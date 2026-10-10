@@ -1,7 +1,7 @@
 //! Live recording on X11: `#[ignore]`d, run by CI's Linux job under Xvfb
-//! with ffmpeg installed (names start `live_rec_linux_`). The runner has no
-//! sound server, so the MP4 has no sound (the arguments with sound are
-//! unit-tested in `ffmpeg`).
+//! with ffmpeg installed (names start `live_rec_linux_`). CI starts a
+//! PulseAudio daemon with a null sink and a null source for the test with
+//! sound; without a sound server it prints "SKIP:" and passes.
 
 use super::ffmpeg::{self, FfmpegEncoder};
 use super::xshm::XShmSource;
@@ -79,6 +79,50 @@ fn live_rec_linux_xvfb_mp4_with_ffmpeg() {
     assert_eq!(value(&st, "codec_name"), "h264");
     assert_eq!((value(&st, "width"), value(&st, "height")), ("640", "480"));
     assert_eq!(value(&st, "avg_frame_rate"), "30/1", "constant frame rate");
+}
+
+/// System sound and microphone (mixed) through ffmpeg's pulse inputs, with
+/// a pause: two segments joined into one file without the paused time.
+#[test]
+#[ignore = "records the X screen (Xvfb in CI) and PulseAudio with ffmpeg"]
+fn live_rec_linux_xvfb_mp4_with_sound_and_pause() {
+    use super::pulse_list;
+    let all = pulse_list::list();
+    eprintln!("pulse sources: {all:?}");
+    let system = match pulse_list::system_source(all.as_deref()) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("SKIP: no sound to record ({e})");
+            return;
+        }
+    };
+    let mic = pulse_list::mic_source(all.as_deref(), "").ok();
+    eprintln!("system {system}, mic {mic:?}");
+    let dir = out_dir("sound");
+    let spec = spec(RecFormat::Mp4, 30, (0, 0, 320, 240), dir.join("sound.mp4"));
+    let src = XShmSource::open(spec.area).expect("open XShm");
+    let (w, h) = src.size();
+    let enc = FfmpegEncoder::create(&spec.part_path(), w, h, 30, Quality::Low, Some(system), mic).unwrap();
+    let s = Session::start(spec, Box::new(src), Vec::new(), Box::new(enc)).unwrap();
+    std::thread::sleep(Duration::from_millis(1000));
+    s.pause();
+    std::thread::sleep(Duration::from_millis(1500));
+    s.resume();
+    std::thread::sleep(Duration::from_millis(1000));
+    let t = Instant::now();
+    let path = s.stop().unwrap();
+    eprintln!("stopped in {:?}", t.elapsed());
+    let fmt = ffprobe(&path, "format=duration");
+    let st = ffprobe(&path, "stream=codec_type,codec_name,duration");
+    eprintln!("ffprobe:\n{fmt}{st}");
+    let duration: f64 = value(&fmt, "duration").parse().unwrap();
+    eprintln!("FFPROBE sound+pause duration={duration:.3}s");
+    let leftovers: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name()).collect();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(leftovers, [std::ffi::OsString::from("sound.mp4")], "segments and lists are cleaned up");
+    assert!((1.7..=2.3).contains(&duration), "duration {duration} s, want 2 ± 0.3 (the pause is cut)");
+    assert!(st.contains("codec_type=video") && st.contains("codec_name=h264"), "{st}");
+    assert!(st.contains("codec_type=audio") && st.contains("codec_name=aac"), "{st}");
 }
 
 #[test]
