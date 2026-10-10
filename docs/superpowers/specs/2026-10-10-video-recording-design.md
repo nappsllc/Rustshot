@@ -80,9 +80,14 @@ AudioSource(s) ──► Mixer (48 kHz stereo f32, 10 ms blocks) ─────
 
 ### Encoding
 - **ffmpeg** (preferred when `ffmpeg` is on PATH): rustshot writes raw BGRA
-  frames to its stdin (`-f rawvideo -pix_fmt bgra -s WxH -r FPS -i -`),
-  ffmpeg captures audio itself (`-f pulse -i <monitor source>` for system,
-  `-f pulse -i <mic>`; mixed with `amix`), output `libx264 -preset veryfast
+  frames to its stdin (`-f rawvideo -pix_fmt bgra -s WxH -r FPS -i -`).
+  *Amended 2026-10-10 (user decision):* rustshot captures audio itself, as
+  on Windows — PulseAudio/PipeWire sources read in-app (via `parec` until
+  the libpulse-simple source lands in Task 6), mixed by the shared `Mixer`,
+  and fed to the same ffmpeg as timestamped PCM on a second pipe
+  (`-f f32le -ar 48000 -ac 2 -i pipe:3`, low probe sizes); one ffmpeg
+  process, no per-source processes, temp files or post-mux. Mic mute works
+  as on Windows. Output `libx264 -preset veryfast
   -crf 23 -pix_fmt yuv420p` (falls back to `libopenh264` or `h264_vaapi` if
   libx264 is absent) + `aac`, `-movflags +faststart`. Timestamps: constant
   frame rate, rustshot duplicates/drops frames to keep it.
