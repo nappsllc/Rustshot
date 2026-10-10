@@ -5,10 +5,14 @@
 //! thread opens the camera, reads it, fits each picture to the bubble and
 //! posts it (at most about 30 a second); the window composes it with the
 //! shape, ring and shadow ([`super::compose`]) when the message arrives.
+//! The picture buffers, the scratch and the DIB section are reused from
+//! one picture to the next.
 //!
 //! Dragging moves it; within [`super::SNAP`] of a corner position of the
 //! area it snaps there, and where it is dropped is remembered relative to
-//! the area ([`super::remember`]).
+//! the area ([`super::remember`]). While the overlay's toolbar and Record
+//! popover are up it keeps off them ([`Bubble::set_avoid`],
+//! [`super::clear_of`]).
 //!
 //! The camera is open only while the bubble exists: dropping the
 //! [`Bubble`] stops the camera thread (it releases the camera within a
@@ -17,6 +21,7 @@
 use super::{CamFrame, CamSource, Look, Template};
 use crate::capture::IRect;
 use crate::rec::win::com_init;
+use crate::rec_ui::Dib;
 use crate::theme::Theme;
 use anyhow::{bail, Context, Result};
 use std::cell::RefCell;
@@ -51,12 +56,18 @@ pub(crate) type Opener = Box<dyn FnOnce() -> Result<Box<dyn CamSource>> + Send>;
 
 /// Between the camera thread and the window.
 struct Shared {
+    /// The newest fitted picture, not yet shown.
     frame: Mutex<Option<CamFrame>>,
+    /// A picture the window is done with: the camera thread fits the next
+    /// one into its buffer.
+    spare: Mutex<Option<CamFrame>>,
     error: Mutex<Option<String>>,
     stop: AtomicBool,
     /// The bubble's side in physical px (what pictures are fitted to).
     side: AtomicU32,
-    hwnd: isize,
+    /// The window; 0 once it is being destroyed. Posting holds the lock,
+    /// so nothing reaches a destroyed (or reused) handle.
+    hwnd: Mutex<isize>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -72,6 +83,10 @@ struct State {
     scale: f32,
     look: Look,
     th: Theme,
+    /// Rects to keep off (the overlay's toolbar and popover) and the
+    /// screen the bubble may go to around a small area.
+    avoid: Vec<IRect>,
+    screen: IRect,
     /// Top-left of the shape (physical px; the window is `pad` larger).
     pos: (i32, i32),
     tpl: Template,
@@ -79,8 +94,19 @@ struct State {
     /// Pressed: (cursor, pos) at the press.
     drag: Option<((i32, i32), (i32, i32))>,
     px: Vec<u8>,
+    dib: Dib,
     shared: Arc<Shared>,
     shown: bool,
+}
+
+impl State {
+    /// Where the bubble goes: where it was left relative to the area, off
+    /// the rects to avoid.
+    fn home(&self) -> (i32, i32) {
+        let d = self.tpl.d as i32;
+        let p = super::place(super::remembered(), self.area, d, self.scale);
+        super::clear_of(p, self.area, d, self.scale, &self.avoid, self.screen)
+    }
 }
 
 thread_local! {
@@ -126,10 +152,13 @@ fn paint() {
     let job = with(|st| {
         super::compose(&st.tpl, st.frame.as_ref(), st.look.mirror, &mut st.px);
         let pad = st.tpl.pad as i32;
-        (st.hwnd, (st.pos.0 - pad, st.pos.1 - pad), st.tpl.w, std::mem::take(&mut st.px), !st.shown)
+        let (x, y, w) = (st.pos.0 - pad, st.pos.1 - pad, st.tpl.w);
+        st.dib.put(hwnd_of(st.hwnd), x, y, w, w, &st.px);
+        let first = !st.shown;
+        st.shown = true;
+        (st.hwnd, first)
     });
-    let Some((hwnd, (x, y), w, px, first)) = job else { return };
-    crate::rec_ui::update_layered(hwnd_of(hwnd), x, y, w, w, &px);
+    let Some((hwnd, first)) = job else { return };
     unsafe {
         if first {
             let _ = ShowWindow(hwnd_of(hwnd), SW_SHOWNOACTIVATE);
@@ -137,10 +166,27 @@ fn paint() {
         // Over the overlay and the recording frame.
         let _ = SetWindowPos(hwnd_of(hwnd), Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     }
-    with(|st| {
-        st.px = px;
-        st.shown = true;
+}
+
+/// Take the waiting picture (if any) and show it; true when one was taken.
+fn take_frame() -> bool {
+    let got = with(|st| {
+        let Some(f) = lock(&st.shared.frame).take() else { return false };
+        // A picture fitted before a size change is dropped.
+        if f.w == st.tpl.d {
+            if let Some(old) = st.frame.replace(f) {
+                *lock(&st.shared.spare) = Some(old);
+            }
+        } else {
+            *lock(&st.shared.spare) = Some(f);
+        }
+        true
     });
+    if got == Some(true) {
+        paint();
+        return true;
+    }
+    false
 }
 
 fn end_drag() {
@@ -191,20 +237,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 LRESULT(0)
             }
             WM_FRAME => {
-                let got = with(|st| {
-                    if let Some(f) = lock(&st.shared.frame).take() {
-                        // A picture fitted before a size change is dropped.
-                        if f.w == st.tpl.d {
-                            st.frame = Some(f);
-                        }
-                        true
-                    } else {
-                        false
-                    }
-                });
-                if got == Some(true) {
-                    paint();
-                }
+                take_frame();
                 LRESULT(0)
             }
             WM_FAIL => {
@@ -244,27 +277,40 @@ fn register() -> Result<()> {
     Ok(())
 }
 
-fn post(hwnd: isize, msg: u32) {
-    let _ = unsafe { PostMessageW(Some(hwnd_of(hwnd)), msg, WPARAM(0), LPARAM(0)) };
+/// Post `msg` to the window unless it is being destroyed.
+fn post(sh: &Shared, msg: u32) {
+    let h = lock(&sh.hwnd);
+    if *h != 0 {
+        let _ = unsafe { PostMessageW(Some(hwnd_of(*h)), msg, WPARAM(0), LPARAM(0)) };
+    }
 }
 
 /// Open the camera, then read it until told to stop; the camera is
-/// released (the source dropped) before `done` is signalled.
+/// released (the source dropped) before `done` is signalled. The camera's
+/// picture, the scratch and the fitted pictures are reused.
 fn camera_thread(open: Opener, sh: Arc<Shared>, done: mpsc::Sender<()>) {
     com_init();
     let r = (|| -> Result<()> {
         let mut src = open()?;
         let mut last: Option<Instant> = None;
+        let (mut raw, mut tmp) = (CamFrame::default(), Vec::new());
         while !sh.stop.load(Ordering::SeqCst) {
-            let Some(f) = src.read()? else { continue };
+            if !src.read(&mut raw)? {
+                continue;
+            }
             let now = Instant::now();
             if last.is_some_and(|t| now.saturating_duration_since(t) < FRAME_GAP) {
                 continue;
             }
             last = Some(now);
-            let sq = super::fit_square(&f, sh.side.load(Ordering::SeqCst));
-            *lock(&sh.frame) = Some(sq);
-            post(sh.hwnd, WM_FRAME);
+            // The window's old picture (or the one it never took) is
+            // filled again.
+            let mut sq = lock(&sh.spare).take().or_else(|| lock(&sh.frame).take()).unwrap_or_default();
+            super::fit_square_into(&raw, sh.side.load(Ordering::SeqCst), &mut tmp, &mut sq);
+            if let Some(old) = lock(&sh.frame).replace(sq) {
+                *lock(&sh.spare) = Some(old);
+            }
+            post(&sh, WM_FRAME);
         }
         Ok(())
     })();
@@ -274,7 +320,7 @@ fn camera_thread(open: Opener, sh: Arc<Shared>, done: mpsc::Sender<()>) {
         let msg = format!("{e:#}");
         eprintln!("rustshot: camera: {msg}");
         *lock(&sh.error) = Some(msg);
-        post(sh.hwnd, WM_FAIL);
+        post(&sh, WM_FAIL);
     }
     let _ = done.send(());
 }
@@ -284,7 +330,6 @@ pub struct Bubble {
     hwnd: HWND,
     shared: Arc<Shared>,
     done: Option<Receiver<()>>,
-    #[cfg_attr(test, allow(dead_code))]
     device: String,
 }
 
@@ -323,29 +368,32 @@ impl Bubble {
         let tpl = super::template(look, scale, th);
         let shared = Arc::new(Shared {
             frame: Mutex::new(None),
+            spare: Mutex::new(None),
             error: Mutex::new(None),
             stop: AtomicBool::new(false),
             side: AtomicU32::new(tpl.d),
+            hwnd: Mutex::new(hwnd.0 as isize),
+        });
+        let mut st = State {
             hwnd: hwnd.0 as isize,
-        });
-        let pos = super::place(super::remembered(), area, tpl.d as i32, scale);
-        BUBBLE.with(|b| {
-            *b.borrow_mut() = Some(State {
-                hwnd: hwnd.0 as isize,
-                nudge: nudge.0 as isize,
-                area,
-                scale,
-                look,
-                th: *th,
-                pos,
-                tpl,
-                frame: None,
-                drag: None,
-                px: Vec::new(),
-                shared: shared.clone(),
-                shown: false,
-            })
-        });
+            nudge: nudge.0 as isize,
+            area,
+            scale,
+            look,
+            th: *th,
+            avoid: Vec::new(),
+            screen: area,
+            pos: (0, 0),
+            tpl,
+            frame: None,
+            drag: None,
+            px: Vec::new(),
+            dib: Dib::default(),
+            shared: shared.clone(),
+            shown: false,
+        };
+        st.pos = st.home();
+        BUBBLE.with(|b| *b.borrow_mut() = Some(st));
         let (tx, rx) = mpsc::channel();
         let sh = shared.clone();
         let mut bubble = Bubble { hwnd, shared, done: None, device: device.to_string() };
@@ -360,7 +408,6 @@ impl Bubble {
     }
 
     /// The camera it shows ("" = the first).
-    #[cfg_attr(test, allow(dead_code))]
     pub fn device(&self) -> &str {
         &self.device
     }
@@ -376,10 +423,26 @@ impl Bubble {
         with(|st| st.pos)
     }
 
-    /// A camera picture is shown (tests).
-    #[cfg(test)]
-    pub(crate) fn has_picture(&self) -> bool {
+    /// A camera picture is shown.
+    pub fn has_picture(&self) -> bool {
         with(|st| st.frame.is_some()).unwrap_or(false)
+    }
+
+    /// Wait up to `timeout` for the camera's first picture and show it
+    /// (so a recording does not start on the placeholder); false when none
+    /// came (or the camera failed).
+    pub fn wait_picture(&self, timeout: Duration) -> bool {
+        let end = Instant::now() + timeout;
+        loop {
+            take_frame();
+            if self.has_picture() {
+                return true;
+            }
+            if self.error().is_some() || Instant::now() >= end {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
 
     /// The window (tests).
@@ -403,7 +466,7 @@ impl Bubble {
                 st.frame = None;
                 st.shared.side.store(st.tpl.d, Ordering::SeqCst);
             }
-            st.pos = super::place(super::remembered(), area, st.tpl.d as i32, scale);
+            st.pos = st.home();
             Some((rescale, st.hwnd, st.pos, st.tpl.pad as i32))
         })
         .flatten();
@@ -411,6 +474,36 @@ impl Bubble {
             Some((true, ..)) => paint(),
             Some((false, h, p, pad)) => move_to(h, p, pad),
             None => {}
+        }
+    }
+
+    /// Keep off `avoid` (the overlay's toolbar and Record popover,
+    /// physical px; none once they are gone), going outside a small area
+    /// within `screen` if it must. Not while dragged.
+    pub fn set_avoid(&mut self, avoid: &[IRect], screen: IRect) {
+        let r = with(|st| {
+            if (st.avoid.as_slice(), st.screen) == (avoid, screen) || st.drag.is_some() {
+                return None;
+            }
+            st.avoid = avoid.to_vec();
+            st.screen = screen;
+            let pos = st.home();
+            (pos != st.pos).then(|| {
+                st.pos = pos;
+                (st.hwnd, pos, st.tpl.pad as i32)
+            })
+        })
+        .flatten();
+        if let Some((h, p, pad)) = r {
+            move_to(h, p, pad);
+        }
+    }
+
+    /// Keep off nothing any more (the overlay is gone).
+    pub fn clear_avoid(&mut self) {
+        let screen = with(|st| st.screen);
+        if let Some(screen) = screen {
+            self.set_avoid(&[], screen);
         }
     }
 
@@ -428,7 +521,7 @@ impl Bubble {
             if resized {
                 // Keep it at its corner of the area.
                 st.frame = None;
-                st.pos = super::place(super::remembered(), st.area, st.tpl.d as i32, st.scale);
+                st.pos = st.home();
             }
             true
         });
@@ -443,6 +536,8 @@ impl Drop for Bubble {
     /// [`CLOSE_WAIT`]) and take the window down.
     fn drop(&mut self) {
         self.shared.stop.store(true, Ordering::SeqCst);
+        // The camera thread posts nothing from now on.
+        *lock(&self.shared.hwnd) = 0;
         if let Some(rx) = self.done.take()
             && !CLOSE_WAIT.is_zero()
         {

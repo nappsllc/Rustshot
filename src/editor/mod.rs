@@ -211,6 +211,8 @@ pub fn run(
         rec_spec: None,
         #[cfg(test)]
         rec_cam: None,
+        #[cfg(test)]
+        rec_bubble: None,
     };
     if wind::run(&mut app) != 0 {
         return 1;
@@ -276,6 +278,10 @@ struct App {
     /// Tests: the camera bubble the last recording was handed.
     #[cfg(test)]
     rec_cam: Option<(String, crate::cam::Look, capture::IRect, f32)>,
+    /// Tests: the last recording got a bubble (Some), and it showed a
+    /// picture (true) when it started.
+    #[cfg(test)]
+    rec_bubble: Option<bool>,
 }
 
 impl App {
@@ -317,6 +323,11 @@ impl App {
             self.notice = None;
         }
         self.tick_recording();
+        if let State::Edit(e) = &mut self.st
+            && e.rec.poll_cams()
+        {
+            self.repaint(); // the Camera row is ready
+        }
         self.sync_bubble();
 
         for _ in 0..16 {
@@ -420,8 +431,9 @@ impl App {
         #[cfg(test)]
         let mons = Vec::new();
         let geom = e.rec_geom(&mons);
-        let (dev, look, th) = (e.rec.opts.cam_dev.clone(), e.rec.opts.cam_look(), e.th);
-        if let Some(err) = e.rec.cam.sync(&dev, look, geom.area, geom.area_scale(), &th, nudge) {
+        let mut want = e.cam_want(&geom);
+        want.avoid = e.toolbar_screen_rects();
+        if let Some(err) = e.rec.cam.sync(&want, nudge) {
             e.rec.opts.camera = false;
             e.notice = Some(Toast::new(err, ToastKind::Error));
         }
@@ -470,33 +482,26 @@ impl App {
 
     /// Start recording `area` (physical px) with `opts`: the overlay is
     /// already hidden.
-    /// `bubble`: the popover's camera bubble (the camera is opened here
-    /// when the camera is on and the popover had none up).
+    /// `bubble`: the camera bubble (the popover's, or opened for the
+    /// recording), up until the recording is over.
     fn start_recording(&mut self, cfg: &Config, opts: &RecOpts, geom: rec_ui::Geom, th: Theme, bubble: Option<crate::cam::Bubble>) {
         let spec = opts.spec(cfg, geom.area, export::local_ymdhms());
         #[cfg(test)]
         {
+            #[cfg(windows)]
+            {
+                self.rec_bubble = bubble.as_ref().map(|b| b.has_picture());
+            }
+            #[cfg(not(windows))]
+            {
+                self.rec_bubble = bubble.as_ref().map(|_| false);
+            }
             let _ = (th, bubble);
             self.rec_spec = Some(spec);
             self.recording_started(Ok(rec_ui::Run::fake(cfg.rec_countdown, opts.mic, Instant::now())));
         }
         #[cfg(not(test))]
         {
-            let bubble = match bubble {
-                Some(b) => Some(b),
-                #[cfg(windows)]
-                None if opts.camera && !rec_ui::cameras().is_empty() => {
-                    let look = opts.cam_look();
-                    match crate::cam::Bubble::show(look, &opts.cam_dev, geom.area, geom.area_scale(), &th, self.hwnd) {
-                        Ok(b) => Some(b),
-                        Err(e) => {
-                            eprintln!("warning: camera not shown: {e:#}");
-                            None
-                        }
-                    }
-                }
-                None => None,
-            };
             self.recording_started(rec_ui::Run::start(spec, geom, th, cfg.rec_countdown, self.hwnd, bubble));
         }
     }
@@ -740,7 +745,19 @@ impl App {
             {
                 self.rec_cam = edit.rec.cam.shown.clone();
             }
-            let bubble = edit.rec.cam.take();
+            let mut bubble = edit.rec.cam.take();
+            // Started without the popover (Enter in record mode): the
+            // camera opens now. Without a countdown the recording waits
+            // (up to a second) for its first picture, so it does not
+            // begin on the placeholder.
+            if bubble.is_none() && opts.camera && rec_ui::SUPPORTED {
+                edit.rec.wait_cams(CAM_LIST_WAIT);
+                if edit.rec.has_cams() {
+                    let want = edit.cam_want(&geom);
+                    let wait = (!cfg.rec_countdown).then_some(FIRST_PICTURE_WAIT);
+                    bubble = edit.rec.cam.open_now(&want, self.hwnd, wait);
+                }
+            }
             self.start_recording(&cfg, &opts, geom, th, bubble);
             return;
         }
@@ -1625,8 +1642,11 @@ struct RecPop {
     mode: bool,
     /// Microphones as (id, name), listed once per capture when needed.
     devs: Option<Vec<(String, String)>>,
-    /// Cameras, listed once per capture when the popover opens.
+    /// Cameras, listed once per capture (on a worker: [`RecPop::load_cams`])
+    /// when the popover opens or record mode begins.
     cams: Option<Vec<crate::cam::CamDevice>>,
+    /// The camera list on its way.
+    cams_rx: Option<std::sync::mpsc::Receiver<Vec<crate::cam::CamDevice>>>,
     /// The open device list.
     dev_open: Option<Dev>,
     /// "Start recording" pressed: `finish` records instead of exporting.
@@ -1635,9 +1655,26 @@ struct RecPop {
     cam: CamSlot,
 }
 
+/// How long Start waits for the camera list (it is usually there long
+/// before).
+const CAM_LIST_WAIT: Duration = Duration::from_secs(2);
+/// How long a recording started with no countdown waits for the camera's
+/// first picture.
+const FIRST_PICTURE_WAIT: Duration = Duration::from_secs(1);
+
 impl RecPop {
     fn new(opts: RecOpts, mode: bool) -> RecPop {
-        let mut p = RecPop { opts, open: mode, mode, devs: None, cams: None, dev_open: None, start: false, cam: CamSlot::default() };
+        let mut p = RecPop {
+            opts,
+            open: mode,
+            mode,
+            devs: None,
+            cams: None,
+            cams_rx: None,
+            dev_open: None,
+            start: false,
+            cam: CamSlot::default(),
+        };
         if mode {
             p.load_cams();
         }
@@ -1650,10 +1687,38 @@ impl RecPop {
         }
     }
 
+    /// Start listing the cameras (once per capture), off the UI thread.
     fn load_cams(&mut self) {
-        if self.cams.is_none() {
-            self.cams = Some(rec_ui::cameras());
+        if self.cams.is_none() && self.cams_rx.is_none() {
+            self.cams_rx = Some(rec_ui::cameras_async());
+            self.poll_cams();
         }
+    }
+
+    /// Take the camera list if it has come; true when it just did.
+    fn poll_cams(&mut self) -> bool {
+        let Some(rx) = &self.cams_rx else { return false };
+        let list = match rx.try_recv() {
+            Ok(l) => l,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return false,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Vec::new(),
+        };
+        self.cams = Some(list);
+        self.cams_rx = None;
+        true
+    }
+
+    /// Wait up to `t` for the camera list (Start needs it now).
+    fn wait_cams(&mut self, t: Duration) {
+        self.load_cams();
+        if let Some(rx) = self.cams_rx.take() {
+            self.cams = Some(rx.recv_timeout(t).unwrap_or_default());
+        }
+    }
+
+    /// The cameras are still being listed.
+    fn cams_looking(&self) -> bool {
+        self.cams_rx.is_some()
     }
 
     /// There is a camera (listed when the popover opened).
@@ -1728,14 +1793,39 @@ impl RecPop {
     }
 }
 
+/// What the camera bubble should show, and where.
+#[cfg_attr(not(windows), allow(dead_code))]
+struct CamWant {
+    dev: String,
+    look: crate::cam::Look,
+    /// The area (physical px) and its UI scale.
+    area: capture::IRect,
+    scale: f32,
+    th: Theme,
+    /// Rects to keep off (the toolbar and popover, physical px) and the
+    /// monitor it may go to around a small area.
+    avoid: Vec<capture::IRect>,
+    screen: capture::IRect,
+}
+
+/// Tests: opens a fake camera for a device id.
+#[cfg(all(windows, test))]
+type FakeCam = Box<dyn Fn(&str) -> crate::cam::Opener>;
+
 /// The camera bubble of the Record popover: shown while the popover is
 /// open with the camera on (and a selection), following the selection;
 /// handed to the recording on Start, closed otherwise (dropped with the
 /// overlay on every other way out).
 #[derive(Default)]
 struct CamSlot {
-    #[cfg(all(windows, not(test)))]
+    #[cfg(windows)]
     bubble: Option<crate::cam::Bubble>,
+    /// Tests: the camera the bubble opens (no bubble without one).
+    #[cfg(all(windows, test))]
+    fake: Option<FakeCam>,
+    /// Tests: how many times a camera was opened.
+    #[cfg(all(windows, test))]
+    opened: usize,
     /// What is shown: camera, look, area (physical px), UI scale.
     shown: Option<(String, crate::cam::Look, capture::IRect, f32)>,
     /// The system's monitors (their UI scales), read once per capture.
@@ -1745,52 +1835,108 @@ struct CamSlot {
 
 impl CamSlot {
     fn close(&mut self) {
-        #[cfg(all(windows, not(test)))]
+        #[cfg(windows)]
         {
             self.bubble = None;
         }
         self.shown = None;
     }
 
-    /// Show camera `dev` with `look` at `area`; the camera's error when
-    /// it could not be opened or stopped (the bubble is closed then).
-    #[cfg_attr(any(test, not(windows)), allow(unused_variables))]
-    fn sync(&mut self, dev: &str, look: crate::cam::Look, area: capture::IRect, scale: f32, th: &Theme, nudge: Hwnd) -> Option<String> {
-        #[cfg(all(windows, not(test)))]
+    /// A bubble can be made (tests: only with a fake camera).
+    #[cfg(windows)]
+    fn can_open(&self) -> bool {
+        #[cfg(test)]
         {
-            if self.bubble.as_ref().is_some_and(|b| b.device() != dev) {
+            self.fake.is_some()
+        }
+        #[cfg(not(test))]
+        {
+            true
+        }
+    }
+
+    /// Open a bubble for `w`.
+    #[cfg(windows)]
+    fn open(&mut self, w: &CamWant, nudge: Hwnd) -> anyhow::Result<crate::cam::Bubble> {
+        #[cfg(test)]
+        {
+            let open = self.fake.as_ref().map(|f| f(&w.dev)).ok_or_else(|| anyhow::anyhow!("no fake camera"))?;
+            self.opened += 1;
+            crate::cam::Bubble::show_with(w.look, &w.dev, w.area, w.scale, &w.th, nudge, open)
+        }
+        #[cfg(not(test))]
+        {
+            crate::cam::Bubble::show(w.look, &w.dev, w.area, w.scale, &w.th, nudge)
+        }
+    }
+
+    /// Show `w`; the camera's error when it could not be opened or
+    /// stopped (the bubble is closed then).
+    #[cfg_attr(not(windows), allow(unused_variables))]
+    fn sync(&mut self, w: &CamWant, nudge: Hwnd) -> Option<String> {
+        #[cfg(windows)]
+        if self.can_open() {
+            if self.bubble.as_ref().is_some_and(|b| b.device() != w.dev) {
                 self.bubble = None; // another camera: reopen
             }
             if let Some(err) = self.bubble.as_ref().and_then(|b| b.error()) {
                 self.close();
                 return Some(err);
             }
-            match &mut self.bubble {
-                Some(b) => {
-                    b.set_look(look, th);
-                    b.set_anchor(area, scale);
-                }
-                None => match crate::cam::Bubble::show(look, dev, area, scale, th, nudge) {
+            if self.bubble.is_none() {
+                match self.open(w, nudge) {
                     Ok(b) => self.bubble = Some(b),
                     Err(e) => {
                         self.close();
                         return Some(format!("{e:#}"));
                     }
-                },
+                }
+            }
+            if let Some(b) = &mut self.bubble {
+                b.set_look(w.look, &w.th);
+                b.set_anchor(w.area, w.scale);
+                b.set_avoid(&w.avoid, w.screen);
             }
         }
-        self.shown = Some((dev.to_string(), look, area, scale));
+        self.shown = Some((w.dev.clone(), w.look, w.area, w.scale));
         None
     }
 
-    /// The bubble, for the recording (closed here).
+    /// A bubble for a recording started without the popover's: opened
+    /// now; with `wait`, shown once its first picture is in (or `wait`
+    /// is over). None when the camera cannot be opened (said on stderr).
+    #[cfg_attr(not(windows), allow(unused_variables))]
+    fn open_now(&mut self, w: &CamWant, nudge: Hwnd, wait: Option<Duration>) -> Option<crate::cam::Bubble> {
+        #[cfg(windows)]
+        if self.can_open() {
+            match self.open(w, nudge) {
+                Ok(b) => {
+                    if let Some(t) = wait
+                        && !b.wait_picture(t)
+                    {
+                        eprintln!("rustshot: camera: no picture within {} ms; recording anyway", t.as_millis());
+                    }
+                    return Some(b);
+                }
+                Err(e) => eprintln!("warning: camera not shown: {e:#}"),
+            }
+        }
+        None
+    }
+
+    /// The bubble, for the recording (closed here); it keeps off nothing
+    /// now (the toolbar is gone).
     fn take(&mut self) -> Option<crate::cam::Bubble> {
         self.shown = None;
-        #[cfg(all(windows, not(test)))]
+        #[cfg(windows)]
         {
-            self.bubble.take()
+            let mut b = self.bubble.take();
+            if let Some(b) = &mut b {
+                b.clear_avoid();
+            }
+            b
         }
-        #[cfg(any(test, not(windows)))]
+        #[cfg(not(windows))]
         {
             None
         }
@@ -2072,6 +2218,34 @@ impl Edit {
         }
     }
 
+    /// What the camera bubble shows for a recording of `geom`'s area:
+    /// the popover's camera and look, kept on the area's monitor.
+    fn cam_want(&self, geom: &rec_ui::Geom) -> CamWant {
+        let a = geom.area;
+        let (cx, cy) = (a.0 + a.2 as i32 / 2, a.1 + a.3 as i32 / 2);
+        let screen = geom.monitors.iter().map(|m| m.0).find(|m| rec_ui::contains(*m, cx, cy)).unwrap_or(a);
+        CamWant {
+            dev: self.rec.opts.cam_dev.clone(),
+            look: self.rec.opts.cam_look(),
+            area: a,
+            scale: geom.area_scale(),
+            th: self.th,
+            avoid: Vec::new(),
+            screen,
+        }
+    }
+
+    /// The toolbar and its popover on screen (physical px), for the
+    /// camera bubble to keep off.
+    fn toolbar_screen_rects(&self) -> Vec<capture::IRect> {
+        let (ox, oy) = self.shot.origin;
+        let to = |r: FRect| {
+            let (x, y) = (r.x.floor() as i32, r.y.floor() as i32);
+            (x + ox, y + oy, (r.x1().ceil() as i32 - x).max(0) as u32, (r.y1().ceil() as i32 - y).max(0) as u32)
+        };
+        self.toolbar.as_ref().map_or(Vec::new(), |t| std::iter::once(t.bar).chain(t.pop).map(to).collect())
+    }
+
     /// Track the hovered toolbar item / handle; true when either changed.
     fn track_hover(&mut self, p: Pt) -> bool {
         let hover = self.toolbar.as_ref().and_then(|tb| tb.index_at(p));
@@ -2279,11 +2453,13 @@ fn next_boundary(s: &str, i: usize) -> usize {
 }
 
 /// Something on screen moves by itself: a tween, the pending tooltip,
-/// a toast fading in or out.
+/// a toast fading in or out; or the camera list is on its way (polled
+/// on the timer).
 fn animating(edit: &Edit, app_notice: Option<&Toast>, now: Instant) -> bool {
     let tip_pending = edit.hover.is_some() && now.saturating_duration_since(edit.hover_at) < Duration::from_millis(500);
     let toast_moving = edit.notice.as_ref().or(app_notice).is_some_and(|t| t.animating(now));
-    edit.mo.active(now) || tip_pending || toast_moving
+    // The Camera row says "Looking for cameras…" until the list comes.
+    edit.mo.active(now) || tip_pending || toast_moving || edit.rec.cams_looking()
 }
 
 /// The last frame no longer matches: something animates, the caret
@@ -2693,6 +2869,7 @@ mod tests {
             rec_opts: None,
             rec_spec: None,
             rec_cam: None,
+            rec_bubble: None,
         }
     }
 
@@ -3001,6 +3178,14 @@ mod tests {
             e.hover_at = Instant::now() - Duration::from_secs(2);
             save(&mut app, &format!("{tn}-record-no-camera.png"));
             rec_ui::FAKE_CAMS.with(|c| *c.borrow_mut() = rec_ui::fake_cams());
+            // The cameras still being listed.
+            let mut app = annotated(th, big);
+            let e = edit_of(&mut app);
+            e.rec.open = true;
+            let (_tx, rx) = std::sync::mpsc::channel();
+            e.rec.cams_rx = Some(rx);
+            app.frame();
+            save(&mut app, &format!("{tn}-record-looking-for-cameras.png"));
         }
     }
 

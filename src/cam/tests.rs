@@ -252,6 +252,194 @@ fn yuy2_and_nv12_to_bgra() {
     assert_eq!(out, [0; 16]);
 }
 
+/// Full range (0-255): black is 0 and white 255 without the 16-235
+/// stretch; BT.709 full red.
+#[test]
+fn full_range_yuv() {
+    let full601 = Yuv { matrix: Matrix::Bt601, full: true };
+    let mut out = Vec::new();
+    yuy2_to_bgra(&[0u8, 128, 255, 128], 4, 2, 1, full601, &mut out);
+    assert_eq!(out, [0, 0, 0, 255, 255, 255, 255, 255]);
+    // Limited range reads 16 as black and stretches the rest.
+    yuy2_to_bgra(&[16u8, 128, 128, 128], 4, 2, 1, full601, &mut out);
+    assert_eq!((out[0], out[4]), (16, 128));
+    yuy2_to_bgra(&[16u8, 128, 128, 128], 4, 2, 1, Matrix::Bt601, &mut out);
+    assert_eq!((out[0], out[4]), (0, 130));
+    // BT.709 full-range red: Y 54, U 99, V 255.
+    nv12_to_bgra(&[54; 4], &[99, 255], 2, 2, 2, Yuv { matrix: Matrix::Bt709, full: true }, &mut out);
+    let p = &out[..4];
+    assert!(p[2] >= 253 && p[1] <= 2 && p[0] <= 2, "{p:?}");
+}
+
+/// A synthetic NV12 buffer: a `w`x`h` picture whose Y plane has `y_rows`
+/// rows (the padding below the picture is 0xEE) and whose UV plane has
+/// `uv_rows` rows, at `stride`; Y = 100 + row % 50, UV (60, 200) on the
+/// picture's rows. With `short_tail` the last UV row has only `w` bytes.
+fn nv12_buf(w: usize, h: usize, stride: usize, y_rows: usize, uv_rows: usize, short_tail: bool) -> Vec<u8> {
+    let mut b = vec![0xEEu8; stride * (y_rows + uv_rows)];
+    for y in 0..h {
+        b[y * stride..][..w].fill(100 + (y % 50) as u8);
+    }
+    for r in 0..h / 2 {
+        for x in (0..w).step_by(2) {
+            let at = (y_rows + r) * stride + x;
+            b[at] = 60;
+            b[at + 1] = 200;
+        }
+    }
+    if short_tail {
+        b.truncate((y_rows + uv_rows - 1) * stride + w);
+    }
+    b
+}
+
+/// The UV plane is found after the Y plane's real rows (padded 1080 to
+/// 1088, with or without the trailing padding), never past the buffer's
+/// end; a buffer too short for the picture drops it.
+#[test]
+fn camera_buffer_layouts() {
+    let (w, h, stride) = (1920usize, 1080usize, 2048usize);
+    let px = |y: u8| {
+        let mut p = [0u8; 4];
+        yuv_px(y, 60, 200, coef(Matrix::Bt601.into()), &mut p);
+        p
+    };
+    let check = |buf: &[u8], coded_h: u32, want_rows: usize| {
+        let l = layout(Fmt::Nv12, w as u32, h as u32, coded_h, stride, buf.len()).expect("fits");
+        assert_eq!(l.uv, want_rows * stride, "UV after {want_rows} rows");
+        assert!(l.len <= buf.len());
+        let (y, uv) = buf[..l.len].split_at(l.uv);
+        let mut out = Vec::new();
+        nv12_to_bgra(y, uv, l.stride, w as u32, h as u32, Matrix::Bt601, &mut out);
+        // The picture's chroma everywhere (not the padding's 0xEE).
+        assert_eq!(&out[..4], &px(100));
+        let row = h - 1;
+        assert_eq!(&out[(row * w + w - 1) * 4..][..4], &px(100 + (row % 50) as u8), "the bottom rows' chroma");
+    };
+    // No padding.
+    check(&nv12_buf(w, h, stride, h, h / 2, false), h as u32, h);
+    check(&nv12_buf(w, h, stride, h, h / 2, true), h as u32, h);
+    // Padded to 1088 rows, both planes (the frame size says 1080).
+    check(&nv12_buf(w, h, stride, 1088, 544, false), h as u32, 1088);
+    // Padded Y plane, the UV plane's trailing padding missing.
+    check(&nv12_buf(w, h, stride, 1088, 540, false), h as u32, 1088);
+    check(&nv12_buf(w, h, stride, 1088, 540, true), h as u32, 1088);
+    // A coded height of 1088 with a 1080 aperture says so directly.
+    check(&nv12_buf(w, h, stride, 1088, 540, true), 1088, 1088);
+    // Too short (a truncated buffer): dropped, never read past the end.
+    let mut short = nv12_buf(w, h, stride, h, h / 2, false);
+    short.truncate(stride * h + stride * 100);
+    assert_eq!(layout(Fmt::Nv12, w as u32, h as u32, h as u32, stride, short.len()), None);
+    assert_eq!(layout(Fmt::Nv12, w as u32, h as u32, h as u32, stride, stride * h - 1), None);
+    assert_eq!(layout(Fmt::Nv12, w as u32, h as u32, h as u32, 1000, 1 << 24), None, "pitch under the width");
+    assert_eq!(layout(Fmt::Nv12, w as u32, h as u32, h as u32, stride, 0), None);
+    // Junk past an unpadded picture is not taken for padding.
+    let l = layout(Fmt::Nv12, w as u32, h as u32, h as u32, stride, stride * (h + h / 2) + 777).unwrap();
+    assert_eq!(l.uv, stride * h);
+    // YUY2: the last row needs only its own bytes.
+    let (yw, yh, ys) = (640u32, 480u32, 1536usize);
+    let need = ys * 479 + 1280;
+    assert_eq!(layout(Fmt::Yuy2, yw, yh, yh, ys, need), Some(Layout { stride: ys, uv: 0, len: need }));
+    assert_eq!(layout(Fmt::Yuy2, yw, yh, yh, ys, need - 1), None);
+    assert_eq!(layout(Fmt::Yuy2, yw, yh, yh, 1000, 1 << 24), None);
+    assert_eq!(layout(Fmt::Mjpg, yw, yh, yh, ys, 1 << 24), None);
+}
+
+#[test]
+fn bottom_up_rows_are_flipped() {
+    let mut px: Vec<u8> = (0..3u8).flat_map(|r| [r; 8]).collect(); // 2x3
+    flip_rows(&mut px, 2, 3);
+    assert_eq!(px, [[2u8; 8], [1; 8], [0; 8]].concat());
+    let mut even: Vec<u8> = (0..2u8).flat_map(|r| [r; 4]).collect();
+    flip_rows(&mut even, 1, 2);
+    assert_eq!(even, [[1u8; 4], [0; 4]].concat());
+}
+
+/// The picture shows only inside the ring: at the anti-aliased edge the
+/// ring and the shadow share the pixel and the picture has no part (no
+/// fringe of picture colour outside the ring).
+#[test]
+fn no_picture_fringe_at_the_edge() {
+    for shape in Shape::ALL {
+        for s in [1.0f32, 2.0] {
+            let t = template(Look { shape, ..LOOK }, s, &DARK);
+            let d = t.d as usize;
+            for i in 0..d * d {
+                assert_eq!(t.pic[i] as u32 + t.ring[i] as u32, t.mask[i] as u32, "{shape:?} {s}x pixel {i}");
+            }
+            // Pictures that differ only in colour give the same pixels
+            // wherever the picture has no coverage.
+            let solid = |c: [u8; 4]| CamFrame { w: t.d, h: t.d, bgra: c.repeat(d * d) };
+            let (mut a, mut b) = (Vec::new(), Vec::new());
+            compose(&t, Some(&solid([255, 255, 255, 255])), false, &mut a);
+            compose(&t, Some(&solid([0, 0, 0, 255])), false, &mut b);
+            let (w, pad) = (t.w as usize, t.pad as usize);
+            let mut edge = 0;
+            for y in 0..d {
+                for x in 0..d {
+                    let o = ((y + pad) * w + x + pad) * 4;
+                    let i = y * d + x;
+                    if t.pic[i] == 0 {
+                        assert_eq!(a[o..o + 4], b[o..o + 4], "{shape:?} ({x},{y}): the picture leaks");
+                        if t.mask[i] > 0 && t.mask[i] < 255 {
+                            edge += 1;
+                        }
+                    }
+                }
+            }
+            if shape != Shape::Square {
+                assert!(edge > 0, "{shape:?}: the soft edge was checked");
+            }
+            assert!(a.as_chunks::<4>().0.iter().all(|p| p[0] <= p[3] && p[1] <= p[3] && p[2] <= p[3]), "premultiplied");
+        }
+    }
+}
+
+/// Off the toolbar and popover: the nearest free corner of the area;
+/// outside a small area (on its screen); kept when nothing is in the way.
+#[test]
+fn bubble_keeps_off_the_toolbar() {
+    let (area, screen, d) = ((100, 100, 1000, 700), (0, 0, 1920, 1080), 240);
+    let bl = place(Rel::default(), area, d, 1.0);
+    assert_eq!(clear_of(bl, area, d, 1.0, &[], screen), bl);
+    assert_eq!(clear_of(bl, area, d, 1.0, &[(800, 100, 200, 40)], screen), bl, "not in the way");
+    // A popover over the bottom left: the top left is free.
+    let br = place(Rel { corner: Corner::BottomRight, dx: INSET, dy: INSET }, area, d, 1.0);
+    assert_eq!(clear_of(bl, area, d, 1.0, &[(110, 400, 300, 380)], screen), place(Rel { corner: Corner::TopLeft, dx: INSET, dy: INSET }, area, d, 1.0), "the nearest free corner");
+    // The left side covered: the bottom right.
+    assert_eq!(clear_of(bl, area, d, 1.0, &[(110, 100, 300, 700)], screen), br);
+    // The whole bottom covered: the top left (nearer than the top right).
+    let tl = place(Rel { corner: Corner::TopLeft, dx: INSET, dy: INSET }, area, d, 1.0);
+    assert_eq!(clear_of(bl, area, d, 1.0, &[(100, 400, 1000, 400)], screen), tl);
+    // An area too small for a free corner: just outside it, on screen.
+    let small = (600, 300, 300, 260);
+    let p = clear_of(place(Rel::default(), small, d, 1.0), small, d, 1.0, &[small], screen);
+    let r = (p.0, p.1, d as u32, d as u32);
+    assert!(!overlaps(r, small) && inside(r, screen), "{p:?}");
+    assert_eq!(p, (600, 300 - 16 - d), "above the area (the nearest), left aligned");
+    // At the top of the screen: never off it.
+    for top in [(600, 0, 300, 260), (0, 0, 300, 260), (1620, 0, 300, 260)] {
+        let p = clear_of(place(Rel::default(), top, d, 1.0), top, d, 1.0, &[top], screen);
+        let r = (p.0, p.1, d as u32, d as u32);
+        assert!(!overlaps(r, top) && inside(r, screen), "{top:?}: {p:?}");
+    }
+    // Nowhere free: where it was.
+    assert_eq!(clear_of(bl, area, d, 1.0, &[screen], screen), bl);
+}
+
+/// The fitted picture and the scratch are reused (no new allocation for
+/// the same size).
+#[test]
+fn fit_square_into_reuses_its_buffers() {
+    let pic = sample_picture(320, 180);
+    let (mut tmp, mut out) = (Vec::new(), CamFrame::default());
+    fit_square_into(&pic, 96, &mut tmp, &mut out);
+    let (p0, t0) = (out.bgra.as_ptr(), tmp.as_ptr());
+    fit_square_into(&pic, 96, &mut tmp, &mut out);
+    assert_eq!((out.bgra.as_ptr(), tmp.as_ptr()), (p0, t0));
+    assert_eq!(out, fit_square(&pic, 96));
+}
+
 #[test]
 fn fit_square_crops_the_centre_and_averages() {
     // 4x2: columns 1..3 are the centre square; averaged down to 1x1.
@@ -385,8 +573,9 @@ fn live_cam_opens_and_reads() {
     let mut got = 0;
     let t0 = std::time::Instant::now();
     let want: usize = std::env::var("RUSTSHOT_CAM_FRAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(5);
+    let mut f = CamFrame::default();
     while got < want && t0.elapsed() < std::time::Duration::from_secs(10) {
-        if let Some(f) = cam.read().unwrap() {
+        if cam.read(&mut f).unwrap() {
             assert_eq!((f.w, f.h), (w, h));
             assert_eq!(f.bgra.len(), (w * h * 4) as usize);
             // Mean colour only (no picture is kept): a wrong conversion
@@ -401,6 +590,9 @@ fn live_cam_opens_and_reads() {
         }
     }
     assert_eq!(got, want, "pictures within 10 s");
+    let (drops, yuv, coded_h, stride) = cam.stats();
+    eprintln!("dropped {drops}; {yuv:?}, coded height {coded_h}, stride {stride}");
+    assert_eq!(drops, 0, "no picture dropped");
 }
 
 #[cfg(windows)]

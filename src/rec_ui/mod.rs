@@ -13,7 +13,7 @@ pub mod countdown;
 #[cfg(windows)]
 mod win;
 #[cfg(windows)]
-pub(crate) use win::update_layered;
+pub(crate) use win::Dib;
 
 use crate::cam::{CamDevice, CamSize, Look, Shape};
 use crate::capture::IRect;
@@ -155,6 +155,27 @@ pub fn cameras() -> Vec<CamDevice> {
     {
         crate::cam::list()
     }
+}
+
+/// [`cameras`] listed on a worker thread (it can take a moment: Media
+/// Foundation starts and asks every device); the list arrives on the
+/// receiver. Tests list their fake cameras at once.
+pub fn cameras_async() -> std::sync::mpsc::Receiver<Vec<CamDevice>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    #[cfg(test)]
+    {
+        let _ = tx.send(cameras());
+    }
+    #[cfg(not(test))]
+    {
+        let spawned = std::thread::Builder::new().name("camera-list".into()).spawn(move || {
+            let _ = tx.send(cameras());
+        });
+        if let Err(e) = spawned {
+            eprintln!("rustshot: cannot list cameras: {e}");
+        }
+    }
+    rx
 }
 
 // ---------------------------------------------------------------------------
@@ -314,7 +335,7 @@ pub fn fmt_time(d: Duration) -> String {
 // Placement
 // ---------------------------------------------------------------------------
 
-fn contains(m: IRect, x: i32, y: i32) -> bool {
+pub fn contains(m: IRect, x: i32, y: i32) -> bool {
     x >= m.0 && y >= m.1 && x < m.0 + m.2 as i32 && y < m.1 + m.3 as i32
 }
 
@@ -482,6 +503,18 @@ pub enum End {
     Failed(String),
     /// Stopped during the countdown.
     Cancelled,
+}
+
+/// `end` with "camera stopped: <reason>" among the warnings of a saved
+/// file when the camera bubble failed during the recording (it hid then).
+pub fn with_camera_error(end: End, cam: Option<String>) -> End {
+    match (end, cam) {
+        (End::Saved { path, mut warnings }, Some(e)) => {
+            warnings.push(format!("camera stopped: {e}"));
+            End::Saved { path, warnings }
+        }
+        (end, _) => end,
+    }
 }
 
 /// Where the recording is on screen.

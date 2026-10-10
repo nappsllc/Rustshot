@@ -20,9 +20,12 @@ impl CamSource for Fake {
         (64, 48)
     }
 
-    fn read(&mut self) -> anyhow::Result<Option<CamFrame>> {
+    fn read(&mut self, into: &mut CamFrame) -> anyhow::Result<bool> {
         std::thread::sleep(Duration::from_millis(10));
-        Ok(Some(CamFrame { w: 64, h: 48, bgra: [40u8, 160, 90, 255].repeat(64 * 48) }))
+        (into.w, into.h) = (64, 48);
+        into.bgra.clear();
+        into.bgra.extend_from_slice(&[40u8, 160, 90, 255].repeat(64 * 48));
+        Ok(true)
     }
 }
 
@@ -144,4 +147,37 @@ fn bubble_says_why_the_camera_failed() {
     assert!(!unsafe { IsWindowVisible(h) }.as_bool(), "hidden once the camera failed");
     drop(b);
     assert!(!unsafe { IsWindow(Some(h)) }.as_bool());
+}
+
+/// Start without a countdown waits for the first picture; the bubble
+/// keeps off the toolbar and comes back when it is gone; closing stops
+/// the camera thread posting to the window.
+#[test]
+fn bubble_waits_for_a_picture_and_keeps_off_the_toolbar() {
+    let _g = super::REMEMBERED_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    remember(Rel::default());
+    let dropped = Arc::new(AtomicBool::new(false));
+    let d2 = dropped.clone();
+    let open: Opener = Box::new(move || Ok(Box::new(Fake { dropped: d2 }) as Box<dyn CamSource>));
+    let area = (100, 100, 800, 600);
+    let mut b = Bubble::show_with(M, "", area, 1.0, &DARK, HWND::default(), open).unwrap();
+    assert!(b.wait_picture(Duration::from_secs(1)), "a picture within a second");
+    assert!(b.has_picture());
+    let home = b.pos().unwrap();
+    assert_eq!(home, (116, 700 - 16 - 240));
+    // A popover down the left side: the bubble moves to the bottom right.
+    let screen = (0, 0, 1920, 1080);
+    b.set_avoid(&[(110, 100, 320, 600)], screen);
+    assert_eq!(b.pos(), Some((900 - 16 - 240, 700 - 16 - 240)));
+    assert_eq!(rect(b.hwnd()).left, 900 - 16 - 240 - pad(1.0) as i32);
+    // The toolbar is gone: back where it was left.
+    b.clear_avoid();
+    assert_eq!(b.pos(), Some(home));
+    drop(b);
+    assert!(dropped.load(Ordering::SeqCst));
+    // No picture when the camera fails.
+    let open: Opener = Box::new(|| anyhow::bail!("broken"));
+    let b = Bubble::show_with(M, "", area, 1.0, &DARK, HWND::default(), open).unwrap();
+    assert!(!b.wait_picture(Duration::from_secs(1)));
+    assert_eq!(b.error().as_deref(), Some("broken"));
 }

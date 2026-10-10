@@ -303,3 +303,36 @@ fn live_rec_windows_close_when_the_start_fails() {
     assert!(hwnds.iter().all(|h| !unsafe { IsWindow(Some(*h)) }.as_bool()), "every window is gone");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The camera fails mid-recording: the bubble hides and the saved file
+/// says "camera stopped: <reason>".
+#[test]
+#[ignore = "opens windows on the real desktop"]
+fn live_rec_camera_failure_is_said_with_the_file() {
+    crate::capture::enable_dpi_awareness();
+    let geom = Geom { area: (200, 200, 400, 300), monitors: vec![((0, 0, 1280, 720), 1.0)], scale: 1.0 };
+    let dir = worker_dir("live-cam");
+    let s = spec(RecFormat::Gif, 10, geom.area, dir.join("a.gif"));
+    let mut ui = Recorder::start_with(s, geom, crate::theme::DARK, HWND::default(), fake_parts(None, Arc::new(AtomicBool::new(false)), vec![])).unwrap();
+    let look = crate::cam::Look { shape: crate::cam::Shape::Circle, size: crate::cam::CamSize::S, mirror: true };
+    let open: crate::cam::Opener = Box::new(|| bail!("The camera was disconnected or taken by another app"));
+    let bubble = crate::cam::Bubble::show_with(look, "", (200, 200, 400, 300), 1.0, &crate::theme::DARK, HWND::default(), open).unwrap();
+    let bh = bubble.hwnd();
+    ui.bubble = Some(bubble);
+    ui.send(Effect::Go);
+    pump(300);
+    assert!(!unsafe { IsWindowVisible(bh) }.as_bool(), "the bubble hid");
+    ui.send(Effect::Stop);
+    let t = Instant::now();
+    let mut end = None;
+    while end.is_none() && t.elapsed() < Duration::from_secs(10) {
+        pump(20);
+        end = ui.poll_end();
+    }
+    ui.close();
+    assert_eq!(
+        end,
+        Some(End::Saved { path: dir.join("a.gif"), warnings: vec!["camera stopped: The camera was disconnected or taken by another app".into()] })
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

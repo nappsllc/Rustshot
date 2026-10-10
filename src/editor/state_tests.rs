@@ -1254,9 +1254,178 @@ fn record_popover_without_a_camera() {
     ed(&mut a).hover_at = Instant::now() - Duration::from_secs(2);
     let m = a.mouse;
     ed(&mut a).prepare(None, m, Instant::now());
-    let tip = ed(&mut a).scene.as_ref().and_then(|s| s.tip.as_ref()).map(|t| t.label);
-    assert_eq!(tip, Some(crate::cam::NO_CAMERA));
+    let tip = ed(&mut a).scene.as_ref().and_then(|s| s.tip.as_ref()).map(|t| (t.label, t.below, t.anchor));
+    let (label, below, anchor) = tip.expect("tooltip");
+    assert_eq!(label, crate::cam::NO_CAMERA);
+    // Below the row (never over the Microphone row above it).
+    let tb = ed(&mut a).toolbar.clone().unwrap();
+    let row = tb.items[i].r;
+    assert!(below && anchor.y1() <= row.y1() + 0.5 && anchor.x >= row.x, "{anchor:?} {row:?}");
     rec_ui::FAKE_CAMS.with(|c| *c.borrow_mut() = rec_ui::fake_cams());
+}
+
+/// A fake camera: solid pictures about 100 a second.
+#[cfg(windows)]
+struct SolidCam;
+
+#[cfg(windows)]
+impl crate::cam::CamSource for SolidCam {
+    fn size(&self) -> (u32, u32) {
+        (64, 48)
+    }
+
+    fn read(&mut self, into: &mut crate::cam::CamFrame) -> anyhow::Result<bool> {
+        std::thread::sleep(Duration::from_millis(10));
+        (into.w, into.h) = (64, 48);
+        into.bgra.clear();
+        into.bgra.extend_from_slice(&[40u8, 160, 90, 255].repeat(64 * 48));
+        Ok(true)
+    }
+}
+
+/// Bubbles in `a` open fake cameras; `fail` makes the camera fail with it
+/// once opened.
+#[cfg(windows)]
+fn fake_camera(a: &mut App, fail: Option<&'static str>) {
+    ed(a).rec.cam.fake = Some(Box::new(move |_dev: &str| -> crate::cam::Opener {
+        Box::new(move || match fail {
+            Some(e) => anyhow::bail!(e),
+            None => Ok(Box::new(SolidCam) as Box<dyn crate::cam::CamSource>),
+        })
+    }));
+}
+
+#[cfg(windows)]
+fn overlaps(a: capture::IRect, b: capture::IRect) -> bool {
+    a.0 < b.0 + b.2 as i32 && b.0 < a.0 + a.2 as i32 && a.1 < b.1 + b.3 as i32 && b.1 < a.1 + a.3 as i32
+}
+
+/// The real bubble (a fake camera): opened with the camera switch,
+/// reopened for another camera (not for another shape), kept off the
+/// toolbar and popover, handed to the recording at Start.
+#[cfg(windows)]
+#[test]
+fn record_popover_bubble_opens_reopens_and_is_handed_over() {
+    let mut a = app(Some(r(100.0, 100.0, 600.0, 400.0)));
+    a.kind = RunKind::Daemon;
+    fake_camera(&mut a, None);
+    let (x, y) = button(&mut a, Act::Record);
+    click(&mut a, x, y);
+    let (cx, cy) = item(&mut a, |k| matches!(k, toolbar::Kind::Switch { act: Act::RecCamera, .. }));
+    click(&mut a, cx, cy);
+    assert_eq!(ed(&mut a).rec.cam.opened, 1);
+    assert_eq!(ed(&mut a).rec.cam.bubble.as_ref().map(|b| b.device().to_string()).as_deref(), Some(""));
+    // Off the toolbar and the popover.
+    let (pos, d) = {
+        let e = ed(&mut a);
+        let d = crate::cam::side(e.rec.opts.cam_size, 1.0);
+        (e.rec.cam.bubble.as_ref().and_then(|b| b.pos()).unwrap(), d)
+    };
+    a.pump();
+    for t in ed(&mut a).toolbar_screen_rects() {
+        assert!(!overlaps((pos.0, pos.1, d, d), t), "bubble {pos:?} over the toolbar {t:?}");
+    }
+    // Another shape: the same camera stays open.
+    let seg = |a: &mut App, act: Act| item(a, |k| matches!(k, toolbar::Kind::Seg { act: x, .. } if *x == act));
+    let (sx, sy) = seg(&mut a, Act::RecShape(crate::cam::Shape::Rounded));
+    click(&mut a, sx, sy);
+    assert_eq!(ed(&mut a).rec.cam.opened, 1);
+    // Another camera: reopened.
+    let (bx, by) = item(&mut a, |k| matches!(k, toolbar::Kind::DevBox { dev: toolbar::Dev::Cam, .. }));
+    click(&mut a, bx, by);
+    let (dx, dy) = item(&mut a, |k| matches!(k, toolbar::Kind::DevItem { dev: toolbar::Dev::Cam, i: 2, .. }));
+    click(&mut a, dx, dy);
+    assert_eq!(ed(&mut a).rec.cam.opened, 2);
+    assert_eq!(ed(&mut a).rec.cam.bubble.as_ref().map(|b| b.device().to_string()).as_deref(), Some("{cam-2}"));
+    // Start: the recording gets that bubble (no new camera).
+    let (tx, ty) = item(&mut a, |k| matches!(k, toolbar::Kind::Primary { .. }));
+    click(&mut a, tx, ty);
+    assert!(hidden(&a));
+    assert!(a.rec_bubble.is_some(), "the recording has the bubble");
+}
+
+/// The camera fails once open: a toast says why, the camera switches off
+/// and the bubble closes.
+#[cfg(windows)]
+#[test]
+fn record_popover_camera_error_is_a_toast() {
+    let mut a = app(Some(r(100.0, 100.0, 600.0, 400.0)));
+    fake_camera(&mut a, Some(crate::cam::ACCESS_OFF));
+    let (x, y) = button(&mut a, Act::Record);
+    click(&mut a, x, y);
+    let (cx, cy) = item(&mut a, |k| matches!(k, toolbar::Kind::Switch { act: Act::RecCamera, .. }));
+    click(&mut a, cx, cy);
+    let t = Instant::now();
+    while ed(&mut a).rec.opts.camera && t.elapsed() < Duration::from_secs(3) {
+        std::thread::sleep(Duration::from_millis(10));
+        a.pump();
+    }
+    let e = ed(&mut a);
+    assert!(!e.rec.opts.camera, "the camera is switched off");
+    assert!(e.rec.cam.bubble.is_none() && e.rec.cam.shown.is_none());
+    assert_eq!(e.notice.as_ref().map(|n| n.text.as_str()), Some(crate::cam::ACCESS_OFF));
+}
+
+/// Enter in record mode with the popover closed, no countdown and the
+/// camera on: the camera opens and the recording starts once its first
+/// picture is in.
+#[cfg(windows)]
+#[test]
+fn record_mode_enter_waits_for_the_first_picture() {
+    let mut a = app(None);
+    a.st = State::Hidden;
+    a.kind = RunKind::Daemon;
+    a.cfg.rec_countdown = false;
+    assert!(a.on_hot(HotEvent::Record));
+    queue(Ok(synthetic_shot()));
+    a.on_event(Ev::Timer);
+    drag(&mut a, (200, 150), (520, 390));
+    // The popover closed, then the camera on (no bubble before Start).
+    let (x, y) = button(&mut a, Act::Record);
+    click(&mut a, x, y);
+    assert!(!ed(&mut a).rec.open);
+    ed(&mut a).rec.opts.camera = true;
+    fake_camera(&mut a, None);
+    a.pump();
+    assert_eq!(ed(&mut a).rec.cam.opened, 0, "no bubble while the popover is closed");
+    key(&mut a, key::RETURN);
+    assert!(hidden(&a));
+    assert_eq!(rec_phase(&a), Some(rec_ui::Phase::Recording), "no countdown");
+    assert_eq!(a.rec_bubble, Some(true), "the bubble shows a picture as the recording starts");
+}
+
+/// The cameras are listed on a worker: until they come the Camera row
+/// says "Looking for cameras…", is disabled and has no tooltip; then it
+/// is the Camera switch.
+#[cfg(windows)]
+#[test]
+fn record_popover_lists_cameras_in_the_background() {
+    let mut a = app(Some(r(100.0, 100.0, 600.0, 400.0)));
+    let (tx, rx) = std::sync::mpsc::channel();
+    ed(&mut a).rec.cams_rx = Some(rx);
+    let (x, y) = button(&mut a, Act::Record);
+    click(&mut a, x, y);
+    assert!(ed(&mut a).rec.cams_looking());
+    let row = |a: &mut App| {
+        let m = a.mouse;
+        ed(a).prepare(None, m, Instant::now());
+        let tb = ed(a).toolbar.clone().unwrap();
+        tb.items.into_iter().find(|i| matches!(i.kind, toolbar::Kind::Switch { act: Act::RecCamera, .. })).unwrap()
+    };
+    let it = row(&mut a);
+    assert!(matches!(it.kind, toolbar::Kind::Switch { label: toolbar::LOOKING_CAMS, .. }) && it.disabled);
+    assert!(animating(ed(&mut a), None, Instant::now()), "ticks until the list comes");
+    let (cx, cy) = ((it.r.x + it.r.w / 2.0) as i32, (it.r.y + it.r.h / 2.0) as i32);
+    mv(&mut a, cx, cy);
+    ed(&mut a).hover_at = Instant::now() - Duration::from_secs(2);
+    let m = a.mouse;
+    ed(&mut a).prepare(None, m, Instant::now());
+    assert!(ed(&mut a).scene.as_ref().unwrap().tip.is_none(), "no \"No camera found\" while looking");
+    tx.send(rec_ui::fake_cams()).unwrap();
+    a.pump();
+    assert!(!ed(&mut a).rec.cams_looking() && ed(&mut a).rec.has_cams());
+    let it = row(&mut a);
+    assert!(matches!(it.kind, toolbar::Kind::Switch { label: "Camera", .. }) && !it.disabled);
 }
 
 /// The record hotkey: idle → selection in record mode (popover open,

@@ -524,11 +524,21 @@ pub fn act_tip(a: Act, km: &Keymap) -> (&'static str, Vec<String>) {
     (label, keys)
 }
 
-/// Dark label + key caps, 8 above `anchor` (below if no room).
-pub fn tooltip(f: &mut Fb, ui: &Ui, anchor: FRect, label: &str, keys: &[String], area: FRect, k: f32) {
+/// Where a tooltip goes: by `anchor`, inside `area`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TipAt {
+    pub anchor: FRect,
+    pub area: FRect,
+    /// Below the anchor (else above it, below only when there is no room).
+    pub below: bool,
+}
+
+/// Dark label + key caps, 8 above the anchor (below if no room, or when
+/// asked).
+pub fn tooltip(f: &mut Fb, ui: &Ui, at: TipAt, label: &str, keys: &[String], k: f32) {
     let th = ui.th;
     let (h, gap, kgap) = (ui.px(26.0), ui.px(8.0), ui.px(4.0));
-    let r = tooltip_rect(ui, anchor, label, keys, area);
+    let r = tooltip_rect(ui, at, label, keys);
     panel(f, ui, r, 7.0, &SMALL_LAYERS, th.tooltip_bg, rgba(0xFFFFFF, 80), k);
     let cy = r.y + h / 2.0;
     let mut cx = r.x + ui.px(9.0);
@@ -544,7 +554,8 @@ pub fn tooltip(f: &mut Fb, ui: &Ui, anchor: FRect, label: &str, keys: &[String],
 }
 
 /// Where `tooltip` puts its panel.
-fn tooltip_rect(ui: &Ui, anchor: FRect, label: &str, keys: &[String], area: FRect) -> FRect {
+fn tooltip_rect(ui: &Ui, at: TipAt, label: &str, keys: &[String]) -> FRect {
+    let TipAt { anchor, area, below } = at;
     let (h, gap, kgap) = (ui.px(26.0), ui.px(8.0), ui.px(4.0));
     let keys_w: f32 = keys.iter().map(|s| key_w(ui, s)).sum::<f32>() + kgap * keys.len().saturating_sub(1) as f32;
     let mut w = ui.px(9.0) + tw(ui, 12.0, label) + ui.px(if keys.is_empty() { 9.0 } else { 6.0 });
@@ -553,7 +564,7 @@ fn tooltip_rect(ui: &Ui, anchor: FRect, label: &str, keys: &[String], area: FRec
     }
     let x = (anchor.x + anchor.w / 2.0 - w / 2.0).clamp(area.x, (area.x1() - w).max(area.x));
     let mut y = anchor.y - ui.px(8.0) - h;
-    if y < area.y {
+    if below || y < area.y {
         y = anchor.y1() + ui.px(8.0);
     }
     FRect { x, y, w, h }
@@ -658,8 +669,8 @@ pub fn toolbar_bounds(ui: &Ui, tb: &Toolbar) -> FRect {
     tb.pop.map_or(b, |p| union(b, surface_bounds(ui, p)))
 }
 
-pub fn tooltip_bounds(ui: &Ui, anchor: FRect, label: &str, keys: &[String], area: FRect) -> FRect {
-    surface_bounds(ui, tooltip_rect(ui, anchor, label, keys, area))
+pub fn tooltip_bounds(ui: &Ui, at: TipAt, label: &str, keys: &[String]) -> FRect {
+    surface_bounds(ui, tooltip_rect(ui, at, label, keys))
 }
 
 pub fn hint_bounds(ui: &Ui, area: FRect) -> FRect {

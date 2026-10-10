@@ -350,3 +350,23 @@ fn render_recording_previews() {
         save(&format!("{tn}-tray-recording.png"), w, h, &px, bg);
     }
 }
+
+/// A camera that stopped during the recording is said with the file.
+#[test]
+fn camera_failure_is_a_warning_of_the_saved_file() {
+    let path = std::path::PathBuf::from("a.mp4");
+    let saved = End::Saved { path: path.clone(), warnings: vec!["microphone not recorded: gone".into()] };
+    assert_eq!(with_camera_error(saved.clone(), None), saved);
+    assert_eq!(
+        with_camera_error(saved, Some("The camera was disconnected or taken by another app".into())),
+        End::Saved {
+            path,
+            warnings: vec![
+                "microphone not recorded: gone".into(),
+                "camera stopped: The camera was disconnected or taken by another app".into()
+            ]
+        }
+    );
+    assert_eq!(with_camera_error(End::Cancelled, Some("x".into())), End::Cancelled);
+    assert_eq!(with_camera_error(End::Failed("f".into()), Some("x".into())), End::Failed("f".into()));
+}

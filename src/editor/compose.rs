@@ -208,7 +208,15 @@ pub struct TipUi {
     /// Key caps of the first chord bound to `act`.
     pub keys: Vec<String>,
     pub area: FRect,
+    /// Below the anchor (the Camera row's: never over the rows above).
+    pub below: bool,
     pub k: f32,
+}
+
+impl TipUi {
+    fn at(&self) -> chrome::TipAt {
+        chrome::TipAt { anchor: self.anchor, area: self.area, below: self.below }
+    }
 }
 
 /// Chrome elements in paint order.
@@ -489,6 +497,7 @@ impl Edit {
             mic: rp.opts.mic,
             camera: rp.opts.camera,
             cams: rp.has_cams(),
+            cams_looking: rp.cams_looking(),
             shape: rp.opts.cam_shape,
             size: rp.opts.cam_size,
             mic_label: &mic_label,
@@ -555,6 +564,7 @@ impl Edit {
             k: t.opacity(now),
         });
         let mut tip = None;
+        let looking = self.rec.cams_looking();
         let bar = self.toolbar.as_ref().map(|tb| {
             let kb = self.mo.bar.value(now);
             let (value, unit) = self.size_label();
@@ -567,11 +577,14 @@ impl Edit {
                 match it.kind {
                     toolbar::Kind::Btn(act) => {
                         let (label, keys) = chrome::act_tip(act, &self.keys);
-                        tip = Some(TipUi { anchor: it.r, act, label, keys, area, k });
+                        tip = Some(TipUi { anchor: it.r, act, label, keys, area, below: false, k });
                     }
-                    // Why the Camera row does nothing.
-                    toolbar::Kind::Switch { act: act @ toolbar::Act::RecCamera, .. } if it.disabled => {
-                        tip = Some(TipUi { anchor: it.r, act, label: crate::cam::NO_CAMERA, keys: Vec::new(), area, k });
+                    // Why the Camera row does nothing: below its switch,
+                    // clear of the Microphone row above.
+                    toolbar::Kind::Switch { act: act @ toolbar::Act::RecCamera, .. } if it.disabled && !looking => {
+                        let sw = 40.0 * s;
+                        let anchor = FRect { x: it.r.x1() - sw, y: it.r.y, w: sw, h: it.r.h };
+                        tip = Some(TipUi { anchor, act, label: crate::cam::NO_CAMERA, keys: Vec::new(), area, below: true, k });
                     }
                     _ => {}
                 }
@@ -648,7 +661,7 @@ impl Edit {
             El::Toast => sc.toast.as_ref().map_or(Vec::new(), |t| one(chrome::toast_bounds(&ui, &t.text, t.area, t.k))),
             El::Bar => sc.bar.as_ref().map_or(Vec::new(), |b| one(chrome::toolbar_bounds(&ui, &b.tb))),
             El::Tip => sc.tip.as_ref().map_or(Vec::new(), |t| {
-                one(chrome::tooltip_bounds(&ui, t.anchor, t.label, &t.keys, t.area))
+                one(chrome::tooltip_bounds(&ui, t.at(), t.label, &t.keys))
             }),
             El::Hint => sc.hint.map_or(Vec::new(), |(area, _)| one(chrome::hint_bounds(&ui, area))),
         }
@@ -759,7 +772,7 @@ impl Edit {
         if let Some(t) = &sc.tip
             && hits(El::Tip)
         {
-            chrome::tooltip(&mut f, &ui, t.anchor, t.label, &t.keys, t.area, t.k);
+            chrome::tooltip(&mut f, &ui, t.at(), t.label, &t.keys, t.k);
         }
         if let Some((area, kh)) = sc.hint
             && hits(El::Hint)

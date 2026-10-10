@@ -26,7 +26,7 @@ use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, ReleaseDC, SelectObject, AC_SRC_ALPHA,
-    AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HGDIOBJ,
+    AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HBITMAP, HDC, HGDIOBJ,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
@@ -149,6 +149,7 @@ fn register() -> Result<()> {
 struct Layer {
     hwnd: HWND,
     shown: bool,
+    dib: Dib,
 }
 
 impl Layer {
@@ -167,7 +168,7 @@ impl Layer {
         if let Err(e) = unsafe { SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE) } {
             eprintln!("rustshot: cannot exclude the recording frame from capture: {e}");
         }
-        Ok(Layer { hwnd, shown: false })
+        Ok(Layer { hwnd, shown: false, dib: Dib::default() })
     }
 
     /// Show `bgra` (`w`x`h`, premultiplied) at (x, y).
@@ -176,7 +177,7 @@ impl Layer {
             self.hide();
             return;
         }
-        update_layered(self.hwnd, x, y, w, h, bgra);
+        self.dib.put(self.hwnd, x, y, w, h, bgra);
         unsafe {
             if !self.shown {
                 let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
@@ -196,28 +197,75 @@ impl Layer {
     }
 }
 
-/// Put `bgra` (`w`x`h`, premultiplied BGRA) on layered window `hwnd` at
-/// (x, y) through a DIB section and `UpdateLayeredWindow`.
-pub(crate) fn update_layered(hwnd: HWND, x: i32, y: i32, w: u32, h: u32, bgra: &[u8]) {
-    if w == 0 || h == 0 || bgra.len() < (w * h * 4) as usize {
-        return;
-    }
-    unsafe {
-        let screen = GetDC(None);
-        let mem = CreateCompatibleDC(Some(screen));
-        let mut bmi = BITMAPINFO::default();
-        bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
-        bmi.bmiHeader.biWidth = w as i32;
-        bmi.bmiHeader.biHeight = -(h as i32);
-        bmi.bmiHeader.biPlanes = 1;
-        bmi.bmiHeader.biBitCount = 32;
-        bmi.bmiHeader.biCompression = BI_RGB.0;
-        let mut bits = std::ptr::null_mut();
-        if let Ok(bmp) = CreateDIBSection(Some(mem), &bmi, DIB_RGB_COLORS, &mut bits, None, 0)
-            && !bits.is_null()
+/// A memory DC with a 32-bit DIB section, kept from one
+/// `UpdateLayeredWindow` to the next (made again only when the size
+/// changes): a window repainted many times a second allocates nothing.
+#[derive(Default)]
+pub(crate) struct Dib {
+    /// (memory DC, bitmap, the DC's bitmap before, bits, w, h)
+    cur: Option<(HDC, HBITMAP, HGDIOBJ, *mut u8, u32, u32)>,
+}
+
+impl Dib {
+    fn ensure(&mut self, w: u32, h: u32) -> Option<(HDC, *mut u8)> {
+        if let Some((dc, _, _, bits, cw, ch)) = self.cur
+            && (cw, ch) == (w, h)
         {
-            std::ptr::copy_nonoverlapping(bgra.as_ptr(), bits as *mut u8, (w * h * 4) as usize);
-            let old = SelectObject(mem, HGDIOBJ(bmp.0));
+            return Some((dc, bits));
+        }
+        self.release();
+        unsafe {
+            let mem = CreateCompatibleDC(None);
+            if mem.is_invalid() {
+                return None;
+            }
+            let mut bmi = BITMAPINFO::default();
+            bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+            bmi.bmiHeader.biWidth = w as i32;
+            bmi.bmiHeader.biHeight = -(h as i32);
+            bmi.bmiHeader.biPlanes = 1;
+            bmi.bmiHeader.biBitCount = 32;
+            bmi.bmiHeader.biCompression = BI_RGB.0;
+            let mut bits = std::ptr::null_mut();
+            match CreateDIBSection(Some(mem), &bmi, DIB_RGB_COLORS, &mut bits, None, 0) {
+                Ok(bmp) if !bits.is_null() => {
+                    let old = SelectObject(mem, HGDIOBJ(bmp.0));
+                    self.cur = Some((mem, bmp, old, bits as *mut u8, w, h));
+                    Some((mem, bits as *mut u8))
+                }
+                Ok(bmp) => {
+                    let _ = DeleteObject(HGDIOBJ(bmp.0));
+                    let _ = DeleteDC(mem);
+                    None
+                }
+                Err(_) => {
+                    let _ = DeleteDC(mem);
+                    None
+                }
+            }
+        }
+    }
+
+    fn release(&mut self) {
+        if let Some((mem, bmp, old, ..)) = self.cur.take() {
+            unsafe {
+                SelectObject(mem, old);
+                let _ = DeleteObject(HGDIOBJ(bmp.0));
+                let _ = DeleteDC(mem);
+            }
+        }
+    }
+
+    /// Put `bgra` (`w`x`h`, premultiplied BGRA) on layered window `hwnd`
+    /// at (x, y).
+    pub(crate) fn put(&mut self, hwnd: HWND, x: i32, y: i32, w: u32, h: u32, bgra: &[u8]) {
+        if w == 0 || h == 0 || bgra.len() < (w * h * 4) as usize {
+            return;
+        }
+        let Some((mem, bits)) = self.ensure(w, h) else { return };
+        unsafe {
+            std::ptr::copy_nonoverlapping(bgra.as_ptr(), bits, (w * h * 4) as usize);
+            let screen = GetDC(None);
             let blend = BLENDFUNCTION {
                 BlendOp: AC_SRC_OVER as u8,
                 BlendFlags: 0,
@@ -236,11 +284,14 @@ pub(crate) fn update_layered(hwnd: HWND, x: i32, y: i32, w: u32, h: u32, bgra: &
                 Some(&blend),
                 ULW_ALPHA,
             );
-            SelectObject(mem, old);
-            let _ = DeleteObject(HGDIOBJ(bmp.0));
+            ReleaseDC(None, screen);
         }
-        let _ = DeleteDC(mem);
-        ReleaseDC(None, screen);
+    }
+}
+
+impl Drop for Dib {
+    fn drop(&mut self) {
+        self.release();
     }
 }
 
@@ -567,7 +618,8 @@ impl Recorder {
 
     pub fn poll_end(&mut self) -> Option<End> {
         match self.worker.rx.try_recv() {
-            Ok(e) => Some(e),
+            // A camera that stopped meanwhile is said with the file.
+            Ok(e) => Some(super::with_camera_error(e, self.bubble.as_ref().and_then(|b| b.error()))),
             Err(mpsc::TryRecvError::Empty) => None,
             Err(mpsc::TryRecvError::Disconnected) => Some(End::Failed("the recording thread stopped".into())),
         }

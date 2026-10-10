@@ -11,6 +11,8 @@ use crate::uifb::C4;
 pub const BTN: f32 = 32.0;
 pub const PAD: f32 = 6.0;
 pub const MARGIN: f32 = 12.0;
+/// The Camera row's label while the cameras are being listed.
+pub const LOOKING_CAMS: &str = "Looking for cameras…";
 const IN_GAP: f32 = 2.0;
 const GROUP_GAP: f32 = 6.0;
 const SEP_LEN: f32 = 16.0;
@@ -155,6 +157,8 @@ pub struct RecView<'a> {
     pub camera: bool,
     /// There is a camera (else the Camera row is disabled, "No camera found").
     pub cams: bool,
+    /// The cameras are still being listed (the row says so, disabled).
+    pub cams_looking: bool,
     pub shape: Shape,
     pub size: CamSize,
     /// The chosen microphone's name ("Default microphone" for the default).
@@ -401,7 +405,8 @@ fn place_rec(rv: &RecView, bar: FRect, above: bool, items: &mut Vec<Item>, texts
         y += DEV_H + 6.0;
     }
     let cam = rv.camera && rv.cams;
-    push(Kind::Switch { act: Act::RecCamera, label: "Camera", on: cam }, row(y), !rv.cams);
+    let label = if rv.cams_looking { LOOKING_CAMS } else { "Camera" };
+    push(Kind::Switch { act: Act::RecCamera, label, on: cam }, row(y), !rv.cams);
     y += SWITCH_H;
     if cam {
         y += 2.0;
@@ -766,6 +771,7 @@ mod tests {
             mic,
             camera: false,
             cams: true,
+            cams_looking: false,
             shape: Shape::Circle,
             size: CamSize::M,
             mic_label: "Default microphone",

@@ -28,6 +28,8 @@ mod win;
 
 #[cfg(windows)]
 pub use bubble::Bubble;
+#[cfg(all(windows, test))]
+pub(crate) use bubble::Opener;
 
 use crate::capture::IRect;
 use crate::theme::Theme;
@@ -66,9 +68,10 @@ pub struct CamFrame {
 pub trait CamSource: Send {
     /// The picture size it delivers.
     fn size(&self) -> (u32, u32);
-    /// The next picture (blocks for about one frame); `None` when the
-    /// camera had nothing this time (a gap in the stream).
-    fn read(&mut self) -> Result<Option<CamFrame>>;
+    /// The next picture into `into` (its buffer is reused; blocks for
+    /// about one frame); false when the camera had nothing this time (a
+    /// gap in the stream, or a picture that was dropped).
+    fn read(&mut self, into: &mut CamFrame) -> Result<bool>;
 }
 
 /// The cameras on this system (none where there is no capture yet).
@@ -246,8 +249,10 @@ pub struct Template {
     shadow: Vec<u8>,
     /// Shape coverage, `d`x`d`.
     pub mask: Vec<u8>,
-    /// Ring coverage, `d`x`d`.
+    /// Ring coverage, `d`x`d` (`mask - pic`).
     pub ring: Vec<u8>,
+    /// The picture's coverage: the shape inside the ring, `d`x`d`.
+    pub pic: Vec<u8>,
     ring_c: C4,
     /// What shows until the first picture: BGRA `d`x`d`.
     placeholder: Vec<u8>,
@@ -275,14 +280,18 @@ pub fn template(look: Look, scale: f32, th: &Theme) -> Template {
     }
     let mut mask = vec![0u8; (d * d) as usize];
     let mut ring = vec![0u8; (d * d) as usize];
+    let mut pic = vec![0u8; (d * d) as usize];
     for y in 0..d {
         for x in 0..d {
             let e = sdf(look.shape, df, x as f32 + 0.5, y as f32 + 0.5);
             let inside = (0.5 - e).clamp(0.0, 1.0);
-            let inner = (0.5 - (e + rw)).clamp(0.0, 1.0);
+            let inner = (0.5 - (e + rw)).clamp(0.0, 1.0).min(inside);
             let i = (y * d + x) as usize;
             mask[i] = (inside * 255.0).round() as u8;
-            ring[i] = ((inside - inner).max(0.0) * 255.0).round() as u8;
+            // The picture only inside the ring; the ring takes the rest of
+            // the shape, so the edge has no picture fringe.
+            pic[i] = ((inner * 255.0).round() as u8).min(mask[i]);
+            ring[i] = mask[i] - pic[i];
         }
     }
     // Placeholder: a dark field with the camera glyph.
@@ -297,7 +306,7 @@ pub fn template(look: Look, scale: f32, th: &Theme) -> Template {
     for p in ph.as_chunks_mut::<4>().0 {
         p.swap(0, 2);
     }
-    Template { d, pad, w, shadow, mask, ring, ring_c: th.accent, placeholder: ph }
+    Template { d, pad, w, shadow, mask, ring, pic, ring_c: th.accent, placeholder: ph }
 }
 
 /// The bubble's pixels: `t`'s shadow, the picture `frame` (`t.d` square,
@@ -324,12 +333,13 @@ pub fn compose(t: &Template, frame: Option<&CamFrame>, mirror: bool, out: &mut V
             let sx = if flip { d - 1 - x } else { x };
             let src = &row[sx * 4..][..4];
             let px = &mut o[x * 4..][..4];
-            let rg = t.ring[y * d + x] as u32;
+            let (rg, pm) = (t.ring[y * d + x] as u32, t.pic[y * d + x] as u32);
             for c in 0..4 {
                 let v = if c == 3 { 255 } else { src[c] as u32 };
-                // Picture over the shadow by the mask, then the ring over it.
-                let under = (v * m + px[c] as u32 * (255 - m) + 127) / 255;
-                px[c] = ((rc[c] * rg + under * (255 - rg) + 127) / 255) as u8;
+                // The picture by its coverage, the ring by its own, the
+                // shadow where the shape leaves room (rg + pm == m, so a
+                // colour never exceeds its alpha).
+                px[c] = ((v * pm + rc[c] * rg + px[c] as u32 * (255 - m) + 127) / 255) as u8;
             }
         }
     }
@@ -432,6 +442,54 @@ pub fn snap(pos: (i32, i32), area: IRect, d: i32, scale: f32) -> (i32, i32) {
     best.unwrap_or(pos)
 }
 
+fn overlaps(a: IRect, b: IRect) -> bool {
+    a.0 < right(b) && b.0 < right(a) && a.1 < bottom(b) && b.1 < bottom(a)
+}
+
+fn inside(a: IRect, b: IRect) -> bool {
+    a.0 >= b.0 && a.1 >= b.1 && right(a) <= right(b) && bottom(a) <= bottom(b)
+}
+
+/// `pos` of a `d` px bubble moved off the rects in `avoid` (the overlay's
+/// toolbar and popover): kept when it covers none of them, else the
+/// nearest corner position of `area` that is free, else the nearest spot
+/// just outside the area on `screen` that is free (a small area), else
+/// `pos` as it was.
+pub fn clear_of(pos: (i32, i32), area: IRect, d: i32, scale: f32, avoid: &[IRect], screen: IRect) -> (i32, i32) {
+    let du = d.max(0) as u32;
+    let gap = (8.0 * scale).round() as i32;
+    let grown: Vec<IRect> = avoid.iter().map(|r| (r.0 - gap, r.1 - gap, r.2 + 2 * gap as u32, r.3 + 2 * gap as u32)).collect();
+    let free = |p: (i32, i32)| !grown.iter().any(|r| overlaps((p.0, p.1, du, du), *r));
+    if free(pos) {
+        return pos;
+    }
+    let dist = |p: &(i32, i32)| (p.0 - pos.0).pow(2) + (p.1 - pos.1).pow(2);
+    let mut corners: Vec<(i32, i32)> = [Corner::TopLeft, Corner::TopRight, Corner::BottomLeft, Corner::BottomRight]
+        .into_iter()
+        .map(|c| place(Rel { corner: c, dx: INSET, dy: INSET }, area, d, scale))
+        .filter(|&p| inside((p.0, p.1, du, du), area))
+        .collect();
+    corners.sort_by_key(dist);
+    if let Some(p) = corners.into_iter().find(|&p| free(p)) {
+        return p;
+    }
+    let inset = (INSET * scale).round() as i32;
+    let (l, t, r, b) = (area.0, area.1, right(area), bottom(area));
+    let mut outside = vec![
+        (l - inset - d, b - d),
+        (r + inset, b - d),
+        (l - inset - d, t),
+        (r + inset, t),
+        (l, b + inset),
+        (r - d, b + inset),
+        (l, t - inset - d),
+        (r - d, t - inset - d),
+    ];
+    outside.retain(|&p| inside((p.0, p.1, du, du), screen));
+    outside.sort_by_key(dist);
+    outside.into_iter().find(|&p| free(p)).unwrap_or(pos)
+}
+
 // ---------------------------------------------------------------------------
 // Camera pixels
 // ---------------------------------------------------------------------------
@@ -485,40 +543,70 @@ pub fn pick_mode(modes: &[Mode], pref: (u32, u32)) -> std::result::Result<usize,
     }
 }
 
-/// The YUV → RGB matrix of a camera's pictures (limited range).
+/// The YUV → RGB matrix of a camera's pictures.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Matrix {
     Bt601,
     Bt709,
 }
 
-/// Fixed-point (×256) coefficients: (R from V, G from U, G from V, B from U).
-fn coef(m: Matrix) -> (i32, i32, i32, i32) {
-    match m {
-        Matrix::Bt601 => (409, -100, -208, 516),
-        Matrix::Bt709 => (459, -55, -136, 541),
+/// How a camera's YUV is read: the matrix, and full range (0-255) or
+/// limited (16-235, the usual one; a bare [`Matrix`] means limited).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Yuv {
+    pub matrix: Matrix,
+    pub full: bool,
+}
+
+impl From<Matrix> for Yuv {
+    fn from(matrix: Matrix) -> Yuv {
+        Yuv { matrix, full: false }
     }
 }
 
+/// Fixed-point (×256) conversion coefficients.
+#[derive(Clone, Copy)]
+struct Coef {
+    /// Y gain and offset.
+    yk: i32,
+    yo: i32,
+    /// R from V, G from U, G from V, B from U.
+    rv: i32,
+    gu: i32,
+    gv: i32,
+    bu: i32,
+}
+
+fn coef(cs: Yuv) -> Coef {
+    let (yk, yo) = if cs.full { (256, 0) } else { (298, 16) };
+    let (rv, gu, gv, bu) = match (cs.matrix, cs.full) {
+        (Matrix::Bt601, false) => (409, -100, -208, 516),
+        (Matrix::Bt709, false) => (459, -55, -136, 541),
+        (Matrix::Bt601, true) => (359, -88, -183, 454),
+        (Matrix::Bt709, true) => (403, -48, -120, 475),
+    };
+    Coef { yk, yo, rv, gu, gv, bu }
+}
+
 #[inline(always)]
-fn yuv_px(y: u8, u: u8, v: u8, k: (i32, i32, i32, i32), out: &mut [u8]) {
-    let c = 298 * (i32::from(y) - 16) + 128;
+fn yuv_px(y: u8, u: u8, v: u8, k: Coef, out: &mut [u8]) {
+    let c = k.yk * (i32::from(y) - k.yo) + 128;
     let (d, e) = (i32::from(u) - 128, i32::from(v) - 128);
-    out[0] = ((c + k.3 * d) >> 8).clamp(0, 255) as u8;
-    out[1] = ((c + k.1 * d + k.2 * e) >> 8).clamp(0, 255) as u8;
-    out[2] = ((c + k.0 * e) >> 8).clamp(0, 255) as u8;
+    out[0] = ((c + k.bu * d) >> 8).clamp(0, 255) as u8;
+    out[1] = ((c + k.gu * d + k.gv * e) >> 8).clamp(0, 255) as u8;
+    out[2] = ((c + k.rv * e) >> 8).clamp(0, 255) as u8;
     out[3] = 255;
 }
 
 /// YUY2 (Y0 U Y1 V per pixel pair, rows `stride` bytes apart) to BGRA.
-pub fn yuy2_to_bgra(src: &[u8], stride: usize, w: u32, h: u32, m: Matrix, out: &mut Vec<u8>) {
+pub fn yuy2_to_bgra(src: &[u8], stride: usize, w: u32, h: u32, cs: impl Into<Yuv>, out: &mut Vec<u8>) {
     let (w, h) = (w as usize & !1, h as usize);
     out.clear();
     out.resize(w * h * 4, 0);
-    if stride < w * 2 || src.len() < stride * h.saturating_sub(1) + w * 2 {
+    if h == 0 || stride < w * 2 || src.len() < stride * (h - 1) + w * 2 {
         return;
     }
-    let k = coef(m);
+    let k = coef(cs.into());
     for y in 0..h {
         let row = &src[y * stride..][..w * 2];
         let o = &mut out[y * w * 4..][..w * 4];
@@ -532,14 +620,14 @@ pub fn yuy2_to_bgra(src: &[u8], stride: usize, w: u32, h: u32, m: Matrix, out: &
 
 /// NV12 (a Y plane, then interleaved U V at half resolution, both with
 /// rows `stride` bytes apart) to BGRA.
-pub fn nv12_to_bgra(y_plane: &[u8], uv_plane: &[u8], stride: usize, w: u32, h: u32, m: Matrix, out: &mut Vec<u8>) {
+pub fn nv12_to_bgra(y_plane: &[u8], uv_plane: &[u8], stride: usize, w: u32, h: u32, cs: impl Into<Yuv>, out: &mut Vec<u8>) {
     let (w, h) = (w as usize & !1, h as usize & !1);
     out.clear();
     out.resize(w * h * 4, 0);
-    if stride < w || y_plane.len() < stride * (h - 1) + w || uv_plane.len() < stride * (h / 2 - 1) + w {
+    if h == 0 || stride < w || y_plane.len() < stride * (h - 1) + w || uv_plane.len() < stride * (h / 2 - 1) + w {
         return;
     }
-    let k = coef(m);
+    let k = coef(cs.into());
     for y in 0..h {
         let row = &y_plane[y * stride..][..w];
         let uv = &uv_plane[(y / 2) * stride..][..w];
@@ -551,12 +639,95 @@ pub fn nv12_to_bgra(y_plane: &[u8], uv_plane: &[u8], stride: usize, w: u32, h: u
     }
 }
 
+/// Where one picture sits in a locked camera buffer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Layout {
+    /// Bytes from one row to the next.
+    pub stride: usize,
+    /// NV12: where the UV plane starts (bytes from the start; 0 for YUY2).
+    pub uv: usize,
+    /// The bytes the picture needs (never more than the buffer has).
+    pub len: usize,
+}
+
+/// The [`Layout`] of a visible `w`x`h` `fmt` picture in a buffer of `len`
+/// bytes with rows `stride` apart; `None` when the buffer is too short for
+/// it (the picture is dropped). `coded_h` is the media type's frame height
+/// (more than `h` when a display aperture crops it).
+///
+/// NV12's UV plane starts after the Y plane's rows, which may be more than
+/// `h` (padded to a multiple of 16: 1080 → 1088). The first of these that
+/// fits wins: `coded_h`; the rows of a padded Y plane plus a padded UV
+/// plane (`len / stride = 1.5 * rows`); the rows of a padded Y plane when
+/// the UV plane's trailing padding is missing (`len / stride = rows +
+/// h / 2`); `h`. Padded heights count only when they are multiples of 8
+/// and less than 64 rows over `h`.
+pub fn layout(fmt: Fmt, w: u32, h: u32, coded_h: u32, stride: usize, len: usize) -> Option<Layout> {
+    match fmt {
+        Fmt::Yuy2 => {
+            let (w, h) = (w as usize & !1, h as usize);
+            let need = (stride * h.checked_sub(1)?).checked_add(w * 2)?;
+            (w > 0 && stride >= w * 2 && need <= len).then_some(Layout { stride, uv: 0, len: need })
+        }
+        Fmt::Nv12 => {
+            let (w, h) = (w as usize & !1, h as usize & !1);
+            if w == 0 || h == 0 || stride < w {
+                return None;
+            }
+            let uv_end = |rows: usize| rows * stride + stride * (h / 2 - 1) + w;
+            let rows = len.div_ceil(stride);
+            let padded = |r: usize| r >= h && r < h + 64 && r.is_multiple_of(8);
+            let mut cands = Vec::with_capacity(4);
+            if coded_h as usize > h {
+                cands.push(coded_h as usize);
+            }
+            if rows.is_multiple_of(3) && padded(rows / 3 * 2) {
+                cands.push(rows / 3 * 2);
+            }
+            if let Some(r) = rows.checked_sub(h / 2)
+                && padded(r)
+            {
+                cands.push(r);
+            }
+            cands.push(h);
+            let y_rows = cands.into_iter().find(|&r| uv_end(r) <= len)?;
+            Some(Layout { stride, uv: y_rows * stride, len: uv_end(y_rows) })
+        }
+        Fmt::Mjpg | Fmt::Other => None,
+    }
+}
+
+/// Turn a BGRA `w`x`h` picture upside down (from a bottom-up buffer).
+pub fn flip_rows(bgra: &mut [u8], w: u32, h: u32) {
+    let row = w as usize * 4;
+    let h = h as usize;
+    if bgra.len() < row * h {
+        return;
+    }
+    for y in 0..h / 2 {
+        let (top, rest) = bgra.split_at_mut((h - 1 - y) * row);
+        top[y * row..][..row].swap_with_slice(&mut rest[..row]);
+    }
+}
+
 /// The centre square of `f`, resampled (box filter) to `d`x`d`.
+#[cfg_attr(not(test), allow(dead_code))] // tests and previews
 pub fn fit_square(f: &CamFrame, d: u32) -> CamFrame {
+    let mut out = CamFrame::default();
+    fit_square_into(f, d, &mut Vec::new(), &mut out);
+    out
+}
+
+/// [`fit_square`] into `out` with `tmp` as scratch (both reused from one
+/// picture to the next: no allocation once they have grown).
+pub fn fit_square_into(f: &CamFrame, d: u32, tmp: &mut Vec<u32>, out: &mut CamFrame) {
     let (w, h) = (f.w as usize, f.h as usize);
     let d = d as usize;
     if w == 0 || h == 0 || d == 0 || f.bgra.len() < w * h * 4 {
-        return CamFrame::default();
+        out.w = 0;
+        out.h = 0;
+        out.bgra.clear();
+        return;
     }
     let s = w.min(h);
     let (x0, y0) = ((w - s) / 2, (h - s) / 2);
@@ -567,7 +738,8 @@ pub fn fit_square(f: &CamFrame, d: u32) -> CamFrame {
         (a, b)
     };
     // Horizontal pass: `d` columns for each of the `s` source rows.
-    let mut tmp = vec![0u32; s * d * 4];
+    tmp.clear();
+    tmp.resize(s * d * 4, 0);
     for y in 0..s {
         let row = &f.bgra[((y0 + y) * w + x0) * 4..][..s * 4];
         for i in 0..d {
@@ -584,7 +756,10 @@ pub fn fit_square(f: &CamFrame, d: u32) -> CamFrame {
             }
         }
     }
-    let mut out = vec![0u8; d * d * 4];
+    out.w = d as u32;
+    out.h = d as u32;
+    out.bgra.clear();
+    out.bgra.resize(d * d * 4, 0);
     for j in 0..d {
         let (a, b) = span(j);
         let n = (b - a) as u32;
@@ -595,12 +770,11 @@ pub fn fit_square(f: &CamFrame, d: u32) -> CamFrame {
                     acc[c] += tmp[(y * d + i) * 4 + c];
                 }
             }
-            for c in 0..4 {
-                out[(j * d + i) * 4 + c] = ((acc[c] + n / 2) / n) as u8;
+            for (o, a) in out.bgra[(j * d + i) * 4..][..4].iter_mut().zip(acc) {
+                *o = ((a + n / 2) / n) as u8;
             }
         }
     }
-    CamFrame { w: d as u32, h: d as u32, bgra: out }
 }
 
 #[cfg(test)]
