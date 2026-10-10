@@ -767,6 +767,7 @@ impl VideoEncoder for FfmpegEncoder {
             let n = plan.audio_inputs().len();
             if n > 0 {
                 run.wait_audio(n, AUDIO_OPEN_TIMEOUT).inspect_err(|e| self.failed = Some(format!("{e:#}")))?;
+                eprintln!("rustshot: ffmpeg is hearing after {} ms", t0.elapsed().as_millis());
                 // The stretch starts now, with the sound: frames captured
                 // while ffmpeg was starting are left out.
                 self.skip_until = Some(f.ts + t0.elapsed());
