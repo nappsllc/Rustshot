@@ -35,11 +35,7 @@ unsafe extern "C" {
     fn XNextEvent(dpy: *mut c_void, event: *mut XEvent) -> c_int;
     fn XPeekEvent(dpy: *mut c_void, event: *mut XEvent) -> c_int;
     fn XPending(dpy: *mut c_void) -> c_int;
-    fn XSync(dpy: *mut c_void, discard: c_int) -> c_int;
     fn XConnectionNumber(dpy: *mut c_void) -> c_int;
-    fn XSetErrorHandler(
-        handler: Option<unsafe extern "C" fn(*mut c_void, *mut XErrorEvent) -> c_int>,
-    ) -> Option<unsafe extern "C" fn(*mut c_void, *mut XErrorEvent) -> c_int>;
 }
 
 #[repr(C)]
@@ -70,17 +66,6 @@ struct XEvent {
     pad: [c_ulong; 24],
 }
 
-#[repr(C)]
-struct XErrorEvent {
-    type_: c_int,
-    display: *mut c_void,
-    resourceid: c_ulong,
-    serial: c_ulong,
-    error_code: u8,
-    major_opcode: u8,
-    minor_opcode: u8,
-}
-
 const KEY_PRESS: c_int = 2;
 const KEY_RELEASE: c_int = 3;
 
@@ -95,14 +80,6 @@ const GRAB_MODE_ASYNC: c_int = 1;
 
 /// Modifier bits a hotkey can ask for (everything except CapsLock/NumLock).
 const MOD_BASE_MASK: c_uint = SHIFT_MASK | CONTROL_MASK | MOD1_MASK | MOD4_MASK;
-
-/// Set while the temporary X error handler below is installed.
-static GRAB_FAILED: AtomicBool = AtomicBool::new(false);
-
-unsafe extern "C" fn record_grab_error(_dpy: *mut c_void, _ev: *mut XErrorEvent) -> c_int {
-    GRAB_FAILED.store(true, Ordering::SeqCst);
-    0
-}
 
 #[repr(C)]
 struct PollFd {
@@ -153,8 +130,8 @@ fn hotkey_thread(specs: [(i32, String, HotEvent); SLOTS], tx: mpsc::Sender<HotEv
 
         // A refused grab (BadAccess: e.g. the desktop already owns
         // PrintScreen) is an asynchronous protocol error, and Xlib's default
-        // handler exits the process — install a recording one while grabbing.
-        let prev = XSetErrorHandler(Some(record_grab_error));
+        // handler exits the process: each grab runs under the shared
+        // recording handler (`wind::x_guarded`, which syncs before checking).
         // (keycode, modifiers, index into specs)
         let mut grabs: Vec<(u8, c_uint, usize)> = Vec::new();
         let mut result: Registered = [Ok(()); SLOTS];
@@ -184,18 +161,10 @@ fn hotkey_thread(specs: [(i32, String, HotEvent); SLOTS], tx: mpsc::Sender<HotEv
             let mut refused = false;
             for extra in [0, LOCK_MASK, MOD2_MASK, LOCK_MASK | MOD2_MASK] {
                 let combo = base | extra;
-                GRAB_FAILED.store(false, Ordering::SeqCst);
-                XGrabKey(
-                    dpy,
-                    keycode as c_int,
-                    combo,
-                    root,
-                    0,
-                    GRAB_MODE_ASYNC,
-                    GRAB_MODE_ASYNC,
-                );
-                XSync(dpy, 0); // errors are async: flush before checking
-                if GRAB_FAILED.load(Ordering::SeqCst) {
+                let ((), failed) = crate::wind::x_guarded(dpy, || {
+                    XGrabKey(dpy, keycode as c_int, combo, root, 0, GRAB_MODE_ASYNC, GRAB_MODE_ASYNC);
+                });
+                if failed {
                     eprintln!("warning: could not register hotkey {spec:?} (already grabbed?)");
                     refused = true;
                     break;
@@ -213,7 +182,6 @@ fn hotkey_thread(specs: [(i32, String, HotEvent); SLOTS], tx: mpsc::Sender<HotEv
                 result[i] = Err(Cause::InUse);
             }
         }
-        XSetErrorHandler(prev);
         let _ = done.send(result);
 
         // Passive grabs deliver KeyPress/KeyRelease here. `held` drops the

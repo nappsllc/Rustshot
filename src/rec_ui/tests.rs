@@ -275,6 +275,24 @@ fn muted_source_reads_silence() {
     assert_eq!((m.rate(), m.channels()), (48_000, 2));
 }
 
+/// The bar offers Mute only once the microphone's source opened (on the
+/// worker, after the bar is up), and muting reaches that source.
+#[test]
+fn mute_appears_once_the_microphone_opened() {
+    let t = t0();
+    let mut r = Run::fake(false, false, t);
+    assert_eq!(r.view(t).mic, None);
+    r.toggle_mute();
+    assert!(!r.muted(), "nothing to mute yet");
+    let mut m = r.mic.opened(Tone(vec![0.5; 4]));
+    assert_eq!(r.view(t).mic, Some(false));
+    r.toggle_mute();
+    assert_eq!(r.view(t).mic, Some(true));
+    let mut out = Vec::new();
+    m.read(&mut out);
+    assert!(out.iter().all(|&v| v == 0.0), "the source is muted");
+}
+
 #[test]
 fn run_effects_and_end() {
     let t = t0();

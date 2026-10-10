@@ -17,8 +17,9 @@
 //! leaves the paused time out of both.
 //!
 //! Frames and sound go to ffmpeg on two writer threads through bounded
-//! channels, so neither pipe waits for the other. Nothing goes through a
-//! shell: every argument is its own argv entry.
+//! queues, fed so that neither pipe can hold the other up for good (ffmpeg
+//! 7 stops reading an input that runs ahead; see [`super::feed`]). Nothing
+//! goes through a shell: every argument is its own argv entry.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))] // unit-tested everywhere, used on Linux
 
 use crate::rec::{bitrate, mp4_fit, Quality};
@@ -197,12 +198,63 @@ pub fn vaapi_probe_args() -> Vec<OsString> {
     ])
 }
 
-fn run_listing(exe: &Path, what: &str) -> String {
-    match Command::new(exe).args(["-hide_banner", what]).stdin(Stdio::null()).stderr(Stdio::null()).output() {
-        Ok(o) => String::from_utf8_lossy(&o.stdout).into_owned(),
+/// How long a capability probe (`-encoders`, the VA-API encode) may take
+/// before it is stopped and taken as a failure.
+pub const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Why [`run_bounded`] has no output.
+#[derive(Debug, PartialEq, Eq)]
+pub enum RunErr {
+    /// It could not be started.
+    Start(String),
+    /// It ran longer than allowed and was stopped (our child, by its PID).
+    Timeout,
+}
+
+/// Run `cmd` (stdin and stderr closed) for at most `limit`: whether it
+/// succeeded, and its stdout.
+pub fn run_bounded(mut cmd: Command, limit: Duration) -> Result<(bool, Vec<u8>), RunErr> {
+    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+    #[cfg(target_os = "linux")]
+    super::child::prepare(&mut cmd, None);
+    let mut child = cmd.spawn().map_err(|e| RunErr::Start(e.to_string()))?;
+    let reader = child.stdout.take().map(|mut out| {
+        std::thread::spawn(move || {
+            let mut b = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut out, &mut b);
+            b
+        })
+    });
+    let end = Instant::now() + limit;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(s)) => break Some(s),
+            Ok(None) if Instant::now() < end => std::thread::sleep(Duration::from_millis(10)),
+            _ => break None,
+        }
+    };
+    let Some(status) = status else {
+        let _ = child.kill(); // our own child, by its PID
+        let _ = child.wait();
+        if let Some(r) = reader {
+            let _ = r.join();
+        }
+        return Err(RunErr::Timeout);
+    };
+    let out = reader.and_then(|r| r.join().ok()).unwrap_or_default();
+    Ok((status.success(), out))
+}
+
+/// `ffmpeg -hide_banner <what>`'s output; `None` when it did not run to
+/// the end in time.
+fn run_listing(exe: &Path, what: &str) -> Option<String> {
+    let mut cmd = Command::new(exe);
+    cmd.args(["-hide_banner", what]);
+    match run_bounded(cmd, PROBE_TIMEOUT) {
+        Ok((_, out)) => Some(String::from_utf8_lossy(&out).into_owned()),
         Err(e) => {
-            eprintln!("rustshot: cannot run {} {what}: {e}", exe.display());
-            String::new()
+            eprintln!("rustshot: cannot run {} {what}: {e:?}", exe.display());
+            None
         }
     }
 }
@@ -211,30 +263,73 @@ fn vaapi_works(exe: &Path) -> bool {
     if !Path::new(VAAPI_DEVICE).exists() {
         return false;
     }
-    let ok = Command::new(exe)
-        .args(vaapi_probe_args())
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success());
+    let mut cmd = Command::new(exe);
+    cmd.args(vaapi_probe_args());
+    let ok = matches!(run_bounded(cmd, PROBE_TIMEOUT), Ok((true, _)));
     if !ok {
-        eprintln!("rustshot: h264_vaapi is listed but cannot encode here; not used");
+        eprintln!("rustshot: h264_vaapi is listed but cannot encode here (or took over {} s); not used", PROBE_TIMEOUT.as_secs());
     }
     ok
 }
 
-/// Ask `exe` what it can do (cached per path).
+/// What each ffmpeg can do: `None` while it is being asked.
+type CapsCache = (Mutex<Vec<(PathBuf, Option<Caps>)>>, std::sync::Condvar);
+
+fn cache() -> &'static CapsCache {
+    static CACHE: OnceLock<CapsCache> = OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
+/// Ask `exe` what it can do (each probe at most [`PROBE_TIMEOUT`]); cached
+/// per path, and only once at a time (a second caller waits for the
+/// first). Blocks: call it off the UI thread ([`caps_now`] does not).
 pub fn caps(exe: &Path) -> Caps {
-    static CACHE: OnceLock<Mutex<Vec<(PathBuf, Caps)>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(Default::default);
-    if let Some((_, c)) = cache.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(p, _)| p == exe) {
-        return c.clone();
+    let (m, cv) = cache();
+    let mut g = m.lock().unwrap_or_else(|e| e.into_inner());
+    loop {
+        match g.iter().find(|(p, _)| p == exe) {
+            Some((_, Some(c))) => return c.clone(),
+            Some((_, None)) => g = cv.wait(g).unwrap_or_else(|e| e.into_inner()),
+            None => break,
+        }
     }
+    g.push((exe.to_path_buf(), None));
+    drop(g);
     let enc = run_listing(exe, "-encoders");
-    let c = Caps { h264: pick_h264(&enc, || vaapi_works(exe)), aac: has_aac(&enc) };
-    cache.lock().unwrap_or_else(|e| e.into_inner()).push((exe.to_path_buf(), c.clone()));
+    let c = match &enc {
+        Some(enc) => Caps { h264: pick_h264(enc, || vaapi_works(exe)), aac: has_aac(enc) },
+        None => Caps { h264: None, aac: false },
+    };
+    // A listing that did not come in time counts as no encoder for the
+    // rest of the run (the probe is not repeated every time the UI looks).
+    let mut g = m.lock().unwrap_or_else(|e| e.into_inner());
+    g.retain(|(p, _)| p != exe);
+    g.push((exe.to_path_buf(), Some(c.clone())));
+    drop(g);
+    cv.notify_all();
     c
+}
+
+/// What `exe` can do if known; otherwise `None`, with the question asked
+/// on a background thread (the UI shows "checking" meanwhile).
+pub fn caps_now(exe: &Path) -> Option<Caps> {
+    let (m, _) = cache();
+    let g = m.lock().unwrap_or_else(|e| e.into_inner());
+    match g.iter().find(|(p, _)| p == exe) {
+        Some((_, c)) => return c.clone(),
+        None => drop(g),
+    }
+    warm(exe);
+    None
+}
+
+/// Ask `exe` what it can do on a background thread (at start, so the
+/// Record popover knows by the time it opens).
+pub fn warm(exe: &Path) {
+    let exe = exe.to_path_buf();
+    let _ = std::thread::Builder::new().name("ffmpeg-caps".into()).spawn(move || {
+        caps(&exe);
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -390,6 +485,12 @@ impl Cfr {
         n
     }
 
+    /// `n` of the frames counted were not written after all (no room): the
+    /// frames that follow fill their slots.
+    pub fn unsend(&mut self, n: u64) {
+        self.sent = self.sent.saturating_sub(n);
+    }
+
     /// How many more times to write the last frame so the picture lasts
     /// `end` (to the frame; the end of the recording).
     pub fn hold_to(&mut self, end: Duration) -> u64 {
@@ -447,21 +548,13 @@ pub fn pcm_bytes(pcm: &[f32]) -> Vec<u8> {
     pcm.iter().flat_map(|s| s.to_le_bytes()).collect()
 }
 
-/// Send every buffer from `rx` to `w`, flushing at the end; the writer
-/// threads' loop (the pipe closes when `w` is dropped).
-pub fn pump<T: AsRef<[u8]>>(rx: std::sync::mpsc::Receiver<T>, mut w: impl std::io::Write) -> std::io::Result<()> {
-    for b in rx {
-        w.write_all(b.as_ref())?;
-    }
-    w.flush()
-}
-
 // ---------------------------------------------------------------------------
 // Finishing
 // ---------------------------------------------------------------------------
 
 /// Whether the MP4 at `path` has a complete `moov` box at its top level
-/// (without it no player can open the file).
+/// with a complete `mvhd` (movie header) in it: without them no player can
+/// open the file.
 pub fn has_moov(path: &Path) -> bool {
     std::fs::File::open(path).is_ok_and(|f| {
         let len = f.metadata().map(|m| m.len()).unwrap_or(0);
@@ -471,57 +564,65 @@ pub fn has_moov(path: &Path) -> bool {
 
 /// [`has_moov`] over a reader of `len` bytes.
 pub fn moov_in(mut r: impl std::io::Read + std::io::Seek, len: u64) -> bool {
+    let Some((start, end)) = find_box(&mut r, 0, len, b"moov") else { return false };
+    find_box(&mut r, start, end, b"mvhd").is_some()
+}
+
+/// The first complete box of `kind` among the boxes from `from` to `to`
+/// (one level): where its body starts and where it ends. `None` when there
+/// is none, or a box before it is cut short.
+fn find_box(r: &mut (impl std::io::Read + std::io::Seek), from: u64, to: u64, kind: &[u8; 4]) -> Option<(u64, u64)> {
     use std::io::SeekFrom;
-    let mut at = 0u64;
-    while at + 8 <= len {
+    let mut at = from;
+    while at + 8 <= to {
         let mut h = [0u8; 16];
-        if r.seek(SeekFrom::Start(at)).is_err() || r.read_exact(&mut h[..8]).is_err() {
-            return false;
-        }
+        r.seek(SeekFrom::Start(at)).ok()?;
+        r.read_exact(&mut h[..8]).ok()?;
         let size32 = u32::from_be_bytes([h[0], h[1], h[2], h[3]]);
-        let kind = [h[4], h[5], h[6], h[7]];
-        let size = match size32 {
-            0 => len - at, // to the end
+        let (size, head) = match size32 {
+            0 => (to - at, 8), // to the end
             1 => {
-                if r.read_exact(&mut h[8..16]).is_err() {
-                    return false;
-                }
-                u64::from_be_bytes([h[8], h[9], h[10], h[11], h[12], h[13], h[14], h[15]])
+                r.read_exact(&mut h[8..16]).ok()?;
+                (u64::from_be_bytes([h[8], h[9], h[10], h[11], h[12], h[13], h[14], h[15]]), 16)
             }
-            n => u64::from(n),
+            n => (u64::from(n), 8),
         };
-        if size < 8 || at + size > len {
-            return false; // cut short
+        if size < head || at + size > to {
+            return None; // cut short
         }
-        if &kind == b"moov" {
-            return true;
+        if &h[4..8] == kind {
+            return Some((at + head, at + size));
         }
         at += size;
     }
-    false
+    None
 }
 
 /// Waits for ffmpeg to finish a file while the file keeps changing: no
 /// fixed time limit, only a limit on how long nothing happens.
 #[derive(Debug)]
-pub struct Progress {
-    last: Option<(u64, Option<SystemTime>)>,
+pub struct Progress<S> {
+    last: Option<S>,
     since: Instant,
     limit: Duration,
 }
 
+/// What [`Progress`] watches while ffmpeg finishes: the output's length
+/// and modification time, and the bytes the writers have handed it.
+pub type FileState = (u64, Option<SystemTime>, u64);
+
 /// How long the output may stay unchanged before ffmpeg is taken for hung.
 pub const STALL: Duration = Duration::from_secs(30);
 
-impl Progress {
-    pub fn new(now: Instant, limit: Duration) -> Progress {
+impl<S: PartialEq> Progress<S> {
+    pub fn new(now: Instant, limit: Duration) -> Progress<S> {
         Progress { last: None, since: now, limit }
     }
 
-    /// The output's state (`len`, `modified`) at `now`: whether it stopped
-    /// changing for longer than the limit.
-    pub fn stalled(&mut self, now: Instant, state: (u64, Option<SystemTime>)) -> bool {
-        if self.last != Some(state) {
+    /// The state at `now` (e.g. [`FileState`]): whether it stopped changing
+    /// for longer than the limit.
+    pub fn stalled(&mut self, now: Instant, state: S) -> bool {
+        if self.last.as_ref() != Some(&state) {
             self.last = Some(state);
             self.since = now;
             return false;
@@ -555,20 +656,14 @@ pub use imp::FfmpegEncoder;
 mod imp {
     use super::*;
     use crate::rec::linux::child;
+    use crate::rec::linux::feed::{self, Feeder, Pipe, Stuck};
     use crate::rec::{Frame, Salvaged, VideoEncoder};
     use anyhow::{anyhow, bail, Context, Result};
     use std::io::{Read, Write};
     use std::process::{Child, ExitStatus};
-    use std::sync::mpsc::{sync_channel, SyncSender};
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Arc;
     use std::thread::JoinHandle;
-
-    /// Frames waiting for the video writer (bounded: a slow ffmpeg blocks
-    /// the encode thread, and the session's queue drops frames before it).
-    const PIPE_FRAMES: usize = 2;
-    /// Sound buffers waiting for the sound writer (one per encode tick,
-    /// ~10 ms each: a few seconds, tiny next to a frame).
-    const PIPE_SOUND: usize = 256;
 
     fn tail_text(tail: &Mutex<Tail>) -> String {
         let t = tail.lock().unwrap_or_else(|e| e.into_inner()).text();
@@ -582,26 +677,30 @@ mod imp {
 
     type Writer = Option<JoinHandle<std::io::Result<()>>>;
 
-    fn writer<T: AsRef<[u8]> + Send + 'static>(name: &str, cap: usize, w: impl Write + Send + 'static) -> Result<(SyncSender<T>, Writer)> {
-        let (tx, rx) = sync_channel::<T>(cap);
-        let h = std::thread::Builder::new().name(name.into()).spawn(move || pump(rx, w)).context("start an ffmpeg writer thread")?;
-        Ok((tx, Some(h)))
+    fn writer<T: AsRef<[u8]> + Send + 'static>(
+        name: &str,
+        q: Arc<feed::Bounded<T>>,
+        w: impl Write + Send + 'static,
+        written: Arc<AtomicU64>,
+    ) -> Result<Writer> {
+        let h = std::thread::Builder::new()
+            .name(name.into())
+            .spawn(move || feed::pump(&q, w, &written))
+            .context("start an ffmpeg writer thread")?;
+        Ok(Some(h))
     }
 
     /// MP4 through ffmpeg; see the module docs.
     pub struct FfmpegEncoder {
         plan: Plan,
         child: Child,
-        video: Option<SyncSender<Arc<[u8]>>>,
+        feed: Feeder,
         video_w: Writer,
-        sound: Option<SyncSender<Vec<u8>>>,
         sound_w: Writer,
+        /// Bytes the writers handed ffmpeg (progress while finishing).
+        written: Arc<AtomicU64>,
         reader: Option<JoinHandle<()>>,
         tail: Arc<Mutex<Tail>>,
-        cfr: Cfr,
-        pcm: PcmTimeline,
-        /// The last frame written (held to the end of the sound).
-        last: Option<Arc<[u8]>>,
         /// A write failed; `finish` reports it.
         failed: Option<String>,
         finished: bool,
@@ -623,7 +722,8 @@ mod imp {
             if sound && !caps.aac {
                 bail!("{} has no AAC encoder", exe.display());
             }
-            let plan = Plan { w, h, fps: fps.clamp(1, 60), quality, codec, sound, out: path.to_path_buf() };
+            let fps = fps.clamp(1, 60);
+            let plan = Plan { w, h, fps, quality, codec, sound, out: path.to_path_buf() };
             let args = plan.args();
             if verbose() {
                 eprintln!("rustshot: {} {}", exe.display(), args.iter().map(|a| a.to_string_lossy()).collect::<Vec<_>>().join(" "));
@@ -655,27 +755,23 @@ mod imp {
                     })
                     .ok()
             });
+            let stdin = child.stdin.take();
             let mut enc = FfmpegEncoder {
                 plan,
                 child,
-                video: None,
+                feed: Feeder::new(fps, sound, feed::SEND_TIMEOUT),
                 video_w: None,
-                sound: None,
                 sound_w: None,
+                written: Arc::new(AtomicU64::new(0)),
                 reader,
                 tail,
-                cfr: Cfr::new(fps.clamp(1, 60)),
-                pcm: PcmTimeline::default(),
-                last: None,
                 failed: None,
                 finished: false,
             };
-            let stdin = enc.child.stdin.take().ok_or_else(|| anyhow!("ffmpeg has no stdin"))?;
-            let (tx, w) = writer("ffmpeg-video", PIPE_FRAMES, stdin)?;
-            (enc.video, enc.video_w) = (Some(tx), w);
-            if let Some(fd) = sound_fd {
-                let (tx, w) = writer("ffmpeg-sound", PIPE_SOUND, std::fs::File::from(fd))?;
-                (enc.sound, enc.sound_w) = (Some(tx), w);
+            let stdin = stdin.ok_or_else(|| anyhow!("ffmpeg has no stdin"))?;
+            enc.video_w = writer("ffmpeg-video", enc.feed.video.clone(), stdin, enc.written.clone())?;
+            if let (Some(fd), Some(q)) = (sound_fd, enc.feed.sound.clone()) {
+                enc.sound_w = writer("ffmpeg-sound", q, std::fs::File::from(fd), enc.written.clone())?;
             }
             Ok(enc)
         }
@@ -685,84 +781,66 @@ mod imp {
             self.plan.codec
         }
 
-        /// The writer of `which` stopped: why, with ffmpeg's last words.
-        fn broken(&mut self, which: &str) -> anyhow::Error {
-            let w = if which == "frames" { self.video_w.take() } else { self.sound_w.take() };
-            let why = match w.map(|w| w.join()) {
-                Some(Ok(Err(e))) => format!("{e}"),
-                _ => "stopped".into(),
+        /// Stop ffmpeg (our child, by its PID).
+        fn kill(&mut self) {
+            let _ = self.child.kill();
+        }
+
+        /// A write that did not go through: why, with ffmpeg's last words.
+        /// A pipe that took nothing for the timeout means ffmpeg hung: it
+        /// is stopped.
+        fn stuck(&mut self, s: Stuck) -> anyhow::Error {
+            let e = match s {
+                Stuck::Timeout(p) => {
+                    self.kill();
+                    anyhow!("ffmpeg took no {} for {} s and was stopped: {}", p.name(), feed::SEND_TIMEOUT.as_secs(), tail_text(&self.tail))
+                }
+                Stuck::Closed(p) => {
+                    let w = if p == Pipe::Frames { self.video_w.take() } else { self.sound_w.take() };
+                    let why = match w.map(|w| w.join()) {
+                        Some(Ok(Err(e))) => format!("{e}"),
+                        _ => "stopped".into(),
+                    };
+                    std::thread::sleep(Duration::from_millis(200)); // its last words
+                    anyhow!("ffmpeg stopped taking {} ({why}): {}", p.name(), tail_text(&self.tail))
+                }
             };
-            std::thread::sleep(Duration::from_millis(200)); // its last words
-            let e = anyhow!("ffmpeg stopped taking {which} ({why}): {}", tail_text(&self.tail));
             self.failed = Some(format!("{e:#}"));
             e
         }
 
-        fn write_frame(&mut self, buf: &Arc<[u8]>, n: u64) -> Result<()> {
-            for _ in 0..n {
-                let sent = self.video.as_ref().is_some_and(|tx| tx.send(buf.clone()).is_ok());
-                if !sent {
-                    return Err(self.broken("frames"));
-                }
-            }
-            Ok(())
-        }
-
-        fn write_silence(&mut self, frames: u64) -> Result<()> {
-            let mut left = frames as usize;
-            while left > 0 {
-                let k = left.min(RATE as usize / 10);
-                self.write_pcm(&vec![0.0; k * 2])?;
-                left -= k;
-            }
-            Ok(())
-        }
-
-        fn write_pcm(&mut self, pcm: &[f32]) -> Result<()> {
-            if pcm.is_empty() {
-                return Ok(());
-            }
-            let sent = self.sound.as_ref().is_some_and(|tx| tx.send(pcm_bytes(pcm)).is_ok());
-            if !sent {
-                return Err(self.broken("sound"));
-            }
-            Ok(())
-        }
-
-        /// Even out the ends (the picture held to the sound, the sound
-        /// padded to the picture), close both pipes and wait while ffmpeg
-        /// keeps writing.
-        fn close_and_wait(&mut self) -> Result<ExitStatus> {
-            if self.failed.is_none() && self.plan.sound {
-                let end = self.pcm.length();
-                if let Some(last) = self.last.clone() {
-                    let n = self.cfr.hold_to(end);
-                    self.write_frame(&last, n)?;
-                }
-                let pad = self.pcm.pad_to(self.cfr.length());
-                self.write_silence(pad)?;
-            }
-            drop(self.video.take());
-            drop(self.sound.take());
-            let wrote: Vec<_> = [self.video_w.take(), self.sound_w.take()].into_iter().flatten().map(|w| w.join()).collect();
+        /// Even out the ends (unless a write failed already), close both
+        /// pipes and wait while ffmpeg keeps going: the writers handing it
+        /// what is left and ffmpeg writing the file. Nothing changing for
+        /// [`STALL`] (writers stuck or ffmpeg hung) stops it.
+        fn close_and_wait(&mut self, failed: bool) -> Result<ExitStatus> {
+            let even = if failed { Ok(()) } else { self.feed.even_out().map_err(|s| self.stuck(s)) };
+            self.feed.close();
             let mut p = Progress::new(Instant::now(), STALL);
+            let mut killed = false;
             let status = loop {
-                if let Some(s) = self.child.try_wait()? {
+                let writing = [&self.video_w, &self.sound_w].iter().any(|w| w.as_ref().is_some_and(|h| !h.is_finished()));
+                if !writing && let Some(s) = self.child.try_wait()? {
                     break s;
                 }
-                let state = std::fs::metadata(&self.plan.out).map(|m| (m.len(), m.modified().ok())).unwrap_or((0, None));
-                if p.stalled(Instant::now(), state) {
-                    let _ = self.child.kill(); // our own child, by its PID
-                    let _ = self.child.wait();
-                    bail!("ffmpeg stopped writing for {} s: {}", STALL.as_secs(), tail_text(&self.tail));
+                let (len, modified) = std::fs::metadata(&self.plan.out).map(|m| (m.len(), m.modified().ok())).unwrap_or((0, None));
+                let state: FileState = (len, modified, self.written.load(Ordering::Relaxed));
+                if !killed && p.stalled(Instant::now(), state) {
+                    self.kill(); // the writers then fail on the broken pipes
+                    killed = true;
                 }
                 std::thread::sleep(Duration::from_millis(20));
             };
+            let wrote: Vec<_> = [self.video_w.take(), self.sound_w.take()].into_iter().flatten().map(|w| w.join()).collect();
             if let Some(r) = self.reader.take() {
                 let _ = r.join();
             }
             if verbose() {
                 eprintln!("rustshot: ffmpeg ended ({status}):\n{}", tail_text(&self.tail));
+            }
+            even?;
+            if killed {
+                bail!("ffmpeg made no progress for {} s and was stopped: {}", STALL.as_secs(), tail_text(&self.tail));
             }
             if !status.success() {
                 bail!("ffmpeg failed ({status}): {}", tail_text(&self.tail));
@@ -784,41 +862,32 @@ mod imp {
             if f.w != self.plan.w || f.h != self.plan.h || f.bgra.len() < (f.w * f.h * 4) as usize {
                 bail!("frame size changed to {}x{}", f.w, f.h);
             }
-            let n = self.cfr.repeats(f.ts);
-            if n == 0 {
-                return Ok(());
-            }
-            let buf: Arc<[u8]> = Arc::from(&f.bgra[..(f.w * f.h * 4) as usize]);
-            self.last = Some(buf.clone());
-            self.write_frame(&buf, n)
+            let n = (f.w * f.h * 4) as usize;
+            self.feed.frame(f.ts, || Arc::from(&f.bgra[..n])).map_err(|s| self.stuck(s))
         }
 
         fn push_audio(&mut self, pcm: &[f32], ts: Duration) -> Result<()> {
             if let Some(e) = &self.failed {
                 bail!("{e}");
             }
-            let (gap, pcm) = self.pcm.place(pcm, ts);
-            if gap > 0 {
-                eprintln!("rustshot: sound {gap} frames late at {ts:?}; filled with silence");
-            }
-            self.write_silence(gap)?;
-            self.write_pcm(pcm)
+            self.feed.audio(pcm, ts).map_err(|s| self.stuck(s))
         }
 
         /// `Ok` once ffmpeg wrote the whole file. When it fails but the
-        /// file still has its index (`moov`), the error is [`Salvaged`] and
-        /// the session keeps the file; otherwise it removes it.
+        /// file still has its index (`moov` with `mvhd`), the error is
+        /// [`Salvaged`] and the session keeps the file; otherwise it
+        /// removes it.
         fn finish(mut self: Box<Self>) -> Result<()> {
             self.finished = true;
             let failed = self.failed.take();
-            let r = self.close_and_wait();
+            let r = self.close_and_wait(failed.is_some());
             let e = match (failed, r) {
-                (None, Ok(_)) if self.cfr.sent() > 0 => return Ok(()),
+                (None, Ok(_)) if self.feed.frames() > 0 => return Ok(()),
                 (None, Ok(_)) => anyhow!("no frames were recorded"),
                 (Some(f), _) => anyhow!("{f}"),
                 (None, Err(e)) => e,
             };
-            if self.cfr.sent() > 0 && has_moov(&self.plan.out) {
+            if self.feed.frames() > 0 && has_moov(&self.plan.out) {
                 return Err(anyhow::Error::new(Salvaged(format!("{e:#}"))));
             }
             Err(e)
@@ -833,10 +902,9 @@ mod imp {
         /// Dropped without finishing (cancelled, or the session failed to
         /// start): ffmpeg is stopped (our child, by its PID).
         fn drop(&mut self) {
-            drop(self.video.take());
-            drop(self.sound.take());
+            self.feed.close();
             if !self.finished || self.child.try_wait().ok().flatten().is_none() {
-                let _ = self.child.kill();
+                self.kill();
                 let _ = self.child.wait();
             }
             for w in [self.video_w.take(), self.sound_w.take()].into_iter().flatten() {
@@ -1076,44 +1144,19 @@ mod tests {
         assert_eq!(q.place(&tone, ms(100)).0, 4800);
     }
 
-    #[test]
-    fn pcm_pipe_writer_sends_f32le_in_order() {
-        let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(4);
-        let h = std::thread::spawn(move || {
-            let mut out = Vec::new();
-            pump(rx, &mut out).unwrap();
-            out
-        });
-        tx.send(pcm_bytes(&[1.0, -0.5])).unwrap();
-        tx.send(pcm_bytes(&[0.25])).unwrap();
-        drop(tx);
-        let out = h.join().unwrap();
-        let want: Vec<u8> = [1.0f32, -0.5, 0.25].iter().flat_map(|s| s.to_le_bytes()).collect();
-        assert_eq!(out, want);
-        assert_eq!(&out[..4], &[0, 0, 0x80, 0x3F], "little-endian 1.0");
-    }
-
-    #[test]
-    fn pcm_pipe_writer_reports_a_broken_pipe() {
-        struct Broken;
-        impl std::io::Write for Broken {
-            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
-                Err(std::io::ErrorKind::BrokenPipe.into())
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-        let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(1);
-        tx.send(vec![1, 2, 3, 4]).unwrap();
-        drop(tx);
-        assert_eq!(pump(rx, Broken).unwrap_err().kind(), std::io::ErrorKind::BrokenPipe);
-    }
-
     fn atom(kind: &[u8; 4], body: usize) -> Vec<u8> {
         let mut v = ((body + 8) as u32).to_be_bytes().to_vec();
         v.extend_from_slice(kind);
         v.resize(body + 8, 0);
+        v
+    }
+
+    /// A box holding `children`.
+    fn parent(kind: &[u8; 4], children: &[Vec<u8>]) -> Vec<u8> {
+        let body: Vec<u8> = children.concat();
+        let mut v = ((body.len() + 8) as u32).to_be_bytes().to_vec();
+        v.extend_from_slice(kind);
+        v.extend_from_slice(&body);
         v
     }
 
@@ -1122,14 +1165,25 @@ mod tests {
         let check = |b: &[u8]| moov_in(std::io::Cursor::new(b), b.len() as u64);
         let ftyp = atom(b"ftyp", 16);
         let mdat = atom(b"mdat", 1000);
-        let moov = atom(b"moov", 200);
+        let moov = parent(b"moov", &[atom(b"mvhd", 100), atom(b"trak", 60)]);
         // faststart (moov first) and moov at the end.
         assert!(check(&[ftyp.clone(), moov.clone(), mdat.clone()].concat()));
         assert!(check(&[ftyp.clone(), mdat.clone(), moov.clone()].concat()));
+        // The movie header may come after the tracks.
+        let later = parent(b"moov", &[atom(b"trak", 60), atom(b"mvhd", 100)]);
+        assert!(check(&[ftyp.clone(), later].concat()));
         // Killed while writing: no moov, or a moov cut short.
         assert!(!check(&[ftyp.clone(), mdat.clone()].concat()));
         let cut = [ftyp.clone(), mdat.clone(), moov.clone()].concat();
         assert!(!check(&cut[..cut.len() - 10]));
+        // A moov without its movie header, or with one cut short inside it.
+        assert!(!check(&[ftyp.clone(), atom(b"moov", 200)].concat()));
+        assert!(!check(&[ftyp.clone(), parent(b"moov", &[atom(b"trak", 60)])].concat()));
+        let mut short = parent(b"moov", &[atom(b"mvhd", 100)]);
+        short.truncate(short.len() - 1);
+        let n = (short.len() as u32).to_be_bytes();
+        short[..4].copy_from_slice(&n); // the moov's own size fits, the mvhd's does not
+        assert!(!check(&[ftyp.clone(), short].concat()));
         // An mdat still open (size 0: to the end) and a 64-bit size.
         let mut open = ftyp.clone();
         open.extend_from_slice(&[0, 0, 0, 0, b'm', b'd', b'a', b't', 1, 2, 3]);
@@ -1148,16 +1202,34 @@ mod tests {
         let t0 = Instant::now();
         let s = |t: u64| t0 + Duration::from_secs(t);
         let mut p = Progress::new(t0, Duration::from_secs(30));
-        let st = |len: u64| (len, None);
-        assert!(!p.stalled(s(0), st(0)));
+        let st = |len: u64, fed: u64| -> FileState { (len, None, fed) };
+        assert!(!p.stalled(s(0), st(0, 0)));
         // Growing: never stalled, however long it takes.
         for k in 1..100 {
-            assert!(!p.stalled(s(k * 20), st(k)));
+            assert!(!p.stalled(s(k * 20), st(k, 0)));
         }
+        // The writers still handing ffmpeg sound counts as progress too.
+        assert!(!p.stalled(s(1990), st(99, 1)));
         // Then unchanged: stalled only after the limit.
-        assert!(!p.stalled(s(2000), st(99)));
-        assert!(!p.stalled(s(2010), st(99)));
-        assert!(p.stalled(s(2011), st(99)));
+        assert!(!p.stalled(s(2000), st(99, 1)));
+        assert!(!p.stalled(s(2020), st(99, 1)));
+        assert!(p.stalled(s(2021), st(99, 1)));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_probe_that_hangs_is_stopped_after_its_time() {
+        let t = Instant::now();
+        let mut cmd = Command::new("/bin/sleep");
+        cmd.arg("30");
+        assert_eq!(run_bounded(cmd, Duration::from_millis(300)), Err(RunErr::Timeout));
+        assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
+        let mut cmd = Command::new("/bin/echo");
+        cmd.arg("V....D libx264");
+        let (ok, out) = run_bounded(cmd, Duration::from_secs(5)).unwrap();
+        assert!(ok);
+        assert_eq!(String::from_utf8_lossy(&out).trim(), "V....D libx264");
+        assert!(matches!(run_bounded(Command::new("/nonexistent/ffmpeg"), Duration::from_secs(1)), Err(RunErr::Start(_))));
     }
 
     #[test]

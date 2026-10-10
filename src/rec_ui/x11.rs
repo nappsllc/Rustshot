@@ -18,8 +18,8 @@
 //! shape).
 
 use super::bar::{self, BarAct, BarView};
-use super::worker::{Opener, Parts, Worker};
-use super::{border, countdown, BarSpot, Effect, End, Geom, Muted};
+use super::worker::{Late, Opener, Parts, Worker};
+use super::{border, countdown, BarSpot, Effect, End, Geom, MicFlags};
 use crate::editor::style::Ui;
 use crate::objects::Pt;
 use crate::rec::gif::GifEncoder;
@@ -31,8 +31,7 @@ use crate::rec::{AudioSource, FrameSource, RecFormat, RecSpec, VideoEncoder};
 use crate::theme::Theme;
 use anyhow::{anyhow, bail, Context, Result};
 use core::ffi::{c_char, c_int, c_long, c_short, c_uint, c_ulong, c_ushort, c_void};
-use std::sync::atomic::AtomicBool;
-use std::sync::{mpsc, Arc};
+use std::sync::mpsc;
 
 #[repr(C)]
 struct XSetWindowAttributes {
@@ -497,13 +496,14 @@ impl CountWin {
 /// be recorded is left out and said. Runs on the recording worker, which
 /// outlives the parec and ffmpeg children it starts (see
 /// `rec::linux::child`).
-fn prepare(spec: &RecSpec, muted: Arc<AtomicBool>) -> Result<Parts> {
+fn prepare(spec: &RecSpec, mic: MicFlags) -> Result<Parts> {
     if let Some(dir) = spec.out.parent() {
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
     }
     let src = XShmSource::open(spec.area)?;
     let (w, h) = src.size();
     let mut warnings = Vec::new();
+    let mut late: Vec<Late> = Vec::new();
     let mut audio: Vec<Box<dyn AudioSource>> = Vec::new();
     let part = spec.part_path();
     let enc: Box<dyn VideoEncoder> = match spec.format {
@@ -515,13 +515,19 @@ fn prepare(spec: &RecSpec, muted: Arc<AtomicBool>) -> Result<Parts> {
                 let why = |e: String| if caps.aac { e } else { format!("{} has no AAC encoder", exe.display()) };
                 if spec.system_audio {
                     match pulse_list::system_source(all.as_deref()).map_err(why).and_then(|s| ParecSource::open(&s).map_err(|e| format!("{e:#}"))) {
-                        Ok(a) => audio.push(Box::new(a)),
+                        Ok(a) => {
+                            late.push(ended_note("system sound", a.ended()));
+                            audio.push(Box::new(a));
+                        }
                         Err(e) => warnings.push(format!("system sound not recorded: {e}")),
                     }
                 }
                 if let Some(id) = &spec.mic {
                     match pulse_list::mic_source(all.as_deref(), id).map_err(why).and_then(|s| ParecSource::open(&s).map_err(|e| format!("{e:#}"))) {
-                        Ok(a) => audio.push(Box::new(Muted { inner: a, muted })),
+                        Ok(a) => {
+                            late.push(ended_note("microphone", a.ended()));
+                            audio.push(Box::new(mic.opened(a)));
+                        }
                         Err(e) => warnings.push(format!("microphone not recorded: {e}")),
                     }
                 }
@@ -536,7 +542,15 @@ fn prepare(spec: &RecSpec, muted: Arc<AtomicBool>) -> Result<Parts> {
         eprintln!("rustshot: {w}");
     }
     let src: Box<dyn FrameSource> = Box::new(src);
-    Ok(Parts { src, audio, enc, warnings })
+    Ok(Parts { src, audio, enc, warnings, late })
+}
+
+/// The warning for a sound source whose parec stopped mid-recording.
+fn ended_note(what: &'static str, ended: crate::rec::linux::parec::Ended) -> Late {
+    Box::new(move || {
+        let why = ended.lock().unwrap_or_else(|e| e.into_inner()).clone()?;
+        Some(format!("{what} stopped during the recording: {why}"))
+    })
 }
 
 /// The windows and the worker of one recording.
@@ -554,8 +568,8 @@ pub struct Recorder {
 }
 
 impl Recorder {
-    pub fn start(spec: RecSpec, geom: Geom, th: Theme, muted: Arc<AtomicBool>, bubble: Option<crate::cam::Bubble>) -> Result<Recorder> {
-        let mut r = Recorder::start_with(spec, geom, th, Box::new(move |s: &RecSpec| prepare(s, muted)))?;
+    pub fn start(spec: RecSpec, geom: Geom, th: Theme, mic: MicFlags, bubble: Option<crate::cam::Bubble>) -> Result<Recorder> {
+        let mut r = Recorder::start_with(spec, geom, th, Box::new(move |s: &RecSpec| prepare(s, mic)))?;
         r.bubble = bubble;
         Ok(r)
     }

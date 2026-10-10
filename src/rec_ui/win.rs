@@ -12,7 +12,7 @@ use super::bar::{self, BarAct, BarView};
 #[cfg(test)]
 pub(crate) use super::worker::Cmd;
 pub(crate) use super::worker::{Opener, Parts, Worker};
-use super::{border, countdown, BarSpot, Effect, End, Geom, Muted};
+use super::{border, countdown, BarSpot, Effect, End, Geom, MicFlags};
 use crate::editor::style::Ui;
 use crate::objects::Pt;
 use crate::rec::gif::GifEncoder;
@@ -21,9 +21,7 @@ use crate::rec::{AudioSource, RecFormat, RecSpec, VideoEncoder};
 use crate::theme::Theme;
 use anyhow::{bail, Context, Result};
 use std::cell::RefCell;
-use std::sync::atomic::AtomicBool;
 use std::sync::mpsc;
-use std::sync::Arc;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM};
 use windows::Win32::Graphics::Gdi::{
@@ -410,7 +408,7 @@ impl CountWin {
 
 /// Open the capture, the sound and the encoder for `spec` (the encoder
 /// creates `.part`). Sound that cannot be opened is left out and said.
-fn prepare(spec: &RecSpec, muted: Arc<AtomicBool>) -> Result<Parts> {
+fn prepare(spec: &RecSpec, mic: MicFlags) -> Result<Parts> {
     if let Some(dir) = spec.out.parent() {
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
     }
@@ -427,7 +425,7 @@ fn prepare(spec: &RecSpec, muted: Arc<AtomicBool>) -> Result<Parts> {
         }
         if let Some(id) = &spec.mic {
             match WasapiCapture::open(Some(id)) {
-                Ok(a) => audio.push(Box::new(Muted { inner: a, muted })),
+                Ok(a) => audio.push(Box::new(mic.opened(a))),
                 Err(e) => warnings.push(format!("microphone not recorded: {e:#}")),
             }
         }
@@ -451,7 +449,7 @@ fn prepare(spec: &RecSpec, muted: Arc<AtomicBool>) -> Result<Parts> {
         }
         RecFormat::Gif => Box::new(GifEncoder::create(&part, w, h, spec.capture_fps())?),
     };
-    Ok(Parts { src, audio, enc, warnings })
+    Ok(Parts { src, audio, enc, warnings, late: Vec::new() })
 }
 
 /// The windows and the worker of one recording.
@@ -471,11 +469,11 @@ impl Recorder {
         spec: RecSpec,
         geom: Geom,
         th: Theme,
-        muted: Arc<AtomicBool>,
+        mic: MicFlags,
         nudge: HWND,
         bubble: Option<crate::cam::Bubble>,
     ) -> Result<Recorder> {
-        let mut r = Recorder::start_with(spec, geom, th, nudge, Box::new(move |s: &RecSpec| prepare(s, muted)))?;
+        let mut r = Recorder::start_with(spec, geom, th, nudge, Box::new(move |s: &RecSpec| prepare(s, mic)))?;
         r.bubble = bubble;
         Ok(r)
     }

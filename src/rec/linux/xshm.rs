@@ -12,7 +12,6 @@ use crate::capture::IRect;
 use crate::rec::{Frame, FrameSource};
 use anyhow::{anyhow, bail, Result};
 use core::ffi::{c_char, c_int, c_short, c_uint, c_ulong, c_ushort, c_void};
-use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::time::{Duration, Instant};
 
 /// The head of XImage (ABI-stable), as in capture_linux.
@@ -78,56 +77,17 @@ unsafe extern "C" {
         format: c_int,
     ) -> *mut XImage;
     fn XDestroyImage(image: *mut XImage) -> c_int;
-    fn XSync(dpy: *mut c_void, discard: c_int) -> c_int;
     fn XFree(data: *mut c_void) -> c_int;
-    fn XSetErrorHandler(handler: Option<ErrorHandler>) -> Option<ErrorHandler>;
-}
-
-type ErrorHandler = unsafe extern "C" fn(*mut c_void, *mut XErrorEvent) -> c_int;
-
-#[repr(C)]
-struct XErrorEvent {
-    type_: c_int,
-    display: *mut c_void,
-    resourceid: c_ulong,
-    serial: c_ulong,
-    error_code: u8,
-    major_opcode: u8,
-    minor_opcode: u8,
 }
 
 // X errors. Xlib's default handler exits the process, and a grab can fail
 // at any time (the screen shrank under the area, the server refused the
-// shared segment), so every request here runs in `guarded`, which
-// installs a recording handler for its duration (as hotkey_linux does
-// while grabbing keys). The handler is process-wide: errors of another
-// Display in that window (a few milliseconds per frame) are swallowed
-// rather than fatal; only ours are counted.
-static GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
-static OUR_DPY: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
-static X_FAILED: AtomicBool = AtomicBool::new(false);
-
-unsafe extern "C" fn on_x_error(dpy: *mut c_void, _ev: *mut XErrorEvent) -> c_int {
-    if dpy == OUR_DPY.load(Ordering::SeqCst) {
-        X_FAILED.store(true, Ordering::SeqCst);
-    }
-    0
-}
-
-/// Run `f` (requests on `dpy`) with X errors recorded instead of fatal;
-/// its result and whether `dpy` got an error. Synced first, so errors of
-/// asynchronous requests in `f` are in.
+// shared segment), so every request here runs in `guarded`: the shared
+// recording handler of `wind::x_guarded` (also used by the hotkey grabs),
+// serialised process-wide.
 unsafe fn guarded<T>(dpy: *mut c_void, f: impl FnOnce() -> T) -> (T, bool) {
-    let _g = GUARD.lock().unwrap_or_else(|e| e.into_inner());
-    unsafe {
-        OUR_DPY.store(dpy, Ordering::SeqCst);
-        X_FAILED.store(false, Ordering::SeqCst);
-        let prev = XSetErrorHandler(Some(on_x_error));
-        let r = f();
-        XSync(dpy, 0);
-        XSetErrorHandler(prev);
-        (r, X_FAILED.load(Ordering::SeqCst))
-    }
+    // SAFETY: `dpy` is this source's own Display, used by one thread at a time.
+    unsafe { crate::wind::x_guarded(dpy, f) }
 }
 
 #[link(name = "Xext")]

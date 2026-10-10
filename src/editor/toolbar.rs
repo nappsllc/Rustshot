@@ -150,9 +150,10 @@ pub struct Input<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct RecView<'a> {
     pub format: RecFormat,
-    /// MP4 can be recorded (Linux: ffmpeg is installed); else its segment
-    /// is disabled (`rec_ui::NO_MP4`).
-    pub mp4: bool,
+    /// MP4 can be recorded (Linux: ffmpeg is installed and encodes
+    /// H.264); else its segment is disabled (`rec_ui::NO_MP4`), and while
+    /// ffmpeg is being asked it says "checking…" (disabled too).
+    pub mp4: crate::rec_ui::Mp4,
     pub fps: u32,
     pub fps_choices: [u32; 2],
     pub system: bool,
@@ -366,7 +367,8 @@ fn place_rec(rv: &RecView, bar: FRect, above: bool, items: &mut Vec<Item>, texts
     let half = (inner - 4.0) / 2.0;
     for (i, (f, label)) in [(RecFormat::Mp4, "MP4"), (RecFormat::Gif, "GIF")].into_iter().enumerate() {
         let r = FRect { x: x0 + 2.0 + i as f32 * half, y: y + 2.0, w: half, h: SEG_H - 4.0 };
-        push(Kind::Seg { act: Act::RecFormat(f), label, on: rv.format == f }, r, f == RecFormat::Mp4 && !rv.mp4);
+        let label = if f == RecFormat::Mp4 && rv.mp4 == crate::rec_ui::Mp4::Checking { "checking\u{2026}" } else { label };
+        push(Kind::Seg { act: Act::RecFormat(f), label, on: rv.format == f }, r, f == RecFormat::Mp4 && rv.mp4 != crate::rec_ui::Mp4::Yes);
     }
     y += SEG_H + 10.0;
     // Frame rate: label left, two segments right.
@@ -768,7 +770,7 @@ mod tests {
     fn rec_view(format: RecFormat, mic: bool, devs: Option<&[String]>) -> RecView<'_> {
         RecView {
             format,
-            mp4: true,
+            mp4: crate::rec_ui::Mp4::Yes,
             fps: if format == RecFormat::Gif { 15 } else { 30 },
             fps_choices: if format == RecFormat::Gif { [10, 15] } else { [30, 60] },
             system: true,
@@ -814,15 +816,24 @@ mod tests {
         let mut i = inp(r(100.0, 100.0, 800.0, 300.0));
         i.record = true;
         let mut rv = rec_view(RecFormat::Gif, false, None);
-        rv.mp4 = false;
+        rv.mp4 = crate::rec_ui::Mp4::No;
         i.rec = Some(&rv);
         let tb = layout(&i);
         let seg = |a: Act| kind_at(&tb, |k| matches!(k, Kind::Seg { act, .. } if *act == a));
         let mp4 = seg(Act::RecFormat(RecFormat::Mp4));
         assert!(mp4.disabled);
+        assert!(matches!(mp4.kind, Kind::Seg { label: "MP4", .. }));
         assert_eq!(tb.act_at(centre(mp4.r)), None);
         assert!(!seg(Act::RecFormat(RecFormat::Gif)).disabled);
         assert_eq!(tb.act_at(centre(seg(Act::RecFormat(RecFormat::Gif)).r)), Some(Act::RecFormat(RecFormat::Gif)));
+        // While ffmpeg is being asked: "checking…", disabled.
+        let mut rv2 = rv.clone();
+        rv2.mp4 = crate::rec_ui::Mp4::Checking;
+        i.rec = Some(&rv2);
+        let tb = layout(&i);
+        let mp4 = kind_at(&tb, |k| matches!(k, Kind::Seg { act: Act::RecFormat(RecFormat::Mp4), .. }));
+        assert!(mp4.disabled);
+        assert!(matches!(mp4.kind, Kind::Seg { label: "checking\u{2026}", .. }), "{:?}", mp4.kind);
     }
 
     #[test]

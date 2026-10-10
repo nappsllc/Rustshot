@@ -115,7 +115,7 @@ pub fn pump(mut r: impl std::io::Read, ring: &std::sync::Mutex<PcmRing>) {
 }
 
 #[cfg(target_os = "linux")]
-pub use imp::ParecSource;
+pub use imp::{Ended, ParecSource};
 
 #[cfg(target_os = "linux")]
 mod imp {
@@ -130,12 +130,28 @@ mod imp {
 
     /// How long opening waits for parec to either deliver or fail.
     const OPEN_WAIT: Duration = Duration::from_millis(500);
+    /// How often a running source checks that parec is still there.
+    const CHECK_EVERY: Duration = Duration::from_millis(500);
+
+    /// Why a source stopped mid-recording ("parec -d X ended (...): ...").
+    pub type Ended = Arc<Mutex<Option<String>>>;
 
     /// One PulseAudio source through parec (see the module docs).
     pub struct ParecSource {
         child: Child,
+        source: String,
         ring: Arc<Mutex<PcmRing>>,
         reader: Option<JoinHandle<()>>,
+        /// parec's messages, drained on a thread (an unread pipe would
+        /// stop parec once full; a closed one would kill it).
+        errs: Arc<Mutex<ffmpeg::Tail>>,
+        err_reader: Option<JoinHandle<()>>,
+        checked: Instant,
+        ended: Ended,
+    }
+
+    fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+        m.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     impl ParecSource {
@@ -149,32 +165,78 @@ mod imp {
             child::prepare(&mut cmd, None);
             let mut child = cmd.spawn().with_context(|| format!("start {}", exe.display()))?;
             let ring = Arc::new(Mutex::new(PcmRing::new(RATE, CHANNELS, Duration::from_millis(LATENCY_MS))));
-            let stderr = child.stderr.take();
+            let errs = Arc::new(Mutex::new(ffmpeg::Tail::default()));
+            let err_reader = child.stderr.take().and_then(|mut e| {
+                let errs = errs.clone();
+                std::thread::Builder::new()
+                    .name("parec-stderr".into())
+                    .spawn(move || {
+                        let mut buf = [0u8; 512];
+                        while let Ok(n) = e.read(&mut buf) {
+                            if n == 0 {
+                                break;
+                            }
+                            lock(&errs).push(&buf[..n]);
+                        }
+                    })
+                    .ok()
+            });
             let reader = child.stdout.take().and_then(|out| {
                 let ring = ring.clone();
                 std::thread::Builder::new().name("parec-reader".into()).spawn(move || pump(out, &ring)).ok()
             });
-            let mut src = ParecSource { child, ring, reader };
+            let mut src = ParecSource {
+                child,
+                source: source.to_string(),
+                ring,
+                reader,
+                errs,
+                err_reader,
+                checked: Instant::now(),
+                ended: Ended::default(),
+            };
             if src.reader.is_none() {
                 bail!("start the parec reader thread");
             }
             let end = Instant::now() + OPEN_WAIT;
             while Instant::now() < end {
                 if let Some(st) = src.child.try_wait()? {
-                    let mut msg = String::new();
-                    if let Some(mut e) = stderr {
-                        let _ = e.read_to_string(&mut msg);
+                    if let Some(r) = src.err_reader.take() {
+                        let _ = r.join(); // its last words
                     }
-                    bail!("parec -d {source} ended ({st}): {}", msg.trim());
+                    bail!("parec -d {source} ended ({st}): {}", lock(&src.errs).text());
                 }
-                if src.ring.lock().unwrap_or_else(|e| e.into_inner()).newest.is_some() {
+                if lock(&src.ring).newest.is_some() {
                     break;
                 }
                 std::thread::sleep(Duration::from_millis(10));
             }
-            // parec's messages are not needed past this point.
-            drop(stderr);
             Ok(src)
+        }
+
+        /// Set to why parec stopped, if it stops while recording.
+        pub fn ended(&self) -> Ended {
+            self.ended.clone()
+        }
+
+        /// Now and then: whether parec is still running; once it is not,
+        /// why is logged and kept for the recording's warnings.
+        fn check(&mut self) {
+            let now = Instant::now();
+            if now.duration_since(self.checked) < CHECK_EVERY || lock(&self.ended).is_some() {
+                return;
+            }
+            self.checked = now;
+            let st = match self.child.try_wait() {
+                Ok(Some(st)) => st.to_string(),
+                Ok(None) => return,
+                Err(e) => e.to_string(),
+            };
+            std::thread::sleep(Duration::from_millis(50)); // its last words
+            let why = lock(&self.errs).text();
+            let msg = format!("parec -d {} ended ({st}){}{why}", self.source, if why.is_empty() { "" } else { ": " });
+            eprintln!("rustshot: {msg}; the rest of the recording has no sound from it");
+            *lock(&self.ended) = Some(msg);
         }
     }
 
@@ -192,7 +254,8 @@ mod imp {
         }
 
         fn read_timed(&mut self, out: &mut Vec<f32>) -> (usize, Option<Instant>) {
-            self.ring.lock().unwrap_or_else(|e| e.into_inner()).take(out)
+            self.check();
+            lock(&self.ring).take(out)
         }
     }
 
@@ -201,7 +264,7 @@ mod imp {
             // Our own child, by its PID.
             let _ = self.child.kill();
             let _ = self.child.wait();
-            if let Some(r) = self.reader.take() {
+            for r in [self.reader.take(), self.err_reader.take()].into_iter().flatten() {
                 let _ = r.join();
             }
         }

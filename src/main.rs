@@ -629,6 +629,7 @@ fn run() -> Result<()> {
                 }
             };
             update_install::cleanup_previous();
+            rec_ui::warm_mp4();
             let cfg = config::load();
             let exit_code = Arc::new(AtomicI32::new(0));
             let slot: UploadSlot = Arc::new(Mutex::new(None));

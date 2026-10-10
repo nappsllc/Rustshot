@@ -16,14 +16,19 @@ pub(crate) enum Cmd {
     Cancel,
 }
 
+/// A warning that may come up while recording (a sound source that
+/// stopped): asked once the file is saved.
+pub(crate) type Late = Box<dyn Fn() -> Option<String> + Send>;
+
 /// What a recording is made of: the capture, the sound, the encoder (it
-/// created `.part`) and what could not be opened ("microphone not
-/// recorded: <reason>").
+/// created `.part`), what could not be opened ("microphone not
+/// recorded: <reason>") and what may go wrong later ([`Late`]).
 pub(crate) struct Parts {
     pub(crate) src: Box<dyn FrameSource>,
     pub(crate) audio: Vec<Box<dyn AudioSource>>,
     pub(crate) enc: Box<dyn VideoEncoder>,
     pub(crate) warnings: Vec<String>,
+    pub(crate) late: Vec<Late>,
 }
 
 /// Opens the [`Parts`] for a spec on the worker thread (the platform's
@@ -34,7 +39,7 @@ pub(crate) fn work(spec: RecSpec, open: Opener, rx: Receiver<Cmd>) -> End {
     #[cfg(windows)]
     crate::rec::win::com_init();
     let part = spec.part_path();
-    let Parts { src, mut audio, enc, warnings } = match open(&spec) {
+    let Parts { src, mut audio, enc, mut warnings, late } = match open(&spec) {
         Ok(p) => p,
         Err(e) => {
             let _ = std::fs::remove_file(&part);
@@ -82,7 +87,10 @@ pub(crate) fn work(spec: RecSpec, open: Opener, rx: Receiver<Cmd>) -> End {
         }
     }
     match session.stop() {
-        Ok(path) => End::Saved { path, warnings },
+        Ok(path) => {
+            warnings.extend(late.iter().filter_map(|w| w()));
+            End::Saved { path, warnings }
+        }
         Err(e) => End::Failed(format!("{e:#}")),
     }
 }

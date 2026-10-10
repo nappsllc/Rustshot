@@ -23,6 +23,8 @@ unsafe extern "C" {
     fn XOpenDisplay(name: *const c_char) -> *mut c_void;
     fn XCloseDisplay(dpy: *mut c_void) -> c_int;
     fn XInitThreads() -> c_int;
+    fn XSync(dpy: *mut c_void, discard: c_int) -> c_int;
+    fn XSetErrorHandler(handler: Option<XErrorHandler>) -> Option<XErrorHandler>;
     fn XConnectionNumber(dpy: *mut c_void) -> c_int;
     fn XDefaultScreen(dpy: *mut c_void) -> c_int;
     fn XRootWindow(dpy: *mut c_void, screen: c_int) -> c_ulong;
@@ -317,6 +319,50 @@ pub fn init_x11() {
     XLIB_INIT.call_once(|| unsafe {
         XInitThreads();
     });
+}
+
+/// An Xlib error handler (the event is only passed through).
+type XErrorHandler = unsafe extern "C" fn(*mut c_void, *mut c_void) -> c_int;
+
+// X errors. Xlib's default handler exits the process, so requests that can
+// fail (a refused key grab, a screen grab of an area that is gone) run in
+// `x_guarded`, which installs a recording handler for their duration. The
+// handler is process-wide and Xlib keeps one: `X_ERR_LOCK` makes sure two
+// threads never interleave their save and restore (which could leave the
+// recording handler installed for good, or the default one where an error
+// is expected). Errors of another Display while it is installed (a few
+// milliseconds at a time) are ignored rather than fatal; only the guarded
+// Display's are counted.
+static X_ERR_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static X_ERR_DPY: std::sync::atomic::AtomicPtr<c_void> = std::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
+static X_ERR_HIT: AtomicBool = AtomicBool::new(false);
+
+unsafe extern "C" fn record_x_error(dpy: *mut c_void, _ev: *mut c_void) -> c_int {
+    if dpy == X_ERR_DPY.load(Ordering::SeqCst) {
+        X_ERR_HIT.store(true, Ordering::SeqCst);
+    }
+    0
+}
+
+/// Run `f` (requests on `dpy`) with X errors recorded instead of fatal:
+/// its result and whether `dpy` got an error. `dpy` is synced before the
+/// handler is restored, so the errors of asynchronous requests in `f` are
+/// in. Serialised process-wide (see above).
+///
+/// # Safety
+/// `dpy` is an open Display used only by this thread for the duration.
+pub unsafe fn x_guarded<T>(dpy: *mut c_void, f: impl FnOnce() -> T) -> (T, bool) {
+    let _g = X_ERR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    unsafe {
+        X_ERR_DPY.store(dpy, Ordering::SeqCst);
+        X_ERR_HIT.store(false, Ordering::SeqCst);
+        let prev = XSetErrorHandler(Some(record_x_error));
+        let r = f();
+        XSync(dpy, 0);
+        XSetErrorHandler(prev);
+        X_ERR_DPY.store(core::ptr::null_mut(), Ordering::SeqCst);
+        (r, X_ERR_HIT.load(Ordering::SeqCst))
+    }
 }
 
 /// Live modifier state via `XQueryPointer` (ShiftMask=1, ControlMask=4,

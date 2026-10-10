@@ -587,9 +587,10 @@ impl Edit {
                         let anchor = FRect { x: it.r.x1() - sw, y: it.r.y, w: sw, h: it.r.h };
                         tip = Some(TipUi { anchor, act, label: crate::cam::NO_CAMERA, keys: Vec::new(), area, below: true, k });
                     }
-                    // Why MP4 is off (Linux without ffmpeg).
+                    // Why MP4 is off (Linux without ffmpeg, or still asking it).
                     toolbar::Kind::Seg { act: act @ toolbar::Act::RecFormat(crate::rec::RecFormat::Mp4), .. } if it.disabled => {
-                        tip = Some(TipUi { anchor: it.r, act, label: crate::rec_ui::NO_MP4, keys: Vec::new(), area, below: false, k });
+                        let label = if self.rec.mp4 == crate::rec_ui::Mp4::Checking { crate::rec_ui::CHECKING_MP4 } else { crate::rec_ui::NO_MP4 };
+                        tip = Some(TipUi { anchor: it.r, act, label, keys: Vec::new(), area, below: false, k });
                     }
                     _ => {}
                 }

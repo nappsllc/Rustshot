@@ -5,6 +5,8 @@
 use super::*;
 use crate::rec::win::tests::{out_dir, record, skip_without_mf, spec, TestWindow};
 use crate::rec::{FrameSource, Quality};
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Pump this thread's messages for `ms` (the windows live here).
@@ -188,7 +190,7 @@ fn fake_parts(fail_at: Option<usize>, finished: Arc<AtomicBool>, warnings: Vec<S
         std::fs::create_dir_all(s.out.parent().unwrap())?;
         let file = std::fs::File::create(s.part_path())?;
         let enc = Enc { file, n: 0, fail_at, finished };
-        Ok(Parts { src: Box::new(Still), audio: Vec::new(), enc: Box::new(enc), warnings })
+        Ok(Parts { src: Box::new(Still), audio: Vec::new(), enc: Box::new(enc), warnings, late: Vec::new() })
     })
 }
 
@@ -232,6 +234,30 @@ fn worker_saves_with_warnings() {
     let end = wait_end(&w, 10).expect("saved");
     assert_eq!(end, End::Saved { path: dir.join("a.gif"), warnings: warn });
     assert!(dir.join("a.gif").is_file() && !dir.join("a.gif.part").exists());
+    drop(w);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A sound source that stopped while recording is a warning of the saved
+/// file, asked once it is saved.
+#[test]
+fn worker_adds_late_warnings_to_the_saved_file() {
+    let dir = worker_dir("late");
+    let s = spec(RecFormat::Gif, 10, (0, 0, 4, 4), dir.join("a.gif"));
+    let inner = fake_parts(None, Arc::new(AtomicBool::new(false)), vec!["first".into()]);
+    let open: Opener = Box::new(move |s: &RecSpec| {
+        let mut p = inner(s)?;
+        p.late.push(Box::new(|| Some("microphone stopped during the recording: gone".into())));
+        p.late.push(Box::new(|| None));
+        Ok(p)
+    });
+    let w = Worker::spawn(s, open).unwrap();
+    w.tx.send(Cmd::Go).unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    w.tx.send(Cmd::Stop).unwrap();
+    let end = wait_end(&w, 10).expect("saved");
+    let warnings = vec!["first".to_string(), "microphone stopped during the recording: gone".into()];
+    assert_eq!(end, End::Saved { path: dir.join("a.gif"), warnings });
     drop(w);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -286,8 +312,7 @@ fn live_rec_windows_close_when_the_start_fails() {
     assert_eq!(hwnds.len(), 6);
     let mut run = super::super::Run {
         m: super::super::Machine::new(),
-        muted: Arc::new(AtomicBool::new(false)),
-        has_mic: false,
+        mic: super::super::MicFlags::default(),
         ui: Some(ui),
         log: Vec::new(),
         fake_end: None,

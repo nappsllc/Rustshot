@@ -73,6 +73,37 @@ jobs:
           if grep -q "SKIP:" "$RUNNER_TEMP/test-logs/xvfb-rec.log"; then
             echo "::error::the recording-with-sound test was skipped"; exit 1
           fi
+      # The same recording tests with ffmpeg 7, whose scheduler stops reading
+      # an input that runs more than 100 ms ahead of the other (the two-pipe
+      # deadlock): a pinned static build (BtbN, monthly release, sha256
+      # checked) used through RUSTSHOT_FFMPEG. Includes the 5 s capture
+      # stall test (picture and sound lengths must match). PulseAudio and its
+      # null devices are still up from the step above.
+      - name: X11 recording under Xvfb with ffmpeg 7.1 (static build)
+        timeout-minutes: 10
+        env:
+          RUSTSHOT_FFMPEG_LOG: "1"
+          FFMPEG7_URL: https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-07-31-14-10/ffmpeg-n7.1.5-12-g1fdbca85aa-linux64-gpl-7.1.tar.xz
+          FFMPEG7_SHA256: c1e6caf48923dd8e6bc5e54d51ba70c321175b8162ae9c414c392990e72f0e79
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/test-logs" "$RUNNER_TEMP/ffmpeg7"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/ffmpeg7.tar.xz" "$FFMPEG7_URL"
+          echo "$FFMPEG7_SHA256  $RUNNER_TEMP/ffmpeg7.tar.xz" | sha256sum -c -
+          tar -xJf "$RUNNER_TEMP/ffmpeg7.tar.xz" -C "$RUNNER_TEMP/ffmpeg7" --strip-components=1
+          export RUSTSHOT_FFMPEG="$RUNNER_TEMP/ffmpeg7/bin/ffmpeg"
+          "$RUSTSHOT_FFMPEG" -hide_banner -version | head -n1
+          pactl info >/dev/null || echo "::warning::PulseAudio is not running"
+          timeout 400 xvfb-run -a -s "-screen 0 1600x900x24"             cargo test --bin rustshot -- --ignored --test-threads=1 --nocapture live_rec_linux_             2>&1 | tee "$RUNNER_TEMP/test-logs/xvfb-rec7.log"
+          grep -o "FFPROBE .*duration=.*\|SKIP:.*" "$RUNNER_TEMP/test-logs/xvfb-rec7.log" | while read -r line; do
+            echo "::notice title=Linux recording (ffmpeg 7)::$line"
+          done
+          # The tests ran this ffmpeg, not the system one.
+          grep -q "ffmpeg $RUSTSHOT_FFMPEG: ffmpeg version n7\." "$RUNNER_TEMP/test-logs/xvfb-rec7.log" \
+            || { echo "::error::the stall test did not run with ffmpeg 7"; exit 1; }
+          if grep -q "SKIP:" "$RUNNER_TEMP/test-logs/xvfb-rec7.log"; then
+            echo "::error::the recording-with-sound test was skipped"; exit 1
+          fi
       - name: Upload Xvfb test log
         if: failure()
         uses: actions/upload-artifact@v4
@@ -82,7 +113,11 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
       - name: Build
-        run: cargo build --release
+        run: |
+          cargo build --release
+          size=$(stat -c %s target/release/rustshot)
+          echo "Linux release exe: $size bytes"
+          echo "::notice title=Linux exe size::$size bytes"
       - name: Package (tarball, deb, AppImage)
         run: |
           bash packaging/linux/package.sh

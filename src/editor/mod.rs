@@ -324,9 +324,9 @@ impl App {
         }
         self.tick_recording();
         if let State::Edit(e) = &mut self.st
-            && e.rec.poll_cams()
+            && (e.rec.poll_cams() | e.rec.poll_mp4())
         {
-            self.repaint(); // the Camera row is ready
+            self.repaint(); // the Camera row or the MP4 choice is ready
         }
         self.sync_bubble();
 
@@ -1220,9 +1220,10 @@ impl App {
                     edit.rec.load_cams(); // whether there is one
                 }
             }
-            Act::RecFormat(crate::rec::RecFormat::Mp4) if !edit.rec.mp4 => {}
+            Act::RecFormat(crate::rec::RecFormat::Mp4) if edit.rec.mp4 != rec_ui::Mp4::Yes => {}
             Act::RecFormat(f) => {
                 edit.rec.opts.format = f;
+                edit.rec.wanted = f;
                 edit.rec.dev_open = None;
             }
             Act::RecFps(n) => edit.rec.opts.set_fps(n),
@@ -1654,9 +1655,13 @@ struct RecPop {
     start: bool,
     /// The camera bubble while the popover shows the camera.
     cam: CamSlot,
-    /// MP4 can be recorded (Linux: ffmpeg found, looked up once per
-    /// capture); else the popover records GIF and MP4 is disabled.
-    mp4: bool,
+    /// MP4 can be recorded (Linux: ffmpeg found and able, asked in the
+    /// background); else the popover records GIF and MP4 is disabled,
+    /// saying "checking…" until ffmpeg answers.
+    mp4: rec_ui::Mp4,
+    /// The format chosen (the config's, or a click): taken again once MP4
+    /// turns out to be there.
+    wanted: crate::rec::RecFormat,
 }
 
 /// How long Start waits for the camera list (it is usually there long
@@ -1668,12 +1673,14 @@ const FIRST_PICTURE_WAIT: Duration = Duration::from_secs(1);
 
 impl RecPop {
     fn new(mut opts: RecOpts, mode: bool) -> RecPop {
-        let mp4 = rec_ui::mp4_available();
-        if !mp4 {
+        let mp4 = rec_ui::mp4_status();
+        let wanted = opts.format;
+        if mp4 != rec_ui::Mp4::Yes {
             opts.format = crate::rec::RecFormat::Gif;
         }
         let mut p = RecPop {
             mp4,
+            wanted,
             opts,
             open: mode,
             mode,
@@ -1701,6 +1708,23 @@ impl RecPop {
         if self.cams.is_none() && self.cams_rx.is_none() {
             self.cams_rx = Some(rec_ui::cameras_async());
             self.poll_cams();
+        }
+    }
+
+    /// While ffmpeg is being asked: its answer, if it came; true when the
+    /// popover changed (MP4 known; the chosen format is taken again).
+    fn poll_mp4(&mut self) -> bool {
+        if self.mp4 != rec_ui::Mp4::Checking {
+            return false;
+        }
+        self.mp4 = rec_ui::mp4_status();
+        match self.mp4 {
+            rec_ui::Mp4::Checking => false,
+            rec_ui::Mp4::Yes => {
+                self.opts.format = self.wanted;
+                true
+            }
+            rec_ui::Mp4::No => true,
         }
     }
 
@@ -3196,7 +3220,7 @@ mod tests {
             app.frame();
             save(&mut app, &format!("{tn}-record-looking-for-cameras.png"));
             // Linux without ffmpeg: GIF only, MP4 disabled with its tooltip.
-            rec_ui::FAKE_MP4.with(|c| c.set(false));
+            rec_ui::FAKE_MP4.with(|c| c.set(rec_ui::Mp4::No));
             let mut app = annotated(th, big);
             let e = edit_of(&mut app);
             e.rec = RecPop::new(e.rec.opts.clone(), false);
@@ -3208,7 +3232,7 @@ mod tests {
             e.hover = tb.items.iter().position(|i| matches!(i.kind, toolbar::Kind::Seg { act: Act::RecFormat(crate::rec::RecFormat::Mp4), .. }));
             e.hover_at = Instant::now() - Duration::from_secs(2);
             save(&mut app, &format!("{tn}-record-no-ffmpeg.png"));
-            rec_ui::FAKE_MP4.with(|c| c.set(true));
+            rec_ui::FAKE_MP4.with(|c| c.set(rec_ui::Mp4::Yes));
         }
     }
 

@@ -1,8 +1,10 @@
 //! Live recording on X11: `#[ignore]`d, run by CI's Linux job under Xvfb
-//! with ffmpeg installed (names start `live_rec_linux_`). CI starts a
-//! PulseAudio daemon with a null sink (the default) and a null source for
-//! the test with sound, which plays a tone into the sink while it records;
-//! without a sound server it prints "SKIP:" and passes.
+//! with ffmpeg installed (names start `live_rec_linux_`), once with the
+//! distribution's ffmpeg 6 and once with a static ffmpeg 7 build
+//! (`RUSTSHOT_FFMPEG`). CI starts a PulseAudio daemon with a null sink (the
+//! default) and a null source for the test with sound, which plays a tone
+//! into the sink while it records; without a sound server it prints
+//! "SKIP:" and passes.
 
 use super::ffmpeg::{self, FfmpegEncoder};
 use super::parec::ParecSource;
@@ -191,6 +193,121 @@ fn live_rec_linux_xvfb_mp4_with_sound_and_pause() {
     assert!((2.7..=3.3).contains(&duration), "duration {duration} s, want 3 ± 0.3 (the pause is cut)");
     assert!(st.contains("codec_type=video") && st.contains("codec_name=h264"), "{st}");
     assert!(st.contains("codec_type=audio") && st.contains("codec_name=aac"), "{st}");
+    assert!((v - a).abs() <= 0.1, "video {v} s and audio {a} s differ by more than 0.1 s");
+    assert!(vol > -60.0, "the tone is in the recording (mean_volume {vol} dB)");
+}
+
+/// Frames of a moving bar, delivered on time except once: the capture
+/// stalls for `stall` after `at` (a hung X server, a busy machine).
+struct StallingFrames {
+    w: u32,
+    h: u32,
+    start: Instant,
+    at: Duration,
+    stall: Duration,
+    stalled: bool,
+    n: u32,
+}
+
+impl FrameSource for StallingFrames {
+    fn next(&mut self, deadline: Instant) -> Option<crate::rec::Frame> {
+        if !self.stalled && self.start.elapsed() >= self.at {
+            self.stalled = true;
+            eprintln!("stalling the capture for {:?}", self.stall);
+            std::thread::sleep(self.stall);
+        } else {
+            std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
+        }
+        self.n += 1;
+        let mut bgra = vec![40u8; (self.w * self.h * 4) as usize];
+        let x = (self.n * 4) % self.w;
+        for y in 0..self.h {
+            let i = ((y * self.w + x) * 4) as usize;
+            bgra[i..i + 4].copy_from_slice(&[255, 255, 255, 255]);
+        }
+        Some(crate::rec::Frame { w: self.w, h: self.h, bgra, ts: Duration::ZERO })
+    }
+
+    fn size(&self) -> (u32, u32) {
+        (self.w, self.h)
+    }
+}
+
+/// A 440 Hz tone that arrives in step with the wall clock, like a device.
+struct LiveTone {
+    start: Instant,
+    sent: u64,
+}
+
+impl AudioSource for LiveTone {
+    fn rate(&self) -> u32 {
+        48_000
+    }
+
+    fn channels(&self) -> u16 {
+        2
+    }
+
+    fn read(&mut self, out: &mut Vec<f32>) -> usize {
+        let due = (self.start.elapsed().as_secs_f64() * 48_000.0) as u64;
+        let n = due.saturating_sub(self.sent);
+        for i in self.sent..self.sent + n {
+            let v = ((i as f64) * 440.0 * std::f64::consts::TAU / 48_000.0).sin() as f32 * 0.4;
+            out.extend_from_slice(&[v, v]);
+        }
+        self.sent += n;
+        (n * 2) as usize
+    }
+}
+
+/// ffmpeg 7's scheduler stops reading an input that runs more than 100 ms
+/// ahead of the other: a capture that stalls for 5 s mid-recording must
+/// neither deadlock the two pipes nor leave the sound and picture with
+/// different lengths (the last frame is held while no new one comes).
+#[test]
+#[ignore = "records synthetic frames and sound with ffmpeg"]
+fn live_rec_linux_ffmpeg_capture_stall_keeps_av_in_step() {
+    let exe = ffmpeg::find().expect("ffmpeg is installed");
+    let version = Command::new(&exe).arg("-version").output().map(|o| String::from_utf8_lossy(&o.stdout).lines().next().unwrap_or("").to_string());
+    eprintln!("ffmpeg {}: {}", exe.display(), version.unwrap_or_default());
+    let dir = out_dir("stall");
+    let spec = spec(RecFormat::Mp4, 30, (0, 0, 320, 240), dir.join("stall.mp4"));
+    let enc = FfmpegEncoder::create(&spec.part_path(), 320, 240, 30, Quality::Low, true).unwrap();
+    eprintln!("encoder: {}", enc.codec().name());
+    let now = Instant::now();
+    let src = StallingFrames { w: 320, h: 240, start: now, at: Duration::from_millis(1500), stall: Duration::from_secs(5), stalled: false, n: 0 };
+    let audio: Vec<Box<dyn AudioSource>> = vec![Box::new(LiveTone { start: now, sent: 0 })];
+    let s = Session::start(spec, Box::new(src), audio, Box::new(enc)).unwrap();
+    std::thread::sleep(Duration::from_millis(8000)); // 1.5 s, the 5 s stall, 1.5 s
+    let st = s.stats();
+    eprintln!("stats: {st:?}");
+    assert!(!st.failed, "the encoder failed while recording");
+    let t = Instant::now();
+    // Stop must come back (a deadlock would hang here): bounded by a thread.
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(s.stop().map_err(|e| format!("{e:#}")));
+    });
+    let path = rx.recv_timeout(Duration::from_secs(60)).expect("stop came back within 60 s").unwrap();
+    let stop_secs = t.elapsed().as_secs_f64();
+    let fmt = ffprobe(&path, "format=duration");
+    let st = ffprobe(&path, "stream=codec_type,duration");
+    eprintln!("ffprobe:\n{fmt}{st}");
+    let duration: f64 = value(&fmt, "duration").parse().unwrap();
+    let mut durs = std::collections::HashMap::new();
+    let mut kind = String::new();
+    for l in st.lines() {
+        if let Some(k) = l.strip_prefix("codec_type=") {
+            kind = k.to_string();
+        } else if let Some(d) = l.strip_prefix("duration=") {
+            durs.insert(kind.clone(), d.parse::<f64>().unwrap_or(f64::NAN));
+        }
+    }
+    let (v, a) = (durs.get("video").copied().unwrap_or(f64::NAN), durs.get("audio").copied().unwrap_or(f64::NAN));
+    let vol = mean_volume(&path);
+    eprintln!("FFPROBE stall duration={duration:.3}s video={v:.3}s audio={a:.3}s stop={stop_secs:.2}s mean_volume={vol:.1}dB");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!((7.4..=8.6).contains(&duration), "duration {duration} s, want 8 ± 0.6 (the stall is recorded as a still)");
     assert!((v - a).abs() <= 0.1, "video {v} s and audio {a} s differ by more than 0.1 s");
     assert!(vol > -60.0, "the tone is in the recording (mean_volume {vol} dB)");
 }

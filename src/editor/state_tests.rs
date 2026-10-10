@@ -1587,12 +1587,36 @@ fn rec_geom_has_each_monitors_scale() {
 fn without_mp4_the_popover_records_gif() {
     let mut opts = rec_ui::RecOpts::from_config(&Config::default());
     opts.format = crate::rec::RecFormat::Mp4;
-    rec_ui::FAKE_MP4.with(|c| c.set(false));
+    rec_ui::FAKE_MP4.with(|c| c.set(rec_ui::Mp4::No));
     let p = RecPop::new(opts.clone(), false);
-    rec_ui::FAKE_MP4.with(|c| c.set(true));
-    assert!(!p.mp4);
+    rec_ui::FAKE_MP4.with(|c| c.set(rec_ui::Mp4::Yes));
+    assert_eq!(p.mp4, rec_ui::Mp4::No);
     assert_eq!(p.opts.format, crate::rec::RecFormat::Gif);
     let p = RecPop::new(opts, false);
-    assert!(p.mp4);
+    assert_eq!(p.mp4, rec_ui::Mp4::Yes);
     assert_eq!(p.opts.format, crate::rec::RecFormat::Mp4);
+}
+
+/// While ffmpeg is being asked the popover records GIF and MP4 waits;
+/// once it answers yes, the configured MP4 is chosen again.
+#[test]
+fn while_mp4_is_checked_the_popover_waits_then_takes_the_config() {
+    let mut opts = rec_ui::RecOpts::from_config(&Config::default());
+    opts.format = crate::rec::RecFormat::Mp4;
+    rec_ui::FAKE_MP4.with(|c| c.set(rec_ui::Mp4::Checking));
+    let mut p = RecPop::new(opts.clone(), false);
+    assert_eq!(p.mp4, rec_ui::Mp4::Checking);
+    assert_eq!(p.opts.format, crate::rec::RecFormat::Gif);
+    assert!(!p.poll_mp4(), "still asking");
+    rec_ui::FAKE_MP4.with(|c| c.set(rec_ui::Mp4::Yes));
+    assert!(p.poll_mp4());
+    assert_eq!((p.mp4, p.opts.format), (rec_ui::Mp4::Yes, crate::rec::RecFormat::Mp4));
+    assert!(!p.poll_mp4(), "once");
+    // No MP4 after all: GIF stays.
+    rec_ui::FAKE_MP4.with(|c| c.set(rec_ui::Mp4::Checking));
+    let mut p = RecPop::new(opts, false);
+    rec_ui::FAKE_MP4.with(|c| c.set(rec_ui::Mp4::No));
+    assert!(p.poll_mp4());
+    rec_ui::FAKE_MP4.with(|c| c.set(rec_ui::Mp4::Yes));
+    assert_eq!((p.mp4, p.opts.format), (rec_ui::Mp4::No, crate::rec::RecFormat::Gif));
 }

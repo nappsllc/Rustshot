@@ -7,6 +7,7 @@
 
 #[cfg(target_os = "linux")]
 pub mod child;
+pub mod feed;
 pub mod ffmpeg;
 pub mod parec;
 pub mod pulse_list;

@@ -61,18 +61,33 @@ pub fn x11_session(wayland_display: Option<&std::ffi::OsStr>, session_type: Opti
 /// Why MP4 is off on Linux without ffmpeg (the MP4 segment's tooltip).
 pub const NO_MP4: &str = "MP4 needs ffmpeg (install it, or wait for the built-in fallback)";
 
-#[cfg(test)]
-thread_local! {
-    /// Whether tests see an MP4 encoder.
-    pub static FAKE_MP4: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+/// The MP4 segment's tooltip while ffmpeg is being asked.
+pub const CHECKING_MP4: &str = "Checking whether ffmpeg can record MP4";
+
+/// Whether MP4 can be recorded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))] // Yes elsewhere
+pub enum Mp4 {
+    Yes,
+    /// GIF only: the MP4 choice is disabled with [`NO_MP4`].
+    No,
+    /// Not known yet (Linux: ffmpeg is being asked, in the background).
+    Checking,
 }
 
-/// Whether MP4 can be recorded: on Linux only with ffmpeg installed and
-/// able to encode H.264 (`ffmpeg -encoders`, cached; a VA-API-only ffmpeg
-/// is tried once)
-/// (else GIF only, the MP4 choice disabled with [`NO_MP4`]); Windows checks
-/// Media Foundation when the recording starts.
-pub fn mp4_available() -> bool {
+#[cfg(test)]
+thread_local! {
+    /// What tests see.
+    pub static FAKE_MP4: std::cell::Cell<Mp4> = const { std::cell::Cell::new(Mp4::Yes) };
+}
+
+/// Whether MP4 can be recorded, without waiting: on Linux only with ffmpeg
+/// installed and able to encode H.264 (`ffmpeg -encoders`, a VA-API-only
+/// ffmpeg tried once; cached, each probe stopped after 3 s), asked on a
+/// background thread ([`Mp4::Checking`] until it answers; [`warm_mp4`]
+/// asks at start). Windows checks Media Foundation when the recording
+/// starts.
+pub fn mp4_status() -> Mp4 {
     #[cfg(test)]
     {
         FAKE_MP4.with(|c| c.get())
@@ -80,11 +95,25 @@ pub fn mp4_available() -> bool {
     #[cfg(all(target_os = "linux", not(test)))]
     {
         use crate::rec::linux::ffmpeg;
-        ffmpeg::find().is_some_and(|exe| ffmpeg::caps(&exe).h264.is_some())
+        match ffmpeg::find().map(|exe| ffmpeg::caps_now(&exe)) {
+            None => Mp4::No,
+            Some(None) => Mp4::Checking,
+            Some(Some(c)) if c.h264.is_some() => Mp4::Yes,
+            Some(Some(_)) => Mp4::No,
+        }
     }
     #[cfg(all(not(target_os = "linux"), not(test)))]
     {
-        true
+        Mp4::Yes
+    }
+}
+
+/// Linux: ask ffmpeg what it can do now, in the background (the daemon
+/// starts this so the Record popover knows when it opens).
+pub fn warm_mp4() {
+    #[cfg(all(target_os = "linux", not(test)))]
+    if let Some(exe) = crate::rec::linux::ffmpeg::find() {
+        crate::rec::linux::ffmpeg::warm(&exe);
     }
 }
 
@@ -586,6 +615,23 @@ pub fn layer_over(bgra: &[u8], bg: [u8; 3]) -> Vec<u8> {
 // Audio mute
 // ---------------------------------------------------------------------------
 
+/// The microphone as the control bar sees it: whether its source opened
+/// (set by the worker once it did: only then is there a Mute button) and
+/// whether it is muted.
+#[derive(Clone, Debug, Default)]
+pub struct MicFlags {
+    pub muted: Arc<AtomicBool>,
+    pub open: Arc<AtomicBool>,
+}
+
+impl MicFlags {
+    /// `inner` (the microphone, which opened) to record, mutable from the bar.
+    pub fn opened<A>(&self, inner: A) -> Muted<A> {
+        self.open.store(true, Ordering::SeqCst);
+        Muted { inner, muted: self.muted.clone() }
+    }
+}
+
 /// An audio source the control bar can mute: silence (same timing) while
 /// `muted` is set.
 pub struct Muted<A> {
@@ -683,8 +729,8 @@ impl Geom {
 /// machine, the pipeline worker and the windows around the area.
 pub struct Run {
     m: Machine,
-    muted: Arc<AtomicBool>,
-    has_mic: bool,
+    /// Mute, and whether the microphone opened (no Mute button before).
+    mic: MicFlags,
     #[cfg(windows)]
     ui: Option<win::Recorder>,
     #[cfg(target_os = "linux")]
@@ -712,13 +758,11 @@ impl Run {
         nudge: crate::wind::Hwnd,
         bubble: Option<crate::cam::Bubble>,
     ) -> anyhow::Result<Run> {
-        let muted = Arc::new(AtomicBool::new(false));
-        let has_mic = spec.mic.is_some();
-        let ui = win::Recorder::start(spec, geom, th, muted.clone(), nudge, bubble)?;
+        let mic = MicFlags::default();
+        let ui = win::Recorder::start(spec, geom, th, mic.clone(), nudge, bubble)?;
         let mut run = Run {
             m: Machine::new(),
-            muted,
-            has_mic,
+            mic,
             ui: Some(ui),
             #[cfg(test)]
             log: Vec::new(),
@@ -734,7 +778,7 @@ impl Run {
     }
 
     /// X11: as on Windows (the sound is read in-app, so the microphone
-    /// can be muted from the bar).
+    /// can be muted from the bar once it opened).
     #[cfg(target_os = "linux")]
     #[cfg_attr(test, allow(dead_code))] // tests record through `Run::fake`
     pub fn start(
@@ -745,13 +789,11 @@ impl Run {
         _nudge: crate::wind::Hwnd,
         bubble: Option<crate::cam::Bubble>,
     ) -> anyhow::Result<Run> {
-        let muted = Arc::new(AtomicBool::new(false));
-        let has_mic = spec.mic.is_some();
-        let ui = x11::Recorder::start(spec, geom, th, muted.clone(), bubble)?;
+        let mic = MicFlags::default();
+        let ui = x11::Recorder::start(spec, geom, th, mic.clone(), bubble)?;
         let mut run = Run {
             m: Machine::new(),
-            muted,
-            has_mic,
+            mic,
             ui: Some(ui),
             #[cfg(test)]
             log: Vec::new(),
@@ -783,8 +825,7 @@ impl Run {
     pub fn fake(countdown: bool, mic: bool, now: Instant) -> Run {
         let mut run = Run {
             m: Machine::new(),
-            muted: Arc::new(AtomicBool::new(false)),
-            has_mic: mic,
+            mic: MicFlags { muted: Arc::default(), open: Arc::new(AtomicBool::new(mic)) },
             #[cfg(any(windows, target_os = "linux"))]
             ui: None,
             log: Vec::new(),
@@ -827,13 +868,18 @@ impl Run {
     }
 
     pub fn toggle_mute(&mut self) {
-        if self.has_mic {
-            self.muted.fetch_xor(true, Ordering::SeqCst);
+        if self.has_mic() {
+            self.mic.muted.fetch_xor(true, Ordering::SeqCst);
         }
     }
 
+    /// The microphone is being recorded (its source opened).
+    fn has_mic(&self) -> bool {
+        self.mic.open.load(Ordering::SeqCst)
+    }
+
     pub fn muted(&self) -> bool {
-        self.muted.load(Ordering::SeqCst)
+        self.mic.muted.load(Ordering::SeqCst)
     }
 
     /// The control bar's state now.
@@ -842,7 +888,7 @@ impl Run {
             // Whole seconds: the bar is redrawn only when its text changes.
             elapsed: Duration::from_secs(self.m.elapsed(now).as_secs()),
             paused: self.m.phase() == Phase::Paused,
-            mic: self.has_mic.then(|| self.muted()),
+            mic: self.has_mic().then(|| self.muted()),
             stopping: self.m.phase() == Phase::Stopping,
             compact: false,
         }
