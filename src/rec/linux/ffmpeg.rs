@@ -1,33 +1,32 @@
-//! MP4 through an `ffmpeg` subprocess (Linux, when ffmpeg is installed).
+//! MP4 through `ffmpeg` subprocesses (Linux, when ffmpeg is installed).
 //!
 //! Rustshot writes raw BGRA frames to ffmpeg's stdin at a constant frame
-//! rate (frames are duplicated or dropped to keep it, see [`Cfr`]); ffmpeg
-//! captures the sound itself (`-f pulse` inputs: the system monitor and the
-//! microphone, mixed with `amix`) and writes H.264 (libx264, else
-//! libopenh264, else h264_vaapi, whichever `ffmpeg -encoders` lists) + AAC
-//! to the `.part` file, `-movflags +faststart`.
+//! rate (`-f rawvideo -pix_fmt bgra -s WxH -r FPS -i -`; frames are
+//! duplicated or dropped to keep the rate, see [`Cfr`]) and ffmpeg writes
+//! H.264 (libx264, else libopenh264, else h264_vaapi, whichever `ffmpeg
+//! -encoders` lists), `-movflags +faststart`, to the `.part` file. Frames
+//! go to ffmpeg on a writer thread through a bounded channel.
 //!
-//! Since ffmpeg hears the sound in real time, a pause cannot just skip
-//! time the way the session clock does. With sound, every stretch between
-//! pauses is its own ffmpeg run (a segment, started at its first frame);
-//! [`VideoEncoder::finish`] joins them with the concat demuxer (`-c copy`).
-//! Without sound there is one run and pausing needs nothing.
+//! The sound is recorded by ffmpeg too (`-f pulse -i <source>`), but by a
+//! process of its own per source, never by the video's: a live input in
+//! the video's process paces the picture by the sound (ffmpeg works on the
+//! stream that is behind), so a source that is slow to open (a suspended
+//! sink can take a second or two to wake) holds the picture back and
+//! `-shortest` cuts it. Each sound process writes FLAC and logs the wall
+//! clock time of its first sample (`start:` in its input dump); the time
+//! of the stretch's first frame is known too. [`FfmpegEncoder::finish`]
+//! then puts the sound where it belongs (`adelay` / `atrim`), mixes the
+//! sources (`amix`), joins the stretches and muxes it with the picture
+//! (`-c:v copy`, AAC). Sound is only heard while recording: a stretch has
+//! no sound until its source is open.
 //!
-//! Sound and picture are kept in step by the wall clock (ffmpeg 6+): with
-//! sound the frames go to ffmpeg in a minimal Matroska stream ([`Mkv`]:
-//! raw BGRA, each frame stamped with the wall-clock time of its slot on
-//! the constant-rate grid), the pulse inputs stamp their samples with the
-//! wall clock too, and `-isync 0` places the sound by the difference
-//! between the two starts; `-fps_mode cfr` keeps the output constant-rate.
-//! The stamps travel with the frames, so however long ffmpeg takes to open
-//! the pulse inputs (it opens them first, when the stretch's first frame
-//! starts it; a suspended sink can take a second or two to wake) the
-//! picture keeps its timing; the stretch just has no sound until the input
-//! is open, and never sound from before it. An older ffmpeg (no `-isync`)
-//! gets the plain raw input: its sound starts with the picture.
+//! With sound, every stretch between pauses has its own processes (they
+//! start at its first frame), as ffmpeg hears in real time and a pause
+//! cannot skip time the way the session clock does. Without sound there is
+//! one video process writing the `.part` directly, and pausing needs
+//! nothing.
 //!
 //! Nothing goes through a shell: every argument is its own argv entry.
-//! Frames go to ffmpeg on a writer thread through a bounded channel.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))] // unit-tested everywhere, used on Linux
 
 use crate::rec::{bitrate, mp4_fit, Frame, Quality, VideoEncoder};
@@ -35,12 +34,11 @@ use anyhow::{anyhow, bail, Context, Result};
 use std::ffi::{OsStr, OsString};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{sync_channel, SyncSender};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 /// Absolute path of the ffmpeg to use instead of the one on `PATH`.
 pub const ENV_OVERRIDE: &str = "RUSTSHOT_FFMPEG";
@@ -52,15 +50,16 @@ pub const VAAPI_DEVICE: &str = "/dev/dri/renderD128";
 /// encode thread, and the session's queue drops frames before it).
 const PIPE_FRAMES: usize = 2;
 
-/// How long [`FfmpegEncoder::finish`] waits for ffmpeg to finish the file.
+/// How long finishing waits for ffmpeg to finish a file.
 const FINISH_TIMEOUT: Duration = Duration::from_secs(60);
-/// With live sound inputs ffmpeg runs until told to stop: it gets SIGINT
-/// once it has encoded every frame, or once its frame count has not moved
-/// for this long.
-const DRAIN_STALL: Duration = Duration::from_secs(3);
+/// How long a sound process gets to stop after `q`.
+const AUDIO_STOP_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The stderr kept for error messages (the last bytes).
 const TAIL_BYTES: usize = 4096;
+
+/// The AAC bit rate of the recording's sound.
+const AAC_RATE: &str = "160k";
 
 /// The ffmpeg to run: [`ENV_OVERRIDE`] when it names an absolute,
 /// executable file, else the first `ffmpeg` in an absolute `PATH` entry
@@ -139,20 +138,6 @@ pub struct Caps {
     pub aac: bool,
     /// The PulseAudio input device (`-f pulse`) is built in.
     pub pulse: bool,
-    /// ffmpeg 6 or later (`-isync`, `-fps_mode`).
-    pub isync: bool,
-}
-
-/// Whether the first line of `ffmpeg -version` is ffmpeg 6 or later (a
-/// git build, "N-…", counts as recent; an unreadable one does not).
-pub fn version_has_isync(out: &str) -> bool {
-    let Some(v) = out.lines().next().and_then(|l| l.split("version ").nth(1)) else { return false };
-    if v.starts_with("N-") {
-        return true;
-    }
-    let v = v.trim_start_matches('n');
-    let major: String = v.chars().take_while(|c| c.is_ascii_digit()).collect();
-    major.parse::<u32>().is_ok_and(|m| m >= 6)
 }
 
 /// Names in a listing of `ffmpeg -hide_banner -encoders` or `-devices`
@@ -229,13 +214,7 @@ pub fn caps(exe: &Path) -> Caps {
     }
     let enc = run_listing(exe, "-encoders");
     let dev = run_listing(exe, "-devices");
-    let ver = run_listing(exe, "-version");
-    let c = Caps {
-        h264: pick_h264(&enc, Path::new(VAAPI_DEVICE).exists()),
-        aac: has_aac(&enc),
-        pulse: has_pulse(&dev),
-        isync: version_has_isync(&ver),
-    };
+    let c = Caps { h264: pick_h264(&enc, Path::new(VAAPI_DEVICE).exists()), aac: has_aac(&enc), pulse: has_pulse(&dev) };
     cache.lock().unwrap_or_else(|e| e.into_inner()).push((exe.to_path_buf(), c.clone()));
     c
 }
@@ -244,7 +223,7 @@ pub fn caps(exe: &Path) -> Caps {
 // Arguments
 // ---------------------------------------------------------------------------
 
-/// One ffmpeg run.
+/// The picture's ffmpeg run.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Plan {
     /// Input frame size.
@@ -253,13 +232,7 @@ pub struct Plan {
     pub fps: u32,
     pub quality: Quality,
     pub codec: Codec,
-    /// PulseAudio source of the system sound (a sink's monitor).
-    pub system: Option<String>,
-    /// PulseAudio source of the microphone.
-    pub mic: Option<String>,
     pub out: PathBuf,
-    /// Align the sound by the wall clock (ffmpeg 6+, see the module docs).
-    pub isync: bool,
 }
 
 /// `-crf` (libx264) / `-qp` (VA-API) for a quality.
@@ -271,12 +244,13 @@ pub fn crf(q: Quality) -> u32 {
     }
 }
 
-impl Plan {
-    /// The sound inputs, in input order (input 0 is the video).
-    pub fn audio_inputs(&self) -> Vec<&str> {
-        [self.system.as_deref(), self.mic.as_deref()].into_iter().flatten().collect()
-    }
+fn os(v: &[&str]) -> Vec<OsString> {
+    v.iter().map(OsString::from).collect()
+}
 
+const HEAD: [&str; 6] = ["-hide_banner", "-nostdin", "-nostats", "-loglevel", "warning", "-y"];
+
+impl Plan {
     /// The video filter: scale to the MP4 limit / crop odd sizes to even,
     /// and upload for VA-API; `None` when nothing is needed.
     fn video_filter(&self) -> Option<String> {
@@ -298,131 +272,130 @@ impl Plan {
 
     /// The command line (without the program).
     pub fn args(&self) -> Vec<OsString> {
-        let mut a: Vec<OsString> = Vec::new();
-        let mut push = |s: &str| a.push(s.into());
-        let audio = self.audio_inputs();
-        let synced = self.isync && !audio.is_empty();
-        for s in ["-hide_banner", "-nostdin", "-nostats", "-loglevel", "warning", "-y"] {
-            push(s);
-        }
+        let mut a = os(&HEAD);
         if self.codec == Codec::Vaapi {
-            push("-vaapi_device");
-            push(VAAPI_DEVICE);
+            a.extend(os(&["-vaapi_device", VAAPI_DEVICE]));
         }
         let size = format!("{}x{}", self.w, self.h);
         let fps = self.fps.to_string();
-        // With sound the pulse inputs come first: ffmpeg opens its inputs
-        // in order, so they hear before it starts on the frames (it then
-        // never waits on sound that has not begun, which with -shortest
-        // would hold the picture back). The video is input `n`.
-        let n = audio.len();
-        let video_ix = n.to_string();
-        for src in &audio {
-            if synced {
-                push("-isync");
-                push(&video_ix);
-            }
-            for s in ["-thread_queue_size", "1024", "-probesize", "32", "-analyzeduration", "0", "-f", "pulse", "-i", src] {
-                push(s);
-            }
-        }
-        if synced {
-            // Raw BGRA in Matroska, stamped (see `Mkv`); its size and
-            // pixel format are in the stream's header.
-            for s in ["-thread_queue_size", "64", "-analyzeduration", "0", "-f", "matroska", "-i", "-"] {
-                push(s);
-            }
-        } else {
-            for s in ["-thread_queue_size", "64", "-f", "rawvideo", "-pix_fmt", "bgra", "-s", &size, "-r", &fps, "-i", "-"] {
-                push(s);
-            }
-        }
-        let video = format!("{n}:v");
-        match n {
-            0 => {
-                for s in ["-map", &video] {
-                    push(s);
-                }
-            }
-            1 => {
-                for s in ["-map", &video, "-map", "0:a"] {
-                    push(s);
-                }
-            }
-            _ => {
-                for s in ["-filter_complex", "[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0[a]", "-map", &video, "-map", "[a]"] {
-                    push(s);
-                }
-            }
-        }
-        if synced {
-            for s in ["-fps_mode", "cfr", "-r", &fps] {
-                push(s);
-            }
-        }
+        a.extend(os(&["-thread_queue_size", "64", "-f", "rawvideo", "-pix_fmt", "bgra", "-s", &size, "-r", &fps, "-i", "-"]));
+        a.extend(os(&["-map", "0:v"]));
         if let Some(vf) = self.video_filter() {
-            push("-vf");
-            push(&vf);
+            a.extend(os(&["-vf", &vf]));
         }
         let q = crf(self.quality).to_string();
         match self.codec {
-            Codec::X264 => {
-                for s in ["-c:v", "libx264", "-preset", "veryfast", "-crf", &q, "-pix_fmt", "yuv420p"] {
-                    push(s);
-                }
-            }
+            Codec::X264 => a.extend(os(&["-c:v", "libx264", "-preset", "veryfast", "-crf", &q, "-pix_fmt", "yuv420p"])),
             Codec::OpenH264 => {
                 let (ow, oh) = mp4_fit(self.w, self.h);
                 let b = bitrate(ow, oh, self.fps, self.quality).to_string();
-                for s in ["-c:v", "libopenh264", "-b:v", &b, "-pix_fmt", "yuv420p"] {
-                    push(s);
-                }
+                a.extend(os(&["-c:v", "libopenh264", "-b:v", &b, "-pix_fmt", "yuv420p"]));
             }
-            Codec::Vaapi => {
-                for s in ["-c:v", "h264_vaapi", "-qp", &q] {
-                    push(s);
-                }
-            }
+            Codec::Vaapi => a.extend(os(&["-c:v", "h264_vaapi", "-qp", &q])),
         }
-        if !audio.is_empty() {
-            // No -shortest: it would hold the picture back while a pulse
-            // input is still opening. ffmpeg is stopped once it has
-            // encoded every frame (`Run::finish`), and the join cuts each
-            // stretch's sound at its picture's end.
-            for s in ["-c:a", "aac", "-b:a", "160k", "-progress", "pipe:2", "-stats_period", "0.1"] {
-                push(s);
-            }
-        }
-        for s in ["-movflags", "+faststart", "-f", "mp4"] {
-            push(s);
-        }
+        a.extend(os(&["-movflags", "+faststart", "-f", "mp4"]));
         a.push(self.out.clone().into_os_string());
         a
     }
 }
 
-/// The command line that joins `list` (a concat-demuxer file) into `out`.
-pub fn concat_args(list: &Path, out: &Path) -> Vec<OsString> {
-    let mut a: Vec<OsString> = ["-hide_banner", "-nostdin", "-nostats", "-loglevel", "warning", "-y", "-f", "concat", "-safe", "0", "-i"]
-        .iter()
-        .map(OsString::from)
-        .collect();
-    a.push(list.as_os_str().to_owned());
-    for s in ["-c", "copy", "-movflags", "+faststart", "-f", "mp4"] {
-        a.push(s.into());
+/// The command line of a sound process: PulseAudio source `src` to FLAC at
+/// `out`. Logged at `info`, for the input's `start:` time; no `-nostdin`:
+/// `q` on stdin ends it.
+pub fn audio_args(src: &str, out: &Path) -> Vec<OsString> {
+    let mut a = os(&["-hide_banner", "-nostats", "-loglevel", "info", "-y"]);
+    a.extend(os(&["-thread_queue_size", "1024", "-probesize", "32", "-analyzeduration", "0", "-f", "pulse", "-i", src]));
+    a.extend(os(&["-map", "0:a", "-c:a", "flac", "-f", "flac"]));
+    a.push(out.as_os_str().to_owned());
+    a
+}
+
+/// The wall-clock time (seconds since the epoch) of the first sample, from
+/// the `Duration: N/A, start: 1791669391.947440, bitrate: …` line of a
+/// sound process's input dump.
+pub fn parse_start(log: &str) -> Option<f64> {
+    log.lines()
+        .filter(|l| l.trim_start().starts_with("Duration:"))
+        .find_map(|l| l.split("start: ").nth(1)?.split(',').next()?.trim().parse().ok())
+}
+
+/// A finished stretch: its picture and length, the wall-clock time of its
+/// first frame, and per sound source the FLAC file and the wall-clock time
+/// of its first sample (`None`: the source never opened).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Stretch {
+    pub video: PathBuf,
+    pub len: Duration,
+    pub origin: f64,
+    pub sound: Vec<(PathBuf, Option<f64>)>,
+}
+
+/// The filter graph that lays each stretch's sound under its picture:
+/// every source delayed (`adelay`) or trimmed (`atrim`) to its first
+/// frame and cut or padded to its length, sources mixed (`amix`), silence
+/// for a stretch without sound, stretches joined (`concat`) into `[a]`.
+/// Inputs: 0 is the picture, then every present source in order.
+pub fn mux_filter(stretches: &[Stretch]) -> String {
+    let mut chains = Vec::new();
+    let mut k = 1;
+    for (i, st) in stretches.iter().enumerate() {
+        let len = st.len.as_secs_f64();
+        let mut parts = Vec::new();
+        for (j, (_, start)) in st.sound.iter().enumerate() {
+            let Some(start) = start else { continue };
+            let off = start - st.origin;
+            let place = if off >= 0.0 {
+                let ms = (off * 1000.0).round() as u64;
+                format!("adelay={ms}|{ms}")
+            } else {
+                format!("atrim=start={:.6},asetpts=PTS-STARTPTS", -off)
+            };
+            let label = format!("s{i}m{j}");
+            chains.push(format!(
+                "[{k}:a]aformat=sample_rates=48000:channel_layouts=stereo,{place},apad,atrim=duration={len:.6}[{label}]"
+            ));
+            parts.push(label);
+            k += 1;
+        }
+        let out = format!("s{i}");
+        match parts.len() {
+            0 => chains.push(format!("anullsrc=r=48000:cl=stereo,atrim=duration={len:.6}[{out}]")),
+            1 => chains.push(format!("[{}]anull[{out}]", parts[0])),
+            n => {
+                let ins: String = parts.iter().map(|p| format!("[{p}]")).collect();
+                chains.push(format!("{ins}amix=inputs={n}:duration=longest:dropout_transition=0[{out}]"));
+            }
+        }
     }
+    let ins: String = (0..stretches.len()).map(|i| format!("[s{i}]")).collect();
+    chains.push(format!("{ins}concat=n={}:v=0:a=1[a]", stretches.len()));
+    chains.join(";")
+}
+
+/// The command line that muxes the joined pictures (`vlist`, a concat
+/// list) with the stretches' sound into `out`.
+pub fn mux_args(vlist: &Path, stretches: &[Stretch], out: &Path) -> Vec<OsString> {
+    let mut a = os(&HEAD);
+    a.extend(os(&["-f", "concat", "-safe", "0", "-i"]));
+    a.push(vlist.as_os_str().to_owned());
+    for st in stretches {
+        for (p, start) in &st.sound {
+            if start.is_some() {
+                a.push("-i".into());
+                a.push(p.as_os_str().to_owned());
+            }
+        }
+    }
+    a.extend(os(&["-filter_complex", &mux_filter(stretches), "-map", "0:v", "-map", "[a]"]));
+    a.extend(os(&["-c:v", "copy", "-c:a", "aac", "-b:a", AAC_RATE, "-movflags", "+faststart", "-f", "mp4"]));
     a.push(out.as_os_str().to_owned());
     a
 }
 
 /// A concat-demuxer list of `files` (`file '<path>'` lines; a `'` in a
-/// path is written `'\''`), each cut at its picture's length (`outpoint`:
-/// its sound runs a little longer).
-pub fn concat_list(files: &[(PathBuf, Duration)]) -> String {
-    files
-        .iter()
-        .map(|(f, d)| format!("file '{}'\noutpoint {:.6}\n", f.to_string_lossy().replace('\'', "'\\''"), d.as_secs_f64()))
-        .collect()
+/// path is written `'\''`).
+pub fn concat_list(files: &[&Path]) -> String {
+    files.iter().map(|f| format!("file '{}'\n", f.to_string_lossy().replace('\'', "'\\''"))).collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -454,6 +427,11 @@ impl Cfr {
         self.sent
     }
 
+    /// The length of what was written.
+    pub fn length(&self) -> Duration {
+        Duration::from_secs_f64(self.sent as f64 / f64::from(self.fps))
+    }
+
     /// How many times to write the frame stamped `ts`.
     pub fn repeats(&mut self, ts: Duration) -> u64 {
         let origin = *self.origin.get_or_insert(ts);
@@ -469,121 +447,7 @@ impl Cfr {
 }
 
 // ---------------------------------------------------------------------------
-// Stamped frames: a minimal Matroska stream
-// ---------------------------------------------------------------------------
-
-/// Writes raw BGRA frames as a live Matroska stream (unknown-size segment,
-/// one cluster per frame, 1 µs timestamps): frame `slot` is stamped
-/// `origin + slot / fps`, `origin` being the wall-clock time (µs since the
-/// Unix epoch, the clock ffmpeg's pulse input stamps with) of the first.
-pub struct Mkv {
-    w: u32,
-    h: u32,
-    fps: u32,
-    origin: Option<u64>,
-}
-
-/// An EBML element size, always 8 bytes long.
-fn ebml_size(n: u64) -> [u8; 8] {
-    let mut b = (n | 0x01 << 56).to_be_bytes();
-    b[0] = 0x01;
-    b
-}
-
-/// The 8-byte "unknown size" (a live stream's segment).
-const EBML_UNKNOWN: [u8; 8] = [0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
-
-fn ebml_id(out: &mut Vec<u8>, id: u32) {
-    let b = id.to_be_bytes();
-    let skip = b.iter().position(|&x| x != 0).unwrap_or(3);
-    out.extend_from_slice(&b[skip..]);
-}
-
-fn ebml_elem(out: &mut Vec<u8>, id: u32, body: &[u8]) {
-    ebml_id(out, id);
-    out.extend_from_slice(&ebml_size(body.len() as u64));
-    out.extend_from_slice(body);
-}
-
-fn ebml_uint(out: &mut Vec<u8>, id: u32, v: u64) {
-    let b = v.to_be_bytes();
-    let skip = b.iter().position(|&x| x != 0).unwrap_or(7);
-    ebml_elem(out, id, &b[skip..]);
-}
-
-impl Mkv {
-    pub fn new(w: u32, h: u32, fps: u32) -> Mkv {
-        Mkv { w, h, fps: fps.max(1), origin: None }
-    }
-
-    /// The EBML header, the segment start, Info and Tracks.
-    pub fn header(&self) -> Vec<u8> {
-        let mut out = Vec::new();
-        let mut ebml = Vec::new();
-        ebml_uint(&mut ebml, 0x4286, 1); // EBMLVersion
-        ebml_uint(&mut ebml, 0x42F7, 1); // EBMLReadVersion
-        ebml_uint(&mut ebml, 0x42F2, 4); // EBMLMaxIDLength
-        ebml_uint(&mut ebml, 0x42F3, 8); // EBMLMaxSizeLength
-        ebml_elem(&mut ebml, 0x4282, b"matroska"); // DocType
-        ebml_uint(&mut ebml, 0x4287, 4); // DocTypeVersion
-        ebml_uint(&mut ebml, 0x4285, 2); // DocTypeReadVersion
-        ebml_elem(&mut out, 0x1A45_DFA3, &ebml);
-        ebml_id(&mut out, 0x1853_8067); // Segment
-        out.extend_from_slice(&EBML_UNKNOWN);
-        let mut info = Vec::new();
-        ebml_uint(&mut info, 0x2A_D7B1, 1000); // TimestampScale: 1 µs
-        ebml_elem(&mut info, 0x4D80, b"rustshot"); // MuxingApp
-        ebml_elem(&mut info, 0x5741, b"rustshot"); // WritingApp
-        ebml_elem(&mut out, 0x1549_A966, &info);
-        let mut video = Vec::new();
-        ebml_uint(&mut video, 0xB0, u64::from(self.w)); // PixelWidth
-        ebml_uint(&mut video, 0xBA, u64::from(self.h)); // PixelHeight
-        ebml_elem(&mut video, 0x2E_B524, b"BGRA"); // ColourSpace (raw FourCC)
-        let mut track = Vec::new();
-        ebml_uint(&mut track, 0xD7, 1); // TrackNumber
-        ebml_uint(&mut track, 0x73C5, 1); // TrackUID
-        ebml_uint(&mut track, 0x83, 1); // TrackType: video
-        ebml_uint(&mut track, 0x9C, 0); // FlagLacing
-        ebml_uint(&mut track, 0x23_E383, 1_000_000_000 / u64::from(self.fps)); // DefaultDuration (ns)
-        ebml_elem(&mut track, 0x86, b"V_UNCOMPRESSED"); // CodecID
-        ebml_elem(&mut track, 0xE0, &video);
-        let mut tracks = Vec::new();
-        ebml_elem(&mut tracks, 0xAE, &track); // TrackEntry
-        ebml_elem(&mut out, 0x1654_AE6B, &tracks);
-        out
-    }
-
-    /// The stamp of frame `slot` (µs since the epoch).
-    pub fn stamp(&mut self, slot: u64) -> u64 {
-        let origin = *self.origin.get_or_insert_with(|| {
-            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-            now.as_micros() as u64
-        });
-        origin + slot * 1_000_000 / u64::from(self.fps)
-    }
-
-    /// A cluster holding frame `slot` of `len` bytes, up to the frame data
-    /// (which follows it).
-    pub fn frame_head(&mut self, slot: u64, len: usize) -> Vec<u8> {
-        let t = self.stamp(slot);
-        let mut ts = Vec::new();
-        ebml_uint(&mut ts, 0xE7, t); // Timestamp
-        // SimpleBlock: track 1 (vint 0x81), relative time 0, keyframe.
-        let block = [0x81u8, 0, 0, 0x80];
-        let block_len = (block.len() + len) as u64;
-        let mut out = Vec::new();
-        ebml_id(&mut out, 0x1F43_B675); // Cluster
-        out.extend_from_slice(&ebml_size(ts.len() as u64 + 1 + 8 + block_len));
-        out.extend_from_slice(&ts);
-        ebml_id(&mut out, 0xA3); // SimpleBlock
-        out.extend_from_slice(&ebml_size(block_len));
-        out.extend_from_slice(&block);
-        out
-    }
-}
-
-// ---------------------------------------------------------------------------
-// The encoder
+// Processes
 // ---------------------------------------------------------------------------
 
 /// The end of a stream, bounded.
@@ -604,8 +468,83 @@ impl Tail {
     }
 }
 
-/// A running ffmpeg: the child, its frame writer and its stderr reader.
-struct Run {
+fn tail_text(tail: &Mutex<Tail>) -> String {
+    let t = tail.lock().unwrap_or_else(|e| e.into_inner()).text();
+    if t.is_empty() { "no output".into() } else { t }
+}
+
+/// RUSTSHOT_FFMPEG_LOG set: ffmpeg's command lines and logs are printed.
+fn verbose() -> bool {
+    std::env::var_os("RUSTSHOT_FFMPEG_LOG").is_some()
+}
+
+/// Start `exe args` with stdin piped and stderr read into a tail (and,
+/// with `head`, its first lines kept whole: the input dump).
+/// A started ffmpeg: the child, its stdin, its stderr tail and reader.
+type Spawned = (Child, ChildStdin, Arc<Mutex<Tail>>, Option<JoinHandle<()>>);
+
+fn spawn(exe: &Path, args: &[OsString], head: Option<Arc<Mutex<String>>>) -> Result<Spawned> {
+    if verbose() {
+        eprintln!("rustshot: {} {}", exe.display(), args.iter().map(|a| a.to_string_lossy()).collect::<Vec<_>>().join(" "));
+    }
+    let mut child = Command::new(exe)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("start {}", exe.display()))?;
+    let tail = Arc::new(Mutex::new(Tail::default()));
+    let reader = child.stderr.take().and_then(|mut err| {
+        let tail = tail.clone();
+        std::thread::Builder::new()
+            .name("ffmpeg-stderr".into())
+            .spawn(move || {
+                let mut buf = [0u8; 1024];
+                while let Ok(n) = err.read(&mut buf) {
+                    if n == 0 {
+                        break;
+                    }
+                    tail.lock().unwrap_or_else(|e| e.into_inner()).push(&buf[..n]);
+                    if let Some(h) = &head {
+                        let mut h = h.lock().unwrap_or_else(|e| e.into_inner());
+                        if h.len() < 8192 {
+                            h.push_str(&String::from_utf8_lossy(&buf[..n]));
+                        }
+                    }
+                }
+            })
+            .ok()
+    });
+    let stdin = match child.stdin.take() {
+        Some(s) => s,
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("ffmpeg has no stdin");
+        }
+    };
+    Ok((child, stdin, tail, reader))
+}
+
+/// Wait up to `t` for `c`; killed after that.
+fn wait_timeout(c: &mut Child, t: Duration) -> Result<std::process::ExitStatus> {
+    let start = Instant::now();
+    loop {
+        if let Some(s) = c.try_wait()? {
+            return Ok(s);
+        }
+        if start.elapsed() >= t {
+            let _ = c.kill();
+            let _ = c.wait();
+            bail!("ffmpeg did not finish within {} s", t.as_secs());
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// The picture's ffmpeg: the child, its frame writer and its stderr reader.
+struct VideoRun {
     child: Child,
     tx: Option<SyncSender<Arc<Vec<u8>>>>,
     writer: Option<JoinHandle<std::io::Result<()>>>,
@@ -613,85 +552,13 @@ struct Run {
     tail: Arc<Mutex<Tail>>,
     cfr: Cfr,
     out: PathBuf,
-    /// Live sound inputs: ffmpeg gets SIGINT if it lingers at the end.
-    live: bool,
-    /// With sound (ffmpeg 6+): frames go in Matroska, stamped.
-    mkv: Option<Mkv>,
-    /// Frames ffmpeg has encoded (its `-progress` output).
-    encoded: Arc<AtomicU64>,
     /// The last frame written (held up to the end of a stretch).
     last: Option<Arc<Vec<u8>>>,
 }
 
-/// The frame count in a line of ffmpeg's `-progress` output ("frame=12").
-pub fn progress_frames(line: &str) -> Option<u64> {
-    line.trim().strip_prefix("frame=")?.trim().parse().ok()
-}
-
-fn stderr_tail(tail: &Mutex<Tail>) -> String {
-    let t = tail.lock().unwrap_or_else(|e| e.into_inner()).text();
-    if t.is_empty() { "no output".into() } else { t }
-}
-
-impl Run {
-    fn spawn(exe: &Path, plan: &Plan) -> Result<Run> {
-        let (args, fps, out, live) = (plan.args(), plan.fps, plan.out.clone(), !plan.audio_inputs().is_empty());
-        let mkv = (live && plan.isync).then(|| Mkv::new(plan.w, plan.h, plan.fps));
-        // RUSTSHOT_FFMPEG_LOG=1: ffmpeg logs at info, printed when it ends.
-        let verbose = std::env::var_os("RUSTSHOT_FFMPEG_LOG").is_some();
-        let args: Vec<OsString> =
-            args.into_iter().map(|a| if verbose && a == "warning" { OsString::from("info") } else { a }).collect();
-        if verbose {
-            eprintln!("rustshot: {} {}", exe.display(), args.iter().map(|a| a.to_string_lossy()).collect::<Vec<_>>().join(" "));
-        }
-        let mut child = Command::new(exe)
-            .args(&args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-            .with_context(|| format!("start {}", exe.display()))?;
-        let tail = Arc::new(Mutex::new(Tail::default()));
-        let encoded = Arc::new(AtomicU64::new(0));
-        let reader = child.stderr.take().and_then(|mut err| {
-            let (tail, encoded) = (tail.clone(), encoded.clone());
-            std::thread::Builder::new()
-                .name("ffmpeg-stderr".into())
-                .spawn(move || {
-                    let mut buf = [0u8; 1024];
-                    let mut line = Vec::new();
-                    while let Ok(n) = err.read(&mut buf) {
-                        if n == 0 {
-                            break;
-                        }
-                        for &b in &buf[..n] {
-                            if b != b'\n' {
-                                if line.len() < 256 {
-                                    line.push(b);
-                                }
-                                continue;
-                            }
-                            let l = String::from_utf8_lossy(&line);
-                            match progress_frames(&l) {
-                                Some(f) => encoded.store(f, Ordering::Relaxed),
-                                // Progress lines (key=value) stay out of the tail.
-                                None if !l.contains('=') || l.contains(' ') => {
-                                    let mut t = tail.lock().unwrap_or_else(|e| e.into_inner());
-                                    t.push(&line);
-                                    t.push(b"\n");
-                                }
-                                None => {}
-                            }
-                            line.clear();
-                        }
-                    }
-                    if !line.is_empty() {
-                        tail.lock().unwrap_or_else(|e| e.into_inner()).push(&line);
-                    }
-                })
-                .ok()
-        });
-        let stdin = child.stdin.take().ok_or_else(|| anyhow!("ffmpeg has no stdin"))?;
+impl VideoRun {
+    fn start(exe: &Path, plan: &Plan) -> Result<VideoRun> {
+        let (mut child, stdin, tail, reader) = spawn(exe, &plan.args(), None)?;
         let (tx, rx) = sync_channel::<Arc<Vec<u8>>>(PIPE_FRAMES);
         let writer = std::thread::Builder::new().name("ffmpeg-writer".into()).spawn(move || {
             let mut stdin = stdin;
@@ -709,128 +576,85 @@ impl Run {
                 return Err(anyhow::Error::new(e).context("start the ffmpeg writer thread"));
             }
         };
-        let mut run = Run { child, tx: Some(tx), writer: Some(writer), reader, tail, cfr: Cfr::new(fps), out, live, mkv, encoded, last: None };
-        if let Some(h) = run.mkv.as_ref().map(|m| m.header()) {
-            run.send(Arc::new(h))?;
-        }
-        Ok(run)
+        Ok(VideoRun {
+            child,
+            tx: Some(tx),
+            writer: Some(writer),
+            reader,
+            tail,
+            cfr: Cfr::new(plan.fps),
+            out: plan.out.clone(),
+            last: None,
+        })
     }
 
     /// Write `f` as many times as the frame rate wants.
-    /// Write `f` as many times as the frame rate wants. Stamped (with
-    /// sound), a frame is written once, at the first of its slots: ffmpeg
-    /// repeats it (`-fps_mode cfr`) up to the next one.
     fn push(&mut self, f: &Frame) -> Result<()> {
-        let first = self.cfr.sent();
         let n = self.cfr.repeats(f.ts);
         if n == 0 {
             return Ok(());
         }
         let buf = Arc::new(f.bgra[..(f.w * f.h * 4) as usize].to_vec());
         self.last = Some(buf.clone());
-        self.write(buf, first, n, first)
+        self.write(buf, n)
     }
 
     /// Hold the last frame up to clock time `ts` (the end of a stretch:
-    /// frames dropped while ffmpeg was slow to take them, e.g. opening a
-    /// sound input, leave the picture still rather than the stretch short).
+    /// frames dropped while ffmpeg was slow to take them leave the picture
+    /// still rather than the stretch short).
     fn hold_to(&mut self, ts: Duration) -> Result<()> {
         let Some(buf) = self.last.clone() else { return Ok(()) };
-        let first = self.cfr.sent();
         let n = self.cfr.repeats(ts);
-        if n == 0 {
-            return Ok(());
-        }
-        // Stamped at the last slot, so the picture lasts to the end.
-        self.write(buf, first, n, first + n - 1)
+        self.write(buf, n)
     }
 
-    /// `buf` over slots `first..first + n`: `n` copies, or one stamped `at`.
-    fn write(&mut self, buf: Arc<Vec<u8>>, first: u64, n: u64, at: u64) -> Result<()> {
-        if let Some(m) = &mut self.mkv {
-            let head = m.frame_head(at, buf.len());
-            self.send(Arc::new(head))?;
-            return self.send(buf);
-        }
-        for _ in first..first + n {
-            self.send(buf.clone())?;
-        }
-        Ok(())
-    }
-
-    fn send(&mut self, b: Arc<Vec<u8>>) -> Result<()> {
+    fn write(&mut self, buf: Arc<Vec<u8>>, n: u64) -> Result<()> {
         let tx = self.tx.as_ref().ok_or_else(|| anyhow!("ffmpeg input closed"))?;
-        if tx.send(b).is_err() {
-            // The writer stopped: ffmpeg is gone or stopped reading.
-            let why = match self.writer.take().map(|w| w.join()) {
-                Some(Ok(Err(e))) => format!("{e}"),
-                _ => "stopped".into(),
-            };
-            let _ = self.child.wait_timeout(Duration::from_secs(2));
-            bail!("ffmpeg stopped taking frames ({why}): {}", stderr_tail(&self.tail));
+        for _ in 0..n {
+            if tx.send(buf.clone()).is_err() {
+                // The writer stopped: ffmpeg is gone or stopped reading.
+                let why = match self.writer.take().map(|w| w.join()) {
+                    Some(Ok(Err(e))) => format!("{e}"),
+                    _ => "stopped".into(),
+                };
+                let _ = wait_timeout(&mut self.child, Duration::from_secs(2));
+                bail!("ffmpeg stopped taking frames ({why}): {}", tail_text(&self.tail));
+            }
         }
         Ok(())
     }
 
-    /// Close the input and wait for ffmpeg to finish the file. `None`: no
-    /// frame was written (a stretch paused before its first frame); ffmpeg
-    /// is stopped and its file removed.
+    /// Close the input and wait for ffmpeg to finish the file: its path and
+    /// length, or `None` when no frame was written (a stretch paused before
+    /// its first frame; ffmpeg is stopped and its file removed).
     fn finish(mut self) -> Result<Option<(PathBuf, Duration)>> {
+        drop(self.tx.take());
+        let wrote = self.writer.take().map(|w| w.join());
         if self.cfr.sent() == 0 {
-            drop(self.tx.take());
-            if let Some(w) = self.writer.take() {
-                let _ = w.join();
-            }
             let _ = self.child.kill();
             let _ = self.child.wait();
             let _ = std::fs::remove_file(&self.out);
             return Ok(None);
         }
-        drop(self.tx.take());
-        let wrote = self.writer.take().map(|w| w.join());
-        if self.live {
-            // ffmpeg keeps hearing after the last frame: once it has encoded
-            // the frames (or stopped making progress), SIGINT makes it finish
-            // the file.
-            let want = self.cfr.sent().saturating_sub(2);
-            let mut seen = (self.encoded.load(Ordering::Relaxed), Instant::now());
-            while self.child.try_wait()?.is_none() {
-                let e = self.encoded.load(Ordering::Relaxed);
-                if e >= want {
-                    break;
-                }
-                if e != seen.0 {
-                    seen = (e, Instant::now());
-                } else if seen.1.elapsed() >= DRAIN_STALL {
-                    eprintln!("rustshot: ffmpeg encoded {e} of {} frames and stopped; finishing", self.cfr.sent());
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(20));
-            }
-            interrupt(&self.child);
-        }
-        let status = self.child.wait_timeout(FINISH_TIMEOUT);
+        let status = wait_timeout(&mut self.child, FINISH_TIMEOUT);
         if let Some(r) = self.reader.take() {
             let _ = r.join();
         }
         let status = status?;
-        if std::env::var_os("RUSTSHOT_FFMPEG_LOG").is_some() {
-            eprintln!("rustshot: ffmpeg ended ({status}):\n{}", stderr_tail(&self.tail));
+        if verbose() {
+            eprintln!("rustshot: ffmpeg (picture) ended ({status}):\n{}", tail_text(&self.tail));
         }
-        // ffmpeg exits 255 after a SIGINT it handled (the file is finished).
-        let interrupted_ok = self.live && status.code() == Some(255) && std::fs::metadata(&self.out).is_ok_and(|m| m.len() > 0);
-        if !status.success() && !interrupted_ok {
-            bail!("ffmpeg failed ({status}): {}", stderr_tail(&self.tail));
+        if !status.success() {
+            bail!("ffmpeg failed ({status}): {}", tail_text(&self.tail));
         }
         if let Some(Ok(Err(e))) = wrote {
-            bail!("writing frames to ffmpeg failed: {e}: {}", stderr_tail(&self.tail));
+            bail!("writing frames to ffmpeg failed: {e}: {}", tail_text(&self.tail));
         }
-        let len = Duration::from_secs_f64(self.cfr.sent() as f64 / f64::from(self.cfr.fps));
-        Ok(Some((self.out.clone(), len)))
+        Ok(Some((self.out.clone(), self.cfr.length())))
     }
 }
 
-impl Drop for Run {
+impl Drop for VideoRun {
     fn drop(&mut self) {
         // Not finished (an error, or dropped): stop ffmpeg.
         drop(self.tx.take());
@@ -841,60 +665,84 @@ impl Drop for Run {
     }
 }
 
-trait WaitTimeout {
-    fn wait_timeout(&mut self, t: Duration) -> Result<std::process::ExitStatus>;
+/// A sound process: one PulseAudio source to FLAC.
+struct AudioRun {
+    child: Child,
+    stdin: Option<ChildStdin>,
+    reader: Option<JoinHandle<()>>,
+    tail: Arc<Mutex<Tail>>,
+    head: Arc<Mutex<String>>,
+    out: PathBuf,
 }
 
-impl WaitTimeout for Child {
-    /// Wait up to `t`; killed after that.
-    fn wait_timeout(&mut self, t: Duration) -> Result<std::process::ExitStatus> {
-        let start = Instant::now();
-        loop {
-            if let Some(s) = self.try_wait()? {
-                return Ok(s);
-            }
-            if start.elapsed() >= t {
-                let _ = self.kill();
-                let _ = self.wait();
-                bail!("ffmpeg did not finish within {} s", t.as_secs());
-            }
-            std::thread::sleep(Duration::from_millis(20));
+impl AudioRun {
+    fn start(exe: &Path, src: &str, out: PathBuf) -> Result<AudioRun> {
+        let head = Arc::new(Mutex::new(String::new()));
+        let (child, stdin, tail, reader) = spawn(exe, &audio_args(src, &out), Some(head.clone()))?;
+        Ok(AudioRun { child, stdin: Some(stdin), reader, tail, head, out })
+    }
+
+    /// Stop it (`q`) and wait: the file and the wall-clock time of its
+    /// first sample (`None` when the source never opened; it is said).
+    fn finish(mut self) -> (PathBuf, Option<f64>) {
+        if let Some(mut s) = self.stdin.take() {
+            let _ = s.write_all(b"q");
+        }
+        let status = wait_timeout(&mut self.child, AUDIO_STOP_TIMEOUT);
+        if let Some(r) = self.reader.take() {
+            let _ = r.join();
+        }
+        let start = parse_start(&self.head.lock().unwrap_or_else(|e| e.into_inner()));
+        let ok = matches!(&status, Ok(s) if s.success());
+        if verbose() || !ok || start.is_none() {
+            eprintln!("rustshot: ffmpeg (sound) ended ({status:?}), start {start:?}:\n{}", tail_text(&self.tail));
+        }
+        let have = ok && start.is_some() && std::fs::metadata(&self.out).is_ok_and(|m| m.len() > 0);
+        (self.out.clone(), start.filter(|_| have))
+    }
+}
+
+impl Drop for AudioRun {
+    fn drop(&mut self) {
+        if self.child.try_wait().ok().flatten().is_none() {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
         }
     }
 }
 
-/// SIGINT to a child we started (ffmpeg then finishes the file).
-fn interrupt(c: &Child) {
-    #[cfg(unix)]
-    {
-        unsafe extern "C" {
-            fn kill(pid: i32, sig: i32) -> i32;
-        }
-        const SIGINT: i32 = 2;
-        if let Ok(pid) = i32::try_from(c.id()) {
-            unsafe {
-                kill(pid, SIGINT);
-            }
-        }
-    }
-    #[cfg(not(unix))]
-    let _ = c;
+fn wall_now() -> f64 {
+    SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_secs_f64()
+}
+
+// ---------------------------------------------------------------------------
+// The encoder
+// ---------------------------------------------------------------------------
+
+/// The running stretch (with sound).
+struct Current {
+    video: VideoRun,
+    origin: f64,
+    sound: Vec<AudioRun>,
 }
 
 /// MP4 through ffmpeg; see the module docs.
 pub struct FfmpegEncoder {
     exe: PathBuf,
     plan: Plan,
+    /// PulseAudio sources ffmpeg records (system monitor, microphone).
+    sources: Vec<String>,
     /// The file the session renames (`.part`).
     part: PathBuf,
-    /// The ffmpeg writing now (started at the first frame of a segment).
-    run: Option<Run>,
-    /// Finished segments (with sound, one per stretch between pauses).
-    done: Vec<(PathBuf, Duration)>,
+    /// Without sound: the one video run.
+    run: Option<VideoRun>,
+    /// With sound: the stretch being recorded, and the finished ones.
+    cur: Option<Current>,
+    done: Vec<Stretch>,
     /// After a pause: frames stamped up to here belong to the stretch
     /// before it, which is finished.
     skip_until: Option<Duration>,
-    /// A segment failed; `finish` reports it.
+    /// A run failed; `finish` reports it.
     failed: Option<String>,
 }
 
@@ -918,25 +766,25 @@ impl FfmpegEncoder {
         let exe = find().ok_or_else(|| anyhow!("ffmpeg is not installed"))?;
         let caps = caps(&exe);
         let codec = caps.h264.ok_or_else(|| anyhow!("{} has no H.264 encoder (libx264, libopenh264 or h264_vaapi)", exe.display()))?;
-        let sound = system_monitor.is_some() || mic.is_some();
-        if sound && !caps.pulse {
+        let sources: Vec<String> = [system_monitor, mic].into_iter().flatten().collect();
+        if !sources.is_empty() && !caps.pulse {
             bail!("{} cannot record PulseAudio sound", exe.display());
         }
-        if sound && !caps.aac {
+        if !sources.is_empty() && !caps.aac {
             bail!("{} has no AAC encoder", exe.display());
         }
-        let plan = Plan {
-            w,
-            h,
-            fps: fps.clamp(1, 60),
-            quality,
-            codec,
-            system: system_monitor,
-            mic,
-            out: path.to_path_buf(),
-            isync: caps.isync,
-        };
-        Ok(FfmpegEncoder { exe, plan, part: path.to_path_buf(), run: None, done: Vec::new(), skip_until: None, failed: None })
+        let plan = Plan { w, h, fps: fps.clamp(1, 60), quality, codec, out: path.to_path_buf() };
+        Ok(FfmpegEncoder {
+            exe,
+            plan,
+            sources,
+            part: path.to_path_buf(),
+            run: None,
+            cur: None,
+            done: Vec::new(),
+            skip_until: None,
+            failed: None,
+        })
     }
 
     /// The H.264 encoder ffmpeg uses.
@@ -945,38 +793,95 @@ impl FfmpegEncoder {
     }
 
     fn sound(&self) -> bool {
-        !self.plan.audio_inputs().is_empty()
+        !self.sources.is_empty()
     }
 
-    /// Where segment `i` is written (with sound) or the `.part` (without).
-    fn segment_path(&self, i: usize) -> PathBuf {
-        if !self.sound() {
-            return self.part.clone();
-        }
+    /// `<part>.<suffix>`.
+    fn beside(&self, suffix: &str) -> PathBuf {
         let mut s = self.part.as_os_str().to_os_string();
-        s.push(format!(".seg{i}.mp4"));
+        s.push(suffix);
         PathBuf::from(s)
     }
 
-    fn end_segment(&mut self) -> Result<()> {
-        if let Some(r) = self.run.take() {
-            match r.finish() {
-                Ok(p) => self.done.extend(p),
-                Err(e) => {
-                    self.failed = Some(format!("{e:#}"));
-                    return Err(e);
-                }
+    /// Start a stretch with sound: the picture and one process per source.
+    fn start_stretch(&mut self) -> Result<()> {
+        let i = self.done.len();
+        let mut plan = self.plan.clone();
+        plan.out = self.beside(&format!(".s{i}.mp4"));
+        let video = VideoRun::start(&self.exe, &plan)?;
+        let origin = wall_now();
+        let mut sound = Vec::new();
+        for (j, src) in self.sources.iter().enumerate() {
+            match AudioRun::start(&self.exe, src, self.beside(&format!(".s{i}.a{j}.flac"))) {
+                Ok(a) => sound.push(a),
+                Err(e) => eprintln!("rustshot: {src} not recorded: {e:#}"),
             }
         }
+        self.cur = Some(Current { video, origin, sound });
         Ok(())
     }
 
-    fn cleanup_segments(&self) {
-        if self.sound() {
-            for (p, _) in &self.done {
+    /// Finish the running stretch (with sound).
+    fn end_stretch(&mut self) -> Result<()> {
+        let Some(c) = self.cur.take() else { return Ok(()) };
+        let video = c.video.finish();
+        let sound: Vec<(PathBuf, Option<f64>)> = c.sound.into_iter().map(AudioRun::finish).collect();
+        match video {
+            Ok(Some((video, len))) => {
+                self.done.push(Stretch { video, len, origin: c.origin, sound });
+                Ok(())
+            }
+            Ok(None) => {
+                for (p, _) in sound {
+                    let _ = std::fs::remove_file(p);
+                }
+                Ok(())
+            }
+            Err(e) => {
+                for (p, _) in sound {
+                    let _ = std::fs::remove_file(p);
+                }
+                self.failed = Some(format!("{e:#}"));
+                Err(e)
+            }
+        }
+    }
+
+    fn cleanup(&mut self) {
+        for st in self.done.drain(..) {
+            let _ = std::fs::remove_file(&st.video);
+            for (p, _) in st.sound {
                 let _ = std::fs::remove_file(p);
             }
         }
+    }
+
+    /// Join the stretches and their sound into the `.part`.
+    fn mux(&self) -> Result<()> {
+        let vlist = self.beside(".concat.txt");
+        let videos: Vec<&Path> = self.done.iter().map(|s| s.video.as_path()).collect();
+        let r = (|| -> Result<()> {
+            std::fs::write(&vlist, concat_list(&videos)).context("write the stretch list")?;
+            let args = mux_args(&vlist, &self.done, &self.part);
+            if verbose() {
+                eprintln!("rustshot: {} {}", self.exe.display(), args.iter().map(|a| a.to_string_lossy()).collect::<Vec<_>>().join(" "));
+            }
+            let out = Command::new(&self.exe)
+                .args(args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .output()
+                .context("start ffmpeg to put the sound in")?;
+            if !out.status.success() {
+                let mut t = Tail::default();
+                t.push(&out.stderr);
+                bail!("putting the sound in failed ({}): {}", out.status, t.text());
+            }
+            Ok(())
+        })();
+        let _ = std::fs::remove_file(&vlist);
+        r
     }
 }
 
@@ -994,13 +899,18 @@ impl VideoEncoder for FfmpegEncoder {
         if f.w != self.plan.w || f.h != self.plan.h || f.bgra.len() < (f.w * f.h * 4) as usize {
             bail!("frame size changed to {}x{}", f.w, f.h);
         }
-        if self.run.is_none() {
-            let mut plan = self.plan.clone();
-            plan.out = self.segment_path(self.done.len());
-            let run = Run::spawn(&self.exe, &plan);
-            self.run = Some(run.inspect_err(|e| self.failed = Some(format!("{e:#}")))?);
-        }
-        let r = self.run.as_mut().map_or(Ok(()), |r| r.push(f));
+        let r = (|| -> Result<()> {
+            if !self.sound() {
+                if self.run.is_none() {
+                    self.run = Some(VideoRun::start(&self.exe, &self.plan)?);
+                }
+                return self.run.as_mut().map_or(Ok(()), |r| r.push(f));
+            }
+            if self.cur.is_none() {
+                self.start_stretch()?;
+            }
+            self.cur.as_mut().map_or(Ok(()), |c| c.video.push(f))
+        })();
         if let Err(e) = &r {
             self.failed = Some(format!("{e:#}"));
         }
@@ -1015,64 +925,44 @@ impl VideoEncoder for FfmpegEncoder {
         if !self.sound() {
             return Ok(()); // the clock leaves the paused time out
         }
-        // What ffmpeg hears from now on is not part of this stretch: end
-        // it (its picture lasting up to the pause); the next one starts at
-        // the first frame after the pause.
+        // What ffmpeg hears from now on is not part of this stretch: end it
+        // (its picture lasting up to the pause); the next one starts at the
+        // first frame after the pause.
         self.skip_until = Some(at);
-        if let Some(r) = self.run.as_mut()
-            && let Err(e) = r.hold_to(at)
+        if let Some(c) = self.cur.as_mut()
+            && let Err(e) = c.video.hold_to(at)
         {
             self.failed = Some(format!("{e:#}"));
             return Err(e);
         }
-        self.end_segment()
+        self.end_stretch()
     }
 
+    /// `Ok` once a playable file is written, even after a failure part-way
+    /// (the session reports that one): with sound, the stretches finished
+    /// before it are kept.
     fn finish(mut self: Box<Self>) -> Result<()> {
-        if let Some(e) = self.failed.take() {
-            // Keep a finished file when there is one, as the contract asks.
-            let _ = self.end_segment();
-            self.cleanup_segments();
-            bail!("{e}");
-        }
-        if let Err(e) = self.end_segment() {
-            self.cleanup_segments();
-            return Err(e);
-        }
         if !self.sound() {
-            return if self.done.is_empty() { Err(anyhow!("no frames were recorded")) } else { Ok(()) };
+            let failed = self.failed.take();
+            return match self.run.take().map(VideoRun::finish) {
+                Some(Ok(Some(_))) => Ok(()),
+                Some(Err(e)) => Err(e),
+                Some(Ok(None)) | None => Err(anyhow!("{}", failed.unwrap_or_else(|| "no frames were recorded".into()))),
+            };
         }
-        match self.done.len() {
-            0 => bail!("no frames were recorded"),
-            1 => {
-                std::fs::rename(&self.done[0].0, &self.part).context("move the recording into place")?;
-                Ok(())
-            }
-            _ => {
-                let mut list = self.part.as_os_str().to_os_string();
-                list.push(".concat.txt");
-                let list = PathBuf::from(list);
-                let r = (|| -> Result<()> {
-                    std::fs::write(&list, concat_list(&self.done)).context("write the segment list")?;
-                    let out = Command::new(&self.exe)
-                        .args(concat_args(&list, &self.part))
-                        .stdin(Stdio::null())
-                        .stdout(Stdio::null())
-                        .stderr(Stdio::piped())
-                        .output()
-                        .context("start ffmpeg to join the segments")?;
-                    if !out.status.success() {
-                        let mut t = Tail::default();
-                        t.push(&out.stderr);
-                        bail!("joining the segments failed ({}): {}", out.status, t.text());
-                    }
-                    Ok(())
-                })();
-                let _ = std::fs::remove_file(&list);
-                self.cleanup_segments();
-                r
-            }
-        }
+        let ended = self.end_stretch();
+        let failed = self.failed.take();
+        let r = if self.done.is_empty() {
+            Err(match (failed, ended) {
+                (Some(e), _) => anyhow!("{e}"),
+                (None, Err(e)) => e,
+                (None, Ok(())) => anyhow!("no frames were recorded"),
+            })
+        } else {
+            self.mux()
+        };
+        self.cleanup();
+        r
     }
 
     fn audio(&self) -> bool {
@@ -1080,187 +970,66 @@ impl VideoEncoder for FfmpegEncoder {
     }
 }
 
+impl Drop for FfmpegEncoder {
+    /// Dropped without finishing (cancelled): the runs stop, their files go.
+    fn drop(&mut self) {
+        if let Some(c) = self.cur.take() {
+            let video = c.video.out.clone();
+            drop(c.video);
+            let _ = std::fs::remove_file(video);
+            for a in c.sound {
+                let out = a.out.clone();
+                drop(a);
+                let _ = std::fs::remove_file(out);
+            }
+        }
+        self.cleanup();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn plan(codec: Codec, system: bool, mic: bool) -> Plan {
-        Plan {
-            w: 1280,
-            h: 720,
-            fps: 30,
-            quality: Quality::Medium,
-            codec,
-            system: system.then(|| "@DEFAULT_MONITOR@".to_string()),
-            mic: mic.then(|| "alsa_input.usb-mic".to_string()),
-            out: PathBuf::from("/tmp/rec dir/it's.mp4.part"),
-            isync: true,
-        }
+    fn plan(codec: Codec) -> Plan {
+        Plan { w: 1280, h: 720, fps: 30, quality: Quality::Medium, codec, out: PathBuf::from("/tmp/rec dir/it's.mp4.part") }
     }
 
-    fn joined(p: &Plan) -> String {
-        p.args().iter().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>().join(" ")
+    fn joined(a: &[OsString]) -> String {
+        a.iter().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>().join(" ")
     }
 
-    const HEAD: &str = "-hide_banner -nostdin -nostats -loglevel warning -y";
-    const HEAD_SOUND: &str = HEAD;
+    const HEAD_S: &str = "-hide_banner -nostdin -nostats -loglevel warning -y";
     const VIDEO_IN: &str = "-thread_queue_size 64 -f rawvideo -pix_fmt bgra -s 1280x720 -r 30 -i -";
-    const VIDEO_IN_SOUND: &str = "-thread_queue_size 64 -analyzeduration 0 -f matroska -i -";
-    const PULSE: &str = "-thread_queue_size 1024 -probesize 32 -analyzeduration 0 -f pulse -i";
-    const OUT_SOUND: &str = "-fps_mode cfr -r 30";
     const X264: &str = "-c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p";
     const TAIL: &str = "-movflags +faststart -f mp4 /tmp/rec dir/it's.mp4.part";
 
     #[test]
-    fn args_video_only() {
-        assert_eq!(joined(&plan(Codec::X264, false, false)), format!("{HEAD} {VIDEO_IN} -map 0:v {X264} {TAIL}"));
+    fn video_args() {
+        assert_eq!(joined(&plan(Codec::X264).args()), format!("{HEAD_S} {VIDEO_IN} -map 0:v {X264} {TAIL}"));
     }
 
     #[test]
-    fn args_system_sound_only() {
-        let p = plan(Codec::X264, true, false);
-        assert_eq!(
-            joined(&p),
-            format!(
-                "{HEAD_SOUND} -isync 1 {PULSE} @DEFAULT_MONITOR@ {VIDEO_IN_SOUND} -map 1:v -map 0:a {OUT_SOUND} {X264} \
-                 -c:a aac -b:a 160k -progress pipe:2 -stats_period 0.1 {TAIL}"
-            )
-        );
-    }
-
-    #[test]
-    fn args_mic_only() {
-        let p = plan(Codec::X264, false, true);
-        assert_eq!(
-            joined(&p),
-            format!(
-                "{HEAD_SOUND} -isync 1 {PULSE} alsa_input.usb-mic {VIDEO_IN_SOUND} -map 1:v -map 0:a {OUT_SOUND} {X264} \
-                 -c:a aac -b:a 160k -progress pipe:2 -stats_period 0.1 {TAIL}"
-            )
-        );
-    }
-
-    #[test]
-    fn args_both_sounds_are_mixed() {
-        let p = plan(Codec::X264, true, true);
-        assert_eq!(
-            joined(&p),
-            format!(
-                "{HEAD_SOUND} -isync 2 {PULSE} @DEFAULT_MONITOR@ -isync 2 {PULSE} alsa_input.usb-mic {VIDEO_IN_SOUND} \
-                 -filter_complex [0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0[a] -map 2:v -map [a] {OUT_SOUND} {X264} \
-                 -c:a aac -b:a 160k -progress pipe:2 -stats_period 0.1 {TAIL}"
-            )
-        );
-    }
-
-    #[test]
-    fn args_each_argument_is_its_own_entry() {
-        // Paths and device names with spaces and quotes stay one argv entry.
-        let mut p = plan(Codec::X264, true, true);
-        p.mic = Some("weird name; rm -rf ~".into());
-        let a = p.args();
-        assert!(a.iter().any(|x| x == "weird name; rm -rf ~"));
-        assert_eq!(a.last().unwrap(), &OsString::from("/tmp/rec dir/it's.mp4.part"));
-    }
-
-    /// Picture and sound share the wall clock: the frames' stamps are
-    /// kept (no input `-r`, which would replace them), the output gets the
-    /// frame rate back; the pulse inputs come first, so they are open
-    /// before ffmpeg starts on the frames.
-    #[test]
-    fn args_with_sound_keep_wall_clock_stamps() {
-        let a: Vec<String> = plan(Codec::X264, true, true).args().iter().map(|s| s.to_string_lossy().into()).collect();
-        let at = |x: &str| a.iter().position(|y| y == x).unwrap_or_else(|| panic!("{x} in {a:?}"));
-        let inputs: Vec<usize> = a.iter().enumerate().filter(|(_, x)| *x == "-i").map(|(i, _)| i).collect();
-        assert_eq!(inputs.len(), 3);
-        let vi = inputs[2];
-        assert_eq!(a[vi + 1], "-", "the video is the last input (2)");
-        assert_eq!(a[vi - 1], "matroska", "stamped frames");
-        assert!(!a[inputs[1]..vi].contains(&"-r".to_string()), "no input -r");
-        let syncs: Vec<&String> = a.iter().enumerate().filter(|(_, x)| *x == "-isync").map(|(i, _)| &a[i + 1]).collect();
-        assert_eq!(syncs, ["2", "2"], "both pulse inputs follow the video's clock");
-        assert!(at("-fps_mode") > at("-map"));
-        // Without sound, or with an ffmpeg older than 6: the plain input, counted at -r.
-        let plain = |p: Plan| -> Vec<String> { p.args().iter().map(|s| s.to_string_lossy().into()).collect() };
-        let mut old = plan(Codec::X264, true, false);
-        old.isync = false;
-        for v in [plain(plan(Codec::X264, false, false)), plain(old)] {
-            assert!(!v.iter().any(|x| x == "-isync" || x == "matroska" || x == "-fps_mode"), "{v:?}");
-            assert!(v.windows(2).any(|w| w[0] == "-r" && w[1] == "30"), "{v:?}");
+    fn sound_args_per_source() {
+        for src in ["@DEFAULT_MONITOR@", "alsa_input.usb-mic", "weird name; rm -rf ~"] {
+            let a = audio_args(src, Path::new("/tmp/a dir/x.s0.a1.flac"));
+            assert_eq!(
+                joined(&a),
+                format!(
+                    "-hide_banner -nostats -loglevel info -y -thread_queue_size 1024 -probesize 32 -analyzeduration 0 \
+                     -f pulse -i {src} -map 0:a -c:a flac -f flac /tmp/a dir/x.s0.a1.flac"
+                )
+            );
+            // Device names and paths stay one argv entry each; no -nostdin (q stops it).
+            assert!(a.iter().any(|x| x == src));
+            assert!(!a.iter().any(|x| x == "-nostdin"));
         }
     }
 
-    /// Walk EBML elements at the top of `b`: (id, body).
-    fn elems(mut b: &[u8]) -> Vec<(u32, &[u8])> {
-        let mut out = Vec::new();
-        while !b.is_empty() {
-            let id_len = b[0].leading_zeros() as usize + 1;
-            let id = b[..id_len].iter().fold(0u32, |a, &x| a << 8 | u32::from(x));
-            let sz = &b[id_len..id_len + 8];
-            assert_eq!(sz[0], 0x01, "8-byte sizes");
-            if sz == EBML_UNKNOWN {
-                out.push((id, &b[id_len + 8..]));
-                return out;
-            }
-            let n = sz[1..].iter().fold(0usize, |a, &x| a << 8 | usize::from(x));
-            out.push((id, &b[id_len + 8..id_len + 8 + n]));
-            b = &b[id_len + 8 + n..];
-        }
-        out
-    }
-
     #[test]
-    fn mkv_stream_layout() {
-        let mut m = Mkv::new(640, 480, 30);
-        let h = m.header();
-        let top = elems(&h);
-        assert_eq!(top.iter().map(|e| e.0).collect::<Vec<_>>(), [0x1A45_DFA3, 0x1853_8067]);
-        let seg = elems(top[1].1);
-        assert_eq!(seg.iter().map(|e| e.0).collect::<Vec<_>>(), [0x1549_A966, 0x1654_AE6B]);
-        let track = elems(elems(seg[1].1)[0].1);
-        let get = |id: u32| track.iter().find(|e| e.0 == id).unwrap().1;
-        assert_eq!(get(0x86), b"V_UNCOMPRESSED");
-        let video = elems(get(0xE0));
-        assert_eq!(video, [(0xB0, &[0x02, 0x80][..]), (0xBA, &[0x01, 0xE0][..]), (0x2E_B524, &b"BGRA"[..])]);
-        // Frames: slot k is stamped origin + k/30 s (µs).
-        let f0 = m.frame_head(0, 640 * 480 * 4);
-        let t0 = m.stamp(0);
-        let mut f1 = m.frame_head(3, 16);
-        assert_eq!(m.stamp(3) - t0, 100_000);
-        f1.extend_from_slice(&[7; 16]);
-        let c = elems(&f1);
-        assert_eq!(c.len(), 1, "the cluster's size covers the frame that follows");
-        assert_eq!(c[0].0, 0x1F43_B675);
-        let inner = elems(c[0].1);
-        assert_eq!(inner[0], (0xE7, &(t0 + 100_000).to_be_bytes()[1..]), "Timestamp");
-        assert_eq!(inner[1].0, 0xA3);
-        assert_eq!(inner[1].1, &[[0x81, 0, 0, 0x80].as_slice(), &[7; 16]].concat()[..]);
-        assert_eq!(f0[f0.len() - 4..], [0x81, 0, 0, 0x80]);
-        assert!(t0 > 1_600_000_000_000_000, "wall clock µs");
-    }
-
-    #[test]
-    fn progress_lines() {
-        assert_eq!(progress_frames("frame=42"), Some(42));
-        assert_eq!(progress_frames("frame=0\r"), Some(0));
-        assert_eq!(progress_frames("fps=30.0"), None);
-        assert_eq!(progress_frames("frame=   60 fps= 31 q=-1.0 size=4kB"), None, "a stats line is not progress");
-    }
-
-    #[test]
-    fn ffmpeg_versions() {
-        assert!(version_has_isync("ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023 the FFmpeg developers\nbuilt with gcc"));
-        assert!(version_has_isync("ffmpeg version n7.0.2 Copyright (c) 2000-2024"));
-        assert!(version_has_isync("ffmpeg version N-117000-g1234abcd Copyright"));
-        assert!(!version_has_isync("ffmpeg version 4.4.2-0ubuntu0.22.04.1 Copyright (c) 2000-2021"));
-        assert!(!version_has_isync("ffmpeg version 5.1.6-0+deb12u1"));
-        assert!(!version_has_isync(""));
-    }
-
-    #[test]
-    fn args_quality_sets_crf() {
+    fn video_args_quality_sets_crf() {
         for (q, n) in [(Quality::Low, "28"), (Quality::Medium, "23"), (Quality::High, "18")] {
-            let mut p = plan(Codec::X264, false, false);
+            let mut p = plan(Codec::X264);
             p.quality = q;
             let a = p.args();
             let i = a.iter().position(|x| x == "-crf").unwrap();
@@ -1269,47 +1038,104 @@ mod tests {
     }
 
     #[test]
-    fn args_openh264_uses_a_bit_rate() {
-        let s = joined(&plan(Codec::OpenH264, false, false));
+    fn video_args_openh264_uses_a_bit_rate() {
+        let s = joined(&plan(Codec::OpenH264).args());
         let b = bitrate(1280, 720, 30, Quality::Medium);
         assert!(s.contains(&format!("-c:v libopenh264 -b:v {b} -pix_fmt yuv420p")), "{s}");
         assert!(!s.contains("-crf"), "{s}");
     }
 
     #[test]
-    fn args_vaapi_uploads_frames() {
-        let s = joined(&plan(Codec::Vaapi, true, false));
-        assert!(s.starts_with(&format!("{HEAD_SOUND} -vaapi_device /dev/dri/renderD128 -isync 1 -thread_queue_size 1024")), "{s}");
-        assert!(s.contains("-vf format=nv12,hwupload -c:v h264_vaapi -qp 23 -c:a aac"), "{s}");
+    fn video_args_vaapi_uploads_frames() {
+        let s = joined(&plan(Codec::Vaapi).args());
+        assert!(s.starts_with(&format!("{HEAD_S} -vaapi_device /dev/dri/renderD128 -thread_queue_size 64")), "{s}");
+        assert!(s.contains("-vf format=nv12,hwupload -c:v h264_vaapi -qp 23 -movflags"), "{s}");
         assert!(!s.contains("yuv420p"), "{s}");
     }
 
     #[test]
-    fn args_odd_sizes_crop_and_big_ones_scale() {
-        let mut p = plan(Codec::X264, false, false);
+    fn video_args_odd_sizes_crop_and_big_ones_scale() {
+        let mut p = plan(Codec::X264);
         (p.w, p.h) = (641, 481);
-        assert!(joined(&p).contains("-s 641x481 -r 30 -i - -map 0:v -vf crop=640:480:0:0 -c:v"));
+        assert!(joined(&p.args()).contains("-s 641x481 -r 30 -i - -map 0:v -vf crop=640:480:0:0 -c:v"));
         (p.w, p.h) = (7680, 4320);
-        assert!(joined(&p).contains("-vf scale=4096:2304:flags=area -c:v"));
+        assert!(joined(&p.args()).contains("-vf scale=4096:2304:flags=area -c:v"));
         (p.w, p.h) = (1920, 1080);
-        assert!(!joined(&p).contains("-vf"));
+        assert!(!joined(&p.args()).contains("-vf"));
         p.codec = Codec::Vaapi;
         (p.w, p.h) = (641, 480);
-        assert!(joined(&p).contains("-vf crop=640:480:0:0,format=nv12,hwupload"));
+        assert!(joined(&p.args()).contains("-vf crop=640:480:0:0,format=nv12,hwupload"));
+    }
+
+    #[test]
+    fn sound_start_from_the_input_dump() {
+        let log = "Input #0, pulse, from '@DEFAULT_MONITOR@':\n  Duration: N/A, start: 1791669391.947440, bitrate: 1536 kb/s\n  \
+                   Stream #0:0: Audio: pcm_s16le, 48000 Hz, 2 channels, s16, 1536 kb/s\n";
+        assert_eq!(parse_start(log), Some(1_791_669_391.947_44));
+        assert_eq!(parse_start("[pulse @ 0x5] pa_stream_get_latency() failed\n"), None);
+        assert_eq!(parse_start(""), None);
+    }
+
+    fn st(len_ms: u64, origin: f64, sound: &[Option<f64>]) -> Stretch {
+        Stretch {
+            video: PathBuf::from("v.mp4"),
+            len: Duration::from_millis(len_ms),
+            origin,
+            sound: sound.iter().enumerate().map(|(j, s)| (PathBuf::from(format!("a{j}.flac")), *s)).collect(),
+        }
+    }
+
+    const FMT: &str = "aformat=sample_rates=48000:channel_layouts=stereo";
+
+    #[test]
+    fn mux_one_stretch_one_source_late() {
+        // The source opened 250 ms after the first frame: delayed by that.
+        let f = mux_filter(&[st(2000, 100.0, &[Some(100.25)])]);
+        assert_eq!(f, format!("[1:a]{FMT},adelay=250|250,apad,atrim=duration=2.000000[s0m0];[s0m0]anull[s0];[s0]concat=n=1:v=0:a=1[a]"));
+    }
+
+    #[test]
+    fn mux_early_sound_is_trimmed() {
+        let f = mux_filter(&[st(1500, 100.0, &[Some(99.5)])]);
+        assert!(f.starts_with(&format!("[1:a]{FMT},atrim=start=0.500000,asetpts=PTS-STARTPTS,apad,atrim=duration=1.500000[s0m0]")), "{f}");
+    }
+
+    #[test]
+    fn mux_both_sources_are_mixed_and_stretches_joined() {
+        let f = mux_filter(&[st(1500, 10.0, &[Some(11.3), Some(12.0)]), st(1000, 20.0, &[Some(20.1), None])]);
+        let want = [
+            format!("[1:a]{FMT},adelay=1300|1300,apad,atrim=duration=1.500000[s0m0]"),
+            format!("[2:a]{FMT},adelay=2000|2000,apad,atrim=duration=1.500000[s0m1]"),
+            "[s0m0][s0m1]amix=inputs=2:duration=longest:dropout_transition=0[s0]".to_string(),
+            format!("[3:a]{FMT},adelay=100|100,apad,atrim=duration=1.000000[s1m0]"),
+            "[s1m0]anull[s1]".to_string(),
+            "[s0][s1]concat=n=2:v=0:a=1[a]".to_string(),
+        ];
+        assert_eq!(f, want.join(";"));
+    }
+
+    #[test]
+    fn mux_a_stretch_without_sound_is_silent() {
+        let f = mux_filter(&[st(500, 1.0, &[None, None]), st(700, 2.0, &[Some(2.0)])]);
+        assert!(f.starts_with("anullsrc=r=48000:cl=stereo,atrim=duration=0.500000[s0];[1:a]"), "{f}");
+        assert!(f.ends_with("[s0][s1]concat=n=2:v=0:a=1[a]"), "{f}");
+    }
+
+    #[test]
+    fn mux_args_take_the_present_sources() {
+        let sts = [st(1500, 10.0, &[Some(11.3), None]), st(1000, 20.0, &[Some(20.1), Some(20.2)])];
+        let a = mux_args(Path::new("/t/list.txt"), &sts, Path::new("/t/out.mp4.part"));
+        let s = joined(&a);
+        assert!(s.starts_with(&format!("{HEAD_S} -f concat -safe 0 -i /t/list.txt -i a0.flac -i a0.flac -i a1.flac -filter_complex ")), "{s}");
+        assert!(s.ends_with("-map 0:v -map [a] -c:v copy -c:a aac -b:a 160k -movflags +faststart -f mp4 /t/out.mp4.part"), "{s}");
+        // The filter graph is one argv entry.
+        assert!(a.iter().any(|x| x.to_string_lossy().starts_with("[1:a]aformat")));
     }
 
     #[test]
     fn concat_list_quotes_paths() {
-        let l = concat_list(&[
-            (PathBuf::from("/a/b.seg0.mp4"), Duration::from_millis(1500)),
-            (PathBuf::from("/a/it's.seg1.mp4"), Duration::from_secs(2)),
-        ]);
-        assert_eq!(l, "file '/a/b.seg0.mp4'\noutpoint 1.500000\nfile '/a/it'\\''s.seg1.mp4'\noutpoint 2.000000\n");
-        let a: Vec<String> = concat_args(Path::new("/a/l.txt"), Path::new("/a/o.part")).iter().map(|s| s.to_string_lossy().into()).collect();
-        assert_eq!(
-            a.join(" "),
-            "-hide_banner -nostdin -nostats -loglevel warning -y -f concat -safe 0 -i /a/l.txt -c copy -movflags +faststart -f mp4 /a/o.part"
-        );
+        let l = concat_list(&[Path::new("/a/b.s0.mp4"), Path::new("/a/it's.s1.mp4")]);
+        assert_eq!(l, "file '/a/b.s0.mp4'\nfile '/a/it'\\''s.s1.mp4'\n");
     }
 
     const ENCODERS: &str = "Encoders:
@@ -1390,6 +1216,7 @@ mod tests {
         let n: Vec<u64> = (0..30).map(|i| c.repeats(ms(1000 * i / 30))).collect();
         assert!(n.iter().all(|&k| k == 1), "{n:?}");
         assert_eq!(c.sent(), 30);
+        assert_eq!(c.length(), Duration::from_secs(1));
     }
 
     #[test]
@@ -1415,7 +1242,9 @@ mod tests {
         assert_eq!(c.repeats(ms(620)), 0);
         assert_eq!(c.repeats(ms(700)), 1);
         assert_eq!(c.sent(), 8);
-        // The duration follows the last timestamp: 0.7 s → 8 frames at 10 fps.
+        // Held to the end of a stretch (the pause at 1 s): slots 8..=10.
+        assert_eq!(c.repeats(ms(1000)), 3);
+        assert_eq!(c.length(), Duration::from_millis(1100));
     }
 
     #[test]
