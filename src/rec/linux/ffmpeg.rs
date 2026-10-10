@@ -20,11 +20,11 @@
 //! wall clock too, and `-isync 0` places the sound by the difference
 //! between the two starts; `-fps_mode cfr` keeps the output constant-rate.
 //! The stamps travel with the frames, so however long ffmpeg takes to open
-//! the pulse inputs (it opens them after the first frame; a suspended sink
-//! can take a second or two to wake) the picture keeps its timing; the
-//! stretch just has no sound until the input is open, and never sound from
-//! before it. An older ffmpeg (no `-isync`) gets the plain raw input: its
-//! sound starts with the picture however late it opened.
+//! the pulse inputs (it opens them first, when the stretch's first frame
+//! starts it; a suspended sink can take a second or two to wake) the
+//! picture keeps its timing; the stretch just has no sound until the input
+//! is open, and never sound from before it. An older ffmpeg (no `-isync`)
+//! gets the plain raw input: its sound starts with the picture.
 //!
 //! Nothing goes through a shell: every argument is its own argv entry.
 //! Frames go to ffmpeg on a writer thread through a bounded channel.
@@ -310,6 +310,21 @@ impl Plan {
         }
         let size = format!("{}x{}", self.w, self.h);
         let fps = self.fps.to_string();
+        // With sound the pulse inputs come first: ffmpeg opens its inputs
+        // in order, so they hear before it starts on the frames (it then
+        // never waits on sound that has not begun, which with -shortest
+        // would hold the picture back). The video is input `n`.
+        let n = audio.len();
+        let video_ix = n.to_string();
+        for src in &audio {
+            if synced {
+                push("-isync");
+                push(&video_ix);
+            }
+            for s in ["-thread_queue_size", "1024", "-probesize", "32", "-analyzeduration", "0", "-f", "pulse", "-i", src] {
+                push(s);
+            }
+        }
         if synced {
             // Raw BGRA in Matroska, stamped (see `Mkv`); its size and
             // pixel format are in the stream's header.
@@ -321,28 +336,20 @@ impl Plan {
                 push(s);
             }
         }
-        for src in &audio {
-            if synced {
-                push("-isync");
-                push("0");
-            }
-            for s in ["-thread_queue_size", "1024", "-probesize", "32", "-analyzeduration", "0", "-f", "pulse", "-i", src] {
-                push(s);
-            }
-        }
-        match audio.len() {
+        let video = format!("{n}:v");
+        match n {
             0 => {
-                for s in ["-map", "0:v"] {
+                for s in ["-map", &video] {
                     push(s);
                 }
             }
             1 => {
-                for s in ["-map", "0:v", "-map", "1:a"] {
+                for s in ["-map", &video, "-map", "0:a"] {
                     push(s);
                 }
             }
             _ => {
-                for s in ["-filter_complex", "[1:a][2:a]amix=inputs=2:duration=first:dropout_transition=0[a]", "-map", "0:v", "-map", "[a]"] {
+                for s in ["-filter_complex", "[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0[a]", "-map", &video, "-map", "[a]"] {
                     push(s);
                 }
             }
@@ -1008,7 +1015,7 @@ mod tests {
     const HEAD_SOUND: &str = HEAD;
     const VIDEO_IN: &str = "-thread_queue_size 64 -f rawvideo -pix_fmt bgra -s 1280x720 -r 30 -i -";
     const VIDEO_IN_SOUND: &str = "-thread_queue_size 64 -analyzeduration 0 -f matroska -i -";
-    const PULSE: &str = "-isync 0 -thread_queue_size 1024 -probesize 32 -analyzeduration 0 -f pulse -i";
+    const PULSE: &str = "-thread_queue_size 1024 -probesize 32 -analyzeduration 0 -f pulse -i";
     const OUT_SOUND: &str = "-fps_mode cfr -r 30";
     const X264: &str = "-c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p";
     const TAIL: &str = "-movflags +faststart -f mp4 /tmp/rec dir/it's.mp4.part";
@@ -1024,7 +1031,7 @@ mod tests {
         assert_eq!(
             joined(&p),
             format!(
-                "{HEAD_SOUND} {VIDEO_IN_SOUND} {PULSE} @DEFAULT_MONITOR@ -map 0:v -map 1:a {OUT_SOUND} {X264} \
+                "{HEAD_SOUND} -isync 1 {PULSE} @DEFAULT_MONITOR@ {VIDEO_IN_SOUND} -map 1:v -map 0:a {OUT_SOUND} {X264} \
                  -c:a aac -b:a 160k -shortest {TAIL}"
             )
         );
@@ -1036,7 +1043,7 @@ mod tests {
         assert_eq!(
             joined(&p),
             format!(
-                "{HEAD_SOUND} {VIDEO_IN_SOUND} {PULSE} alsa_input.usb-mic -map 0:v -map 1:a {OUT_SOUND} {X264} \
+                "{HEAD_SOUND} -isync 1 {PULSE} alsa_input.usb-mic {VIDEO_IN_SOUND} -map 1:v -map 0:a {OUT_SOUND} {X264} \
                  -c:a aac -b:a 160k -shortest {TAIL}"
             )
         );
@@ -1048,8 +1055,8 @@ mod tests {
         assert_eq!(
             joined(&p),
             format!(
-                "{HEAD_SOUND} {VIDEO_IN_SOUND} {PULSE} @DEFAULT_MONITOR@ {PULSE} alsa_input.usb-mic \
-                 -filter_complex [1:a][2:a]amix=inputs=2:duration=first:dropout_transition=0[a] -map 0:v -map [a] {OUT_SOUND} {X264} \
+                "{HEAD_SOUND} -isync 2 {PULSE} @DEFAULT_MONITOR@ -isync 2 {PULSE} alsa_input.usb-mic {VIDEO_IN_SOUND} \
+                 -filter_complex [0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0[a] -map 2:v -map [a] {OUT_SOUND} {X264} \
                  -c:a aac -b:a 160k -shortest {TAIL}"
             )
         );
@@ -1067,17 +1074,20 @@ mod tests {
 
     /// Picture and sound share the wall clock: the frames' stamps are
     /// kept (no input `-r`, which would replace them), the output gets the
-    /// frame rate back and starts at the first frame; the video input is
-    /// first, so ffmpeg opens the pulse inputs only once frames come.
+    /// frame rate back; the pulse inputs come first, so they are open
+    /// before ffmpeg starts on the frames.
     #[test]
     fn args_with_sound_keep_wall_clock_stamps() {
         let a: Vec<String> = plan(Codec::X264, true, true).args().iter().map(|s| s.to_string_lossy().into()).collect();
         let at = |x: &str| a.iter().position(|y| y == x).unwrap_or_else(|| panic!("{x} in {a:?}"));
-        let first_i = at("-i");
-        assert_eq!(a[first_i + 1], "-", "the video is input 0");
-        assert_eq!(a[first_i - 1], "matroska", "stamped frames");
-        assert!(!a[..first_i].contains(&"-r".to_string()), "no input -r");
-        assert_eq!(a.iter().filter(|x| *x == "-isync").count(), 2, "both pulse inputs follow the video's clock");
+        let inputs: Vec<usize> = a.iter().enumerate().filter(|(_, x)| *x == "-i").map(|(i, _)| i).collect();
+        assert_eq!(inputs.len(), 3);
+        let vi = inputs[2];
+        assert_eq!(a[vi + 1], "-", "the video is the last input (2)");
+        assert_eq!(a[vi - 1], "matroska", "stamped frames");
+        assert!(!a[inputs[1]..vi].contains(&"-r".to_string()), "no input -r");
+        let syncs: Vec<&String> = a.iter().enumerate().filter(|(_, x)| *x == "-isync").map(|(i, _)| &a[i + 1]).collect();
+        assert_eq!(syncs, ["2", "2"], "both pulse inputs follow the video's clock");
         assert!(at("-fps_mode") > at("-map"));
         // Without sound, or with an ffmpeg older than 6: the plain input, counted at -r.
         let plain = |p: Plan| -> Vec<String> { p.args().iter().map(|s| s.to_string_lossy().into()).collect() };
@@ -1170,7 +1180,7 @@ mod tests {
     #[test]
     fn args_vaapi_uploads_frames() {
         let s = joined(&plan(Codec::Vaapi, true, false));
-        assert!(s.starts_with(&format!("{HEAD_SOUND} -vaapi_device /dev/dri/renderD128 -thread_queue_size 64")), "{s}");
+        assert!(s.starts_with(&format!("{HEAD_SOUND} -vaapi_device /dev/dri/renderD128 -isync 1 -thread_queue_size 1024")), "{s}");
         assert!(s.contains("-vf format=nv12,hwupload -c:v h264_vaapi -qp 23 -c:a aac"), "{s}");
         assert!(!s.contains("yuv420p"), "{s}");
     }
