@@ -13,14 +13,17 @@
 //! [`VideoEncoder::finish`] joins them with the concat demuxer (`-c copy`).
 //! Without sound there is one run and pausing needs nothing.
 //!
-//! Sound and picture are kept in step by the wall clock: with sound the
-//! frames are stamped when ffmpeg reads them (`-use_wallclock_as_timestamps`)
-//! and the pulse inputs stamp their samples the same way, `-copyts` keeps
-//! both, and the output starts at the first frame (`-avoid_negative_ts
-//! make_zero`). ffmpeg opens its inputs in order and waits on stdin for the
-//! first frame before it opens the pulse ones, so a stretch has no sound
-//! for the moment that takes (well under a second on a desktop; a
-//! suspended sink can take longer to wake) but never sound from before it.
+//! Sound and picture are kept in step by the wall clock (ffmpeg 6+): with
+//! sound the frames are stamped when ffmpeg reads them
+//! (`-use_wallclock_as_timestamps`), the pulse inputs stamp their samples
+//! the same way, and `-isync 0` places the sound by the difference between
+//! the two starts; the output is made constant-rate again (`-fps_mode
+//! cfr`). ffmpeg opens its inputs in order and waits on stdin for the first
+//! frame before it opens the pulse ones, so a stretch has no sound for the
+//! moment that takes (well under a second on a desktop; a suspended sink
+//! can take longer to wake) but never sound from before it. An older
+//! ffmpeg (no `-isync`) gets the plain inputs: its sound starts with the
+//! picture however late it opened (a little early, by the open time).
 //!
 //! Nothing goes through a shell: every argument is its own argv entry.
 //! Frames go to ffmpeg on a writer thread through a bounded channel.
@@ -134,6 +137,20 @@ pub struct Caps {
     pub aac: bool,
     /// The PulseAudio input device (`-f pulse`) is built in.
     pub pulse: bool,
+    /// ffmpeg 6 or later (`-isync`, `-fps_mode`).
+    pub isync: bool,
+}
+
+/// Whether the first line of `ffmpeg -version` is ffmpeg 6 or later (a
+/// git build, "N-…", counts as recent; an unreadable one does not).
+pub fn version_has_isync(out: &str) -> bool {
+    let Some(v) = out.lines().next().and_then(|l| l.split("version ").nth(1)) else { return false };
+    if v.starts_with("N-") {
+        return true;
+    }
+    let v = v.trim_start_matches('n');
+    let major: String = v.chars().take_while(|c| c.is_ascii_digit()).collect();
+    major.parse::<u32>().is_ok_and(|m| m >= 6)
 }
 
 /// Names in a listing of `ffmpeg -hide_banner -encoders` or `-devices`
@@ -210,7 +227,13 @@ pub fn caps(exe: &Path) -> Caps {
     }
     let enc = run_listing(exe, "-encoders");
     let dev = run_listing(exe, "-devices");
-    let c = Caps { h264: pick_h264(&enc, Path::new(VAAPI_DEVICE).exists()), aac: has_aac(&enc), pulse: has_pulse(&dev) };
+    let ver = run_listing(exe, "-version");
+    let c = Caps {
+        h264: pick_h264(&enc, Path::new(VAAPI_DEVICE).exists()),
+        aac: has_aac(&enc),
+        pulse: has_pulse(&dev),
+        isync: version_has_isync(&ver),
+    };
     cache.lock().unwrap_or_else(|e| e.into_inner()).push((exe.to_path_buf(), c.clone()));
     c
 }
@@ -233,6 +256,8 @@ pub struct Plan {
     /// PulseAudio source of the microphone.
     pub mic: Option<String>,
     pub out: PathBuf,
+    /// Align the sound by the wall clock (ffmpeg 6+, see the module docs).
+    pub isync: bool,
 }
 
 /// `-crf` (libx264) / `-qp` (VA-API) for a quality.
@@ -274,12 +299,9 @@ impl Plan {
         let mut a: Vec<OsString> = Vec::new();
         let mut push = |s: &str| a.push(s.into());
         let audio = self.audio_inputs();
-        let sound = !audio.is_empty();
+        let synced = self.isync && !audio.is_empty();
         for s in ["-hide_banner", "-nostdin", "-nostats", "-loglevel", "warning", "-y"] {
             push(s);
-        }
-        if sound {
-            push("-copyts");
         }
         if self.codec == Codec::Vaapi {
             push("-vaapi_device");
@@ -287,7 +309,7 @@ impl Plan {
         }
         let size = format!("{}x{}", self.w, self.h);
         let fps = self.fps.to_string();
-        if sound {
+        if synced {
             // Wall-clock stamps (an input `-r` would replace them with a
             // count); the frame rate comes back on the output.
             for s in [
@@ -302,6 +324,10 @@ impl Plan {
             }
         }
         for src in &audio {
+            if synced {
+                push("-isync");
+                push("0");
+            }
             for s in ["-thread_queue_size", "1024", "-probesize", "32", "-analyzeduration", "0", "-f", "pulse", "-i", src] {
                 push(s);
             }
@@ -323,8 +349,8 @@ impl Plan {
                 }
             }
         }
-        if sound {
-            for s in ["-vsync", "cfr", "-r", &fps, "-avoid_negative_ts", "make_zero"] {
+        if synced {
+            for s in ["-fps_mode", "cfr", "-r", &fps] {
                 push(s);
             }
         }
@@ -669,7 +695,17 @@ impl FfmpegEncoder {
         if sound && !caps.aac {
             bail!("{} has no AAC encoder", exe.display());
         }
-        let plan = Plan { w, h, fps: fps.clamp(1, 60), quality, codec, system: system_monitor, mic, out: path.to_path_buf() };
+        let plan = Plan {
+            w,
+            h,
+            fps: fps.clamp(1, 60),
+            quality,
+            codec,
+            system: system_monitor,
+            mic,
+            out: path.to_path_buf(),
+            isync: caps.isync,
+        };
         Ok(FfmpegEncoder { exe, plan, part: path.to_path_buf(), run: None, done: Vec::new(), skip_until: None, failed: None })
     }
 
@@ -821,6 +857,7 @@ mod tests {
             system: system.then(|| "@DEFAULT_MONITOR@".to_string()),
             mic: mic.then(|| "alsa_input.usb-mic".to_string()),
             out: PathBuf::from("/tmp/rec dir/it's.mp4.part"),
+            isync: true,
         }
     }
 
@@ -829,12 +866,12 @@ mod tests {
     }
 
     const HEAD: &str = "-hide_banner -nostdin -nostats -loglevel warning -y";
-    const HEAD_SOUND: &str = "-hide_banner -nostdin -nostats -loglevel warning -y -copyts";
+    const HEAD_SOUND: &str = HEAD;
     const VIDEO_IN: &str = "-thread_queue_size 64 -f rawvideo -pix_fmt bgra -s 1280x720 -r 30 -i -";
     const VIDEO_IN_SOUND: &str = "-thread_queue_size 64 -use_wallclock_as_timestamps 1 -probesize 32 -analyzeduration 0 \
                                   -f rawvideo -pix_fmt bgra -s 1280x720 -framerate 30 -i -";
-    const PULSE: &str = "-thread_queue_size 1024 -probesize 32 -analyzeduration 0 -f pulse -i";
-    const OUT_SOUND: &str = "-vsync cfr -r 30 -avoid_negative_ts make_zero";
+    const PULSE: &str = "-isync 0 -thread_queue_size 1024 -probesize 32 -analyzeduration 0 -f pulse -i";
+    const OUT_SOUND: &str = "-fps_mode cfr -r 30";
     const X264: &str = "-c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p";
     const TAIL: &str = "-movflags +faststart -f mp4 /tmp/rec dir/it's.mp4.part";
 
@@ -902,11 +939,26 @@ mod tests {
         assert_eq!(a[first_i + 1], "-", "the video is input 0");
         assert!(at("-use_wallclock_as_timestamps") < first_i && at("-framerate") < first_i);
         assert!(!a[..first_i].contains(&"-r".to_string()), "no input -r");
-        assert!(at("-copyts") < first_i);
-        assert!(at("-vsync") > at("-map"));
-        // Without sound: the spec's plain input, counted at -r.
-        let v: Vec<String> = plan(Codec::X264, false, false).args().iter().map(|s| s.to_string_lossy().into()).collect();
-        assert!(!v.iter().any(|x| x == "-copyts" || x == "-use_wallclock_as_timestamps" || x == "-vsync"), "{v:?}");
+        assert_eq!(a.iter().filter(|x| *x == "-isync").count(), 2, "both pulse inputs follow the video's clock");
+        assert!(at("-fps_mode") > at("-map"));
+        // Without sound, or with an ffmpeg older than 6: the plain input, counted at -r.
+        let plain = |p: Plan| -> Vec<String> { p.args().iter().map(|s| s.to_string_lossy().into()).collect() };
+        let mut old = plan(Codec::X264, true, false);
+        old.isync = false;
+        for v in [plain(plan(Codec::X264, false, false)), plain(old)] {
+            assert!(!v.iter().any(|x| x == "-isync" || x == "-use_wallclock_as_timestamps" || x == "-fps_mode"), "{v:?}");
+            assert!(v.windows(2).any(|w| w[0] == "-r" && w[1] == "30"), "{v:?}");
+        }
+    }
+
+    #[test]
+    fn ffmpeg_versions() {
+        assert!(version_has_isync("ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023 the FFmpeg developers\nbuilt with gcc"));
+        assert!(version_has_isync("ffmpeg version n7.0.2 Copyright (c) 2000-2024"));
+        assert!(version_has_isync("ffmpeg version N-117000-g1234abcd Copyright"));
+        assert!(!version_has_isync("ffmpeg version 4.4.2-0ubuntu0.22.04.1 Copyright (c) 2000-2021"));
+        assert!(!version_has_isync("ffmpeg version 5.1.6-0+deb12u1"));
+        assert!(!version_has_isync(""));
     }
 
     #[test]
