@@ -285,7 +285,7 @@ impl Plan {
             push(VAAPI_DEVICE);
         }
         for src in &audio {
-            for s in ["-thread_queue_size", "1024", "-f", "pulse", "-i", src] {
+            for s in ["-thread_queue_size", "1024", "-probesize", "32", "-analyzeduration", "0", "-fragment_size", "3840", "-f", "pulse", "-i", src] {
                 push(s);
             }
         }
@@ -887,7 +887,7 @@ mod tests {
         assert_eq!(
             joined(&p),
             format!(
-                "{HEAD_SOUND} -thread_queue_size 1024 -f pulse -i @DEFAULT_MONITOR@ {VIDEO_IN} -map 1:v -map 0:a {X264} \
+                "{HEAD_SOUND} -thread_queue_size 1024 -probesize 32 -analyzeduration 0 -fragment_size 3840 -f pulse -i @DEFAULT_MONITOR@ {VIDEO_IN} -map 1:v -map 0:a {X264} \
                  -c:a aac -b:a 160k -shortest {TAIL}"
             )
         );
@@ -899,7 +899,7 @@ mod tests {
         assert_eq!(
             joined(&p),
             format!(
-                "{HEAD_SOUND} -thread_queue_size 1024 -f pulse -i alsa_input.usb-mic {VIDEO_IN} -map 1:v -map 0:a {X264} \
+                "{HEAD_SOUND} -thread_queue_size 1024 -probesize 32 -analyzeduration 0 -fragment_size 3840 -f pulse -i alsa_input.usb-mic {VIDEO_IN} -map 1:v -map 0:a {X264} \
                  -c:a aac -b:a 160k -shortest {TAIL}"
             )
         );
@@ -911,8 +911,8 @@ mod tests {
         assert_eq!(
             joined(&p),
             format!(
-                "{HEAD_SOUND} -thread_queue_size 1024 -f pulse -i @DEFAULT_MONITOR@ \
-                 -thread_queue_size 1024 -f pulse -i alsa_input.usb-mic {VIDEO_IN} \
+                "{HEAD_SOUND} -thread_queue_size 1024 -probesize 32 -analyzeduration 0 -fragment_size 3840 -f pulse -i @DEFAULT_MONITOR@ \
+                 -thread_queue_size 1024 -probesize 32 -analyzeduration 0 -fragment_size 3840 -f pulse -i alsa_input.usb-mic {VIDEO_IN} \
                  -filter_complex [0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0[a] -map 2:v -map [a] {X264} \
                  -c:a aac -b:a 160k -shortest {TAIL}"
             )
@@ -951,7 +951,7 @@ mod tests {
     #[test]
     fn args_vaapi_uploads_frames() {
         let s = joined(&plan(Codec::Vaapi, true, false));
-        assert!(s.starts_with(&format!("{HEAD_SOUND} -vaapi_device /dev/dri/renderD128 -thread_queue_size 1024 -f pulse")), "{s}");
+        assert!(s.starts_with(&format!("{HEAD_SOUND} -vaapi_device /dev/dri/renderD128 -thread_queue_size 1024 -probesize 32 -analyzeduration 0 -fragment_size 3840 -f pulse")), "{s}");
         assert!(s.contains("-vf format=nv12,hwupload -c:v h264_vaapi -qp 23 -c:a aac"), "{s}");
         assert!(!s.contains("yuv420p"), "{s}");
     }
