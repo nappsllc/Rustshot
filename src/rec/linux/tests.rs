@@ -113,7 +113,7 @@ fn live_rec_linux_xvfb_mp4_with_sound_and_pause() {
     let path = s.stop().unwrap();
     eprintln!("stopped in {:?}", t.elapsed());
     let fmt = ffprobe(&path, "format=duration");
-    let st = ffprobe(&path, "stream=codec_type,codec_name,duration");
+    let st = ffprobe(&path, "stream=codec_type,codec_name,start_time,duration");
     eprintln!("ffprobe:\n{fmt}{st}");
     let duration: f64 = value(&fmt, "duration").parse().unwrap();
     eprintln!("FFPROBE sound+pause duration={duration:.3}s");

@@ -14,16 +14,17 @@
 //! Without sound there is one run and pausing needs nothing.
 //!
 //! Sound and picture are kept in step by the wall clock (ffmpeg 6+): with
-//! sound the frames are stamped when ffmpeg reads them
-//! (`-use_wallclock_as_timestamps`), the pulse inputs stamp their samples
-//! the same way, and `-isync 0` places the sound by the difference between
-//! the two starts; the output is made constant-rate again (`-fps_mode
-//! cfr`). ffmpeg opens its inputs in order and waits on stdin for the first
-//! frame before it opens the pulse ones, so a stretch has no sound for the
-//! moment that takes (well under a second on a desktop; a suspended sink
-//! can take longer to wake) but never sound from before it. An older
-//! ffmpeg (no `-isync`) gets the plain inputs: its sound starts with the
-//! picture however late it opened (a little early, by the open time).
+//! sound the frames go to ffmpeg in a minimal Matroska stream ([`Mkv`]:
+//! raw BGRA, each frame stamped with the wall-clock time of its slot on
+//! the constant-rate grid), the pulse inputs stamp their samples with the
+//! wall clock too, and `-isync 0` places the sound by the difference
+//! between the two starts; `-fps_mode cfr` keeps the output constant-rate.
+//! The stamps travel with the frames, so however long ffmpeg takes to open
+//! the pulse inputs (it opens them after the first frame; a suspended sink
+//! can take a second or two to wake) the picture keeps its timing; the
+//! stretch just has no sound until the input is open, and never sound from
+//! before it. An older ffmpeg (no `-isync`) gets the plain raw input: its
+//! sound starts with the picture however late it opened.
 //!
 //! Nothing goes through a shell: every argument is its own argv entry.
 //! Frames go to ffmpeg on a writer thread through a bounded channel.
@@ -310,12 +311,9 @@ impl Plan {
         let size = format!("{}x{}", self.w, self.h);
         let fps = self.fps.to_string();
         if synced {
-            // Wall-clock stamps (an input `-r` would replace them with a
-            // count); the frame rate comes back on the output.
-            for s in [
-                "-thread_queue_size", "64", "-use_wallclock_as_timestamps", "1", "-probesize", "32", "-analyzeduration", "0",
-                "-f", "rawvideo", "-pix_fmt", "bgra", "-s", &size, "-framerate", &fps, "-i", "-",
-            ] {
+            // Raw BGRA in Matroska, stamped (see `Mkv`); its size and
+            // pixel format are in the stream's header.
+            for s in ["-thread_queue_size", "64", "-analyzeduration", "0", "-f", "matroska", "-i", "-"] {
                 push(s);
             }
         } else {
@@ -455,6 +453,120 @@ impl Cfr {
 }
 
 // ---------------------------------------------------------------------------
+// Stamped frames: a minimal Matroska stream
+// ---------------------------------------------------------------------------
+
+/// Writes raw BGRA frames as a live Matroska stream (unknown-size segment,
+/// one cluster per frame, 1 µs timestamps): frame `slot` is stamped
+/// `origin + slot / fps`, `origin` being the wall-clock time (µs since the
+/// Unix epoch, the clock ffmpeg's pulse input stamps with) of the first.
+pub struct Mkv {
+    w: u32,
+    h: u32,
+    fps: u32,
+    origin: Option<u64>,
+}
+
+/// An EBML element size, always 8 bytes long.
+fn ebml_size(n: u64) -> [u8; 8] {
+    let mut b = (n | 0x01 << 56).to_be_bytes();
+    b[0] = 0x01;
+    b
+}
+
+/// The 8-byte "unknown size" (a live stream's segment).
+const EBML_UNKNOWN: [u8; 8] = [0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
+
+fn ebml_id(out: &mut Vec<u8>, id: u32) {
+    let b = id.to_be_bytes();
+    let skip = b.iter().position(|&x| x != 0).unwrap_or(3);
+    out.extend_from_slice(&b[skip..]);
+}
+
+fn ebml_elem(out: &mut Vec<u8>, id: u32, body: &[u8]) {
+    ebml_id(out, id);
+    out.extend_from_slice(&ebml_size(body.len() as u64));
+    out.extend_from_slice(body);
+}
+
+fn ebml_uint(out: &mut Vec<u8>, id: u32, v: u64) {
+    let b = v.to_be_bytes();
+    let skip = b.iter().position(|&x| x != 0).unwrap_or(7);
+    ebml_elem(out, id, &b[skip..]);
+}
+
+impl Mkv {
+    pub fn new(w: u32, h: u32, fps: u32) -> Mkv {
+        Mkv { w, h, fps: fps.max(1), origin: None }
+    }
+
+    /// The EBML header, the segment start, Info and Tracks.
+    pub fn header(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut ebml = Vec::new();
+        ebml_uint(&mut ebml, 0x4286, 1); // EBMLVersion
+        ebml_uint(&mut ebml, 0x42F7, 1); // EBMLReadVersion
+        ebml_uint(&mut ebml, 0x42F2, 4); // EBMLMaxIDLength
+        ebml_uint(&mut ebml, 0x42F3, 8); // EBMLMaxSizeLength
+        ebml_elem(&mut ebml, 0x4282, b"matroska"); // DocType
+        ebml_uint(&mut ebml, 0x4287, 4); // DocTypeVersion
+        ebml_uint(&mut ebml, 0x4285, 2); // DocTypeReadVersion
+        ebml_elem(&mut out, 0x1A45_DFA3, &ebml);
+        ebml_id(&mut out, 0x1853_8067); // Segment
+        out.extend_from_slice(&EBML_UNKNOWN);
+        let mut info = Vec::new();
+        ebml_uint(&mut info, 0x2A_D7B1, 1000); // TimestampScale: 1 µs
+        ebml_elem(&mut info, 0x4D80, b"rustshot"); // MuxingApp
+        ebml_elem(&mut info, 0x5741, b"rustshot"); // WritingApp
+        ebml_elem(&mut out, 0x1549_A966, &info);
+        let mut video = Vec::new();
+        ebml_uint(&mut video, 0xB0, u64::from(self.w)); // PixelWidth
+        ebml_uint(&mut video, 0xBA, u64::from(self.h)); // PixelHeight
+        ebml_elem(&mut video, 0x2E_B524, b"BGRA"); // ColourSpace (raw FourCC)
+        let mut track = Vec::new();
+        ebml_uint(&mut track, 0xD7, 1); // TrackNumber
+        ebml_uint(&mut track, 0x73C5, 1); // TrackUID
+        ebml_uint(&mut track, 0x83, 1); // TrackType: video
+        ebml_uint(&mut track, 0x9C, 0); // FlagLacing
+        ebml_uint(&mut track, 0x23_E383, 1_000_000_000 / u64::from(self.fps)); // DefaultDuration (ns)
+        ebml_elem(&mut track, 0x86, b"V_UNCOMPRESSED"); // CodecID
+        ebml_elem(&mut track, 0xE0, &video);
+        let mut tracks = Vec::new();
+        ebml_elem(&mut tracks, 0xAE, &track); // TrackEntry
+        ebml_elem(&mut out, 0x1654_AE6B, &tracks);
+        out
+    }
+
+    /// The stamp of frame `slot` (µs since the epoch).
+    pub fn stamp(&mut self, slot: u64) -> u64 {
+        let origin = *self.origin.get_or_insert_with(|| {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+            now.as_micros() as u64
+        });
+        origin + slot * 1_000_000 / u64::from(self.fps)
+    }
+
+    /// A cluster holding frame `slot` of `len` bytes, up to the frame data
+    /// (which follows it).
+    pub fn frame_head(&mut self, slot: u64, len: usize) -> Vec<u8> {
+        let t = self.stamp(slot);
+        let mut ts = Vec::new();
+        ebml_uint(&mut ts, 0xE7, t); // Timestamp
+        // SimpleBlock: track 1 (vint 0x81), relative time 0, keyframe.
+        let block = [0x81u8, 0, 0, 0x80];
+        let block_len = (block.len() + len) as u64;
+        let mut out = Vec::new();
+        ebml_id(&mut out, 0x1F43_B675); // Cluster
+        out.extend_from_slice(&ebml_size(ts.len() as u64 + 1 + 8 + block_len));
+        out.extend_from_slice(&ts);
+        ebml_id(&mut out, 0xA3); // SimpleBlock
+        out.extend_from_slice(&ebml_size(block_len));
+        out.extend_from_slice(&block);
+        out
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The encoder
 // ---------------------------------------------------------------------------
 
@@ -487,6 +599,8 @@ struct Run {
     out: PathBuf,
     /// Live sound inputs: ffmpeg gets SIGINT if it lingers at the end.
     live: bool,
+    /// With sound (ffmpeg 6+): frames go in Matroska, stamped.
+    mkv: Option<Mkv>,
 }
 
 fn stderr_tail(tail: &Mutex<Tail>) -> String {
@@ -497,6 +611,7 @@ fn stderr_tail(tail: &Mutex<Tail>) -> String {
 impl Run {
     fn spawn(exe: &Path, plan: &Plan) -> Result<Run> {
         let (args, fps, out, live) = (plan.args(), plan.fps, plan.out.clone(), !plan.audio_inputs().is_empty());
+        let mkv = (live && plan.isync).then(|| Mkv::new(plan.w, plan.h, plan.fps));
         let mut child = Command::new(exe)
             .args(&args)
             .stdin(Stdio::piped())
@@ -538,27 +653,41 @@ impl Run {
                 return Err(anyhow::Error::new(e).context("start the ffmpeg writer thread"));
             }
         };
-        Ok(Run { child, tx: Some(tx), writer: Some(writer), reader, tail, cfr: Cfr::new(fps), out, live })
+        let mut run = Run { child, tx: Some(tx), writer: Some(writer), reader, tail, cfr: Cfr::new(fps), out, live, mkv };
+        if let Some(h) = run.mkv.as_ref().map(|m| m.header()) {
+            run.send(Arc::new(h))?;
+        }
+        Ok(run)
     }
 
     /// Write `f` as many times as the frame rate wants.
     fn push(&mut self, f: &Frame) -> Result<()> {
+        let first = self.cfr.sent();
         let n = self.cfr.repeats(f.ts);
         if n == 0 {
             return Ok(());
         }
         let buf = Arc::new(f.bgra[..(f.w * f.h * 4) as usize].to_vec());
-        let tx = self.tx.as_ref().ok_or_else(|| anyhow!("ffmpeg input closed"))?;
-        for _ in 0..n {
-            if tx.send(buf.clone()).is_err() {
-                // The writer stopped: ffmpeg is gone or stopped reading.
-                let why = match self.writer.take().map(|w| w.join()) {
-                    Some(Ok(Err(e))) => format!("{e}"),
-                    _ => "stopped".into(),
-                };
-                let _ = self.child.wait_timeout(Duration::from_secs(2), false);
-                bail!("ffmpeg stopped taking frames ({why}): {}", stderr_tail(&self.tail));
+        for slot in first..first + n {
+            if let Some(m) = &mut self.mkv {
+                let head = m.frame_head(slot, buf.len());
+                self.send(Arc::new(head))?;
             }
+            self.send(buf.clone())?;
+        }
+        Ok(())
+    }
+
+    fn send(&mut self, b: Arc<Vec<u8>>) -> Result<()> {
+        let tx = self.tx.as_ref().ok_or_else(|| anyhow!("ffmpeg input closed"))?;
+        if tx.send(b).is_err() {
+            // The writer stopped: ffmpeg is gone or stopped reading.
+            let why = match self.writer.take().map(|w| w.join()) {
+                Some(Ok(Err(e))) => format!("{e}"),
+                _ => "stopped".into(),
+            };
+            let _ = self.child.wait_timeout(Duration::from_secs(2), false);
+            bail!("ffmpeg stopped taking frames ({why}): {}", stderr_tail(&self.tail));
         }
         Ok(())
     }
@@ -868,8 +997,7 @@ mod tests {
     const HEAD: &str = "-hide_banner -nostdin -nostats -loglevel warning -y";
     const HEAD_SOUND: &str = HEAD;
     const VIDEO_IN: &str = "-thread_queue_size 64 -f rawvideo -pix_fmt bgra -s 1280x720 -r 30 -i -";
-    const VIDEO_IN_SOUND: &str = "-thread_queue_size 64 -use_wallclock_as_timestamps 1 -probesize 32 -analyzeduration 0 \
-                                  -f rawvideo -pix_fmt bgra -s 1280x720 -framerate 30 -i -";
+    const VIDEO_IN_SOUND: &str = "-thread_queue_size 64 -analyzeduration 0 -f matroska -i -";
     const PULSE: &str = "-isync 0 -thread_queue_size 1024 -probesize 32 -analyzeduration 0 -f pulse -i";
     const OUT_SOUND: &str = "-fps_mode cfr -r 30";
     const X264: &str = "-c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p";
@@ -937,7 +1065,7 @@ mod tests {
         let at = |x: &str| a.iter().position(|y| y == x).unwrap_or_else(|| panic!("{x} in {a:?}"));
         let first_i = at("-i");
         assert_eq!(a[first_i + 1], "-", "the video is input 0");
-        assert!(at("-use_wallclock_as_timestamps") < first_i && at("-framerate") < first_i);
+        assert_eq!(a[first_i - 1], "matroska", "stamped frames");
         assert!(!a[..first_i].contains(&"-r".to_string()), "no input -r");
         assert_eq!(a.iter().filter(|x| *x == "-isync").count(), 2, "both pulse inputs follow the video's clock");
         assert!(at("-fps_mode") > at("-map"));
@@ -946,9 +1074,58 @@ mod tests {
         let mut old = plan(Codec::X264, true, false);
         old.isync = false;
         for v in [plain(plan(Codec::X264, false, false)), plain(old)] {
-            assert!(!v.iter().any(|x| x == "-isync" || x == "-use_wallclock_as_timestamps" || x == "-fps_mode"), "{v:?}");
+            assert!(!v.iter().any(|x| x == "-isync" || x == "matroska" || x == "-fps_mode"), "{v:?}");
             assert!(v.windows(2).any(|w| w[0] == "-r" && w[1] == "30"), "{v:?}");
         }
+    }
+
+    /// Walk EBML elements at the top of `b`: (id, body).
+    fn elems(mut b: &[u8]) -> Vec<(u32, &[u8])> {
+        let mut out = Vec::new();
+        while !b.is_empty() {
+            let id_len = b[0].leading_zeros() as usize + 1;
+            let id = b[..id_len].iter().fold(0u32, |a, &x| a << 8 | u32::from(x));
+            let sz = &b[id_len..id_len + 8];
+            assert_eq!(sz[0], 0x01, "8-byte sizes");
+            if sz == EBML_UNKNOWN {
+                out.push((id, &b[id_len + 8..]));
+                return out;
+            }
+            let n = sz[1..].iter().fold(0usize, |a, &x| a << 8 | usize::from(x));
+            out.push((id, &b[id_len + 8..id_len + 8 + n]));
+            b = &b[id_len + 8 + n..];
+        }
+        out
+    }
+
+    #[test]
+    fn mkv_stream_layout() {
+        let mut m = Mkv::new(640, 480, 30);
+        let h = m.header();
+        let top = elems(&h);
+        assert_eq!(top.iter().map(|e| e.0).collect::<Vec<_>>(), [0x1A45_DFA3, 0x1853_8067]);
+        let seg = elems(top[1].1);
+        assert_eq!(seg.iter().map(|e| e.0).collect::<Vec<_>>(), [0x1549_A966, 0x1654_AE6B]);
+        let track = elems(elems(seg[1].1)[0].1);
+        let get = |id: u32| track.iter().find(|e| e.0 == id).unwrap().1;
+        assert_eq!(get(0x86), b"V_UNCOMPRESSED");
+        let video = elems(get(0xE0));
+        assert_eq!(video, [(0xB0, &[0x02, 0x80][..]), (0xBA, &[0x01, 0xE0][..]), (0x2E_B524, &b"BGRA"[..])]);
+        // Frames: slot k is stamped origin + k/30 s (µs).
+        let f0 = m.frame_head(0, 640 * 480 * 4);
+        let t0 = m.stamp(0);
+        let mut f1 = m.frame_head(3, 16);
+        assert_eq!(m.stamp(3) - t0, 100_000);
+        f1.extend_from_slice(&[7; 16]);
+        let c = elems(&f1);
+        assert_eq!(c.len(), 1, "the cluster's size covers the frame that follows");
+        assert_eq!(c[0].0, 0x1F43_B675);
+        let inner = elems(c[0].1);
+        assert_eq!(inner[0], (0xE7, &(t0 + 100_000).to_be_bytes()[1..]), "Timestamp");
+        assert_eq!(inner[1].0, 0xA3);
+        assert_eq!(inner[1].1, &[[0x81, 0, 0, 0x80].as_slice(), &[7; 16]].concat()[..]);
+        assert_eq!(f0[f0.len() - 4..], [0x81, 0, 0, 0x80]);
+        assert!(t0 > 1_600_000_000_000_000, "wall clock µs");
     }
 
     #[test]
