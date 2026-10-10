@@ -14,6 +14,10 @@
 
 pub mod gif;
 pub mod mix;
+// Linux: XShm frames, the ffmpeg encoder, PulseAudio device lists. The
+// pure parts (argument building, parsing) are unit-tested everywhere.
+#[cfg(any(target_os = "linux", test))]
+pub mod linux;
 #[cfg(windows)]
 pub mod win;
 
@@ -179,8 +183,54 @@ pub trait VideoEncoder: Send {
     /// than leave a corrupt file that looks finished (the session then
     /// removes it).
     fn finish(self: Box<Self>) -> Result<()>;
-    /// Whether this encoder takes audio (GIF does not).
+    /// Whether this encoder takes audio from the session: when `false` the
+    /// session opens no mixer and never calls [`VideoEncoder::push_audio`].
+    /// GIF has no sound; the ffmpeg encoder (Linux) captures its sound
+    /// itself (`-f pulse` inputs), so it says `false` too and the caller
+    /// passes it no audio sources.
     fn audio(&self) -> bool;
+    /// The recording was paused at clock time `at` (called on the encode
+    /// thread once per pause, after the audio up to it was pushed, possibly
+    /// after the resume already happened). Frames stamped `at` or earlier
+    /// may still follow. Encoders fed by the session need nothing here (the
+    /// clock already leaves the paused time out); one that captures sound
+    /// on its own must leave out what it heard while paused.
+    fn pause(&mut self, at: Duration) -> Result<()> {
+        let _ = at;
+        Ok(())
+    }
+}
+
+/// The largest frame recorded to MP4; larger areas are scaled to fit.
+pub const MP4_MAX_W: u32 = 4096;
+pub const MP4_MAX_H: u32 = 2304;
+
+/// The encoded MP4 size for a `w`×`h` area: scaled down (aspect kept) to
+/// fit [`MP4_MAX_W`]×[`MP4_MAX_H`], then rounded down to even sizes (at
+/// least 2×2).
+pub fn mp4_fit(w: u32, h: u32) -> (u32, u32) {
+    let (mut ow, mut oh) = (w.max(1), h.max(1));
+    if ow > MP4_MAX_W || oh > MP4_MAX_H {
+        let s = (f64::from(MP4_MAX_W) / f64::from(ow)).min(f64::from(MP4_MAX_H) / f64::from(oh));
+        ow = ((f64::from(ow) * s).round() as u32).clamp(1, MP4_MAX_W);
+        oh = ((f64::from(oh) * s).round() as u32).clamp(1, MP4_MAX_H);
+    }
+    ((ow & !1).max(2), (oh & !1).max(2))
+}
+
+/// Video bit rate for a `w`×`h` picture at `fps`: bits per pixel per frame
+/// of 0.05 (low), 0.1 (medium), 0.2 (high), within 0.3-60 Mbit/s.
+/// At 1920×1080 and 30 fps that is about 3.1 / 6.2 / 12.4 Mbit/s; screen
+/// content (large flat areas) looks clean from medium up.
+#[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]
+pub fn bitrate(w: u32, h: u32, fps: u32, q: Quality) -> u32 {
+    let bpp = match q {
+        Quality::Low => 0.05,
+        Quality::Medium => 0.1,
+        Quality::High => 0.2,
+    };
+    let bits = f64::from(w) * f64::from(h) * f64::from(fps.max(1)) * bpp;
+    bits.clamp(300_000.0, 60_000_000.0) as u32
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -664,18 +714,21 @@ fn encode_loop(
                 Pop::Empty => false,
                 Pop::Closed => true,
             };
-            if let Some(m) = mixer.as_mut() {
-                let c = *lock_clock(clock);
-                if c.pauses() != pauses {
-                    // Paused since the last look (maybe resumed already):
-                    // everything up to the pause, then drop what came
-                    // after. The discard comes before the push, so input
-                    // read after the push is never dropped.
-                    pauses = c.pauses();
+            let c = *lock_clock(clock);
+            if c.pauses() != pauses {
+                // Paused since the last look (maybe resumed already):
+                // everything up to the pause, then drop what came after.
+                // The discard comes before the push, so input read after
+                // the push is never dropped.
+                pauses = c.pauses();
+                if let Some(m) = mixer.as_mut() {
                     let (ts, pcm) = flush(m, c.last_pause(), &c);
                     m.discard();
                     push_pcm(enc.as_mut(), &pcm, ts)?;
                 }
+                enc.pause(c.last_pause())?;
+            }
+            if let Some(m) = mixer.as_mut() {
                 let now = c.now_at(time());
                 if closed {
                     let (ts, pcm) = flush(m, now, &c);

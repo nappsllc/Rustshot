@@ -370,3 +370,14 @@ fn camera_failure_is_a_warning_of_the_saved_file() {
     assert_eq!(with_camera_error(End::Cancelled, Some("x".into())), End::Cancelled);
     assert_eq!(with_camera_error(End::Failed("f".into()), Some("x".into())), End::Failed("f".into()));
 }
+
+#[test]
+fn x11_sessions_are_told_from_wayland_ones() {
+    use std::ffi::OsStr;
+    assert!(x11_session(None, None));
+    assert!(x11_session(None, Some("x11")));
+    assert!(x11_session(Some(OsStr::new("")), Some("tty")));
+    assert!(!x11_session(Some(OsStr::new("wayland-0")), Some("x11")), "XWayland under a Wayland compositor");
+    assert!(!x11_session(None, Some("wayland")));
+    assert!(!x11_session(None, Some("Wayland")));
+}

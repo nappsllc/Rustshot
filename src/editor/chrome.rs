@@ -146,7 +146,7 @@ pub fn toolbar(f: &mut Fb, ui: &Ui, tb: &Toolbar, st: &BarState, k: f32) {
             }
             Kind::Dot(c) => dot(f, ui, it.r, c, (c == st.color, hovered), kp),
             Kind::SegTrack => fill(f, round(it.r), ui.px(8.0), ui.th.bg_hover.fade(kp)),
-            Kind::Seg { label, on, .. } => segment(f, ui, it.r, label, on, hovered, kp),
+            Kind::Seg { label, on, .. } => segment(f, ui, it.r, label, on, hovered, if it.disabled { kp * 0.4 } else { kp }),
             Kind::Label(s) => {
                 text(f, ui, 12.0, s, it.r.x, it.r.y + it.r.h / 2.0, ui.th.text_muted.fade(kp));
             }

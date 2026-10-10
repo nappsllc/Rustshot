@@ -150,6 +150,9 @@ pub struct Input<'a> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct RecView<'a> {
     pub format: RecFormat,
+    /// MP4 can be recorded (Linux: ffmpeg is installed); else its segment
+    /// is disabled (`rec_ui::NO_MP4`).
+    pub mp4: bool,
     pub fps: u32,
     pub fps_choices: [u32; 2],
     pub system: bool,
@@ -363,7 +366,7 @@ fn place_rec(rv: &RecView, bar: FRect, above: bool, items: &mut Vec<Item>, texts
     let half = (inner - 4.0) / 2.0;
     for (i, (f, label)) in [(RecFormat::Mp4, "MP4"), (RecFormat::Gif, "GIF")].into_iter().enumerate() {
         let r = FRect { x: x0 + 2.0 + i as f32 * half, y: y + 2.0, w: half, h: SEG_H - 4.0 };
-        push(Kind::Seg { act: Act::RecFormat(f), label, on: rv.format == f }, r, false);
+        push(Kind::Seg { act: Act::RecFormat(f), label, on: rv.format == f }, r, f == RecFormat::Mp4 && !rv.mp4);
     }
     y += SEG_H + 10.0;
     // Frame rate: label left, two segments right.
@@ -765,6 +768,7 @@ mod tests {
     fn rec_view(format: RecFormat, mic: bool, devs: Option<&[String]>) -> RecView<'_> {
         RecView {
             format,
+            mp4: true,
             fps: if format == RecFormat::Gif { 15 } else { 30 },
             fps_choices: if format == RecFormat::Gif { [10, 15] } else { [30, 60] },
             system: true,
@@ -801,6 +805,24 @@ mod tests {
         // The busy OK mode has no Record button.
         i.busy = true;
         assert!(!layout(&i).items.iter().any(|it| it.kind == Kind::Btn(Act::Record)));
+    }
+
+    /// Without an MP4 encoder (Linux without ffmpeg) the MP4 segment is
+    /// there but disabled; GIF still works.
+    #[test]
+    fn record_popover_without_mp4() {
+        let mut i = inp(r(100.0, 100.0, 800.0, 300.0));
+        i.record = true;
+        let mut rv = rec_view(RecFormat::Gif, false, None);
+        rv.mp4 = false;
+        i.rec = Some(&rv);
+        let tb = layout(&i);
+        let seg = |a: Act| kind_at(&tb, |k| matches!(k, Kind::Seg { act, .. } if *act == a));
+        let mp4 = seg(Act::RecFormat(RecFormat::Mp4));
+        assert!(mp4.disabled);
+        assert_eq!(tb.act_at(centre(mp4.r)), None);
+        assert!(!seg(Act::RecFormat(RecFormat::Gif)).disabled);
+        assert_eq!(tb.act_at(centre(seg(Act::RecFormat(RecFormat::Gif)).r)), Some(Act::RecFormat(RecFormat::Gif)));
     }
 
     #[test]

@@ -9,19 +9,21 @@
 //! ticks at once ([`Recorder::take_clicks`]).
 
 use super::bar::{self, BarAct, BarView};
+#[cfg(test)]
+pub(crate) use super::worker::Cmd;
+pub(crate) use super::worker::{Opener, Parts, Worker};
 use super::{border, countdown, BarSpot, Effect, End, Geom, Muted};
 use crate::editor::style::Ui;
 use crate::objects::Pt;
 use crate::rec::gif::GifEncoder;
 use crate::rec::win::{self as recwin, mf, MfEncoder, WasapiCapture, WasapiLoopback};
-use crate::rec::{AudioSource, FrameSource, RecFormat, RecSpec, Session, VideoEncoder};
+use crate::rec::{AudioSource, RecFormat, RecSpec, VideoEncoder};
 use crate::theme::Theme;
 use anyhow::{bail, Context, Result};
 use std::cell::RefCell;
 use std::sync::atomic::AtomicBool;
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc;
 use std::sync::Arc;
-use std::time::Duration;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM};
 use windows::Win32::Graphics::Gdi::{
@@ -406,32 +408,6 @@ impl CountWin {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Worker
-// ---------------------------------------------------------------------------
-
-enum Cmd {
-    Go,
-    Pause,
-    Resume,
-    Stop,
-    Cancel,
-}
-
-/// What a recording is made of: the capture, the sound, the encoder (it
-/// created `.part`) and what could not be opened ("microphone not
-/// recorded: <reason>").
-pub(crate) struct Parts {
-    pub(crate) src: Box<dyn FrameSource>,
-    pub(crate) audio: Vec<Box<dyn AudioSource>>,
-    pub(crate) enc: Box<dyn VideoEncoder>,
-    pub(crate) warnings: Vec<String>,
-}
-
-/// Opens the [`Parts`] for a spec on the worker thread ([`prepare`];
-/// tests inject their own).
-pub(crate) type Opener = Box<dyn FnOnce(&RecSpec) -> Result<Parts> + Send>;
-
 /// Open the capture, the sound and the encoder for `spec` (the encoder
 /// creates `.part`). Sound that cannot be opened is left out and said.
 fn prepare(spec: &RecSpec, muted: Arc<AtomicBool>) -> Result<Parts> {
@@ -478,92 +454,6 @@ fn prepare(spec: &RecSpec, muted: Arc<AtomicBool>) -> Result<Parts> {
     Ok(Parts { src, audio, enc, warnings })
 }
 
-fn work(spec: RecSpec, open: Opener, rx: Receiver<Cmd>) -> End {
-    recwin::com_init();
-    let part = spec.part_path();
-    let Parts { src, mut audio, enc, warnings } = match open(&spec) {
-        Ok(p) => p,
-        Err(e) => {
-            let _ = std::fs::remove_file(&part);
-            return End::Failed(format!("{e:#}"));
-        }
-    };
-    loop {
-        match rx.recv() {
-            Ok(Cmd::Go) => break,
-            Ok(Cmd::Cancel | Cmd::Stop) | Err(_) => {
-                drop(enc); // closes `.part`
-                let _ = std::fs::remove_file(&part);
-                return End::Cancelled;
-            }
-            Ok(Cmd::Pause | Cmd::Resume) => {}
-        }
-    }
-    // Sound captured during the countdown is not part of the recording.
-    let mut scratch = Vec::new();
-    for a in &mut audio {
-        while a.read(&mut scratch) > 0 {
-            scratch.clear();
-        }
-    }
-    let session = match Session::start(spec, src, audio, enc) {
-        Ok(s) => s,
-        Err(e) => {
-            // The session dropped the encoder (closing `.part`): remove it.
-            let _ = std::fs::remove_file(&part);
-            return End::Failed(format!("{e:#}"));
-        }
-    };
-    loop {
-        match rx.recv_timeout(Duration::from_millis(250)) {
-            Ok(Cmd::Pause) => session.pause(),
-            Ok(Cmd::Resume) => session.resume(),
-            Ok(Cmd::Go) => {}
-            Ok(Cmd::Stop | Cmd::Cancel) | Err(RecvTimeoutError::Disconnected) => break,
-            Err(RecvTimeoutError::Timeout) => {
-                // The encoder failed: stop now and keep what was written.
-                if session.stats().failed {
-                    break;
-                }
-            }
-        }
-    }
-    match session.stop() {
-        Ok(path) => End::Saved { path, warnings },
-        Err(e) => End::Failed(format!("{e:#}")),
-    }
-}
-
-struct Worker {
-    tx: Sender<Cmd>,
-    rx: Receiver<End>,
-    join: Option<std::thread::JoinHandle<()>>,
-}
-
-impl Worker {
-    fn spawn(spec: RecSpec, open: Opener) -> Result<Worker> {
-        let (tx, crx) = mpsc::channel();
-        let (etx, rx) = mpsc::channel();
-        let join = std::thread::Builder::new()
-            .name("rec-worker".into())
-            .spawn(move || {
-                let _ = etx.send(work(spec, open, crx));
-            })
-            .context("start the recording thread")?;
-        Ok(Worker { tx, rx, join: Some(join) })
-    }
-}
-
-impl Drop for Worker {
-    /// The process is going away mid-recording: finish the file first.
-    fn drop(&mut self) {
-        let _ = self.tx.send(Cmd::Stop);
-        if let Some(j) = self.join.take() {
-            let _ = j.join();
-        }
-    }
-}
-
 /// The windows and the worker of one recording.
 pub struct Recorder {
     worker: Worker,
@@ -602,14 +492,7 @@ impl Recorder {
     }
 
     pub fn send(&mut self, e: Effect) {
-        let c = match e {
-            Effect::Go => Cmd::Go,
-            Effect::Pause => Cmd::Pause,
-            Effect::Resume => Cmd::Resume,
-            Effect::Stop => Cmd::Stop,
-            Effect::Cancel => Cmd::Cancel,
-        };
-        let _ = self.worker.tx.send(c);
+        self.worker.send(e);
     }
 
     pub fn take_clicks(&mut self) -> Vec<BarAct> {

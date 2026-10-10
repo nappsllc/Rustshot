@@ -178,6 +178,8 @@ struct Log {
     frames: Vec<Duration>,
     audio: Vec<(Duration, usize)>,
     pcm: Vec<f32>,
+    /// `VideoEncoder::pause` calls.
+    pauses: Vec<Duration>,
 }
 
 impl Log {
@@ -238,6 +240,10 @@ impl VideoEncoder for FakeEncoder {
     }
     fn audio(&self) -> bool {
         self.opts.enc_audio
+    }
+    fn pause(&mut self, at: Duration) -> Result<()> {
+        self.log.lock().unwrap().pauses.push(at);
+        Ok(())
     }
 }
 
@@ -376,7 +382,10 @@ fn session_pause_cuts_time_and_frames() {
     run.shoot(1040);
     assert_eq!(s.stats().elapsed, Duration::from_millis(90), "paused time is not recorded");
     s.stop().unwrap();
-    assert_eq!(run.log.lock().unwrap().frames, ms(&[0, 20, 40, 70, 90]));
+    let log = run.log.lock().unwrap();
+    assert_eq!(log.frames, ms(&[0, 20, 40, 70, 90]));
+    // The encoder hears of the pause once, with its time (without a mixer too).
+    assert_eq!(log.pauses, ms(&[50]));
 }
 
 #[test]

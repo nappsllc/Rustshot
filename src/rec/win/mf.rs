@@ -51,19 +51,7 @@ const HNS: i64 = 10_000_000;
 /// AAC encoder accepts: 12000, 16000, 20000, 24000).
 const AAC_BYTES_PER_SEC: u32 = 20_000;
 
-/// Video bit rate for a `w`×`h` picture at `fps`: bits per pixel per frame
-/// of 0.05 (low), 0.1 (medium), 0.2 (high), within 0.3-60 Mbit/s.
-/// At 1920×1080 and 30 fps that is about 3.1 / 6.2 / 12.4 Mbit/s; screen
-/// content (large flat areas) looks clean from medium up.
-pub fn bitrate(w: u32, h: u32, fps: u32, q: Quality) -> u32 {
-    let bpp = match q {
-        Quality::Low => 0.05,
-        Quality::Medium => 0.1,
-        Quality::High => 0.2,
-    };
-    let bits = f64::from(w) * f64::from(h) * f64::from(fps.max(1)) * bpp;
-    bits.clamp(300_000.0, 60_000_000.0) as u32
-}
+pub use crate::rec::bitrate;
 
 type FnStartup = unsafe extern "system" fn(u32, u32) -> HRESULT;
 type FnCreateAttributes = unsafe extern "system" fn(*mut *mut c_void, u32) -> HRESULT;

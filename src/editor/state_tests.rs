@@ -1500,7 +1500,7 @@ fn record_hotkey_refused_while_busy() {
     assert!(a.pending.is_none(), "update installing");
     a.updating = false;
     a.on_hot(HotEvent::Record);
-    assert_eq!(a.pending.is_some(), rec_ui::SUPPORTED);
+    assert_eq!(a.pending.is_some(), rec_ui::supported());
     // A config reload forgets the popover's last choices.
     a.rec_opts = Some(rec_ui::RecOpts::from_config(&a.cfg));
     a.reload_config(a.cfg.clone());
@@ -1579,4 +1579,20 @@ fn rec_geom_has_each_monitors_scale() {
     // No system monitors (tests): the shot's scale.
     let g = ed(&mut a).rec_geom(&[]);
     assert!(g.monitors.iter().all(|m| m.1 == g.scale));
+}
+
+/// Without an MP4 encoder (Linux without ffmpeg) the popover records GIF,
+/// whatever the config says, until one is found.
+#[test]
+fn without_mp4_the_popover_records_gif() {
+    let mut opts = rec_ui::RecOpts::from_config(&Config::default());
+    opts.format = crate::rec::RecFormat::Mp4;
+    rec_ui::FAKE_MP4.with(|c| c.set(false));
+    let p = RecPop::new(opts.clone(), false);
+    rec_ui::FAKE_MP4.with(|c| c.set(true));
+    assert!(!p.mp4);
+    assert_eq!(p.opts.format, crate::rec::RecFormat::Gif);
+    let p = RecPop::new(opts, false);
+    assert!(p.mp4);
+    assert_eq!(p.opts.format, crate::rec::RecFormat::Mp4);
 }

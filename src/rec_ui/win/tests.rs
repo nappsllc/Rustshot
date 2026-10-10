@@ -4,8 +4,8 @@
 
 use super::*;
 use crate::rec::win::tests::{out_dir, record, skip_without_mf, spec, TestWindow};
-use crate::rec::Quality;
-use std::time::Instant;
+use crate::rec::{FrameSource, Quality};
+use std::time::{Duration, Instant};
 
 /// Pump this thread's messages for `ms` (the windows live here).
 fn pump(ms: u64) {

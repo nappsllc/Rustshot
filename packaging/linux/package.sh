@@ -33,7 +33,8 @@ Rustshot $version (linux x86_64, X11)
 3. Start the daemon (registers the global hotkeys):
        rustshot daemon
 
-Requires libX11 at runtime (present on every X11/Xorg desktop).
+Requires libX11, libXrandr, libXext and libXfixes at runtime (present on every X11/Xorg desktop).
+Recording MP4 needs ffmpeg (with sound: PulseAudio or PipeWire, and pactl); GIF needs nothing more.
 Wayland sessions are not supported yet; run under XWayland for capture only.
 EOF
 

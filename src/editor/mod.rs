@@ -407,7 +407,7 @@ impl App {
                 eprintln!("rustshot: an update is installing; capture ignored");
             }
             HotEvent::Capture if matches!(self.st, State::Hidden) => self.pending = Some(Pending::editor()),
-            HotEvent::Record if !rec_ui::SUPPORTED => eprintln!("rustshot: recording is not supported on this platform yet"),
+            HotEvent::Record if !rec_ui::supported() => eprintln!("rustshot: recording is not supported on this platform yet"),
             HotEvent::Record if matches!(self.st, State::Hidden) => self.pending = Some(Pending::record()),
             HotEvent::Capture | HotEvent::Record => {}
         }
@@ -421,7 +421,7 @@ impl App {
     fn sync_bubble(&mut self) {
         let nudge = self.hwnd;
         let State::Edit(e) = &mut self.st else { return };
-        let want = rec_ui::SUPPORTED && e.rec.open && e.rec.opts.camera && e.rec.has_cams() && e.sel.is_some() && e.tasks.is_empty();
+        let want = rec_ui::supported() && e.rec.open && e.rec.opts.camera && e.rec.has_cams() && e.sel.is_some() && e.tasks.is_empty();
         if !want {
             e.rec.cam.close();
             return;
@@ -622,7 +622,7 @@ impl App {
         let tasks = std::mem::take(&mut pending.tasks);
         let accept_on_select = pending.accept_on_select;
         let rec_opts = self.rec_opts.clone().unwrap_or_else(|| RecOpts::from_config(&cfg));
-        let rec = RecPop::new(rec_opts, pending.record && rec_ui::SUPPORTED);
+        let rec = RecPop::new(rec_opts, pending.record && rec_ui::supported());
 
         let th = theme::resolve(&cfg);
         let (shot, gdi) = match grab(&cfg, &th, screen) {
@@ -750,7 +750,7 @@ impl App {
             // camera opens now. Without a countdown the recording waits
             // (up to a second) for its first picture, so it does not
             // begin on the placeholder.
-            if bubble.is_none() && opts.camera && rec_ui::SUPPORTED {
+            if bubble.is_none() && opts.camera && rec_ui::supported() {
                 edit.rec.wait_cams(CAM_LIST_WAIT);
                 if edit.rec.has_cams() {
                     let want = edit.cam_want(&geom);
@@ -938,7 +938,7 @@ impl App {
             }
             // The palette popover hangs off the toolbar, which needs a selection.
             Action::TogglePalette if edit.sel.is_none() => {}
-            Action::Record if edit.sel.is_none() || !rec_ui::SUPPORTED || !edit.tasks.is_empty() => {}
+            Action::Record if edit.sel.is_none() || !rec_ui::supported() || !edit.tasks.is_empty() => {}
             a => {
                 if let Some(act) = act_of(a) {
                     self.apply_act(edit, act);
@@ -1220,6 +1220,7 @@ impl App {
                     edit.rec.load_cams(); // whether there is one
                 }
             }
+            Act::RecFormat(crate::rec::RecFormat::Mp4) if !edit.rec.mp4 => {}
             Act::RecFormat(f) => {
                 edit.rec.opts.format = f;
                 edit.rec.dev_open = None;
@@ -1653,6 +1654,9 @@ struct RecPop {
     start: bool,
     /// The camera bubble while the popover shows the camera.
     cam: CamSlot,
+    /// MP4 can be recorded (Linux: ffmpeg found, looked up once per
+    /// capture); else the popover records GIF and MP4 is disabled.
+    mp4: bool,
 }
 
 /// How long Start waits for the camera list (it is usually there long
@@ -1663,8 +1667,13 @@ const CAM_LIST_WAIT: Duration = Duration::from_secs(2);
 const FIRST_PICTURE_WAIT: Duration = Duration::from_secs(1);
 
 impl RecPop {
-    fn new(opts: RecOpts, mode: bool) -> RecPop {
+    fn new(mut opts: RecOpts, mode: bool) -> RecPop {
+        let mp4 = rec_ui::mp4_available();
+        if !mp4 {
+            opts.format = crate::rec::RecFormat::Gif;
+        }
         let mut p = RecPop {
+            mp4,
             opts,
             open: mode,
             mode,
@@ -3186,6 +3195,20 @@ mod tests {
             e.rec.cams_rx = Some(rx);
             app.frame();
             save(&mut app, &format!("{tn}-record-looking-for-cameras.png"));
+            // Linux without ffmpeg: GIF only, MP4 disabled with its tooltip.
+            rec_ui::FAKE_MP4.with(|c| c.set(false));
+            let mut app = annotated(th, big);
+            let e = edit_of(&mut app);
+            e.rec = RecPop::new(e.rec.opts.clone(), false);
+            e.rec.open = true;
+            e.rec.load_cams();
+            app.frame();
+            let e = edit_of(&mut app);
+            let tb = e.toolbar.clone().expect("toolbar");
+            e.hover = tb.items.iter().position(|i| matches!(i.kind, toolbar::Kind::Seg { act: Act::RecFormat(crate::rec::RecFormat::Mp4), .. }));
+            e.hover_at = Instant::now() - Duration::from_secs(2);
+            save(&mut app, &format!("{tn}-record-no-ffmpeg.png"));
+            rec_ui::FAKE_MP4.with(|c| c.set(true));
         }
     }
 

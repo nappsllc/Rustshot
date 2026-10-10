@@ -5,21 +5,10 @@
 //! resolution in both directions. Chroma is taken from the average of each
 //! 2×2 block. Fixed point, 16 fractional bits.
 
-/// The largest frame recorded to MP4; larger areas are scaled to fit.
-pub const MAX_W: u32 = 4096;
-pub const MAX_H: u32 = 2304;
-
-/// The encoded size for a `w`×`h` area: scaled down (aspect kept) to fit
-/// [`MAX_W`]×[`MAX_H`], then rounded down to even sizes (at least 2×2).
-pub fn fit(w: u32, h: u32) -> (u32, u32) {
-    let (mut ow, mut oh) = (w.max(1), h.max(1));
-    if ow > MAX_W || oh > MAX_H {
-        let s = (f64::from(MAX_W) / f64::from(ow)).min(f64::from(MAX_H) / f64::from(oh));
-        ow = ((f64::from(ow) * s).round() as u32).clamp(1, MAX_W);
-        oh = ((f64::from(oh) * s).round() as u32).clamp(1, MAX_H);
-    }
-    ((ow & !1).max(2), (oh & !1).max(2))
-}
+// The MP4 size limit and fit are shared with the Linux encoders.
+pub use crate::rec::mp4_fit as fit;
+#[cfg(test)]
+use crate::rec::{MP4_MAX_H as MAX_H, MP4_MAX_W as MAX_W};
 
 /// Bytes of an NV12 picture of `w`×`h` (both even).
 pub fn size(w: u32, h: u32) -> usize {

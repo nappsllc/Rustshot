@@ -491,6 +491,7 @@ impl Edit {
         let cam_label = rp.cam_label();
         let rv = toolbar::RecView {
             format: rp.opts.format,
+            mp4: rp.mp4,
             fps: rp.opts.fps(),
             fps_choices: rp.opts.fps_choices(),
             system: rp.opts.system,
@@ -515,8 +516,8 @@ impl Edit {
                 can_undo: self.hi > 0,
                 can_redo: self.hi + 1 < self.hist.len(),
                 palette: self.palette_open.then_some(colors.as_slice()),
-                record: crate::rec_ui::SUPPORTED && !busy,
-                rec: (rp.open && crate::rec_ui::SUPPORTED && !busy).then_some(&rv),
+                record: crate::rec_ui::supported() && !busy,
+                rec: (rp.open && crate::rec_ui::supported() && !busy).then_some(&rv),
             })
         });
 
@@ -585,6 +586,10 @@ impl Edit {
                         let sw = 40.0 * s;
                         let anchor = FRect { x: it.r.x1() - sw, y: it.r.y, w: sw, h: it.r.h };
                         tip = Some(TipUi { anchor, act, label: crate::cam::NO_CAMERA, keys: Vec::new(), area, below: true, k });
+                    }
+                    // Why MP4 is off (Linux without ffmpeg).
+                    toolbar::Kind::Seg { act: act @ toolbar::Act::RecFormat(crate::rec::RecFormat::Mp4), .. } if it.disabled => {
+                        tip = Some(TipUi { anchor: it.r, act, label: crate::rec_ui::NO_MP4, keys: Vec::new(), area, below: false, k });
                     }
                     _ => {}
                 }

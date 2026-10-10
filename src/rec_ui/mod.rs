@@ -2,10 +2,11 @@
 //! Record popover makes ([`RecOpts`]), the recording state machine
 //! ([`Machine`]: idle → countdown → recording ⇄ paused → stopping → idle),
 //! where the control bar goes ([`place_bar`]) and a running recording
-//! ([`Run`]). The windows (red border, control bar, 3-2-1 countdown) and
-//! the worker thread that drives the pipeline are Windows-only (`win.rs`);
-//! elsewhere the Record button is hidden.
-#![cfg_attr(not(windows), allow(dead_code))] // recording UI: Windows only for now
+//! ([`Run`]). The windows (red border, control bar, 3-2-1 countdown) are
+//! per platform: Windows (`win.rs`) and X11 (`x11.rs`); the worker thread
+//! that drives the pipeline is shared (`worker.rs`). Elsewhere (macOS,
+//! Wayland sessions) the Record button is hidden.
+#![cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))] // no recording UI on macOS yet
 
 pub mod bar;
 pub mod border;
@@ -14,6 +15,10 @@ pub mod countdown;
 mod win;
 #[cfg(windows)]
 pub(crate) use win::Dib;
+#[cfg(any(windows, target_os = "linux"))]
+mod worker;
+#[cfg(target_os = "linux")]
+mod x11;
 
 use crate::cam::{CamDevice, CamSize, Look, Shape};
 use crate::capture::IRect;
@@ -25,8 +30,60 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// Whether this platform records (shows the Record button).
-pub const SUPPORTED: bool = cfg!(windows);
+/// Whether this platform records (shows the Record button): Windows, and
+/// Linux in an X11 session (a Wayland session needs the ScreenCast portal,
+/// which comes later; XShm would see only XWayland windows there).
+pub fn supported() -> bool {
+    #[cfg(any(windows, test))]
+    {
+        cfg!(any(windows, target_os = "linux"))
+    }
+    #[cfg(all(target_os = "linux", not(test)))]
+    {
+        static X11: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *X11.get_or_init(|| {
+            x11_session(std::env::var_os("WAYLAND_DISPLAY").as_deref(), std::env::var("XDG_SESSION_TYPE").ok().as_deref())
+        })
+    }
+    #[cfg(all(not(windows), not(target_os = "linux"), not(test)))]
+    {
+        false
+    }
+}
+
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+/// An X11 session: no Wayland display, and the session type (when set)
+/// is not Wayland.
+pub fn x11_session(wayland_display: Option<&std::ffi::OsStr>, session_type: Option<&str>) -> bool {
+    wayland_display.is_none_or(|d| d.is_empty()) && !session_type.is_some_and(|t| t.eq_ignore_ascii_case("wayland"))
+}
+
+/// Why MP4 is off on Linux without ffmpeg (the MP4 segment's tooltip).
+pub const NO_MP4: &str = "MP4 needs ffmpeg (install it, or wait for the built-in fallback)";
+
+#[cfg(test)]
+thread_local! {
+    /// Whether tests see an MP4 encoder.
+    pub static FAKE_MP4: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// Whether MP4 can be recorded: on Linux only with ffmpeg installed
+/// (else GIF only, the MP4 choice disabled with [`NO_MP4`]); Windows checks
+/// Media Foundation when the recording starts.
+pub fn mp4_available() -> bool {
+    #[cfg(test)]
+    {
+        FAKE_MP4.with(|c| c.get())
+    }
+    #[cfg(all(target_os = "linux", not(test)))]
+    {
+        crate::rec::linux::ffmpeg::find().is_some()
+    }
+    #[cfg(all(not(target_os = "linux"), not(test)))]
+    {
+        true
+    }
+}
 
 /// The recording border's colour (`border 2 px red`).
 pub const RED: C4 = C4::rgb(0xF0, 0x3E, 0x3E);
@@ -123,7 +180,11 @@ pub fn mics() -> Vec<(String, String)> {
     {
         crate::rec::win::wasapi::list_mics()
     }
-    #[cfg(all(not(windows), not(test)))]
+    #[cfg(all(target_os = "linux", not(test)))]
+    {
+        crate::rec::linux::pulse_list::sources().into_iter().map(|s| (s.name, s.description)).collect()
+    }
+    #[cfg(all(not(windows), not(target_os = "linux"), not(test)))]
     {
         Vec::new()
     }
@@ -507,6 +568,7 @@ pub enum End {
 
 /// `end` with "camera stopped: <reason>" among the warnings of a saved
 /// file when the camera bubble failed during the recording (it hid then).
+#[cfg_attr(not(windows), allow(dead_code))] // no camera bubble elsewhere yet
 pub fn with_camera_error(end: End, cam: Option<String>) -> End {
     match (end, cam) {
         (End::Saved { path, mut warnings }, Some(e)) => {
@@ -559,6 +621,8 @@ pub struct Run {
     has_mic: bool,
     #[cfg(windows)]
     ui: Option<win::Recorder>,
+    #[cfg(target_os = "linux")]
+    ui: Option<x11::Recorder>,
     /// Effects carried out (tests run without windows or a worker).
     #[cfg(test)]
     pub(crate) log: Vec<Effect>,
@@ -603,7 +667,39 @@ impl Run {
         Ok(run)
     }
 
-    #[cfg(not(windows))]
+    /// X11: as on Windows, but ffmpeg records the sound itself, so the
+    /// microphone cannot be muted from the bar (it has no Mute button).
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(test, allow(dead_code))] // tests record through `Run::fake`
+    pub fn start(
+        spec: RecSpec,
+        geom: Geom,
+        th: crate::theme::Theme,
+        countdown: bool,
+        _nudge: crate::wind::Hwnd,
+        bubble: Option<crate::cam::Bubble>,
+    ) -> anyhow::Result<Run> {
+        let muted = Arc::new(AtomicBool::new(false));
+        let ui = x11::Recorder::start(spec, geom, th, bubble)?;
+        let mut run = Run {
+            m: Machine::new(),
+            muted,
+            has_mic: false,
+            ui: Some(ui),
+            #[cfg(test)]
+            log: Vec::new(),
+            #[cfg(test)]
+            fake_end: None,
+        };
+        let now = Instant::now();
+        if let Some(e) = run.m.start(countdown, now) {
+            run.apply(e);
+        }
+        run.show(now);
+        Ok(run)
+    }
+
+    #[cfg(not(any(windows, target_os = "linux")))]
     pub fn start(
         _spec: RecSpec,
         _geom: Geom,
@@ -622,7 +718,7 @@ impl Run {
             m: Machine::new(),
             muted: Arc::new(AtomicBool::new(false)),
             has_mic: mic,
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             ui: None,
             log: Vec::new(),
             fake_end: None,
@@ -639,11 +735,11 @@ impl Run {
     }
 
     fn apply(&mut self, e: Effect) {
-        #[cfg(not(any(windows, test)))]
+        #[cfg(not(any(windows, target_os = "linux", test)))]
         let _ = e;
         #[cfg(test)]
         self.log.push(e);
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         if let Some(ui) = &mut self.ui {
             ui.send(e);
         }
@@ -690,9 +786,9 @@ impl Run {
         if let Some(e) = self.m.tick(now) {
             self.apply(e);
         }
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         let clicks = self.ui.as_mut().map(|u| u.take_clicks()).unwrap_or_default();
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, target_os = "linux")))]
         let clicks: Vec<bar::BarAct> = Vec::new();
         for c in clicks {
             match c {
@@ -704,7 +800,7 @@ impl Run {
         let end = self.poll_end();
         if let Some(end) = end {
             self.m.finish();
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             if let Some(ui) = &mut self.ui {
                 ui.close();
             }
@@ -719,7 +815,7 @@ impl Run {
         if let Some(e) = self.fake_end.take() {
             return Some(e);
         }
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         if let Some(ui) = &mut self.ui {
             return ui.poll_end();
         }
@@ -728,7 +824,7 @@ impl Run {
 
     /// Bring the windows up to date (border, bar, countdown).
     fn show(&mut self, now: Instant) {
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         {
             let view = self.view(now);
             let count = self.m.countdown(now);
@@ -736,7 +832,7 @@ impl Run {
                 ui.show(&view, count);
             }
         }
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, target_os = "linux")))]
         let _ = now;
     }
 }

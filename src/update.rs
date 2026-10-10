@@ -222,7 +222,7 @@ fn skip_value(s: &str) -> Option<&str> {
 }
 
 /// Top-level members of the object at the start of `s`: (key, value slice).
-fn members(s: &str) -> Option<Vec<(String, &str)>> {
+pub(crate) fn members(s: &str) -> Option<Vec<(String, &str)>> {
     let mut s = ws(ws(s).strip_prefix('{')?);
     let mut out = Vec::new();
     if s.starts_with('}') {
@@ -243,7 +243,7 @@ fn members(s: &str) -> Option<Vec<(String, &str)>> {
 }
 
 /// Elements of the array at the start of `s` (each slice starts at a value).
-fn items(s: &str) -> Option<Vec<&str>> {
+pub(crate) fn items(s: &str) -> Option<Vec<&str>> {
     let mut s = ws(ws(s).strip_prefix('[')?);
     let mut out = Vec::new();
     if s.starts_with(']') {
@@ -265,7 +265,7 @@ fn field<'a>(m: &[(String, &'a str)], key: &str) -> Option<&'a str> {
     m.iter().find(|(k, _)| k == key).map(|(_, v)| *v)
 }
 
-fn str_field(m: &[(String, &str)], key: &str) -> Option<String> {
+pub(crate) fn str_field(m: &[(String, &str)], key: &str) -> Option<String> {
     read_string(field(m, key)?).map(|(s, _)| s)
 }
 

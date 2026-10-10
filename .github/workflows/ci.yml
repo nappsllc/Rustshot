@@ -18,8 +18,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install X11 headers and validators
-        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxrandr-dev desktop-file-utils appstream xvfb xauth
+      - name: Install X11 headers, validators and ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxrandr-dev libxext-dev libxfixes-dev desktop-file-utils appstream xvfb xauth ffmpeg
       - name: Validate desktop entry and AppStream metadata
         run: |
           desktop-file-validate packaging/linux/io.github.nappsllc.rustshot.desktop
@@ -45,6 +45,19 @@ jobs:
           set -o pipefail
           mkdir -p "$RUNNER_TEMP/test-logs"
           timeout 300 xvfb-run -a -s "-screen 0 1600x900x24"             cargo test --bin rustshot -- --ignored --test-threads=1 --nocapture             live_monitor_capture live_desktop_capture live_window_lifecycle             interactive_window_renders_rect window_smoke             2>&1 | tee "$RUNNER_TEMP/test-logs/xvfb.log"
+      # Screen recording on X11: XShm frames of the Xvfb screen to MP4
+      # through ffmpeg (ffprobe checks the duration: 2 s +- 0.3) and to GIF.
+      # The runner has no sound server: the MP4 has no sound.
+      - name: X11 recording under Xvfb (ffmpeg)
+        timeout-minutes: 8
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/test-logs"
+          ffmpeg -hide_banner -version | head -n1
+          timeout 300 xvfb-run -a -s "-screen 0 1600x900x24"             cargo test --bin rustshot -- --ignored --test-threads=1 --nocapture live_rec_linux_             2>&1 | tee "$RUNNER_TEMP/test-logs/xvfb-rec.log"
+          grep -o "FFPROBE duration=.*" "$RUNNER_TEMP/test-logs/xvfb-rec.log" | while read -r line; do
+            echo "::notice title=Linux recording::$line"
+          done
       - name: Upload Xvfb test log
         if: failure()
         uses: actions/upload-artifact@v4
@@ -86,7 +99,7 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
       - name: Install X11 headers
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxrandr-dev
+        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxrandr-dev libxext-dev libxfixes-dev
       - name: Coverage
         shell: bash
         run: |

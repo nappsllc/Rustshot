@@ -29,6 +29,20 @@ pub fn strips(area: IRect, monitors: &[(IRect, i32)]) -> Vec<IRect> {
     out
 }
 
+/// [`strips`] without the ones inside the area (where it touches a
+/// screen edge): for X11, which cannot keep the border out of the capture.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn strips_outside(area: IRect, monitors: &[(IRect, i32)]) -> Vec<IRect> {
+    let (ax0, ay0, ax1, ay1) = (area.0, area.1, area.0 + area.2 as i32, area.1 + area.3 as i32);
+    strips(area, monitors)
+        .into_iter()
+        .filter(|r| {
+            let (x0, y0, x1, y1) = (r.0, r.1, r.0 + r.2 as i32, r.1 + r.3 as i32);
+            x0.max(ax0) >= x1.min(ax1) || y0.max(ay0) >= y1.min(ay1)
+        })
+        .collect()
+}
+
 /// The strips of `area` on monitor `m`, `t` px thick (none when the area
 /// is not on it). Sides whose edge lies on another monitor are skipped;
 /// the others span the area's outer box clipped to `m`.
@@ -110,6 +124,16 @@ mod tests {
         // The bottom of the left monitor: the bottom strip moves inside there.
         let s = strips((100, 900, 400, 180), &mons);
         assert_eq!(s[1], (98, 1078, 404, 2));
+    }
+
+    #[test]
+    fn outside_strips_never_cover_the_area() {
+        let s = strips_outside((100, 200, 300, 150), &[(SCREEN, 2)]);
+        assert_eq!(s, strips((100, 200, 300, 150), &[(SCREEN, 2)]), "all four are outside");
+        assert!(strips_outside(SCREEN, &[(SCREEN, 2)]).is_empty(), "a full screen area has none");
+        // Touching the top and left edges: only the bottom and right strips.
+        let s = strips_outside((0, 0, 300, 150), &[(SCREEN, 2)]);
+        assert_eq!(s, [(0, 150, 302, 2), (300, 2, 2, 148)]);
     }
 
     #[test]
