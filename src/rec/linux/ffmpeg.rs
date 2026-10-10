@@ -24,7 +24,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{sync_channel, SyncSender};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -44,6 +44,10 @@ const FINISH_TIMEOUT: Duration = Duration::from_secs(60);
 /// (`-shortest`); if it is still running this long after, it gets SIGINT
 /// (which makes it finish the file).
 const INT_AFTER: Duration = Duration::from_secs(5);
+
+/// How long the first frame of a stretch with sound waits for ffmpeg to
+/// open its pulse inputs.
+const AUDIO_OPEN_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The stderr kept for error messages (the last bytes).
 const TAIL_BYTES: usize = 4096;
@@ -261,40 +265,49 @@ impl Plan {
     }
 
     /// The command line (without the program).
+    ///
+    /// The sound inputs come first: ffmpeg opens its inputs in order and
+    /// blocks on stdin until frames come, so the pulse sources are open
+    /// (and hearing) before the first frame is written ([`Run::spawn`]
+    /// waits for that, see [`opened_pulse_inputs`]); the video is the last
+    /// input. With sound the log level is `info`, which prints the
+    /// "Input #n, pulse" lines that wait reads.
     pub fn args(&self) -> Vec<OsString> {
         let mut a: Vec<OsString> = Vec::new();
         let mut push = |s: &str| a.push(s.into());
-        for s in ["-hide_banner", "-nostdin", "-loglevel", "warning", "-y"] {
+        let audio = self.audio_inputs();
+        let level = if audio.is_empty() { "warning" } else { "info" };
+        for s in ["-hide_banner", "-nostdin", "-nostats", "-loglevel", level, "-y"] {
             push(s);
         }
         if self.codec == Codec::Vaapi {
             push("-vaapi_device");
             push(VAAPI_DEVICE);
         }
-        let size = format!("{}x{}", self.w, self.h);
-        let fps = self.fps.to_string();
-        for s in ["-thread_queue_size", "64", "-f", "rawvideo", "-pix_fmt", "bgra", "-s", &size, "-r", &fps, "-i", "-"] {
-            push(s);
-        }
-        let audio = self.audio_inputs();
         for src in &audio {
             for s in ["-thread_queue_size", "1024", "-f", "pulse", "-i", src] {
                 push(s);
             }
         }
+        let size = format!("{}x{}", self.w, self.h);
+        let fps = self.fps.to_string();
+        for s in ["-thread_queue_size", "64", "-f", "rawvideo", "-pix_fmt", "bgra", "-s", &size, "-r", &fps, "-i", "-"] {
+            push(s);
+        }
+        let video = format!("{}:v", audio.len());
         match audio.len() {
             0 => {
-                for s in ["-map", "0:v"] {
+                for s in ["-map", &video] {
                     push(s);
                 }
             }
             1 => {
-                for s in ["-map", "0:v", "-map", "1:a"] {
+                for s in ["-map", &video, "-map", "0:a"] {
                     push(s);
                 }
             }
             _ => {
-                for s in ["-filter_complex", "[1:a][2:a]amix=inputs=2:duration=first:dropout_transition=0[a]", "-map", "0:v", "-map", "[a]"] {
+                for s in ["-filter_complex", "[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0[a]", "-map", &video, "-map", "[a]"] {
                     push(s);
                 }
             }
@@ -432,6 +445,14 @@ struct Run {
     out: PathBuf,
     /// Live sound inputs: ffmpeg gets SIGINT if it lingers at the end.
     live: bool,
+    /// How many pulse inputs ffmpeg has opened (from its log).
+    opened: Arc<(Mutex<usize>, Condvar)>,
+}
+
+/// How many "Input #n, pulse, from ..." lines are in ffmpeg's log: the
+/// pulse inputs it has opened.
+pub fn opened_pulse_inputs(log: &str) -> usize {
+    log.lines().filter(|l| l.starts_with("Input #") && l.contains(", pulse, from")).count()
 }
 
 fn stderr_tail(tail: &Mutex<Tail>) -> String {
@@ -450,18 +471,36 @@ impl Run {
             .spawn()
             .with_context(|| format!("start {}", exe.display()))?;
         let tail = Arc::new(Mutex::new(Tail::default()));
+        let opened = Arc::new((Mutex::new(0usize), Condvar::new()));
         let reader = child.stderr.take().and_then(|mut err| {
-            let tail = tail.clone();
+            let (tail, opened) = (tail.clone(), opened.clone());
             std::thread::Builder::new()
                 .name("ffmpeg-stderr".into())
                 .spawn(move || {
                     let mut buf = [0u8; 1024];
+                    let mut line = Vec::new();
                     while let Ok(n) = err.read(&mut buf) {
                         if n == 0 {
                             break;
                         }
                         tail.lock().unwrap_or_else(|e| e.into_inner()).push(&buf[..n]);
+                        for &b in &buf[..n] {
+                            if b != b'\n' {
+                                if line.len() < 512 {
+                                    line.push(b);
+                                }
+                                continue;
+                            }
+                            if opened_pulse_inputs(&String::from_utf8_lossy(&line)) > 0 {
+                                *opened.0.lock().unwrap_or_else(|e| e.into_inner()) += 1;
+                                opened.1.notify_all();
+                            }
+                            line.clear();
+                        }
                     }
+                    // The end: nobody waits any longer.
+                    *opened.0.lock().unwrap_or_else(|e| e.into_inner()) += 1000;
+                    opened.1.notify_all();
                 })
                 .ok()
         });
@@ -483,7 +522,28 @@ impl Run {
                 return Err(anyhow::Error::new(e).context("start the ffmpeg writer thread"));
             }
         };
-        Ok(Run { child, tx: Some(tx), writer: Some(writer), reader, tail, cfr: Cfr::new(fps), out, live })
+        Ok(Run { child, tx: Some(tx), writer: Some(writer), reader, tail, cfr: Cfr::new(fps), out, live, opened })
+    }
+
+    /// Wait until ffmpeg has opened its `n` pulse inputs (it hears from
+    /// then on), at most `timeout`; `Err` when it exited instead.
+    fn wait_audio(&mut self, n: usize, timeout: Duration) -> Result<()> {
+        let end = Instant::now() + timeout;
+        let (m, cv) = &*self.opened;
+        let mut g = m.lock().unwrap_or_else(|e| e.into_inner());
+        while *g < n {
+            let now = Instant::now();
+            if now >= end {
+                eprintln!("rustshot: ffmpeg did not report its sound inputs within {} s; recording anyway", timeout.as_secs());
+                return Ok(());
+            }
+            g = cv.wait_timeout(g, end - now).unwrap_or_else(|e| e.into_inner()).0;
+        }
+        drop(g);
+        if let Some(st) = self.child.try_wait()? {
+            bail!("ffmpeg stopped ({st}): {}", stderr_tail(&self.tail));
+        }
+        Ok(())
     }
 
     /// Write `f` as many times as the frame rate wants.
@@ -509,7 +569,19 @@ impl Run {
     }
 
     /// Close the input and wait for ffmpeg to finish the file.
-    fn finish(mut self) -> Result<PathBuf> {
+    /// `None`: no frame was written (a stretch paused before its first
+    /// frame); ffmpeg is stopped and its file removed.
+    fn finish(mut self) -> Result<Option<PathBuf>> {
+        if self.cfr.sent() == 0 {
+            drop(self.tx.take());
+            if let Some(w) = self.writer.take() {
+                let _ = w.join();
+            }
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+            let _ = std::fs::remove_file(&self.out);
+            return Ok(None);
+        }
         drop(self.tx.take());
         let wrote = self.writer.take().map(|w| w.join());
         let status = self.child.wait_timeout(FINISH_TIMEOUT, self.live);
@@ -523,10 +595,7 @@ impl Run {
         if let Some(Ok(Err(e))) = wrote {
             bail!("writing frames to ffmpeg failed: {e}: {}", stderr_tail(&self.tail));
         }
-        if self.cfr.sent() == 0 {
-            bail!("no frames were recorded");
-        }
-        Ok(self.out.clone())
+        Ok(Some(self.out.clone()))
     }
 }
 
@@ -657,7 +726,7 @@ impl FfmpegEncoder {
     fn end_segment(&mut self) -> Result<()> {
         if let Some(r) = self.run.take() {
             match r.finish() {
-                Ok(p) => self.done.push(p),
+                Ok(p) => self.done.extend(p),
                 Err(e) => {
                     self.failed = Some(format!("{e:#}"));
                     return Err(e);
@@ -693,8 +762,18 @@ impl VideoEncoder for FfmpegEncoder {
         if self.run.is_none() {
             let mut plan = self.plan.clone();
             plan.out = self.segment_path(self.done.len());
-            let run = Run::spawn(&self.exe, &plan);
-            self.run = Some(run.inspect_err(|e| self.failed = Some(format!("{e:#}")))?);
+            let t0 = Instant::now();
+            let mut run = Run::spawn(&self.exe, &plan).inspect_err(|e| self.failed = Some(format!("{e:#}")))?;
+            let n = plan.audio_inputs().len();
+            if n > 0 {
+                run.wait_audio(n, AUDIO_OPEN_TIMEOUT).inspect_err(|e| self.failed = Some(format!("{e:#}")))?;
+                // The stretch starts now, with the sound: frames captured
+                // while ffmpeg was starting are left out.
+                self.skip_until = Some(f.ts + t0.elapsed());
+                self.run = Some(run);
+                return Ok(());
+            }
+            self.run = Some(run);
         }
         let r = self.run.as_mut().map_or(Ok(()), |r| r.push(f));
         if let Err(e) = &r {
@@ -790,7 +869,8 @@ mod tests {
         p.args().iter().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>().join(" ")
     }
 
-    const HEAD: &str = "-hide_banner -nostdin -loglevel warning -y";
+    const HEAD: &str = "-hide_banner -nostdin -nostats -loglevel warning -y";
+    const HEAD_SOUND: &str = "-hide_banner -nostdin -nostats -loglevel info -y";
     const VIDEO_IN: &str = "-thread_queue_size 64 -f rawvideo -pix_fmt bgra -s 1280x720 -r 30 -i -";
     const X264: &str = "-c:v libx264 -preset veryfast -crf 23 -pix_fmt yuv420p";
     const TAIL: &str = "-movflags +faststart -f mp4 /tmp/rec dir/it's.mp4.part";
@@ -806,7 +886,7 @@ mod tests {
         assert_eq!(
             joined(&p),
             format!(
-                "{HEAD} {VIDEO_IN} -thread_queue_size 1024 -f pulse -i @DEFAULT_MONITOR@ -map 0:v -map 1:a {X264} \
+                "{HEAD_SOUND} -thread_queue_size 1024 -f pulse -i @DEFAULT_MONITOR@ {VIDEO_IN} -map 1:v -map 0:a {X264} \
                  -c:a aac -b:a 160k -shortest {TAIL}"
             )
         );
@@ -818,7 +898,7 @@ mod tests {
         assert_eq!(
             joined(&p),
             format!(
-                "{HEAD} {VIDEO_IN} -thread_queue_size 1024 -f pulse -i alsa_input.usb-mic -map 0:v -map 1:a {X264} \
+                "{HEAD_SOUND} -thread_queue_size 1024 -f pulse -i alsa_input.usb-mic {VIDEO_IN} -map 1:v -map 0:a {X264} \
                  -c:a aac -b:a 160k -shortest {TAIL}"
             )
         );
@@ -830,9 +910,9 @@ mod tests {
         assert_eq!(
             joined(&p),
             format!(
-                "{HEAD} {VIDEO_IN} -thread_queue_size 1024 -f pulse -i @DEFAULT_MONITOR@ \
-                 -thread_queue_size 1024 -f pulse -i alsa_input.usb-mic \
-                 -filter_complex [1:a][2:a]amix=inputs=2:duration=first:dropout_transition=0[a] -map 0:v -map [a] {X264} \
+                "{HEAD_SOUND} -thread_queue_size 1024 -f pulse -i @DEFAULT_MONITOR@ \
+                 -thread_queue_size 1024 -f pulse -i alsa_input.usb-mic {VIDEO_IN} \
+                 -filter_complex [0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0[a] -map 2:v -map [a] {X264} \
                  -c:a aac -b:a 160k -shortest {TAIL}"
             )
         );
@@ -870,7 +950,7 @@ mod tests {
     #[test]
     fn args_vaapi_uploads_frames() {
         let s = joined(&plan(Codec::Vaapi, true, false));
-        assert!(s.starts_with(&format!("{HEAD} -vaapi_device /dev/dri/renderD128 -thread_queue_size 64")), "{s}");
+        assert!(s.starts_with(&format!("{HEAD_SOUND} -vaapi_device /dev/dri/renderD128 -thread_queue_size 1024 -f pulse")), "{s}");
         assert!(s.contains("-vf format=nv12,hwupload -c:v h264_vaapi -qp 23 -c:a aac"), "{s}");
         assert!(!s.contains("yuv420p"), "{s}");
     }
@@ -1011,6 +1091,17 @@ mod tests {
         let mut c = Cfr::new(30);
         c.repeats(ms(0));
         assert_eq!(c.repeats(Duration::from_secs(3600)), MAX_REPEATS_SECS * 30);
+    }
+
+    #[test]
+    fn pulse_inputs_are_seen_opening_in_the_log() {
+        let log = "Input #0, pulse, from '@DEFAULT_MONITOR@':\n  Duration: N/A, start: 1760130000.123456, bitrate: 1536 kb/s\n  \
+                   Stream #0:0: Audio: pcm_s16le, 48000 Hz, stereo, s16, 1536 kb/s\n";
+        assert_eq!(opened_pulse_inputs(log), 1);
+        let two = format!("{log}Input #1, pulse, from 'alsa_input.usb-mic':\n");
+        assert_eq!(opened_pulse_inputs(&two), 2);
+        assert_eq!(opened_pulse_inputs("Input #0, rawvideo, from 'pipe:':\n"), 0);
+        assert_eq!(opened_pulse_inputs("[pulse @ 0x55] Input #0, pulse, from x\n"), 0, "only the line itself");
     }
 
     #[test]
