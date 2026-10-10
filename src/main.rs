@@ -3,6 +3,7 @@
 mod actions;
 mod anim;
 mod autostart;
+mod cam;
 mod capture;
 mod config;
 mod editor;

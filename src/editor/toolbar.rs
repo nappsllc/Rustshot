@@ -3,6 +3,7 @@
 //! logical px from the design spec; `Input::s` scales them to image pixels.
 
 use super::Tool;
+use crate::cam::{CamSize, Shape};
 use crate::objects::{FRect, Pt};
 use crate::rec::RecFormat;
 use crate::uifb::C4;
@@ -62,13 +63,35 @@ pub enum Act {
     RecSystem,
     RecMic,
     RecCamera,
-    /// Open/close the microphone list.
-    RecDevMenu,
-    /// Pick microphone `i` of the list (0 = the default device).
-    RecDev(usize),
+    /// Open/close a device list.
+    RecDevMenu(Dev),
+    /// Pick device `i` of the list (0 = the default device).
+    RecDev(Dev, usize),
+    RecShape(Shape),
+    RecCamSize(CamSize),
     /// "Start recording".
     RecStart,
 }
+
+/// Which device dropdown of the Record popover.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Dev {
+    Mic,
+    Cam,
+}
+
+impl Dev {
+    /// Index in `Toolbar::texts` of the chosen device's name.
+    pub fn text(self) -> usize {
+        match self {
+            Dev::Mic => 0,
+            Dev::Cam => 1,
+        }
+    }
+}
+
+/// `Toolbar::texts` index of the open list's first entry.
+pub const LIST_TEXT: usize = 2;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Kind {
@@ -87,12 +110,12 @@ pub enum Kind {
     Label(&'static str),
     /// A row with a label and an on/off switch (the whole row toggles).
     Switch { act: Act, label: &'static str, on: bool },
-    /// The microphone dropdown box (shows `Toolbar::texts[0]`).
-    DevBox { open: bool },
-    /// The open microphone list's panel.
+    /// A device dropdown box (shows `Toolbar::texts[dev.text()]`).
+    DevBox { dev: Dev, open: bool },
+    /// The open device list's panel.
     DevList,
-    /// Microphone `i` of the list (`Toolbar::texts[i + 1]`).
-    DevItem { i: usize, on: bool },
+    /// Device `i` of the open list (`Toolbar::texts[LIST_TEXT + i]`).
+    DevItem { dev: Dev, i: usize, on: bool },
     /// The popover's primary button.
     Primary { act: Act, label: &'static str },
 }
@@ -130,11 +153,17 @@ pub struct RecView<'a> {
     pub system: bool,
     pub mic: bool,
     pub camera: bool,
+    /// There is a camera (else the Camera row is disabled, "No camera found").
+    pub cams: bool,
+    pub shape: Shape,
+    pub size: CamSize,
     /// The chosen microphone's name ("Default microphone" for the default).
     pub mic_label: &'a str,
-    /// The microphone list while it is open: the default first.
-    pub devs: Option<&'a [String]>,
-    /// Index into `devs` of the chosen one.
+    /// The chosen camera's name ("Default camera" for the first).
+    pub cam_label: &'a str,
+    /// The open device list: whose, and its names (the default first).
+    pub devs: Option<(Dev, &'a [String])>,
+    /// Index into the open list of the chosen one.
     pub dev_sel: usize,
 }
 
@@ -146,7 +175,8 @@ pub struct Toolbar {
     pub wrapped: bool,
     /// The bar's anchor edge is its bottom (placed above / inside).
     pub above: bool,
-    /// Texts of the Record popover's microphone box and list.
+    /// Texts of the Record popover: the microphone box, the camera box,
+    /// then the open list ([`LIST_TEXT`]).
     pub texts: Vec<String>,
 }
 
@@ -352,33 +382,61 @@ fn place_rec(rv: &RecView, bar: FRect, above: bool, items: &mut Vec<Item>, texts
     push(Kind::Switch { act: Act::RecMic, label: "Microphone", on: audio && rv.mic }, row(y), !audio);
     y += SWITCH_H;
     texts.push(rv.mic_label.to_string());
+    texts.push(rv.cam_label.to_string());
     let mut list = None;
-    if audio && rv.mic {
-        y += 2.0;
-        let open = rv.devs.is_some();
-        push(Kind::DevBox { open }, FRect { x: x0, y, w: inner, h: DEV_H }, false);
-        y += DEV_H;
-        if let Some(devs) = rv.devs {
+    // A device box at `y`; its list (when open) floats below it.
+    let mut dev_box = |dev: Dev, y: f32, push: &mut dyn FnMut(Kind, FRect, bool)| {
+        let open = rv.devs.filter(|d| d.0 == dev);
+        push(Kind::DevBox { dev, open: open.is_some() }, FRect { x: x0, y, w: inner, h: DEV_H }, false);
+        if let Some((_, devs)) = open {
             let n = devs.len().min(DEV_MAX);
-            let lr = FRect { x: x0, y: y + 4.0, w: inner, h: n as f32 * DEV_ITEM_H + 8.0 };
-            list = Some((lr, n));
+            let lr = FRect { x: x0, y: y + DEV_H + 4.0, w: inner, h: n as f32 * DEV_ITEM_H + 8.0 };
+            list = Some((dev, lr, n));
             texts.extend(devs.iter().take(n).cloned());
         }
-        y += 6.0;
+    };
+    if audio && rv.mic {
+        y += 2.0;
+        dev_box(Dev::Mic, y, &mut push);
+        y += DEV_H + 6.0;
     }
-    // Camera: wired up with the camera bubble.
-    push(Kind::Switch { act: Act::RecCamera, label: "Camera", on: rv.camera }, row(y), true);
-    y += SWITCH_H + 8.0;
+    let cam = rv.camera && rv.cams;
+    push(Kind::Switch { act: Act::RecCamera, label: "Camera", on: cam }, row(y), !rv.cams);
+    y += SWITCH_H;
+    if cam {
+        y += 2.0;
+        dev_box(Dev::Cam, y, &mut push);
+        y += DEV_H + 8.0;
+        // Shape: three segments across the width.
+        push(Kind::SegTrack, FRect { x: x0, y, w: inner, h: SEG_H }, false);
+        let third = (inner - 4.0) / 3.0;
+        for (i, sh) in Shape::ALL.into_iter().enumerate() {
+            let r = FRect { x: x0 + 2.0 + i as f32 * third, y: y + 2.0, w: third, h: SEG_H - 4.0 };
+            push(Kind::Seg { act: Act::RecShape(sh), label: sh.label(), on: rv.shape == sh }, r, false);
+        }
+        y += SEG_H + 8.0;
+        // Size: label left, S M L right.
+        push(Kind::Label("Size"), FRect { x: x0, y, w: inner / 2.0, h: SEG_H }, false);
+        let (fw, fx) = (128.0, x0 + inner - 128.0);
+        push(Kind::SegTrack, FRect { x: fx, y, w: fw, h: SEG_H }, false);
+        let fh = (fw - 4.0) / 3.0;
+        for (i, sz) in CamSize::ALL.into_iter().enumerate() {
+            let r = FRect { x: fx + 2.0 + i as f32 * fh, y: y + 2.0, w: fh, h: SEG_H - 4.0 };
+            push(Kind::Seg { act: Act::RecCamSize(sz), label: sz.label(), on: rv.size == sz }, r, false);
+        }
+        y += SEG_H;
+    }
+    y += 8.0;
     push(Kind::Primary { act: Act::RecStart, label: "Start recording" }, FRect { x: x0, y, w: inner, h: START_H }, false);
     y += START_H + REC_PAD;
     // The open list floats over the rows below the box: drawn (and hit) last.
     let mut h = y;
-    if let Some((lr, n)) = list {
+    if let Some((dev, lr, n)) = list {
         h = h.max(lr.y1() + REC_PAD);
         push(Kind::DevList, lr, false);
         for i in 0..n {
             let r = FRect { x: lr.x + 4.0, y: lr.y + 4.0 + i as f32 * DEV_ITEM_H, w: lr.w - 8.0, h: DEV_ITEM_H };
-            push(Kind::DevItem { i, on: i == rv.dev_sel }, r, false);
+            push(Kind::DevItem { dev, i, on: i == rv.dev_sel }, r, false);
         }
     }
     let (pw, ph) = (REC_W * s, h * s);
@@ -443,8 +501,8 @@ impl Toolbar {
             Kind::Btn(a) => Some(a),
             Kind::Dot(c) => Some(Act::Color(c)),
             Kind::Seg { act, .. } | Kind::Switch { act, .. } | Kind::Primary { act, .. } => Some(act),
-            Kind::DevBox { .. } => Some(Act::RecDevMenu),
-            Kind::DevItem { i, .. } => Some(Act::RecDev(i)),
+            Kind::DevBox { dev, .. } => Some(Act::RecDevMenu(dev)),
+            Kind::DevItem { dev, i, .. } => Some(Act::RecDev(dev, i)),
             Kind::Value | Kind::SepV | Kind::SepH | Kind::SegTrack | Kind::Label(_) | Kind::DevList => None,
         }
     }
@@ -707,8 +765,12 @@ mod tests {
             system: true,
             mic,
             camera: false,
+            cams: true,
+            shape: Shape::Circle,
+            size: CamSize::M,
             mic_label: "Default microphone",
-            devs,
+            cam_label: "Default camera",
+            devs: devs.map(|d| (Dev::Mic, d)),
             dev_sel: 0,
         }
     }
@@ -762,11 +824,12 @@ mod tests {
         let sys = sw(Act::RecSystem);
         assert_eq!(tb.act_at(Pt::new(sys.r.x + 6.0, sys.r.y + 10.0)), Some(Act::RecSystem));
         assert_eq!(tb.act_at(centre(sw(Act::RecMic).r)), Some(Act::RecMic));
-        // The camera is wired up later: shown, not clickable.
+        // The camera toggles; while it is off there are no camera options.
         let cam = sw(Act::RecCamera);
-        assert!(cam.disabled);
-        assert_eq!(tb.act_at(centre(cam.r)), None);
-        assert!(tb.contains(centre(cam.r)), "but the press is consumed");
+        assert!(!cam.disabled);
+        assert_eq!(tb.act_at(centre(cam.r)), Some(Act::RecCamera));
+        assert!(!tb.items.iter().any(|it| matches!(it.kind, Kind::DevBox { dev: Dev::Cam, .. })));
+        assert!(!tb.items.iter().any(|it| matches!(it.kind, Kind::Seg { act: Act::RecShape(_), .. })));
         let start = kind_at(&tb, |k| matches!(k, Kind::Primary { .. }));
         assert_eq!(tb.act_at(centre(start.r)), Some(Act::RecStart));
         assert!(start.r.y1() < pop.y1() && start.r.y > cam.r.y1());
@@ -801,22 +864,22 @@ mod tests {
         let closed = rec_view(RecFormat::Mp4, true, None);
         i.rec = Some(&closed);
         let short = layout(&i);
-        let bx = kind_at(&short, |k| matches!(k, Kind::DevBox { open: false }));
-        assert_eq!(short.act_at(centre(bx.r)), Some(Act::RecDevMenu));
-        assert_eq!(short.texts, ["Default microphone"]);
+        let bx = kind_at(&short, |k| matches!(k, Kind::DevBox { dev: Dev::Mic, open: false }));
+        assert_eq!(short.act_at(centre(bx.r)), Some(Act::RecDevMenu(Dev::Mic)));
+        assert_eq!(short.texts, ["Default microphone", "Default camera"]);
         let devs: Vec<String> = ["Default microphone", "USB mic", "Headset"].iter().map(|s| s.to_string()).collect();
         let mut open = rec_view(RecFormat::Mp4, true, Some(&devs));
         open.dev_sel = 2;
         i.rec = Some(&open);
         let tb = layout(&i);
-        assert_eq!(tb.texts.len(), 4);
+        assert_eq!(tb.texts.len(), 5);
         let items: Vec<Item> = tb.items.iter().filter(|it| matches!(it.kind, Kind::DevItem { .. })).copied().collect();
         assert_eq!(items.len(), 3);
-        assert!(matches!(items[2].kind, Kind::DevItem { i: 2, on: true }));
+        assert!(matches!(items[2].kind, Kind::DevItem { dev: Dev::Mic, i: 2, on: true }));
         // The list floats over the rows below the box and wins their hits.
         let cam = kind_at(&tb, |k| matches!(k, Kind::Switch { act: Act::RecCamera, .. }));
         assert!(items[1].r.y < cam.r.y1() && items[2].r.y1() > cam.r.y);
-        assert_eq!(tb.act_at(centre(items[1].r)), Some(Act::RecDev(1)));
+        assert_eq!(tb.act_at(centre(items[1].r)), Some(Act::RecDev(Dev::Mic, 1)));
         let pop = tb.pop.unwrap();
         assert!(items[2].r.y1() <= pop.y1(), "the popover grows to hold the list");
         // Many devices: the list is capped.
@@ -825,6 +888,70 @@ mod tests {
         i.rec = Some(&lots);
         let tb = layout(&i);
         assert_eq!(tb.items.iter().filter(|it| matches!(it.kind, Kind::DevItem { .. })).count(), DEV_MAX);
+    }
+
+    #[test]
+    fn record_popover_camera_options() {
+        let mut i = inp(r(100.0, 100.0, 800.0, 300.0));
+        i.record = true;
+        let mut rv = rec_view(RecFormat::Mp4, false, None);
+        rv.camera = true;
+        rv.shape = Shape::Rounded;
+        rv.size = CamSize::L;
+        rv.cam_label = "USB Webcam";
+        i.rec = Some(&rv);
+        let tb = layout(&i);
+        let pop = tb.pop.unwrap();
+        let cam = kind_at(&tb, |k| matches!(k, Kind::Switch { act: Act::RecCamera, on: true, .. }));
+        // Camera box, then shape, then size, all below the switch and above Start.
+        let bx = kind_at(&tb, |k| matches!(k, Kind::DevBox { dev: Dev::Cam, open: false }));
+        assert!(bx.r.y >= cam.r.y1());
+        assert_eq!(tb.act_at(centre(bx.r)), Some(Act::RecDevMenu(Dev::Cam)));
+        assert_eq!(tb.texts[Dev::Cam.text()], "USB Webcam");
+        let seg = |a: Act| kind_at(&tb, |k| matches!(k, Kind::Seg { act, .. } if *act == a));
+        let shapes: Vec<Item> = Shape::ALL.iter().map(|&s| seg(Act::RecShape(s))).collect();
+        assert!(matches!(shapes[1].kind, Kind::Seg { on: true, label: "Rounded", .. }));
+        assert!(shapes[0].r.y > bx.r.y1());
+        assert_eq!(tb.act_at(centre(shapes[2].r)), Some(Act::RecShape(Shape::Square)));
+        let sizes: Vec<Item> = CamSize::ALL.iter().map(|&s| seg(Act::RecCamSize(s))).collect();
+        assert!(matches!(sizes[2].kind, Kind::Seg { on: true, label: "L", .. }));
+        assert!(sizes[0].r.y > shapes[0].r.y1());
+        assert_eq!(tb.act_at(centre(sizes[0].r)), Some(Act::RecCamSize(CamSize::S)));
+        let start = kind_at(&tb, |k| matches!(k, Kind::Primary { .. }));
+        assert!(start.r.y > sizes[0].r.y1() && start.r.y1() < pop.y1());
+        let n = tb.items.iter().position(|it| it.kind == Kind::SegTrack).unwrap();
+        for it in &tb.items[n..] {
+            assert!(it.r.x >= pop.x && it.r.x1() <= pop.x1() + 0.01 && it.r.y >= pop.y && it.r.y1() <= pop.y1() + 0.01, "{it:?}");
+        }
+        // The camera list: its entries pick cameras.
+        let names: Vec<String> = ["Default camera", "Integrated Camera", "USB Webcam"].iter().map(|s| s.to_string()).collect();
+        let mut listed = rv.clone();
+        listed.devs = Some((Dev::Cam, &names));
+        listed.dev_sel = 2;
+        i.rec = Some(&listed);
+        let tb = layout(&i);
+        let items: Vec<Item> = tb.items.iter().filter(|it| matches!(it.kind, Kind::DevItem { .. })).copied().collect();
+        assert_eq!(items.len(), 3);
+        assert!(matches!(items[2].kind, Kind::DevItem { dev: Dev::Cam, i: 2, on: true }));
+        assert_eq!(tb.act_at(centre(items[1].r)), Some(Act::RecDev(Dev::Cam, 1)));
+        assert_eq!(&tb.texts[LIST_TEXT..], &names[..]);
+        assert!(items[2].r.y1() <= tb.pop.unwrap().y1());
+    }
+
+    #[test]
+    fn record_popover_without_a_camera() {
+        let mut i = inp(r(100.0, 100.0, 800.0, 300.0));
+        i.record = true;
+        let mut rv = rec_view(RecFormat::Mp4, false, None);
+        rv.camera = true; // on in the config, but there is none
+        rv.cams = false;
+        i.rec = Some(&rv);
+        let tb = layout(&i);
+        let cam = kind_at(&tb, |k| matches!(k, Kind::Switch { act: Act::RecCamera, .. }));
+        assert!(cam.disabled && matches!(cam.kind, Kind::Switch { on: false, .. }));
+        assert_eq!(tb.act_at(centre(cam.r)), None);
+        assert!(tb.contains(centre(cam.r)), "the press is consumed");
+        assert!(!tb.items.iter().any(|it| matches!(it.kind, Kind::DevBox { dev: Dev::Cam, .. })));
     }
 
     #[test]

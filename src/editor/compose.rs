@@ -478,8 +478,9 @@ impl Edit {
         let s = self.ui_scale();
         let colors = palette_colors(&self.cfg);
         let rp = &self.rec;
-        let names = rp.dev_open.then(|| rp.dev_names());
+        let names = rp.dev_open.map(|d| (d, rp.dev_names(d)));
         let mic_label = rp.mic_label();
+        let cam_label = rp.cam_label();
         let rv = toolbar::RecView {
             format: rp.opts.format,
             fps: rp.opts.fps(),
@@ -487,9 +488,13 @@ impl Edit {
             system: rp.opts.system,
             mic: rp.opts.mic,
             camera: rp.opts.camera,
+            cams: rp.has_cams(),
+            shape: rp.opts.cam_shape,
+            size: rp.opts.cam_size,
             mic_label: &mic_label,
-            devs: names.as_deref(),
-            dev_sel: rp.dev_sel(),
+            cam_label: &cam_label,
+            devs: names.as_ref().map(|(d, n)| (*d, n.as_slice())),
+            dev_sel: rp.dev_open.map_or(0, |d| rp.dev_sel(d)),
         };
         let busy = !self.tasks.is_empty();
         self.toolbar = self.sel.map(|sel| {
@@ -557,10 +562,19 @@ impl Edit {
             if !interacting
                 && shown_ms >= 0.0
                 && let Some(it) = self.hover.and_then(|i| tb.items.get(i))
-                && let toolbar::Kind::Btn(act) = it.kind
             {
-                let (label, keys) = chrome::act_tip(act, &self.keys);
-                tip = Some(TipUi { anchor: it.r, act, label, keys, area, k: anim::ease_out(shown_ms / 80.0) });
+                let k = anim::ease_out(shown_ms / 80.0);
+                match it.kind {
+                    toolbar::Kind::Btn(act) => {
+                        let (label, keys) = chrome::act_tip(act, &self.keys);
+                        tip = Some(TipUi { anchor: it.r, act, label, keys, area, k });
+                    }
+                    // Why the Camera row does nothing.
+                    toolbar::Kind::Switch { act: act @ toolbar::Act::RecCamera, .. } if it.disabled => {
+                        tip = Some(TipUi { anchor: it.r, act, label: crate::cam::NO_CAMERA, keys: Vec::new(), area, k });
+                    }
+                    _ => {}
+                }
             }
             BarUi {
                 tb: tb.scaled(0.96 + 0.04 * kb),

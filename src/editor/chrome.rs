@@ -2,7 +2,7 @@
 //! handles, size label, toast, tooltip and the empty-state hint.
 
 use super::Tool;
-use super::toolbar::{label_rect, Act, Item, Kind, Toolbar};
+use super::toolbar::{label_rect, Act, Dev, Item, Kind, Toolbar};
 use crate::icon_path::draw_icon;
 use crate::keymap::{Chord, Keymap};
 use crate::objects::FRect;
@@ -105,8 +105,10 @@ pub fn act_icon(a: Act) -> &'static str {
         | Act::RecSystem
         | Act::RecMic
         | Act::RecCamera
-        | Act::RecDevMenu
-        | Act::RecDev(_)
+        | Act::RecDevMenu(_)
+        | Act::RecDev(..)
+        | Act::RecShape(_)
+        | Act::RecCamSize(_)
         | Act::RecStart => "",
     }
 }
@@ -149,16 +151,16 @@ pub fn toolbar(f: &mut Fb, ui: &Ui, tb: &Toolbar, st: &BarState, k: f32) {
                 text(f, ui, 12.0, s, it.r.x, it.r.y + it.r.h / 2.0, ui.th.text_muted.fade(kp));
             }
             Kind::Switch { label, on, .. } => switch_row(f, ui, it, label, on, hovered, kp),
-            Kind::DevBox { open } => {
-                let name = tb.texts.first().map_or("", String::as_str);
+            Kind::DevBox { dev, open } => {
+                let name = tb.texts.get(dev.text()).map_or("", String::as_str);
                 dev_box(f, ui, it.r, name, open || hovered, kp);
             }
             Kind::DevList => {
                 let r = round(it.r);
                 panel(f, ui, r, 8.0, &SMALL_LAYERS, ui.th.surface.with_alpha(255), ui.th.border, kp);
             }
-            Kind::DevItem { i: n, on } => {
-                let name = tb.texts.get(n + 1).map_or("", String::as_str);
+            Kind::DevItem { i: n, on, .. } => {
+                let name = tb.texts.get(super::toolbar::LIST_TEXT + n).map_or("", String::as_str);
                 dev_item(f, ui, it.r, name, on, hovered, kp);
             }
             Kind::Primary { label, .. } => primary(f, ui, it.r, label, (hovered, pressed), kp),
@@ -509,8 +511,10 @@ pub fn act_tip(a: Act, km: &Keymap) -> (&'static str, Vec<String>) {
         Act::RecFormat(_) => "Format",
         Act::RecFps(_) => "Frame rate",
         Act::RecSystem => "System sound",
-        Act::RecMic | Act::RecDevMenu | Act::RecDev(_) => "Microphone",
-        Act::RecCamera => "Camera",
+        Act::RecMic | Act::RecDevMenu(Dev::Mic) | Act::RecDev(Dev::Mic, _) => "Microphone",
+        Act::RecCamera | Act::RecDevMenu(Dev::Cam) | Act::RecDev(Dev::Cam, _) => "Camera",
+        Act::RecShape(_) => "Shape",
+        Act::RecCamSize(_) => "Size",
         Act::RecStart => "Start recording",
     };
     let keys = match a {

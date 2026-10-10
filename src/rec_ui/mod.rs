@@ -12,7 +12,10 @@ pub mod border;
 pub mod countdown;
 #[cfg(windows)]
 mod win;
+#[cfg(windows)]
+pub(crate) use win::update_layered;
 
+use crate::cam::{CamDevice, CamSize, Look, Shape};
 use crate::capture::IRect;
 use crate::config::Config;
 use crate::rec::{AudioSource, RecFormat, RecSpec};
@@ -40,8 +43,13 @@ pub struct RecOpts {
     pub mic: bool,
     /// Microphone endpoint id; "" = the default device.
     pub mic_dev: String,
-    /// Camera bubble (wired up with the camera).
+    /// Camera bubble.
     pub camera: bool,
+    /// Camera id; "" = the first camera.
+    pub cam_dev: String,
+    pub cam_shape: Shape,
+    pub cam_size: CamSize,
+    pub cam_mirror: bool,
 }
 
 impl RecOpts {
@@ -54,7 +62,16 @@ impl RecOpts {
             mic: cfg.rec_mic,
             mic_dev: cfg.rec_mic_device.clone(),
             camera: cfg.rec_camera,
+            cam_dev: cfg.rec_camera_device.clone(),
+            cam_shape: Shape::from_config(&cfg.rec_camera_shape),
+            cam_size: CamSize::from_config(&cfg.rec_camera_size),
+            cam_mirror: cfg.rec_camera_mirror,
         }
+    }
+
+    /// How the camera bubble looks.
+    pub fn cam_look(&self) -> Look {
+        Look { shape: self.cam_shape, size: self.cam_size, mirror: self.cam_mirror }
     }
 
     /// The frame rate of the chosen format.
@@ -109,6 +126,34 @@ pub fn mics() -> Vec<(String, String)> {
     #[cfg(all(not(windows), not(test)))]
     {
         Vec::new()
+    }
+}
+
+/// The cameras tests see by default.
+#[cfg(test)]
+pub fn fake_cams() -> Vec<CamDevice> {
+    vec![
+        CamDevice { id: "{cam-1}".into(), name: "Integrated Camera".into() },
+        CamDevice { id: "{cam-2}".into(), name: "USB Webcam".into() },
+    ]
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The cameras tests see (empty for a camera-less machine).
+    pub static FAKE_CAMS: std::cell::RefCell<Vec<CamDevice>> = std::cell::RefCell::new(fake_cams());
+}
+
+/// The cameras on offer (none on a machine without one, or without Media
+/// Foundation).
+pub fn cameras() -> Vec<CamDevice> {
+    #[cfg(test)]
+    {
+        FAKE_CAMS.with(|c| c.borrow().clone())
+    }
+    #[cfg(not(test))]
+    {
+        crate::cam::list()
     }
 }
 
@@ -495,10 +540,18 @@ impl Run {
     /// when the control bar is clicked, so the owner ticks at once.
     #[cfg(windows)]
     #[cfg_attr(test, allow(dead_code))] // tests record through `Run::fake`
-    pub fn start(spec: RecSpec, geom: Geom, th: crate::theme::Theme, countdown: bool, nudge: crate::wind::Hwnd) -> anyhow::Result<Run> {
+    /// `bubble`, the camera bubble, stays up until the recording is over.
+    pub fn start(
+        spec: RecSpec,
+        geom: Geom,
+        th: crate::theme::Theme,
+        countdown: bool,
+        nudge: crate::wind::Hwnd,
+        bubble: Option<crate::cam::Bubble>,
+    ) -> anyhow::Result<Run> {
         let muted = Arc::new(AtomicBool::new(false));
         let has_mic = spec.mic.is_some();
-        let ui = win::Recorder::start(spec, geom, th, muted.clone(), nudge)?;
+        let ui = win::Recorder::start(spec, geom, th, muted.clone(), nudge, bubble)?;
         let mut run = Run {
             m: Machine::new(),
             muted,
@@ -518,7 +571,14 @@ impl Run {
     }
 
     #[cfg(not(windows))]
-    pub fn start(_spec: RecSpec, _geom: Geom, _th: crate::theme::Theme, _countdown: bool, _nudge: crate::wind::Hwnd) -> anyhow::Result<Run> {
+    pub fn start(
+        _spec: RecSpec,
+        _geom: Geom,
+        _th: crate::theme::Theme,
+        _countdown: bool,
+        _nudge: crate::wind::Hwnd,
+        _bubble: Option<crate::cam::Bubble>,
+    ) -> anyhow::Result<Run> {
         anyhow::bail!("recording is not supported on this platform yet")
     }
 

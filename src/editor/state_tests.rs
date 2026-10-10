@@ -1151,16 +1151,19 @@ fn record_popover_choices_start_a_recording() {
     // The microphone list: pick the second device.
     let (bx, by) = item(&mut a, |k| matches!(k, toolbar::Kind::DevBox { .. }));
     click(&mut a, bx, by);
-    assert!(ed(&mut a).rec.dev_open);
+    assert_eq!(ed(&mut a).rec.dev_open, Some(toolbar::Dev::Mic));
     let (dx, dy) = item(&mut a, |k| matches!(k, toolbar::Kind::DevItem { i: 2, .. }));
     click(&mut a, dx, dy);
-    assert!(!ed(&mut a).rec.dev_open);
+    assert!(ed(&mut a).rec.dev_open.is_none());
     assert_eq!(ed(&mut a).rec.opts.mic_dev, "{mic-2}");
     assert_eq!(ed(&mut a).rec.mic_label(), "Headset");
-    // The camera is not wired up yet: its row does nothing.
+    // The camera: on shows the bubble over the selection, off closes it.
     let (cx, cy) = item(&mut a, |k| matches!(k, toolbar::Kind::Switch { act: Act::RecCamera, .. }));
     click(&mut a, cx, cy);
-    assert!(!ed(&mut a).rec.opts.camera);
+    assert!(ed(&mut a).rec.opts.camera);
+    assert!(ed(&mut a).rec.cam.shown.is_some());
+    click(&mut a, cx, cy);
+    assert!(!ed(&mut a).rec.opts.camera && ed(&mut a).rec.cam.shown.is_none());
     // Esc closes the popover before it cancels anything.
     key(&mut a, key::ESCAPE);
     assert!(matches!(a.st, State::Edit(_)) && !ed(&mut a).rec.open);
@@ -1176,6 +1179,84 @@ fn record_popover_choices_start_a_recording() {
     assert!(!a.idle(), "recording is not idle");
     // The choices are remembered for the next capture.
     assert_eq!(a.rec_opts.as_ref().map(|o| o.fps_mp4), Some(60));
+}
+
+/// The camera in the popover: device list, shape, size; the bubble
+/// follows the selection, is handed to the recording on Start, and is
+/// closed when the popover closes.
+#[cfg(windows)]
+#[test]
+fn record_popover_camera_bubble() {
+    let mut a = app(Some(r(100.0, 100.0, 600.0, 400.0)));
+    a.kind = RunKind::Daemon;
+    let (x, y) = button(&mut a, Act::Record);
+    click(&mut a, x, y);
+    let cam = |a: &mut App| item(a, |k| matches!(k, toolbar::Kind::Switch { act: Act::RecCamera, .. }));
+    let (cx, cy) = cam(&mut a);
+    click(&mut a, cx, cy);
+    let shown = ed(&mut a).rec.cam.shown.clone().expect("bubble shown");
+    assert_eq!(shown.0, "", "the first camera");
+    assert_eq!(shown.1, crate::cam::Look { shape: crate::cam::Shape::Circle, size: crate::cam::CamSize::M, mirror: true });
+    assert_eq!(shown.2, (100, 100, 600, 400), "anchored to the selection");
+    // Pick the second camera from its list.
+    let (bx, by) = item(&mut a, |k| matches!(k, toolbar::Kind::DevBox { dev: toolbar::Dev::Cam, .. }));
+    click(&mut a, bx, by);
+    assert_eq!(ed(&mut a).rec.dev_open, Some(toolbar::Dev::Cam));
+    let (dx, dy) = item(&mut a, |k| matches!(k, toolbar::Kind::DevItem { dev: toolbar::Dev::Cam, i: 2, .. }));
+    click(&mut a, dx, dy);
+    assert_eq!(ed(&mut a).rec.opts.cam_dev, "{cam-2}");
+    assert_eq!(ed(&mut a).rec.cam_label(), "USB Webcam");
+    assert_eq!(ed(&mut a).rec.cam.shown.as_ref().map(|s| s.0.as_str()), Some("{cam-2}"));
+    // Shape and size.
+    let seg = |a: &mut App, act: Act| item(a, |k| matches!(k, toolbar::Kind::Seg { act: x, .. } if *x == act));
+    let (sx, sy) = seg(&mut a, Act::RecShape(crate::cam::Shape::Square));
+    click(&mut a, sx, sy);
+    let (zx, zy) = seg(&mut a, Act::RecCamSize(crate::cam::CamSize::S));
+    click(&mut a, zx, zy);
+    let look = ed(&mut a).rec.cam.shown.as_ref().unwrap().1;
+    assert_eq!((look.shape, look.size), (crate::cam::Shape::Square, crate::cam::CamSize::S));
+    // Closing the popover closes the bubble; opening it again brings it back.
+    click(&mut a, x, y);
+    assert!(ed(&mut a).rec.cam.shown.is_none());
+    click(&mut a, x, y);
+    assert!(ed(&mut a).rec.cam.shown.is_some());
+    // Start: the recording gets the bubble.
+    let (tx, ty) = item(&mut a, |k| matches!(k, toolbar::Kind::Primary { .. }));
+    click(&mut a, tx, ty);
+    assert!(hidden(&a));
+    let handed = a.rec_cam.clone().expect("the recording has the bubble");
+    assert_eq!((handed.0.as_str(), handed.1.shape, handed.2), ("{cam-2}", crate::cam::Shape::Square, (100, 100, 600, 400)));
+    // The choices are remembered for the next capture.
+    let o = a.rec_opts.clone().unwrap();
+    assert!(o.camera && o.cam_dev == "{cam-2}" && o.cam_size == crate::cam::CamSize::S);
+}
+
+/// No camera: the Camera row is disabled and says why on hover; a config
+/// with the camera on shows no bubble.
+#[cfg(windows)]
+#[test]
+fn record_popover_without_a_camera() {
+    rec_ui::FAKE_CAMS.with(|c| c.borrow_mut().clear());
+    let mut a = app(Some(r(100.0, 100.0, 600.0, 400.0)));
+    ed(&mut a).rec.opts.camera = true;
+    let (x, y) = button(&mut a, Act::Record);
+    click(&mut a, x, y);
+    assert!(ed(&mut a).rec.open);
+    assert!(ed(&mut a).rec.cam.shown.is_none(), "no bubble without a camera");
+    let (cx, cy) = item(&mut a, |k| matches!(k, toolbar::Kind::Switch { act: Act::RecCamera, .. }));
+    let tb = ed(&mut a).toolbar.clone().unwrap();
+    let i = tb.index_at(Pt::new(cx as f32, cy as f32)).unwrap();
+    assert!(tb.items[i].disabled);
+    click(&mut a, cx, cy);
+    assert!(ed(&mut a).rec.cam.shown.is_none());
+    // Hover long enough: the tooltip.
+    mv(&mut a, cx, cy);
+    ed(&mut a).hover_at = Instant::now() - Duration::from_secs(2);
+    let m = a.mouse;
+    ed(&mut a).prepare(None, m, Instant::now());
+    let tip = ed(&mut a).scene.as_ref().and_then(|s| s.tip.as_ref()).map(|t| t.label);
+    assert_eq!(tip, Some(crate::cam::NO_CAMERA));
+    rec_ui::FAKE_CAMS.with(|c| *c.borrow_mut() = rec_ui::fake_cams());
 }
 
 /// The record hotkey: idle → selection in record mode (popover open,

@@ -176,45 +176,8 @@ impl Layer {
             self.hide();
             return;
         }
+        update_layered(self.hwnd, x, y, w, h, bgra);
         unsafe {
-            let screen = GetDC(None);
-            let mem = CreateCompatibleDC(Some(screen));
-            let mut bmi = BITMAPINFO::default();
-            bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
-            bmi.bmiHeader.biWidth = w as i32;
-            bmi.bmiHeader.biHeight = -(h as i32);
-            bmi.bmiHeader.biPlanes = 1;
-            bmi.bmiHeader.biBitCount = 32;
-            bmi.bmiHeader.biCompression = BI_RGB.0;
-            let mut bits = std::ptr::null_mut();
-            if let Ok(bmp) = CreateDIBSection(Some(mem), &bmi, DIB_RGB_COLORS, &mut bits, None, 0)
-                && !bits.is_null()
-            {
-                std::ptr::copy_nonoverlapping(bgra.as_ptr(), bits as *mut u8, (w * h * 4) as usize);
-                let old = SelectObject(mem, HGDIOBJ(bmp.0));
-                let blend = BLENDFUNCTION {
-                    BlendOp: AC_SRC_OVER as u8,
-                    BlendFlags: 0,
-                    SourceConstantAlpha: 255,
-                    AlphaFormat: AC_SRC_ALPHA as u8,
-                };
-                let (pos, size, src) = (POINT { x, y }, SIZE { cx: w as i32, cy: h as i32 }, POINT::default());
-                let _ = UpdateLayeredWindow(
-                    self.hwnd,
-                    Some(screen),
-                    Some(&pos),
-                    Some(&size),
-                    Some(mem),
-                    Some(&src),
-                    COLORREF(0),
-                    Some(&blend),
-                    ULW_ALPHA,
-                );
-                SelectObject(mem, old);
-                let _ = DeleteObject(HGDIOBJ(bmp.0));
-            }
-            let _ = DeleteDC(mem);
-            ReleaseDC(None, screen);
             if !self.shown {
                 let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
                 self.shown = true;
@@ -230,6 +193,54 @@ impl Layer {
             }
             self.shown = false;
         }
+    }
+}
+
+/// Put `bgra` (`w`x`h`, premultiplied BGRA) on layered window `hwnd` at
+/// (x, y) through a DIB section and `UpdateLayeredWindow`.
+pub(crate) fn update_layered(hwnd: HWND, x: i32, y: i32, w: u32, h: u32, bgra: &[u8]) {
+    if w == 0 || h == 0 || bgra.len() < (w * h * 4) as usize {
+        return;
+    }
+    unsafe {
+        let screen = GetDC(None);
+        let mem = CreateCompatibleDC(Some(screen));
+        let mut bmi = BITMAPINFO::default();
+        bmi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+        bmi.bmiHeader.biWidth = w as i32;
+        bmi.bmiHeader.biHeight = -(h as i32);
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = BI_RGB.0;
+        let mut bits = std::ptr::null_mut();
+        if let Ok(bmp) = CreateDIBSection(Some(mem), &bmi, DIB_RGB_COLORS, &mut bits, None, 0)
+            && !bits.is_null()
+        {
+            std::ptr::copy_nonoverlapping(bgra.as_ptr(), bits as *mut u8, (w * h * 4) as usize);
+            let old = SelectObject(mem, HGDIOBJ(bmp.0));
+            let blend = BLENDFUNCTION {
+                BlendOp: AC_SRC_OVER as u8,
+                BlendFlags: 0,
+                SourceConstantAlpha: 255,
+                AlphaFormat: AC_SRC_ALPHA as u8,
+            };
+            let (pos, size, src) = (POINT { x, y }, SIZE { cx: w as i32, cy: h as i32 }, POINT::default());
+            let _ = UpdateLayeredWindow(
+                hwnd,
+                Some(screen),
+                Some(&pos),
+                Some(&size),
+                Some(mem),
+                Some(&src),
+                COLORREF(0),
+                Some(&blend),
+                ULW_ALPHA,
+            );
+            SelectObject(mem, old);
+            let _ = DeleteObject(HGDIOBJ(bmp.0));
+        }
+        let _ = DeleteDC(mem);
+        ReleaseDC(None, screen);
     }
 }
 
@@ -510,11 +521,22 @@ pub struct Recorder {
     border: Option<Border>,
     bar: Option<BarWin>,
     count: Option<CountWin>,
+    /// The camera bubble: up until the recording is over.
+    bubble: Option<crate::cam::Bubble>,
 }
 
 impl Recorder {
-    pub fn start(spec: RecSpec, geom: Geom, th: Theme, muted: Arc<AtomicBool>, nudge: HWND) -> Result<Recorder> {
-        Recorder::start_with(spec, geom, th, nudge, Box::new(move |s: &RecSpec| prepare(s, muted)))
+    pub fn start(
+        spec: RecSpec,
+        geom: Geom,
+        th: Theme,
+        muted: Arc<AtomicBool>,
+        nudge: HWND,
+        bubble: Option<crate::cam::Bubble>,
+    ) -> Result<Recorder> {
+        let mut r = Recorder::start_with(spec, geom, th, nudge, Box::new(move |s: &RecSpec| prepare(s, muted)))?;
+        r.bubble = bubble;
+        Ok(r)
     }
 
     /// [`Recorder::start`] with the parts opened by `open`. When a window
@@ -525,7 +547,7 @@ impl Recorder {
         let bar = BarWin::new(nudge.0 as isize)?;
         let count = CountWin { layer: Layer::new(true)?, drawn: None };
         let worker = Worker::spawn(spec, open)?;
-        Ok(Recorder { worker, geom, th, border: Some(border), bar: Some(bar), count: Some(count) })
+        Ok(Recorder { worker, geom, th, border: Some(border), bar: Some(bar), count: Some(count), bubble: None })
     }
 
     pub fn send(&mut self, e: Effect) {
@@ -562,6 +584,7 @@ impl Recorder {
 
     /// The recording is over: take the windows down.
     pub fn close(&mut self) {
+        self.bubble = None;
         self.count = None;
         self.bar = None;
         self.border = None;
