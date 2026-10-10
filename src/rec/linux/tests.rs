@@ -104,11 +104,11 @@ fn live_rec_linux_xvfb_mp4_with_sound_and_pause() {
     let (w, h) = src.size();
     let enc = FfmpegEncoder::create(&spec.part_path(), w, h, 30, Quality::Low, Some(system), mic).unwrap();
     let s = Session::start(spec, Box::new(src), Vec::new(), Box::new(enc)).unwrap();
-    std::thread::sleep(Duration::from_millis(1000));
-    s.pause();
     std::thread::sleep(Duration::from_millis(1500));
-    s.resume();
+    s.pause();
     std::thread::sleep(Duration::from_millis(1000));
+    s.resume();
+    std::thread::sleep(Duration::from_millis(1500));
     let t = Instant::now();
     let path = s.stop().unwrap();
     eprintln!("stopped in {:?}", t.elapsed());
@@ -120,7 +120,7 @@ fn live_rec_linux_xvfb_mp4_with_sound_and_pause() {
     let leftovers: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name()).collect();
     let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(leftovers, [std::ffi::OsString::from("sound.mp4")], "segments and lists are cleaned up");
-    assert!((1.7..=2.3).contains(&duration), "duration {duration} s, want 2 ± 0.3 (the pause is cut)");
+    assert!((2.7..=3.3).contains(&duration), "duration {duration} s, want 3 ± 0.3 (the pause is cut)");
     assert!(st.contains("codec_type=video") && st.contains("codec_name=h264"), "{st}");
     assert!(st.contains("codec_type=audio") && st.contains("codec_name=aac"), "{st}");
 }
