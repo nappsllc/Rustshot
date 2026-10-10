@@ -7,8 +7,10 @@
 //! ([`Recorder::take_clicks`]). X11 cannot keep a window out of the
 //! capture, so nothing is drawn over the recorded area: the border strips
 //! lie outside it (a side that touches the screen edge has none) and the
-//! bar goes beside it (inside only when it fits nowhere else, e.g. a full
-//! screen recording). The countdown is taken down before the first frame.
+//! bar goes beside it or on another monitor (only when there is neither, a
+//! full-screen recording on the only monitor, it shrinks to a timer-and-Stop
+//! pill in the area's corner, and is recorded). The countdown is taken down
+//! `HIDE_BEFORE_GO` before the first frame.
 //!
 //! With a compositor the bar and countdown use a 32-bit ARGB visual;
 //! without one they are cut to shape (alpha ≥ 50%) with the Shape
@@ -17,18 +19,20 @@
 
 use super::bar::{self, BarAct, BarView};
 use super::worker::{Opener, Parts, Worker};
-use super::{border, countdown, BarSpot, Effect, End, Geom};
+use super::{border, countdown, BarSpot, Effect, End, Geom, Muted};
 use crate::editor::style::Ui;
 use crate::objects::Pt;
 use crate::rec::gif::GifEncoder;
 use crate::rec::linux::ffmpeg::{self, FfmpegEncoder};
+use crate::rec::linux::parec::ParecSource;
 use crate::rec::linux::pulse_list;
 use crate::rec::linux::xshm::XShmSource;
-use crate::rec::{FrameSource, RecFormat, RecSpec, VideoEncoder};
+use crate::rec::{AudioSource, FrameSource, RecFormat, RecSpec, VideoEncoder};
 use crate::theme::Theme;
 use anyhow::{anyhow, bail, Context, Result};
 use core::ffi::{c_char, c_int, c_long, c_short, c_uint, c_ulong, c_ushort, c_void};
-use std::sync::mpsc;
+use std::sync::atomic::AtomicBool;
+use std::sync::{mpsc, Arc};
 
 #[repr(C)]
 struct XSetWindowAttributes {
@@ -219,6 +223,8 @@ struct Disp {
     screen: c_int,
     root: c_ulong,
     argb: Option<(*mut c_void, c_ulong)>,
+    /// A compositor owns the screen (it repaints a frame after a change).
+    composited: bool,
 }
 
 impl Disp {
@@ -241,7 +247,7 @@ impl Disp {
                     argb = Some((vi.visual, XCreateColormap(dpy, root, vi.visual, 0)));
                 }
             }
-            Ok(Disp { dpy, screen, root, argb })
+            Ok(Disp { dpy, screen, root, argb, composited })
         }
     }
 }
@@ -399,14 +405,30 @@ struct BarWin {
     pressed: Option<BarAct>,
     clicks: Vec<BarAct>,
     drawn: Option<(BarView, Option<BarAct>, Option<BarAct>)>,
+    /// Shown as the compact pill (see `show`).
+    compact: Option<bool>,
 }
 
 impl BarWin {
     fn show(&mut self, geom: &Geom, th: &Theme, v: &BarView) {
         let font = Some(crate::fonts::ui_font());
-        let spot = super::spot_bar(geom, self.spot, |s| {
+        let panel = |s: f32, v: &BarView| {
             let p = bar::layout(&Ui { th, s, font }, v).panel;
             (p.w.round() as i32, p.h.round() as i32)
+        };
+        // X11 records whatever is over the area: the bar goes beside it or
+        // on another monitor; with neither (a full-screen recording on the
+        // only monitor) it shrinks to a pill (timer and Stop) in the
+        // area's top-right corner. Decided once per recording.
+        let compact = *self.compact.get_or_insert_with(|| {
+            let s = geom.area_scale();
+            let gap = (8.0 * s).round() as i32;
+            super::place_bar_away(geom.area, &geom.rects(), panel(s, v), gap, gap).is_none()
+        });
+        let v = &BarView { compact, ..v.clone() };
+        let spot = super::spot_bar_with(geom, self.spot, |s| panel(s, v), |area, rects, sz, gap| {
+            let away = (!compact).then(|| super::place_bar_away(area, rects, sz, gap, gap)).flatten();
+            away.unwrap_or_else(|| super::corner_pill(area, sz, gap))
         });
         let moved = self.spot != Some(spot);
         self.spot = Some(spot);
@@ -470,41 +492,42 @@ impl CountWin {
     }
 }
 
-/// Open the capture and the encoder for `spec` (ffmpeg records the sound;
-/// what cannot be recorded is left out and said).
-fn prepare(spec: &RecSpec) -> Result<Parts> {
+/// Open the capture, the sound and the encoder for `spec`, as on Windows:
+/// the sound is read in-app (parec) and mixed by the session; what cannot
+/// be recorded is left out and said. Runs on the recording worker, which
+/// outlives the parec and ffmpeg children it starts (see
+/// `rec::linux::child`).
+fn prepare(spec: &RecSpec, muted: Arc<AtomicBool>) -> Result<Parts> {
     if let Some(dir) = spec.out.parent() {
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
     }
     let src = XShmSource::open(spec.area)?;
     let (w, h) = src.size();
     let mut warnings = Vec::new();
+    let mut audio: Vec<Box<dyn AudioSource>> = Vec::new();
     let part = spec.part_path();
     let enc: Box<dyn VideoEncoder> = match spec.format {
         RecFormat::Mp4 => {
             let exe = ffmpeg::find().ok_or_else(|| anyhow!("{}", super::NO_MP4))?;
             let caps = ffmpeg::caps(&exe);
-            let (mut system, mut mic) = (None, None);
             if spec.system_audio || spec.mic.is_some() {
-                let all = if caps.pulse && caps.aac { pulse_list::list() } else { None };
-                let why = |e: String| {
-                    if caps.pulse && caps.aac { e } else { format!("{} cannot record PulseAudio sound", exe.display()) }
-                };
+                let all = if caps.aac { pulse_list::list() } else { None };
+                let why = |e: String| if caps.aac { e } else { format!("{} has no AAC encoder", exe.display()) };
                 if spec.system_audio {
-                    match pulse_list::system_source(all.as_deref()) {
-                        Ok(s) => system = Some(s),
-                        Err(e) => warnings.push(format!("system sound not recorded: {}", why(e))),
+                    match pulse_list::system_source(all.as_deref()).map_err(why).and_then(|s| ParecSource::open(&s).map_err(|e| format!("{e:#}"))) {
+                        Ok(a) => audio.push(Box::new(a)),
+                        Err(e) => warnings.push(format!("system sound not recorded: {e}")),
                     }
                 }
                 if let Some(id) = &spec.mic {
-                    match pulse_list::mic_source(all.as_deref(), id) {
-                        Ok(s) => mic = Some(s),
-                        Err(e) => warnings.push(format!("microphone not recorded: {}", why(e))),
+                    match pulse_list::mic_source(all.as_deref(), id).map_err(why).and_then(|s| ParecSource::open(&s).map_err(|e| format!("{e:#}"))) {
+                        Ok(a) => audio.push(Box::new(Muted { inner: a, muted })),
+                        Err(e) => warnings.push(format!("microphone not recorded: {e}")),
                     }
                 }
             }
-            let e = FfmpegEncoder::create(&part, w, h, spec.capture_fps(), spec.quality, system, mic)?;
-            eprintln!("rustshot: recording {w}x{h} with ffmpeg ({})", e.codec().name());
+            let e = FfmpegEncoder::create(&part, w, h, spec.capture_fps(), spec.quality, !audio.is_empty())?;
+            eprintln!("rustshot: recording {w}x{h} with ffmpeg ({}), {} sound source(s)", e.codec().name(), audio.len());
             Box::new(e)
         }
         RecFormat::Gif => Box::new(GifEncoder::create(&part, w, h, spec.capture_fps())?),
@@ -513,7 +536,7 @@ fn prepare(spec: &RecSpec) -> Result<Parts> {
         eprintln!("rustshot: {w}");
     }
     let src: Box<dyn FrameSource> = Box::new(src);
-    Ok(Parts { src, audio: Vec::new(), enc, warnings })
+    Ok(Parts { src, audio, enc, warnings })
 }
 
 /// The windows and the worker of one recording.
@@ -531,8 +554,8 @@ pub struct Recorder {
 }
 
 impl Recorder {
-    pub fn start(spec: RecSpec, geom: Geom, th: Theme, bubble: Option<crate::cam::Bubble>) -> Result<Recorder> {
-        let mut r = Recorder::start_with(spec, geom, th, Box::new(prepare))?;
+    pub fn start(spec: RecSpec, geom: Geom, th: Theme, muted: Arc<AtomicBool>, bubble: Option<crate::cam::Bubble>) -> Result<Recorder> {
+        let mut r = Recorder::start_with(spec, geom, th, Box::new(move |s: &RecSpec| prepare(s, muted)))?;
         r.bubble = bubble;
         Ok(r)
     }
@@ -555,6 +578,7 @@ impl Recorder {
             pressed: None,
             clicks: Vec::new(),
             drawn: None,
+            compact: None,
         };
         let count = CountWin { win: Win::new(&disp, false, None)?, drawn: None };
         unsafe {
@@ -568,11 +592,18 @@ impl Recorder {
         if e == Effect::Go
             && let Some(c) = &mut self.count
         {
-            // Off the screen before the first frame is grabbed.
+            // Off the screen before the first frame is grabbed. It normally
+            // went `HIDE_BEFORE_GO` earlier (`Machine::countdown_shown`);
+            // when the owner ticked too late for that, a compositor gets
+            // that long to repaint without it.
+            let late = c.drawn.is_some();
             c.win.hide();
             c.drawn = None;
             unsafe {
                 XSync(self.disp.dpy, 0);
+            }
+            if late && self.disp.composited {
+                std::thread::sleep(super::HIDE_BEFORE_GO);
             }
         }
         self.worker.send(e);

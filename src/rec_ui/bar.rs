@@ -37,6 +37,10 @@ pub struct BarView {
     pub mic: Option<bool>,
     /// Stop pressed; finishing the file.
     pub stopping: bool,
+    /// The minimal pill (timer and Stop only): on X11, when the bar has to
+    /// sit inside the recorded area (a full-screen recording on the only
+    /// monitor), where it is recorded too.
+    pub compact: bool,
 }
 
 /// The bar in its window (physical px; the panel sits `MARGIN` inside).
@@ -72,9 +76,12 @@ pub fn layout(ui: &Ui, v: &BarView) -> BarLayout {
     let tt = timer_text(v);
     let digits = tw(ui, TEXT, "00:00").max(tw(ui, TEXT, &tt)) / s;
     let timer_w = TIMER_PAD + 2.0 * DOT + DOT_GAP + digits.ceil() + 4.0;
-    let mut acts = vec![BarAct::Pause];
-    if v.mic.is_some() {
-        acts.push(BarAct::Mute);
+    let mut acts = Vec::new();
+    if !v.compact {
+        acts.push(BarAct::Pause);
+        if v.mic.is_some() {
+            acts.push(BarAct::Mute);
+        }
     }
     acts.push(BarAct::Stop);
     let n = acts.len() as f32;
@@ -176,7 +183,7 @@ mod tests {
     }
 
     fn view(mic: Option<bool>) -> BarView {
-        BarView { elapsed: Duration::from_secs(65), paused: false, mic, stopping: false }
+        BarView { elapsed: Duration::from_secs(65), paused: false, mic, stopping: false, compact: false }
     }
 
     #[test]
@@ -192,6 +199,16 @@ mod tests {
         // The panel sits MARGIN inside the window.
         assert_eq!((l.panel.x, l.panel.y), (MARGIN, MARGIN));
         assert_eq!(l.panel.x1() + MARGIN, l.size.0 as f32);
+    }
+
+    #[test]
+    fn the_compact_pill_has_the_timer_and_stop_only() {
+        let full = layout(&ui(1.0), &view(Some(false)));
+        let l = layout(&ui(1.0), &BarView { compact: true, ..view(Some(false)) });
+        let acts: Vec<BarAct> = l.buttons.iter().map(|b| b.0).collect();
+        assert_eq!(acts, [BarAct::Stop]);
+        assert_eq!(full.size.0 as f32 - l.size.0 as f32, 2.0 * (BTN + BTN_GAP));
+        assert_eq!(l.timer, full.timer);
     }
 
     #[test]

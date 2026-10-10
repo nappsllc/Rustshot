@@ -1,6 +1,8 @@
 //! X11 frames: `XShmGetImage` of the recorded area into a shared-memory
 //! image (plain `XGetImage` when the server has no MIT-SHM, e.g. over
-//! ssh), with the pointer drawn in from `XFixesGetCursorImage`.
+//! ssh, or once a shared-memory grab raised an X error), with the pointer
+//! drawn in from `XFixesGetCursorImage`. X errors never end the process
+//! (see `guarded`); a grab that fails keeps the last frame.
 //!
 //! The source has its own Display connection (Xlib is thread-initialised
 //! by `wind::init_x11`); it is opened on the recording worker and used on
@@ -10,6 +12,7 @@ use crate::capture::IRect;
 use crate::rec::{Frame, FrameSource};
 use anyhow::{anyhow, bail, Result};
 use core::ffi::{c_char, c_int, c_short, c_uint, c_ulong, c_ushort, c_void};
+use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::time::{Duration, Instant};
 
 /// The head of XImage (ABI-stable), as in capture_linux.
@@ -77,6 +80,54 @@ unsafe extern "C" {
     fn XDestroyImage(image: *mut XImage) -> c_int;
     fn XSync(dpy: *mut c_void, discard: c_int) -> c_int;
     fn XFree(data: *mut c_void) -> c_int;
+    fn XSetErrorHandler(handler: Option<ErrorHandler>) -> Option<ErrorHandler>;
+}
+
+type ErrorHandler = unsafe extern "C" fn(*mut c_void, *mut XErrorEvent) -> c_int;
+
+#[repr(C)]
+struct XErrorEvent {
+    type_: c_int,
+    display: *mut c_void,
+    resourceid: c_ulong,
+    serial: c_ulong,
+    error_code: u8,
+    major_opcode: u8,
+    minor_opcode: u8,
+}
+
+// X errors. Xlib's default handler exits the process, and a grab can fail
+// at any time (the screen shrank under the area, the server refused the
+// shared segment), so every request here runs in `guarded`, which
+// installs a recording handler for its duration (as hotkey_linux does
+// while grabbing keys). The handler is process-wide: errors of another
+// Display in that window (a few milliseconds per frame) are swallowed
+// rather than fatal; only ours are counted.
+static GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static OUR_DPY: AtomicPtr<c_void> = AtomicPtr::new(core::ptr::null_mut());
+static X_FAILED: AtomicBool = AtomicBool::new(false);
+
+unsafe extern "C" fn on_x_error(dpy: *mut c_void, _ev: *mut XErrorEvent) -> c_int {
+    if dpy == OUR_DPY.load(Ordering::SeqCst) {
+        X_FAILED.store(true, Ordering::SeqCst);
+    }
+    0
+}
+
+/// Run `f` (requests on `dpy`) with X errors recorded instead of fatal;
+/// its result and whether `dpy` got an error. Synced first, so errors of
+/// asynchronous requests in `f` are in.
+unsafe fn guarded<T>(dpy: *mut c_void, f: impl FnOnce() -> T) -> (T, bool) {
+    let _g = GUARD.lock().unwrap_or_else(|e| e.into_inner());
+    unsafe {
+        OUR_DPY.store(dpy, Ordering::SeqCst);
+        X_FAILED.store(false, Ordering::SeqCst);
+        let prev = XSetErrorHandler(Some(on_x_error));
+        let r = f();
+        XSync(dpy, 0);
+        XSetErrorHandler(prev);
+        (r, X_FAILED.load(Ordering::SeqCst))
+    }
 }
 
 #[link(name = "Xext")]
@@ -131,6 +182,8 @@ pub struct XShmSource {
     area: IRect,
     shm: Option<Shm>,
     cursor: bool,
+    /// Said that grabs fail.
+    warned: bool,
     /// The last frame (returned again when a grab fails).
     last: Option<Frame>,
 }
@@ -170,7 +223,7 @@ impl XShmSource {
             }
             let (mut eb, mut er) = (0, 0);
             let cursor = XFixesQueryExtension(dpy, &mut eb, &mut er) != 0;
-            let mut src = XShmSource { dpy, root, area, shm: None, cursor, last: None };
+            let mut src = XShmSource { dpy, root, area, shm: None, cursor, warned: false, last: None };
             if XShmQueryExtension(dpy) != 0 {
                 match src.attach(XDefaultVisual(dpy, screen), depth as c_uint) {
                     Ok(s) => src.shm = Some(s),
@@ -211,8 +264,10 @@ impl XShmSource {
             }
             info.shmaddr = addr as *mut c_char;
             (*img).data = addr as *mut u8;
-            let attached = XShmAttach(self.dpy, &mut *info) != 0;
-            XSync(self.dpy, 0);
+            // Refused asynchronously (BadAccess: e.g. a server in another
+            // container cannot map our segment): an X error, not a result.
+            let (ok, err) = guarded(self.dpy, || XShmAttach(self.dpy, &mut *info) != 0);
+            let attached = ok && !err;
             // Removed now: it goes away once both sides detach (or exit).
             shmctl(info.shmid, IPC_RMID, core::ptr::null_mut());
             if !attached {
@@ -225,25 +280,64 @@ impl XShmSource {
         }
     }
 
-    /// Grab the area now (BGRA, alpha 255).
+    /// Grab the area now (BGRA, alpha 255). An X error on the shared-memory
+    /// grab drops MIT-SHM for plain `XGetImage`; when that fails too (the
+    /// area left the screen), `None`: the last frame stays.
     fn grab(&mut self) -> Option<Vec<u8>> {
+        if self.shm.is_some() {
+            let (out, err) = unsafe { guarded(self.dpy, || self.grab_with_shm()) };
+            if !err {
+                return out;
+            }
+            eprintln!("rustshot: XShmGetImage failed; recording with XGetImage");
+            self.drop_shm();
+        }
+        let (out, err) = unsafe { guarded(self.dpy, || self.grab_plain()) };
+        if err && !self.warned {
+            self.warned = true;
+            eprintln!("rustshot: XGetImage failed (the area left the screen?); the picture stays still");
+        }
+        out.filter(|_| !err)
+    }
+
+    fn grab_with_shm(&self) -> Option<Vec<u8>> {
+        let (x, y, ..) = self.area;
+        let s = self.shm.as_ref()?;
+        unsafe {
+            if XShmGetImage(self.dpy, self.root, s.img, x, y, ALL_PLANES) == 0 {
+                return None;
+            }
+            self.copy_out(s.img, false)
+        }
+    }
+
+    fn grab_plain(&self) -> Option<Vec<u8>> {
         let (x, y, w, h) = self.area;
         unsafe {
-            let (img, owned) = match &self.shm {
-                Some(s) => {
-                    if XShmGetImage(self.dpy, self.root, s.img, x, y, ALL_PLANES) == 0 {
-                        return None;
-                    }
-                    (s.img, false)
-                }
-                None => {
-                    let i = XGetImage(self.dpy, self.root, x, y, w, h, ALL_PLANES, Z_PIXMAP);
-                    if i.is_null() {
-                        return None;
-                    }
-                    (i, true)
-                }
-            };
+            let i = XGetImage(self.dpy, self.root, x, y, w, h, ALL_PLANES, Z_PIXMAP);
+            if i.is_null() {
+                return None;
+            }
+            self.copy_out(i, true)
+        }
+    }
+
+    fn drop_shm(&mut self) {
+        if let Some(mut s) = self.shm.take() {
+            unsafe {
+                // The detach may fail (the segment is gone): guarded. XShm
+                // images free only the struct, not the shared data.
+                guarded(self.dpy, || XShmDetach(self.dpy, &mut *s.info));
+                XDestroyImage(s.img);
+                shmdt(s.info.shmaddr as *const c_void);
+            }
+        }
+    }
+
+    /// The area's pixels out of `img` (destroyed when `owned`).
+    unsafe fn copy_out(&self, img: *mut XImage, owned: bool) -> Option<Vec<u8>> {
+        let (w, h) = (self.area.2, self.area.3);
+        unsafe {
             let ok = (*img).bits_per_pixel == 32 && (*img).byte_order == LSB_FIRST && !(*img).data.is_null();
             let out = ok.then(|| {
                 let stride = (*img).bytes_per_line as usize;
@@ -322,7 +416,8 @@ impl FrameSource for XShmSource {
         let _ = deadline; // a grab takes a few ms; there is nothing to wait for
         match self.grab() {
             Some(mut bgra) => {
-                self.draw_cursor(&mut bgra);
+                // SAFETY: requests on our Display, errors recorded.
+                unsafe { guarded(self.dpy, || self.draw_cursor(&mut bgra)) };
                 let f = Frame { w: self.area.2, h: self.area.3, bgra, ts: Duration::ZERO };
                 self.last = Some(f.clone());
                 Some(f)
@@ -338,14 +433,8 @@ impl FrameSource for XShmSource {
 
 impl Drop for XShmSource {
     fn drop(&mut self) {
+        self.drop_shm();
         unsafe {
-            if let Some(mut s) = self.shm.take() {
-                XShmDetach(self.dpy, &mut *s.info);
-                XSync(self.dpy, 0);
-                // XShm images free only the struct, not the shared data.
-                XDestroyImage(s.img);
-                shmdt(s.info.shmaddr as *const c_void);
-            }
             XCloseDisplay(self.dpy);
         }
     }

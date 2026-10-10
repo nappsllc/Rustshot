@@ -178,8 +178,6 @@ struct Log {
     frames: Vec<Duration>,
     audio: Vec<(Duration, usize)>,
     pcm: Vec<f32>,
-    /// `VideoEncoder::pause` calls.
-    pauses: Vec<Duration>,
 }
 
 impl Log {
@@ -201,6 +199,8 @@ struct Opts {
     enc_audio: bool,
     fail_push_at: Option<usize>,
     fail_finish: bool,
+    /// `finish` fails but says the file plays (`Salvaged`).
+    salvage: bool,
     gate: Option<Gate>,
 }
 
@@ -236,14 +236,13 @@ impl VideoEncoder for FakeEncoder {
         if self.opts.fail_finish {
             anyhow::bail!("cannot finalise");
         }
+        if self.opts.salvage {
+            return Err(anyhow::Error::new(super::Salvaged("ffmpeg failed (signal 9)".into())));
+        }
         Ok(())
     }
     fn audio(&self) -> bool {
         self.opts.enc_audio
-    }
-    fn pause(&mut self, at: Duration) -> Result<()> {
-        self.log.lock().unwrap().pauses.push(at);
-        Ok(())
     }
 }
 
@@ -384,8 +383,6 @@ fn session_pause_cuts_time_and_frames() {
     s.stop().unwrap();
     let log = run.log.lock().unwrap();
     assert_eq!(log.frames, ms(&[0, 20, 40, 70, 90]));
-    // The encoder hears of the pause once, with its time (without a mixer too).
-    assert_eq!(log.pauses, ms(&[50]));
 }
 
 #[test]
@@ -473,6 +470,16 @@ fn session_failure_to_finish_removes_the_part_file() {
     let e = s.stop().unwrap_err();
     assert!(format!("{e:#}").contains("cannot finalise"), "{e:#}");
     assert!(run.files().is_empty(), "{:?}", run.files());
+}
+
+#[test]
+fn session_keeps_a_salvaged_file_and_reports_the_failure() {
+    let mut run = setup("salvage", RecFormat::Mp4, 30);
+    let s = run.start(Vec::new(), Opts { salvage: true, ..Opts::default() });
+    run.shoot(0);
+    let e = format!("{:#}", s.stop().unwrap_err());
+    assert!(e.contains("signal 9") && e.contains("saved") && e.contains("clip.mp4"), "{e}");
+    assert_eq!(run.files(), ["clip.mp4"]);
 }
 
 #[test]

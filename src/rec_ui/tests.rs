@@ -130,6 +130,36 @@ fn bar_goes_where_there_is_most_room() {
 }
 
 #[test]
+fn x11_bar_stays_out_of_the_recording_or_shrinks_to_a_corner_pill() {
+    // Beside the area: as everywhere.
+    assert_eq!(place_bar_away((800, 200, 320, 200), &[MON], BAR, 8, 8), Some((870, 408)));
+    // Full screen on the only monitor: nowhere; the pill goes top-right inside.
+    assert_eq!(place_bar_away(MON, &[MON], BAR, 8, 8), None);
+    assert_eq!(corner_pill(MON, (90, 44), 8), (1920 - 8 - 90, 8));
+    // Full screen with a monitor that is not beside it (below-left, apart
+    // from the probe points): the bottom centre of that monitor.
+    let other: IRect = (-1280, 1080, 1280, 720);
+    assert_eq!(place_bar_away(MON, &[MON, other], BAR, 8, 8), Some((-1280 + (1280 - 180) / 2, 1080 + 720 - 8 - 44)));
+    // A monitor overlapping the area (mirrored) does not count.
+    assert_eq!(place_bar_away(MON, &[MON, (0, 0, 1280, 720)], BAR, 8, 8), None);
+}
+
+#[test]
+fn x11_countdown_goes_before_the_first_frame() {
+    let t = t0();
+    let mut m = Machine::new();
+    m.start(true, t);
+    assert_eq!(m.countdown_shown(t + secs(2.9)), Some(1));
+    // In the last HIDE_BEFORE_GO it is already down (a compositor repaints by Go).
+    let late = t + COUNTDOWN - HIDE_BEFORE_GO;
+    assert_eq!(m.countdown(late), Some(1));
+    assert_eq!(m.countdown_shown(late), None);
+    assert!(HIDE_BEFORE_GO >= Duration::from_millis(50));
+    assert_eq!(m.tick(t + COUNTDOWN), Some(Effect::Go));
+    assert_eq!(m.countdown_shown(t + COUNTDOWN), None);
+}
+
+#[test]
 fn bar_on_multi_monitor_setups() {
     let right: IRect = (1920, 0, 1280, 1024);
     let mons = [MON, right];
@@ -309,10 +339,11 @@ fn render_recording_previews() {
         for s in [1.0f32, 2.0] {
             let ui = Ui { th, s, font: Some(crate::fonts::ui_font()) };
             let views = [
-                ("recording", bar::BarView { elapsed: secs(83.0), paused: false, mic: Some(false), stopping: false }, Some(bar::BarAct::Stop)),
-                ("paused", bar::BarView { elapsed: secs(754.0), paused: true, mic: Some(true), stopping: false }, None),
-                ("nomic", bar::BarView { elapsed: secs(5.0), paused: false, mic: None, stopping: false }, Some(bar::BarAct::Pause)),
-                ("stopping", bar::BarView { elapsed: secs(9.0), paused: false, mic: None, stopping: true }, None),
+                ("recording", bar::BarView { elapsed: secs(83.0), paused: false, mic: Some(false), stopping: false, compact: false }, Some(bar::BarAct::Stop)),
+                ("paused", bar::BarView { elapsed: secs(754.0), paused: true, mic: Some(true), stopping: false, compact: false }, None),
+                ("nomic", bar::BarView { elapsed: secs(5.0), paused: false, mic: None, stopping: false, compact: false }, Some(bar::BarAct::Pause)),
+                ("stopping", bar::BarView { elapsed: secs(9.0), paused: false, mic: None, stopping: true, compact: false }, None),
+                ("compact", bar::BarView { elapsed: secs(42.0), paused: false, mic: Some(false), stopping: false, compact: true }, None),
             ];
             for (vn, v, hover) in views {
                 let l = bar::layout(&ui, &v);

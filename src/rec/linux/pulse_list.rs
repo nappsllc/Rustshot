@@ -1,6 +1,6 @@
 //! PulseAudio (and PipeWire's pulse server) sources, from `pactl`: the
-//! sinks' monitors (system sound) and the microphones. ffmpeg records
-//! them by name (`-f pulse -i <name>`).
+//! sinks' monitors (system sound) and the microphones. parec records
+//! them by name (`parec -d <name>`, see `parec.rs`).
 //!
 //! `pactl -f json list sources` (pactl 16+), else `pactl list short
 //! sources` (tab-separated: index, name, driver, sample spec, state).

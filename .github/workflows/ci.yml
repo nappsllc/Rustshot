@@ -47,9 +47,11 @@ jobs:
           timeout 300 xvfb-run -a -s "-screen 0 1600x900x24"             cargo test --bin rustshot -- --ignored --test-threads=1 --nocapture             live_monitor_capture live_desktop_capture live_window_lifecycle             interactive_window_renders_rect window_smoke             2>&1 | tee "$RUNNER_TEMP/test-logs/xvfb.log"
       # Screen recording on X11: XShm frames of the Xvfb screen to MP4
       # through ffmpeg (ffprobe checks the duration: 2 s +- 0.3) and to GIF;
-      # with sound from a PulseAudio null sink (system) and null source
-      # (microphone), paused once.
-      - name: X11 recording under Xvfb (ffmpeg, PulseAudio)
+      # with sound: the test plays a tone (paplay) into a PulseAudio null
+      # sink and records its monitor (system) and a null source
+      # (microphone) with parec, mixed in-app into one ffmpeg, paused once
+      # (ffprobe: 3 s +- 0.3, audio within 0.1 s of video; volumedetect).
+      - name: X11 recording under Xvfb (ffmpeg, parec, PulseAudio)
         timeout-minutes: 8
         env:
           RUSTSHOT_FFMPEG_LOG: "1"
@@ -67,6 +69,10 @@ jobs:
           grep -o "FFPROBE .*duration=.*\|SKIP:.*" "$RUNNER_TEMP/test-logs/xvfb-rec.log" | while read -r line; do
             echo "::notice title=Linux recording::$line"
           done
+          # The sound test must run here (PulseAudio is set up above).
+          if grep -q "SKIP:" "$RUNNER_TEMP/test-logs/xvfb-rec.log"; then
+            echo "::error::the recording-with-sound test was skipped"; exit 1
+          fi
       - name: Upload Xvfb test log
         if: failure()
         uses: actions/upload-artifact@v4

@@ -67,7 +67,9 @@ thread_local! {
     pub static FAKE_MP4: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
 }
 
-/// Whether MP4 can be recorded: on Linux only with ffmpeg installed
+/// Whether MP4 can be recorded: on Linux only with ffmpeg installed and
+/// able to encode H.264 (`ffmpeg -encoders`, cached; a VA-API-only ffmpeg
+/// is tried once)
 /// (else GIF only, the MP4 choice disabled with [`NO_MP4`]); Windows checks
 /// Media Foundation when the recording starts.
 pub fn mp4_available() -> bool {
@@ -77,7 +79,8 @@ pub fn mp4_available() -> bool {
     }
     #[cfg(all(target_os = "linux", not(test)))]
     {
-        crate::rec::linux::ffmpeg::find().is_some()
+        use crate::rec::linux::ffmpeg;
+        ffmpeg::find().is_some_and(|exe| ffmpeg::caps(&exe).h264.is_some())
     }
     #[cfg(all(not(target_os = "linux"), not(test)))]
     {
@@ -245,6 +248,10 @@ pub fn cameras_async() -> std::sync::mpsc::Receiver<Vec<CamDevice>> {
 
 /// The 3-2-1 countdown before the first frame.
 pub const COUNTDOWN: Duration = Duration::from_secs(3);
+/// How long before the first frame the X11 countdown is taken down: more
+/// than a compositor frame (about 16 ms at 60 Hz), so it is never recorded.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub const HIDE_BEFORE_GO: Duration = Duration::from_millis(60);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
@@ -333,6 +340,18 @@ impl Machine {
         Some((left.as_millis().div_ceil(1000) as u32).clamp(1, COUNTDOWN.as_secs() as u32))
     }
 
+    /// The countdown's number as shown on X11: taken down [`HIDE_BEFORE_GO`]
+    /// before the first frame, so a compositor has repainted without it by
+    /// then (it would be recorded otherwise).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))] // X11 only; tested everywhere
+    pub fn countdown_shown(&self, now: Instant) -> Option<u32> {
+        let t = self.go_at.filter(|_| self.phase == Phase::Countdown)?;
+        if t.saturating_duration_since(now) <= HIDE_BEFORE_GO {
+            return None;
+        }
+        self.countdown(now)
+    }
+
     /// Pause/Resume: recording ⇄ paused.
     pub fn toggle_pause(&mut self, now: Instant) -> Option<Effect> {
         match self.phase {
@@ -415,7 +434,48 @@ fn y1(r: IRect) -> i32 {
 /// kept `margin` inside that monitor. When it fits on no side (a full
 /// screen recording) it goes inside the area at its bottom centre (it is
 /// excluded from the capture).
+#[cfg_attr(not(windows), allow(dead_code))] // Windows; X11 uses `place_bar_away`
 pub fn place_bar(area: IRect, monitors: &[IRect], (w, h): (i32, i32), gap: i32, margin: i32) -> (i32, i32) {
+    if let Some(p) = place_bar_beside(area, monitors, (w, h), gap, margin) {
+        return p;
+    }
+    let (cx, cy) = (area.0 + area.2 as i32 / 2, area.1 + area.3 as i32 / 2);
+    let clamp = |v: i32, lo: i32, hi: i32| v.clamp(lo, hi.max(lo));
+    let mon = |x: i32, y: i32| monitors.iter().copied().find(|m| contains(*m, x, y));
+    // Inside, bottom centre (clamped to the area's monitor).
+    let m = mon(cx, cy).unwrap_or(area);
+    let x = clamp(cx - w / 2, m.0 + margin, x1(m) - margin - w);
+    let y = clamp(y1(area) - gap - h, m.1 + margin, y1(m) - margin - h);
+    (x, y)
+}
+
+/// Where the bar goes when it must stay out of the recorded area (X11
+/// cannot keep a window out of the capture): beside the area as in
+/// [`place_bar`], else at the bottom centre of another monitor that the
+/// area does not touch; `None` when there is no such place (a full-screen
+/// recording on the only monitor: see [`corner_pill`]).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))] // X11 only; tested everywhere
+pub fn place_bar_away(area: IRect, monitors: &[IRect], (w, h): (i32, i32), gap: i32, margin: i32) -> Option<(i32, i32)> {
+    if let Some(p) = place_bar_beside(area, monitors, (w, h), gap, margin) {
+        return Some(p);
+    }
+    let apart = |m: &IRect| x1(*m) <= area.0 || m.0 >= x1(area) || y1(*m) <= area.1 || m.1 >= y1(area);
+    monitors
+        .iter()
+        .filter(|m| apart(m) && m.2 as i32 >= w + 2 * margin && m.3 as i32 >= h + 2 * margin)
+        .map(|m| (m.0 + (m.2 as i32 - w) / 2, y1(*m) - margin - h))
+        .next()
+}
+
+/// The compact pill's top-left: inside the area's top-right corner,
+/// `margin` in (it is recorded there, so it stays small and out of the way).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn corner_pill(area: IRect, (w, _h): (i32, i32), margin: i32) -> (i32, i32) {
+    ((x1(area) - margin - w).max(area.0), area.1 + margin)
+}
+
+/// [`place_bar`]'s sides: `None` when the bar fits beside the area on none.
+fn place_bar_beside(area: IRect, monitors: &[IRect], (w, h): (i32, i32), gap: i32, margin: i32) -> Option<(i32, i32)> {
     let (cx, cy) = (area.0 + area.2 as i32 / 2, area.1 + area.3 as i32 / 2);
     let clamp = |v: i32, lo: i32, hi: i32| v.clamp(lo, hi.max(lo));
     let mon = |x: i32, y: i32| monitors.iter().copied().find(|m| contains(*m, x, y));
@@ -436,14 +496,7 @@ pub fn place_bar(area: IRect, monitors: &[IRect], (w, h): (i32, i32), gap: i32, 
             best = Some((room, pos));
         }
     }
-    if let Some((_, p)) = best {
-        return p;
-    }
-    // Inside, bottom centre (clamped to the area's monitor).
-    let m = mon(cx, cy).unwrap_or(area);
-    let x = clamp(cx - w / 2, m.0 + margin, x1(m) - margin - w);
-    let y = clamp(y1(area) - gap - h, m.1 + margin, y1(m) - margin - h);
-    (x, y)
+    best.map(|(_, p)| p)
 }
 
 /// Where the control bar is: the UI scale it is drawn at, its panel's
@@ -460,7 +513,20 @@ pub struct BarSpot {
 /// with another scale (mixed DPI), again at that one's. `prev` is kept
 /// while the panel's size at its scale is unchanged; when it changes (the
 /// timer passed an hour) the bar is placed again.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn spot_bar(geom: &Geom, prev: Option<BarSpot>, size: impl Fn(f32) -> (i32, i32)) -> BarSpot {
+    spot_bar_with(geom, prev, size, |area, rects, sz, gap| place_bar(area, rects, sz, gap, gap))
+}
+
+/// [`spot_bar`] with the placement given (`place(area, monitors, size,
+/// gap)`; the gap is also the margin).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn spot_bar_with(
+    geom: &Geom,
+    prev: Option<BarSpot>,
+    size: impl Fn(f32) -> (i32, i32),
+    place: impl Fn(IRect, &[IRect], (i32, i32), i32) -> (i32, i32),
+) -> BarSpot {
     if let Some(p) = prev
         && size(p.scale) == p.size
     {
@@ -470,7 +536,7 @@ pub fn spot_bar(geom: &Geom, prev: Option<BarSpot>, size: impl Fn(f32) -> (i32, 
     let at = |s: f32| {
         let sz = size(s);
         let gap = (8.0 * s).round() as i32;
-        BarSpot { scale: s, size: sz, pos: place_bar(geom.area, &rects, sz, gap, gap) }
+        BarSpot { scale: s, size: sz, pos: place(geom.area, &rects, sz, gap) }
     };
     let first = at(geom.area_scale());
     let s = geom.scale_at(first.pos.0 + first.size.0 / 2, first.pos.1 + first.size.1 / 2);
@@ -667,8 +733,8 @@ impl Run {
         Ok(run)
     }
 
-    /// X11: as on Windows, but ffmpeg records the sound itself, so the
-    /// microphone cannot be muted from the bar (it has no Mute button).
+    /// X11: as on Windows (the sound is read in-app, so the microphone
+    /// can be muted from the bar).
     #[cfg(target_os = "linux")]
     #[cfg_attr(test, allow(dead_code))] // tests record through `Run::fake`
     pub fn start(
@@ -680,11 +746,12 @@ impl Run {
         bubble: Option<crate::cam::Bubble>,
     ) -> anyhow::Result<Run> {
         let muted = Arc::new(AtomicBool::new(false));
-        let ui = x11::Recorder::start(spec, geom, th, bubble)?;
+        let has_mic = spec.mic.is_some();
+        let ui = x11::Recorder::start(spec, geom, th, muted.clone(), bubble)?;
         let mut run = Run {
             m: Machine::new(),
             muted,
-            has_mic: false,
+            has_mic,
             ui: Some(ui),
             #[cfg(test)]
             log: Vec::new(),
@@ -777,6 +844,7 @@ impl Run {
             paused: self.m.phase() == Phase::Paused,
             mic: self.has_mic.then(|| self.muted()),
             stopping: self.m.phase() == Phase::Stopping,
+            compact: false,
         }
     }
 
@@ -827,7 +895,10 @@ impl Run {
         #[cfg(any(windows, target_os = "linux"))]
         {
             let view = self.view(now);
+            #[cfg(windows)]
             let count = self.m.countdown(now);
+            #[cfg(target_os = "linux")]
+            let count = self.m.countdown_shown(now);
             if let Some(ui) = &mut self.ui {
                 ui.show(&view, count);
             }

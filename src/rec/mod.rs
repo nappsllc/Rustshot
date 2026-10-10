@@ -184,22 +184,26 @@ pub trait VideoEncoder: Send {
     /// removes it).
     fn finish(self: Box<Self>) -> Result<()>;
     /// Whether this encoder takes audio from the session: when `false` the
-    /// session opens no mixer and never calls [`VideoEncoder::push_audio`].
-    /// GIF has no sound; the ffmpeg encoder (Linux) captures its sound
-    /// itself (`-f pulse` inputs), so it says `false` too and the caller
-    /// passes it no audio sources.
+    /// session opens no mixer and never calls [`VideoEncoder::push_audio`]
+    /// (GIF has no sound). With a mixer, the audio pushed is contiguous
+    /// from clock time 0 (silence included), which encoders without
+    /// timestamps on their sound (ffmpeg's PCM pipe on Linux) rely on.
     fn audio(&self) -> bool;
-    /// The recording was paused at clock time `at` (called on the encode
-    /// thread once per pause, after the audio up to it was pushed, possibly
-    /// after the resume already happened). Frames stamped `at` or earlier
-    /// may still follow. Encoders fed by the session need nothing here (the
-    /// clock already leaves the paused time out); one that captures sound
-    /// on its own must leave out what it heard while paused.
-    fn pause(&mut self, at: Duration) -> Result<()> {
-        let _ = at;
-        Ok(())
+}
+
+/// The error of a [`VideoEncoder::finish`] that failed but left a playable
+/// file (e.g. ffmpeg died after writing the MP4 index): the session keeps
+/// the file and reports the error with where it was saved.
+#[derive(Debug)]
+pub struct Salvaged(pub String);
+
+impl std::fmt::Display for Salvaged {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
     }
 }
+
+impl std::error::Error for Salvaged {}
 
 /// The largest frame recorded to MP4; larger areas are scaled to fit.
 pub const MP4_MAX_W: u32 = 4096;
@@ -608,7 +612,18 @@ impl Session {
         self.queue.close();
         let Some(h) = self.encode.take() else { return Err(anyhow!("recording already stopped")) };
         let part = part_path(&self.out);
-        let (push_err, finished) = h.join().unwrap_or_else(|_| (None, Err(anyhow!("the encoder crashed"))));
+        let (mut push_err, finished) = h.join().unwrap_or_else(|_| (None, Err(anyhow!("the encoder crashed"))));
+        let finished = match finished {
+            // Failed, but the file plays: kept, and the failure reported.
+            Err(e) if e.is::<Salvaged>() => {
+                push_err = Some(match push_err {
+                    Some(p) => e.context(format!("{p:#}")),
+                    None => e,
+                });
+                Ok(())
+            }
+            r => r,
+        };
         if let Err(e) = finished {
             let _ = std::fs::remove_file(&part);
             let e = e.context("finish the recording");
@@ -726,7 +741,6 @@ fn encode_loop(
                     m.discard();
                     push_pcm(enc.as_mut(), &pcm, ts)?;
                 }
-                enc.pause(c.last_pause())?;
             }
             if let Some(m) = mixer.as_mut() {
                 let now = c.now_at(time());

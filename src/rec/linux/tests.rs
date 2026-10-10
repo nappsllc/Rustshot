@@ -1,14 +1,16 @@
 //! Live recording on X11: `#[ignore]`d, run by CI's Linux job under Xvfb
 //! with ffmpeg installed (names start `live_rec_linux_`). CI starts a
-//! PulseAudio daemon with a null sink and a null source for the test with
-//! sound; without a sound server it prints "SKIP:" and passes.
+//! PulseAudio daemon with a null sink (the default) and a null source for
+//! the test with sound, which plays a tone into the sink while it records;
+//! without a sound server it prints "SKIP:" and passes.
 
 use super::ffmpeg::{self, FfmpegEncoder};
+use super::parec::ParecSource;
 use super::xshm::XShmSource;
 use crate::rec::gif::GifEncoder;
-use crate::rec::{FrameSource, Quality, RecFormat, RecSpec, Session, VideoEncoder};
+use crate::rec::{AudioSource, FrameSource, Quality, RecFormat, RecSpec, Session, VideoEncoder};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 fn out_dir(name: &str) -> PathBuf {
@@ -62,7 +64,7 @@ fn live_rec_linux_xvfb_mp4_with_ffmpeg() {
     // An odd size: cropped to even by the video filter.
     let spec = spec(RecFormat::Mp4, 30, (100, 80, 641, 481), dir.join("screen.mp4"));
     let path = record(spec, 2.0, |p, w, h| {
-        let e = FfmpegEncoder::create(p, w, h, 30, Quality::Medium, None, None).unwrap();
+        let e = FfmpegEncoder::create(p, w, h, 30, Quality::Medium, false).unwrap();
         eprintln!("encoder: {}", e.codec().name());
         Box::new(e)
     });
@@ -81,10 +83,52 @@ fn live_rec_linux_xvfb_mp4_with_ffmpeg() {
     assert_eq!(value(&st, "avg_frame_rate"), "30/1", "constant frame rate");
 }
 
-/// System sound and microphone (mixed) through ffmpeg's pulse inputs, with
-/// a pause: two segments joined into one file without the paused time.
+/// A 16-bit stereo WAV of a `hz` sine at half scale, `secs` long.
+fn tone_wav(path: &Path, hz: f64, secs: f64) {
+    let rate = 48_000u32;
+    let n = (f64::from(rate) * secs) as u32;
+    let mut b = Vec::with_capacity(44 + n as usize * 4);
+    b.extend_from_slice(b"RIFF");
+    b.extend_from_slice(&(36 + n * 4).to_le_bytes());
+    b.extend_from_slice(b"WAVEfmt ");
+    b.extend_from_slice(&16u32.to_le_bytes());
+    b.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    b.extend_from_slice(&2u16.to_le_bytes());
+    b.extend_from_slice(&rate.to_le_bytes());
+    b.extend_from_slice(&(rate * 4).to_le_bytes());
+    b.extend_from_slice(&4u16.to_le_bytes());
+    b.extend_from_slice(&16u16.to_le_bytes());
+    b.extend_from_slice(b"data");
+    b.extend_from_slice(&(n * 4).to_le_bytes());
+    for i in 0..n {
+        let v = ((f64::from(i) * hz * std::f64::consts::TAU / f64::from(rate)).sin() * 16_000.0) as i16;
+        b.extend_from_slice(&v.to_le_bytes());
+        b.extend_from_slice(&v.to_le_bytes());
+    }
+    std::fs::write(path, b).unwrap();
+}
+
+/// `mean_volume` (dB) of `path`'s sound, from ffmpeg's volumedetect.
+fn mean_volume(path: &Path) -> f64 {
+    let exe = ffmpeg::find().unwrap();
+    let o = Command::new(exe)
+        .args(["-hide_banner", "-nostats", "-i"])
+        .arg(path)
+        .args(["-map", "0:a", "-af", "volumedetect", "-f", "null", "-"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let log = String::from_utf8_lossy(&o.stderr);
+    log.lines()
+        .find_map(|l| l.split("mean_volume: ").nth(1)?.split_whitespace().next()?.parse().ok())
+        .unwrap_or_else(|| panic!("no mean_volume in:\n{log}"))
+}
+
+/// System sound (a tone played into the null sink) and microphone (the
+/// null source), read with parec, mixed by the session and fed to one
+/// ffmpeg; paused once: 1.5 s + 1.5 s recorded.
 #[test]
-#[ignore = "records the X screen (Xvfb in CI) and PulseAudio with ffmpeg"]
+#[ignore = "records the X screen (Xvfb in CI) and PulseAudio with parec and ffmpeg"]
 fn live_rec_linux_xvfb_mp4_with_sound_and_pause() {
     use super::pulse_list;
     let all = pulse_list::list();
@@ -99,11 +143,20 @@ fn live_rec_linux_xvfb_mp4_with_sound_and_pause() {
     let mic = pulse_list::mic_source(all.as_deref(), "").ok();
     eprintln!("system {system}, mic {mic:?}");
     let dir = out_dir("sound");
+    let wav = std::env::temp_dir().join(format!("rustshot-tone-{}.wav", std::process::id()));
+    tone_wav(&wav, 440.0, 20.0);
+    let paplay = ffmpeg::find_tool("paplay", None).expect("paplay (pulseaudio-utils)");
+    let mut player = Command::new(paplay).arg(&wav).stdin(Stdio::null()).spawn().expect("play the tone");
+    std::thread::sleep(Duration::from_millis(500)); // the sink wakes up
+    let mut audio: Vec<Box<dyn AudioSource>> = vec![Box::new(ParecSource::open(&system).expect("parec the monitor"))];
+    if let Some(m) = &mic {
+        audio.push(Box::new(ParecSource::open(m).expect("parec the mic")));
+    }
     let spec = spec(RecFormat::Mp4, 30, (0, 0, 320, 240), dir.join("sound.mp4"));
     let src = XShmSource::open(spec.area).expect("open XShm");
     let (w, h) = src.size();
-    let enc = FfmpegEncoder::create(&spec.part_path(), w, h, 30, Quality::Low, Some(system), mic).unwrap();
-    let s = Session::start(spec, Box::new(src), Vec::new(), Box::new(enc)).unwrap();
+    let enc = FfmpegEncoder::create(&spec.part_path(), w, h, 30, Quality::Low, true).unwrap();
+    let s = Session::start(spec, Box::new(src), audio, Box::new(enc)).unwrap();
     std::thread::sleep(Duration::from_millis(1500));
     s.pause();
     std::thread::sleep(Duration::from_millis(1000));
@@ -112,17 +165,34 @@ fn live_rec_linux_xvfb_mp4_with_sound_and_pause() {
     let t = Instant::now();
     let path = s.stop().unwrap();
     eprintln!("stopped in {:?}", t.elapsed());
+    let _ = player.kill(); // our own child, by its PID
+    let _ = player.wait();
+    let _ = std::fs::remove_file(&wav);
     let fmt = ffprobe(&path, "format=duration");
-    let st = ffprobe(&path, "stream=codec_type,codec_name,start_time,duration");
+    let st = ffprobe(&path, "stream=codec_type,codec_name,duration");
     eprintln!("ffprobe:\n{fmt}{st}");
     let duration: f64 = value(&fmt, "duration").parse().unwrap();
-    eprintln!("FFPROBE sound+pause duration={duration:.3}s");
+    // Per stream: codec_type comes before its duration.
+    let mut durs = std::collections::HashMap::new();
+    let mut kind = String::new();
+    for l in st.lines() {
+        if let Some(k) = l.strip_prefix("codec_type=") {
+            kind = k.to_string();
+        } else if let Some(d) = l.strip_prefix("duration=") {
+            durs.insert(kind.clone(), d.parse::<f64>().unwrap_or(f64::NAN));
+        }
+    }
+    let vol = mean_volume(&path);
+    let (v, a) = (durs.get("video").copied().unwrap_or(f64::NAN), durs.get("audio").copied().unwrap_or(f64::NAN));
+    eprintln!("FFPROBE sound+pause duration={duration:.3}s video={v:.3}s audio={a:.3}s mean_volume={vol:.1}dB");
     let leftovers: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name()).collect();
     let _ = std::fs::remove_dir_all(&dir);
-    assert_eq!(leftovers, [std::ffi::OsString::from("sound.mp4")], "segments and lists are cleaned up");
+    assert_eq!(leftovers, [std::ffi::OsString::from("sound.mp4")], "nothing else is written");
     assert!((2.7..=3.3).contains(&duration), "duration {duration} s, want 3 ± 0.3 (the pause is cut)");
     assert!(st.contains("codec_type=video") && st.contains("codec_name=h264"), "{st}");
     assert!(st.contains("codec_type=audio") && st.contains("codec_name=aac"), "{st}");
+    assert!((v - a).abs() <= 0.1, "video {v} s and audio {a} s differ by more than 0.1 s");
+    assert!(vol > -60.0, "the tone is in the recording (mean_volume {vol} dB)");
 }
 
 #[test]

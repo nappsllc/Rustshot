@@ -294,6 +294,12 @@ Limitations:
 
 - **Linux** needs an **X11** session (or XWayland). Native Wayland capture and
   hotkeys are not supported yet. Runtime dependencies: `libx11`, `libxrandr`.
+  Screen recording on X11 records MP4 with `ffmpeg` (sound through `parec`,
+  from `pulseaudio-utils`; it works on PipeWire too) and GIF without it.
+  X11 cannot keep a window out of a recording, so the control bar sits
+  beside the recorded area or on another monitor; when you record the whole
+  screen of your only monitor it shrinks to a small pill (timer and Stop)
+  in the top-right corner, and that pill is in the video.
 - **Mixed-DPI setups** (for example a 150 % laptop with a 100 % monitor): the
   editor captures the monitor under the cursor instead of spanning all of them.
 - **macOS** asks for *Screen Recording* permission on first capture
