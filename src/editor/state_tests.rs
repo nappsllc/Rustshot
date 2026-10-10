@@ -1256,3 +1256,77 @@ fn record_hotkey_refused_while_busy() {
     a.reload_config(a.cfg.clone());
     assert!(a.rec_opts.is_none());
 }
+
+/// A one-shot run (`rustshot gui`, no tasks) records too and exits once
+/// the recording is over, like a capture: 0 saved ("saved: <path>"),
+/// 1 failed, 2 cancelled; a recording that cannot start exits 1.
+#[cfg(windows)]
+#[test]
+fn one_shot_recording_exits_with_its_result() {
+    let saved = rec_ui::End::Saved { path: "C:/shots/a.mp4".into(), warnings: vec![] };
+    for (end, want) in [(saved, 0), (rec_ui::End::Failed("disk full".into()), 1), (rec_ui::End::Cancelled, 2)] {
+        let mut a = app(Some(r(100.0, 100.0, 600.0, 400.0)));
+        assert!(a.one_shot());
+        a.exit_code.store(-1, Ordering::SeqCst);
+        ed(&mut a).rec.open = true;
+        key(&mut a, key::RETURN);
+        assert!(hidden(&a) && a.rec.is_some(), "recording");
+        a.pump();
+        assert_eq!(code(&a), -1, "still running: no exit yet");
+        // The bar's Stop (no tray, no hotkeys in a one-shot run).
+        a.rec.as_mut().unwrap().stop(Instant::now());
+        a.rec.as_mut().unwrap().fake_end = Some(end.clone());
+        a.pump();
+        assert!(a.rec.is_none());
+        assert_eq!(code(&a), want, "{end:?}");
+    }
+    let mut a = app(None);
+    a.st = State::Hidden;
+    a.exit_code.store(-1, Ordering::SeqCst);
+    a.recording_started(Err(anyhow::anyhow!("no H.264 encoder is installed")));
+    assert_eq!(code(&a), 1);
+    assert!(a.rec.is_none());
+}
+
+/// A run with tasks (`gui --copy`) has no Record: neither the keymap's
+/// `record` nor Enter (even in record mode) starts one.
+#[cfg(windows)]
+#[test]
+fn record_is_unavailable_in_a_run_with_tasks() {
+    let mut a = app(Some(r(100.0, 100.0, 600.0, 400.0)));
+    ed(&mut a).tasks = vec![Task::Geometry];
+    ed(&mut a).keys = Keymap::from_config(&[("record".to_string(), "Ctrl+R".to_string())].into_iter().collect()).0;
+    key_m(&mut a, 'R' as u32, CTRL);
+    assert!(!ed(&mut a).rec.open, "no popover");
+    ed(&mut a).rec.mode = true;
+    key(&mut a, key::RETURN);
+    assert!(a.rec.is_none() && a.rec_spec.is_none(), "Enter ran the tasks instead");
+    assert!(hidden(&a));
+}
+
+/// Enter in record mode with nothing selected records the monitor under
+/// the pointer, not the whole desktop.
+#[cfg(windows)]
+#[test]
+fn record_mode_enter_without_selection_records_the_monitor_under_the_pointer() {
+    let mut a = quiet(preview_app_with(theme::DARK, None, two_monitor_shot()));
+    a.kind = RunKind::Daemon;
+    ed(&mut a).rec = RecPop::new(RecOpts::from_config(&a.cfg), true);
+    mv(&mut a, 1500, 300);
+    key(&mut a, key::RETURN);
+    assert_eq!(a.rec_spec.as_ref().expect("recording").area, (1200, 0, 1200, 900));
+}
+
+/// The recording geometry carries each monitor's own UI scale.
+#[test]
+fn rec_geom_has_each_monitors_scale() {
+    let mut a = quiet(preview_app_with(theme::DARK, Some(r(10.0, 300.0, 100.0, 100.0)), two_monitor_shot()));
+    let mon = |x, y, w, h, scale| capture::MonInfo { x, y, w, h, scale, primary: false };
+    let mons = [mon(0, 200, 1200, 700, 1.0), mon(1200, 0, 1200, 900, 2.0)];
+    let g = ed(&mut a).rec_geom(&mons);
+    assert_eq!(g.monitors, vec![((0, 200, 1200, 700), 1.0), ((1200, 0, 1200, 900), 2.0)]);
+    assert_eq!(g.area_scale(), 1.0);
+    // No system monitors (tests): the shot's scale.
+    let g = ed(&mut a).rec_geom(&[]);
+    assert!(g.monitors.iter().all(|m| m.1 == g.scale));
+}

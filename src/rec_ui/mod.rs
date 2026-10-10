@@ -319,6 +319,37 @@ pub fn place_bar(area: IRect, monitors: &[IRect], (w, h): (i32, i32), gap: i32, 
     (x, y)
 }
 
+/// Where the control bar is: the UI scale it is drawn at, its panel's
+/// size at that scale and the panel's top-left (physical px).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BarSpot {
+    pub scale: f32,
+    pub size: (i32, i32),
+    pub pos: (i32, i32),
+}
+
+/// Place the control bar, whose panel is `size(s)` at UI scale `s`: at
+/// the scale of the area's monitor first and, when it lands on a monitor
+/// with another scale (mixed DPI), again at that one's. `prev` is kept
+/// while the panel's size at its scale is unchanged; when it changes (the
+/// timer passed an hour) the bar is placed again.
+pub fn spot_bar(geom: &Geom, prev: Option<BarSpot>, size: impl Fn(f32) -> (i32, i32)) -> BarSpot {
+    if let Some(p) = prev
+        && size(p.scale) == p.size
+    {
+        return p;
+    }
+    let rects = geom.rects();
+    let at = |s: f32| {
+        let sz = size(s);
+        let gap = (8.0 * s).round() as i32;
+        BarSpot { scale: s, size: sz, pos: place_bar(geom.area, &rects, sz, gap, gap) }
+    };
+    let first = at(geom.area_scale());
+    let s = geom.scale_at(first.pos.0 + first.size.0 / 2, first.pos.1 + first.size.1 / 2);
+    if s == first.scale { first } else { at(s) }
+}
+
 /// Where the countdown goes: centred on the area.
 pub fn centre_on(area: IRect, (w, h): (i32, i32)) -> (i32, i32) {
     (area.0 + (area.2 as i32 - w) / 2, area.1 + (area.3 as i32 - h) / 2)
@@ -399,7 +430,9 @@ impl<A: AudioSource> AudioSource for Muted<A> {
 /// How a recording ended.
 #[derive(Clone, Debug, PartialEq)]
 pub enum End {
-    Saved(PathBuf),
+    /// The file, and what was left out of it ("microphone not recorded:
+    /// <reason>").
+    Saved { path: PathBuf, warnings: Vec<String> },
     /// It could not start, or the file could not be finished.
     Failed(String),
     /// Stopped during the countdown.
@@ -411,10 +444,33 @@ pub enum End {
 pub struct Geom {
     /// Recorded area, physical virtual-screen px.
     pub area: IRect,
-    /// Every monitor, same coordinates.
-    pub monitors: Vec<IRect>,
-    /// UI scale (physical px per logical px).
+    /// Every monitor (same coordinates) and its UI scale (physical px per
+    /// logical px).
+    pub monitors: Vec<(IRect, f32)>,
+    /// UI scale off every monitor.
     pub scale: f32,
+}
+
+impl Geom {
+    /// The monitors' rects.
+    pub fn rects(&self) -> Vec<IRect> {
+        self.monitors.iter().map(|m| m.0).collect()
+    }
+
+    /// The UI scale of the monitor at (x, y).
+    pub fn scale_at(&self, x: i32, y: i32) -> f32 {
+        self.monitors.iter().find(|m| contains(m.0, x, y)).map_or(self.scale, |m| m.1)
+    }
+
+    /// The UI scale where the area is (its centre).
+    pub fn area_scale(&self) -> f32 {
+        self.scale_at(self.area.0 + self.area.2 as i32 / 2, self.area.1 + self.area.3 as i32 / 2)
+    }
+
+    /// Each monitor with the border's thickness there.
+    pub fn border_monitors(&self) -> Vec<(IRect, i32)> {
+        self.monitors.iter().map(|&(m, s)| (m, border::thickness(s))).collect()
+    }
 }
 
 /// A recording from the Start button to the saved file: the state

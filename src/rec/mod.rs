@@ -39,7 +39,7 @@ pub struct Frame {
     pub ts: Duration,
 }
 
-/// The recording's monotonic clock: time since [`Clock::start`] minus the
+/// The recording's monotonic clock: time since its start minus the
 /// time spent paused (paused time is cut, not recorded as frozen frames).
 #[derive(Clone, Copy, Debug)]
 pub struct Clock {
@@ -58,26 +58,6 @@ pub struct Clock {
 }
 
 impl Clock {
-    #[allow(dead_code)] // for real-time callers (the session uses the `_at` forms)
-    pub fn start() -> Clock {
-        Clock::start_at(Instant::now())
-    }
-
-    #[allow(dead_code)] // for real-time callers (the session uses the `_at` forms)
-    pub fn pause(&mut self) {
-        self.pause_at(Instant::now());
-    }
-
-    #[allow(dead_code)] // for real-time callers (the session uses the `_at` forms)
-    pub fn resume(&mut self) {
-        self.resume_at(Instant::now());
-    }
-
-    #[allow(dead_code)] // for real-time callers (the session uses the `_at` forms)
-    pub fn now(&self) -> Duration {
-        self.now_at(Instant::now())
-    }
-
     pub fn is_paused(&self) -> bool {
         self.paused_at.is_some()
     }

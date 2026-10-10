@@ -74,11 +74,11 @@ fn post_tray(msg: u32) {
     }
 }
 
-/// "Saved <path>" as a balloon; clicking it opens the folder.
-pub fn notify_saved(path: &std::path::Path) {
+/// `text` ("Saved <path>…") as a balloon; clicking it opens the folder.
+pub fn notify_saved(path: &std::path::Path, text: &str) {
     *SAVED.lock().unwrap() = path.parent().map(|p| p.to_path_buf());
-    post_balloon(&format!("Saved {}
-Click to open the folder.", path.display()));
+    post_balloon(&format!("{text}
+Click to open the folder."));
 }
 
 /// The recording state changed: swap the icon (red dot) and the tip.

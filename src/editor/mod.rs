@@ -402,17 +402,39 @@ impl App {
         let Some(run) = self.rec.as_mut() else { return };
         let Some(end) = run.tick(Instant::now()) else { return };
         self.rec = None;
-        crate::tray::set_recording(false);
-        match end {
-            rec_ui::End::Saved(p) => {
-                println!("saved: {}", p.display());
-                crate::tray::notify_saved(&p);
+        self.recording_over(end);
+    }
+
+    /// Say how a recording ended: on stdout/stderr, and in a tray balloon
+    /// for the daemon. A one-shot run (no tray, no hotkeys: the bar's Stop
+    /// ends it) exits like a capture: 0 saved, 1 failed, 2 cancelled.
+    fn recording_over(&mut self, end: rec_ui::End) {
+        let daemon = !self.one_shot();
+        if daemon {
+            crate::tray::set_recording(false);
+        }
+        let code = match end {
+            rec_ui::End::Saved { path, warnings } => {
+                println!("saved: {}", path.display());
+                for w in &warnings {
+                    eprintln!("warning: {w}");
+                }
+                if daemon {
+                    crate::tray::notify_saved(&path, &warnings);
+                }
+                0
             }
             rec_ui::End::Failed(e) => {
                 eprintln!("error: recording failed: {e}");
-                crate::tray::notify(&format!("Recording failed: {e}"));
+                if daemon {
+                    crate::tray::notify(&format!("Recording failed: {e}"));
+                }
+                1
             }
-            rec_ui::End::Cancelled => {}
+            rec_ui::End::Cancelled => 2,
+        };
+        if self.one_shot() {
+            self.request_exit(code);
         }
     }
 
@@ -424,18 +446,22 @@ impl App {
         {
             let _ = th;
             self.rec_spec = Some(spec);
-            self.rec = Some(rec_ui::Run::fake(cfg.rec_countdown, opts.mic, Instant::now()));
+            self.recording_started(Ok(rec_ui::Run::fake(cfg.rec_countdown, opts.mic, Instant::now())));
         }
         #[cfg(not(test))]
-        match rec_ui::Run::start(spec, geom, th, cfg.rec_countdown, self.hwnd) {
+        self.recording_started(rec_ui::Run::start(spec, geom, th, cfg.rec_countdown, self.hwnd));
+    }
+
+    /// The recording is up, or it could not start (said like a failure).
+    fn recording_started(&mut self, run: anyhow::Result<rec_ui::Run>) {
+        match run {
             Ok(run) => {
                 self.rec = Some(run);
-                crate::tray::set_recording(true);
+                if !self.one_shot() {
+                    crate::tray::set_recording(true);
+                }
             }
-            Err(e) => {
-                eprintln!("error: recording failed: {e:#}");
-                crate::tray::notify(&format!("Recording failed: {e:#}"));
-            }
+            Err(e) => self.recording_over(rec_ui::End::Failed(format!("{e:#}"))),
         }
     }
 
@@ -653,7 +679,11 @@ impl App {
         self.rec_opts = Some(edit.rec.opts.clone());
         if edit.rec.start && !cancelled {
             // Recording: the overlay goes away, the area is recorded live.
-            let geom = edit.rec_geom();
+            #[cfg(not(test))]
+            let mons = capture::monitors().unwrap_or_default();
+            #[cfg(test)]
+            let mons = Vec::new();
+            let geom = edit.rec_geom(&mons);
             wind::hide(self.hwnd);
             self.st = State::Hidden;
             let (cfg, opts, th) = (edit.cfg.clone(), edit.rec.opts.clone(), edit.th);
@@ -825,8 +855,11 @@ impl App {
         let Some(action) = edit.keys.resolve(vk, mods) else { return };
         match action {
             Action::Cancel => cancel_key(edit),
-            // In record mode (or with the Record popover open) Enter records.
-            Action::Accept if edit.rec.mode || edit.rec.open => self.apply_act(edit, Act::RecStart),
+            // In record mode (or with the Record popover open) Enter
+            // records; never in a run with tasks (`gui --copy`: no Record).
+            Action::Accept if (edit.rec.mode || edit.rec.open) && edit.tasks.is_empty() => {
+                self.apply_act(edit, Act::RecStart)
+            }
             Action::Accept => accept_key(edit),
             Action::SelectAll => {
                 edit.sel = Some(FRect { x: 0.0, y: 0.0, w: edit.shot.size.0 as f32, h: edit.shot.size.1 as f32 });
@@ -834,7 +867,7 @@ impl App {
             }
             // The palette popover hangs off the toolbar, which needs a selection.
             Action::TogglePalette if edit.sel.is_none() => {}
-            Action::Record if edit.sel.is_none() || !rec_ui::SUPPORTED => {}
+            Action::Record if edit.sel.is_none() || !rec_ui::SUPPORTED || !edit.tasks.is_empty() => {}
             a => {
                 if let Some(act) = act_of(a) {
                     self.apply_act(edit, act);
@@ -1103,6 +1136,8 @@ impl App {
                 edit.palette_open = !edit.palette_open;
                 edit.rec.open = false;
             }
+            // A run with tasks has no Record button.
+            Act::Record | Act::RecStart if !edit.tasks.is_empty() => {}
             Act::Record => {
                 edit.rec.open = !edit.rec.open;
                 edit.rec.dev_open = false;
@@ -1139,8 +1174,10 @@ impl App {
                 edit.rec.dev_open = false;
             }
             Act::RecStart => {
+                // Nothing selected: the monitor under the pointer.
                 if edit.sel.is_none() {
-                    edit.sel = Some(FRect { x: 0.0, y: 0.0, w: edit.shot.size.0 as f32, h: edit.shot.size.1 as f32 });
+                    let p = Pt::new(self.mouse.0 as f32, self.mouse.1 as f32);
+                    edit.sel = Some(pick_area(&edit.shot.monitors, None, p));
                 }
                 edit.rec.start = true;
                 edit.done = true;
@@ -1435,8 +1472,6 @@ fn act_of(a: Action) -> Option<Act> {
         Action::TogglePalette => Act::Palette,
         Action::Record => Act::Record,
         Action::SelectAll | Action::Accept | Action::Cancel => return None,
-        // Nothing records while the overlay is up.
-        Action::StopRecording => return None,
     })
 }
 
@@ -1822,8 +1857,9 @@ impl Edit {
     }
 
     /// The selection as a recording area (physical virtual-screen px,
-    /// at least 2x2) with every monitor and the UI scale.
-    fn rec_geom(&self) -> rec_ui::Geom {
+    /// at least 2x2) with every monitor and its UI scale (from `mons`, the
+    /// system's monitors; the shot's scale where none matches).
+    fn rec_geom(&self, mons: &[capture::MonInfo]) -> rec_ui::Geom {
         let (ox, oy) = self.shot.origin;
         let full = FRect { x: 0.0, y: 0.0, w: self.shot.size.0 as f32, h: self.shot.size.1 as f32 };
         let mut s = self.sel.unwrap_or(full);
@@ -1832,7 +1868,14 @@ impl Edit {
         let (w, h) = ((s.x1().round() as i32 - x).max(2), (s.y1().round() as i32 - y).max(2));
         rec_ui::Geom {
             area: (x + ox, y + oy, w as u32, h as u32),
-            monitors: self.shot.monitors.iter().map(|m| (m.0 + ox, m.1 + oy, m.2, m.3)).collect(),
+            monitors: (self.shot.monitors.iter())
+                .map(|m| {
+                    let r = (m.0 + ox, m.1 + oy, m.2, m.3);
+                    let (cx, cy) = (r.0 + r.2 as i32 / 2, r.1 + r.3 as i32 / 2);
+                    let s = mons.iter().find(|i| i.contains(cx, cy)).map_or(self.ui_scale(), |i| i.scale.clamp(1.0, 4.0));
+                    (r, s)
+                })
+                .collect(),
             scale: self.ui_scale(),
         }
     }

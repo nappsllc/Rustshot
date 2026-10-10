@@ -9,7 +9,7 @@
 //! ticks at once ([`Recorder::take_clicks`]).
 
 use super::bar::{self, BarAct, BarView};
-use super::{border, countdown, Effect, End, Geom, Muted};
+use super::{border, countdown, BarSpot, Effect, End, Geom, Muted};
 use crate::editor::style::Ui;
 use crate::objects::Pt;
 use crate::rec::gif::GifEncoder;
@@ -248,11 +248,11 @@ pub(crate) struct Border {
 }
 
 impl Border {
-    /// Show it around `area` (inside `screen` bounds), `t` px thick.
-    pub(crate) fn show(area: crate::capture::IRect, t: i32, screen: crate::capture::IRect) -> Result<Border> {
+    /// Show it around `area`, on each monitor `(rect, thickness)` it is on.
+    pub(crate) fn show(area: crate::capture::IRect, monitors: &[(crate::capture::IRect, i32)]) -> Result<Border> {
         let mut strips = Vec::new();
         let red = super::RED;
-        for (x, y, w, h) in border::strips(area, t, screen) {
+        for (x, y, w, h) in border::strips(area, monitors) {
             let mut l = Layer::new(true)?;
             let px = [red.b, red.g, red.r, 255].repeat((w * h) as usize);
             l.put(x, y, w, h, &px);
@@ -265,7 +265,7 @@ impl Border {
 /// The control bar window.
 pub(crate) struct BarWin {
     layer: Layer,
-    pos: Option<(i32, i32)>,
+    spot: Option<BarSpot>,
     drawn: Option<(BarView, Option<BarAct>, Option<BarAct>)>,
 }
 
@@ -275,12 +275,20 @@ impl BarWin {
     pub(crate) fn new(nudge: isize) -> Result<BarWin> {
         let layer = Layer::new(false)?;
         BAR.with(|b| *b.borrow_mut() = BarInput { hwnd: layer.hwnd.0 as isize, nudge, ..Default::default() });
-        Ok(BarWin { layer, pos: None, drawn: None })
+        Ok(BarWin { layer, spot: None, drawn: None })
     }
 
-    /// Draw `v` (when it changed), placed by `geom` the first time.
+    /// Draw `v` (when it changed), at the DPI of the monitor it is on;
+    /// placed by `geom` the first time and again when its size changes.
     pub(crate) fn show(&mut self, geom: &Geom, th: &Theme, v: &BarView) {
-        let ui = Ui { th, s: geom.scale, font: Some(crate::fonts::ui_font()) };
+        let font = Some(crate::fonts::ui_font());
+        let spot = super::spot_bar(geom, self.spot, |s| {
+            let p = bar::layout(&Ui { th, s, font }, v).panel;
+            (p.w.round() as i32, p.h.round() as i32)
+        });
+        let moved = self.spot != Some(spot);
+        self.spot = Some(spot);
+        let ui = Ui { th, s: spot.scale, font };
         let l = bar::layout(&ui, v);
         let (hover, pressed) = BAR.with(|b| {
             let mut b = b.borrow_mut();
@@ -288,17 +296,11 @@ impl BarWin {
             (b.hover, b.pressed)
         });
         let state = (v.clone(), hover, pressed);
-        if self.drawn.as_ref() == Some(&state) {
+        if !moved && self.drawn.as_ref() == Some(&state) {
             return;
         }
-        let pos = *self.pos.get_or_insert_with(|| {
-            let s = geom.scale;
-            let gap = (8.0 * s).round() as i32;
-            let (pw, ph) = (l.panel.w.round() as i32, l.panel.h.round() as i32);
-            let (x, y) = super::place_bar(geom.area, &geom.monitors, (pw, ph), gap, gap);
-            let m = (bar::MARGIN * s).round() as i32;
-            (x - m, y - m)
-        });
+        let m = (bar::MARGIN * spot.scale).round() as i32;
+        let pos = (spot.pos.0 - m, spot.pos.1 - m);
         let (w, h) = l.size;
         let px = super::render_layer(w as usize, h as usize, |f| bar::draw(f, &ui, &l, v, hover, pressed));
         self.layer.put(pos.0, pos.1, w, h, &px);
@@ -332,8 +334,10 @@ impl CountWin {
             self.layer.hide();
             return;
         };
-        let ui = Ui { th, s: geom.scale, font: Some(crate::fonts::ui_font()) };
-        let (w, h) = countdown::size(geom.scale);
+        // At the DPI of the monitor the area (and so the panel) is on.
+        let s = geom.area_scale();
+        let ui = Ui { th, s, font: Some(crate::fonts::ui_font()) };
+        let (w, h) = countdown::size(s);
         let px = super::render_layer(w as usize, h as usize, |f| countdown::draw(f, &ui, n));
         let (x, y) = super::centre_on(geom.area, (w as i32, h as i32));
         self.layer.put(x, y, w, h, &px);
@@ -352,10 +356,22 @@ enum Cmd {
     Cancel,
 }
 
-type Parts = (Box<dyn FrameSource>, Vec<Box<dyn AudioSource>>, Box<dyn VideoEncoder>);
+/// What a recording is made of: the capture, the sound, the encoder (it
+/// created `.part`) and what could not be opened ("microphone not
+/// recorded: <reason>").
+pub(crate) struct Parts {
+    pub(crate) src: Box<dyn FrameSource>,
+    pub(crate) audio: Vec<Box<dyn AudioSource>>,
+    pub(crate) enc: Box<dyn VideoEncoder>,
+    pub(crate) warnings: Vec<String>,
+}
+
+/// Opens the [`Parts`] for a spec on the worker thread ([`prepare`];
+/// tests inject their own).
+pub(crate) type Opener = Box<dyn FnOnce(&RecSpec) -> Result<Parts> + Send>;
 
 /// Open the capture, the sound and the encoder for `spec` (the encoder
-/// creates `.part`). Sound that cannot be opened is left out (and said).
+/// creates `.part`). Sound that cannot be opened is left out and said.
 fn prepare(spec: &RecSpec, muted: Arc<AtomicBool>) -> Result<Parts> {
     if let Some(dir) = spec.out.parent() {
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
@@ -363,19 +379,23 @@ fn prepare(spec: &RecSpec, muted: Arc<AtomicBool>) -> Result<Parts> {
     let (src, _) = recwin::open_source(spec.area)?;
     let (w, h) = src.size();
     let mut audio: Vec<Box<dyn AudioSource>> = Vec::new();
+    let mut warnings = Vec::new();
     if spec.format == RecFormat::Mp4 {
         if spec.system_audio {
             match WasapiLoopback::open() {
                 Ok(a) => audio.push(Box::new(a)),
-                Err(e) => eprintln!("rustshot: system sound is not recorded: {e:#}"),
+                Err(e) => warnings.push(format!("system sound not recorded: {e:#}")),
             }
         }
         if let Some(id) = &spec.mic {
             match WasapiCapture::open(Some(id)) {
                 Ok(a) => audio.push(Box::new(Muted { inner: a, muted })),
-                Err(e) => eprintln!("rustshot: the microphone is not recorded: {e:#}"),
+                Err(e) => warnings.push(format!("microphone not recorded: {e:#}")),
             }
         }
+    }
+    for w in &warnings {
+        eprintln!("rustshot: {w}");
     }
     let part = spec.part_path();
     let enc: Box<dyn VideoEncoder> = match spec.format {
@@ -393,13 +413,13 @@ fn prepare(spec: &RecSpec, muted: Arc<AtomicBool>) -> Result<Parts> {
         }
         RecFormat::Gif => Box::new(GifEncoder::create(&part, w, h, spec.capture_fps())?),
     };
-    Ok((src, audio, enc))
+    Ok(Parts { src, audio, enc, warnings })
 }
 
-fn work(spec: RecSpec, muted: Arc<AtomicBool>, rx: Receiver<Cmd>) -> End {
+fn work(spec: RecSpec, open: Opener, rx: Receiver<Cmd>) -> End {
     recwin::com_init();
     let part = spec.part_path();
-    let (src, mut audio, enc) = match prepare(&spec, muted) {
+    let Parts { src, mut audio, enc, warnings } = match open(&spec) {
         Ok(p) => p,
         Err(e) => {
             let _ = std::fs::remove_file(&part);
@@ -426,7 +446,11 @@ fn work(spec: RecSpec, muted: Arc<AtomicBool>, rx: Receiver<Cmd>) -> End {
     }
     let session = match Session::start(spec, src, audio, enc) {
         Ok(s) => s,
-        Err(e) => return End::Failed(format!("{e:#}")),
+        Err(e) => {
+            // The session dropped the encoder (closing `.part`): remove it.
+            let _ = std::fs::remove_file(&part);
+            return End::Failed(format!("{e:#}"));
+        }
     };
     loop {
         match rx.recv_timeout(Duration::from_millis(250)) {
@@ -443,7 +467,7 @@ fn work(spec: RecSpec, muted: Arc<AtomicBool>, rx: Receiver<Cmd>) -> End {
         }
     }
     match session.stop() {
-        Ok(p) => End::Saved(p),
+        Ok(path) => End::Saved { path, warnings },
         Err(e) => End::Failed(format!("{e:#}")),
     }
 }
@@ -455,13 +479,13 @@ struct Worker {
 }
 
 impl Worker {
-    fn spawn(spec: RecSpec, muted: Arc<AtomicBool>) -> Result<Worker> {
+    fn spawn(spec: RecSpec, open: Opener) -> Result<Worker> {
         let (tx, crx) = mpsc::channel();
         let (etx, rx) = mpsc::channel();
         let join = std::thread::Builder::new()
             .name("rec-worker".into())
             .spawn(move || {
-                let _ = etx.send(work(spec, muted, crx));
+                let _ = etx.send(work(spec, open, crx));
             })
             .context("start the recording thread")?;
         Ok(Worker { tx, rx, join: Some(join) })
@@ -490,11 +514,17 @@ pub struct Recorder {
 
 impl Recorder {
     pub fn start(spec: RecSpec, geom: Geom, th: Theme, muted: Arc<AtomicBool>, nudge: HWND) -> Result<Recorder> {
-        let t = border::thickness(geom.scale);
-        let border = Border::show(geom.area, t, border::bounds(&geom.monitors))?;
+        Recorder::start_with(spec, geom, th, nudge, Box::new(move |s: &RecSpec| prepare(s, muted)))
+    }
+
+    /// [`Recorder::start`] with the parts opened by `open`. When a window
+    /// or the worker cannot be made, the ones already up are taken down
+    /// (dropped) before the error returns.
+    pub(crate) fn start_with(spec: RecSpec, geom: Geom, th: Theme, nudge: HWND, open: Opener) -> Result<Recorder> {
+        let border = Border::show(geom.area, &geom.border_monitors())?;
         let bar = BarWin::new(nudge.0 as isize)?;
         let count = CountWin { layer: Layer::new(true)?, drawn: None };
-        let worker = Worker::spawn(spec, muted)?;
+        let worker = Worker::spawn(spec, open)?;
         Ok(Recorder { worker, geom, th, border: Some(border), bar: Some(bar), count: Some(count) })
     }
 

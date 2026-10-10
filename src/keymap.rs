@@ -31,13 +31,13 @@ pub enum Action {
     Cancel,
     /// Start a screen recording of the selection (no default chord; the
     /// global hotkey is `record_hotkey` in the config).
+    /// The overlay is hidden while recording, so stopping is not an
+    /// overlay action: the record hotkey toggles, the bar and the tray stop.
     Record,
-    /// Stop the recording in progress.
-    StopRecording,
 }
 
 impl Action {
-    pub const ALL: [Action; 21] = [
+    pub const ALL: [Action; 20] = [
         Action::ToolPencil,
         Action::ToolLine,
         Action::ToolArrow,
@@ -58,7 +58,6 @@ impl Action {
         Action::Accept,
         Action::Cancel,
         Action::Record,
-        Action::StopRecording,
     ];
 
     /// Config key in the `[shortcuts]` table.
@@ -97,7 +96,6 @@ impl Action {
             Action::Accept => ("accept", "Accept (default action)", &["Enter"]),
             Action::Cancel => ("cancel", "Cancel", &["Esc"]),
             Action::Record => ("record", "Record screen", &[]),
-            Action::StopRecording => ("stop_recording", "Stop recording", &[]),
         }
     }
 
@@ -273,7 +271,7 @@ mod tests {
     #[test]
     fn defaults_match_spec_table() {
         let km = Keymap::defaults();
-        let want: [(Action, &[&str]); 21] = [
+        let want: [(Action, &[&str]); 20] = [
             (Action::ToolPencil, &["P"]),
             (Action::ToolLine, &["D"]),
             (Action::ToolArrow, &["A"]),
@@ -294,7 +292,6 @@ mod tests {
             (Action::Accept, &["Enter"]),
             (Action::Cancel, &["Esc"]),
             (Action::Record, &[]),
-            (Action::StopRecording, &[]),
         ];
         for (a, keys) in want {
             assert_eq!(shown(&km, a), keys, "{a:?}");
@@ -312,12 +309,11 @@ mod tests {
         assert_eq!(Action::SaveAs.id(), "save_as");
         assert_eq!(Action::ToolPencil.id(), "tool_pencil");
         assert_eq!(Action::Record.id(), "record");
-        assert_eq!(Action::StopRecording.id(), "stop_recording");
-        // Recording actions can be bound like any other.
-        let (km, w) = Keymap::from_config(&cfg(&[("record", "Ctrl+R"), ("stop_recording", "F9")]));
+        assert_eq!(Action::from_id("stop_recording"), None, "the record hotkey toggles; no stop action");
+        // Record can be bound like any other.
+        let (km, w) = Keymap::from_config(&cfg(&[("record", "Ctrl+R")]));
         assert!(w.is_empty(), "{w:?}");
         assert_eq!(km.resolve('R' as u32, m(true, false, false)), Some(Action::Record));
-        assert_eq!(km.resolve(0x78 /* F9 */, NONE), Some(Action::StopRecording));
     }
 
     #[test]

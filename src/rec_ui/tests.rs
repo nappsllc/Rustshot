@@ -149,6 +149,57 @@ fn bar_on_multi_monitor_setups() {
     assert_eq!(x, -8 - 180);
 }
 
+/// A 100 % monitor and a 200 % one to its right.
+fn mixed() -> Geom {
+    Geom { area: MON, monitors: vec![(MON, 1.0), ((1920, 0, 2560, 1440), 2.0)], scale: 1.0 }
+}
+
+/// The bar's panel at scale `s` (`wide`: the timer past an hour).
+fn panel(wide: bool) -> impl Fn(f32) -> (i32, i32) {
+    move |s| (((if wide { 220.0 } else { 180.0 }) * s) as i32, (44.0 * s) as i32)
+}
+
+#[test]
+fn geom_scale_per_monitor() {
+    let g = mixed();
+    assert_eq!((g.scale_at(10, 10), g.scale_at(2000, 10), g.scale_at(-5, 0)), (1.0, 2.0, 1.0));
+    assert_eq!(g.area_scale(), 1.0);
+    assert_eq!(g.border_monitors(), vec![(MON, 2), ((1920, 0, 2560, 1440), 4)]);
+    assert_eq!(Geom { area: (2000, 100, 400, 300), ..mixed() }.area_scale(), 2.0);
+}
+
+/// Mixed DPI: a full-screen recording of the 100 % monitor puts the bar on
+/// the 200 % one, drawn (and sized, and placed) at 200 %.
+#[test]
+fn bar_takes_the_dpi_of_the_monitor_it_lands_on() {
+    let spot = spot_bar(&mixed(), None, panel(false));
+    assert_eq!(spot, BarSpot { scale: 2.0, size: (360, 88), pos: (1936, 1080 - 88) });
+    // An area on the 200 % monitor: 200 % from the start, below the area.
+    let g = Geom { area: (2000, 100, 2000, 300), ..mixed() };
+    let spot = spot_bar(&g, None, panel(false));
+    assert_eq!(spot, BarSpot { scale: 2.0, size: (360, 88), pos: (3000 - 180, 416) });
+    // On the 100 % monitor: 100 %.
+    let g = Geom { area: (100, 100, 400, 300), ..mixed() };
+    assert_eq!(spot_bar(&g, None, panel(false)).scale, 1.0);
+}
+
+/// The bar stays put while its size does not change, and is placed again
+/// (re-centred) when it grows (the timer passed an hour).
+#[test]
+fn bar_is_placed_again_when_its_width_changes() {
+    let g = Geom { area: (2000, 100, 2000, 300), ..mixed() };
+    let first = spot_bar(&g, None, panel(false));
+    assert_eq!(spot_bar(&g, Some(first), panel(false)), first, "same size: kept");
+    let wide = spot_bar(&g, Some(first), panel(true));
+    assert_eq!(wide, BarSpot { scale: 2.0, size: (440, 88), pos: (3000 - 220, 416) });
+    // Near a monitor's edge the wider bar is placed again, on screen.
+    let g = Geom { area: (1700, 100, 200, 200), monitors: vec![(MON, 1.0)], scale: 1.0 };
+    let narrow = spot_bar(&g, None, panel(false));
+    let wide = spot_bar(&g, Some(narrow), panel(true));
+    assert!(wide.pos.0 + wide.size.0 <= 1920 - 8, "{wide:?}");
+    assert_ne!(wide.pos, narrow.pos);
+}
+
 #[test]
 fn layer_alpha_from_black_and_white() {
     let px = render_layer(4, 1, |f| {
@@ -218,8 +269,9 @@ fn run_effects_and_end() {
     assert_eq!(r.log, [Effect::Go, Effect::Pause, Effect::Resume, Effect::Stop]);
     assert!(r.view(t + secs(3.0)).stopping);
     assert_eq!(r.tick(t + secs(3.1)), None, "waits for the file");
-    r.fake_end = Some(End::Saved("x.mp4".into()));
-    assert_eq!(r.tick(t + secs(4.0)), Some(End::Saved("x.mp4".into())));
+    let saved = End::Saved { path: "x.mp4".into(), warnings: vec!["microphone not recorded: gone".into()] };
+    r.fake_end = Some(saved.clone());
+    assert_eq!(r.tick(t + secs(4.0)), Some(saved));
     // No microphone: nothing to mute.
     let mut r = Run::fake(false, false, t);
     r.toggle_mute();

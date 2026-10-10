@@ -12,38 +12,53 @@ pub fn thickness(s: f32) -> i32 {
     ((WIDTH * s).round() as i32).max(1)
 }
 
-/// Top, bottom, left and right strips around `area`, `t` px thick, kept
-/// inside `screen` (the virtual screen's bounds). Empty strips (a side
-/// with no room at all) have zero size.
-pub fn strips(area: IRect, t: i32, screen: IRect) -> [IRect; 4] {
-    let (sx0, sy0) = (screen.0, screen.1);
-    let (sx1, sy1) = (screen.0 + screen.2 as i32, screen.1 + screen.3 as i32);
-    let x0 = (area.0 - t).max(sx0);
-    let y0 = (area.1 - t).max(sy0);
-    let x1 = (area.0 + area.2 as i32 + t).min(sx1);
-    let y1 = (area.1 + area.3 as i32 + t).min(sy1);
-    let (w, h) = ((x1 - x0).max(0), (y1 - y0).max(0));
-    let t = t.min(w / 2).min(h / 2).max(0);
-    let side_h = (h - 2 * t).max(0) as u32;
-    [
-        (x0, y0, w as u32, t as u32),
-        (x0, y1 - t, w as u32, t as u32),
-        (x0, y0 + t, t as u32, side_h),
-        (x1 - t, y0 + t, t as u32, side_h),
-    ]
+/// The strips around `area` on each monitor it is on (`(monitor, t)`:
+/// physical rect and thickness there). Each strip lies on one monitor: a
+/// side is drawn on the monitor its edge is on, just outside the area, or
+/// inside it where the edge touches that monitor's edge. Empty strips are
+/// left out.
+pub fn strips(area: IRect, monitors: &[(IRect, i32)]) -> Vec<IRect> {
+    let mut out = Vec::new();
+    for &(m, t) in monitors {
+        for r in strips_on(area, t, m) {
+            if r.2 > 0 && r.3 > 0 {
+                out.push(r);
+            }
+        }
+    }
+    out
 }
 
-/// The virtual screen's bounds: the union of `monitors`.
-pub fn bounds(monitors: &[IRect]) -> IRect {
-    let Some(first) = monitors.first() else { return (0, 0, 0, 0) };
-    let (mut x0, mut y0, mut x1, mut y1) = (first.0, first.1, first.0 + first.2 as i32, first.1 + first.3 as i32);
-    for m in monitors {
-        x0 = x0.min(m.0);
-        y0 = y0.min(m.1);
-        x1 = x1.max(m.0 + m.2 as i32);
-        y1 = y1.max(m.1 + m.3 as i32);
+/// The strips of `area` on monitor `m`, `t` px thick (none when the area
+/// is not on it). Sides whose edge lies on another monitor are skipped;
+/// the others span the area's outer box clipped to `m`.
+pub fn strips_on(area: IRect, t: i32, m: IRect) -> Vec<IRect> {
+    let (ax0, ay0, ax1, ay1) = (area.0, area.1, area.0 + area.2 as i32, area.1 + area.3 as i32);
+    let (mx0, my0, mx1, my1) = (m.0, m.1, m.0 + m.2 as i32, m.1 + m.3 as i32);
+    if ax0.max(mx0) >= ax1.min(mx1) || ay0.max(my0) >= ay1.min(my1) {
+        return Vec::new();
     }
-    (x0, y0, (x1 - x0) as u32, (y1 - y0) as u32)
+    let (x0, y0) = ((ax0 - t).max(mx0), (ay0 - t).max(my0));
+    let (x1, y1) = ((ax1 + t).min(mx1), (ay1 + t).min(my1));
+    let (w, h) = (x1 - x0, y1 - y0);
+    let t = t.min(w / 2).min(h / 2).max(0);
+    let (top, bottom, left, right) = (ay0 >= my0, ay1 <= my1, ax0 >= mx0, ax1 <= mx1);
+    let side_y0 = if top { y0 + t } else { y0 };
+    let side_h = (if bottom { y1 - t } else { y1 } - side_y0).max(0) as u32;
+    let mut v = Vec::new();
+    if top {
+        v.push((x0, y0, w as u32, t as u32));
+    }
+    if bottom {
+        v.push((x0, y1 - t, w as u32, t as u32));
+    }
+    if left {
+        v.push((x0, side_y0, t as u32, side_h));
+    }
+    if right {
+        v.push((x1 - t, side_y0, t as u32, side_h));
+    }
+    v
 }
 
 #[cfg(test)]
@@ -54,20 +69,47 @@ mod tests {
 
     #[test]
     fn strips_hug_the_area_from_outside() {
-        let s = strips((100, 200, 300, 150), 2, SCREEN);
-        assert_eq!(s[0], (98, 198, 304, 2));
-        assert_eq!(s[1], (98, 350, 304, 2));
-        assert_eq!(s[2], (98, 200, 2, 150));
-        assert_eq!(s[3], (400, 200, 2, 150));
+        let s = strips((100, 200, 300, 150), &[(SCREEN, 2)]);
+        assert_eq!(s, [(98, 198, 304, 2), (98, 350, 304, 2), (98, 200, 2, 150), (400, 200, 2, 150)]);
     }
 
     #[test]
     fn a_full_screen_area_gets_the_border_inside() {
-        let s = strips(SCREEN, 2, SCREEN);
-        assert_eq!(s[0], (0, 0, 1920, 2));
-        assert_eq!(s[1], (0, 1078, 1920, 2));
-        assert_eq!(s[2], (0, 2, 2, 1076));
-        assert_eq!(s[3], (1918, 2, 2, 1076));
+        let s = strips(SCREEN, &[(SCREEN, 2)]);
+        assert_eq!(s, [(0, 0, 1920, 2), (0, 1078, 1920, 2), (0, 2, 2, 1076), (1918, 2, 2, 1076)]);
+    }
+
+    /// A 1080 px monitor beside a 1440 px one (scale 1 and 1.5): each strip
+    /// stays on the monitor its edge is on, at that monitor's thickness.
+    #[test]
+    fn strips_per_monitor_of_different_heights() {
+        let (left, right): (IRect, IRect) = ((0, 0, 1920, 1080), (1920, 0, 2560, 1440));
+        let mons = [(left, 2), (right, 3)];
+        // Across both, down to y = 1200 (below the left monitor's bottom).
+        let s = strips((1000, 500, 2000, 700), &mons);
+        assert_eq!(
+            s,
+            [
+                // Left monitor: top and left sides; no bottom (its edge is off this
+                // monitor) and no right (the area goes on to the right one).
+                (998, 498, 922, 2),
+                (998, 500, 2, 580),
+                // Right monitor: top, bottom (outside, at y 1200) and right.
+                (1920, 497, 1083, 3),
+                (1920, 1200, 1083, 3),
+                (3000, 500, 3, 700),
+            ]
+        );
+        for r in &s {
+            let on = |m: IRect| r.0 >= m.0 && r.1 >= m.1 && r.0 + r.2 as i32 <= m.0 + m.2 as i32 && r.1 + r.3 as i32 <= m.1 + m.3 as i32;
+            assert!(on(left) || on(right), "{r:?} is on one monitor");
+        }
+        // The whole right monitor: inside on all four sides; nothing on the left one.
+        let s = strips(right, &mons);
+        assert_eq!(s, [(1920, 0, 2560, 3), (1920, 1437, 2560, 3), (1920, 3, 3, 1434), (4477, 3, 3, 1434)]);
+        // The bottom of the left monitor: the bottom strip moves inside there.
+        let s = strips((100, 900, 400, 180), &mons);
+        assert_eq!(s[1], (98, 1078, 404, 2));
     }
 
     #[test]
@@ -76,11 +118,5 @@ mod tests {
         assert_eq!(thickness(1.5), 3);
         assert_eq!(thickness(2.0), 4);
         assert_eq!(thickness(0.2), 1);
-    }
-
-    #[test]
-    fn bounds_of_monitors() {
-        assert_eq!(bounds(&[(0, 0, 1920, 1080), (-1280, 100, 1280, 1024)]), (-1280, 0, 3200, 1124));
-        assert_eq!(bounds(&[]), (0, 0, 0, 0));
     }
 }

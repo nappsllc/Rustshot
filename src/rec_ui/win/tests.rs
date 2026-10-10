@@ -38,8 +38,8 @@ fn live_rec_border_and_bar_are_not_recorded() {
     // The border hugs a smaller rect, so its strips lie inside the area;
     // with no room outside, the bar and the countdown go inside too.
     let inner = (area.0 + 40, area.1 + 40, area.2 - 80, area.3 - 80);
-    let border = Border::show(inner, 4, area).unwrap();
-    let geom = Geom { area, monitors: vec![area], scale: 1.0 };
+    let border = Border::show(inner, &[(area, 4)]).unwrap();
+    let geom = Geom { area, monitors: vec![(area, 1.0)], scale: 1.0 };
     let mut bar = BarWin::new(0).unwrap();
     let v = BarView { elapsed: Duration::from_secs(5), paused: false, mic: Some(false), stopping: false };
     bar.show(&geom, &crate::theme::DARK, &v);
@@ -47,7 +47,7 @@ fn live_rec_border_and_bar_are_not_recorded() {
     count.show(&geom, &crate::theme::DARK, Some(3));
     pump(300);
     assert!(border._strips.iter().all(visible) && visible(&bar.layer) && visible(&count.layer), "the frame is up");
-    let (bx, by) = bar.pos.unwrap();
+    let (bx, by) = bar.spot.map(|s| (s.pos.0 - bar::MARGIN as i32, s.pos.1 - bar::MARGIN as i32)).unwrap();
     eprintln!("area {area:?}, bar window at {:?}", (bx, by));
 
     // GIF: exact colours. No red (border, dot, stop) and almost no dark
@@ -94,7 +94,7 @@ fn live_rec_border_and_bar_are_not_recorded() {
 #[ignore = "opens windows on the real desktop"]
 fn live_rec_bar_clicks_queue() {
     crate::capture::enable_dpi_awareness();
-    let geom = Geom { area: (200, 200, 400, 300), monitors: vec![(0, 0, 1280, 720)], scale: 1.0 };
+    let geom = Geom { area: (200, 200, 400, 300), monitors: vec![((0, 0, 1280, 720), 1.0)], scale: 1.0 };
     let mut bar = BarWin::new(0).unwrap();
     let v = BarView { elapsed: Duration::ZERO, paused: false, mic: None, stopping: false };
     bar.show(&geom, &crate::theme::LIGHT, &v);
@@ -134,4 +134,172 @@ fn probe_recording_file() {
         println!("MP4 {w}x{h}, {} frames, {:?}, audio {}", q.frames, q.duration, q.has_audio);
         println!("luma top/bottom/left/right/centre of the last frame: {:?}", q.luma_at.last());
     }
+}
+
+// ---- the worker, with injected parts (no screen, no devices) ----------------
+
+/// A 4x4 grey frame every call.
+struct Still;
+
+impl FrameSource for Still {
+    fn next(&mut self, _deadline: Instant) -> Option<crate::rec::Frame> {
+        std::thread::sleep(Duration::from_millis(5));
+        Some(crate::rec::Frame { w: 4, h: 4, bgra: vec![128; 64], ts: Duration::MAX })
+    }
+    fn size(&self) -> (u32, u32) {
+        (4, 4)
+    }
+}
+
+/// Writes a byte per frame to `.part`; fails pushing frame `fail_at`;
+/// `finished` is set by `finish`.
+struct Enc {
+    file: std::fs::File,
+    n: usize,
+    fail_at: Option<usize>,
+    finished: Arc<AtomicBool>,
+}
+
+impl VideoEncoder for Enc {
+    fn push_video(&mut self, _f: &crate::rec::Frame) -> Result<()> {
+        use std::io::Write;
+        if Some(self.n) == self.fail_at {
+            bail!("disk full");
+        }
+        self.n += 1;
+        self.file.write_all(&[1])?;
+        Ok(())
+    }
+    fn push_audio(&mut self, _pcm: &[f32], _ts: Duration) -> Result<()> {
+        Ok(())
+    }
+    fn finish(self: Box<Self>) -> Result<()> {
+        self.finished.store(true, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+    fn audio(&self) -> bool {
+        false
+    }
+}
+
+/// An opener for the fake parts (`warnings` as if a device failed).
+fn fake_parts(fail_at: Option<usize>, finished: Arc<AtomicBool>, warnings: Vec<String>) -> Opener {
+    Box::new(move |s: &RecSpec| {
+        std::fs::create_dir_all(s.out.parent().unwrap())?;
+        let file = std::fs::File::create(s.part_path())?;
+        let enc = Enc { file, n: 0, fail_at, finished };
+        Ok(Parts { src: Box::new(Still), audio: Vec::new(), enc: Box::new(enc), warnings })
+    })
+}
+
+fn worker_dir(tag: &str) -> std::path::PathBuf {
+    let d = out_dir().join(format!("worker-{tag}"));
+    let _ = std::fs::remove_dir_all(&d);
+    d
+}
+
+fn wait_end(w: &Worker, secs: u64) -> Option<End> {
+    w.rx.recv_timeout(Duration::from_secs(secs)).ok()
+}
+
+/// The encoder fails mid-recording: the worker stops by itself and the
+/// recording ends as failed (nobody pressed Stop).
+#[test]
+fn worker_encoder_failure_ends_failed() {
+    let dir = worker_dir("fail");
+    let s = spec(RecFormat::Gif, 10, (0, 0, 4, 4), dir.join("a.gif"));
+    let w = Worker::spawn(s, fake_parts(Some(2), Arc::new(AtomicBool::new(false)), vec![])).unwrap();
+    w.tx.send(Cmd::Go).unwrap();
+    let end = wait_end(&w, 10).expect("ended by itself");
+    match &end {
+        End::Failed(e) => assert!(e.contains("disk full"), "{e}"),
+        e => panic!("not failed: {e:?}"),
+    }
+    drop(w);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Saved: the file is in place and what was left out is reported.
+#[test]
+fn worker_saves_with_warnings() {
+    let dir = worker_dir("warn");
+    let s = spec(RecFormat::Gif, 10, (0, 0, 4, 4), dir.join("a.gif"));
+    let warn = vec!["microphone not recorded: no such device".to_string()];
+    let w = Worker::spawn(s, fake_parts(None, Arc::new(AtomicBool::new(false)), warn.clone())).unwrap();
+    w.tx.send(Cmd::Go).unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    w.tx.send(Cmd::Stop).unwrap();
+    let end = wait_end(&w, 10).expect("saved");
+    assert_eq!(end, End::Saved { path: dir.join("a.gif"), warnings: warn });
+    assert!(dir.join("a.gif").is_file() && !dir.join("a.gif.part").exists());
+    drop(w);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Dropping the worker mid-recording (the daemon quits) finishes the file.
+#[test]
+fn worker_drop_finishes_the_file() {
+    let dir = worker_dir("drop");
+    let s = spec(RecFormat::Gif, 10, (0, 0, 4, 4), dir.join("a.gif"));
+    let finished = Arc::new(AtomicBool::new(false));
+    let w = Worker::spawn(s, fake_parts(None, finished.clone(), vec![])).unwrap();
+    w.tx.send(Cmd::Go).unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    drop(w);
+    assert!(finished.load(std::sync::atomic::Ordering::SeqCst), "finished");
+    assert!(dir.join("a.gif").is_file(), "moved into place");
+    assert!(!std::fs::read(dir.join("a.gif")).unwrap().is_empty(), "frames written");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Parts that cannot be opened: failed, and no `.part` is left behind.
+#[test]
+fn worker_open_failure_removes_the_part() {
+    let dir = worker_dir("open");
+    let s = spec(RecFormat::Gif, 10, (0, 0, 4, 4), dir.join("a.gif"));
+    let open: Opener = Box::new(|s: &RecSpec| {
+        std::fs::create_dir_all(s.out.parent().unwrap())?;
+        std::fs::write(s.part_path(), b"x")?;
+        bail!("no H.264 encoder is installed")
+    });
+    let w = Worker::spawn(s, open).unwrap();
+    assert_eq!(wait_end(&w, 10), Some(End::Failed("no H.264 encoder is installed".into())));
+    assert!(!dir.join("a.gif.part").exists());
+    drop(w);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A recording that fails to start (its parts cannot be opened) takes its
+/// windows (border, bar, countdown) down when the failure arrives.
+#[test]
+#[ignore = "opens windows on the real desktop"]
+fn live_rec_windows_close_when_the_start_fails() {
+    crate::capture::enable_dpi_awareness();
+    let geom = Geom { area: (200, 200, 400, 300), monitors: vec![((0, 0, 1280, 720), 1.0)], scale: 1.0 };
+    let dir = worker_dir("live-fail");
+    let s = spec(RecFormat::Gif, 10, geom.area, dir.join("a.gif"));
+    let open: Opener = Box::new(|_: &RecSpec| bail!("no capture"));
+    let ui = Recorder::start_with(s, geom, crate::theme::DARK, HWND::default(), open).unwrap();
+    let hwnds: Vec<HWND> = (ui.border.as_ref().unwrap()._strips.iter().map(|l| l.hwnd))
+        .chain([ui.bar.as_ref().unwrap().layer.hwnd, ui.count.as_ref().unwrap().layer.hwnd])
+        .collect();
+    assert_eq!(hwnds.len(), 6);
+    let mut run = super::super::Run {
+        m: super::super::Machine::new(),
+        muted: Arc::new(AtomicBool::new(false)),
+        has_mic: false,
+        ui: Some(ui),
+        log: Vec::new(),
+        fake_end: None,
+    };
+    let t = Instant::now();
+    run.m.start(true, t);
+    let mut end = None;
+    while end.is_none() && t.elapsed() < Duration::from_secs(5) {
+        pump(20);
+        end = run.tick(Instant::now());
+    }
+    assert_eq!(end, Some(End::Failed("no capture".into())));
+    assert!(hwnds.iter().all(|h| !unsafe { IsWindow(Some(*h)) }.as_bool()), "every window is gone");
+    let _ = std::fs::remove_dir_all(&dir);
 }

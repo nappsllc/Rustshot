@@ -127,7 +127,9 @@ pub struct BarState<'a> {
 pub fn toolbar(f: &mut Fb, ui: &Ui, tb: &Toolbar, st: &BarState, k: f32) {
     surface(f, ui, tb.bar, 12.0, &ALL_LAYERS, k);
     if let Some(pop) = tb.pop {
-        surface(f, ui, pop, 12.0, &ALL_LAYERS, k * st.pop_k);
+        // Opaque: the annotations under a popover never show through it.
+        let bg = C4 { a: 255, ..ui.th.surface };
+        panel(f, ui, pop, 12.0, &ALL_LAYERS, bg, ui.th.border, k * st.pop_k);
     }
     let kp = k * st.pop_k;
     for (i, it) in tb.items.iter().enumerate() {

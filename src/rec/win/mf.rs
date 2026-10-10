@@ -307,12 +307,6 @@ impl MfEncoder {
         })
     }
 
-    /// Encoded picture size.
-    #[allow(dead_code)] // the encoded size (scaled to fit 4096x2304)
-    pub fn out_size(&self) -> (u32, u32) {
-        (self.out_w, self.out_h)
-    }
-
     /// Whether the H.264 encoder in use is a hardware MFT.
     pub fn hardware(&self) -> bool {
         self.hardware

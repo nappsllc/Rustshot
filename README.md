@@ -199,6 +199,15 @@ save_as = "Ctrl+Shift+S"  # copy, save, upload, undo, select_all, toggle_palette
 redo = "Ctrl+Shift+Z, Ctrl+Y"  # accept (Enter), cancel (Esc)
 ```
 
+`record` (unbound by default) opens the Record popover for the selection
+(Windows). There is no `stop_recording` action: the overlay is hidden while
+a recording runs, so the record hotkey (`record_hotkey`) toggles start and
+stop, and the control bar's Stop button and the tray's **Stop recording**
+end it too. A `rustshot gui` run with no tasks records as well and exits
+when the recording ends (`saved: <path>`, exit 0; 1 on failure, 2 when it
+is cancelled during the countdown); with tasks (`--copy`, `--path`, …)
+Record is not offered.
+
 ## Configuration
 
 Rustshot reads an optional `config.toml`:

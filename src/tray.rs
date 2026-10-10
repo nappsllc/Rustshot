@@ -66,13 +66,24 @@ pub fn set_recording(on: bool) {
     crate::tray_win::refresh_state();
 }
 
-/// "Saved <path>": a tray balloon whose click opens the folder (Windows);
-/// stdout elsewhere.
-pub fn notify_saved(path: &std::path::Path) {
+/// "Saved <path>" (with what was left out, e.g. "microphone not
+/// recorded: <reason>"): a tray balloon whose click opens the folder
+/// (Windows); stdout elsewhere.
+pub fn notify_saved(path: &std::path::Path, warnings: &[String]) {
     #[cfg(windows)]
-    crate::tray_win::notify_saved(path);
+    crate::tray_win::notify_saved(path, &saved_text(path, warnings));
     #[cfg(not(windows))]
-    println!("Saved {}", path.display());
+    println!("{}", saved_text(path, warnings));
+}
+
+/// "Saved <path> — microphone not recorded: <reason>".
+pub fn saved_text(path: &std::path::Path, warnings: &[String]) -> String {
+    let mut t = format!("Saved {}", path.display());
+    for w in warnings {
+        t.push_str(" — ");
+        t.push_str(w);
+    }
+    t
 }
 
 /// Start the tray for the running daemon. `tx` receives Capture/Quit.
@@ -100,18 +111,8 @@ const GLYPH_DOT_R: f32 = 2.4;
 /// Draw the app glyph (the tray icon's shape) in a `size`×`size` box at
 /// (x, y), physical px; also the update dialog's app icon.
 pub fn draw_glyph(fb: &mut crate::uifb::Fb, x: f32, y: f32, size: f32, c: crate::uifb::C4) {
-    use crate::raster::Blend;
+    draw_brackets(fb, x, y, size, c);
     let k = size / 16.0;
-    if let Some(lines) = crate::icon_path::parse_path(GLYPH_PATH) {
-        let mut surf = fb.surf();
-        for mut line in lines {
-            for p in &mut line {
-                p.x = x + p.x * k;
-                p.y = y + p.y * k;
-            }
-            surf.stroke_polyline(&line, GLYPH_STROKE * k, c, Blend::Normal);
-        }
-    }
     fb.fill_circle(x + 8.0 * k, y + 8.0 * k, GLYPH_DOT_R * k, c);
 }
 
@@ -144,7 +145,7 @@ pub fn tray_glyph_rgba_rec(size: u32, rgb: (u8, u8, u8), recording: bool) -> Vec
     }
     // The brackets in `rgb`, the red dot over them (coverage of each).
     let k = size as f32 / 16.0;
-    draw_brackets(&mut Fb::new(&mut scratch, n), size as f32, white);
+    draw_brackets(&mut Fb::new(&mut scratch, n), 0.0, 0.0, size as f32, white);
     let mut dot = [0u8, 0, 0, 255].repeat(n * n);
     Fb::new(&mut dot, n).fill_circle(8.0 * k, 8.0 * k, REC_DOT_R * k, white);
     let mut out = Vec::with_capacity(n * n * 4);
@@ -164,16 +165,16 @@ pub fn tray_glyph_rgba_rec(size: u32, rgb: (u8, u8, u8), recording: bool) -> Vec
     out
 }
 
-/// The glyph's corner brackets alone (no centre dot), at the origin.
-fn draw_brackets(fb: &mut crate::uifb::Fb, size: f32, c: crate::uifb::C4) {
+/// The glyph's corner brackets alone (no centre dot), `size`x`size` at (x, y).
+fn draw_brackets(fb: &mut crate::uifb::Fb, x: f32, y: f32, size: f32, c: crate::uifb::C4) {
     use crate::raster::Blend;
     let k = size / 16.0;
     if let Some(lines) = crate::icon_path::parse_path(GLYPH_PATH) {
         let mut surf = fb.surf();
         for mut line in lines {
             for p in &mut line {
-                p.x *= k;
-                p.y *= k;
+                p.x = x + p.x * k;
+                p.y = y + p.y * k;
             }
             surf.stroke_polyline(&line, GLYPH_STROKE * k, c, Blend::Normal);
         }
@@ -183,6 +184,17 @@ fn draw_brackets(fb: &mut crate::uifb::Fb, size: f32, c: crate::uifb::C4) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saved_text_says_what_was_left_out() {
+        let p = std::path::Path::new("C:/shots/a.mp4");
+        assert_eq!(saved_text(p, &[]), format!("Saved {}", p.display()));
+        let w = ["microphone not recorded: no device".to_string(), "system sound not recorded: busy".to_string()];
+        assert_eq!(
+            saved_text(p, &w),
+            format!("Saved {} — microphone not recorded: no device — system sound not recorded: busy", p.display())
+        );
+    }
 
     #[test]
     fn menu_composition() {

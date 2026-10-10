@@ -18,6 +18,8 @@ const TIMER_PAD: f32 = 10.0;
 const DOT: f32 = 4.0;
 const DOT_GAP: f32 = 8.0;
 const TEXT: f32 = 13.0;
+/// Shadow layers (`theme::SHADOW` indices) of the light theme's bar.
+const LIGHT_LAYERS: [usize; 2] = [0, 1];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BarAct {
@@ -113,7 +115,10 @@ fn icon_of(a: BarAct, v: &BarView) -> &'static str {
 pub fn draw(f: &mut Fb, ui: &Ui, l: &BarLayout, v: &BarView, hover: Option<BarAct>, pressed: Option<BarAct>) {
     let th = ui.th;
     let s = ui.s;
-    surface(f, ui, l.panel, 12.0, &crate::editor::style::ALL_LAYERS, 1.0);
+    // Over the desktop a light theme's full shadow looks heavy: the two
+    // tight layers only (1 px and 3 px down).
+    let layers: &[usize] = if th.dark { &crate::editor::style::ALL_LAYERS } else { &LIGHT_LAYERS };
+    surface(f, ui, l.panel, 12.0, layers, 1.0);
     // Timer: a red dot (grey while paused) and the time.
     let cy = l.timer.y + l.timer.h / 2.0;
     let dx = l.timer.x + TIMER_PAD * s + DOT * s;
