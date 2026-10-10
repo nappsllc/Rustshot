@@ -619,6 +619,8 @@ struct Run {
     mkv: Option<Mkv>,
     /// Frames ffmpeg has encoded (its `-progress` output).
     encoded: Arc<AtomicU64>,
+    /// The last frame written (held up to the end of a stretch).
+    last: Option<Arc<Vec<u8>>>,
 }
 
 /// The frame count in a line of ffmpeg's `-progress` output ("frame=12").
@@ -707,7 +709,7 @@ impl Run {
                 return Err(anyhow::Error::new(e).context("start the ffmpeg writer thread"));
             }
         };
-        let mut run = Run { child, tx: Some(tx), writer: Some(writer), reader, tail, cfr: Cfr::new(fps), out, live, mkv, encoded };
+        let mut run = Run { child, tx: Some(tx), writer: Some(writer), reader, tail, cfr: Cfr::new(fps), out, live, mkv, encoded, last: None };
         if let Some(h) = run.mkv.as_ref().map(|m| m.header()) {
             run.send(Arc::new(h))?;
         }
@@ -715,6 +717,9 @@ impl Run {
     }
 
     /// Write `f` as many times as the frame rate wants.
+    /// Write `f` as many times as the frame rate wants. Stamped (with
+    /// sound), a frame is written once, at the first of its slots: ffmpeg
+    /// repeats it (`-fps_mode cfr`) up to the next one.
     fn push(&mut self, f: &Frame) -> Result<()> {
         let first = self.cfr.sent();
         let n = self.cfr.repeats(f.ts);
@@ -722,11 +727,32 @@ impl Run {
             return Ok(());
         }
         let buf = Arc::new(f.bgra[..(f.w * f.h * 4) as usize].to_vec());
-        for slot in first..first + n {
-            if let Some(m) = &mut self.mkv {
-                let head = m.frame_head(slot, buf.len());
-                self.send(Arc::new(head))?;
-            }
+        self.last = Some(buf.clone());
+        self.write(buf, first, n, first)
+    }
+
+    /// Hold the last frame up to clock time `ts` (the end of a stretch:
+    /// frames dropped while ffmpeg was slow to take them, e.g. opening a
+    /// sound input, leave the picture still rather than the stretch short).
+    fn hold_to(&mut self, ts: Duration) -> Result<()> {
+        let Some(buf) = self.last.clone() else { return Ok(()) };
+        let first = self.cfr.sent();
+        let n = self.cfr.repeats(ts);
+        if n == 0 {
+            return Ok(());
+        }
+        // Stamped at the last slot, so the picture lasts to the end.
+        self.write(buf, first, n, first + n - 1)
+    }
+
+    /// `buf` over slots `first..first + n`: `n` copies, or one stamped `at`.
+    fn write(&mut self, buf: Arc<Vec<u8>>, first: u64, n: u64, at: u64) -> Result<()> {
+        if let Some(m) = &mut self.mkv {
+            let head = m.frame_head(at, buf.len());
+            self.send(Arc::new(head))?;
+            return self.send(buf);
+        }
+        for _ in first..first + n {
             self.send(buf.clone())?;
         }
         Ok(())
@@ -990,8 +1016,15 @@ impl VideoEncoder for FfmpegEncoder {
             return Ok(()); // the clock leaves the paused time out
         }
         // What ffmpeg hears from now on is not part of this stretch: end
-        // it; the next one starts at the first frame after the pause.
+        // it (its picture lasting up to the pause); the next one starts at
+        // the first frame after the pause.
         self.skip_until = Some(at);
+        if let Some(r) = self.run.as_mut()
+            && let Err(e) = r.hold_to(at)
+        {
+            self.failed = Some(format!("{e:#}"));
+            return Err(e);
+        }
         self.end_segment()
     }
 
