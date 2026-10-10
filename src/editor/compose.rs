@@ -477,15 +477,32 @@ impl Edit {
         self.area_drawn = Some(area);
         let s = self.ui_scale();
         let colors = palette_colors(&self.cfg);
+        let rp = &self.rec;
+        let names = rp.dev_open.then(|| rp.dev_names());
+        let mic_label = rp.mic_label();
+        let rv = toolbar::RecView {
+            format: rp.opts.format,
+            fps: rp.opts.fps(),
+            fps_choices: rp.opts.fps_choices(),
+            system: rp.opts.system,
+            mic: rp.opts.mic,
+            camera: rp.opts.camera,
+            mic_label: &mic_label,
+            devs: names.as_deref(),
+            dev_sel: rp.dev_sel(),
+        };
+        let busy = !self.tasks.is_empty();
         self.toolbar = self.sel.map(|sel| {
             toolbar::layout(&toolbar::Input {
                 sel,
                 area,
                 s,
-                busy: !self.tasks.is_empty(),
+                busy,
                 can_undo: self.hi > 0,
                 can_redo: self.hi + 1 < self.hist.len(),
                 palette: self.palette_open.then_some(colors.as_slice()),
+                record: crate::rec_ui::SUPPORTED && !busy,
+                rec: (rp.open && crate::rec_ui::SUPPORTED && !busy).then_some(&rv),
             })
         });
 
@@ -495,7 +512,7 @@ impl Edit {
         } else {
             self.mo.bar.snap(0.0);
         }
-        if self.palette_open {
+        if self.palette_open || self.rec.open {
             self.mo.pop.set(1.0, 100, now);
         } else {
             self.mo.pop.snap(0.0);

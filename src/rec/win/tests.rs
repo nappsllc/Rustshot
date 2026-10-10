@@ -18,10 +18,10 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 /// Colours the test window cycles through, far apart in luma.
-const COLOURS: [(u8, u8, u8); 6] = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 255), (0, 0, 0), (255, 255, 0)];
+pub(crate) const COLOURS: [(u8, u8, u8); 6] = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 255), (0, 0, 0), (255, 255, 0)];
 
 /// A top-most popup on its own thread, changing colour every `period`.
-struct TestWindow {
+pub(crate) struct TestWindow {
     hwnd: isize,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -58,7 +58,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
 }
 
 impl TestWindow {
-    fn open(x: i32, y: i32, w: i32, h: i32, period_ms: u32) -> TestWindow {
+    pub(crate) fn open(x: i32, y: i32, w: i32, h: i32, period_ms: u32) -> TestWindow {
         let (tx, rx) = mpsc::channel();
         let thread = std::thread::spawn(move || unsafe {
             let inst = GetModuleHandleW(None).unwrap();
@@ -93,7 +93,18 @@ impl TestWindow {
         TestWindow { hwnd, thread: Some(thread) }
     }
 
-    fn rect(&self) -> crate::capture::IRect {
+    /// Show colour `i` of [`COLOURS`] from now on (a period that never
+    /// elapses keeps it).
+    pub(crate) fn set_colour(&self, i: usize) {
+        unsafe {
+            let h = HWND(self.hwnd as *mut _);
+            SetWindowLongPtrW(h, GWLP_USERDATA, i as isize);
+            let _ = InvalidateRect(Some(h), None, false);
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+
+    pub(crate) fn rect(&self) -> crate::capture::IRect {
         let mut r = RECT::default();
         unsafe { GetWindowRect(HWND(self.hwnd as *mut _), &mut r) }.unwrap();
         (r.left, r.top, (r.right - r.left) as u32, (r.bottom - r.top) as u32)
@@ -111,18 +122,18 @@ impl Drop for TestWindow {
     }
 }
 
-fn out_dir() -> PathBuf {
+pub(crate) fn out_dir() -> PathBuf {
     let d = std::env::temp_dir().join(format!("rustshot-rec-test-{}", std::process::id()));
     std::fs::create_dir_all(&d).unwrap();
     d
 }
 
-fn spec(format: RecFormat, fps: u32, area: crate::capture::IRect, out: PathBuf) -> RecSpec {
+pub(crate) fn spec(format: RecFormat, fps: u32, area: crate::capture::IRect, out: PathBuf) -> RecSpec {
     RecSpec { format, fps, quality: Quality::Medium, area, system_audio: false, mic: None, out }
 }
 
 /// Record `secs` with `enc` built on the spec's `.part` path.
-fn record(
+pub(crate) fn record(
     spec: RecSpec,
     audio: Vec<Box<dyn AudioSource>>,
     secs: f64,
@@ -140,7 +151,7 @@ fn record(
 /// (with `aac`) its AAC encoder is missing. Prints a `SKIP:` line, which
 /// CI turns into a warning. Failures past this point (creating the
 /// encoder, writing) fail the test.
-fn skip_without_mf(aac: bool) -> bool {
+pub(crate) fn skip_without_mf(aac: bool) -> bool {
     if !mf::available() {
         eprintln!("SKIP: Media Foundation is not available on this system");
         return true;
@@ -585,4 +596,26 @@ fn bench_rec_capture() {
         Box::new(e).finish().unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }
+}
+
+/// A display that presents nothing after the duplication starts (a static
+/// desktop) gives no first frame: the canvas starts from a GDI copy, so
+/// the recording is not black.
+#[test]
+#[ignore = "records the real desktop"]
+fn live_rec_dxgi_static_display_is_seeded_from_gdi() {
+    crate::capture::enable_dpi_awareness();
+    let win = TestWindow::open(280, 280, 160, 120, 1_000_000); // stays red
+    dxgi::NO_FIRST_FRAME.with(|f| f.set(true));
+    let r = DxgiSource::open(win.rect());
+    dxgi::NO_FIRST_FRAME.with(|f| f.set(false));
+    let src = match r {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("SKIP: desktop duplication is unavailable here: {e:#}");
+            return;
+        }
+    };
+    let c = &src.canvas()[(60 * 160 + 80) * 4..][..3];
+    assert_eq!(c, [0, 0, 255], "the window's red, as BGR");
 }

@@ -97,7 +97,17 @@ pub fn act_icon(a: Act) -> &'static str {
         Act::Upload => "cloud",
         Act::Exit => "x",
         Act::Accept => "check",
-        Act::Palette | Act::Color(_) => "",
+        Act::Record => "video",
+        Act::Palette
+        | Act::Color(_)
+        | Act::RecFormat(_)
+        | Act::RecFps(_)
+        | Act::RecSystem
+        | Act::RecMic
+        | Act::RecCamera
+        | Act::RecDevMenu
+        | Act::RecDev(_)
+        | Act::RecStart => "",
     }
 }
 
@@ -119,6 +129,7 @@ pub fn toolbar(f: &mut Fb, ui: &Ui, tb: &Toolbar, st: &BarState, k: f32) {
     if let Some(pop) = tb.pop {
         surface(f, ui, pop, 12.0, &ALL_LAYERS, k * st.pop_k);
     }
+    let kp = k * st.pop_k;
     for (i, it) in tb.items.iter().enumerate() {
         let hovered = st.hover == Some(i) && !it.disabled;
         let pressed = st.pressed == Some(i) && !it.disabled;
@@ -129,9 +140,148 @@ pub fn toolbar(f: &mut Fb, ui: &Ui, tb: &Toolbar, st: &BarState, k: f32) {
                 let r = round(it.r);
                 f.fill_rect(r.x as i32, r.y as i32, r.w.max(1.0) as i32, r.h.max(1.0) as i32, ui.th.separator.fade(k));
             }
-            Kind::Dot(c) => dot(f, ui, it.r, c, (c == st.color, hovered), k * st.pop_k),
+            Kind::Dot(c) => dot(f, ui, it.r, c, (c == st.color, hovered), kp),
+            Kind::SegTrack => fill(f, round(it.r), ui.px(8.0), ui.th.bg_hover.fade(kp)),
+            Kind::Seg { label, on, .. } => segment(f, ui, it.r, label, on, hovered, kp),
+            Kind::Label(s) => {
+                text(f, ui, 12.0, s, it.r.x, it.r.y + it.r.h / 2.0, ui.th.text_muted.fade(kp));
+            }
+            Kind::Switch { label, on, .. } => switch_row(f, ui, it, label, on, hovered, kp),
+            Kind::DevBox { open } => {
+                let name = tb.texts.first().map_or("", String::as_str);
+                dev_box(f, ui, it.r, name, open || hovered, kp);
+            }
+            Kind::DevList => {
+                let r = round(it.r);
+                panel(f, ui, r, 8.0, &SMALL_LAYERS, ui.th.surface.with_alpha(255), ui.th.border, kp);
+            }
+            Kind::DevItem { i: n, on } => {
+                let name = tb.texts.get(n + 1).map_or("", String::as_str);
+                dev_item(f, ui, it.r, name, on, hovered, kp);
+            }
+            Kind::Primary { label, .. } => primary(f, ui, it.r, label, (hovered, pressed), kp),
         }
     }
+}
+
+fn mix(a: C4, b: C4, t: f32) -> C4 {
+    let l = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+    C4::new(l(a.r, b.r), l(a.g, b.g), l(a.b, b.b), a.a)
+}
+
+/// `s` cut with "…" to fit `max_w` physical px at `size`.
+fn fit_text(ui: &Ui, size: f32, s: &str, max_w: f32) -> String {
+    if tw(ui, size, s) <= max_w {
+        return s.to_string();
+    }
+    let mut out: String = s.to_string();
+    while !out.is_empty() {
+        out.pop();
+        let t = format!("{}…", out.trim_end());
+        if tw(ui, size, &t) <= max_w {
+            return t;
+        }
+    }
+    "…".into()
+}
+
+/// One segment of a segmented control: raised surface when chosen.
+fn segment(f: &mut Fb, ui: &Ui, r: FRect, label: &str, on: bool, hovered: bool, k: f32) {
+    let th = ui.th;
+    let r = round(r);
+    let rad = ui.px(6.0);
+    if on {
+        fill(f, r, rad, th.accent_bg.fade(k));
+        ring(f, ui, r, rad, th.accent_ring.fade(k));
+    } else if hovered {
+        fill(f, r, rad, th.bg_hover.fade(k));
+    }
+    let fg = if on { th.accent_fg } else if hovered { th.text } else { th.text_muted };
+    let x = r.x + (r.w - tw(ui, 12.0, label)) / 2.0;
+    text(f, ui, 12.0, label, x, r.y + r.h / 2.0, fg.fade(k));
+}
+
+/// A row with a label and an on/off switch at its right end.
+fn switch_row(f: &mut Fb, ui: &Ui, it: &Item, label: &str, on: bool, hovered: bool, k: f32) {
+    let th = ui.th;
+    let r = round(it.r);
+    let k = if it.disabled { k * 0.4 } else { k };
+    if hovered {
+        fill(f, r, ui.px(8.0), th.bg_hover.fade(k));
+    }
+    let cy = r.y + r.h / 2.0;
+    text(f, ui, 12.0, label, r.x + ui.px(4.0), cy, th.text.fade(k));
+    let (sw, sh) = (ui.px(36.0).round(), ui.px(20.0).round());
+    let t = FRect { x: r.x1() - ui.px(4.0) - sw, y: (cy - sh / 2.0).round(), w: sw, h: sh };
+    let track = if on {
+        if hovered { mix(th.accent, C4::rgb(255, 255, 255), 0.12) } else { th.accent }
+    } else if hovered {
+        th.text_muted.fade(0.6)
+    } else {
+        th.text_muted.fade(0.45)
+    };
+    fill(f, t, ui.px(10.0), track.fade(k));
+    let kr = ui.px(8.0);
+    let cx = if on { t.x1() - ui.px(10.0) } else { t.x + ui.px(10.0) };
+    let ky = t.y + t.h / 2.0;
+    f.fill_circle(cx, ky + ui.px(0.5), kr + ui.px(0.5), C4::new(0, 0, 0, 40).fade(k));
+    f.fill_circle(cx, ky, kr, C4::rgb(255, 255, 255).fade(k));
+}
+
+/// The microphone box: recessed field, the chosen name, a chevron.
+fn dev_box(f: &mut Fb, ui: &Ui, r: FRect, name: &str, hot: bool, k: f32) {
+    let th = ui.th;
+    let r = round(r);
+    let rad = ui.px(8.0);
+    fill(f, r, rad, th.field_bg.fade(k));
+    if hot {
+        fill(f, r, rad, th.bg_hover.fade(k));
+    }
+    ring(f, ui, r, rad, th.border.fade(k));
+    let isz = ui.px(16.0);
+    let cy = r.y + r.h / 2.0;
+    let room = r.w - ui.px(10.0 + 8.0 + 10.0) - isz;
+    text(f, ui, 12.0, &fit_text(ui, 12.0, name, room), r.x + ui.px(10.0), cy, th.text.fade(k));
+    draw_icon(f, "chevron", r.x1() - ui.px(8.0) - isz, cy - isz / 2.0, isz, th.icon.fade(k));
+}
+
+/// A microphone in the open list: tinted when hovered, checked when chosen.
+fn dev_item(f: &mut Fb, ui: &Ui, r: FRect, name: &str, on: bool, hovered: bool, k: f32) {
+    let th = ui.th;
+    let r = round(r);
+    if hovered {
+        fill(f, r, ui.px(6.0), th.bg_hover.fade(k));
+    }
+    let isz = ui.px(14.0);
+    let cy = r.y + r.h / 2.0;
+    let room = r.w - ui.px(8.0 + 8.0 + 6.0) - isz;
+    let c = if on { th.accent_fg } else { th.text };
+    text(f, ui, 12.0, &fit_text(ui, 12.0, name, room), r.x + ui.px(8.0), cy, c.fade(k));
+    if on {
+        draw_icon(f, "check", r.x1() - ui.px(6.0) - isz, cy - isz / 2.0, isz, th.accent_fg.fade(k));
+    }
+}
+
+/// The popover's accent-filled primary button.
+fn primary(f: &mut Fb, ui: &Ui, r: FRect, label: &str, (hovered, pressed): (bool, bool), k: f32) {
+    let th = ui.th;
+    let r = round(r);
+    let bg = if pressed {
+        mix(th.accent, C4::rgb(0, 0, 0), 0.2)
+    } else if hovered {
+        mix(th.accent, C4::rgb(255, 255, 255), 0.12)
+    } else {
+        th.accent
+    };
+    let fg = if th.dark { C4::rgb(0x10, 0x11, 0x16) } else { C4::rgb(255, 255, 255) };
+    fill(f, r, ui.px(8.0), bg.fade(k));
+    // A recording dot before the label.
+    let (dot_r, gap) = (ui.px(4.0), ui.px(8.0));
+    let w = 2.0 * dot_r + gap + tw(ui, 13.0, label);
+    let (x, cy) = (r.x + (r.w - w) / 2.0, r.y + r.h / 2.0);
+    let (rr, rg, rb) = crate::tray::REC_RED;
+    f.fill_circle(x + dot_r, cy, dot_r, C4::rgb(rr, rg, rb).fade(k));
+    text(f, ui, 13.0, label, x + 2.0 * dot_r + gap, cy, fg.fade(k));
 }
 
 fn button(f: &mut Fb, ui: &Ui, it: &Item, act: Act, (hovered, pressed): (bool, bool), st: &BarState, k: f32) {
@@ -353,6 +503,13 @@ pub fn act_tip(a: Act, km: &Keymap) -> (&'static str, Vec<String>) {
         Act::Upload => "Upload",
         Act::Exit => "Close",
         Act::Accept => "Accept",
+        Act::Record => "Record screen",
+        Act::RecFormat(_) => "Format",
+        Act::RecFps(_) => "Frame rate",
+        Act::RecSystem => "System sound",
+        Act::RecMic | Act::RecDevMenu | Act::RecDev(_) => "Microphone",
+        Act::RecCamera => "Camera",
+        Act::RecStart => "Start recording",
     };
     let keys = match a {
         Act::Size(_) => vec!["Wheel".to_string()],
@@ -548,6 +705,8 @@ mod tests {
             can_undo,
             can_redo: true,
             palette: None,
+            record: true,
+            rec: None,
         });
         let mut d = buf(800, 200, 0);
         let st = BarState {

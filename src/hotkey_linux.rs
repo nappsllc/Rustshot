@@ -123,7 +123,7 @@ pub struct Worker {
 
 impl Worker {
     /// Grab `specs` on a new thread; `done` gets which were grabbed.
-    pub fn start(specs: [(i32, String, HotEvent); 2], tx: mpsc::Sender<HotEvent>, done: mpsc::Sender<Registered>) -> Worker {
+    pub fn start(specs: [(i32, String, HotEvent); SLOTS], tx: mpsc::Sender<HotEvent>, done: mpsc::Sender<Registered>) -> Worker {
         let stop = std::sync::Arc::new(AtomicBool::new(false));
         let s = stop.clone();
         let join = std::thread::spawn(move || hotkey_thread(specs, tx, &s, done));
@@ -140,7 +140,7 @@ impl Worker {
 /// Serve `specs` until the receiver goes away or `stop` is set. Mirrors
 /// hotkey_win: register everything, loop on events, warn (never die) when
 /// a grab is refused.
-fn hotkey_thread(specs: [(i32, String, HotEvent); 2], tx: mpsc::Sender<HotEvent>, stop: &AtomicBool, done: mpsc::Sender<Registered>) {
+fn hotkey_thread(specs: [(i32, String, HotEvent); SLOTS], tx: mpsc::Sender<HotEvent>, stop: &AtomicBool, done: mpsc::Sender<Registered>) {
     crate::wind::init_x11();
     unsafe {
         let dpy = XOpenDisplay(core::ptr::null());
@@ -157,7 +157,7 @@ fn hotkey_thread(specs: [(i32, String, HotEvent); 2], tx: mpsc::Sender<HotEvent>
         let prev = XSetErrorHandler(Some(record_grab_error));
         // (keycode, modifiers, index into specs)
         let mut grabs: Vec<(u8, c_uint, usize)> = Vec::new();
-        let mut result: Registered = [Ok(()); 2];
+        let mut result: Registered = [Ok(()); SLOTS];
         for (i, (_, spec, _)) in specs.iter().enumerate() {
             if spec.trim().is_empty() {
                 continue; // no hotkey for this action

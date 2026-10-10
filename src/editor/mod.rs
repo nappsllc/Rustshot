@@ -9,6 +9,7 @@ use crate::objects::{FRect, Obj, Pt};
 use crate::pixbuf::PixBuf;
 use crate::theme::{self, Theme};
 use crate::raster::Order;
+use crate::rec_ui::{self, RecOpts};
 use crate::uifb::C4;
 use compose::PixBufBackdrop;
 use crate::wind::{self, Cursor, Driver, Ev, Hwnd, Mods};
@@ -56,6 +57,9 @@ pub struct Pending {
     pub region: Option<(i32, i32, u32, u32)>,
     pub accept_on_select: bool,
     pub filename: Option<String>,
+    /// Started by the record hotkey: the Record popover opens with the
+    /// selection and Enter starts recording.
+    pub record: bool,
 }
 
 impl Pending {
@@ -66,7 +70,13 @@ impl Pending {
             region: None,
             accept_on_select: false,
             filename: None,
+            record: false,
         }
+    }
+
+    /// Area selection in record mode (the record hotkey).
+    pub fn record() -> Self {
+        Self { record: true, ..Self::editor() }
     }
 }
 
@@ -195,6 +205,10 @@ pub fn run(
         hwnd: Hwnd::default(),
         mouse: (0, 0),
         focus_tries: 0,
+        rec: None,
+        rec_opts: None,
+        #[cfg(test)]
+        rec_spec: None,
     };
     if wind::run(&mut app) != 0 {
         return 1;
@@ -250,6 +264,13 @@ struct App {
     /// Last known mouse position (client == image coordinates).
     mouse: (i32, i32),
     focus_tries: u8,
+    /// The recording in progress (the overlay is hidden meanwhile).
+    rec: Option<rec_ui::Run>,
+    /// The Record popover's last choices (until the config is reloaded).
+    rec_opts: Option<RecOpts>,
+    /// Tests: the spec the last recording started with.
+    #[cfg(test)]
+    rec_spec: Option<crate::rec::RecSpec>,
 }
 
 impl App {
@@ -290,6 +311,7 @@ impl App {
         if self.notice.as_ref().is_some_and(|t| t.expired(Instant::now())) {
             self.notice = None;
         }
+        self.tick_recording();
 
         for _ in 0..16 {
             match std::mem::replace(&mut self.st, State::Hidden) {
@@ -352,14 +374,69 @@ impl App {
                 Ok(cfg) => self.reload_config(cfg.unwrap_or_default()),
                 Err(e) => eprintln!("rustshot: config.toml not reloaded: {e}"),
             },
+            // The record hotkey stops a recording; so do the tray and the bar.
+            HotEvent::Record | HotEvent::StopRecording if self.rec.is_some() => {
+                if let Some(r) = self.rec.as_mut() {
+                    r.stop(Instant::now());
+                }
+            }
+            HotEvent::StopRecording => {}
+            // A capture would show the overlay in the recording.
+            HotEvent::Capture | HotEvent::Record if self.rec.is_some() => {
+                eprintln!("rustshot: a recording is running; capture ignored");
+            }
             // No new capture while an update installs or restarts us.
-            HotEvent::Capture if self.updating || self.restart_pending => {
+            HotEvent::Capture | HotEvent::Record if self.updating || self.restart_pending => {
                 eprintln!("rustshot: an update is installing; capture ignored");
             }
             HotEvent::Capture if matches!(self.st, State::Hidden) => self.pending = Some(Pending::editor()),
-            HotEvent::Capture => {}
+            HotEvent::Record if !rec_ui::SUPPORTED => eprintln!("rustshot: recording is not supported on this platform yet"),
+            HotEvent::Record if matches!(self.st, State::Hidden) => self.pending = Some(Pending::record()),
+            HotEvent::Capture | HotEvent::Record => {}
         }
         true
+    }
+
+    /// Advance the recording; once it is over, say how it went.
+    fn tick_recording(&mut self) {
+        let Some(run) = self.rec.as_mut() else { return };
+        let Some(end) = run.tick(Instant::now()) else { return };
+        self.rec = None;
+        crate::tray::set_recording(false);
+        match end {
+            rec_ui::End::Saved(p) => {
+                println!("saved: {}", p.display());
+                crate::tray::notify_saved(&p);
+            }
+            rec_ui::End::Failed(e) => {
+                eprintln!("error: recording failed: {e}");
+                crate::tray::notify(&format!("Recording failed: {e}"));
+            }
+            rec_ui::End::Cancelled => {}
+        }
+    }
+
+    /// Start recording `area` (physical px) with `opts`: the overlay is
+    /// already hidden.
+    fn start_recording(&mut self, cfg: &Config, opts: &RecOpts, geom: rec_ui::Geom, th: Theme) {
+        let spec = opts.spec(cfg, geom.area, export::local_ymdhms());
+        #[cfg(test)]
+        {
+            let _ = th;
+            self.rec_spec = Some(spec);
+            self.rec = Some(rec_ui::Run::fake(cfg.rec_countdown, opts.mic, Instant::now()));
+        }
+        #[cfg(not(test))]
+        match rec_ui::Run::start(spec, geom, th, cfg.rec_countdown, self.hwnd) {
+            Ok(run) => {
+                self.rec = Some(run);
+                crate::tray::set_recording(true);
+            }
+            Err(e) => {
+                eprintln!("error: recording failed: {e:#}");
+                crate::tray::notify(&format!("Recording failed: {e:#}"));
+            }
+        }
     }
 
     /// Take `cfg` (Settings saved it): the next capture uses it, the global
@@ -383,14 +460,17 @@ impl App {
             // check (and never takes the day's stamp).
             self.updates = crate::update::spawn_checker(cfg.check_updates);
         }
+        // The Record popover starts from the (new) defaults again.
+        self.rec_opts = None;
         self.cfg = cfg;
     }
 
-    /// No capture, editor or export is open or about to open, and no
-    /// upload is in flight.
+    /// No capture, editor, recording or export is open or about to open,
+    /// and no upload is in flight.
     fn idle(&self) -> bool {
         matches!(self.st, State::Hidden)
             && self.pending.is_none()
+            && self.rec.is_none()
             && self.upload_slot.lock().unwrap_or_else(|e| e.into_inner()).is_none()
     }
 
@@ -461,6 +541,8 @@ impl App {
         let region = pending.region.take();
         let tasks = std::mem::take(&mut pending.tasks);
         let accept_on_select = pending.accept_on_select;
+        let rec_opts = self.rec_opts.clone().unwrap_or_else(|| RecOpts::from_config(&cfg));
+        let rec = RecPop::new(rec_opts, pending.record && rec_ui::SUPPORTED);
 
         let th = theme::resolve(&cfg);
         let (shot, gdi) = match grab(&cfg, &th, screen) {
@@ -522,6 +604,7 @@ impl App {
             cfg,
             toolbar: None,
             palette_open: false,
+            rec,
             done: false,
             cancelled: false,
             dirty: false,
@@ -567,6 +650,16 @@ impl App {
     /// (so a native save dialog is never covered by the overlay).
     fn finish(&mut self, edit: &mut Edit, cancelled: bool) {
         wind::set_fast_timer(self.hwnd, false);
+        self.rec_opts = Some(edit.rec.opts.clone());
+        if edit.rec.start && !cancelled {
+            // Recording: the overlay goes away, the area is recorded live.
+            let geom = edit.rec_geom();
+            wind::hide(self.hwnd);
+            self.st = State::Hidden;
+            let (cfg, opts, th) = (edit.cfg.clone(), edit.rec.opts.clone(), edit.th);
+            self.start_recording(&cfg, &opts, geom, th);
+            return;
+        }
         if cancelled {
             if self.one_shot() {
                 self.exit_code.store(2, Ordering::SeqCst);
@@ -732,6 +825,8 @@ impl App {
         let Some(action) = edit.keys.resolve(vk, mods) else { return };
         match action {
             Action::Cancel => cancel_key(edit),
+            // In record mode (or with the Record popover open) Enter records.
+            Action::Accept if edit.rec.mode || edit.rec.open => self.apply_act(edit, Act::RecStart),
             Action::Accept => accept_key(edit),
             Action::SelectAll => {
                 edit.sel = Some(FRect { x: 0.0, y: 0.0, w: edit.shot.size.0 as f32, h: edit.shot.size.1 as f32 });
@@ -739,6 +834,7 @@ impl App {
             }
             // The palette popover hangs off the toolbar, which needs a selection.
             Action::TogglePalette if edit.sel.is_none() => {}
+            Action::Record if edit.sel.is_none() || !rec_ui::SUPPORTED => {}
             a => {
                 if let Some(act) = act_of(a) {
                     self.apply_act(edit, act);
@@ -1003,7 +1099,52 @@ impl App {
                 edit.color = c;
                 edit.palette_open = false;
             }
-            Act::Palette => edit.palette_open = !edit.palette_open,
+            Act::Palette => {
+                edit.palette_open = !edit.palette_open;
+                edit.rec.open = false;
+            }
+            Act::Record => {
+                edit.rec.open = !edit.rec.open;
+                edit.rec.dev_open = false;
+                edit.palette_open = false;
+                if edit.rec.open && edit.rec.opts.mic && !edit.rec.opts.mic_dev.is_empty() {
+                    edit.rec.load_devs(); // the chosen microphone's name
+                }
+            }
+            Act::RecFormat(f) => {
+                edit.rec.opts.format = f;
+                edit.rec.dev_open = false;
+            }
+            Act::RecFps(n) => edit.rec.opts.set_fps(n),
+            Act::RecSystem => edit.rec.opts.system = !edit.rec.opts.system,
+            Act::RecMic => {
+                edit.rec.opts.mic = !edit.rec.opts.mic;
+                edit.rec.dev_open = false;
+                if edit.rec.opts.mic {
+                    edit.rec.load_devs();
+                }
+            }
+            // The camera bubble comes with its own task.
+            Act::RecCamera => {}
+            Act::RecDevMenu => {
+                edit.rec.load_devs();
+                edit.rec.dev_open = !edit.rec.dev_open;
+            }
+            Act::RecDev(i) => {
+                edit.rec.opts.mic_dev = if i == 0 {
+                    String::new()
+                } else {
+                    edit.rec.devs.as_ref().and_then(|d| d.get(i - 1)).map(|d| d.0.clone()).unwrap_or_default()
+                };
+                edit.rec.dev_open = false;
+            }
+            Act::RecStart => {
+                if edit.sel.is_none() {
+                    edit.sel = Some(FRect { x: 0.0, y: 0.0, w: edit.shot.size.0 as f32, h: edit.shot.size.1 as f32 });
+                }
+                edit.rec.start = true;
+                edit.done = true;
+            }
             Act::Copy => {
                 edit.tasks = vec![Task::Copy];
                 edit.done = true;
@@ -1227,8 +1368,17 @@ fn drag_mods() -> Mods {
     Mods::current()
 }
 
-/// Esc: drop the current tool / draft / palette, or cancel the capture.
+/// Esc: close the microphone list or the Record popover, drop the current
+/// tool / draft / palette, or cancel the capture.
 fn cancel_key(edit: &mut Edit) {
+    if edit.rec.dev_open {
+        edit.rec.dev_open = false;
+        return;
+    }
+    if edit.rec.open {
+        edit.rec.open = false;
+        return;
+    }
     if matches!(edit.interact, Interact::None)
         && edit.draft.is_none()
         && !edit.palette_open
@@ -1283,9 +1433,10 @@ fn act_of(a: Action) -> Option<Act> {
         Action::Undo => Act::Undo,
         Action::Redo => Act::Redo,
         Action::TogglePalette => Act::Palette,
+        Action::Record => Act::Record,
         Action::SelectAll | Action::Accept | Action::Cancel => return None,
-        // Recording is wired up with the recording UI.
-        Action::Record | Action::StopRecording => return None,
+        // Nothing records while the overlay is up.
+        Action::StopRecording => return None,
     })
 }
 
@@ -1372,6 +1523,56 @@ impl Sizes {
     }
 }
 
+/// The Record popover in the overlay.
+struct RecPop {
+    opts: RecOpts,
+    open: bool,
+    /// Record mode (the record hotkey): Enter records.
+    mode: bool,
+    /// Microphones as (id, name), listed once per capture when needed.
+    devs: Option<Vec<(String, String)>>,
+    dev_open: bool,
+    /// "Start recording" pressed: `finish` records instead of exporting.
+    start: bool,
+}
+
+impl RecPop {
+    fn new(opts: RecOpts, mode: bool) -> RecPop {
+        RecPop { opts, open: mode, mode, devs: None, dev_open: false, start: false }
+    }
+
+    fn load_devs(&mut self) {
+        if self.devs.is_none() {
+            self.devs = Some(rec_ui::mics());
+        }
+    }
+
+    /// "Default microphone" and every listed one.
+    fn dev_names(&self) -> Vec<String> {
+        let mut v = vec![DEFAULT_MIC.to_string()];
+        v.extend(self.devs.iter().flatten().map(|d| d.1.clone()));
+        v
+    }
+
+    /// Index of the chosen microphone in [`RecPop::dev_names`].
+    fn dev_sel(&self) -> usize {
+        if self.opts.mic_dev.is_empty() {
+            return 0;
+        }
+        self.devs.iter().flatten().position(|d| d.0 == self.opts.mic_dev).map_or(0, |i| i + 1)
+    }
+
+    fn mic_label(&self) -> String {
+        if self.opts.mic_dev.is_empty() {
+            return DEFAULT_MIC.into();
+        }
+        let named = self.devs.iter().flatten().find(|d| d.0 == self.opts.mic_dev).map(|d| d.1.clone());
+        named.unwrap_or_else(|| "Microphone".into())
+    }
+}
+
+const DEFAULT_MIC: &str = "Default microphone";
+
 struct TextDraft {
     pos: Pt,
     text: String,
@@ -1428,6 +1629,7 @@ struct Edit {
     keys: Keymap,
     toolbar: Option<Toolbar>,
     palette_open: bool,
+    rec: RecPop,
     done: bool,
     cancelled: bool,
     dirty: bool,
@@ -1617,6 +1819,22 @@ impl Edit {
 
     fn ui_scale(&self) -> f32 {
         self.shot.scale.clamp(1.0, 4.0)
+    }
+
+    /// The selection as a recording area (physical virtual-screen px,
+    /// at least 2x2) with every monitor and the UI scale.
+    fn rec_geom(&self) -> rec_ui::Geom {
+        let (ox, oy) = self.shot.origin;
+        let full = FRect { x: 0.0, y: 0.0, w: self.shot.size.0 as f32, h: self.shot.size.1 as f32 };
+        let mut s = self.sel.unwrap_or(full);
+        s.clamp_to(full.w, full.h);
+        let (x, y) = (s.x.round() as i32, s.y.round() as i32);
+        let (w, h) = ((s.x1().round() as i32 - x).max(2), (s.y1().round() as i32 - y).max(2));
+        rec_ui::Geom {
+            area: (x + ox, y + oy, w as u32, h as u32),
+            monitors: self.shot.monitors.iter().map(|m| (m.0 + ox, m.1 + oy, m.2, m.3)).collect(),
+            scale: self.ui_scale(),
+        }
     }
 
     /// Track the hovered toolbar item / handle; true when either changed.
@@ -2203,6 +2421,7 @@ mod tests {
             cfg: cfg.clone(),
             toolbar: None,
             palette_open: false,
+            rec: RecPop::new(RecOpts::from_config(&cfg), false),
             done: false,
             cancelled: false,
             dirty: false,
@@ -2235,6 +2454,9 @@ mod tests {
             hwnd: Hwnd::default(),
             mouse: (0, 0),
             focus_tries: 0,
+            rec: None,
+            rec_opts: None,
+            rec_spec: None,
         }
     }
 
@@ -2475,6 +2697,40 @@ mod tests {
         let mut app = preview_app_with(theme::DARK, Some(sel), two_monitor_shot());
         edit_of(&mut app).notice = Some(Toast::new("Copied", ToastKind::Success));
         save(&mut app, "dark-two-monitors.png");
+
+        // The Record popover: MP4 with the microphone list open, GIF, and
+        // above the bar near the bottom; the Record button's tooltip.
+        for (name, th, sel, gif, mic, list) in [
+            ("dark-record-popover.png", theme::DARK, big, false, false, false),
+            ("light-record-popover.png", theme::LIGHT, big, false, false, false),
+            ("dark-record-mic-list.png", theme::DARK, big, false, true, true),
+            ("light-record-mic-list.png", theme::LIGHT, big, false, true, true),
+            ("dark-record-gif.png", theme::DARK, FRect { x: 240.0, y: 560.0, w: 960.0, h: 300.0 }, true, false, false),
+            ("light-record-gif.png", theme::LIGHT, FRect { x: 240.0, y: 560.0, w: 960.0, h: 300.0 }, true, false, false),
+        ] {
+            let mut app = annotated(th, sel);
+            let e = edit_of(&mut app);
+            e.rec.open = true;
+            e.rec.opts.format = if gif { crate::rec::RecFormat::Gif } else { crate::rec::RecFormat::Mp4 };
+            e.rec.opts.mic = mic;
+            if list {
+                e.rec.load_devs();
+                e.rec.opts.mic_dev = "{mic-1}".into();
+                e.rec.dev_open = true;
+            }
+            app.frame();
+            let e = edit_of(&mut app);
+            let tb = e.toolbar.clone().expect("toolbar");
+            e.hover = tb.items.iter().position(|i| matches!(i.kind, toolbar::Kind::Primary { .. }));
+            save(&mut app, name);
+        }
+        let mut app = annotated(theme::DARK, big);
+        app.frame();
+        let i = btn(&mut app, Act::Record);
+        let e = edit_of(&mut app);
+        e.hover = Some(i);
+        e.hover_at = Instant::now() - Duration::from_secs(2);
+        save(&mut app, "dark-tooltip-record.png");
     }
 
     fn two_mons() -> Vec<capture::IRect> {

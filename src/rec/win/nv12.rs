@@ -29,6 +29,7 @@ pub fn size(w: u32, h: u32) -> usize {
 /// Convert `bgra` (`w`×`h`, top-down) to NV12 of `out_w`×`out_h` (even).
 /// The same size, or one less in a direction (odd areas), crops; anything
 /// else is resampled with a box filter.
+#[cfg_attr(not(test), allow(dead_code))] // tests and benchmarks
 pub fn convert(bgra: &[u8], w: u32, h: u32, out_w: u32, out_h: u32) -> Vec<u8> {
     let mut out = Vec::new();
     let mut scratch = Vec::new();

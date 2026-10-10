@@ -23,10 +23,16 @@ const WM_TRAYICON: u32 = WM_APP + 1;
 const WM_TRAY_INIT: u32 = WM_APP + 2;
 /// Posted when an action failed: show the stored message as a balloon.
 const WM_TRAY_BALLOON: u32 = WM_APP + 3;
+/// Posted by [`refresh_state`]: the recording state changed (icon, tip).
+const WM_TRAY_STATE: u32 = WM_APP + 4;
+/// Classic-callback balloon click (`NIN_BALLOONUSERCLICK`).
+const BALLOON_CLICK: u32 = WM_USER + 5;
 const ICON_ID: u32 = 1;
 
 static TX: Mutex<Option<Sender<HotEvent>>> = Mutex::new(None);
 static BALLOON: Mutex<Option<String>> = Mutex::new(None);
+/// The folder the next balloon click opens (set with a "Saved" balloon).
+static SAVED: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
 
 fn taskbar_created() -> u32 {
     static MSG: OnceLock<u32> = OnceLock::new();
@@ -51,12 +57,33 @@ pub fn spawn(tx: Sender<HotEvent>) {
 
 /// Show `text` as a tray balloon (from any thread; the tray window shows it).
 pub fn notify(text: &str) {
+    *SAVED.lock().unwrap() = None;
+    post_balloon(text);
+}
+
+fn post_balloon(text: &str) {
     *BALLOON.lock().unwrap() = Some(text.to_string());
+    post_tray(WM_TRAY_BALLOON);
+}
+
+fn post_tray(msg: u32) {
     unsafe {
         if let Ok(hwnd) = FindWindowW(crate::instance::tray_class(), PCWSTR::null()) {
-            let _ = PostMessageW(Some(hwnd), WM_TRAY_BALLOON, WPARAM(0), LPARAM(0));
+            let _ = PostMessageW(Some(hwnd), msg, WPARAM(0), LPARAM(0));
         }
     }
+}
+
+/// "Saved <path>" as a balloon; clicking it opens the folder.
+pub fn notify_saved(path: &std::path::Path) {
+    *SAVED.lock().unwrap() = path.parent().map(|p| p.to_path_buf());
+    post_balloon(&format!("Saved {}
+Click to open the folder.", path.display()));
+}
+
+/// The recording state changed: swap the icon (red dot) and the tip.
+pub fn refresh_state() {
+    post_tray(WM_TRAY_STATE);
 }
 
 /// Drop the event sender (called when the instance guard goes away).
@@ -115,7 +142,7 @@ fn build_glyph(hwnd: HWND) -> Option<HICON> {
         }
         let size = GetSystemMetricsForDpi(SM_CXSMICON, dpi.max(96)).max(16) as u32;
         let rgb = if taskbar_is_light() { (0x1B, 0x1C, 0x20) } else { (255, 255, 255) };
-        let rgba = tray::tray_glyph_rgba(size, rgb);
+        let rgba = tray::tray_glyph_rgba_rec(size, rgb, tray::is_recording());
         let bmi = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
                 biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
@@ -197,13 +224,17 @@ fn refresh_icon(hwnd: HWND) {
     }
 }
 
+fn tip() -> &'static str {
+    if tray::is_recording() { "Rustshot — recording" } else { "Rustshot" }
+}
+
 fn add_icon(hwnd: HWND) {
     unsafe {
         let mut nid = base_data(hwnd);
         nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
         nid.uCallbackMessage = WM_TRAYICON;
         nid.hIcon = icon(hwnd);
-        copy_wide(&mut nid.szTip, "Rustshot");
+        copy_wide(&mut nid.szTip, tip());
         if !Shell_NotifyIconW(NIM_ADD, &nid).as_bool() {
             eprintln!("Rustshot: could not add the notification-area icon");
         }
@@ -260,6 +291,7 @@ fn show_menu(hwnd: HWND) {
 
 fn run(hwnd: HWND, item: MenuItem) {
     match item {
+        MenuItem::StopRecording => send(HotEvent::StopRecording),
         MenuItem::Capture => send(HotEvent::Capture),
         MenuItem::Quit => send(HotEvent::Quit),
         MenuItem::Settings => crate::settings_ui::show(),
@@ -284,6 +316,15 @@ pub fn handle(hwnd: HWND, m: u32, _w: WPARAM, l: LPARAM) -> Option<LRESULT> {
                 balloon(hwnd, &text);
             }
         }
+        WM_TRAY_STATE => {
+            refresh_icon(hwnd);
+            unsafe {
+                let mut nid = base_data(hwnd);
+                nid.uFlags = NIF_TIP;
+                copy_wide(&mut nid.szTip, tip());
+                let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
+            }
+        }
         WM_DPICHANGED => refresh_icon(hwnd),
         WM_SETTINGCHANGE => {
             // lParam is a wide string naming the changed setting; theme switches send this one.
@@ -299,7 +340,14 @@ pub fn handle(hwnd: HWND, m: u32, _w: WPARAM, l: LPARAM) -> Option<LRESULT> {
             refresh_icon(hwnd);
         }
         WM_TRAYICON => match l.0 as u32 {
+            // While recording, a click stops it (the menu has the same).
+            WM_LBUTTONUP if tray::is_recording() => send(HotEvent::StopRecording),
             WM_LBUTTONUP => send(HotEvent::Capture),
+            BALLOON_CLICK => {
+                if let Some(dir) = SAVED.lock().unwrap().take() {
+                    crate::actions::open_path(&dir);
+                }
+            }
             WM_RBUTTONUP | WM_CONTEXTMENU => show_menu(hwnd),
             _ => {}
         },

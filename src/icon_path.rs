@@ -72,6 +72,29 @@ pub const ICONS: &[(&str, &[Shape])] = &[
         Path("M12 9v4"),
         Path("M12 17h.01"),
     ]),
+    // Recording.
+    ("video", &[
+        Path("m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5"),
+        Rect { x: 2.0, y: 6.0, w: 14.0, h: 12.0, r: 2.0 },
+    ]),
+    ("pause", &[
+        Rect { x: 14.0, y: 4.0, w: 4.0, h: 16.0, r: 1.0 },
+        Rect { x: 6.0, y: 4.0, w: 4.0, h: 16.0, r: 1.0 },
+    ]),
+    ("play", &[Path("M6 3 20 12 6 21z")]),
+    ("mic", &[
+        Path("M12 19v3"),
+        Path("M19 10v2a7 7 0 0 1-14 0v-2"),
+        Rect { x: 9.0, y: 2.0, w: 6.0, h: 13.0, r: 3.0 },
+    ]),
+    ("mic-off", &[
+        Path("M12 19v3"),
+        Path("M15 9.34V5a3 3 0 0 0-5.68-1.33"),
+        Path("M16.95 16.95A7 7 0 0 1 5 12v-2"),
+        Path("M18.89 13.23A7 7 0 0 0 19 12v-2"),
+        Path("m2 2 20 20"),
+        Path("M9 9v3a3 3 0 0 0 5.12 2.12"),
+    ]),
 ];
 
 /// SVG path-data tokenizer (numbers, single-char flags, command letters).

@@ -1104,3 +1104,155 @@ fn daemon_capture_cycle() {
     // Quit closes it.
     assert!(!a.on_hot(HotEvent::Quit));
 }
+
+// ---- recording ---------------------------------------------------------------
+
+/// Centre of the first toolbar item `f` matches (lays the toolbar out first).
+#[cfg(windows)]
+fn item(a: &mut App, f: impl Fn(&toolbar::Kind) -> bool) -> (i32, i32) {
+    let m = a.mouse;
+    ed(a).prepare(None, m, Instant::now());
+    let tb = ed(a).toolbar.as_ref().expect("toolbar");
+    let it = tb.items.iter().find(|i| f(&i.kind)).expect("toolbar item");
+    ((it.r.x + it.r.w / 2.0) as i32, (it.r.y + it.r.h / 2.0) as i32)
+}
+
+#[cfg(windows)]
+fn rec_phase(a: &App) -> Option<rec_ui::Phase> {
+    a.rec.as_ref().map(|r| r.phase())
+}
+
+/// The popover: format, rate, sound, microphone list, Start. Start hides
+/// the overlay and records the selection (physical px) with those choices.
+#[cfg(windows)]
+#[test]
+fn record_popover_choices_start_a_recording() {
+    let mut a = app(Some(r(100.0, 100.0, 600.0, 400.0)));
+    a.kind = RunKind::Daemon;
+    let (x, y) = button(&mut a, Act::Record);
+    click(&mut a, x, y);
+    assert!(ed(&mut a).rec.open && !ed(&mut a).palette_open);
+    // The palette and the popover take turns.
+    let (px, py) = button(&mut a, Act::Palette);
+    click(&mut a, px, py);
+    assert!(!ed(&mut a).rec.open && ed(&mut a).palette_open);
+    click(&mut a, x, y);
+    assert!(ed(&mut a).rec.open && !ed(&mut a).palette_open);
+    let seg = |a: &mut App, act: Act| item(a, |k| matches!(k, toolbar::Kind::Seg { act: x, .. } if *x == act));
+    let (gx, gy) = seg(&mut a, Act::RecFps(60));
+    click(&mut a, gx, gy);
+    assert_eq!(ed(&mut a).rec.opts.fps(), 60);
+    let (sx, sy) = item(&mut a, |k| matches!(k, toolbar::Kind::Switch { act: Act::RecSystem, .. }));
+    click(&mut a, sx, sy);
+    assert!(!ed(&mut a).rec.opts.system);
+    let (mx, my) = item(&mut a, |k| matches!(k, toolbar::Kind::Switch { act: Act::RecMic, .. }));
+    click(&mut a, mx, my);
+    assert!(ed(&mut a).rec.opts.mic);
+    // The microphone list: pick the second device.
+    let (bx, by) = item(&mut a, |k| matches!(k, toolbar::Kind::DevBox { .. }));
+    click(&mut a, bx, by);
+    assert!(ed(&mut a).rec.dev_open);
+    let (dx, dy) = item(&mut a, |k| matches!(k, toolbar::Kind::DevItem { i: 2, .. }));
+    click(&mut a, dx, dy);
+    assert!(!ed(&mut a).rec.dev_open);
+    assert_eq!(ed(&mut a).rec.opts.mic_dev, "{mic-2}");
+    assert_eq!(ed(&mut a).rec.mic_label(), "Headset");
+    // The camera is not wired up yet: its row does nothing.
+    let (cx, cy) = item(&mut a, |k| matches!(k, toolbar::Kind::Switch { act: Act::RecCamera, .. }));
+    click(&mut a, cx, cy);
+    assert!(!ed(&mut a).rec.opts.camera);
+    // Esc closes the popover before it cancels anything.
+    key(&mut a, key::ESCAPE);
+    assert!(matches!(a.st, State::Edit(_)) && !ed(&mut a).rec.open);
+    click(&mut a, x, y);
+    let (tx, ty) = item(&mut a, |k| matches!(k, toolbar::Kind::Primary { .. }));
+    click(&mut a, tx, ty);
+    assert!(hidden(&a), "the overlay is gone while recording");
+    let spec = a.rec_spec.clone().expect("recording started");
+    assert_eq!(spec.area, (100, 100, 600, 400));
+    assert_eq!((spec.format, spec.fps, spec.system_audio), (crate::rec::RecFormat::Mp4, 60, false));
+    assert_eq!(spec.mic.as_deref(), Some("{mic-2}"));
+    assert_eq!(rec_phase(&a), Some(rec_ui::Phase::Countdown), "the countdown is on by default");
+    assert!(!a.idle(), "recording is not idle");
+    // The choices are remembered for the next capture.
+    assert_eq!(a.rec_opts.as_ref().map(|o| o.fps_mp4), Some(60));
+}
+
+/// The record hotkey: idle → selection in record mode (popover open,
+/// Enter records); again → stop; the end makes the daemon idle.
+#[cfg(windows)]
+#[test]
+fn record_hotkey_selects_records_and_stops() {
+    let mut a = app(None);
+    a.st = State::Hidden;
+    a.kind = RunKind::Daemon;
+    a.cfg.rec_countdown = false;
+    assert!(a.on_hot(HotEvent::Record));
+    assert!(a.pending.as_ref().is_some_and(|p| p.record));
+    queue(Ok(synthetic_shot()));
+    a.on_event(Ev::Timer);
+    assert!(ed(&mut a).rec.mode && ed(&mut a).rec.open);
+    drag(&mut a, (200, 150), (520, 390));
+    let m = a.mouse;
+    ed(&mut a).prepare(None, m, Instant::now());
+    assert!(ed(&mut a).toolbar.as_ref().is_some_and(|t| t.pop.is_some()), "the popover shows with the selection");
+    key(&mut a, key::RETURN);
+    assert!(hidden(&a));
+    assert_eq!(a.rec_spec.as_ref().unwrap().area, (200, 150, 320, 240));
+    assert_eq!(rec_phase(&a), Some(rec_ui::Phase::Recording), "no countdown");
+    // A capture now would be recorded: ignored.
+    assert!(a.on_hot(HotEvent::Capture));
+    assert!(a.pending.is_none());
+    // The update gate waits for the recording.
+    let (tx, rx) = std::sync::mpsc::channel();
+    a.on_hot(HotEvent::RestartWhenIdle(tx));
+    a.idle_gate();
+    assert!(rx.try_recv().is_err(), "recording: no reply");
+    // The record hotkey again stops it; the file arrives; idle.
+    assert!(a.on_hot(HotEvent::Record));
+    assert_eq!(rec_phase(&a), Some(rec_ui::Phase::Stopping));
+    assert_eq!(a.rec.as_ref().unwrap().log, [rec_ui::Effect::Go, rec_ui::Effect::Stop]);
+    a.rec.as_mut().unwrap().fake_end = Some(rec_ui::End::Cancelled);
+    a.pump();
+    assert!(a.rec.is_none() && a.idle());
+    assert_eq!(rx.try_recv(), Ok(()), "idle now: the update may install");
+}
+
+/// The tray's "Stop recording" stops it (and cancels a countdown); with
+/// nothing recording it does nothing.
+#[cfg(windows)]
+#[test]
+fn tray_stop_recording() {
+    let mut a = app(Some(r(10.0, 10.0, 300.0, 200.0)));
+    a.kind = RunKind::Daemon;
+    assert!(a.on_hot(HotEvent::StopRecording));
+    assert!(matches!(a.st, State::Edit(_)), "nothing to stop");
+    ed(&mut a).rec.open = true;
+    key(&mut a, key::RETURN);
+    assert_eq!(rec_phase(&a), Some(rec_ui::Phase::Countdown));
+    assert!(a.on_hot(HotEvent::StopRecording));
+    assert_eq!(a.rec.as_ref().unwrap().log, [rec_ui::Effect::Cancel]);
+    // A second stop (bar and tray at once) is one.
+    assert!(a.on_hot(HotEvent::StopRecording));
+    assert_eq!(a.rec.as_ref().unwrap().log.len(), 1);
+}
+
+/// The record hotkey while the overlay is open, or an update installing,
+/// starts nothing; keyboard Record opens the popover only with a selection.
+#[test]
+fn record_hotkey_refused_while_busy() {
+    let mut a = app(None);
+    assert!(a.on_hot(HotEvent::Record));
+    assert!(a.pending.is_none(), "overlay open");
+    a.st = State::Hidden;
+    a.updating = true;
+    assert!(a.on_hot(HotEvent::Record));
+    assert!(a.pending.is_none(), "update installing");
+    a.updating = false;
+    a.on_hot(HotEvent::Record);
+    assert_eq!(a.pending.is_some(), rec_ui::SUPPORTED);
+    // A config reload forgets the popover's last choices.
+    a.rec_opts = Some(rec_ui::RecOpts::from_config(&a.cfg));
+    a.reload_config(a.cfg.clone());
+    assert!(a.rec_opts.is_none());
+}

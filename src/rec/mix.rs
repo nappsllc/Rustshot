@@ -219,6 +219,7 @@ impl Mixer {
     }
 
     /// Gain of source `i` (in the order given to [`Mixer::new`]).
+    #[cfg_attr(not(test), allow(dead_code))] // a microphone level setting may use it
     pub fn set_gain(&mut self, i: usize, gain: f32) {
         if let Some(s) = self.inputs.get_mut(i) {
             s.gain = gain;

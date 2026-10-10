@@ -479,4 +479,4 @@ pub(crate) fn lzw_encode(data: &[u8], min: u8) -> Vec<u8> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

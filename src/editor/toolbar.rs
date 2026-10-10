@@ -4,6 +4,7 @@
 
 use super::Tool;
 use crate::objects::{FRect, Pt};
+use crate::rec::RecFormat;
 use crate::uifb::C4;
 
 pub const BTN: f32 = 32.0;
@@ -54,6 +55,19 @@ pub enum Act {
     Upload,
     Exit,
     Accept,
+    /// The Record button: opens/closes the Record popover.
+    Record,
+    RecFormat(RecFormat),
+    RecFps(u32),
+    RecSystem,
+    RecMic,
+    RecCamera,
+    /// Open/close the microphone list.
+    RecDevMenu,
+    /// Pick microphone `i` of the list (0 = the default device).
+    RecDev(usize),
+    /// "Start recording".
+    RecStart,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -65,6 +79,22 @@ pub enum Kind {
     SepH,
     /// A palette color in the popover.
     Dot(C4),
+    /// Record popover: a segmented control's track.
+    SegTrack,
+    /// A segment (`on` = chosen).
+    Seg { act: Act, label: &'static str, on: bool },
+    /// Muted text.
+    Label(&'static str),
+    /// A row with a label and an on/off switch (the whole row toggles).
+    Switch { act: Act, label: &'static str, on: bool },
+    /// The microphone dropdown box (shows `Toolbar::texts[0]`).
+    DevBox { open: bool },
+    /// The open microphone list's panel.
+    DevList,
+    /// Microphone `i` of the list (`Toolbar::texts[i + 1]`).
+    DevItem { i: usize, on: bool },
+    /// The popover's primary button.
+    Primary { act: Act, label: &'static str },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -85,6 +115,27 @@ pub struct Input<'a> {
     pub can_redo: bool,
     /// Palette colors while the popover is open.
     pub palette: Option<&'a [C4]>,
+    /// Show the Record button (recording works on this platform).
+    pub record: bool,
+    /// The Record popover while it is open (instead of the palette).
+    pub rec: Option<&'a RecView<'a>>,
+}
+
+/// What the Record popover shows.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecView<'a> {
+    pub format: RecFormat,
+    pub fps: u32,
+    pub fps_choices: [u32; 2],
+    pub system: bool,
+    pub mic: bool,
+    pub camera: bool,
+    /// The chosen microphone's name ("Default microphone" for the default).
+    pub mic_label: &'a str,
+    /// The microphone list while it is open: the default first.
+    pub devs: Option<&'a [String]>,
+    /// Index into `devs` of the chosen one.
+    pub dev_sel: usize,
 }
 
 #[derive(Clone, PartialEq)]
@@ -95,6 +146,8 @@ pub struct Toolbar {
     pub wrapped: bool,
     /// The bar's anchor edge is its bottom (placed above / inside).
     pub above: bool,
+    /// Texts of the Record popover's microphone box and list.
+    pub texts: Vec<String>,
 }
 
 type Group = Vec<(Kind, bool, f32)>;
@@ -114,11 +167,16 @@ fn groups(inp: &Input) -> [Group; 4] {
     let mut out: Group = if inp.busy {
         vec![(Kind::Btn(Act::Accept), false, ACCEPT_W)]
     } else {
-        vec![
+        let mut v = Vec::new();
+        if inp.record {
+            v.push((Kind::Btn(Act::Record), false, BTN));
+        }
+        v.extend([
             (Kind::Btn(Act::Copy), false, BTN),
             (Kind::Btn(Act::Save), false, BTN),
             (Kind::Btn(Act::Upload), false, BTN),
-        ]
+        ]);
+        v
     };
     out.push((Kind::Btn(Act::Exit), false, BTN));
     [tools, history, size, out]
@@ -195,8 +253,142 @@ pub fn layout(inp: &Input) -> Toolbar {
         it.r = FRect { x: x + it.r.x * s, y: y + it.r.y * s, w: it.r.w * s, h: it.r.h * s };
     }
     let bar = FRect { x, y, w: bw, h: bh };
-    let pop = inp.palette.map(|colors| place_palette(colors, bar, above, &mut items, inp));
-    Toolbar { bar, pop, items, wrapped, above }
+    let mut texts = Vec::new();
+    let pop = match (inp.rec, inp.palette) {
+        (Some(rv), _) => Some(place_rec(rv, bar, above, &mut items, &mut texts, inp)),
+        (None, Some(colors)) => Some(place_palette(colors, bar, above, &mut items, inp)),
+        (None, None) => None,
+    };
+    Toolbar { bar, pop, items, wrapped, above, texts }
+}
+
+/// Top-left of a `pw`x`ph` popover 6 px from the bar on the side away from
+/// the selection (below a bar below it, above a bar above/inside it), or
+/// the other side when it does not fit there; right-aligned to `anchor`.
+/// When it fits on neither side it goes where there is more room,
+/// clamped to the area.
+fn place_pop(pw: f32, ph: f32, anchor: FRect, bar: FRect, above: bool, inp: &Input) -> (f32, f32) {
+    let s = inp.s;
+    let m = MARGIN * s;
+    let px = (anchor.x1() - pw).clamp(inp.area.x + m, (inp.area.x1() - m - pw).max(inp.area.x + m));
+    let up = bar.y - POP_GAP * s - ph;
+    let down = bar.y1() + POP_GAP * s;
+    let up_ok = up >= inp.area.y + m;
+    let down_ok = down + ph <= inp.area.y1() - m;
+    let py = match (up_ok, down_ok) {
+        (true, true) => {
+            if above {
+                up
+            } else {
+                down
+            }
+        }
+        (true, false) => up,
+        (false, true) => down,
+        (false, false) => {
+            let lo = inp.area.y + m;
+            let hi = (inp.area.y1() - m - ph).max(lo);
+            if bar.y - inp.area.y > inp.area.y1() - bar.y1() { up.clamp(lo, hi) } else { down.clamp(lo, hi) }
+        }
+    };
+    (px, py)
+}
+
+const REC_W: f32 = 256.0;
+const REC_PAD: f32 = 12.0;
+const SEG_H: f32 = 28.0;
+const SWITCH_H: f32 = 32.0;
+const DEV_H: f32 = 28.0;
+const DEV_ITEM_H: f32 = 26.0;
+/// At most this many microphones are listed.
+const DEV_MAX: usize = 8;
+const START_H: f32 = 32.0;
+
+/// Segment labels for the frame rates on offer.
+fn fps_label(n: u32) -> &'static str {
+    match n {
+        10 => "10 fps",
+        15 => "15 fps",
+        30 => "30 fps",
+        60 => "60 fps",
+        _ => "fps",
+    }
+}
+
+/// The Record popover: format, frame rate, sound, microphone, camera and
+/// Start recording, in a column `REC_W` wide; placed like the palette.
+fn place_rec(rv: &RecView, bar: FRect, above: bool, items: &mut Vec<Item>, texts: &mut Vec<String>, inp: &Input) -> FRect {
+    let s = inp.s;
+    let mut local: Vec<Item> = Vec::new();
+    let mut push = |kind: Kind, r: FRect, disabled: bool| local.push(Item { kind, r, disabled });
+    let inner = REC_W - 2.0 * REC_PAD;
+    let x0 = REC_PAD;
+    let mut y = REC_PAD;
+    // Format: MP4 | GIF across the width.
+    push(Kind::SegTrack, FRect { x: x0, y, w: inner, h: SEG_H }, false);
+    let half = (inner - 4.0) / 2.0;
+    for (i, (f, label)) in [(RecFormat::Mp4, "MP4"), (RecFormat::Gif, "GIF")].into_iter().enumerate() {
+        let r = FRect { x: x0 + 2.0 + i as f32 * half, y: y + 2.0, w: half, h: SEG_H - 4.0 };
+        push(Kind::Seg { act: Act::RecFormat(f), label, on: rv.format == f }, r, false);
+    }
+    y += SEG_H + 10.0;
+    // Frame rate: label left, two segments right.
+    push(Kind::Label("Frame rate"), FRect { x: x0, y, w: inner / 2.0, h: SEG_H }, false);
+    let fw = 128.0;
+    let fx = x0 + inner - fw;
+    push(Kind::SegTrack, FRect { x: fx, y, w: fw, h: SEG_H }, false);
+    let fh = (fw - 4.0) / 2.0;
+    for (i, n) in rv.fps_choices.into_iter().enumerate() {
+        let r = FRect { x: fx + 2.0 + i as f32 * fh, y: y + 2.0, w: fh, h: SEG_H - 4.0 };
+        push(Kind::Seg { act: Act::RecFps(n), label: fps_label(n), on: rv.fps == n }, r, false);
+    }
+    y += SEG_H + 8.0;
+    push(Kind::SepH, FRect { x: x0, y, w: inner, h: 1.0 }, false);
+    y += 1.0 + 4.0;
+    let audio = rv.format == RecFormat::Mp4;
+    let row = |y: f32| FRect { x: x0 - 4.0, y, w: inner + 8.0, h: SWITCH_H };
+    push(Kind::Switch { act: Act::RecSystem, label: "System sound", on: audio && rv.system }, row(y), !audio);
+    y += SWITCH_H;
+    push(Kind::Switch { act: Act::RecMic, label: "Microphone", on: audio && rv.mic }, row(y), !audio);
+    y += SWITCH_H;
+    texts.push(rv.mic_label.to_string());
+    let mut list = None;
+    if audio && rv.mic {
+        y += 2.0;
+        let open = rv.devs.is_some();
+        push(Kind::DevBox { open }, FRect { x: x0, y, w: inner, h: DEV_H }, false);
+        y += DEV_H;
+        if let Some(devs) = rv.devs {
+            let n = devs.len().min(DEV_MAX);
+            let lr = FRect { x: x0, y: y + 4.0, w: inner, h: n as f32 * DEV_ITEM_H + 8.0 };
+            list = Some((lr, n));
+            texts.extend(devs.iter().take(n).cloned());
+        }
+        y += 6.0;
+    }
+    // Camera: wired up with the camera bubble.
+    push(Kind::Switch { act: Act::RecCamera, label: "Camera", on: rv.camera }, row(y), true);
+    y += SWITCH_H + 8.0;
+    push(Kind::Primary { act: Act::RecStart, label: "Start recording" }, FRect { x: x0, y, w: inner, h: START_H }, false);
+    y += START_H + REC_PAD;
+    // The open list floats over the rows below the box: drawn (and hit) last.
+    let mut h = y;
+    if let Some((lr, n)) = list {
+        h = h.max(lr.y1() + REC_PAD);
+        push(Kind::DevList, lr, false);
+        for i in 0..n {
+            let r = FRect { x: lr.x + 4.0, y: lr.y + 4.0 + i as f32 * DEV_ITEM_H, w: lr.w - 8.0, h: DEV_ITEM_H };
+            push(Kind::DevItem { i, on: i == rv.dev_sel }, r, false);
+        }
+    }
+    let (pw, ph) = (REC_W * s, h * s);
+    let anchor = items.iter().find(|it| it.kind == Kind::Btn(Act::Record)).map(|it| it.r).unwrap_or(bar);
+    let (px, py) = place_pop(pw, ph, anchor, bar, above, inp);
+    for it in local {
+        let r = FRect { x: px + it.r.x * s, y: py + it.r.y * s, w: it.r.w * s, h: it.r.h * s };
+        items.push(Item { r, ..it });
+    }
+    FRect { x: px, y: py, w: pw, h: ph }
 }
 
 /// Popover 6 px from the bar on the side away from the selection (below a
@@ -250,7 +442,10 @@ impl Toolbar {
         match it.kind {
             Kind::Btn(a) => Some(a),
             Kind::Dot(c) => Some(Act::Color(c)),
-            Kind::Value | Kind::SepV | Kind::SepH => None,
+            Kind::Seg { act, .. } | Kind::Switch { act, .. } | Kind::Primary { act, .. } => Some(act),
+            Kind::DevBox { .. } => Some(Act::RecDevMenu),
+            Kind::DevItem { i, .. } => Some(Act::RecDev(i)),
+            Kind::Value | Kind::SepV | Kind::SepH | Kind::SegTrack | Kind::Label(_) | Kind::DevList => None,
         }
     }
 
@@ -270,6 +465,7 @@ impl Toolbar {
             items: self.items.iter().map(|it| Item { r: f(it.r), ..*it }).collect(),
             wrapped: self.wrapped,
             above: self.above,
+            texts: self.texts.clone(),
         }
     }
 }
@@ -316,7 +512,7 @@ mod tests {
     }
 
     fn inp<'a>(sel: FRect) -> Input<'a> {
-        Input { sel, area: AREA, s: 1.0, busy: false, can_undo: true, can_redo: true, palette: None }
+        Input { sel, area: AREA, s: 1.0, busy: false, can_undo: true, can_redo: true, palette: None, record: false, rec: None }
     }
 
     fn btn(tb: &Toolbar, a: Act) -> FRect {
@@ -501,5 +697,158 @@ mod tests {
         let z = tb.scaled(0.5);
         assert_eq!(z.bar.y, tb.bar.y);
         assert!((z.bar.w - tb.bar.w * 0.5).abs() < 1e-3);
+    }
+
+    fn rec_view(format: RecFormat, mic: bool, devs: Option<&[String]>) -> RecView<'_> {
+        RecView {
+            format,
+            fps: if format == RecFormat::Gif { 15 } else { 30 },
+            fps_choices: if format == RecFormat::Gif { [10, 15] } else { [30, 60] },
+            system: true,
+            mic,
+            camera: false,
+            mic_label: "Default microphone",
+            devs,
+            dev_sel: 0,
+        }
+    }
+
+    fn kind_at(tb: &Toolbar, f: impl Fn(&Kind) -> bool) -> Item {
+        *tb.items.iter().find(|i| f(&i.kind)).expect("item")
+    }
+
+    fn centre(r: FRect) -> Pt {
+        Pt::new(r.x + r.w / 2.0, r.y + r.h / 2.0)
+    }
+
+    #[test]
+    fn record_button_joins_the_outputs() {
+        let mut i = inp(r(100.0, 100.0, 800.0, 300.0));
+        i.record = true;
+        let tb = layout(&i);
+        assert_eq!(tb.bar.w, 713.0 + BTN + IN_GAP);
+        let rec = btn(&tb, Act::Record);
+        assert_eq!(rec.x1() + IN_GAP, btn(&tb, Act::Copy).x, "first of the output group");
+        assert_eq!(tb.act_at(centre(rec)), Some(Act::Record));
+        // The busy OK mode has no Record button.
+        i.busy = true;
+        assert!(!layout(&i).items.iter().any(|it| it.kind == Kind::Btn(Act::Record)));
+    }
+
+    #[test]
+    fn record_popover_layout_and_hits() {
+        let mut i = inp(r(100.0, 100.0, 800.0, 300.0));
+        i.record = true;
+        let rv = rec_view(RecFormat::Mp4, false, None);
+        i.rec = Some(&rv);
+        let tb = layout(&i);
+        let pop = tb.pop.expect("popover");
+        assert_eq!(pop.w, REC_W);
+        assert_eq!(pop.y, tb.bar.y1() + POP_GAP, "below a bar below the selection");
+        assert_eq!(pop.x1(), btn(&tb, Act::Record).x1(), "right-aligned to the Record button");
+        assert!(tb.items.iter().all(|it| !matches!(it.kind, Kind::Dot(_))), "no palette");
+        // Every popover item lies inside it.
+        let n = tb.items.iter().position(|it| it.kind == Kind::SegTrack).unwrap();
+        for it in &tb.items[n..] {
+            assert!(it.r.x >= pop.x && it.r.x1() <= pop.x1() + 0.01 && it.r.y >= pop.y && it.r.y1() <= pop.y1() + 0.01, "{it:?}");
+        }
+        let seg = |a: Act| kind_at(&tb, |k| matches!(k, Kind::Seg { act, .. } if *act == a));
+        assert!(matches!(seg(Act::RecFormat(RecFormat::Mp4)).kind, Kind::Seg { on: true, .. }));
+        assert!(matches!(seg(Act::RecFormat(RecFormat::Gif)).kind, Kind::Seg { on: false, .. }));
+        assert_eq!(tb.act_at(centre(seg(Act::RecFormat(RecFormat::Gif)).r)), Some(Act::RecFormat(RecFormat::Gif)));
+        assert_eq!(tb.act_at(centre(seg(Act::RecFps(60)).r)), Some(Act::RecFps(60)));
+        let sw = |a: Act| kind_at(&tb, |k| matches!(k, Kind::Switch { act, .. } if *act == a));
+        // A whole switch row toggles: its left end too.
+        let sys = sw(Act::RecSystem);
+        assert_eq!(tb.act_at(Pt::new(sys.r.x + 6.0, sys.r.y + 10.0)), Some(Act::RecSystem));
+        assert_eq!(tb.act_at(centre(sw(Act::RecMic).r)), Some(Act::RecMic));
+        // The camera is wired up later: shown, not clickable.
+        let cam = sw(Act::RecCamera);
+        assert!(cam.disabled);
+        assert_eq!(tb.act_at(centre(cam.r)), None);
+        assert!(tb.contains(centre(cam.r)), "but the press is consumed");
+        let start = kind_at(&tb, |k| matches!(k, Kind::Primary { .. }));
+        assert_eq!(tb.act_at(centre(start.r)), Some(Act::RecStart));
+        assert!(start.r.y1() < pop.y1() && start.r.y > cam.r.y1());
+        // No microphone box while the microphone is off.
+        assert!(!tb.items.iter().any(|it| matches!(it.kind, Kind::DevBox { .. })));
+        // Labels hit nothing.
+        let label = kind_at(&tb, |k| matches!(k, Kind::Label(_)));
+        assert_eq!(tb.act_at(Pt::new(label.r.x + 4.0, label.r.y + 4.0)), None);
+    }
+
+    #[test]
+    fn record_popover_gif_disables_sound() {
+        let mut i = inp(r(100.0, 100.0, 800.0, 300.0));
+        i.record = true;
+        let rv = rec_view(RecFormat::Gif, true, None);
+        i.rec = Some(&rv);
+        let tb = layout(&i);
+        let sys = kind_at(&tb, |k| matches!(k, Kind::Switch { act: Act::RecSystem, .. }));
+        assert!(sys.disabled && matches!(sys.kind, Kind::Switch { on: false, .. }));
+        assert!(!tb.items.iter().any(|it| matches!(it.kind, Kind::DevBox { .. })), "no microphone for a GIF");
+        let fps: Vec<Act> = tb.items.iter().filter_map(|it| match it.kind {
+            Kind::Seg { act: a @ Act::RecFps(_), .. } => Some(a),
+            _ => None,
+        }).collect();
+        assert_eq!(fps, [Act::RecFps(10), Act::RecFps(15)]);
+    }
+
+    #[test]
+    fn record_popover_microphone_list() {
+        let mut i = inp(r(100.0, 100.0, 800.0, 300.0));
+        i.record = true;
+        let closed = rec_view(RecFormat::Mp4, true, None);
+        i.rec = Some(&closed);
+        let short = layout(&i);
+        let bx = kind_at(&short, |k| matches!(k, Kind::DevBox { open: false }));
+        assert_eq!(short.act_at(centre(bx.r)), Some(Act::RecDevMenu));
+        assert_eq!(short.texts, ["Default microphone"]);
+        let devs: Vec<String> = ["Default microphone", "USB mic", "Headset"].iter().map(|s| s.to_string()).collect();
+        let mut open = rec_view(RecFormat::Mp4, true, Some(&devs));
+        open.dev_sel = 2;
+        i.rec = Some(&open);
+        let tb = layout(&i);
+        assert_eq!(tb.texts.len(), 4);
+        let items: Vec<Item> = tb.items.iter().filter(|it| matches!(it.kind, Kind::DevItem { .. })).copied().collect();
+        assert_eq!(items.len(), 3);
+        assert!(matches!(items[2].kind, Kind::DevItem { i: 2, on: true }));
+        // The list floats over the rows below the box and wins their hits.
+        let cam = kind_at(&tb, |k| matches!(k, Kind::Switch { act: Act::RecCamera, .. }));
+        assert!(items[1].r.y < cam.r.y1() && items[2].r.y1() > cam.r.y);
+        assert_eq!(tb.act_at(centre(items[1].r)), Some(Act::RecDev(1)));
+        let pop = tb.pop.unwrap();
+        assert!(items[2].r.y1() <= pop.y1(), "the popover grows to hold the list");
+        // Many devices: the list is capped.
+        let many: Vec<String> = (0..20).map(|n| format!("Mic {n}")).collect();
+        let lots = rec_view(RecFormat::Mp4, true, Some(&many));
+        i.rec = Some(&lots);
+        let tb = layout(&i);
+        assert_eq!(tb.items.iter().filter(|it| matches!(it.kind, Kind::DevItem { .. })).count(), DEV_MAX);
+    }
+
+    #[test]
+    fn record_popover_flips_above_and_clamps() {
+        let mut i = inp(r(100.0, 600.0, 800.0, 300.0));
+        i.record = true;
+        let rv = rec_view(RecFormat::Mp4, false, None);
+        i.rec = Some(&rv);
+        let tb = layout(&i);
+        let pop = tb.pop.unwrap();
+        assert!(pop.y1() <= tb.bar.y - POP_GAP + 0.01 || pop.y >= tb.bar.y1(), "{pop:?} {:?}", tb.bar);
+        assert!(pop.y >= MARGIN && pop.y1() <= AREA.h - MARGIN, "{pop:?}");
+        // A short area fits it on neither side: clamped inside.
+        i.area = r(0.0, 0.0, 1920.0, 360.0);
+        i.sel = r(100.0, 100.0, 800.0, 150.0);
+        let tb = layout(&i);
+        let pop = tb.pop.unwrap();
+        assert!(pop.y >= MARGIN - 0.01, "{pop:?}");
+        // At 2x every size doubles.
+        let mut j = inp(r(100.0, 100.0, 1600.0, 300.0));
+        j.area = r(0.0, 0.0, 3840.0, 2160.0);
+        j.s = 2.0;
+        j.record = true;
+        j.rec = Some(&rv);
+        assert_eq!(layout(&j).pop.unwrap().w, 2.0 * REC_W);
     }
 }

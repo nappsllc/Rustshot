@@ -1,0 +1,596 @@
+//! Recording UI around the pipeline in `crate::rec`: the choices the
+//! Record popover makes ([`RecOpts`]), the recording state machine
+//! ([`Machine`]: idle → countdown → recording ⇄ paused → stopping → idle),
+//! where the control bar goes ([`place_bar`]) and a running recording
+//! ([`Run`]). The windows (red border, control bar, 3-2-1 countdown) and
+//! the worker thread that drives the pipeline are Windows-only (`win.rs`);
+//! elsewhere the Record button is hidden.
+#![cfg_attr(not(windows), allow(dead_code))] // recording UI: Windows only for now
+
+pub mod bar;
+pub mod border;
+pub mod countdown;
+#[cfg(windows)]
+mod win;
+
+use crate::capture::IRect;
+use crate::config::Config;
+use crate::rec::{AudioSource, RecFormat, RecSpec};
+use crate::uifb::{Fb, C4};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+/// Whether this platform records (shows the Record button).
+pub const SUPPORTED: bool = cfg!(windows);
+
+/// The recording border's colour (`border 2 px red`).
+pub const RED: C4 = C4::rgb(0xF0, 0x3E, 0x3E);
+
+/// The Record popover's choices, seeded from the config.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecOpts {
+    pub format: RecFormat,
+    /// MP4 frame rate: 30 or 60.
+    pub fps_mp4: u32,
+    /// GIF frame rate: 10 or 15.
+    pub fps_gif: u32,
+    pub system: bool,
+    pub mic: bool,
+    /// Microphone endpoint id; "" = the default device.
+    pub mic_dev: String,
+    /// Camera bubble (wired up with the camera).
+    pub camera: bool,
+}
+
+impl RecOpts {
+    pub fn from_config(cfg: &Config) -> RecOpts {
+        RecOpts {
+            format: RecFormat::from_config(&cfg.rec_format),
+            fps_mp4: if cfg.rec_fps >= 60 { 60 } else { 30 },
+            fps_gif: if cfg.rec_gif_fps <= 10 { 10 } else { 15 },
+            system: cfg.rec_system_audio,
+            mic: cfg.rec_mic,
+            mic_dev: cfg.rec_mic_device.clone(),
+            camera: cfg.rec_camera,
+        }
+    }
+
+    /// The frame rate of the chosen format.
+    pub fn fps(&self) -> u32 {
+        match self.format {
+            RecFormat::Mp4 => self.fps_mp4,
+            RecFormat::Gif => self.fps_gif,
+        }
+    }
+
+    /// The two frame rates the popover offers for the chosen format.
+    pub fn fps_choices(&self) -> [u32; 2] {
+        match self.format {
+            RecFormat::Mp4 => [30, 60],
+            RecFormat::Gif => [10, 15],
+        }
+    }
+
+    pub fn set_fps(&mut self, n: u32) {
+        if self.fps_choices().contains(&n) {
+            match self.format {
+                RecFormat::Mp4 => self.fps_mp4 = n,
+                RecFormat::Gif => self.fps_gif = n,
+            }
+        }
+    }
+
+    /// The pipeline's spec: `area` saved where a capture would be saved
+    /// now, with these choices (a GIF has no sound).
+    pub fn spec(&self, cfg: &Config, area: IRect, now: crate::export::Tm) -> RecSpec {
+        let mut c = cfg.clone();
+        c.rec_format = self.format.ext().into();
+        let mut spec = RecSpec::from_config(&c, area, now);
+        let mp4 = self.format == RecFormat::Mp4;
+        spec.fps = self.fps();
+        spec.system_audio = mp4 && self.system;
+        spec.mic = (mp4 && self.mic).then(|| self.mic_dev.clone());
+        spec
+    }
+}
+
+/// The microphones on offer as (endpoint id, name).
+pub fn mics() -> Vec<(String, String)> {
+    #[cfg(test)]
+    {
+        vec![("{mic-1}".into(), "USB microphone".into()), ("{mic-2}".into(), "Headset".into())]
+    }
+    #[cfg(all(windows, not(test)))]
+    {
+        crate::rec::win::wasapi::list_mics()
+    }
+    #[cfg(all(not(windows), not(test)))]
+    {
+        Vec::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// State machine
+// ---------------------------------------------------------------------------
+
+/// The 3-2-1 countdown before the first frame.
+pub const COUNTDOWN: Duration = Duration::from_secs(3);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Phase {
+    Idle,
+    Countdown,
+    Recording,
+    Paused,
+    /// Stop (or cancel) sent; waiting for the file.
+    Stopping,
+}
+
+/// What the caller must tell the pipeline.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Effect {
+    /// Start capturing now.
+    Go,
+    Pause,
+    Resume,
+    /// Stop and finish the file.
+    Stop,
+    /// Stopped during the countdown: nothing was recorded.
+    Cancel,
+}
+
+/// Recording phases and the timer the control bar shows (paused time
+/// excluded). Pure: the caller passes the time and carries out effects.
+#[derive(Clone, Debug)]
+pub struct Machine {
+    phase: Phase,
+    /// When the countdown ends.
+    go_at: Option<Instant>,
+    /// When capturing started.
+    rec_at: Option<Instant>,
+    paused_at: Option<Instant>,
+    paused_total: Duration,
+}
+
+impl Default for Machine {
+    fn default() -> Self {
+        Machine::new()
+    }
+}
+
+impl Machine {
+    pub fn new() -> Machine {
+        Machine { phase: Phase::Idle, go_at: None, rec_at: None, paused_at: None, paused_total: Duration::ZERO }
+    }
+
+    pub fn phase(&self) -> Phase {
+        self.phase
+    }
+
+    /// Idle → countdown (`countdown`), or straight to recording ([`Effect::Go`]).
+    pub fn start(&mut self, countdown: bool, now: Instant) -> Option<Effect> {
+        if self.phase != Phase::Idle {
+            return None;
+        }
+        *self = Machine::new();
+        if countdown {
+            self.phase = Phase::Countdown;
+            self.go_at = Some(now + COUNTDOWN);
+            None
+        } else {
+            self.go(now)
+        }
+    }
+
+    fn go(&mut self, now: Instant) -> Option<Effect> {
+        self.phase = Phase::Recording;
+        self.rec_at = Some(now);
+        Some(Effect::Go)
+    }
+
+    /// The countdown ends on time.
+    pub fn tick(&mut self, now: Instant) -> Option<Effect> {
+        match (self.phase, self.go_at) {
+            (Phase::Countdown, Some(t)) if now >= t => self.go(now),
+            _ => None,
+        }
+    }
+
+    /// The number the countdown shows now (3, 2, 1), outside it `None`.
+    pub fn countdown(&self, now: Instant) -> Option<u32> {
+        let t = self.go_at.filter(|_| self.phase == Phase::Countdown)?;
+        let left = t.saturating_duration_since(now);
+        Some((left.as_millis().div_ceil(1000) as u32).clamp(1, COUNTDOWN.as_secs() as u32))
+    }
+
+    /// Pause/Resume: recording ⇄ paused.
+    pub fn toggle_pause(&mut self, now: Instant) -> Option<Effect> {
+        match self.phase {
+            Phase::Recording => {
+                self.phase = Phase::Paused;
+                self.paused_at = Some(now);
+                Some(Effect::Pause)
+            }
+            Phase::Paused => {
+                self.phase = Phase::Recording;
+                if let Some(p) = self.paused_at.take() {
+                    self.paused_total += now.saturating_duration_since(p);
+                }
+                Some(Effect::Resume)
+            }
+            _ => None,
+        }
+    }
+
+    /// Stop: the bar, the record hotkey, the tray. During the countdown it
+    /// cancels; twice is once.
+    pub fn stop(&mut self, now: Instant) -> Option<Effect> {
+        match self.phase {
+            Phase::Countdown => {
+                self.phase = Phase::Stopping;
+                Some(Effect::Cancel)
+            }
+            Phase::Recording | Phase::Paused => {
+                if let Some(p) = self.paused_at.take() {
+                    self.paused_total += now.saturating_duration_since(p);
+                }
+                self.paused_at = Some(now); // the timer freezes
+                self.phase = Phase::Stopping;
+                Some(Effect::Stop)
+            }
+            Phase::Idle | Phase::Stopping => None,
+        }
+    }
+
+    /// The pipeline is done (file saved, cancelled, or it failed): idle.
+    pub fn finish(&mut self) {
+        self.phase = Phase::Idle;
+    }
+
+    /// Recorded time: since capturing started, paused time excluded.
+    pub fn elapsed(&self, now: Instant) -> Duration {
+        let Some(t0) = self.rec_at else { return Duration::ZERO };
+        let end = self.paused_at.unwrap_or(now);
+        end.saturating_duration_since(t0).saturating_sub(self.paused_total)
+    }
+}
+
+/// "0:07", "12:34", "1:02:03".
+pub fn fmt_time(d: Duration) -> String {
+    let s = d.as_secs();
+    let (h, m, s) = (s / 3600, s / 60 % 60, s % 60);
+    if h > 0 { format!("{h}:{m:02}:{s:02}") } else { format!("{m}:{s:02}") }
+}
+
+// ---------------------------------------------------------------------------
+// Placement
+// ---------------------------------------------------------------------------
+
+fn contains(m: IRect, x: i32, y: i32) -> bool {
+    x >= m.0 && y >= m.1 && x < m.0 + m.2 as i32 && y < m.1 + m.3 as i32
+}
+
+fn x1(r: IRect) -> i32 {
+    r.0 + r.2 as i32
+}
+
+fn y1(r: IRect) -> i32 {
+    r.1 + r.3 as i32
+}
+
+/// Top-left of a `w`x`h` control bar for a recording of `area` (all
+/// physical px): just outside the area, `gap` from it, on the side with
+/// the most room left beside it on the monitor there (ties: below, above,
+/// right, left),
+/// kept `margin` inside that monitor. When it fits on no side (a full
+/// screen recording) it goes inside the area at its bottom centre (it is
+/// excluded from the capture).
+pub fn place_bar(area: IRect, monitors: &[IRect], (w, h): (i32, i32), gap: i32, margin: i32) -> (i32, i32) {
+    let (cx, cy) = (area.0 + area.2 as i32 / 2, area.1 + area.3 as i32 / 2);
+    let clamp = |v: i32, lo: i32, hi: i32| v.clamp(lo, hi.max(lo));
+    let mon = |x: i32, y: i32| monitors.iter().copied().find(|m| contains(*m, x, y));
+    let mut best: Option<(i32, (i32, i32))> = None;
+    // Below, above, right, left: probe a point just outside each edge.
+    let sides: [(i32, i32); 4] = [(cx, y1(area) + gap), (cx, area.1 - gap - 1), (x1(area) + gap, cy), (area.0 - gap - 1, cy)];
+    for (i, (px, py)) in sides.into_iter().enumerate() {
+        let Some(m) = mon(px, py) else { continue };
+        // Room = what is left on that side once the bar is there.
+        let (room, pos) = match i {
+            0 => (y1(m) - y1(area) - h, (clamp(cx - w / 2, m.0 + margin, x1(m) - margin - w), y1(area) + gap)),
+            1 => (area.1 - m.1 - h, (clamp(cx - w / 2, m.0 + margin, x1(m) - margin - w), area.1 - gap - h)),
+            2 => (x1(m) - x1(area) - w, (x1(area) + gap, clamp(y1(area) - h, m.1 + margin, y1(m) - margin - h))),
+            _ => (area.0 - m.0 - w, (area.0 - gap - w, clamp(y1(area) - h, m.1 + margin, y1(m) - margin - h))),
+        };
+        let fits = pos.0 >= m.0 + margin && pos.1 >= m.1 + margin && pos.0 + w <= x1(m) - margin && pos.1 + h <= y1(m) - margin;
+        if fits && best.is_none_or(|(r, _)| room > r) {
+            best = Some((room, pos));
+        }
+    }
+    if let Some((_, p)) = best {
+        return p;
+    }
+    // Inside, bottom centre (clamped to the area's monitor).
+    let m = mon(cx, cy).unwrap_or(area);
+    let x = clamp(cx - w / 2, m.0 + margin, x1(m) - margin - w);
+    let y = clamp(y1(area) - gap - h, m.1 + margin, y1(m) - margin - h);
+    (x, y)
+}
+
+/// Where the countdown goes: centred on the area.
+pub fn centre_on(area: IRect, (w, h): (i32, i32)) -> (i32, i32) {
+    (area.0 + (area.2 as i32 - w) / 2, area.1 + (area.3 as i32 - h) / 2)
+}
+
+// ---------------------------------------------------------------------------
+// Layered-window pixels
+// ---------------------------------------------------------------------------
+
+/// Draw with `draw` into a `w`x`h` transparent layer: premultiplied BGRA
+/// (what `UpdateLayeredWindow` takes). The rasterizer blends onto an
+/// opaque target, so the layer is drawn over black and over white: the
+/// difference is the coverage, the black one the premultiplied colour.
+pub fn render_layer(w: usize, h: usize, draw: impl Fn(&mut Fb)) -> Vec<u8> {
+    let mut black = [0u8, 0, 0, 255].repeat(w * h);
+    let mut white = [255u8, 255, 255, 255].repeat(w * h);
+    draw(&mut Fb::new(&mut black, w));
+    draw(&mut Fb::new(&mut white, w));
+    let mut out = vec![0u8; w * h * 4];
+    for ((o, b), wh) in out.as_chunks_mut::<4>().0.iter_mut().zip(black.as_chunks::<4>().0).zip(white.as_chunks::<4>().0) {
+        let a = 255 - (0..3).map(|i| wh[i].saturating_sub(b[i])).max().unwrap_or(0);
+        // Premultiplied colour never exceeds alpha.
+        *o = [b[2].min(a), b[1].min(a), b[0].min(a), a];
+    }
+    out
+}
+
+/// A premultiplied BGRA layer over an opaque `bg`, as RGBA (previews, tests).
+#[cfg(test)]
+pub fn layer_over(bgra: &[u8], bg: [u8; 3]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bgra.len());
+    for p in bgra.as_chunks::<4>().0 {
+        let a = p[3] as u32;
+        let ch = |c: u8, b: u8| (c as u32 + b as u32 * (255 - a) / 255).min(255) as u8;
+        out.extend_from_slice(&[ch(p[2], bg[0]), ch(p[1], bg[1]), ch(p[0], bg[2]), 255]);
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Audio mute
+// ---------------------------------------------------------------------------
+
+/// An audio source the control bar can mute: silence (same timing) while
+/// `muted` is set.
+pub struct Muted<A> {
+    pub inner: A,
+    pub muted: Arc<AtomicBool>,
+}
+
+impl<A: AudioSource> AudioSource for Muted<A> {
+    fn rate(&self) -> u32 {
+        self.inner.rate()
+    }
+
+    fn channels(&self) -> u16 {
+        self.inner.channels()
+    }
+
+    fn read(&mut self, out: &mut Vec<f32>) -> usize {
+        self.read_timed(out).0
+    }
+
+    fn read_timed(&mut self, out: &mut Vec<f32>) -> (usize, Option<Instant>) {
+        let start = out.len();
+        let r = self.inner.read_timed(out);
+        if self.muted.load(Ordering::Relaxed) {
+            out[start..].fill(0.0);
+        }
+        r
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A running recording
+// ---------------------------------------------------------------------------
+
+/// How a recording ended.
+#[derive(Clone, Debug, PartialEq)]
+pub enum End {
+    Saved(PathBuf),
+    /// It could not start, or the file could not be finished.
+    Failed(String),
+    /// Stopped during the countdown.
+    Cancelled,
+}
+
+/// Where the recording is on screen.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Geom {
+    /// Recorded area, physical virtual-screen px.
+    pub area: IRect,
+    /// Every monitor, same coordinates.
+    pub monitors: Vec<IRect>,
+    /// UI scale (physical px per logical px).
+    pub scale: f32,
+}
+
+/// A recording from the Start button to the saved file: the state
+/// machine, the pipeline worker and the windows around the area.
+pub struct Run {
+    m: Machine,
+    muted: Arc<AtomicBool>,
+    has_mic: bool,
+    #[cfg(windows)]
+    ui: Option<win::Recorder>,
+    /// Effects carried out (tests run without windows or a worker).
+    #[cfg(test)]
+    pub(crate) log: Vec<Effect>,
+    /// An end reported without a worker (tests).
+    #[cfg(test)]
+    pub(crate) fake_end: Option<End>,
+}
+
+impl Run {
+    /// Start recording `spec` (the pipeline opens in the background; with
+    /// `countdown` it captures after 3-2-1). `nudge` gets a `WM_TIMER`
+    /// when the control bar is clicked, so the owner ticks at once.
+    #[cfg(windows)]
+    #[cfg_attr(test, allow(dead_code))] // tests record through `Run::fake`
+    pub fn start(spec: RecSpec, geom: Geom, th: crate::theme::Theme, countdown: bool, nudge: crate::wind::Hwnd) -> anyhow::Result<Run> {
+        let muted = Arc::new(AtomicBool::new(false));
+        let has_mic = spec.mic.is_some();
+        let ui = win::Recorder::start(spec, geom, th, muted.clone(), nudge)?;
+        let mut run = Run {
+            m: Machine::new(),
+            muted,
+            has_mic,
+            ui: Some(ui),
+            #[cfg(test)]
+            log: Vec::new(),
+            #[cfg(test)]
+            fake_end: None,
+        };
+        let now = Instant::now();
+        if let Some(e) = run.m.start(countdown, now) {
+            run.apply(e);
+        }
+        run.show(now);
+        Ok(run)
+    }
+
+    #[cfg(not(windows))]
+    pub fn start(_spec: RecSpec, _geom: Geom, _th: crate::theme::Theme, _countdown: bool, _nudge: crate::wind::Hwnd) -> anyhow::Result<Run> {
+        anyhow::bail!("recording is not supported on this platform yet")
+    }
+
+    /// A recording with no worker or windows (tests).
+    #[cfg(test)]
+    pub fn fake(countdown: bool, mic: bool, now: Instant) -> Run {
+        let mut run = Run {
+            m: Machine::new(),
+            muted: Arc::new(AtomicBool::new(false)),
+            has_mic: mic,
+            #[cfg(windows)]
+            ui: None,
+            log: Vec::new(),
+            fake_end: None,
+        };
+        if let Some(e) = run.m.start(countdown, now) {
+            run.apply(e);
+        }
+        run
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))] // tests
+    pub fn phase(&self) -> Phase {
+        self.m.phase()
+    }
+
+    fn apply(&mut self, e: Effect) {
+        #[cfg(not(any(windows, test)))]
+        let _ = e;
+        #[cfg(test)]
+        self.log.push(e);
+        #[cfg(windows)]
+        if let Some(ui) = &mut self.ui {
+            ui.send(e);
+        }
+    }
+
+    pub fn stop(&mut self, now: Instant) {
+        if let Some(e) = self.m.stop(now) {
+            self.apply(e);
+            self.show(now);
+        }
+    }
+
+    pub fn toggle_pause(&mut self, now: Instant) {
+        if let Some(e) = self.m.toggle_pause(now) {
+            self.apply(e);
+            self.show(now);
+        }
+    }
+
+    pub fn toggle_mute(&mut self) {
+        if self.has_mic {
+            self.muted.fetch_xor(true, Ordering::SeqCst);
+        }
+    }
+
+    pub fn muted(&self) -> bool {
+        self.muted.load(Ordering::SeqCst)
+    }
+
+    /// The control bar's state now.
+    pub fn view(&self, now: Instant) -> bar::BarView {
+        bar::BarView {
+            // Whole seconds: the bar is redrawn only when its text changes.
+            elapsed: Duration::from_secs(self.m.elapsed(now).as_secs()),
+            paused: self.m.phase() == Phase::Paused,
+            mic: self.has_mic.then(|| self.muted()),
+            stopping: self.m.phase() == Phase::Stopping,
+        }
+    }
+
+    /// Advance: the countdown, clicks on the control bar, the pipeline's
+    /// end (returned once, when the recording is over and its windows gone).
+    pub fn tick(&mut self, now: Instant) -> Option<End> {
+        if let Some(e) = self.m.tick(now) {
+            self.apply(e);
+        }
+        #[cfg(windows)]
+        let clicks = self.ui.as_mut().map(|u| u.take_clicks()).unwrap_or_default();
+        #[cfg(not(windows))]
+        let clicks: Vec<bar::BarAct> = Vec::new();
+        for c in clicks {
+            match c {
+                bar::BarAct::Pause => self.toggle_pause(now),
+                bar::BarAct::Mute => self.toggle_mute(),
+                bar::BarAct::Stop => self.stop(now),
+            }
+        }
+        let end = self.poll_end();
+        if let Some(end) = end {
+            self.m.finish();
+            #[cfg(windows)]
+            if let Some(ui) = &mut self.ui {
+                ui.close();
+            }
+            return Some(end);
+        }
+        self.show(now);
+        None
+    }
+
+    fn poll_end(&mut self) -> Option<End> {
+        #[cfg(test)]
+        if let Some(e) = self.fake_end.take() {
+            return Some(e);
+        }
+        #[cfg(windows)]
+        if let Some(ui) = &mut self.ui {
+            return ui.poll_end();
+        }
+        None
+    }
+
+    /// Bring the windows up to date (border, bar, countdown).
+    fn show(&mut self, now: Instant) {
+        #[cfg(windows)]
+        {
+            let view = self.view(now);
+            let count = self.m.countdown(now);
+            if let Some(ui) = &mut self.ui {
+                ui.show(&view, count);
+            }
+        }
+        #[cfg(not(windows))]
+        let _ = now;
+    }
+}
+
+#[cfg(test)]
+mod tests;

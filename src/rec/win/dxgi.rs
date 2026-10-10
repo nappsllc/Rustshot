@@ -31,6 +31,9 @@ thread_local! {
     /// Tests force [`DxgiSource::open`] to fail (on their own thread only)
     /// to exercise the GDI fallback.
     pub(crate) static FORCE_FAIL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Tests make [`DxgiSource::open`] see no first frame (a display that
+    /// is not presenting), to exercise the GDI seed.
+    pub(crate) static NO_FIRST_FRAME: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// How long to wait before trying to re-create a lost duplication again.
@@ -51,6 +54,8 @@ struct Output {
     retry_at: Instant,
     /// A failure other than lost access was reported (once per output).
     logged: bool,
+    /// A desktop image of this output reached the canvas.
+    seen: bool,
 }
 
 #[derive(Default)]
@@ -220,6 +225,7 @@ impl DxgiSource {
                     staging: None,
                     retry_at: Instant::now(),
                     logged: false,
+                    seen: false,
                 };
                 o.duplicate(area)?;
                 outs.push(o);
@@ -237,13 +243,49 @@ impl DxgiSource {
             frames: 0,
         };
         // The first frame of a new duplication is the whole desktop.
+        #[cfg(test)]
+        let skip = NO_FIRST_FRAME.with(|f| f.get());
+        #[cfg(not(test))]
+        let skip = false;
+        if !skip {
+            for i in 0..s.outs.len() {
+                s.poll(i, 200);
+            }
+        }
+        // An output that is not presenting (a static desktop) sends none
+        // within that: start from a GDI copy of its part, or the recording
+        // stays black until something on it changes.
         for i in 0..s.outs.len() {
-            s.poll(i, 200);
+            if !s.outs[i].seen {
+                s.seed(s.outs[i].isect);
+            }
         }
         Ok(s)
     }
 
+    /// Copy `r` (virtual-screen px, inside the area) into the canvas from GDI.
+    fn seed(&mut self, r: IRect) {
+        if r.2 == 0 || r.3 == 0 {
+            return;
+        }
+        let Some(px) = super::gdi_poll::snapshot(r) else { return };
+        let stride = self.area.2 as usize * 4;
+        let row = r.2 as usize * 4;
+        let x = (r.0 - self.area.0) as usize * 4;
+        for (k, src) in px.chunks_exact(row).enumerate() {
+            let at = (r.1 - self.area.1) as usize * stride + k * stride + x;
+            self.canvas[at..at + row].copy_from_slice(src);
+        }
+    }
+
+    /// The desktop image of the area so far (no pointer).
+    #[cfg(test)]
+    pub(crate) fn canvas(&self) -> &[u8] {
+        &self.canvas
+    }
+
     /// Mean time per frame spent copying and compositing (not waiting).
+    #[cfg_attr(not(test), allow(dead_code))] // tests and benchmarks
     pub fn work_per_frame(&self) -> Duration {
         self.work / self.frames.max(1) as u32
     }
@@ -339,6 +381,7 @@ impl DxgiSource {
                     self.canvas[at..at + row].copy_from_slice(src);
                 }
                 unsafe { o.ctx.Unmap(stg, 0) };
+                o.seen = true;
             }
         }
         self.work += t0.elapsed();

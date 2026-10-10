@@ -17,7 +17,16 @@ pub enum HotEvent {
     /// The Settings window saved `config.toml`: re-read it, re-register the
     /// global hotkeys and apply `check_updates`.
     ReloadConfig,
+    /// The record hotkey: start a recording (area selection in record
+    /// mode) when idle, stop the one in progress otherwise.
+    Record,
+    /// Stop the recording in progress (the tray).
+    #[cfg_attr(not(windows), allow(dead_code))] // the Linux/macOS trays come later
+    StopRecording,
 }
+
+/// Global hotkey slots: capture, quit, record.
+pub const SLOTS: usize = 3;
 
 /// Global hotkeys backed by Win32 `RegisterHotKey` (replaces the
 /// `global-hotkey` crate). Registration and the message loop run on a
@@ -31,9 +40,9 @@ pub struct Hotkeys {
     /// The startup registration's result, not read yet.
     #[cfg(not(target_os = "macos"))]
     started: Option<Receiver<Registered>>,
-    /// The specs registered now (capture, quit); "" where none is (or
+    /// The specs registered now (capture, quit, record); "" where none is (or
     /// where it is not known, so the next reload tries again).
-    specs: [String; 2],
+    specs: [String; SLOTS],
     /// Failures already told to the user (once per run each).
     #[cfg(not(target_os = "macos"))]
     told: Vec<Failure>,
@@ -54,9 +63,9 @@ pub enum Cause {
     Unknown,
 }
 
-/// Per slot (capture, quit): registered (or nothing to register), or why not.
+/// Per slot (capture, quit, record): registered (or nothing to register), or why not.
 #[cfg_attr(target_os = "macos", allow(dead_code))] // macOS: hotkeys apply after a restart
-pub type Registered = [Result<(), Cause>; 2];
+pub type Registered = [Result<(), Cause>; SLOTS];
 
 /// The hotkeys that are not registered as saved, for the Settings window
 /// (published by the daemon after every reload).
@@ -77,19 +86,19 @@ fn publish(f: &[Failure]) {
 #[cfg(not(target_os = "macos"))]
 const RESULT_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// Registration specs for `[capture, quit]`: capture (id 1) and quit (id 2).
-fn specs_for(s: &[String; 2]) -> [(i32, String, HotEvent); 2] {
-    [(1, s[0].clone(), HotEvent::Capture), (2, s[1].clone(), HotEvent::Quit)]
+/// Registration specs for `[capture, quit, record]`: ids 1, 2 and 3.
+fn specs_for(s: &[String; SLOTS]) -> [(i32, String, HotEvent); SLOTS] {
+    [(1, s[0].clone(), HotEvent::Capture), (2, s[1].clone(), HotEvent::Quit), (3, s[2].clone(), HotEvent::Record)]
 }
 
-fn wanted(cfg: &Config) -> [String; 2] {
-    [cfg.capture_hotkey.trim().to_string(), cfg.quit_hotkey.trim().to_string()]
+fn wanted(cfg: &Config) -> [String; SLOTS] {
+    [cfg.capture_hotkey.trim().to_string(), cfg.quit_hotkey.trim().to_string(), cfg.record_hotkey.trim().to_string()]
 }
 
 /// A hotkey `reload` could not register.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Failure {
-    /// 0 = capture, 1 = quit.
+    /// 0 = capture, 1 = quit, 2 = record.
     pub slot: usize,
     pub wanted: String,
     pub cause: Cause,
@@ -146,10 +155,10 @@ pub fn chord_label(spec: &str) -> String {
 /// others. Returns the specs registered now and the failures.
 #[cfg_attr(target_os = "macos", allow(dead_code))] // macOS: hotkeys apply after a restart
 pub fn plan_reload(
-    old: &[String; 2],
-    want: &[String; 2],
-    mut register: impl FnMut(&[String; 2]) -> Registered,
-) -> ([String; 2], Vec<Failure>) {
+    old: &[String; SLOTS],
+    want: &[String; SLOTS],
+    mut register: impl FnMut(&[String; SLOTS]) -> Registered,
+) -> ([String; SLOTS], Vec<Failure>) {
     if want == old {
         return (old.clone(), Vec::new());
     }
@@ -157,10 +166,10 @@ pub fn plan_reload(
     let known = |r: &Result<(), Cause>| matches!(r, Err(c) if *c != Cause::Unknown);
     let (mut tried, mut last) = (want.clone(), first);
     if first.iter().any(known) {
-        let retry: [String; 2] = std::array::from_fn(|i| {
+        let retry: [String; SLOTS] = std::array::from_fn(|i| {
             if !known(&first[i]) {
                 want[i].clone()
-            } else if (0..2).any(|j| first[j].is_ok() && j != i && !want[j].is_empty() && same_chord(&want[j], &old[i])) {
+            } else if (0..SLOTS).any(|j| first[j].is_ok() && j != i && !want[j].is_empty() && same_chord(&want[j], &old[i])) {
                 String::new() // the other slot holds that chord now
             } else {
                 old[i].clone()
@@ -172,7 +181,7 @@ pub fn plan_reload(
         }
     }
     let now = held(&tried, last);
-    let failures = (0..2)
+    let failures = (0..SLOTS)
         .filter_map(|i| {
             // A known cause from the first try, else what the last one says.
             let cause = match (first[i], last[i]) {
@@ -193,14 +202,14 @@ pub fn plan_reload(
 
 /// The specs of `tried` that registered.
 #[cfg_attr(target_os = "macos", allow(dead_code))] // macOS: hotkeys apply after a restart
-fn held(tried: &[String; 2], ok: Registered) -> [String; 2] {
+fn held(tried: &[String; SLOTS], ok: Registered) -> [String; SLOTS] {
     std::array::from_fn(|i| if ok[i].is_ok() { tried[i].clone() } else { String::new() })
 }
 
 /// What a registration thread that did not answer means: every slot with
 /// a chord is unknown.
 #[cfg_attr(target_os = "macos", allow(dead_code))] // macOS: hotkeys apply after a restart
-fn unanswered(specs: &[String; 2]) -> Registered {
+fn unanswered(specs: &[String; SLOTS]) -> Registered {
     std::array::from_fn(|i| if specs[i].trim().is_empty() { Ok(()) } else { Err(Cause::Unknown) })
 }
 
@@ -252,7 +261,7 @@ impl Hotkeys {
             Err(mpsc::TryRecvError::Disconnected) => unanswered(&self.specs),
         };
         self.started = None;
-        let failed: Vec<Failure> = (0..2)
+        let failed: Vec<Failure> = (0..SLOTS)
             .filter_map(|i| ok[i].err().map(|cause| Failure { slot: i, wanted: self.specs[i].clone(), cause, kept: None }))
             .collect();
         self.specs = held(&self.specs, ok);
@@ -290,7 +299,7 @@ impl Hotkeys {
 
     /// Replace the registration thread with one for `specs`; its result.
     #[cfg(not(target_os = "macos"))]
-    fn restart(&mut self, specs: &[String; 2]) -> Registered {
+    fn restart(&mut self, specs: &[String; SLOTS]) -> Registered {
         if let Some(w) = self.worker.take() {
             w.stop();
         }
@@ -450,13 +459,13 @@ mod tests {
         assert_eq!(parse_hotkey("Shift"), None);
     }
 
-    fn s2(a: &str, b: &str) -> [String; 2] {
-        [a.to_string(), b.to_string()]
+    fn s2(a: &str, b: &str) -> [String; SLOTS] {
+        [a.to_string(), b.to_string(), String::new()]
     }
 
     /// A fake registrar: chords in `taken` belong to another app.
-    fn registrar<'a>(taken: &'a [&'a str], calls: &'a mut Vec<[String; 2]>) -> impl FnMut(&[String; 2]) -> Registered + 'a {
-        move |s: &[String; 2]| {
+    fn registrar<'a>(taken: &'a [&'a str], calls: &'a mut Vec<[String; SLOTS]>) -> impl FnMut(&[String; SLOTS]) -> Registered + 'a {
+        move |s: &[String; SLOTS]| {
             calls.push(s.clone());
             std::array::from_fn(|i| {
                 if s[i].is_empty() || !taken.iter().any(|t| same_chord(t, &s[i])) { Ok(()) } else { Err(Cause::InUse) }
@@ -556,7 +565,7 @@ mod tests {
         let mut n = 0;
         let (now, f) = plan_reload(&old, &want, |s| {
             n += 1;
-            if n == 1 { [Err(Cause::InUse), Ok(())] } else { unanswered(s) }
+            if n == 1 { [Err(Cause::InUse), Ok(()), Ok(())] } else { unanswered(s) }
         });
         assert_eq!(now, s2("", ""));
         assert_eq!(f, [fail(0, "Ctrl+Alt+F9", Cause::InUse, None), fail(1, "Ctrl+Alt+F10", Cause::Unknown, None)]);
@@ -571,7 +580,7 @@ mod tests {
         assert_eq!(m(Cause::Unknown), "Couldn't confirm Ctrl+Alt+F9 was registered.");
         // An invalid chord is reported as such, left as written.
         let (_, f) = plan_reload(&s2("", ""), &s2("Hyper+X", ""), |s| {
-            [if s[0].is_empty() { Ok(()) } else { Err(Cause::Invalid) }, Ok(())]
+            [if s[0].is_empty() { Ok(()) } else { Err(Cause::Invalid) }, Ok(()), Ok(())]
         });
         assert_eq!(f[0].message(), "Couldn't register Hyper+X — it's not a hotkey Rustshot can register.");
     }
@@ -592,6 +601,25 @@ mod tests {
         let c = fail(1, "Ctrl+Alt+F9", Cause::InUse, None);
         let d = fail(0, "Ctrl+Alt+F10", Cause::InUse, None);
         assert_eq!(untold(&mut told, &[a, b.clone(), c.clone(), d.clone()]), [b, c, d]);
+    }
+
+    /// The record hotkey is the third slot: it registers like the others
+    /// and a failure names it.
+    #[test]
+    fn record_hotkey_is_a_slot() {
+        let cfg = Config { record_hotkey: " Ctrl+Alt+R ".into(), ..Config::default() };
+        let w = wanted(&cfg);
+        assert_eq!(w[2], "Ctrl+Alt+R");
+        let specs = specs_for(&w);
+        assert_eq!(specs[2].0, 3);
+        assert!(matches!(specs[2].2, HotEvent::Record));
+        let mut calls = Vec::new();
+        let old = s2("Shift+Meta+X", "");
+        let want = [w[0].clone(), w[1].clone(), w[2].clone()];
+        let (now, f) = plan_reload(&old, &want, registrar(&["Ctrl+Alt+R"], &mut calls));
+        assert_eq!(now[2], "");
+        assert_eq!(f.len(), 1);
+        assert_eq!((f[0].slot, f[0].cause), (2, Cause::InUse));
     }
 
     #[test]

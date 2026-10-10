@@ -8,14 +8,9 @@ pub mod mf;
 pub mod nv12;
 pub mod wasapi;
 
-// The recording UI (video Task 3) uses these; remove the allow then.
-#[allow(unused_imports)]
 pub use dxgi::DxgiSource;
-#[allow(unused_imports)]
 pub use gdi_poll::GdiPollSource;
-#[allow(unused_imports)]
 pub use mf::MfEncoder;
-#[allow(unused_imports)]
 pub use wasapi::{WasapiCapture, WasapiLoopback};
 
 use super::FrameSource;
@@ -80,4 +75,4 @@ pub(crate) fn in_mta<T: Send>(f: impl FnOnce() -> T + Send) -> T {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

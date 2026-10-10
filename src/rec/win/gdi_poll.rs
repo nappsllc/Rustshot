@@ -84,6 +84,7 @@ impl GdiPollSource {
     }
 
     /// Mean time per frame (blit, cursor, copy).
+    #[cfg_attr(not(test), allow(dead_code))] // tests and benchmarks
     pub fn work_per_frame(&self) -> Duration {
         self.work / self.frames.max(1) as u32
     }
@@ -114,20 +115,36 @@ impl GdiPollSource {
     }
 }
 
-impl FrameSource for GdiPollSource {
-    fn next(&mut self, _deadline: Instant) -> Option<Frame> {
-        let t0 = Instant::now();
+impl GdiPollSource {
+    /// The area's pixels now (BGRA), with the cursor when `cursor`.
+    fn grab(&mut self, cursor: bool) -> Option<Vec<u8>> {
         let (x, y, w, h) = self.area;
         unsafe {
             // CAPTUREBLT includes layered windows (the camera bubble).
             BitBlt(self.mem, 0, 0, w as i32, h as i32, Some(self.screen), x, y, SRCCOPY | CAPTUREBLT).ok()?;
         }
-        self.draw_cursor();
+        if cursor {
+            self.draw_cursor();
+        }
         let n = w as usize * h as usize * 4;
-        let bgra = unsafe {
+        Some(unsafe {
             let _ = GdiFlush();
             std::slice::from_raw_parts(self.bits, n).to_vec()
-        };
+        })
+    }
+}
+
+/// One copy of `area` (BGRA, no cursor): seeds a capture that has no
+/// picture yet.
+pub fn snapshot(area: IRect) -> Option<Vec<u8>> {
+    GdiPollSource::open(area).ok()?.grab(false)
+}
+
+impl FrameSource for GdiPollSource {
+    fn next(&mut self, _deadline: Instant) -> Option<Frame> {
+        let t0 = Instant::now();
+        let (w, h) = (self.area.2, self.area.3);
+        let bgra = self.grab(true)?;
         self.work += t0.elapsed();
         self.frames += 1;
         Some(Frame { w, h, bgra, ts: Duration::ZERO })

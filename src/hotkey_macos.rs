@@ -96,7 +96,7 @@ const NOT_HANDLED: i32 = -9874;
 /// (specs, Sender) parked by the parsing thread; consumed by `install` on
 /// the pump thread. The Sender must live somewhere until then, which is why
 /// the thread publishes instead of registering itself.
-type Pending = ([(i32, String, HotEvent); 2], mpsc::Sender<HotEvent>);
+type Pending = ([(i32, String, HotEvent); SLOTS], mpsc::Sender<HotEvent>);
 static PENDING: Mutex<Option<Pending>> = Mutex::new(None);
 /// Live registration, from `install` until wind's loop calls `shutdown`.
 /// The box keeps the handler's `user_data` pointer stable.
@@ -111,7 +111,7 @@ struct Ctx {
 
 // --- parsing thread -------------------------------------------------------
 
-pub fn hotkey_thread(specs: [(i32, String, HotEvent); 2], tx: mpsc::Sender<HotEvent>) {
+pub fn hotkey_thread(specs: [(i32, String, HotEvent); SLOTS], tx: mpsc::Sender<HotEvent>) {
     // Hand everything to the main-loop pump and exit: registration must run
     // on the process event loop, so there is nothing left for this thread.
     *PENDING.lock().unwrap_or_else(|e| e.into_inner()) = Some((specs, tx));

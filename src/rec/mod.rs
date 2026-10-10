@@ -58,18 +58,22 @@ pub struct Clock {
 }
 
 impl Clock {
+    #[allow(dead_code)] // for real-time callers (the session uses the `_at` forms)
     pub fn start() -> Clock {
         Clock::start_at(Instant::now())
     }
 
+    #[allow(dead_code)] // for real-time callers (the session uses the `_at` forms)
     pub fn pause(&mut self) {
         self.pause_at(Instant::now());
     }
 
+    #[allow(dead_code)] // for real-time callers (the session uses the `_at` forms)
     pub fn resume(&mut self) {
         self.resume_at(Instant::now());
     }
 
+    #[allow(dead_code)] // for real-time callers (the session uses the `_at` forms)
     pub fn now(&self) -> Duration {
         self.now_at(Instant::now())
     }
@@ -386,10 +390,12 @@ impl FrameQueue {
         self.lock().dropped
     }
 
+    #[cfg_attr(not(test), allow(dead_code))] // tests and benchmarks
     pub fn len(&self) -> usize {
         self.lock().q.len()
     }
 
+    #[allow(dead_code)] // pairs with `len`
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }

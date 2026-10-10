@@ -87,6 +87,7 @@ struct Api {
     create_sample: FnCreate,
     create_memory_buffer: FnCreateMemoryBuffer,
     create_sink_writer: FnCreateSinkWriter,
+    #[cfg_attr(not(test), allow(dead_code))] // tests and benchmarks
     create_source_reader: FnCreateSourceReader,
     mft_enum_ex: FnTEnumEx,
 }
@@ -307,6 +308,7 @@ impl MfEncoder {
     }
 
     /// Encoded picture size.
+    #[allow(dead_code)] // the encoded size (scaled to fit 4096x2304)
     pub fn out_size(&self) -> (u32, u32) {
         (self.out_w, self.out_h)
     }
@@ -602,6 +604,7 @@ impl VideoEncoder for MfEncoder {
 
 /// Facts about an MP4, read back with an `IMFSourceReader` (tests, and a
 /// sanity check for callers that want one).
+#[cfg_attr(not(test), allow(dead_code))] // tests and benchmarks
 #[derive(Debug, Default)]
 pub struct Probe {
     pub duration: Duration,
@@ -610,9 +613,12 @@ pub struct Probe {
     pub has_audio: bool,
     /// Luma at the picture centre of each decoded frame.
     pub center_luma: Vec<u8>,
+    /// Luma at each of the points given to [`probe_at`], per frame.
+    pub luma_at: Vec<Vec<u8>>,
 }
 
 /// A source reader on `path` (call on an MTA thread).
+#[cfg_attr(not(test), allow(dead_code))] // tests and benchmarks
 pub(crate) fn open_reader(path: &Path) -> Result<IMFSourceReader> {
     let api = api()?;
     let url = wide(path);
@@ -621,14 +627,23 @@ pub(crate) fn open_reader(path: &Path) -> Result<IMFSourceReader> {
 }
 
 /// An empty media type.
+#[cfg_attr(not(test), allow(dead_code))] // tests and benchmarks
 pub(crate) fn new_media_type() -> Result<IMFMediaType> {
     media_type(api()?)
 }
 
 /// Open `path` with a source reader, decode every video frame to NV12.
+#[cfg_attr(not(test), allow(dead_code))] // tests and benchmarks
 pub fn probe(path: &Path) -> Result<Probe> {
+    probe_at(path, &[])
+}
+
+/// [`probe`], also reading the luma at `pts` (x, y) of every frame.
+#[cfg_attr(not(test), allow(dead_code))] // tests and benchmarks
+pub fn probe_at(path: &Path, pts: &[(u32, u32)]) -> Result<Probe> {
     let api = api()?;
     let path = path.to_path_buf();
+    let pts = pts.to_vec();
     in_mta(move || unsafe {
         let reader = open_reader(&path)?;
         let mut out = Probe::default();
@@ -661,6 +676,12 @@ pub fn probe(path: &Path) -> Result<Probe> {
                 if at < len as usize {
                     out.center_luma.push(*data.add(at));
                 }
+                let row: Vec<u8> = pts
+                    .iter()
+                    .map(|&(x, y)| y as usize * stride + x as usize)
+                    .map(|i| if i < len as usize { *data.add(i) } else { 0 })
+                    .collect();
+                out.luma_at.push(row);
                 buf.Unlock()?;
             }
             if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {

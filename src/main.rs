@@ -17,11 +17,10 @@ mod pixbuf;
 #[cfg(windows)]
 mod proc_win;
 mod raster;
-// Screen recording pipeline; the platform capture and the UI that start it
-// come in later tasks, so nothing outside its tests calls it yet.
-// Remove this allow when the recording UI (video Task 3) wires it up.
-#[allow(dead_code)]
+// Screen recording pipeline; the Linux/macOS capture comes in later tasks.
+#[cfg_attr(not(windows), allow(dead_code))]
 mod rec;
+mod rec_ui;
 mod settings_ui;
 mod sha256;
 mod text;

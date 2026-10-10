@@ -3,21 +3,21 @@ use std::io::Cursor;
 
 /// A decoded frame: where it went, its colour table and the composited
 /// picture after it (RGB).
-struct DFrame {
+pub(crate) struct DFrame {
     delay: u16,
     rect: (usize, usize, usize, usize),
     palette: Vec<[u8; 3]>,
     transparent: Option<u8>,
     disposal: u8,
     indices: Vec<u8>,
-    canvas: Vec<[u8; 3]>,
+    pub(crate) canvas: Vec<[u8; 3]>,
 }
 
-struct Decoded {
-    w: usize,
-    h: usize,
+pub(crate) struct Decoded {
+    pub(crate) w: usize,
+    pub(crate) h: usize,
     loops: Option<u16>,
-    frames: Vec<DFrame>,
+    pub(crate) frames: Vec<DFrame>,
 }
 
 /// GIF LZW decoder; also returns how many clear codes it read.
@@ -81,7 +81,7 @@ fn u16_at(b: &[u8], i: usize) -> usize {
     u16::from_le_bytes([b[i], b[i + 1]]) as usize
 }
 
-fn decode(b: &[u8]) -> Decoded {
+pub(crate) fn decode(b: &[u8]) -> Decoded {
     assert_eq!(&b[..6], b"GIF89a");
     let (w, h) = (u16_at(b, 6), u16_at(b, 8));
     let mut i = 13;
