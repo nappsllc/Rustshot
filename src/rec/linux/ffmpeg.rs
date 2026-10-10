@@ -37,6 +37,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{sync_channel, SyncSender};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -53,10 +54,10 @@ const PIPE_FRAMES: usize = 2;
 
 /// How long [`FfmpegEncoder::finish`] waits for ffmpeg to finish the file.
 const FINISH_TIMEOUT: Duration = Duration::from_secs(60);
-/// With live sound inputs ffmpeg stops at the end of the video
-/// (`-shortest`); if it is still running this long after, it gets SIGINT
-/// (which makes it finish the file).
-const INT_AFTER: Duration = Duration::from_secs(5);
+/// With live sound inputs ffmpeg runs until told to stop: it gets SIGINT
+/// once it has encoded every frame, or once its frame count has not moved
+/// for this long.
+const DRAIN_STALL: Duration = Duration::from_secs(3);
 
 /// The stderr kept for error messages (the last bytes).
 const TAIL_BYTES: usize = 4096;
@@ -384,7 +385,11 @@ impl Plan {
             }
         }
         if !audio.is_empty() {
-            for s in ["-c:a", "aac", "-b:a", "160k", "-shortest"] {
+            // No -shortest: it would hold the picture back while a pulse
+            // input is still opening. ffmpeg is stopped once it has
+            // encoded every frame (`Run::finish`), and the join cuts each
+            // stretch's sound at its picture's end.
+            for s in ["-c:a", "aac", "-b:a", "160k", "-progress", "pipe:2", "-stats_period", "0.1"] {
                 push(s);
             }
         }
@@ -411,9 +416,13 @@ pub fn concat_args(list: &Path, out: &Path) -> Vec<OsString> {
 }
 
 /// A concat-demuxer list of `files` (`file '<path>'` lines; a `'` in a
-/// path is written `'\''`).
-pub fn concat_list(files: &[PathBuf]) -> String {
-    files.iter().map(|f| format!("file '{}'\n", f.to_string_lossy().replace('\'', "'\\''"))).collect()
+/// path is written `'\''`), each cut at its picture's length (`outpoint`:
+/// its sound runs a little longer).
+pub fn concat_list(files: &[(PathBuf, Duration)]) -> String {
+    files
+        .iter()
+        .map(|(f, d)| format!("file '{}'\noutpoint {:.6}\n", f.to_string_lossy().replace('\'', "'\\''"), d.as_secs_f64()))
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -608,6 +617,13 @@ struct Run {
     live: bool,
     /// With sound (ffmpeg 6+): frames go in Matroska, stamped.
     mkv: Option<Mkv>,
+    /// Frames ffmpeg has encoded (its `-progress` output).
+    encoded: Arc<AtomicU64>,
+}
+
+/// The frame count in a line of ffmpeg's `-progress` output ("frame=12").
+pub fn progress_frames(line: &str) -> Option<u64> {
+    line.trim().strip_prefix("frame=")?.trim().parse().ok()
 }
 
 fn stderr_tail(tail: &Mutex<Tail>) -> String {
@@ -634,17 +650,41 @@ impl Run {
             .spawn()
             .with_context(|| format!("start {}", exe.display()))?;
         let tail = Arc::new(Mutex::new(Tail::default()));
+        let encoded = Arc::new(AtomicU64::new(0));
         let reader = child.stderr.take().and_then(|mut err| {
-            let tail = tail.clone();
+            let (tail, encoded) = (tail.clone(), encoded.clone());
             std::thread::Builder::new()
                 .name("ffmpeg-stderr".into())
                 .spawn(move || {
                     let mut buf = [0u8; 1024];
+                    let mut line = Vec::new();
                     while let Ok(n) = err.read(&mut buf) {
                         if n == 0 {
                             break;
                         }
-                        tail.lock().unwrap_or_else(|e| e.into_inner()).push(&buf[..n]);
+                        for &b in &buf[..n] {
+                            if b != b'\n' {
+                                if line.len() < 256 {
+                                    line.push(b);
+                                }
+                                continue;
+                            }
+                            let l = String::from_utf8_lossy(&line);
+                            match progress_frames(&l) {
+                                Some(f) => encoded.store(f, Ordering::Relaxed),
+                                // Progress lines (key=value) stay out of the tail.
+                                None if !l.contains('=') || l.contains(' ') => {
+                                    let mut t = tail.lock().unwrap_or_else(|e| e.into_inner());
+                                    t.push(&line);
+                                    t.push(b"\n");
+                                }
+                                None => {}
+                            }
+                            line.clear();
+                        }
+                    }
+                    if !line.is_empty() {
+                        tail.lock().unwrap_or_else(|e| e.into_inner()).push(&line);
                     }
                 })
                 .ok()
@@ -667,7 +707,7 @@ impl Run {
                 return Err(anyhow::Error::new(e).context("start the ffmpeg writer thread"));
             }
         };
-        let mut run = Run { child, tx: Some(tx), writer: Some(writer), reader, tail, cfr: Cfr::new(fps), out, live, mkv };
+        let mut run = Run { child, tx: Some(tx), writer: Some(writer), reader, tail, cfr: Cfr::new(fps), out, live, mkv, encoded };
         if let Some(h) = run.mkv.as_ref().map(|m| m.header()) {
             run.send(Arc::new(h))?;
         }
@@ -700,7 +740,7 @@ impl Run {
                 Some(Ok(Err(e))) => format!("{e}"),
                 _ => "stopped".into(),
             };
-            let _ = self.child.wait_timeout(Duration::from_secs(2), false);
+            let _ = self.child.wait_timeout(Duration::from_secs(2));
             bail!("ffmpeg stopped taking frames ({why}): {}", stderr_tail(&self.tail));
         }
         Ok(())
@@ -709,7 +749,7 @@ impl Run {
     /// Close the input and wait for ffmpeg to finish the file. `None`: no
     /// frame was written (a stretch paused before its first frame); ffmpeg
     /// is stopped and its file removed.
-    fn finish(mut self) -> Result<Option<PathBuf>> {
+    fn finish(mut self) -> Result<Option<(PathBuf, Duration)>> {
         if self.cfr.sent() == 0 {
             drop(self.tx.take());
             if let Some(w) = self.writer.take() {
@@ -722,7 +762,28 @@ impl Run {
         }
         drop(self.tx.take());
         let wrote = self.writer.take().map(|w| w.join());
-        let status = self.child.wait_timeout(FINISH_TIMEOUT, self.live);
+        if self.live {
+            // ffmpeg keeps hearing after the last frame: once it has encoded
+            // the frames (or stopped making progress), SIGINT makes it finish
+            // the file.
+            let want = self.cfr.sent().saturating_sub(2);
+            let mut seen = (self.encoded.load(Ordering::Relaxed), Instant::now());
+            while self.child.try_wait()?.is_none() {
+                let e = self.encoded.load(Ordering::Relaxed);
+                if e >= want {
+                    break;
+                }
+                if e != seen.0 {
+                    seen = (e, Instant::now());
+                } else if seen.1.elapsed() >= DRAIN_STALL {
+                    eprintln!("rustshot: ffmpeg encoded {e} of {} frames and stopped; finishing", self.cfr.sent());
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            interrupt(&self.child);
+        }
+        let status = self.child.wait_timeout(FINISH_TIMEOUT);
         if let Some(r) = self.reader.take() {
             let _ = r.join();
         }
@@ -730,13 +791,16 @@ impl Run {
         if std::env::var_os("RUSTSHOT_FFMPEG_LOG").is_some() {
             eprintln!("rustshot: ffmpeg ended ({status}):\n{}", stderr_tail(&self.tail));
         }
-        if !status.success() {
+        // ffmpeg exits 255 after a SIGINT it handled (the file is finished).
+        let interrupted_ok = self.live && status.code() == Some(255) && std::fs::metadata(&self.out).is_ok_and(|m| m.len() > 0);
+        if !status.success() && !interrupted_ok {
             bail!("ffmpeg failed ({status}): {}", stderr_tail(&self.tail));
         }
         if let Some(Ok(Err(e))) = wrote {
             bail!("writing frames to ffmpeg failed: {e}: {}", stderr_tail(&self.tail));
         }
-        Ok(Some(self.out.clone()))
+        let len = Duration::from_secs_f64(self.cfr.sent() as f64 / f64::from(self.cfr.fps));
+        Ok(Some((self.out.clone(), len)))
     }
 }
 
@@ -752,22 +816,16 @@ impl Drop for Run {
 }
 
 trait WaitTimeout {
-    fn wait_timeout(&mut self, t: Duration, int: bool) -> Result<std::process::ExitStatus>;
+    fn wait_timeout(&mut self, t: Duration) -> Result<std::process::ExitStatus>;
 }
 
 impl WaitTimeout for Child {
-    /// Wait up to `t` (with `int`, SIGINT after [`INT_AFTER`]); killed
-    /// after that.
-    fn wait_timeout(&mut self, t: Duration, int: bool) -> Result<std::process::ExitStatus> {
+    /// Wait up to `t`; killed after that.
+    fn wait_timeout(&mut self, t: Duration) -> Result<std::process::ExitStatus> {
         let start = Instant::now();
-        let mut interrupted = !int;
         loop {
             if let Some(s) = self.try_wait()? {
                 return Ok(s);
-            }
-            if !interrupted && start.elapsed() >= INT_AFTER.min(t) {
-                interrupted = true;
-                interrupt(self);
             }
             if start.elapsed() >= t {
                 let _ = self.kill();
@@ -806,7 +864,7 @@ pub struct FfmpegEncoder {
     /// The ffmpeg writing now (started at the first frame of a segment).
     run: Option<Run>,
     /// Finished segments (with sound, one per stretch between pauses).
-    done: Vec<PathBuf>,
+    done: Vec<(PathBuf, Duration)>,
     /// After a pause: frames stamped up to here belong to the stretch
     /// before it, which is finished.
     skip_until: Option<Duration>,
@@ -889,7 +947,7 @@ impl FfmpegEncoder {
 
     fn cleanup_segments(&self) {
         if self.sound() {
-            for p in &self.done {
+            for (p, _) in &self.done {
                 let _ = std::fs::remove_file(p);
             }
         }
@@ -954,7 +1012,7 @@ impl VideoEncoder for FfmpegEncoder {
         match self.done.len() {
             0 => bail!("no frames were recorded"),
             1 => {
-                std::fs::rename(&self.done[0], &self.part).context("move the recording into place")?;
+                std::fs::rename(&self.done[0].0, &self.part).context("move the recording into place")?;
                 Ok(())
             }
             _ => {
@@ -1032,7 +1090,7 @@ mod tests {
             joined(&p),
             format!(
                 "{HEAD_SOUND} -isync 1 {PULSE} @DEFAULT_MONITOR@ {VIDEO_IN_SOUND} -map 1:v -map 0:a {OUT_SOUND} {X264} \
-                 -c:a aac -b:a 160k -shortest {TAIL}"
+                 -c:a aac -b:a 160k -progress pipe:2 -stats_period 0.1 {TAIL}"
             )
         );
     }
@@ -1044,7 +1102,7 @@ mod tests {
             joined(&p),
             format!(
                 "{HEAD_SOUND} -isync 1 {PULSE} alsa_input.usb-mic {VIDEO_IN_SOUND} -map 1:v -map 0:a {OUT_SOUND} {X264} \
-                 -c:a aac -b:a 160k -shortest {TAIL}"
+                 -c:a aac -b:a 160k -progress pipe:2 -stats_period 0.1 {TAIL}"
             )
         );
     }
@@ -1057,7 +1115,7 @@ mod tests {
             format!(
                 "{HEAD_SOUND} -isync 2 {PULSE} @DEFAULT_MONITOR@ -isync 2 {PULSE} alsa_input.usb-mic {VIDEO_IN_SOUND} \
                  -filter_complex [0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0[a] -map 2:v -map [a] {OUT_SOUND} {X264} \
-                 -c:a aac -b:a 160k -shortest {TAIL}"
+                 -c:a aac -b:a 160k -progress pipe:2 -stats_period 0.1 {TAIL}"
             )
         );
     }
@@ -1149,6 +1207,14 @@ mod tests {
     }
 
     #[test]
+    fn progress_lines() {
+        assert_eq!(progress_frames("frame=42"), Some(42));
+        assert_eq!(progress_frames("frame=0\r"), Some(0));
+        assert_eq!(progress_frames("fps=30.0"), None);
+        assert_eq!(progress_frames("frame=   60 fps= 31 q=-1.0 size=4kB"), None, "a stats line is not progress");
+    }
+
+    #[test]
     fn ffmpeg_versions() {
         assert!(version_has_isync("ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023 the FFmpeg developers\nbuilt with gcc"));
         assert!(version_has_isync("ffmpeg version n7.0.2 Copyright (c) 2000-2024"));
@@ -1201,8 +1267,11 @@ mod tests {
 
     #[test]
     fn concat_list_quotes_paths() {
-        let l = concat_list(&[PathBuf::from("/a/b.seg0.mp4"), PathBuf::from("/a/it's.seg1.mp4")]);
-        assert_eq!(l, "file '/a/b.seg0.mp4'\nfile '/a/it'\\''s.seg1.mp4'\n");
+        let l = concat_list(&[
+            (PathBuf::from("/a/b.seg0.mp4"), Duration::from_millis(1500)),
+            (PathBuf::from("/a/it's.seg1.mp4"), Duration::from_secs(2)),
+        ]);
+        assert_eq!(l, "file '/a/b.seg0.mp4'\noutpoint 1.500000\nfile '/a/it'\\''s.seg1.mp4'\noutpoint 2.000000\n");
         let a: Vec<String> = concat_args(Path::new("/a/l.txt"), Path::new("/a/o.part")).iter().map(|s| s.to_string_lossy().into()).collect();
         assert_eq!(
             a.join(" "),
