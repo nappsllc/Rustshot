@@ -51,6 +51,8 @@ jobs:
       # (microphone), paused once.
       - name: X11 recording under Xvfb (ffmpeg, PulseAudio)
         timeout-minutes: 8
+        env:
+          RUSTSHOT_FFMPEG_LOG: "1"
         run: |
           set -o pipefail
           mkdir -p "$RUNNER_TEMP/test-logs"

@@ -612,6 +612,13 @@ impl Run {
     fn spawn(exe: &Path, plan: &Plan) -> Result<Run> {
         let (args, fps, out, live) = (plan.args(), plan.fps, plan.out.clone(), !plan.audio_inputs().is_empty());
         let mkv = (live && plan.isync).then(|| Mkv::new(plan.w, plan.h, plan.fps));
+        // RUSTSHOT_FFMPEG_LOG=1: ffmpeg logs at info, printed when it ends.
+        let verbose = std::env::var_os("RUSTSHOT_FFMPEG_LOG").is_some();
+        let args: Vec<OsString> =
+            args.into_iter().map(|a| if verbose && a == "warning" { OsString::from("info") } else { a }).collect();
+        if verbose {
+            eprintln!("rustshot: {} {}", exe.display(), args.iter().map(|a| a.to_string_lossy()).collect::<Vec<_>>().join(" "));
+        }
         let mut child = Command::new(exe)
             .args(&args)
             .stdin(Stdio::piped())
@@ -713,6 +720,9 @@ impl Run {
             let _ = r.join();
         }
         let status = status?;
+        if std::env::var_os("RUSTSHOT_FFMPEG_LOG").is_some() {
+            eprintln!("rustshot: ffmpeg ended ({status}):\n{}", stderr_tail(&self.tail));
+        }
         if !status.success() {
             bail!("ffmpeg failed ({status}): {}", stderr_tail(&self.tail));
         }
