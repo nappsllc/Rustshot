@@ -296,8 +296,11 @@ Limitations:
   hotkeys are not supported yet. Runtime dependencies: `libx11`, `libxrandr`.
   Screen recording on X11 records MP4 with `ffmpeg` and GIF without it.
   Without ffmpeg, the first MP4 recording offers to download Cisco's
-  OpenH264 (about 1 MB, checked against a pinned SHA-256; the sound is then
-  encoded with the system's `libopus`). Sound is read through
+  OpenH264 (about 1 MB, checked against a pinned SHA-256 and kept in
+  `$XDG_DATA_HOME/rustshot/openh264/`, by default
+  `~/.local/share/rustshot/openh264/` or, in a Flatpak or Snap sandbox, the
+  app's own data folder; the sound is then encoded with the system's
+  `libopus`). Sound is read through
   `libpulse-simple` (or `parec` from `pulseaudio-utils`); it works on
   PipeWire too.
   X11 cannot keep a window out of a recording, so the control bar sits

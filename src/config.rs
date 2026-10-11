@@ -277,10 +277,10 @@ pub fn with_skip_version(text: &str, version: &str) -> String {
 
 /// `text` with its top-level `key` line set to the string `value` (see
 /// [`with_skip_version`]).
-pub fn with_top_key(text: &str, key: &str, version: &str) -> String {
+pub fn with_top_key(text: &str, key: &str, value: &str) -> String {
     let crlf = text.contains("\r\n");
     let nl = if crlf { "\r\n" } else { "\n" };
-    let line = format!("{key} = {}", toml_str(version));
+    let line = format!("{key} = {}", toml_str(value));
     let mut out = String::with_capacity(text.len() + line.len() + 2);
     let mut done = false;
     let mut top = true;

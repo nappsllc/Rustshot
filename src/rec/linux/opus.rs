@@ -21,20 +21,33 @@ pub const PACKET_SAMPLES: usize = OPUS_FRAME as usize * 2;
 #[derive(Default)]
 pub struct Packetizer {
     buf: Vec<f32>,
+    /// Where the samples not handed out yet start in `buf` (taken ones
+    /// are dropped on the next push, so the buffer is reused).
+    head: usize,
     /// Stereo frames taken in (the sound's real length).
     frames: u64,
 }
 
 impl Packetizer {
     pub fn push(&mut self, pcm: &[f32]) {
+        if self.head > 0 {
+            self.buf.drain(..self.head);
+            self.head = 0;
+        }
         let whole = &pcm[..pcm.len() / 2 * 2];
         self.buf.extend_from_slice(whole);
         self.frames += (whole.len() / 2) as u64;
     }
 
-    /// The next full packet's samples, if there are enough.
-    pub fn next(&mut self) -> Option<Vec<f32>> {
-        (self.buf.len() >= PACKET_SAMPLES).then(|| self.buf.drain(..PACKET_SAMPLES).collect())
+    /// The next full packet's samples, if there are enough (lent from the
+    /// buffer until the next call).
+    pub fn next(&mut self) -> Option<&[f32]> {
+        let at = self.head;
+        if self.buf.len() - at < PACKET_SAMPLES {
+            return None;
+        }
+        self.head += PACKET_SAMPLES;
+        Some(&self.buf[at..at + PACKET_SAMPLES])
     }
 
     /// What is left, padded with silence to a packet; `None` when nothing is.
@@ -43,6 +56,10 @@ impl Packetizer {
             return None;
         }
         let mut p = std::mem::take(&mut self.buf);
+        p.drain(..std::mem::take(&mut self.head));
+        if p.is_empty() {
+            return None;
+        }
         p.resize(PACKET_SAMPLES, 0.0);
         Some(p)
     }
@@ -150,14 +167,15 @@ mod imp {
         }
 
         /// One packet from [`PACKET_SAMPLES`] interleaved samples.
-        pub fn encode(&mut self, pcm: &[f32]) -> Result<Vec<u8>> {
+        /// One packet's bytes (lent until the next call).
+        pub fn encode(&mut self, pcm: &[f32]) -> Result<&[u8]> {
             assert_eq!(pcm.len(), PACKET_SAMPLES);
             // SAFETY: `pcm` holds a whole 20 ms frame; `out` has MAX_PACKET bytes.
             let n = unsafe { (self.lib.encode)(self.st, pcm.as_ptr(), OPUS_FRAME as c_int, self.out.as_mut_ptr(), MAX_PACKET as i32) };
             if n < 0 {
                 return Err(anyhow!("opus_encode_float: {}", self.lib.error(n)));
             }
-            Ok(self.out[..n as usize].to_vec())
+            Ok(&self.out[..n as usize])
         }
     }
 
@@ -182,8 +200,10 @@ mod tests {
         let a = p.next().unwrap();
         assert_eq!(a.len(), PACKET_SAMPLES);
         assert_eq!(a[PACKET_SAMPLES - 1], 0.25);
+        let at = a.as_ptr();
         assert!(p.next().is_none());
         p.push(&[0.75; 4]);
+        assert_eq!(p.buf.as_ptr(), at, "the buffer is reused, not reallocated");
         let r = p.rest().unwrap();
         assert_eq!(r.len(), PACKET_SAMPLES);
         assert_eq!(&r[..6], &[0.25, 0.25, 0.75, 0.75, 0.75, 0.75]);

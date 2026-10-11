@@ -43,7 +43,11 @@ pub fn download_http_exact(
         return Err("refusing to download from an unexpected URL".into());
     }
     let max = max.to_string();
-    let args = ["-fsS", "--proto", "=http", "--max-redirs", "0", "--max-filesize", &max];
+    // A stalled download (under 1 KB/s for 30 s) or one past 5 minutes
+    // is given up.
+    let args = [
+        "-fsS", "--proto", "=http", "--max-redirs", "0", "--max-filesize", &max, "--speed-limit", "1024", "--speed-time", "30", "--max-time", "300",
+    ];
     let r = run_curl(url, dest, &args, progress, &|eff| eff == url);
     if r.is_err() {
         let _ = std::fs::remove_file(dest);

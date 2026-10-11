@@ -48,6 +48,40 @@ pub fn lib_path(dir: &Path, pin: &Pin) -> PathBuf {
     dir.join(pin.so)
 }
 
+/// Whether the downloaded library is there and is the pinned file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Installed {
+    Missing,
+    Good,
+    /// It was there but failed its check (why); it has been deleted.
+    Bad(String),
+}
+
+/// The library of `pin` in `dir`, checked by size and SHA-256 (see
+/// [`verify_lib`]); one that fails is deleted, so the dialog's Download
+/// fetches it again.
+pub fn check_in(dir: &Path, pin: &Pin) -> Installed {
+    let p = lib_path(dir, pin);
+    if !p.exists() {
+        return Installed::Missing;
+    }
+    match verify_lib(&p, pin) {
+        Ok(()) => Installed::Good,
+        Err(e) => {
+            let _ = std::fs::remove_file(&p);
+            Installed::Bad(e)
+        }
+    }
+}
+
+/// [`check_in`] for this machine and user.
+pub fn check() -> Installed {
+    match (crate::rec::openh264_pins::this_machine(), dir()) {
+        (Some(pin), Some(d)) => check_in(&d, pin),
+        _ => Installed::Missing,
+    }
+}
+
 /// The downloaded library for this machine, if it is there (by its size;
 /// the hash is checked when it is loaded).
 pub fn installed() -> Option<PathBuf> {
@@ -56,12 +90,19 @@ pub fn installed() -> Option<PathBuf> {
     std::fs::metadata(&p).ok().filter(|m| m.is_file() && m.len() == pin.so_size).map(|_| p)
 }
 
+/// The name of attempt `attempt`'s download in the library's folder: its
+/// own per process and attempt, so that a cancelled attempt still winding
+/// down never deletes or unpacks over the file of the next one.
+pub fn download_name(pin: &Pin, pid: u32, attempt: u64) -> String {
+    format!("{}.{pid}-{attempt}.download", pin.file)
+}
+
 fn hex_digest(p: &Path) -> Result<String, String> {
     crate::sha256::file_digest(p).map(|d| crate::sha256::hex(&d)).map_err(|e| format!("read {}: {e}", p.display()))
 }
 
 /// Check the downloaded `bz2` against `pin`, unpack it with `unpack(src,
-/// dst)` into `dest` (through `dest.part`) and check the result. The
+/// dst)` into `dest` (through `<bz2>.part`) and check the result. The
 /// download is refused (and deleted) unless its SHA-256 is the pinned one,
 /// before anything reads it; a library that does not match is deleted.
 /// The download is removed in every case.
@@ -76,7 +117,9 @@ pub fn verify_and_unpack(
         if len != pin.bz2_size || hex_digest(bz2)? != pin.bz2_sha256 {
             return Err(format!("{} failed its SHA-256 check; refusing it", pin.file));
         }
-        let mut part = dest.as_os_str().to_os_string();
+        // Unpacked next to the download (its own name per attempt), then
+        // renamed into place.
+        let mut part = bz2.as_os_str().to_os_string();
         part.push(".part");
         let part = PathBuf::from(part);
         let _ = std::fs::remove_file(&part);
@@ -177,7 +220,9 @@ mod imp {
 
     /// Download, verify and unpack the pinned OpenH264 for this machine;
     /// `progress(got, total)` returning false cancels. The library's path.
-    pub fn download(progress: &dyn Fn(u64, Option<u64>) -> bool) -> Result<PathBuf, String> {
+    ///
+    /// `attempt` names this attempt's download file ([`download_name`]).
+    pub fn download(attempt: u64, progress: &dyn Fn(u64, Option<u64>) -> bool) -> Result<PathBuf, String> {
         let pin = openh264_pins::this_machine()
             .ok_or_else(|| format!("there is no OpenH264 download for this machine ({})", std::env::consts::ARCH))?;
         let dir = dir().ok_or("no home folder to keep OpenH264 in")?;
@@ -190,7 +235,7 @@ mod imp {
         if !openh264_pins::is_pinned_url(&url) {
             return Err("refusing to download from an unexpected URL".into());
         }
-        let bz2 = dir.join(format!("{}.download", pin.file));
+        let bz2 = dir.join(download_name(pin, std::process::id(), attempt));
         let total = Some(pin.bz2_size);
         crate::export::download_http_exact(&url, &bz2, pin.bz2_size, &|got, _| got <= pin.bz2_size && progress(got, total))?;
         let dest = lib_path(&dir, pin);
@@ -480,7 +525,10 @@ mod imp {
             }
             let mut fmt: c_int = VIDEO_FORMAT_I420;
             // SAFETY: the data format option takes an int.
-            unsafe { (vt.set_option)(self.enc, ENCODER_OPTION_DATAFORMAT, &mut fmt as *mut c_int as *mut c_void) };
+            let r = unsafe { (vt.set_option)(self.enc, ENCODER_OPTION_DATAFORMAT, &mut fmt as *mut c_int as *mut c_void) };
+            if r != 0 {
+                bail!("OpenH264 does not take I420 pictures (SetOption DATAFORMAT failed: {r})");
+            }
             Ok(())
         }
 
@@ -547,15 +595,201 @@ mod imp {
     #[cfg(test)]
     mod layout {
         use super::*;
+        use std::mem::{offset_of, size_of};
 
-        /// The structures' sizes on x86_64 / aarch64 Linux, as the C
-        /// compiler lays out OpenH264 2.6.0's headers.
+        // Every size and field offset below is worked out by hand from
+        // OpenH264 2.6.0's codec/api/wels/codec_app_def.h
+        // (https://github.com/cisco/openh264/blob/v2.6.0/codec/api/wels/codec_app_def.h)
+        // for LP64 Linux (x86_64, aarch64): int, float and enums 4 bytes,
+        // bool and unsigned char 1, unsigned short 2, long long and
+        // pointers 8, each field at its C alignment. Where they are in
+        // the v2.6.0 file (line numbers approximate): MAX_SPATIAL_LAYER_NUM
+        // 4 (l. 43), MAX_LAYER_NUM_OF_FRAME 128 (l. 46), MAX_SLICES_NUM_TMP
+        // 35 (l. 54); SSliceArgument l. 345-352, SSpatialLayerConfig
+        // l. 452-485, SEncParamExt l. 537-595, SLayerBSInfo l. 623-639,
+        // SFrameBSInfo l. 644-651, SSourcePicture l. 656-666;
+        // OpenH264Version (4 unsigned ints) and the 9 ISVCEncoder methods
+        // are in codec_api.h / codec_ver.h. A field added or moved in the
+        // middle of a structure shifts the offsets after it and fails
+        // here; the version check at load guards the library's side.
+
+        fn check(name: &str, got: &[(usize, usize)]) {
+            for (k, (got, want)) in got.iter().enumerate() {
+                assert_eq!(got, want, "{name}: field {k}");
+            }
+        }
+
         #[test]
-        fn structures_have_the_c_sizes() {
-            assert_eq!(std::mem::size_of::<SliceArgument>(), 152);
-            assert_eq!(std::mem::size_of::<SpatialLayerConfig>(), 200);
-            assert_eq!(std::mem::size_of::<SourcePicture>(), 80);
-            assert_eq!(std::mem::size_of::<LayerBsInfo>(), 56);
+        fn slice_argument() {
+            type S = SliceArgument;
+            assert_eq!(size_of::<S>(), 152);
+            check(
+                "SSliceArgument",
+                &[
+                    (offset_of!(S, mode), 0),             // uiSliceMode
+                    (offset_of!(S, num), 4),              // uiSliceNum
+                    (offset_of!(S, mb_num), 8),           // uiSliceMbNum[35]
+                    (offset_of!(S, size_constraint), 148), // uiSliceSizeConstraint
+                ],
+            );
+        }
+
+        #[test]
+        fn spatial_layer_config() {
+            type S = SpatialLayerConfig;
+            assert_eq!(size_of::<S>(), 200);
+            check(
+                "SSpatialLayerConfig",
+                &[
+                    (offset_of!(S, video_width), 0),
+                    (offset_of!(S, video_height), 4),
+                    (offset_of!(S, frame_rate), 8),
+                    (offset_of!(S, spatial_bitrate), 12),
+                    (offset_of!(S, max_spatial_bitrate), 16),
+                    (offset_of!(S, profile_idc), 20),
+                    (offset_of!(S, level_idc), 24),
+                    (offset_of!(S, dlayer_qp), 28),
+                    (offset_of!(S, slice), 32),
+                    (offset_of!(S, video_signal_type_present), 184),
+                    (offset_of!(S, video_format), 185),
+                    (offset_of!(S, full_range), 186),
+                    (offset_of!(S, color_description_present), 187),
+                    (offset_of!(S, color_primaries), 188),
+                    (offset_of!(S, transfer_characteristics), 189),
+                    (offset_of!(S, color_matrix), 190),
+                    (offset_of!(S, aspect_ratio_present), 191),
+                    (offset_of!(S, aspect_ratio), 192),
+                    (offset_of!(S, aspect_ratio_ext_width), 196),
+                    (offset_of!(S, aspect_ratio_ext_height), 198),
+                ],
+            );
+        }
+
+        #[test]
+        fn enc_param_ext() {
+            type S = EncParamExt;
+            assert_eq!(size_of::<S>(), 924);
+            check(
+                "SEncParamExt",
+                &[
+                    (offset_of!(S, usage_type), 0),
+                    (offset_of!(S, pic_width), 4),
+                    (offset_of!(S, pic_height), 8),
+                    (offset_of!(S, target_bitrate), 12),
+                    (offset_of!(S, rc_mode), 16),
+                    (offset_of!(S, max_frame_rate), 20),
+                    (offset_of!(S, temporal_layer_num), 24),
+                    (offset_of!(S, spatial_layer_num), 28),
+                    (offset_of!(S, spatial_layers), 32), // 4 x 200
+                    (offset_of!(S, complexity_mode), 832),
+                    (offset_of!(S, intra_period), 836),
+                    (offset_of!(S, num_ref_frame), 840),
+                    (offset_of!(S, sps_pps_id_strategy), 844),
+                    (offset_of!(S, prefix_nal_adding_ctrl), 848),
+                    (offset_of!(S, enable_ssei), 849),
+                    (offset_of!(S, simulcast_avc), 850),
+                    (offset_of!(S, padding_flag), 852),
+                    (offset_of!(S, entropy_coding_mode_flag), 856),
+                    (offset_of!(S, enable_frame_skip), 860),
+                    (offset_of!(S, max_bitrate), 864),
+                    (offset_of!(S, max_qp), 868),
+                    (offset_of!(S, min_qp), 872),
+                    (offset_of!(S, max_nal_size), 876),
+                    (offset_of!(S, enable_long_term_reference), 880),
+                    (offset_of!(S, ltr_ref_num), 884),
+                    (offset_of!(S, ltr_mark_period), 888),
+                    (offset_of!(S, multiple_thread_idc), 892),
+                    (offset_of!(S, use_load_balancing), 894),
+                    (offset_of!(S, loop_filter_disable_idc), 896),
+                    (offset_of!(S, loop_filter_alpha_c0_offset), 900),
+                    (offset_of!(S, loop_filter_beta_offset), 904),
+                    (offset_of!(S, enable_denoise), 908),
+                    (offset_of!(S, enable_background_detection), 909),
+                    (offset_of!(S, enable_adaptive_quant), 910),
+                    (offset_of!(S, enable_frame_cropping_flag), 911),
+                    (offset_of!(S, enable_scene_change_detect), 912),
+                    (offset_of!(S, is_lossless_link), 913),
+                    (offset_of!(S, fix_rc_overshoot), 914),
+                    (offset_of!(S, idr_bitrate_ratio), 916),
+                    (offset_of!(S, psnr_y), 920),
+                    (offset_of!(S, psnr_u), 921),
+                    (offset_of!(S, psnr_v), 922),
+                ],
+            );
+        }
+
+        #[test]
+        fn source_picture() {
+            type S = SourcePicture;
+            assert_eq!(size_of::<S>(), 80);
+            check(
+                "SSourcePicture",
+                &[
+                    (offset_of!(S, color_format), 0),
+                    (offset_of!(S, stride), 4),
+                    (offset_of!(S, data), 24),
+                    (offset_of!(S, pic_width), 56),
+                    (offset_of!(S, pic_height), 60),
+                    (offset_of!(S, timestamp), 64),
+                    (offset_of!(S, psnr_y), 72),
+                    (offset_of!(S, psnr_u), 73),
+                    (offset_of!(S, psnr_v), 74),
+                ],
+            );
+        }
+
+        #[test]
+        fn layer_and_frame_bitstream_info() {
+            type L = LayerBsInfo;
+            assert_eq!(size_of::<L>(), 56);
+            check(
+                "SLayerBSInfo",
+                &[
+                    (offset_of!(L, temporal_id), 0),
+                    (offset_of!(L, spatial_id), 1),
+                    (offset_of!(L, quality_id), 2),
+                    (offset_of!(L, frame_type), 4),
+                    (offset_of!(L, layer_type), 8),
+                    (offset_of!(L, sub_seq_id), 12),
+                    (offset_of!(L, nal_count), 16),
+                    (offset_of!(L, nal_length), 24),
+                    (offset_of!(L, bs_buf), 32),
+                    (offset_of!(L, psnr), 40),
+                ],
+            );
+            type F = FrameBsInfo;
+            assert_eq!(size_of::<F>(), 7192);
+            check(
+                "SFrameBSInfo",
+                &[
+                    (offset_of!(F, layer_num), 0),
+                    (offset_of!(F, layers), 8), // 128 x 56
+                    (offset_of!(F, frame_type), 7176),
+                    (offset_of!(F, frame_size), 7180),
+                    (offset_of!(F, timestamp), 7184),
+                ],
+            );
+        }
+
+        #[test]
+        fn version_and_vtable() {
+            assert_eq!(size_of::<Version>(), 16);
+            check("OpenH264Version", &[(offset_of!(Version, minor), 4), (offset_of!(Version, revision), 8), (offset_of!(Version, reserved), 12)]);
+            assert_eq!(size_of::<Vtbl>(), 9 * 8);
+            check(
+                "ISVCEncoderVtbl",
+                &[
+                    (offset_of!(Vtbl, initialize), 0),
+                    (offset_of!(Vtbl, initialize_ext), 8),
+                    (offset_of!(Vtbl, get_default_params), 16),
+                    (offset_of!(Vtbl, uninitialize), 24),
+                    (offset_of!(Vtbl, encode_frame), 32),
+                    (offset_of!(Vtbl, encode_parameter_sets), 40),
+                    (offset_of!(Vtbl, force_intra_frame), 48),
+                    (offset_of!(Vtbl, set_option), 56),
+                    (offset_of!(Vtbl, get_option), 64),
+                ],
+            );
         }
     }
 }
@@ -644,6 +878,47 @@ mod tests {
         std::fs::write(&bz2, b"pinned bytes").unwrap();
         let r = verify_and_unpack(&bz2, &pin, &dest2, |_, _, _| Err(NO_BZIP2.into()));
         assert_eq!(r.unwrap_err(), NO_BZIP2);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_bad_library_is_deleted_and_reported() {
+        let d = scratch("check");
+        let pin = fixture_pin(b"unused", b"the library");
+        assert_eq!(check_in(&d, &pin), Installed::Missing);
+        std::fs::write(d.join("fixture.so"), b"the library").unwrap();
+        assert_eq!(check_in(&d, &pin), Installed::Good);
+        assert!(d.join("fixture.so").exists());
+        std::fs::write(d.join("fixture.so"), b"the librarX").unwrap();
+        assert!(matches!(check_in(&d, &pin), Installed::Bad(e) if e.contains("SHA-256")));
+        assert!(!d.join("fixture.so").exists(), "deleted");
+        assert_eq!(check_in(&d, &pin), Installed::Missing, "so Download fetches it again");
+        std::fs::write(d.join("fixture.so"), b"short").unwrap();
+        assert!(matches!(check_in(&d, &pin), Installed::Bad(_)), "wrong size");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn every_attempt_downloads_to_its_own_file() {
+        let a = download_name(&PINS[0], 42, 1);
+        assert_eq!(a, "libopenh264-2.6.0-linux64.8.so.bz2.42-1.download");
+        assert_ne!(a, download_name(&PINS[0], 42, 2));
+        assert_ne!(a, download_name(&PINS[0], 43, 1));
+        // The unpacked part is named after the download, not the library.
+        let d = scratch("attempts");
+        let pin = fixture_pin(b"pinned bytes", b"the library");
+        let dest = d.join("fixture.so");
+        let bz2 = d.join(download_name(&pin, 1, 7));
+        std::fs::write(&bz2, b"pinned bytes").unwrap();
+        let other = d.join(format!("{}.part", download_name(&pin, 1, 8)));
+        std::fs::write(&other, b"attempt 8's").unwrap();
+        verify_and_unpack(&bz2, &pin, &dest, |_, out, _| {
+            assert_eq!(out.file_name().unwrap().to_str().unwrap(), format!("{}.part", download_name(&pin, 1, 7)));
+            std::fs::write(out, b"the library").map_err(|e| e.to_string())
+        })
+        .unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"the library");
+        assert_eq!(std::fs::read(&other).unwrap(), b"attempt 8's", "another attempt's file is left alone");
         let _ = std::fs::remove_dir_all(&d);
     }
 

@@ -17,7 +17,14 @@
 //! (offsets moved by its size) goes in front of it. Memory stays bounded
 //! (one block plus the sample tables, about 16 bytes a sample) and no
 //! second copy of the recording is needed on disk. If the file cannot grow
-//! the recording is kept with `moov` at the end (it still plays).
+//! (or the disk has less than the new `moov` plus [`FREE_MARGIN`] free) the
+//! recording is kept with `moov` at the end (it still plays).
+//!
+//! Not growing is the only graceful failure: once the move has started, a
+//! crash, a kill or ENOSPC half-way leaves `mdat` partly shifted and the
+//! file unplayable (the tail `moov` is overwritten by the move). ffmpeg's
+//! `-movflags +faststart` has the same window; the free-space check before
+//! the move keeps ENOSPC out of it in practice.
 //!
 //! Annex-B to AVCC conversion and `avcC`/`dOps` building are here too
 //! ([`access_unit`], [`avcc_body`], [`dops_body`]).
@@ -36,20 +43,49 @@ pub const OPUS_FRAME: u32 = 960;
 
 const VIDEO_ID: u32 = 1;
 const AUDIO_ID: u32 = 2;
-/// The block moved at a time when `moov` goes to the front.
-const MOVE_BLOCK: usize = 1 << 20;
+/// The block moved at a time when `moov` goes to the front (tests move
+/// small blocks so that every file goes through the many-block path).
+const MOVE_BLOCK: usize = if cfg!(test) { 64 } else { 1 << 20 };
+/// Free space kept beyond the new `moov` before moving it to the front.
+pub const FREE_MARGIN: u64 = 1 << 20;
 /// `mdat`'s header: 32-bit size 1, then a 64-bit size.
 const MDAT_HEAD: u64 = 16;
 
 /// Where the muxer writes: a file (or a buffer in tests).
 pub trait Media: Read + Write + Seek {
     fn set_len(&mut self, n: u64) -> io::Result<()>;
+    /// Bytes free for this file on its disk, when known.
+    fn free_space(&self) -> Option<u64> {
+        None
+    }
 }
 
 impl Media for std::fs::File {
     fn set_len(&mut self, n: u64) -> io::Result<()> {
         std::fs::File::set_len(self, n)
     }
+    #[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+    fn free_space(&self) -> Option<u64> {
+        statvfs_free(self)
+    }
+}
+
+/// `fstatvfs`: blocks free to unprivileged users times the fragment size.
+#[cfg(all(target_os = "linux", target_pointer_width = "64"))]
+fn statvfs_free(f: &std::fs::File) -> Option<u64> {
+    use std::os::fd::AsRawFd;
+    unsafe extern "C" {
+        fn fstatvfs(fd: i32, buf: *mut u64) -> i32;
+    }
+    // glibc/musl `struct statvfs` on 64-bit Linux: f_bsize, f_frsize,
+    // f_blocks, f_bfree, f_bavail, ... (all 8 bytes), 112 bytes in all;
+    // the buffer is larger to be safe.
+    let mut buf = [0u64; 32];
+    // SAFETY: the fd is open for the call; the buffer outsizes the struct.
+    if unsafe { fstatvfs(f.as_raw_fd(), buf.as_mut_ptr()) } != 0 {
+        return None;
+    }
+    Some(buf[4].saturating_mul(buf[1]))
 }
 
 impl Media for io::Cursor<Vec<u8>> {
@@ -637,6 +673,21 @@ impl<F: Media> Mp4Writer<F> {
         boxed(b"moov", &body)
     }
 
+    /// The `moov` that goes in front: its offsets are moved by its own
+    /// size, which depends on whether they still fit 32 bits once moved.
+    /// A fixed point: `co64` never shrinks, so the size only grows, and it
+    /// grows at most once per track.
+    fn front_moov(&self, video_end: u64) -> Vec<u8> {
+        let mut shift = 0;
+        loop {
+            let m = self.moov(video_end, shift);
+            if m.len() as u64 == shift {
+                return m;
+            }
+            shift = m.len() as u64;
+        }
+    }
+
     /// Finish the file (see the module docs): `video_end` is when the
     /// last picture ends (90 kHz; at least one tick after its start).
     /// `Err` means the file does not play (nothing usable was written, or
@@ -660,27 +711,33 @@ impl<F: Media> Mp4Writer<F> {
         self.f.seek(SeekFrom::Start(end))?;
         self.f.write_all(&tail)?;
         self.f.flush()?;
-        // Then in front. Its size depends on whether the offsets still fit
-        // 32 bits once moved by it: co64 is never smaller, so one retry.
-        let mut front = self.moov(video_end, tail.len() as u64);
-        if front.len() != tail.len() {
-            front = self.moov(video_end, front.len() as u64);
-        }
+        // Then in front.
+        let front = self.front_moov(video_end);
         let shift = front.len() as u64;
         let note = |why: String| match &earlier {
             Some(e) => format!("{e}; {why}"),
             None => why,
         };
+        if let Some(free) = self.f.free_space()
+            && free < shift + FREE_MARGIN
+        {
+            eprintln!("rustshot: {free} bytes free, the MP4 index ({shift} bytes) stays at the end of the file");
+            return Ok((self.f, Finished::Partly(note(format!("the index stays at the end of the file: only {free} bytes free")))));
+        }
+        // Growing is the last step that can fail gracefully (see the
+        // module docs): from the first block moved on, a crash or a failed
+        // write leaves the file unplayable.
         if let Err(e) = self.f.set_len(end + shift) {
             // The tail moov is intact (growing failed before any move).
             let _ = self.f.set_len(end + tail.len() as u64);
             return Ok((self.f, Finished::Partly(note(format!("the index stays at the end of the file: {e}")))));
         }
         // From here a failure leaves the file broken.
+        #[allow(clippy::useless_vec)] // 1 MiB outside tests: on the heap
         let mut buf = vec![0u8; MOVE_BLOCK];
         let mut hi = end;
         while hi > self.mdat_at {
-            let n = ((hi - self.mdat_at) as usize).min(MOVE_BLOCK);
+            let n = usize::try_from(hi - self.mdat_at).map_or(MOVE_BLOCK, |r| r.min(MOVE_BLOCK));
             let lo = hi - n as u64;
             self.f.seek(SeekFrom::Start(lo))?;
             self.f.read_exact(&mut buf[..n])?;

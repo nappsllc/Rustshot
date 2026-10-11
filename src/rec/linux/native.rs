@@ -10,6 +10,7 @@
 //! one frame, if that is later).
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))] // unit-tested everywhere, used on Linux
 
+use crate::rec::linux::openh264::Installed;
 use crate::rec::mp4::VIDEO_TIMESCALE;
 use std::time::Duration;
 
@@ -33,15 +34,25 @@ pub enum Pick {
     OpenH264,
     /// Neither is there: ask the user (the first-use dialog).
     Ask,
+    /// Not an MP4 (a GIF): no MP4 encoder is used.
+    Gif,
 }
 
 /// The encoder for `rec_linux_encoder` (`auto`, `ffmpeg`, `openh264`):
 /// the preferred one when it is there, else the other, else ask. `auto`
 /// prefers ffmpeg. `ffmpeg`: ffmpeg is installed and encodes H.264;
-/// `openh264`: the pinned library was downloaded.
-pub fn pick(pref: &str, ffmpeg: bool, openh264: bool) -> Pick {
-    let order = if pref.eq_ignore_ascii_case("openh264") { [Pick::OpenH264, Pick::Ffmpeg] } else { [Pick::Ffmpeg, Pick::OpenH264] };
-    order.into_iter().find(|p| if *p == Pick::Ffmpeg { ffmpeg } else { openh264 }).unwrap_or(Pick::Ask)
+/// `openh264`: what [`crate::rec::linux::openh264::check`] found. A library
+/// that failed its check (and was deleted) counts as not there, except
+/// that when `openh264` was chosen explicitly the dialog asks (offering
+/// the download again) rather than quietly switching to ffmpeg.
+pub fn pick(pref: &str, ffmpeg: bool, openh264: &Installed) -> Pick {
+    let explicit = pref.eq_ignore_ascii_case("openh264");
+    if explicit && matches!(openh264, Installed::Bad(_)) {
+        return Pick::Ask;
+    }
+    let have = *openh264 == Installed::Good;
+    let order = if explicit { [Pick::OpenH264, Pick::Ffmpeg] } else { [Pick::Ffmpeg, Pick::OpenH264] };
+    order.into_iter().find(|p| if *p == Pick::Ffmpeg { ffmpeg } else { have }).unwrap_or(Pick::Ask)
 }
 
 #[cfg(target_os = "linux")]
@@ -114,9 +125,13 @@ mod imp {
             })
         }
 
+        /// Encode and write every whole packet waiting (no allocation:
+        /// the packetizer and the encoder lend their buffers).
         fn packets(&mut self) -> Result<()> {
+            let Some(o) = self.opus.as_mut() else { return Ok(()) };
             while let Some(p) = self.pcm.next() {
-                self.write_packet(&p)?;
+                let pk = o.encode(p)?;
+                self.mp4.write_audio(pk).context("write the recording")?;
             }
             Ok(())
         }
@@ -124,7 +139,7 @@ mod imp {
         fn write_packet(&mut self, p: &[f32]) -> Result<()> {
             let Some(o) = self.opus.as_mut() else { return Ok(()) };
             let pk = o.encode(p)?;
-            self.mp4.write_audio(&pk).context("write the recording")
+            self.mp4.write_audio(pk).context("write the recording")
         }
     }
 
@@ -209,16 +224,30 @@ mod tests {
 
     #[test]
     fn auto_prefers_ffmpeg_then_openh264_then_asks() {
-        assert_eq!(pick("auto", true, true), Pick::Ffmpeg);
-        assert_eq!(pick("auto", false, true), Pick::OpenH264);
-        assert_eq!(pick("auto", true, false), Pick::Ffmpeg);
-        assert_eq!(pick("auto", false, false), Pick::Ask);
-        assert_eq!(pick("ffmpeg", true, true), Pick::Ffmpeg);
-        assert_eq!(pick("ffmpeg", false, true), Pick::OpenH264, "chose ffmpeg but has not installed it yet");
-        assert_eq!(pick("ffmpeg", false, false), Pick::Ask);
-        assert_eq!(pick("openh264", true, true), Pick::OpenH264);
-        assert_eq!(pick("openh264", true, false), Pick::Ffmpeg);
-        assert_eq!(pick("openh264", false, false), Pick::Ask);
+        let (good, none) = (&Installed::Good, &Installed::Missing);
+        assert_eq!(pick("auto", true, good), Pick::Ffmpeg);
+        assert_eq!(pick("auto", false, good), Pick::OpenH264);
+        assert_eq!(pick("auto", true, none), Pick::Ffmpeg);
+        assert_eq!(pick("auto", false, none), Pick::Ask);
+        assert_eq!(pick("ffmpeg", true, good), Pick::Ffmpeg);
+        assert_eq!(pick("ffmpeg", false, good), Pick::OpenH264, "chose ffmpeg but has not installed it yet");
+        assert_eq!(pick("ffmpeg", false, none), Pick::Ask);
+        assert_eq!(pick("openh264", true, good), Pick::OpenH264);
+        assert_eq!(pick("openh264", true, none), Pick::Ffmpeg);
+        assert_eq!(pick("openh264", false, none), Pick::Ask);
+    }
+
+    #[test]
+    fn a_library_that_failed_its_check_is_not_used() {
+        let bad = &Installed::Bad("does not match its SHA-256".into());
+        // auto: ffmpeg if it is there, else the dialog (Download again).
+        assert_eq!(pick("auto", true, bad), Pick::Ffmpeg);
+        assert_eq!(pick("auto", false, bad), Pick::Ask);
+        assert_eq!(pick("ffmpeg", true, bad), Pick::Ffmpeg);
+        assert_eq!(pick("ffmpeg", false, bad), Pick::Ask);
+        // Chosen explicitly: ask, even with ffmpeg there.
+        assert_eq!(pick("openh264", true, bad), Pick::Ask);
+        assert_eq!(pick("OpenH264", false, bad), Pick::Ask);
     }
 
     #[test]

@@ -24,7 +24,9 @@ Rustshot does not collect, store or transmit personal data or telemetry.
   when you first record MP4): Rustshot downloads Cisco's OpenH264 library
   once from Cisco (`http://ciscobinary.openh264.org/`, plain HTTP as Cisco
   serves it; the file is checked against a SHA-256 built into Rustshot) and
-  keeps it in `~/.local/share/rustshot/openh264/`. The request carries no
+  keeps it in `$XDG_DATA_HOME/rustshot/openh264/` (usually
+  `~/.local/share/rustshot/openh264/`; inside a Flatpak or Snap sandbox,
+  the app's own data folder). The request carries no
   data about you or your recordings; Cisco sees your IP address, as with any
   download.
 - Rustshot makes no other network requests.

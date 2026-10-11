@@ -386,7 +386,7 @@ fn openh264_and_opus() -> (std::sync::Arc<super::openh264::OpenH264>, std::sync:
     use super::openh264;
     if openh264::installed().is_none() {
         let t = Instant::now();
-        let p = openh264::download(&|_, _| true).expect("download OpenH264 from Cisco");
+        let p = openh264::download(1, &|_, _| true).expect("download OpenH264 from Cisco");
         eprintln!("downloaded {} in {:?}", p.display(), t.elapsed());
     }
     let lib = openh264::OpenH264::load().expect("load OpenH264");

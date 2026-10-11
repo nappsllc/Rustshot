@@ -146,13 +146,18 @@ impl std::error::Error for NotStarted {}
 fn linux_encoder(spec: &mut RecSpec) -> anyhow::Result<crate::rec::linux::native::Pick> {
     use crate::rec::linux::codec_dialog::{self, Choice};
     use crate::rec::linux::native::{pick, Pick};
-    use crate::rec::linux::{ffmpeg, openh264};
+    use crate::rec::linux::openh264::{self, Installed};
+    use crate::rec::linux::ffmpeg;
     if spec.format != RecFormat::Mp4 {
-        return Ok(Pick::Ffmpeg);
+        return Ok(Pick::Gif);
     }
     let cfg = crate::config::load();
     let ff = ffmpeg::find().is_some_and(|e| ffmpeg::caps(&e).h264.is_some());
-    match pick(&cfg.rec_linux_encoder, ff, openh264::installed().is_some()) {
+    let lib = openh264::check();
+    if let Installed::Bad(why) = &lib {
+        eprintln!("rustshot: {why}; it was deleted");
+    }
+    match pick(&cfg.rec_linux_encoder, ff, &lib) {
         Pick::Ask => {}
         p => return Ok(p),
     }
@@ -160,7 +165,7 @@ fn linux_encoder(spec: &mut RecSpec) -> anyhow::Result<crate::rec::linux::native
         Choice::DownloadOpenH264 => Ok(Pick::OpenH264),
         Choice::Gif => {
             *spec = spec.as_gif(cfg.rec_gif_fps);
-            Ok(Pick::Ffmpeg)
+            Ok(Pick::Gif)
         }
         Choice::InstallFfmpeg | Choice::Cancel => Err(anyhow::Error::new(NotStarted)),
     }

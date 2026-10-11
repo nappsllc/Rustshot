@@ -108,6 +108,8 @@ fn the_box_tree_parses_back_with_moov_first() {
     assert_eq!(&file[mdat.at..mdat.at + 4], &[0, 0, 0, 1], "64-bit mdat size");
     let payload: usize = vs.iter().chain(&as_).map(|s| s.len()).sum();
     assert_eq!(mdat.size, payload + 16);
+    assert!(mdat.size > 100 * MOVE_BLOCK, "the move went through many blocks (and a short last one)");
+    assert_ne!(mdat.size % MOVE_BLOCK, 0);
     // ffmpeg's check sees the index too.
     assert!(crate::rec::linux::ffmpeg::moov_in(io::Cursor::new(&file), file.len() as u64));
 
@@ -273,4 +275,127 @@ fn big_offsets_use_co64_and_long_durations_version_1() {
     let b = &boxes(&m, 0, m.len())[0];
     assert_eq!(b.u8(0), 1);
     assert_eq!(b.u64(24), 1 << 33);
+}
+
+/// A file on a disk with `free` bytes left.
+struct Tight(io::Cursor<Vec<u8>>, u64);
+
+impl Read for Tight {
+    fn read(&mut self, b: &mut [u8]) -> io::Result<usize> {
+        self.0.read(b)
+    }
+}
+impl Write for Tight {
+    fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+        self.0.write(b)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+impl Seek for Tight {
+    fn seek(&mut self, p: SeekFrom) -> io::Result<u64> {
+        self.0.seek(p)
+    }
+}
+impl Media for Tight {
+    fn set_len(&mut self, n: u64) -> io::Result<()> {
+        self.0.set_len(n)
+    }
+    fn free_space(&self) -> Option<u64> {
+        Some(self.1)
+    }
+}
+
+#[test]
+fn too_little_free_space_keeps_the_index_at_the_end() {
+    let mut w = Mp4Writer::new(Tight(io::Cursor::new(Vec::new()), FREE_MARGIN), Some(VideoParams { w: 64, h: 64 }), None).unwrap();
+    let mut vs = Vec::new();
+    for i in 0..10u64 {
+        let au = access_unit(&annexb(i == 0, 500, i as u8));
+        if let (Some(s), Some(p)) = (&au.sps, &au.pps) {
+            w.set_avc_config(s, p);
+        }
+        w.write_video(&au.avcc, i * 3000, au.idr).unwrap();
+        vs.push(au.avcc);
+    }
+    let (c, done) = w.finish(10 * 3000).unwrap();
+    assert!(matches!(&done, Finished::Partly(e) if e.contains("bytes free")), "{done:?}");
+    let file = c.0.into_inner();
+    let top = boxes(&file, 0, file.len());
+    let kinds: Vec<&[u8; 4]> = top.iter().map(|b| &b.kind).collect();
+    assert_eq!(kinds, [b"ftyp", b"mdat", b"moov"], "not moved");
+    let v = track(&top[2], b"vide");
+    let stco = v.get(&[b"mdia", b"minf", b"stbl", b"stco"]).table(4, 1);
+    for (o, s) in stco.iter().zip(&vs) {
+        assert_eq!(&file[o[0] as usize..o[0] as usize + s.len()], &s[..]);
+    }
+    // With room to spare it moves.
+    let mut w = Mp4Writer::new(Tight(io::Cursor::new(Vec::new()), 4 * FREE_MARGIN), Some(VideoParams { w: 64, h: 64 }), None).unwrap();
+    w.set_avc_config(&SPS, &PPS);
+    w.write_video(&[0, 0, 0, 1, 0x65], 0, true).unwrap();
+    assert_eq!(w.finish(3000).unwrap().1, Finished::Done);
+}
+
+/// Fake sample tables (no 4 GB file): two interleaved tracks whose last
+/// offsets are below 4 GiB at the end of the file but cross it once moved,
+/// the picture's by the tail `moov`'s size and the sound's only by the
+/// larger `moov` that the picture's `co64` makes. A single retry would
+/// stop at a `moov` whose size is not the shift it was built with.
+#[test]
+fn the_front_moov_is_a_fixed_point_across_4_gib() {
+    let mut w = Mp4Writer::new(io::Cursor::new(Vec::new()), Some(VideoParams { w: 64, h: 64 }), Some(AudioParams { pre_skip: 312 })).unwrap();
+    w.set_avc_config(&SPS, &PPS);
+    let (nv, na) = (40u64, 60u64);
+    {
+        let v = w.video.as_mut().unwrap();
+        for i in 0..nv {
+            v.s.push(1000, 0);
+            v.times.push(i * 3000);
+        }
+        v.sync.push(1);
+        w.audio.as_mut().unwrap().s.sizes.resize(na as usize, 300);
+        w.audio.as_mut().unwrap().s.offsets.resize(na as usize, 0);
+    }
+    let lay = |w: &mut Mp4Writer<io::Cursor<Vec<u8>>>, v_last: u64, a_last: u64| {
+        // Interleaved: picture, sound, sound, picture, ... ending at the
+        // given last offsets.
+        let v = w.video.as_mut().unwrap();
+        for (k, o) in v.s.offsets.iter_mut().enumerate() {
+            *o = v_last - (nv - 1 - k as u64) * 1600;
+        }
+        let a = w.audio.as_mut().unwrap();
+        for (k, o) in a.s.offsets.iter_mut().enumerate() {
+            *o = a_last - (na - 1 - k as u64) * 1000;
+        }
+    };
+    let max = u64::from(u32::MAX);
+    lay(&mut w, max - 1_000_000, max - 1_000_000);
+    let end = nv * 3000;
+    let tail = w.moov(end, 0).len() as u64;
+    // Picture: crosses with any shift of at least the tail moov.
+    let v_last = max - tail + 1;
+    // Sound: still fits once moved by the tail moov, crosses once moved by
+    // that plus the picture's co64 (4 more bytes a picture).
+    let a_last = max - tail - 4 * nv + 1;
+    lay(&mut w, v_last, a_last);
+    assert_eq!(w.moov(end, 0).len() as u64, tail, "both stco at the end of the file");
+    let once = w.moov(end, tail).len() as u64;
+    assert_eq!(once, tail + 4 * nv, "the picture's offsets went co64");
+    let twice = w.moov(end, once).len() as u64;
+    assert_eq!(twice, once + 4 * na, "then the sound's too: one retry is not enough");
+
+    let front = w.front_moov(end);
+    let shift = front.len() as u64;
+    assert_eq!(shift, twice);
+    assert_eq!(w.moov(end, shift), front, "a fixed point");
+    let top = boxes(&front, 0, front.len());
+    for (handler, offsets) in [(b"vide", &w.video.as_ref().unwrap().s.offsets), (b"soun", &w.audio.as_ref().unwrap().s.offsets)] {
+        let stbl = track(&top[0], handler).get(&[b"mdia", b"minf", b"stbl"]);
+        assert!(!stbl.has(b"stco"));
+        let got: Vec<u64> = stbl.get(&[b"co64"]).table(4, 1).into_iter().map(|e| e[0]).collect();
+        let want: Vec<u64> = offsets.iter().map(|o| o + shift).collect();
+        assert_eq!(got, want, "{}", String::from_utf8_lossy(handler));
+        assert!(want.first().unwrap() <= &max && want.last().unwrap() > &max, "straddles 4 GiB");
+    }
 }

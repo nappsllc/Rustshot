@@ -138,15 +138,18 @@ pub enum In {
     Click(Btn),
     /// Esc or the close button.
     Dismiss,
-    Progress(u64, Option<u64>),
-    /// The download ended (the library's path, or why not).
-    Downloaded(Result<PathBuf, String>),
+    /// Download attempt `.0` got `.1` bytes of `.2`.
+    Progress(u64, u64, Option<u64>),
+    /// Download attempt `.0` ended (the library's path, or why not).
+    /// Reports of any attempt but the current one are ignored.
+    Downloaded(u64, Result<PathBuf, String>),
 }
 
 /// What the driver must do.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Act {
-    Download,
+    /// Start download attempt `.0` (numbered from 1).
+    Download(u64),
     CancelDownload,
     Close(Choice),
 }
@@ -158,6 +161,8 @@ pub struct Machine {
     /// The ffmpeg command for this distribution.
     cmd: Option<&'static str>,
     copied: bool,
+    /// The newest download attempt (0: none yet).
+    attempt: u64,
 }
 
 /// Download errors that mean the user cancelled.
@@ -165,7 +170,7 @@ const CANCELLED: &str = crate::update::CANCELLED;
 
 impl Machine {
     pub fn new(cmd: Option<&'static str>) -> Machine {
-        Machine { screen: Screen::Ask, cmd, copied: false }
+        Machine { screen: Screen::Ask, cmd, copied: false, attempt: 0 }
     }
 
     /// The buttons: (the row under the text, the bottom row), each left
@@ -183,9 +188,18 @@ impl Machine {
 
     pub fn on(&mut self, ev: In) -> Vec<Act> {
         use Screen as S;
+        // A cancelled attempt reporting late.
+        if let In::Progress(n, ..) | In::Downloaded(n, _) = ev
+            && n != self.attempt
+        {
+            return vec![];
+        }
         let screen = std::mem::replace(&mut self.screen, S::Ask);
         let (next, acts) = match (screen, ev) {
-            (S::Ask | S::Failed(_), In::Click(Btn::Download | Btn::Retry)) => (S::Downloading { got: 0, total: None }, vec![Act::Download]),
+            (S::Ask | S::Failed(_), In::Click(Btn::Download | Btn::Retry)) => {
+                self.attempt += 1;
+                (S::Downloading { got: 0, total: None }, vec![Act::Download(self.attempt)])
+            }
             (S::Ask, In::Click(Btn::Ffmpeg)) => {
                 self.copied = false;
                 (S::Ffmpeg, vec![])
@@ -199,13 +213,13 @@ impl Machine {
             (S::Ffmpeg, In::Click(Btn::Back)) => (S::Ask, vec![]),
             (S::Ffmpeg, In::Click(Btn::Done)) => (S::Ffmpeg, vec![Act::Close(Choice::InstallFfmpeg)]),
             (S::Ffmpeg, In::Dismiss) => (S::Ffmpeg, vec![Act::Close(Choice::Cancel)]),
-            (S::Downloading { .. }, In::Progress(got, total)) => (S::Downloading { got, total }, vec![]),
+            (S::Downloading { .. }, In::Progress(_, got, total)) => (S::Downloading { got, total }, vec![]),
             (S::Downloading { .. }, In::Click(Btn::Cancel) | In::Dismiss) => (S::Ask, vec![Act::CancelDownload]),
-            (S::Downloading { .. }, In::Downloaded(Ok(_))) => (S::Ask, vec![Act::Close(Choice::DownloadOpenH264)]),
-            (S::Downloading { .. }, In::Downloaded(Err(e))) if e == CANCELLED => (S::Ask, vec![]),
-            (S::Downloading { .. }, In::Downloaded(Err(e))) => (S::Failed(e), vec![]),
-            // A cancelled download reporting late.
-            (s, In::Downloaded(_) | In::Progress(..)) => (s, vec![]),
+            (S::Downloading { .. }, In::Downloaded(_, Ok(_))) => (S::Ask, vec![Act::Close(Choice::DownloadOpenH264)]),
+            (S::Downloading { .. }, In::Downloaded(_, Err(e))) if e == CANCELLED => (S::Ask, vec![]),
+            (S::Downloading { .. }, In::Downloaded(_, Err(e))) => (S::Failed(e), vec![]),
+            // The current attempt's report after it was cancelled.
+            (s, In::Downloaded(..) | In::Progress(..)) => (s, vec![]),
             (s, _) => (s, vec![]),
         };
         self.screen = next;
@@ -368,19 +382,20 @@ mod imp {
         fn perform(&mut self, acts: Vec<Act>) {
             for a in acts {
                 match a {
-                    Act::Download => {
+                    Act::Download(n) => {
+                        // Each attempt has its own cancel flag and file.
                         self.cancel = Arc::new(AtomicBool::new(false));
                         let (tx, cancel) = (self.tx.clone(), self.cancel.clone());
                         std::thread::spawn(move || {
                             let last = std::cell::Cell::new(0u64);
-                            let r = openh264::download(&|got, total| {
+                            let r = openh264::download(n, &|got, total| {
                                 if got < last.get() || got - last.get() >= 32 * 1024 || total == Some(got) {
                                     last.set(got);
-                                    let _ = tx.send(In::Progress(got, total));
+                                    let _ = tx.send(In::Progress(n, got, total));
                                 }
                                 !cancel.load(Ordering::SeqCst)
                             });
-                            let _ = tx.send(In::Downloaded(r));
+                            let _ = tx.send(In::Downloaded(n, r));
                         });
                     }
                     Act::CancelDownload => self.cancel.store(true, Ordering::SeqCst),
@@ -571,25 +586,25 @@ mod tests {
     #[test]
     fn download_then_record_with_openh264() {
         let mut m = Machine::new(Some("sudo apt install ffmpeg"));
-        assert_eq!(m.on(In::Click(Btn::Download)), vec![Act::Download]);
+        assert_eq!(m.on(In::Click(Btn::Download)), vec![Act::Download(1)]);
         assert!(m.busy());
-        assert_eq!(m.on(In::Progress(1000, Some(4000))), vec![]);
+        assert_eq!(m.on(In::Progress(1, 1000, Some(4000))), vec![]);
         assert_eq!(m.screen, Screen::Downloading { got: 1000, total: Some(4000) });
-        assert_eq!(m.on(In::Downloaded(Ok("/x".into()))), vec![Act::Close(Choice::DownloadOpenH264)]);
+        assert_eq!(m.on(In::Downloaded(1, Ok("/x".into()))), vec![Act::Close(Choice::DownloadOpenH264)]);
     }
 
     #[test]
     fn a_failed_download_can_be_retried_or_given_up() {
         let mut m = Machine::new(None);
         m.on(In::Click(Btn::Download));
-        assert_eq!(m.on(In::Downloaded(Err("bzip2 is needed to unpack OpenH264".into()))), vec![]);
+        assert_eq!(m.on(In::Downloaded(1, Err("bzip2 is needed to unpack OpenH264".into()))), vec![]);
         assert!(matches!(&m.screen, Screen::Failed(e) if e.contains("bzip2")));
-        assert_eq!(m.on(In::Click(Btn::Retry)), vec![Act::Download]);
-        m.on(In::Downloaded(Err("curl: 404".into())));
+        assert_eq!(m.on(In::Click(Btn::Retry)), vec![Act::Download(2)]);
+        m.on(In::Downloaded(2, Err("curl: 404".into())));
         assert_eq!(m.on(In::Click(Btn::Gif)), vec![Act::Close(Choice::Gif)]);
         let mut m = Machine::new(None);
         m.on(In::Click(Btn::Download));
-        m.on(In::Downloaded(Err("x".into())));
+        m.on(In::Downloaded(1, Err("x".into())));
         assert_eq!(m.on(In::Dismiss), vec![Act::Close(Choice::Cancel)]);
     }
 
@@ -600,12 +615,31 @@ mod tests {
         assert_eq!(m.on(In::Click(Btn::Cancel)), vec![Act::CancelDownload]);
         assert_eq!(m.screen, Screen::Ask);
         // The worker's late report changes nothing.
-        assert_eq!(m.on(In::Downloaded(Err(CANCELLED.into()))), vec![]);
-        assert_eq!(m.on(In::Downloaded(Ok("/x".into()))), vec![]);
+        assert_eq!(m.on(In::Downloaded(1, Err(CANCELLED.into()))), vec![]);
+        assert_eq!(m.on(In::Downloaded(1, Ok("/x".into()))), vec![]);
         assert_eq!(m.screen, Screen::Ask);
         let mut m = Machine::new(None);
         m.on(In::Click(Btn::Download));
         assert_eq!(m.on(In::Dismiss), vec![Act::CancelDownload], "Esc cancels the download, not the dialog");
+    }
+
+    #[test]
+    fn a_cancelled_attempt_reporting_late_does_not_touch_the_next_one() {
+        let mut m = Machine::new(None);
+        assert_eq!(m.on(In::Click(Btn::Download)), vec![Act::Download(1)]);
+        m.on(In::Click(Btn::Cancel));
+        assert_eq!(m.on(In::Click(Btn::Download)), vec![Act::Download(2)]);
+        // Attempt 1's worker winds down while attempt 2 runs.
+        assert_eq!(m.on(In::Progress(1, 600_000, Some(634_264))), vec![]);
+        assert_eq!(m.screen, Screen::Downloading { got: 0, total: None }, "not attempt 1's progress");
+        assert_eq!(m.on(In::Downloaded(1, Err(CANCELLED.into()))), vec![]);
+        assert!(m.busy(), "attempt 1's cancel does not end attempt 2");
+        assert_eq!(m.on(In::Downloaded(1, Err("curl: (6)".into()))), vec![]);
+        assert!(m.busy(), "nor does its failure");
+        assert_eq!(m.on(In::Downloaded(1, Ok("/x".into()))), vec![], "nor its success");
+        assert_eq!(m.on(In::Progress(2, 1000, Some(4000))), vec![]);
+        assert_eq!(m.screen, Screen::Downloading { got: 1000, total: Some(4000) });
+        assert_eq!(m.on(In::Downloaded(2, Ok("/x".into()))), vec![Act::Close(Choice::DownloadOpenH264)]);
     }
 
     #[test]
@@ -638,7 +672,7 @@ mod tests {
     }
 
     fn screens() -> Vec<(&'static str, Machine)> {
-        let at = |screen, cmd, copied| Machine { screen, cmd, copied };
+        let at = |screen, cmd, copied| Machine { screen, cmd, copied, attempt: 0 };
         vec![
             ("ask", at(Screen::Ask, Some("sudo apt install ffmpeg"), false)),
             ("ffmpeg", at(Screen::Ffmpeg, Some("sudo apt install ffmpeg"), false)),
