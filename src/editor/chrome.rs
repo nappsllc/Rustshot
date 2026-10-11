@@ -1,11 +1,13 @@
 //! Overlay chrome drawing: surfaces, toolbar and palette, selection and
 //! handles, size label, toast, tooltip and the empty-state hint.
 
+use super::pick::{self, Part, Picker};
 use super::Tool;
 use super::toolbar::{label_rect, Act, Dev, Item, Kind, Toolbar};
 use crate::icon_path::draw_icon;
 use crate::keymap::{Chord, Keymap};
-use crate::objects::FRect;
+use crate::objects::{FRect, Pt};
+use crate::raster::Blend;
 use crate::theme::{rgba, Theme, SHADOW};
 use crate::uifb::{text_height, text_width, Fb, C4};
 use crate::fonts::UiFont;
@@ -99,6 +101,9 @@ pub fn act_icon(a: Act) -> &'static str {
         Act::Exit => "x",
         Act::Accept => "check",
         Act::Record => "video",
+        Act::Eyedrop => "pipette",
+        Act::RingSize(d) if d < 0 => "minus",
+        Act::RingSize(_) => "plus",
         Act::Palette
         | Act::Color(_)
         | Act::RecFormat(_)
@@ -110,7 +115,13 @@ pub fn act_icon(a: Act) -> &'static str {
         | Act::RecDev(..)
         | Act::RecShape(_)
         | Act::RecCamSize(_)
-        | Act::RecStart => "",
+        | Act::RecStart
+        | Act::Wheel
+        | Act::RingPalette
+        | Act::RingColor(_)
+        | Act::RingWheel
+        | Act::Pick(_)
+        | Act::PickColor(_) => "",
     }
 }
 
@@ -120,11 +131,17 @@ pub struct BarState<'a> {
     pub hover_k: f32,
     pub pressed: Option<usize>,
     pub tool: Option<Tool>,
+    /// The current tool's colour (the swatch, the size preview).
     pub color: C4,
+    /// The current tool's size: the number, and the tool and size the
+    /// preview next to it draws.
     pub value: &'a str,
-    pub unit: &'a str,
+    pub ptool: Tool,
+    pub size: f32,
     /// 0..1 opacity of the palette popover.
     pub pop_k: f32,
+    /// The colour picker's state while it is open.
+    pub pick: Option<&'a Picker>,
 }
 
 pub fn toolbar(f: &mut Fb, ui: &Ui, tb: &Toolbar, st: &BarState, k: f32) {
@@ -135,12 +152,20 @@ pub fn toolbar(f: &mut Fb, ui: &Ui, tb: &Toolbar, st: &BarState, k: f32) {
         panel(f, ui, pop, 12.0, &ALL_LAYERS, bg, ui.th.border, k * st.pop_k);
     }
     let kp = k * st.pop_k;
+    let focus = st.pick.and_then(|p| p.focus);
     for (i, it) in tb.items.iter().enumerate() {
         let hovered = st.hover == Some(i) && !it.disabled;
         let pressed = st.pressed == Some(i) && !it.disabled;
+        // Popover items fade with the popover.
+        let in_pop = tb.pop.is_some_and(|p| it.r.x >= p.x && it.r.y >= p.y && it.r.x1() <= p.x1() + 0.5 && it.r.y1() <= p.y1() + 0.5);
         match it.kind {
-            Kind::Btn(act) => button(f, ui, it, act, (hovered, pressed), st, k),
-            Kind::Value => value(f, ui, it.r, st, k),
+            Kind::Btn(act) => {
+                button(f, ui, it, act, (hovered, pressed), st, if in_pop { kp } else { k });
+                if act == Act::Eyedrop && focus == Some(Part::Eyedrop) {
+                    focus_ring(f, ui, it.r, 8.0, kp);
+                }
+            }
+            Kind::Value => value(f, ui, it, st, k),
             Kind::SepV | Kind::SepH => {
                 let r = round(it.r);
                 f.fill_rect(r.x as i32, r.y as i32, r.w.max(1.0) as i32, r.h.max(1.0) as i32, ui.th.separator.fade(k));
@@ -165,8 +190,254 @@ pub fn toolbar(f: &mut Fb, ui: &Ui, tb: &Toolbar, st: &BarState, k: f32) {
                 dev_item(f, ui, it.r, name, on, hovered, kp);
             }
             Kind::Primary { label, .. } => primary(f, ui, it.r, label, (hovered, pressed), kp),
+            Kind::Swatch { c, on, .. } => dot(f, ui, it.r, c.with_alpha(255), (on, hovered), kp),
+            Kind::Rainbow(_) => {
+                let r = round(it.r);
+                if hovered {
+                    fill(f, r, ui.px(7.0), ui.th.bg_hover.fade(kp));
+                }
+                rainbow(f, ui, r.x + r.w / 2.0, r.y + r.h / 2.0, ui.px(9.0), kp);
+            }
+            Kind::RingValue { w, c } => ring_value(f, ui, it.r, w, c, kp),
+            Kind::PickHue => {
+                if let Some(p) = st.pick {
+                    hue_ring(f, ui, it.r, p, focus == Some(Part::Hue), kp);
+                }
+            }
+            Kind::PickSv => {
+                if let Some(p) = st.pick {
+                    sv_square(f, ui, it.r, p, focus == Some(Part::Sv), kp);
+                }
+            }
+            Kind::PickSwatch => {
+                if let Some(p) = st.pick {
+                    let r = round(it.r);
+                    let rad = ui.px(8.0);
+                    checker(f, ui, r, rad, kp);
+                    fill(f, r, rad, p.color().fade(kp));
+                    ring(f, ui, r, rad, ui.th.rim.fade(kp));
+                }
+            }
+            Kind::PickHex => {
+                if let Some(p) = st.pick {
+                    hex_field(f, ui, it.r, p, focus == Some(Part::Hex), hovered, kp);
+                }
+            }
+            Kind::PickAlpha => {
+                if let Some(p) = st.pick {
+                    alpha_slider(f, ui, it.r, p, focus == Some(Part::Alpha), kp);
+                }
+            }
+            Kind::Recent { i: n, c } => {
+                let r = round(it.r);
+                if hovered {
+                    fill(f, r, ui.px(6.0), ui.th.bg_hover.fade(kp));
+                }
+                let (cx, cy, rad) = (r.x + r.w / 2.0, r.y + r.h / 2.0, ui.px(8.0));
+                swatch_r(f, ui, cx, cy, rad, c, kp);
+                if focus == Some(Part::Recent(n)) {
+                    focus_ring(f, ui, r, 6.0, kp);
+                }
+            }
         }
     }
+}
+
+/// The keyboard focus: a 2 px accent ring just outside `r`.
+fn focus_ring(f: &mut Fb, ui: &Ui, r: FRect, radius: f32, k: f32) {
+    let g = ui.px(2.0);
+    let r = round(FRect { x: r.x - g, y: r.y - g, w: r.w + 2.0 * g, h: r.h + 2.0 * g });
+    f.stroke_rounded(FRect { x: r.x + g / 2.0, y: r.y + g / 2.0, w: r.w - g, h: r.h - g }, ui.px(radius) + g / 2.0, g, ui.th.accent.fade(k));
+}
+
+/// A grey checkerboard (what shows through a translucent colour) in `r`
+/// with corner radius `rad` (anti-aliased edges; a circle when `rad` is
+/// half the side).
+fn checker(f: &mut Fb, ui: &Ui, r: FRect, rad: f32, k: f32) {
+    let cell = ui.px(4.0).round().max(2.0);
+    let rad = rad.min(r.w / 2.0).min(r.h / 2.0);
+    let (hx, hy) = (r.w / 2.0 - rad, r.h / 2.0 - rad);
+    let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+    for y in r.y.floor() as i32..r.y1().ceil() as i32 {
+        for x in r.x.floor() as i32..r.x1().ceil() as i32 {
+            let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+            let (qx, qy) = ((px - cx).abs() - hx, (py - cy).abs() - hy);
+            let d = qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - rad;
+            let cov = (0.5 - d).clamp(0.0, 1.0);
+            if cov <= 0.0 {
+                continue;
+            }
+            let odd = (((px - r.x) / cell) as i32 + ((py - r.y) / cell) as i32) % 2 == 1;
+            let c = if odd { C4::rgb(204, 204, 210) } else { C4::rgb(255, 255, 255) };
+            f.blend_px(x, y, c.fade(cov * k));
+        }
+    }
+}
+
+/// A round swatch of radius `rad`: a checkerboard under a translucent
+/// colour, then the colour and its rim.
+fn swatch_r(f: &mut Fb, ui: &Ui, cx: f32, cy: f32, rad: f32, c: C4, k: f32) {
+    if c.a < 255 {
+        checker(f, ui, FRect { x: cx - rad, y: cy - rad, w: 2.0 * rad, h: 2.0 * rad }, rad, k);
+    }
+    let lw = ui.line();
+    f.fill_circle(cx, cy, rad, c.fade(k));
+    f.stroke_circle(cx, cy, rad - lw / 2.0, lw, ui.th.rim.fade(k));
+}
+
+/// A rainbow swatch (every hue around it): the colour picker.
+fn rainbow(f: &mut Fb, ui: &Ui, cx: f32, cy: f32, rad: f32, k: f32) {
+    let (x0, x1) = ((cx - rad - 1.0).floor() as i32, (cx + rad + 1.0).ceil() as i32);
+    let (y0, y1) = ((cy - rad - 1.0).floor() as i32, (cy + rad + 1.0).ceil() as i32);
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let (dx, dy) = (x as f32 + 0.5 - cx, y as f32 + 0.5 - cy);
+            let d = dx.hypot(dy);
+            let cov = (rad + 0.5 - d).clamp(0.0, 1.0);
+            if cov <= 0.0 {
+                continue;
+            }
+            let h = dx.atan2(-dy).to_degrees();
+            // Paler towards the centre, like a colour wheel.
+            let (r, g, b) = pick::hsv_to_rgb(h, (d / rad).clamp(0.0, 1.0) * 0.85 + 0.15, 1.0);
+            f.blend_px(x, y, C4::rgb(r, g, b).fade(cov * k));
+        }
+    }
+    let lw = ui.line();
+    f.stroke_circle(cx, cy, rad - lw / 2.0, lw, ui.th.rim.fade(k));
+}
+
+/// A picker thumb: the colour inside a white ring with a dark edge.
+fn thumb(f: &mut Fb, ui: &Ui, cx: f32, cy: f32, rad: f32, c: C4, k: f32) {
+    f.fill_circle(cx, cy + ui.px(0.5), rad + ui.px(1.5), C4::new(0, 0, 0, 70).fade(k));
+    f.fill_circle(cx, cy, rad + ui.px(1.0), C4::rgb(255, 255, 255).fade(k));
+    f.fill_circle(cx, cy, rad - ui.px(1.0), c.with_alpha(255).fade(k));
+}
+
+/// The hue ring in `r` (its bounding square), the thumb at the hue.
+fn hue_ring(f: &mut Fb, ui: &Ui, r: FRect, p: &Picker, focused: bool, k: f32) {
+    let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+    let ro = r.w / 2.0;
+    let ri = ro - ui.px(super::toolbar::WHEEL_T);
+    for y in r.y.floor() as i32..r.y1().ceil() as i32 {
+        let dy = y as f32 + 0.5 - cy;
+        for x in r.x.floor() as i32..r.x1().ceil() as i32 {
+            let dx = x as f32 + 0.5 - cx;
+            let d = dx.hypot(dy);
+            let cov = (ro + 0.5 - d).clamp(0.0, 1.0).min((d - ri + 0.5).clamp(0.0, 1.0));
+            if cov <= 0.0 {
+                continue;
+            }
+            let (rr, g, b) = pick::hsv_to_rgb(dx.atan2(-dy).to_degrees(), 1.0, 1.0);
+            f.blend_px(x, y, C4::rgb(rr, g, b).fade(cov * k));
+        }
+    }
+    if focused {
+        let g = ui.px(2.0);
+        f.stroke_circle(cx, cy, ro + g * 1.5, g, ui.th.accent.fade(k));
+    }
+    let a = p.h.to_radians();
+    let mid = (ro + ri) / 2.0;
+    let (tx, ty) = (cx + mid * a.sin(), cy - mid * a.cos());
+    let (hr, hg, hb) = pick::hsv_to_rgb(p.h, 1.0, 1.0);
+    thumb(f, ui, tx, ty, ui.px(super::toolbar::WHEEL_T / 2.0 - 2.0), C4::rgb(hr, hg, hb), k);
+}
+
+/// The saturation (across) / value (down) square at the picker's hue.
+fn sv_square(f: &mut Fb, ui: &Ui, r: FRect, p: &Picker, focused: bool, k: f32) {
+    let r = round(r);
+    for y in r.y as i32..r.y1() as i32 {
+        let v = 1.0 - ((y as f32 + 0.5 - r.y) / r.h).clamp(0.0, 1.0);
+        for x in r.x as i32..r.x1() as i32 {
+            let sat = ((x as f32 + 0.5 - r.x) / r.w).clamp(0.0, 1.0);
+            let (rr, g, b) = pick::hsv_to_rgb(p.h, sat, v);
+            f.blend_px(x, y, C4::rgb(rr, g, b).fade(k));
+        }
+    }
+    let lw = ui.line();
+    f.stroke_rect(r.x + lw / 2.0, r.y + lw / 2.0, r.w - lw, r.h - lw, lw, ui.th.rim.fade(k));
+    if focused {
+        focus_ring(f, ui, r, 2.0, k);
+    }
+    let (tx, ty) = (r.x + p.s * r.w, r.y + (1.0 - p.v) * r.h);
+    thumb(f, ui, tx, ty, ui.px(5.0), p.color(), k);
+}
+
+/// The hex field: recessed, the text (in the error colour while it does
+/// not read as a colour), a caret while focused.
+fn hex_field(f: &mut Fb, ui: &Ui, r: FRect, p: &Picker, focused: bool, hovered: bool, k: f32) {
+    let th = ui.th;
+    let r = round(r);
+    let rad = ui.px(8.0);
+    fill(f, r, rad, th.field_bg.fade(k));
+    if hovered && !focused {
+        fill(f, r, rad, th.bg_hover.fade(k));
+    }
+    ring(f, ui, r, rad, if focused { th.accent } else { th.border }.fade(k));
+    let cy = r.y + r.h / 2.0;
+    let x = r.x + ui.px(10.0);
+    let fg = if p.hex_ok { th.text } else { th.error };
+    let shown = fit_text(ui, 13.0, &p.hex, r.w - ui.px(22.0));
+    let w = text(f, ui, 13.0, &shown, x, cy, fg.fade(k));
+    if focused {
+        let h = ui.px(16.0);
+        let cw = ui.line().max(ui.px(1.5)).round();
+        f.fill_rect((x + w + ui.px(1.0)).round() as i32, (cy - h / 2.0).round() as i32, cw as i32, h.round() as i32, th.accent.fade(k));
+    }
+}
+
+/// The opacity slider: a checkered track fading in the colour, the thumb,
+/// the percentage right of it.
+fn alpha_slider(f: &mut Fb, ui: &Ui, r: FRect, p: &Picker, focused: bool, k: f32) {
+    let th = ui.th;
+    let (tx0, tx1) = (r.x + ui.px(8.0), r.x1() - ui.px(8.0));
+    let th_h = ui.px(8.0).round();
+    let cy = r.y + r.h / 2.0;
+    let track = round(FRect { x: tx0, y: cy - th_h / 2.0, w: tx1 - tx0, h: th_h });
+    checker(f, ui, track, th_h / 2.0, k);
+    let c = p.color();
+    for x in track.x as i32..track.x1() as i32 {
+        let t = ((x as f32 + 0.5 - track.x) / track.w).clamp(0.0, 1.0);
+        let col = c.with_alpha((t * 255.0).round() as u8).fade(k);
+        // Rounded ends: inside the capsule only.
+        let ex = (x as f32 + 0.5 - track.x).min(track.x1() - x as f32 - 0.5);
+        for y in track.y as i32..track.y1() as i32 {
+            let ey = (y as f32 + 0.5 - cy).abs();
+            let rr = th_h / 2.0;
+            let cov = if ex < rr { (rr + 0.5 - (rr - ex).hypot(ey)).clamp(0.0, 1.0) } else { 1.0 };
+            if cov > 0.0 {
+                f.blend_px(x, y, col.fade(cov));
+            }
+        }
+    }
+    ring(f, ui, track, th_h / 2.0, th.border.fade(k));
+    if focused {
+        focus_ring(f, ui, track, 4.0, k);
+    }
+    let t = p.a as f32 / 255.0;
+    thumb(f, ui, track.x + t * track.w, cy, ui.px(6.0), c.with_alpha(255), k);
+    let pct = format!("{}%", p.alpha_pct());
+    let w = tw(ui, 12.0, &pct);
+    text(f, ui, 12.0, &pct, r.x1() + ui.px(40.0) - w, cy, th.text.fade(k));
+}
+
+/// The camera ring's width and a stroke of it in its colour ("Off" at 0).
+fn ring_value(f: &mut Fb, ui: &Ui, r: FRect, w: u32, c: C4, k: f32) {
+    let cy = r.y + r.h / 2.0;
+    let n = w.to_string();
+    let nz = ui.px(20.0);
+    let nw = tw(ui, 12.0, &n);
+    text(f, ui, 12.0, &n, r.x + ui.px(2.0) + (nz - nw) / 2.0, cy, ui.th.text.fade(k));
+    let bx = r.x + ui.px(24.0);
+    let bw = r.x1() - ui.px(4.0) - bx;
+    if w == 0 {
+        text(f, ui, 11.0, "Off", bx + (bw - tw(ui, 11.0, "Off")) / 2.0, cy, ui.th.text_muted.fade(k));
+        return;
+    }
+    let lw = ui.px(w as f32).min(ui.px(20.0));
+    let a = Pt::new(bx + lw / 2.0, cy);
+    let b = Pt::new(bx + bw - lw / 2.0, cy);
+    f.surf().stroke_polyline(&[a, b], lw, c.with_alpha(255).fade(k), Blend::Normal);
 }
 
 fn mix(a: C4, b: C4, t: f32) -> C4 {
@@ -292,7 +563,7 @@ fn primary(f: &mut Fb, ui: &Ui, r: FRect, label: &str, (hovered, pressed): (bool
 fn button(f: &mut Fb, ui: &Ui, it: &Item, act: Act, (hovered, pressed): (bool, bool), st: &BarState, k: f32) {
     let th = ui.th;
     let r = round(it.r);
-    let active = matches!(act, Act::Tool(t) if st.tool == Some(t));
+    let active = matches!(act, Act::Tool(t) if st.tool == Some(t)) || (act == Act::Eyedrop && st.pick.is_some_and(|p| p.eyedrop));
     let danger = act == Act::Exit;
     let k = if it.disabled { k * 0.34 } else { k };
     let rad = ui.px(8.0);
@@ -337,20 +608,75 @@ fn button(f: &mut Fb, ui: &Ui, it: &Item, act: Act, (hovered, pressed): (bool, b
     }
 }
 
-fn value(f: &mut Fb, ui: &Ui, r: FRect, st: &BarState, k: f32) {
-    let gap = ui.px(4.0);
-    let (vw, uw) = (tw(ui, 12.0, st.value), tw(ui, 11.0, st.unit));
-    let x = r.x + (r.w - vw - gap - uw) / 2.0;
+/// Where the size preview goes in the readout `r`: right of the number.
+pub fn preview_box(ui: &Ui, r: FRect) -> FRect {
+    let (w, h) = (ui.px(40.0), ui.px(24.0));
+    FRect { x: r.x + ui.px(32.0), y: r.y + (r.h - h) / 2.0, w, h }
+}
+
+/// The size readout: the number, then the size drawn as the tool draws
+/// it (nothing for Invert, which has no size).
+fn value(f: &mut Fb, ui: &Ui, it: &Item, st: &BarState, k: f32) {
+    if it.disabled {
+        return;
+    }
+    let r = it.r;
     let cy = r.y + r.h / 2.0;
-    text(f, ui, 12.0, st.value, x, cy, ui.th.text.fade(k));
-    text(f, ui, 11.0, st.unit, x + vw + gap, cy, ui.th.text_muted.fade(k));
+    let (nx, nz) = (r.x + ui.px(4.0), ui.px(26.0));
+    let vw = tw(ui, 12.0, st.value);
+    text(f, ui, 12.0, st.value, nx + (nz - vw) / 2.0, cy, ui.th.text.fade(k));
+    size_preview(f, ui, preview_box(ui, r), st.ptool, st.size, st.color, k);
+}
+
+/// `tool` at `size` (image px, as drawn), capped to `b`'s height:
+/// strokes a short line (a translucent one for the marker), pixelate a few
+/// blocks, text "Aa".
+pub fn size_preview(f: &mut Fb, ui: &Ui, b: FRect, tool: Tool, size: f32, c: C4, k: f32) {
+    let cap = b.h;
+    let cy = b.y + b.h / 2.0;
+    match tool {
+        Tool::Path | Tool::Line | Tool::Arrow | Tool::Rect | Tool::Ellipse | Tool::Marker => {
+            let w = size.clamp(0.5, cap);
+            let c = if tool == Tool::Marker { super::marker_color(c) } else { c };
+            // Whole rows: an odd width centred on a pixel, an even one
+            // on a pixel edge.
+            let odd = (w.round() as i32) % 2 == 1;
+            let cy = cy.floor() + if odd { 0.5 } else { 0.0 };
+            let a = Pt::new(b.x + w / 2.0, cy);
+            let e = Pt::new(b.x1() - w / 2.0, cy);
+            f.surf().stroke_polyline(&[a, e], w, c.fade(k), Blend::Normal);
+        }
+        Tool::Pixelate => {
+            // Blocks of the size (at most two rows), in a few greys.
+            let cell = size.clamp(2.0, cap / 2.0).round().max(2.0);
+            let shades = [0.55f32, 0.25, 0.4, 0.18];
+            let (cols, rows) = ((b.w / cell).ceil() as i32, (b.h / cell).ceil() as i32);
+            let (x0, y0) = (b.x.round() as i32, b.y.round() as i32);
+            let (x1, y1) = ((b.x1()).round() as i32, (b.y1()).round() as i32);
+            let ci = cell as i32;
+            for j in 0..rows {
+                for i in 0..cols {
+                    let (x, y) = (x0 + i * ci, y0 + j * ci);
+                    let sh = shades[((i * 3 + j * 5) % 4) as usize];
+                    f.fill_rect(x, y, ci.min(x1 - x), ci.min(y1 - y), ui.th.text.fade(sh * k));
+                }
+            }
+        }
+        Tool::Text => {
+            let Some(font) = ui.font else { return };
+            let mut px = size;
+            while px > 4.0 && text_height(font, px) > cap {
+                px -= 1.0;
+            }
+            let w = text_width(font, px, "Aa");
+            f.draw_text(font, px, "Aa", b.x + (b.w - w) / 2.0, cy - text_height(font, px) / 2.0, c.fade(k));
+        }
+        Tool::Invert => {}
+    }
 }
 
 fn swatch(f: &mut Fb, ui: &Ui, cx: f32, cy: f32, c: C4, k: f32) {
-    let rad = ui.px(9.0);
-    let lw = ui.line();
-    f.fill_circle(cx, cy, rad, c.fade(k));
-    f.stroke_circle(cx, cy, rad - lw / 2.0, lw, ui.th.rim.fade(k));
+    swatch_r(f, ui, cx, cy, ui.px(9.0), c, k);
 }
 
 fn dot(f: &mut Fb, ui: &Ui, r: FRect, c: C4, (selected, hovered): (bool, bool), k: f32) {
@@ -524,6 +850,12 @@ pub fn act_tip(a: Act, km: &Keymap) -> (&'static str, Vec<String>) {
         Act::RecShape(_) => "Shape",
         Act::RecCamSize(_) => "Size",
         Act::RecStart => "Start recording",
+        Act::Wheel | Act::RingWheel => "More colors",
+        Act::RingSize(d) if d < 0 => "Thinner ring",
+        Act::RingSize(_) => "Thicker ring",
+        Act::RingPalette | Act::RingColor(_) => "Ring color",
+        Act::Pick(_) | Act::PickColor(_) => "Color",
+        Act::Eyedrop => "Pick from screen",
     };
     let keys = match a {
         Act::Size(_) => vec!["Wheel".to_string()],
@@ -621,6 +953,63 @@ pub fn hint(f: &mut Fb, ui: &Ui, area: FRect, k: f32) {
         }
         x += w + sp;
     }
+}
+
+/// The eyedropper's loupe: [`LOUPE_N`]² pixels around the pointer, each
+/// [`LOUPE_CELL`] logical px, and the colour under it.
+pub const LOUPE_N: usize = 9;
+const LOUPE_CELL: f32 = 8.0;
+const LOUPE_PAD: f32 = 6.0;
+const LOUPE_LABEL: f32 = 24.0;
+
+/// Where the loupe goes for pointer `p`: below right of it, flipped to
+/// stay on the monitor.
+pub fn loupe_rect(ui: &Ui, p: Pt, area: FRect) -> FRect {
+    let g = LOUPE_N as f32 * LOUPE_CELL;
+    let (w, h) = (ui.px(g + 2.0 * LOUPE_PAD), ui.px(g + 2.0 * LOUPE_PAD + LOUPE_LABEL));
+    let off = ui.px(20.0);
+    let mut x = p.x + off;
+    if x + w > area.x1() {
+        x = p.x - off - w;
+    }
+    let mut y = p.y + off;
+    if y + h > area.y1() {
+        y = p.y - off - h;
+    }
+    round(FRect { x: x.max(area.x), y: y.max(area.y), w, h })
+}
+
+/// The loupe at `r`: the magnified pixels `px` (row by row), the centre
+/// one outlined, its colour as hex below.
+pub fn loupe(f: &mut Fb, ui: &Ui, r: FRect, px: &[C4]) {
+    surface(f, ui, r, 10.0, &SMALL_LAYERS, 1.0);
+    let cell = ui.px(LOUPE_CELL);
+    let (gx, gy) = (r.x + ui.px(LOUPE_PAD), r.y + ui.px(LOUPE_PAD));
+    for (i, c) in px.iter().enumerate().take(LOUPE_N * LOUPE_N) {
+        let (cx, cy) = ((i % LOUPE_N) as f32, (i / LOUPE_N) as f32);
+        let x0 = (gx + cx * cell).round() as i32;
+        let y0 = (gy + cy * cell).round() as i32;
+        let x1 = (gx + (cx + 1.0) * cell).round() as i32;
+        let y1 = (gy + (cy + 1.0) * cell).round() as i32;
+        f.fill_rect(x0, y0, x1 - x0, y1 - y0, c.with_alpha(255));
+    }
+    let m = (LOUPE_N / 2) as f32;
+    let lw = ui.line();
+    let (x, y) = ((gx + m * cell).round(), (gy + m * cell).round());
+    f.stroke_rect(x - lw / 2.0, y - lw / 2.0, cell.round() + lw, cell.round() + lw, lw, C4::rgb(0, 0, 0));
+    f.stroke_rect(x - lw * 1.5, y - lw * 1.5, cell.round() + 3.0 * lw, cell.round() + 3.0 * lw, lw, C4::rgb(255, 255, 255));
+    let c = px.get(LOUPE_N * LOUPE_N / 2).copied().unwrap_or(C4::rgb(0, 0, 0));
+    let cy = gy + LOUPE_N as f32 * cell + ui.px(LOUPE_LABEL) / 2.0;
+    let hex = pick::hex_text(c);
+    let (dr, gap) = (ui.px(6.0), ui.px(6.0));
+    let w = 2.0 * dr + gap + tw(ui, 12.0, &hex);
+    let x0 = r.x + (r.w - w) / 2.0;
+    swatch_r(f, ui, x0 + dr, cy, dr, c.with_alpha(255), 1.0);
+    text(f, ui, 12.0, &hex, x0 + 2.0 * dr + gap, cy, ui.th.text);
+}
+
+pub fn loupe_bounds(ui: &Ui, r: FRect) -> FRect {
+    surface_bounds(ui, r)
 }
 
 // ---- conservative bounds (shadows, AA, glyph overhang) for rect composition ----
@@ -732,6 +1121,9 @@ mod tests {
             palette: None,
             record: true,
             rec: None,
+            sizes: true,
+            colors: true,
+            pick: None,
         });
         let mut d = buf(800, 200, 0);
         let st = BarState {
@@ -741,8 +1133,10 @@ mod tests {
             tool,
             color: C4::rgb(240, 68, 56),
             value: "3",
-            unit: "line",
+            ptool: Tool::Line,
+            size: 3.0,
             pop_k: 1.0,
+            pick: None,
         };
         toolbar(&mut Fb::new(&mut d, 800), &ui(), &tb, &st, 1.0);
         (d, tb)

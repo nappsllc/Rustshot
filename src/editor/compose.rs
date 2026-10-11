@@ -7,7 +7,7 @@
 
 use super::chrome::{self, BarState, ToastKind, Ui};
 use super::toolbar::{self, Act, Toolbar};
-use super::{caret_on, palette_colors, pick_area, text_box_rect, Dimmer, Edit, Interact, Toast};
+use super::{caret_on, palette_colors, pick_area, text_box_rect, tools, Dimmer, Edit, Interact, Toast, Tool};
 use crate::anim;
 use crate::objects::{CellGrid, FRect, Obj, Pt};
 use crate::pixbuf::PixBuf;
@@ -196,8 +196,18 @@ pub struct BarUi {
     pub tool: Option<super::Tool>,
     pub color: C4,
     pub value: String,
-    pub unit: &'static str,
+    /// The tool and size the readout previews.
+    pub ptool: Tool,
+    pub size: f32,
     pub pop_k: f32,
+    pub pick: Option<super::pick::Picker>,
+}
+
+/// The eyedropper's loupe: where, and the pixels it magnifies.
+#[derive(Clone, PartialEq, Debug)]
+pub struct LoupeUi {
+    pub r: FRect,
+    pub px: Vec<C4>,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -230,9 +240,10 @@ enum El {
     Bar,
     Tip,
     Hint,
+    Loupe,
 }
 
-const ELS: [El; 8] = [El::Draft, El::Sel, El::Label, El::Text, El::Toast, El::Bar, El::Tip, El::Hint];
+const ELS: [El; 9] = [El::Draft, El::Sel, El::Label, El::Text, El::Toast, El::Bar, El::Tip, El::Hint, El::Loupe];
 
 /// Everything one frame paints, resolved at one instant. Two scenes
 /// compare element by element (`dirty_rects`); a clone is the "painted
@@ -255,8 +266,9 @@ pub struct Scene {
     pub bar: Option<BarUi>,
     pub tip: Option<TipUi>,
     pub hint: Option<(FRect, f32)>,
+    pub loupe: Option<LoupeUi>,
     /// Per element (index = `El as usize`): conservative pixel bounds.
-    bounds: [Vec<PxRect>; 8],
+    bounds: [Vec<PxRect>; 9],
 }
 
 impl Scene {
@@ -274,6 +286,7 @@ impl Scene {
             El::Bar => self.bar == o.bar,
             El::Tip => self.tip == o.tip,
             El::Hint => self.hint == o.hint,
+            El::Loupe => self.loupe == o.loupe,
         }
     }
 
@@ -505,7 +518,19 @@ impl Edit {
             cam_label: &cam_label,
             devs: names.as_ref().map(|(d, n)| (*d, n.as_slice())),
             dev_sel: rp.dev_open.map_or(0, |d| rp.dev_sel(d)),
+            ring: rp.opts.cam_ring,
+            ring_w: rp.opts.cam_ring_w,
+            ring_pal: rp.ring_pal,
+            ring_colors: &colors,
+            accent: self.th.accent,
         };
+        let cur = self.cur_tool();
+        let recents = self.recents();
+        let pv = self.pick.as_ref().map(|p| toolbar::PickView {
+            ring: p.target == super::pick::Target::Ring,
+            alpha: p.has_alpha(),
+            recents: &recents,
+        });
         let busy = !self.tasks.is_empty();
         self.toolbar = self.sel.map(|sel| {
             toolbar::layout(&toolbar::Input {
@@ -518,6 +543,9 @@ impl Edit {
                 palette: self.palette_open.then_some(colors.as_slice()),
                 record: crate::rec_ui::supported() && !busy,
                 rec: (rp.open && crate::rec_ui::supported() && !busy).then_some(&rv),
+                sizes: tools::has_size(cur),
+                colors: tools::has_color(cur),
+                pick: pv.as_ref(),
             })
         });
 
@@ -527,7 +555,7 @@ impl Edit {
         } else {
             self.mo.bar.snap(0.0);
         }
-        if self.palette_open || self.rec.open {
+        if self.palette_open || self.rec.open || self.pick.is_some() {
             self.mo.pop.set(1.0, 100, now);
         } else {
             self.mo.pop.snap(0.0);
@@ -551,11 +579,11 @@ impl Edit {
             LabelUi { sr, show_pos: !interacting, area, avoid }
         });
         let text = self.text.as_ref().map(|td| TextUi {
-            boxr: text_box_rect(ww, td, self.sizes.font, self.font.as_ref(), s),
+            boxr: text_box_rect(ww, td, self.mem.size(Tool::Text), self.font.as_ref(), s),
             pos: td.pos,
             text: td.text.clone(),
-            px: self.sizes.font,
-            color: self.color,
+            px: self.mem.size(Tool::Text),
+            color: self.mem.color(Tool::Text),
             caret: caret_on(td).then_some(td.caret),
         });
         let toast = self.notice.as_ref().or(app_notice).map(|t| ToastUi {
@@ -568,7 +596,7 @@ impl Edit {
         let looking = self.rec.cams_looking();
         let bar = self.toolbar.as_ref().map(|tb| {
             let kb = self.mo.bar.value(now);
-            let (value, unit) = self.size_label();
+            let value = self.size_label();
             let shown_ms = now.saturating_duration_since(self.hover_at).as_secs_f32() * 1000.0 - 400.0;
             if !interacting
                 && shown_ms >= 0.0
@@ -576,7 +604,7 @@ impl Edit {
             {
                 let k = anim::ease_out(shown_ms / 80.0);
                 match it.kind {
-                    toolbar::Kind::Btn(act) => {
+                    toolbar::Kind::Btn(act) | toolbar::Kind::Rainbow(act) | toolbar::Kind::Swatch { act: act @ toolbar::Act::RingPalette, .. } => {
                         let (label, keys) = chrome::act_tip(act, &self.keys);
                         tip = Some(TipUi { anchor: it.r, act, label, keys, area, below: false, k });
                     }
@@ -602,14 +630,25 @@ impl Edit {
                 hover_k: self.mo.hover.value(now),
                 pressed: self.pressed,
                 tool: self.tool,
-                color: self.color,
+                color: self.color(),
                 value,
-                unit,
+                ptool: cur,
+                size: self.mem.size(cur),
                 pop_k: self.mo.pop.value(now),
+                pick: self.pick.clone(),
             }
         });
         let kh = self.mo.hint.value(now);
         let hint = (kh > 0.01).then_some((area, kh));
+        // The eyedropper's loupe follows the pointer, off the toolbar.
+        let on_chrome = |p: Pt| self.toolbar.as_ref().is_some_and(|t| t.contains(p));
+        let loupe = match (self.pick.as_ref().filter(|p| p.eyedrop), self.loupe) {
+            (Some(_), Some(p)) if !on_chrome(p) => {
+                let ui = Ui { th: &self.th, s, font: self.ui_font };
+                Some(LoupeUi { r: chrome::loupe_rect(&ui, p, area), px: self.loupe_pixels(p) })
+            }
+            _ => None,
+        };
 
         let mut sc = Scene {
             size: self.shot.size,
@@ -626,6 +665,7 @@ impl Edit {
             bar,
             tip,
             hint,
+            loupe,
             bounds: Default::default(),
         };
         sc.bounds = ELS.map(|e| self.el_bounds(&sc, e));
@@ -670,6 +710,7 @@ impl Edit {
                 one(chrome::tooltip_bounds(&ui, t.at(), t.label, &t.keys))
             }),
             El::Hint => sc.hint.map_or(Vec::new(), |(area, _)| one(chrome::hint_bounds(&ui, area))),
+            El::Loupe => sc.loupe.as_ref().map_or(Vec::new(), |l| one(chrome::loupe_bounds(&ui, l.r))),
         }
     }
 
@@ -776,8 +817,10 @@ impl Edit {
                 tool: b.tool,
                 color: b.color,
                 value: &b.value,
-                unit: b.unit,
+                ptool: b.ptool,
+                size: b.size,
                 pop_k: b.pop_k,
+                pick: b.pick.as_ref(),
             };
             chrome::toolbar(&mut f, &ui, &b.tb, &st, b.k);
         }
@@ -790,6 +833,11 @@ impl Edit {
             && hits(El::Hint)
         {
             chrome::hint(&mut f, &ui, area, kh);
+        }
+        if let Some(l) = &sc.loupe
+            && hits(El::Loupe)
+        {
+            chrome::loupe(&mut f, &ui, l.r, &l.px);
         }
     }
 

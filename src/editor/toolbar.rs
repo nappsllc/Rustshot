@@ -2,6 +2,7 @@
 //! around the selection, the palette popover and hit-testing. Sizes are
 //! logical px from the design spec; `Input::s` scales them to image pixels.
 
+use super::pick::Part;
 use super::Tool;
 use crate::cam::{CamSize, Shape};
 use crate::objects::{FRect, Pt};
@@ -16,7 +17,8 @@ pub const LOOKING_CAMS: &str = "Looking for cameras…";
 const IN_GAP: f32 = 2.0;
 const GROUP_GAP: f32 = 6.0;
 const SEP_LEN: f32 = 16.0;
-const VALUE_W: f32 = 56.0;
+/// The size readout: the number, then a preview drawn at the size.
+const VALUE_W: f32 = 76.0;
 /// The busy-mode OK button spans the three output buttons it replaces.
 const ACCEPT_W: f32 = 3.0 * BTN + 2.0 * IN_GAP;
 const ROW_GAP: f32 = 4.0;
@@ -73,6 +75,22 @@ pub enum Act {
     RecCamSize(CamSize),
     /// "Start recording".
     RecStart,
+    /// The palette's rainbow swatch: the colour picker for the tool.
+    Wheel,
+    /// The camera ring's width, a step thinner or thicker.
+    RingSize(i32),
+    /// Open/close the ring's palette.
+    RingPalette,
+    /// A ring colour (`None`: the theme's accent).
+    RingColor(Option<C4>),
+    /// The ring palette's rainbow swatch: the colour picker for the ring.
+    RingWheel,
+    /// A press on a part of the colour picker (the point says where).
+    Pick(Part),
+    /// A recent colour in the picker.
+    PickColor(C4),
+    /// The picker's eyedropper on/off.
+    Eyedrop,
 }
 
 /// Which device dropdown of the Record popover.
@@ -120,6 +138,24 @@ pub enum Kind {
     DevItem { dev: Dev, i: usize, on: bool },
     /// The popover's primary button.
     Primary { act: Act, label: &'static str },
+    /// A colour swatch that acts (`on`: the chosen one).
+    Swatch { act: Act, c: C4, on: bool },
+    /// The rainbow swatch at the end of a palette: the colour picker.
+    Rainbow(Act),
+    /// The camera ring's width readout and preview (logical px, colour).
+    RingValue { w: u32, c: C4 },
+    /// The picker's hue ring (the wheel's bounding square).
+    PickHue,
+    /// The saturation/value square inside the ring.
+    PickSv,
+    /// The live swatch of the colour picked.
+    PickSwatch,
+    /// The hex field.
+    PickHex,
+    /// The opacity slider's track.
+    PickAlpha,
+    /// Recent colour `i`.
+    Recent { i: usize, c: C4 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -144,6 +180,22 @@ pub struct Input<'a> {
     pub record: bool,
     /// The Record popover while it is open (instead of the palette).
     pub rec: Option<&'a RecView<'a>>,
+    /// The current tool has a size (else `– N +` is disabled) and a
+    /// colour (else the palette button is).
+    pub sizes: bool,
+    pub colors: bool,
+    /// The colour picker while it is open (over the others).
+    pub pick: Option<&'a PickView<'a>>,
+}
+
+/// What shapes the colour picker popover.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PickView<'a> {
+    /// Over the Record button (the camera ring), else the palette button.
+    pub ring: bool,
+    /// With the opacity row.
+    pub alpha: bool,
+    pub recents: &'a [C4],
 }
 
 /// What the Record popover shows.
@@ -173,6 +225,13 @@ pub struct RecView<'a> {
     pub devs: Option<(Dev, &'a [String])>,
     /// Index into the open list of the chosen one.
     pub dev_sel: usize,
+    /// The camera ring: its colour (`None` = accent), width (logical px),
+    /// and whether its palette is open (with these colours).
+    pub ring: Option<C4>,
+    pub ring_w: u32,
+    pub ring_pal: bool,
+    pub ring_colors: &'a [C4],
+    pub accent: C4,
 }
 
 #[derive(Clone, PartialEq)]
@@ -197,10 +256,10 @@ fn groups(inp: &Input) -> [Group; 4] {
         (Kind::Btn(Act::Redo), !inp.can_redo, BTN),
     ];
     let size = vec![
-        (Kind::Btn(Act::Size(-1)), false, BTN),
-        (Kind::Value, false, VALUE_W),
-        (Kind::Btn(Act::Size(1)), false, BTN),
-        (Kind::Btn(Act::Palette), false, BTN),
+        (Kind::Btn(Act::Size(-1)), !inp.sizes, BTN),
+        (Kind::Value, !inp.sizes, VALUE_W),
+        (Kind::Btn(Act::Size(1)), !inp.sizes, BTN),
+        (Kind::Btn(Act::Palette), !inp.colors, BTN),
     ];
     let mut out: Group = if inp.busy {
         vec![(Kind::Btn(Act::Accept), false, ACCEPT_W)]
@@ -275,9 +334,9 @@ pub fn layout(inp: &Input) -> Toolbar {
     let (bw, bh) = (w * s, h * s);
     let sel = inp.sel;
     let g = SEL_GAP * s;
-    let narrow = sel.w < NARROW * s;
-    let x = if narrow { sel.x + sel.w / 2.0 - bw / 2.0 } else { sel.x1() - bw };
-    let x = x.clamp(area.x + m, (area.x1() - m - bw).max(area.x + m));
+    // Centred on the selection; near a monitor edge it slides along it
+    // (never over to the other side).
+    let x = (sel.x + sel.w / 2.0 - bw / 2.0).clamp(area.x + m, (area.x1() - m - bw).max(area.x + m));
     let (y, above) = if sel.y1() + g + bh <= area.y1() - m {
         (sel.y1() + g, false)
     } else if sel.y - g - bh >= area.y + m {
@@ -292,23 +351,25 @@ pub fn layout(inp: &Input) -> Toolbar {
     }
     let bar = FRect { x, y, w: bw, h: bh };
     let mut texts = Vec::new();
-    let pop = match (inp.rec, inp.palette) {
-        (Some(rv), _) => Some(place_rec(rv, bar, above, &mut items, &mut texts, inp)),
-        (None, Some(colors)) => Some(place_palette(colors, bar, above, &mut items, inp)),
-        (None, None) => None,
+    let pop = match (inp.pick, inp.rec, inp.palette) {
+        (Some(pv), _, _) => Some(place_picker(pv, bar, above, &mut items, inp)),
+        (None, Some(rv), _) => Some(place_rec(rv, bar, above, &mut items, &mut texts, inp)),
+        (None, None, Some(colors)) => Some(place_palette(colors, bar, above, &mut items, inp)),
+        (None, None, None) => None,
     };
     Toolbar { bar, pop, items, wrapped, above, texts }
 }
 
 /// Top-left of a `pw`x`ph` popover 6 px from the bar on the side away from
 /// the selection (below a bar below it, above a bar above/inside it), or
-/// the other side when it does not fit there; right-aligned to `anchor`.
+/// the other side when it does not fit there; centred over `anchor` (kept
+/// on the monitor).
 /// When it fits on neither side it goes where there is more room,
 /// clamped to the area.
 fn place_pop(pw: f32, ph: f32, anchor: FRect, bar: FRect, above: bool, inp: &Input) -> (f32, f32) {
     let s = inp.s;
     let m = MARGIN * s;
-    let px = (anchor.x1() - pw).clamp(inp.area.x + m, (inp.area.x1() - m - pw).max(inp.area.x + m));
+    let px = (anchor.x + anchor.w / 2.0 - pw / 2.0).clamp(inp.area.x + m, (inp.area.x1() - m - pw).max(inp.area.x + m));
     let up = bar.y - POP_GAP * s - ph;
     let down = bar.y1() + POP_GAP * s;
     let up_ok = up >= inp.area.y + m;
@@ -341,6 +402,11 @@ const DEV_ITEM_H: f32 = 26.0;
 /// At most this many microphones are listed.
 const DEV_MAX: usize = 8;
 const START_H: f32 = 32.0;
+/// The ring row's controls: thinner, the readout, thicker, the swatch.
+const RING_VALUE_W: f32 = 56.0;
+const RING_CTL_W: f32 = 3.0 * SEG_H + RING_VALUE_W + 2.0 * IN_GAP + 6.0;
+/// Swatches per row of the ring's palette.
+const RING_PAL_COLS: usize = 6;
 
 /// Segment labels for the frame rates on offer.
 fn fps_label(n: u32) -> &'static str {
@@ -393,6 +459,7 @@ fn place_rec(rv: &RecView, bar: FRect, above: bool, items: &mut Vec<Item>, texts
     texts.push(rv.mic_label.to_string());
     texts.push(rv.cam_label.to_string());
     let mut list = None;
+    let mut ring_pal = None;
     // A device box at `y`; its list (when open) floats below it.
     let mut dev_box = |dev: Dev, y: f32, push: &mut dyn FnMut(Kind, FRect, bool)| {
         let open = rv.devs.filter(|d| d.0 == dev);
@@ -434,6 +501,28 @@ fn place_rec(rv: &RecView, bar: FRect, above: bool, items: &mut Vec<Item>, texts
             let r = FRect { x: fx + 2.0 + i as f32 * fh, y: y + 2.0, w: fh, h: SEG_H - 4.0 };
             push(Kind::Seg { act: Act::RecCamSize(sz), label: sz.label(), on: rv.size == sz }, r, false);
         }
+        y += SEG_H + 8.0;
+        // Ring: label left; thinner, the width (and its preview), thicker
+        // and the colour swatch right.
+        push(Kind::Label("Ring"), FRect { x: x0, y, w: 60.0, h: SEG_H }, false);
+        let ring_c = rv.ring.unwrap_or(rv.accent);
+        let rx = x0 + inner - RING_CTL_W;
+        push(Kind::Btn(Act::RingSize(-1)), FRect { x: rx, y, w: SEG_H, h: SEG_H }, rv.ring_w == 0);
+        let vx = rx + SEG_H + IN_GAP;
+        push(Kind::RingValue { w: rv.ring_w, c: ring_c }, FRect { x: vx, y, w: RING_VALUE_W, h: SEG_H }, false);
+        let px = vx + RING_VALUE_W + IN_GAP;
+        push(Kind::Btn(Act::RingSize(1)), FRect { x: px, y, w: SEG_H, h: SEG_H }, rv.ring_w >= crate::config::RING_WIDTH_MAX);
+        let sx = px + SEG_H + 6.0;
+        push(Kind::Swatch { act: Act::RingPalette, c: ring_c, on: rv.ring_pal }, FRect { x: sx, y, w: SEG_H, h: SEG_H }, false);
+        if rv.ring_pal {
+            // The accent, the palette, the rainbow: rows of six above the row.
+            let n = rv.ring_colors.len() + 2;
+            let rows = n.div_ceil(RING_PAL_COLS);
+            let pw = RING_PAL_COLS as f32 * DOT_BTN + (RING_PAL_COLS - 1) as f32 * DOT_GAP + 2.0 * PAD;
+            let ph = rows as f32 * DOT_BTN + (rows - 1) as f32 * DOT_GAP + 2.0 * PAD;
+            let r = FRect { x: x0 + inner - pw, y: y - 4.0 - ph, w: pw, h: ph };
+            ring_pal = Some((r, ring_c));
+        }
         y += SEG_H;
     }
     y += 8.0;
@@ -449,6 +538,21 @@ fn place_rec(rv: &RecView, bar: FRect, above: bool, items: &mut Vec<Item>, texts
             push(Kind::DevItem { dev, i, on: i == rv.dev_sel }, r, false);
         }
     }
+    if let Some((pr, cur)) = ring_pal {
+        push(Kind::DevList, pr, false);
+        let at = |i: usize| FRect {
+            x: pr.x + PAD + (i % RING_PAL_COLS) as f32 * (DOT_BTN + DOT_GAP),
+            y: pr.y + PAD + (i / RING_PAL_COLS) as f32 * (DOT_BTN + DOT_GAP),
+            w: DOT_BTN,
+            h: DOT_BTN,
+        };
+        push(Kind::Swatch { act: Act::RingColor(None), c: rv.accent, on: rv.ring.is_none() }, at(0), false);
+        for (i, c) in rv.ring_colors.iter().enumerate() {
+            let on = rv.ring.is_some() && *c == cur;
+            push(Kind::Swatch { act: Act::RingColor(Some(c.with_alpha(255))), c: c.with_alpha(255), on }, at(i + 1), false);
+        }
+        push(Kind::Rainbow(Act::RingWheel), at(rv.ring_colors.len() + 1), false);
+    }
     let (pw, ph) = (REC_W * s, h * s);
     let anchor = items.iter().find(|it| it.kind == Kind::Btn(Act::Record)).map(|it| it.r).unwrap_or(bar);
     let (px, py) = place_pop(pw, ph, anchor, bar, above, inp);
@@ -461,12 +565,12 @@ fn place_rec(rv: &RecView, bar: FRect, above: bool, items: &mut Vec<Item>, texts
 
 /// Popover 6 px from the bar on the side away from the selection (below a
 /// bar that sits below it, above a bar that sits above/inside it), falling
-/// back to the other side when it does not fit; right-aligned to the swatch
-/// button, one row of dots.
+/// back to the other side when it does not fit; centred over the swatch
+/// button, one row of dots and the rainbow swatch (the colour picker).
 fn place_palette(colors: &[C4], bar: FRect, above: bool, items: &mut Vec<Item>, inp: &Input) -> FRect {
     let s = inp.s;
     let m = MARGIN * s;
-    let n = colors.len().max(1) as f32;
+    let n = colors.len() as f32 + 1.0;
     let pw = (n * DOT_BTN + (n - 1.0) * DOT_GAP + 2.0 * PAD) * s;
     let ph = (DOT_BTN + 2.0 * PAD) * s;
     let anchor = items
@@ -474,7 +578,7 @@ fn place_palette(colors: &[C4], bar: FRect, above: bool, items: &mut Vec<Item>, 
         .find(|it| it.kind == Kind::Btn(Act::Palette))
         .map(|it| it.r)
         .unwrap_or(bar);
-    let px = (anchor.x1() - pw).clamp(inp.area.x + m, (inp.area.x1() - m - pw).max(inp.area.x + m));
+    let px = (anchor.x + anchor.w / 2.0 - pw / 2.0).clamp(inp.area.x + m, (inp.area.x1() - m - pw).max(inp.area.x + m));
     let up = bar.y - POP_GAP * s - ph;
     let down = bar.y1() + POP_GAP * s;
     let py = if above {
@@ -484,14 +588,80 @@ fn place_palette(colors: &[C4], bar: FRect, above: bool, items: &mut Vec<Item>, 
     } else {
         down
     };
+    let at = |i: usize| FRect {
+        x: px + (PAD + i as f32 * (DOT_BTN + DOT_GAP)) * s,
+        y: py + PAD * s,
+        w: DOT_BTN * s,
+        h: DOT_BTN * s,
+    };
     for (i, c) in colors.iter().enumerate() {
-        let r = FRect {
-            x: px + (PAD + i as f32 * (DOT_BTN + DOT_GAP)) * s,
-            y: py + PAD * s,
-            w: DOT_BTN * s,
-            h: DOT_BTN * s,
-        };
-        items.push(Item { kind: Kind::Dot(*c), r, disabled: false });
+        items.push(Item { kind: Kind::Dot(*c), r: at(i), disabled: false });
+    }
+    items.push(Item { kind: Kind::Rainbow(Act::Wheel), r: at(colors.len()), disabled: false });
+    FRect { x: px, y: py, w: pw, h: ph }
+}
+
+/// The colour picker's width and padding (logical px).
+pub const PICK_W: f32 = 232.0;
+const PICK_PAD: f32 = 12.0;
+/// The hue ring's outer diameter and thickness.
+pub const WHEEL: f32 = 168.0;
+pub const WHEEL_T: f32 = 16.0;
+/// The saturation/value square's side (inside the ring, clear of it).
+pub const SV_SIDE: f32 = 86.0;
+const PICK_ROW: f32 = 32.0;
+const ALPHA_H: f32 = 24.0;
+const RECENT_DOT: f32 = 22.0;
+const RECENT_GAP: f32 = 4.0;
+
+/// The colour picker: the hue ring with the saturation/value square inside,
+/// then the live swatch, the hex field and the eyedropper, the opacity
+/// slider (tool colours) and the recent colours; centred over the palette
+/// button (or the Record button, for the camera ring), placed like the
+/// Record popover.
+fn place_picker(pv: &PickView, bar: FRect, above: bool, items: &mut Vec<Item>, inp: &Input) -> FRect {
+    let s = inp.s;
+    let mut local: Vec<Item> = Vec::new();
+    let mut push = |kind: Kind, r: FRect| local.push(Item { kind, r, disabled: false });
+    let x0 = PICK_PAD;
+    let inner = PICK_W - 2.0 * PICK_PAD;
+    let mut y = PICK_PAD;
+    let wx = (PICK_W - WHEEL) / 2.0;
+    push(Kind::PickHue, FRect { x: wx, y, w: WHEEL, h: WHEEL });
+    let c = (WHEEL - SV_SIDE) / 2.0;
+    push(Kind::PickSv, FRect { x: wx + c, y: y + c, w: SV_SIDE, h: SV_SIDE });
+    y += WHEEL + 12.0;
+    push(Kind::PickSwatch, FRect { x: x0, y, w: PICK_ROW, h: PICK_ROW });
+    let hx = x0 + PICK_ROW + 8.0;
+    let hw = inner - 2.0 * PICK_ROW - 16.0;
+    push(Kind::PickHex, FRect { x: hx, y, w: hw, h: PICK_ROW });
+    push(Kind::Btn(Act::Eyedrop), FRect { x: x0 + inner - PICK_ROW, y, w: PICK_ROW, h: PICK_ROW });
+    y += PICK_ROW + 12.0;
+    if pv.alpha {
+        push(Kind::Label("Opacity"), FRect { x: x0, y, w: 60.0, h: ALPHA_H });
+        // The percentage sits right of the track.
+        push(Kind::PickAlpha, FRect { x: x0 + 64.0, y, w: inner - 64.0 - 40.0, h: ALPHA_H });
+        y += ALPHA_H + 10.0;
+    }
+    push(Kind::Label(if pv.recents.is_empty() { "No recent colors yet" } else { "Recent" }), FRect { x: x0, y, w: inner, h: 16.0 });
+    y += 16.0 + 6.0;
+    if !pv.recents.is_empty() {
+        for (i, c) in pv.recents.iter().take(crate::config::RECENT_MAX).enumerate() {
+            let r = FRect { x: x0 + i as f32 * (RECENT_DOT + RECENT_GAP), y, w: RECENT_DOT, h: RECENT_DOT };
+            push(Kind::Recent { i, c: *c }, r);
+        }
+        y += RECENT_DOT;
+    } else {
+        y -= 6.0;
+    }
+    y += PICK_PAD;
+    let (pw, ph) = (PICK_W * s, y * s);
+    let at = if pv.ring { Act::Record } else { Act::Palette };
+    let anchor = items.iter().find(|it| it.kind == Kind::Btn(at)).map(|it| it.r).unwrap_or(bar);
+    let (px, py) = place_pop(pw, ph, anchor, bar, above, inp);
+    for it in local {
+        let r = FRect { x: px + it.r.x * s, y: py + it.r.y * s, w: it.r.w * s, h: it.r.h * s };
+        items.push(Item { r, ..it });
     }
     FRect { x: px, y: py, w: pw, h: ph }
 }
@@ -510,10 +680,23 @@ impl Toolbar {
         match it.kind {
             Kind::Btn(a) => Some(a),
             Kind::Dot(c) => Some(Act::Color(c)),
-            Kind::Seg { act, .. } | Kind::Switch { act, .. } | Kind::Primary { act, .. } => Some(act),
+            Kind::Seg { act, .. } | Kind::Switch { act, .. } | Kind::Primary { act, .. } | Kind::Swatch { act, .. } => Some(act),
+            Kind::Rainbow(act) => Some(act),
             Kind::DevBox { dev, .. } => Some(Act::RecDevMenu(dev)),
             Kind::DevItem { dev, i, .. } => Some(Act::RecDev(dev, i)),
-            Kind::Value | Kind::SepV | Kind::SepH | Kind::SegTrack | Kind::Label(_) | Kind::DevList => None,
+            Kind::PickHue => Some(Act::Pick(Part::Hue)),
+            Kind::PickSv => Some(Act::Pick(Part::Sv)),
+            Kind::PickHex => Some(Act::Pick(Part::Hex)),
+            Kind::PickAlpha => Some(Act::Pick(Part::Alpha)),
+            Kind::Recent { c, .. } => Some(Act::PickColor(c)),
+            Kind::Value
+            | Kind::SepV
+            | Kind::SepH
+            | Kind::SegTrack
+            | Kind::Label(_)
+            | Kind::DevList
+            | Kind::RingValue { .. }
+            | Kind::PickSwatch => None,
         }
     }
 
@@ -580,18 +763,53 @@ mod tests {
     }
 
     fn inp<'a>(sel: FRect) -> Input<'a> {
-        Input { sel, area: AREA, s: 1.0, busy: false, can_undo: true, can_redo: true, palette: None, record: false, rec: None }
+        Input {
+            sel,
+            area: AREA,
+            s: 1.0,
+            busy: false,
+            can_undo: true,
+            can_redo: true,
+            palette: None,
+            record: false,
+            rec: None,
+            sizes: true,
+            colors: true,
+            pick: None,
+        }
     }
 
     fn btn(tb: &Toolbar, a: Act) -> FRect {
         tb.items.iter().find(|i| i.kind == Kind::Btn(a)).expect("button").r
     }
 
+    /// The bar's horizontal centre.
+    fn cx(r: FRect) -> f32 {
+        r.x + r.w / 2.0
+    }
+
     #[test]
     fn single_row_metrics() {
         let tb = layout(&inp(r(100.0, 100.0, 800.0, 300.0)));
         assert!(!tb.wrapped);
-        assert_eq!((tb.bar.w, tb.bar.h), (713.0, 44.0));
+        assert_eq!((tb.bar.w, tb.bar.h), (733.0, 44.0));
+    }
+
+    /// Invert has no size, Pixelate and Invert no colour: those controls
+    /// are there but disabled (they consume the press).
+    #[test]
+    fn size_and_colour_controls_follow_the_tool() {
+        let mut i = inp(r(100.0, 100.0, 800.0, 300.0));
+        i.sizes = false;
+        i.colors = false;
+        let tb = layout(&i);
+        for a in [Act::Size(-1), Act::Size(1), Act::Palette] {
+            let b = btn(&tb, a);
+            assert_eq!(tb.act_at(Pt::new(b.x + 5.0, b.y + 5.0)), None, "{a:?}");
+            assert!(tb.contains(Pt::new(b.x + 5.0, b.y + 5.0)));
+        }
+        assert!(tb.items.iter().any(|it| it.kind == Kind::Value && it.disabled));
+        assert_eq!(tb.bar.w, 733.0, "same width");
     }
 
     #[test]
@@ -599,7 +817,7 @@ mod tests {
         let mut i = inp(r(100.0, 100.0, 800.0, 300.0));
         i.busy = true;
         let tb = layout(&i);
-        assert_eq!(tb.bar.w, 713.0);
+        assert_eq!(tb.bar.w, 733.0);
         assert!(tb.items.iter().any(|it| it.kind == Kind::Btn(Act::Accept)));
         assert!(!tb.items.iter().any(|it| it.kind == Kind::Btn(Act::Copy)));
     }
@@ -615,11 +833,49 @@ mod tests {
     }
 
     #[test]
-    fn below_and_right_aligned() {
+    fn below_and_centred() {
         let tb = layout(&inp(r(100.0, 100.0, 800.0, 300.0)));
         assert_eq!(tb.bar.y, 408.0);
-        assert_eq!(tb.bar.x1(), 900.0);
+        assert_eq!(cx(tb.bar), 500.0);
         assert!(!tb.above);
+    }
+
+    /// Near a monitor edge the bar slides along it, as close to centred as
+    /// it can be (never over to the other side of the selection).
+    #[test]
+    fn slides_along_the_monitor_edges() {
+        let tb = layout(&inp(r(1600.0, 100.0, 300.0, 300.0)));
+        assert_eq!(tb.bar.x1(), 1908.0, "against the right margin");
+        assert!(tb.bar.x < 1600.0);
+        let tb = layout(&inp(r(20.0, 100.0, 300.0, 300.0)));
+        assert_eq!(tb.bar.x, 12.0, "against the left margin");
+        // A little off centre: only as far as it must.
+        let tb = layout(&inp(r(300.0, 100.0, 900.0, 300.0)));
+        assert_eq!(cx(tb.bar), 750.0, "room for it: centred");
+        let tb = layout(&inp(r(100.0, 100.0, 300.0, 300.0)));
+        assert!(tb.wrapped && cx(tb.bar) == 250.0, "wrapped, centred");
+        // Selections narrower than the bar: centred all the same.
+        for x in [600.0, 900.0, 1100.0] {
+            let tb = layout(&inp(r(x, 300.0, 120.0, 90.0)));
+            assert_eq!(cx(tb.bar), x + 60.0, "{x}");
+        }
+        // On a monitor that does not start at 0.
+        let mut i = inp(r(1920.0 + 1200.0, 100.0, 60.0, 60.0));
+        i.area = r(1920.0, 0.0, 1280.0, 720.0);
+        let tb = layout(&i);
+        assert!(tb.bar.x1() <= 1920.0 + 1280.0 - 12.0 + 0.01 && tb.bar.x >= 1932.0, "{:?}", tb.bar);
+    }
+
+    /// No room below: above, centred; no room above either: inside the
+    /// selection's bottom edge.
+    #[test]
+    fn above_then_inside_stay_centred() {
+        let tb = layout(&inp(r(400.0, 800.0, 600.0, 250.0)));
+        assert!(tb.above && tb.bar.y1() == 792.0 && cx(tb.bar) == 700.0, "{:?}", tb.bar);
+        let tb = layout(&inp(r(400.0, 20.0, 600.0, 1050.0)));
+        assert!(tb.above, "anchored at its bottom");
+        assert_eq!(tb.bar.y1(), 1062.0, "inside, 8 above the bottom edge");
+        assert_eq!(cx(tb.bar), 700.0);
     }
 
     #[test]
@@ -633,7 +889,7 @@ mod tests {
     fn goes_inside_fullscreen_selection() {
         let tb = layout(&inp(r(0.0, 0.0, 1920.0, 1080.0)));
         assert_eq!(tb.bar.y1(), 1068.0, "clamped to the 12 px margin");
-        assert_eq!(tb.bar.x1(), 1908.0, "clamped to the 12 px margin");
+        assert_eq!(cx(tb.bar), 960.0, "centred");
     }
 
     #[test]
@@ -656,7 +912,7 @@ mod tests {
         i.s = 2.0;
         let tb = layout(&i);
         assert!(!tb.wrapped);
-        assert_eq!(tb.bar.w, 1426.0);
+        assert_eq!(tb.bar.w, 1466.0);
         assert_eq!(btn(&tb, Act::Undo).w, 64.0);
     }
 
@@ -674,20 +930,28 @@ mod tests {
     }
 
     #[test]
-    fn palette_pops_below_bar_right_aligned() {
+    fn palette_pops_below_bar_centred_with_the_rainbow_last() {
         let colors = [C4::rgb(1, 2, 3); 10];
         let mut i = inp(r(100.0, 100.0, 800.0, 300.0));
         i.palette = Some(&colors);
         let tb = layout(&i);
         assert!(!tb.above);
         let pop = tb.pop.expect("popover");
-        assert_eq!((pop.w, pop.h), (328.0, 40.0));
+        assert_eq!((pop.w, pop.h), (360.0, 40.0));
         assert_eq!(pop.y, tb.bar.y1() + 6.0);
-        assert_eq!(pop.x1(), btn(&tb, Act::Palette).x1());
+        assert_eq!(cx(pop), cx(btn(&tb, Act::Palette)));
         let dots: Vec<&Item> = tb.items.iter().filter(|it| matches!(it.kind, Kind::Dot(_))).collect();
         assert_eq!(dots.len(), 10);
         let d = dots[0].r;
         assert_eq!(tb.act_at(Pt::new(d.x + 3.0, d.y + 3.0)), Some(Act::Color(C4::rgb(1, 2, 3))));
+        let rb = kind_at(&tb, |k| matches!(k, Kind::Rainbow(_)));
+        assert!(rb.r.x > dots[9].r.x1() && rb.r.x1() <= pop.x1() - PAD + 0.01, "at the far right");
+        assert_eq!(tb.act_at(centre(rb.r)), Some(Act::Wheel));
+        // At the right edge of the monitor it stays on it.
+        let mut i = inp(r(1700.0, 100.0, 200.0, 300.0));
+        i.palette = Some(&colors);
+        let tb = layout(&i);
+        assert_eq!(tb.pop.unwrap().x1(), 1908.0);
     }
 
     #[test]
@@ -784,8 +1048,15 @@ mod tests {
             cam_label: "Default camera",
             devs: devs.map(|d| (Dev::Mic, d)),
             dev_sel: 0,
+            ring: None,
+            ring_w: 3,
+            ring_pal: false,
+            ring_colors: &RING_COLORS,
+            accent: C4::rgb(0x8b, 0x93, 0xff),
         }
     }
+
+    const RING_COLORS: [C4; 10] = [C4::rgb(240, 68, 56); 10];
 
     fn kind_at(tb: &Toolbar, f: impl Fn(&Kind) -> bool) -> Item {
         *tb.items.iter().find(|i| f(&i.kind)).expect("item")
@@ -800,7 +1071,7 @@ mod tests {
         let mut i = inp(r(100.0, 100.0, 800.0, 300.0));
         i.record = true;
         let tb = layout(&i);
-        assert_eq!(tb.bar.w, 713.0 + BTN + IN_GAP);
+        assert_eq!(tb.bar.w, 733.0 + BTN + IN_GAP);
         let rec = btn(&tb, Act::Record);
         assert_eq!(rec.x1() + IN_GAP, btn(&tb, Act::Copy).x, "first of the output group");
         assert_eq!(tb.act_at(centre(rec)), Some(Act::Record));
@@ -846,7 +1117,7 @@ mod tests {
         let pop = tb.pop.expect("popover");
         assert_eq!(pop.w, REC_W);
         assert_eq!(pop.y, tb.bar.y1() + POP_GAP, "below a bar below the selection");
-        assert_eq!(pop.x1(), btn(&tb, Act::Record).x1(), "right-aligned to the Record button");
+        assert_eq!(cx(pop), cx(btn(&tb, Act::Record)), "centred over the Record button");
         assert!(tb.items.iter().all(|it| !matches!(it.kind, Kind::Dot(_))), "no palette");
         // Every popover item lies inside it.
         let n = tb.items.iter().position(|it| it.kind == Kind::SegTrack).unwrap();

@@ -25,6 +25,8 @@ use std::time::{Duration, Instant};
 mod toolbar;
 mod chrome;
 mod compose;
+mod pick;
+mod tools;
 
 /// Chrome styling shared with the window control kit (`crate::ui`).
 pub(crate) mod style {
@@ -291,6 +293,10 @@ impl App {
     }
 
     fn request_exit(&mut self, code: i32) {
+        // Remembered tool settings are written before we go.
+        if let State::Edit(e) = &mut self.st {
+            e.flush_pending(true);
+        }
         self.exit_code.store(code, Ordering::SeqCst);
         wind::close(self.hwnd);
     }
@@ -324,6 +330,11 @@ impl App {
             self.notice = None;
         }
         self.tick_recording();
+        if let State::Edit(e) = &mut self.st
+            && e.pending.is_due(Instant::now())
+        {
+            e.flush_pending(false);
+        }
         if let State::Edit(e) = &mut self.st
             && (e.rec.poll_cams() | e.rec.poll_mp4())
         {
@@ -685,10 +696,13 @@ impl App {
             draft: None,
             stroke_pts: Vec::new(),
             interact: Interact::None,
-            color: config::parse_color(&self.cfg.draw_color)
-                .map(|(r, g, b, _)| C4::rgb(r, g, b))
-                .unwrap_or(C4::rgb(255, 0, 0)),
-            sizes: Sizes::from_cfg(&cfg),
+            mem: tools::ToolMem::from_cfg(&cfg),
+            last_tool: Tool::Path,
+            pending: tools::Pending::default(),
+            // Tests never write the user's config.
+            cfg_path: (!cfg!(test)).then(config::config_path),
+            pick: None,
+            loupe: None,
             text: None,
             tasks,
             accept_on_select,
@@ -742,6 +756,15 @@ impl App {
     /// (so a native save dialog is never covered by the overlay).
     fn finish(&mut self, edit: &mut Edit, cancelled: bool) {
         wind::set_fast_timer(self.hwnd, false);
+        // An open picker keeps its colour; what the tools remember is
+        // written now and taken by the next capture.
+        edit.close_picker(true);
+        edit.flush_pending(true);
+        // Only what changed in this capture (a reset in Settings meanwhile
+        // holds for the rest).
+        for k in edit.pending.touched() {
+            config::copy_key(&edit.cfg, &mut self.cfg, k);
+        }
         self.rec_opts = Some(edit.rec.opts.clone());
         if edit.rec.start && !cancelled {
             // Recording: the overlay goes away, the area is recorded live.
@@ -923,6 +946,12 @@ impl App {
             return;
         }
 
+        // The colour picker takes every key while it is open.
+        if edit.pick.is_some() {
+            edit.pick_key(vk, mods);
+            return;
+        }
+
         // Arrow keys nudge / resize the selection (built in, not remappable).
         if is_arrow && edit.sel.is_some() && !mods.ctrl && !mods.alt {
             let step = edit.shot.scale.round().max(1.0);
@@ -985,6 +1014,12 @@ impl App {
 
     fn char_input(&mut self, c: u16) {
         self.edit_tx(|_this, edit| {
+            if edit.pick.is_some() {
+                if let Some(ch) = char::from_u32(c as u32) {
+                    edit.pick_char(ch);
+                }
+                return;
+            }
             let Some(td) = edit.text.as_mut() else { return };
             let Some(ch) = char::from_u32(c as u32) else { return };
             if ch.is_control() {
@@ -1027,8 +1062,43 @@ impl App {
                 if edit.text.is_some() {
                     this.commit_text(edit);
                 }
+                if let Some(pk) = &edit.pick {
+                    let ring = pk.target == pick::Target::Ring;
+                    let in_pop = edit.toolbar.as_ref().and_then(|t| t.pop).is_some_and(|r| hit(r, p));
+                    if !in_pop {
+                        // The bar: the picker closes (keeping its colour)
+                        // and the button acts; its own button only closes it.
+                        edit.close_picker(true);
+                        if act == Some(Act::Palette) || (ring && act == Some(Act::Record)) {
+                            return;
+                        }
+                    } else if let Some(Act::Pick(part)) = act {
+                        edit.pick_press(part, p);
+                        return;
+                    } else if act != Some(Act::Eyedrop)
+                        && let Some(pk) = edit.pick.as_mut()
+                    {
+                        pk.eyedrop = false;
+                    }
+                }
                 if let Some(act) = act {
                     this.apply_act(edit, act);
+                }
+                return;
+            }
+            // The colour picker: the eyedropper picks the pixel; any other
+            // press outside closes it (keeping the colour), nothing else.
+            if let Some(pk) = &edit.pick {
+                if pk.eyedrop {
+                    let c = edit.sample(p);
+                    if let Some(pk) = edit.pick.as_mut() {
+                        pk.set_color(c.with_alpha(pk.a));
+                        pk.eyedrop = false;
+                    }
+                    edit.loupe = None;
+                    edit.pick_changed();
+                } else {
+                    edit.close_picker(true);
                 }
                 return;
             }
@@ -1038,7 +1108,7 @@ impl App {
                 let r = text_box_rect(
                     edit.shot.size.0 as f32,
                     td,
-                    edit.sizes.font,
+                    edit.mem.size(Tool::Text),
                     edit.font.as_ref(),
                     edit.ui_scale(),
                 );
@@ -1144,6 +1214,10 @@ impl App {
                     let (h, o, a) = (*handle, *orig, *aspect);
                     edit.sel = Some(resize_rect(h, o, p, a, &mods, img));
                 }
+                Interact::Pick(part) => {
+                    let part = *part;
+                    edit.pick_drag(part, p);
+                }
                 Interact::Drawing { start } => {
                     let start = *start;
                     let tool = edit.tool.unwrap_or(Tool::Line);
@@ -1177,17 +1251,13 @@ impl App {
                             edit.stroke_pts.push(cur);
                         }
                         let pts = edit.stroke_pts.clone();
-                        let color = edit.color;
-                        let width = if tool == Tool::Marker {
-                            edit.sizes.marker
-                        } else {
-                            edit.sizes.line
-                        };
+                        let color = edit.mem.color(tool);
+                        let width = edit.mem.size(tool);
                         edit.draft = Some(if tool == Tool::Marker {
                             Obj::Marker {
                                 a: pts.first().copied().unwrap_or(cur),
                                 b: cur,
-                                color: color.with_alpha(90),
+                                color: marker_color(color),
                                 width,
                             }
                         } else {
@@ -1221,8 +1291,8 @@ impl App {
         edit.commit_object(Obj::Text {
             pos,
             text,
-            color: edit.color,
-            size: edit.sizes.font,
+            color: edit.mem.color(Tool::Text),
+            size: edit.mem.size(Tool::Text),
         });
     }
 
@@ -1230,6 +1300,7 @@ impl App {
         match act {
             Act::Tool(t) => {
                 edit.tool = if edit.tool == Some(t) { None } else { Some(t) };
+                edit.last_tool = t;
                 edit.draft = None;
                 edit.stroke_pts.clear();
             }
@@ -1237,12 +1308,45 @@ impl App {
             Act::Redo => edit.redo(),
             Act::Size(d) => edit.adjust_size(d),
             Act::Color(c) => {
-                edit.color = c;
+                edit.set_tool_color(c, Instant::now());
                 edit.palette_open = false;
             }
             Act::Palette => {
                 edit.palette_open = !edit.palette_open;
                 edit.rec.open = false;
+            }
+            Act::Wheel => edit.open_picker(pick::Target::Tool),
+            Act::RingSize(d) => {
+                let w = (edit.rec.opts.cam_ring_w as i32 + d).clamp(0, config::RING_WIDTH_MAX as i32) as u32;
+                edit.rec.opts.cam_ring_w = w;
+                edit.remember_ring(Instant::now());
+            }
+            Act::RingPalette => {
+                edit.rec.ring_pal = !edit.rec.ring_pal;
+                edit.rec.dev_open = None;
+            }
+            Act::RingColor(c) => {
+                edit.rec.opts.cam_ring = c;
+                edit.rec.ring_pal = false;
+                edit.remember_ring(Instant::now());
+            }
+            Act::RingWheel => {
+                edit.rec.ring_pal = false;
+                edit.open_picker(pick::Target::Ring);
+            }
+            // A press on the picker (the point matters): `pointer_down`.
+            Act::Pick(_) => {}
+            Act::PickColor(c) => {
+                if let Some(pk) = edit.pick.as_mut() {
+                    pk.set_color(c);
+                }
+                edit.pick_changed();
+            }
+            Act::Eyedrop => {
+                if let Some(pk) = edit.pick.as_mut() {
+                    pk.eyedrop = !pk.eyedrop;
+                }
+                edit.loupe = None;
             }
             // A run with tasks has no Record button.
             Act::Record | Act::RecStart if !edit.tasks.is_empty() => {}
@@ -1281,6 +1385,7 @@ impl App {
             Act::RecShape(sh) => edit.rec.opts.cam_shape = sh,
             Act::RecCamSize(sz) => edit.rec.opts.cam_size = sz,
             Act::RecDevMenu(dev) => {
+                edit.rec.ring_pal = false;
                 match dev {
                     Dev::Mic => edit.rec.load_devs(),
                     Dev::Cam => edit.rec.load_cams(),
@@ -1353,7 +1458,7 @@ impl Driver for App {
                     // nothing is selected (hint, toast placement).
                     let area_moved =
                         e.area_drawn.is_some_and(|a| a != pick_area(&e.shot.monitors, e.sel, p));
-                    if e.track_hover(p) || area_moved {
+                    if e.track_hover(p) | e.track_loupe(p) || area_moved {
                         self.repaint();
                     }
                 }
@@ -1448,6 +1553,9 @@ impl Driver for App {
 
     fn cursor(&self) -> Cursor {
         let State::Edit(edit) = &self.st else { return Cursor::Arrow };
+        if edit.pick.as_ref().is_some_and(|p| p.eyedrop) {
+            return Cursor::Cross;
+        }
         if edit.text.is_some() {
             return Cursor::IBeam;
         }
@@ -1527,6 +1635,10 @@ fn drag_mods() -> Mods {
 fn cancel_key(edit: &mut Edit) {
     if edit.rec.dev_open.is_some() {
         edit.rec.dev_open = None;
+        return;
+    }
+    if edit.rec.ring_pal {
+        edit.rec.ring_pal = false;
         return;
     }
     if edit.rec.open {
@@ -1644,35 +1756,8 @@ enum Interact {
     Drawing {
         start: Pt,
     },
-}
-
-struct Sizes {
-    line: f32,
-    marker: f32,
-    pixelate: f32,
-    font: f32,
-    shape: f32,
-}
-
-impl Sizes {
-    fn from_cfg(cfg: &Config) -> Self {
-        Self {
-            line: cfg.draw_thickness.clamp(1.0, 50.0),
-            marker: cfg.draw_marker_size.clamp(1.0, 50.0),
-            pixelate: cfg.draw_pixelate_size.clamp(4.0, 100.0),
-            font: cfg.draw_font_size.clamp(8.0, 96.0),
-            shape: cfg.draw_thickness.clamp(1.0, 50.0),
-        }
-    }
-    fn active_mut(&mut self, tool: Option<Tool>) -> &mut f32 {
-        match tool {
-            Some(Tool::Rect | Tool::Ellipse) => &mut self.shape,
-            Some(Tool::Marker) => &mut self.marker,
-            Some(Tool::Pixelate | Tool::Invert) => &mut self.pixelate,
-            Some(Tool::Text) => &mut self.font,
-            _ => &mut self.line,
-        }
-    }
+    /// Dragging in the colour picker (the hue ring, the square, opacity).
+    Pick(pick::Part),
 }
 
 /// The Record popover in the overlay.
@@ -1690,6 +1775,8 @@ struct RecPop {
     cams_rx: Option<std::sync::mpsc::Receiver<Vec<crate::cam::CamDevice>>>,
     /// The open device list.
     dev_open: Option<Dev>,
+    /// The camera ring's palette is open.
+    ring_pal: bool,
     /// "Start recording" pressed: `finish` records instead of exporting.
     start: bool,
     /// The camera bubble while the popover shows the camera.
@@ -1727,6 +1814,7 @@ impl RecPop {
             cams: None,
             cams_rx: None,
             dev_open: None,
+            ring_pal: false,
             start: false,
             cam: CamSlot::default(),
         };
@@ -2069,8 +2157,19 @@ struct Edit {
     draft: Option<Obj>,
     stroke_pts: Vec<Pt>,
     interact: Interact,
-    color: C4,
-    sizes: Sizes,
+    /// Every tool's size and colour (remembered across captures).
+    mem: tools::ToolMem,
+    /// The tool whose size and colour the toolbar shows while none is
+    /// chosen: the last one chosen.
+    last_tool: Tool,
+    /// Remembered settings waiting to be written to the config.
+    pending: tools::Pending,
+    /// The config file they go to (`None`: not written; tests).
+    cfg_path: Option<std::path::PathBuf>,
+    /// The colour picker while it is open.
+    pick: Option<pick::Picker>,
+    /// The pointer while the eyedropper is on (the loupe follows it).
+    loupe: Option<Pt>,
     text: Option<TextDraft>,
     tasks: Vec<Task>,
     accept_on_select: bool,
@@ -2176,20 +2275,58 @@ impl Edit {
         self.dirty = true;
     }
 
+    /// The tool whose size and colour apply: the chosen one, else the
+    /// last one chosen.
+    fn cur_tool(&self) -> Tool {
+        self.tool.unwrap_or(self.last_tool)
+    }
+
+    /// The current tool's colour.
+    fn color(&self) -> C4 {
+        self.mem.color(self.cur_tool())
+    }
+
+    /// Step the current tool's size (a toast says the new one); it is
+    /// remembered.
     fn adjust_size(&mut self, dir: i32) {
-        let v = self.sizes.active_mut(self.tool);
-        let (lo, hi, step) = match self.tool {
-            Some(Tool::Pixelate | Tool::Invert) => (4.0, 100.0, 1.0),
-            Some(Tool::Text) => (8.0, 96.0, 1.0),
-            _ => (1.0, 50.0, 1.0),
-        };
-        *v = (*v + dir as f32 * step).clamp(lo, hi);
-        self.notice = Some(Toast::new(format!("Size {}", *v as i32), ToastKind::Info));
+        let t = self.cur_tool();
+        if !tools::has_size(t) {
+            return;
+        }
+        let v = self.mem.step(t, dir).unwrap_or(self.mem.size(t));
+        self.notice = Some(Toast::new(format!("Size {}", v as i32), ToastKind::Info));
+        self.remember_size(t, Instant::now());
+    }
+
+    /// Queue `t`'s size for the config.
+    fn remember_size(&mut self, t: Tool, now: Instant) {
+        let Some(id) = tools::id(t) else { return };
+        let v = self.mem.size(t);
+        self.cfg.tool_sizes.insert(id.into(), v);
+        self.pending.set(format!("tool_{id}_size"), Some(config::toml_num(v)), now);
+    }
+
+    /// Set the current tool's colour (remembered).
+    fn set_tool_color(&mut self, c: C4, now: Instant) {
+        let t = self.cur_tool();
+        if !tools::has_color(t) {
+            return;
+        }
+        self.mem.set_color(t, c);
+        self.remember_color(t, now);
+    }
+
+    /// Queue `t`'s colour for the config.
+    fn remember_color(&mut self, t: Tool, now: Instant) {
+        let Some(id) = tools::id(t).filter(|_| tools::has_color(t)) else { return };
+        let v = tools::hex(self.mem.color(t));
+        self.pending.set(format!("tool_{id}_color"), Some(config::toml_string(&v)), now);
+        self.cfg.tool_colors.insert(id.into(), v);
     }
 
     fn make_draft(&self, tool: Tool, a: Pt, b: Pt) -> Option<Obj> {
-        let c = self.color;
-        let w = self.sizes.line;
+        let c = self.mem.color(tool);
+        let w = self.mem.size(tool);
         Some(match tool {
             Tool::Path => Obj::Path {
                 pts: vec![a, b],
@@ -2201,22 +2338,22 @@ impl Edit {
             Tool::Rect => Obj::Rect {
                 r: FRect::from_pts(a, b),
                 color: c,
-                width: self.sizes.shape,
+                width: w,
             },
             Tool::Ellipse => Obj::Ellipse {
                 r: FRect::from_pts(a, b),
                 color: c,
-                width: self.sizes.shape,
+                width: w,
             },
             Tool::Marker => Obj::Marker {
                 a,
                 b,
-                color: c.with_alpha(90),
-                width: self.sizes.marker,
+                color: marker_color(c),
+                width: w,
             },
             Tool::Pixelate => Obj::Pixelate {
                 r: FRect::from_pts(a, b),
-                cell: self.sizes.pixelate,
+                cell: w,
             },
             Tool::Invert => Obj::Invert {
                 r: FRect::from_pts(a, b),
@@ -2255,16 +2392,11 @@ impl Edit {
         Pt::new(start.x + len * snapped.cos(), start.y + len * snapped.sin())
     }
 
-    /// Toolbar readout: current tool group's size and its name.
-    fn size_label(&self) -> (String, &'static str) {
-        let (v, unit) = match self.tool {
-            Some(Tool::Rect | Tool::Ellipse) => (self.sizes.shape, "shape"),
-            Some(Tool::Marker) => (self.sizes.marker, "mark"),
-            Some(Tool::Text) => (self.sizes.font, "text"),
-            Some(Tool::Pixelate | Tool::Invert) => (self.sizes.pixelate, "block"),
-            _ => (self.sizes.line, "line"),
-        };
-        ((v as i32).to_string(), unit)
+    /// Toolbar readout: the current tool's size ("" for Invert, which
+    /// has none).
+    fn size_label(&self) -> String {
+        let t = self.cur_tool();
+        if tools::has_size(t) { (self.mem.size(t) as i32).to_string() } else { String::new() }
     }
 
     fn ui_scale(&self) -> f32 {
@@ -2323,6 +2455,264 @@ impl Edit {
         self.toolbar.as_ref().map_or(Vec::new(), |t| std::iter::once(t.bar).chain(t.pop).map(to).collect())
     }
 
+    /// Write the remembered settings waiting (`wait`: before returning).
+    fn flush_pending(&mut self, wait: bool) {
+        if self.pending.is_empty() {
+            return;
+        }
+        let edits = self.pending.take();
+        if let Some(path) = &self.cfg_path {
+            config::queue_key_edits(path, edits, wait);
+        }
+    }
+
+    /// Queue the camera ring's colour and width for the config.
+    fn remember_ring(&mut self, now: Instant) {
+        let c = self.rec.opts.cam_ring.map(|c| tools::hex(c.with_alpha(255))).unwrap_or_default();
+        let w = self.rec.opts.cam_ring_w;
+        self.pending.set("rec_camera_ring_color".into(), Some(config::toml_string(&c)), now);
+        self.pending.set("rec_camera_ring_width".into(), Some(w.to_string()), now);
+        self.cfg.rec_camera_ring_color = c;
+        self.cfg.rec_camera_ring_width = w;
+    }
+
+    /// The picker's recent colours, newest first.
+    fn recents(&self) -> Vec<C4> {
+        self.cfg.recent_colors.iter().filter_map(|s| tools::parse(s)).take(config::RECENT_MAX).collect()
+    }
+
+    /// `c` heads the recent colours (once; at most [`config::RECENT_MAX`]).
+    fn add_recent(&mut self, c: C4, now: Instant) {
+        let mut v = self.recents();
+        v.retain(|x| *x != c);
+        v.insert(0, c);
+        v.truncate(config::RECENT_MAX);
+        let list: Vec<String> = v.iter().map(|c| tools::hex(*c)).collect();
+        self.pending.set("recent_colors".into(), Some(config::toml_strings(&list)), now);
+        self.cfg.recent_colors = list;
+    }
+
+    /// Open the colour picker for `target` at its colour.
+    fn open_picker(&mut self, target: pick::Target) {
+        let p = match target {
+            pick::Target::Tool => pick::Picker::new(target, self.color(), Some(self.color())),
+            pick::Target::Ring => {
+                let ring = self.rec.opts.cam_ring;
+                pick::Picker::new(target, ring.unwrap_or(self.th.accent), ring)
+            }
+        };
+        self.pick = Some(p);
+        self.palette_open = false;
+        self.loupe = None;
+    }
+
+    /// The picker's colour shows on its target as it changes.
+    fn pick_changed(&mut self) {
+        let Some(p) = &self.pick else { return };
+        let c = p.color();
+        match p.target {
+            pick::Target::Tool => {
+                let t = self.cur_tool();
+                self.mem.set_color(t, c);
+            }
+            pick::Target::Ring => self.rec.opts.cam_ring = Some(c),
+        }
+    }
+
+    /// Close the picker: `keep` its colour (remembered, and a recent one
+    /// when it changed), or put the old one back.
+    fn close_picker(&mut self, keep: bool) {
+        let Some(p) = self.pick.take() else { return };
+        self.loupe = None;
+        if matches!(self.interact, Interact::Pick(_)) {
+            self.interact = Interact::None;
+        }
+        let now = Instant::now();
+        let c = p.color();
+        match (p.target, keep) {
+            (pick::Target::Tool, true) => {
+                self.set_tool_color(c, now);
+                if p.orig != Some(c) {
+                    self.add_recent(c, now);
+                }
+            }
+            (pick::Target::Tool, false) => {
+                let t = self.cur_tool();
+                if let Some(o) = p.orig {
+                    self.mem.set_color(t, o);
+                }
+            }
+            (pick::Target::Ring, true) => {
+                self.rec.opts.cam_ring = Some(c);
+                self.remember_ring(now);
+                if p.orig != Some(c) {
+                    self.add_recent(c, now);
+                }
+            }
+            (pick::Target::Ring, false) => self.rec.opts.cam_ring = p.orig,
+        }
+    }
+
+    /// The rect of the picker item `kind` (as laid out last).
+    fn pick_rect(&self, kind: toolbar::Kind) -> Option<FRect> {
+        self.toolbar.as_ref()?.items.iter().find(|it| it.kind == kind).map(|it| it.r)
+    }
+
+    /// A press on picker part `part` at `p`: it takes the focus; the ring,
+    /// the square and the slider follow the pointer until it is released.
+    fn pick_press(&mut self, part: pick::Part, p: Pt) {
+        let Some(pk) = self.pick.as_mut() else { return };
+        pk.focus = Some(part);
+        pk.eyedrop = false;
+        pk.hex_fresh = part == pick::Part::Hex;
+        self.loupe = None;
+        if matches!(part, pick::Part::Hue | pick::Part::Sv | pick::Part::Alpha) {
+            self.interact = Interact::Pick(part);
+            self.pick_drag(part, p);
+        }
+    }
+
+    /// The pointer at `p` while dragging `part`.
+    fn pick_drag(&mut self, part: pick::Part, p: Pt) {
+        let kind = match part {
+            pick::Part::Hue => toolbar::Kind::PickHue,
+            pick::Part::Sv => toolbar::Kind::PickSv,
+            pick::Part::Alpha => toolbar::Kind::PickAlpha,
+            _ => return,
+        };
+        let Some(r) = self.pick_rect(kind) else { return };
+        let s = self.ui_scale();
+        let Some(pk) = self.pick.as_mut() else { return };
+        match part {
+            pick::Part::Hue => {
+                let (dx, dy) = (p.x - (r.x + r.w / 2.0), p.y - (r.y + r.h / 2.0));
+                if dx != 0.0 || dy != 0.0 {
+                    pk.set_hue(dx.atan2(-dy).to_degrees());
+                }
+            }
+            pick::Part::Sv => pk.set_sv((p.x - r.x) / r.w, 1.0 - (p.y - r.y) / r.h),
+            _ => {
+                let (x0, x1) = (r.x + 8.0 * s, r.x1() - 8.0 * s);
+                pk.set_alpha((p.x - x0) / (x1 - x0).max(1.0));
+            }
+        }
+        self.pick_changed();
+    }
+
+    /// A key while the picker is open (it takes them all).
+    fn pick_key(&mut self, vk: u32, mods: Mods) {
+        let recents = self.recents();
+        let n = recents.len();
+        let Some(pk) = self.pick.as_mut() else { return };
+        let k = wind::key::RETURN;
+        match vk {
+            wind::key::ESCAPE if pk.eyedrop => {
+                pk.eyedrop = false;
+                self.loupe = None;
+            }
+            wind::key::ESCAPE => self.close_picker(false),
+            wind::key::TAB => pk.tab(mods.shift, n),
+            wind::key::BACK if pk.focus == Some(pick::Part::Hex) => {
+                pk.backspace();
+                self.pick_changed();
+            }
+            v if v == k || v == wind::key::SPACE => match pk.focus {
+                Some(pick::Part::Eyedrop) => {
+                    pk.eyedrop = !pk.eyedrop;
+                    self.loupe = None;
+                }
+                Some(pick::Part::Recent(i)) if i < n => {
+                    pk.set_color(recents[i]);
+                    self.pick_changed();
+                    if v == k {
+                        self.close_picker(true);
+                    }
+                }
+                // Enter keeps the colour (not while the field reads as none).
+                _ if v == k && (pk.hex_ok || pk.focus != Some(pick::Part::Hex)) => self.close_picker(true),
+                _ => {}
+            },
+            wind::key::LEFT | wind::key::RIGHT | wind::key::UP | wind::key::DOWN => {
+                let (dx, dy) = match vk {
+                    wind::key::LEFT => (-1, 0),
+                    wind::key::RIGHT => (1, 0),
+                    wind::key::UP => (0, -1),
+                    _ => (0, 1),
+                };
+                if pk.nudge(dx, dy, mods.shift, n) {
+                    self.pick_changed();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// A character typed while the picker is open: into the hex field
+    /// (which takes the focus).
+    fn pick_char(&mut self, ch: char) {
+        let Some(pk) = self.pick.as_mut() else { return };
+        if ch.is_control() || (ch == ' ' && pk.focus != Some(pick::Part::Hex)) {
+            return;
+        }
+        if pk.focus != Some(pick::Part::Hex) {
+            pk.focus = Some(pick::Part::Hex);
+            pk.hex_fresh = true;
+        }
+        pk.type_char(ch);
+        self.pick_changed();
+    }
+
+    /// The pointer moved: the eyedropper's loupe follows it; true when it
+    /// must be drawn again.
+    fn track_loupe(&mut self, p: Pt) -> bool {
+        if self.pick.as_ref().is_some_and(|k| k.eyedrop) {
+            self.loupe = Some(p);
+            true
+        } else {
+            self.loupe.take().is_some()
+        }
+    }
+
+    /// The capture's pixels (with the objects) in `r` (inside the image),
+    /// RGBA row by row.
+    fn backdrop_pixels(&self, r: compose::PxRect) -> Vec<u8> {
+        let mut buf = vec![0u8; r.w() as usize * r.h() as usize * 4];
+        if r.is_empty() {
+            return buf;
+        }
+        use compose::Backdrop;
+        #[cfg(windows)]
+        if let Some(scr) = self.gdi.as_ref() {
+            gdi::GdiBackdrop { scr, opaque: true }.fill(r, compose::Source::Plain, &mut buf, r.w() as usize, Order::Rgba);
+            return buf;
+        }
+        PixBufBackdrop { img: self.composed(), dim: self.th.dim }.fill(r, compose::Source::Plain, &mut buf, r.w() as usize, Order::Rgba);
+        buf
+    }
+
+    /// The loupe's pixels around `p` (black off the image), row by row.
+    fn loupe_pixels(&self, p: Pt) -> Vec<C4> {
+        let n = chrome::LOUPE_N as i32;
+        let (x0, y0) = (p.x.floor() as i32 - n / 2, p.y.floor() as i32 - n / 2);
+        let r = compose::PxRect::new(x0, y0, x0 + n, y0 + n);
+        let q = r.intersect(&compose::PxRect::image(self.shot.size));
+        let mut out = vec![C4::rgb(0, 0, 0); (n * n) as usize];
+        let buf = self.backdrop_pixels(q);
+        for y in q.y0..q.y1 {
+            for x in q.x0..q.x1 {
+                let i = (((y - q.y0) * q.w() + (x - q.x0)) * 4) as usize;
+                out[((y - y0) * n + (x - x0)) as usize] = C4::rgb(buf[i], buf[i + 1], buf[i + 2]);
+            }
+        }
+        out
+    }
+
+    /// The colour of the pixel at `p` (the eyedropper).
+    fn sample(&self, p: Pt) -> C4 {
+        let n = chrome::LOUPE_N;
+        self.loupe_pixels(p)[n * n / 2]
+    }
+
     /// Track the hovered toolbar item / handle; true when either changed.
     fn track_hover(&mut self, p: Pt) -> bool {
         let hover = self.toolbar.as_ref().and_then(|tb| tb.index_at(p));
@@ -2376,7 +2766,7 @@ fn end_interaction(edit: &mut Edit) {
                 edit.cancelled = false;
             }
         }
-        Interact::MoveSel { .. } | Interact::Resize { .. } | Interact::None => {}
+        Interact::MoveSel { .. } | Interact::Resize { .. } | Interact::Pick(_) | Interact::None => {}
     }
 }
 
@@ -2508,6 +2898,11 @@ fn text_box_rect(win_w: f32, td: &TextDraft, font_px: f32, font: Option<&AnnotFo
     let h = (font_px * 1.15 + 2.0 * pad).max(28.0 * s);
     let x = (td.pos.x - pad).min((win_w - w).max(0.0));
     FRect { x, y: td.pos.y - pad, w, h }
+}
+
+/// The marker's translucency on top of the colour's own opacity.
+fn marker_color(c: C4) -> C4 {
+    c.with_alpha(((c.a as u32 * 90 + 127) / 255) as u8)
 }
 
 fn palette_colors(cfg: &Config) -> Vec<C4> {
@@ -2900,8 +3295,12 @@ mod tests {
             draft: None,
             stroke_pts: Vec::new(),
             interact: Interact::None,
-            color: C4::rgb(240, 68, 56),
-            sizes: Sizes::from_cfg(&cfg),
+            mem: tools::ToolMem::from_cfg(&cfg),
+            last_tool: Tool::Path,
+            pending: tools::Pending::default(),
+            cfg_path: None,
+            pick: None,
+            loupe: None,
             text: None,
             tasks: Vec::new(),
             accept_on_select: false,
@@ -3003,7 +3402,7 @@ mod tests {
     }
 
     /// Selection with the Arrow tool, a Rect and an Arrow object inside it.
-    fn annotated(th: Theme, sel: FRect) -> App {
+    pub(super) fn annotated(th: Theme, sel: FRect) -> App {
         let mut app = preview_app(th, Some(sel));
         let e = edit_of(&mut app);
         e.tool = Some(Tool::Arrow);
@@ -3085,6 +3484,25 @@ mod tests {
             let prod = src.split("#[cfg(test)]").next().unwrap();
             assert!(!prod.contains("static BGRA") && !prod.contains("static BGRX"), "staging buffer is back");
         }
+    }
+
+    /// The frame with every tween settled (and a toast past its fade-in).
+    pub(super) fn settled_frame(app: &mut App) -> PixBuf {
+        if let State::Edit(e) = &mut app.st {
+            for t in [&mut e.mo.dim, &mut e.mo.bar, &mut e.mo.pop, &mut e.mo.hint, &mut e.mo.hover] {
+                t.snap(t.target());
+            }
+            if let Some(n) = e.notice.as_mut() {
+                n.at = Instant::now() - Duration::from_millis(500);
+            }
+        }
+        app.frame(); // settle: tweens that start in frame() (bar/pop/hint)
+        if let State::Edit(e) = &mut app.st {
+            for t in [&mut e.mo.bar, &mut e.mo.pop, &mut e.mo.hint] {
+                t.snap(t.target());
+            }
+        }
+        app.frame().expect("frame").clone()
     }
 
     #[test]
@@ -3670,6 +4088,29 @@ mod tests {
         e.pressed = Some(4);
         e.hot_handle = Some(2);
         v.push(("objects hover pressed", app));
+        // The colour picker (recents, a translucent colour, a focus), the
+        // eyedropper's loupe, the camera ring's palette.
+        let mut app = annotated(theme::DARK, big);
+        let e = edit_of(&mut app);
+        e.cfg.recent_colors = vec!["#3b82f6cc".into(), "#2dc06f".into()];
+        e.open_picker(pick::Target::Tool);
+        let p = e.pick.as_mut().unwrap();
+        p.set_color(C4::new(139, 92, 246, 150));
+        p.focus = Some(pick::Part::Alpha);
+        v.push(("picker", app));
+        let mut app = annotated(theme::LIGHT, big);
+        let e = edit_of(&mut app);
+        e.open_picker(pick::Target::Tool);
+        e.pick.as_mut().unwrap().eyedrop = true;
+        e.loupe = Some(Pt::new(690.0, 548.0));
+        v.push(("loupe", app));
+        let mut app = annotated(theme::DARK, big);
+        let e = edit_of(&mut app);
+        e.rec.open = true;
+        e.rec.load_cams();
+        e.rec.opts.camera = true;
+        e.rec.ring_pal = true;
+        v.push(("ring palette", app));
         v
     }
 
@@ -4028,4 +4469,7 @@ mod tests {
     #[cfg(windows)]
     #[path = "../gdi_tests.rs"]
     mod gdi_path;
+
+    #[path = "../tools_tests.rs"]
+    mod tools_tests;
 }

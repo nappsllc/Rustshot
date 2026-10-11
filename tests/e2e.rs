@@ -630,3 +630,25 @@ fn settings_window_saves_and_the_daemon_reloads() {
         std::panic::resume_unwind(e);
     }
 }
+
+/// A tool's size changed with the wheel is written to the (isolated)
+/// config when the overlay closes, without touching the rest of the file.
+#[test]
+#[ignore = "live display access"]
+fn tool_size_is_remembered_in_the_config() {
+    let (mut child, hwnd, root) = launch_editor("toolmem");
+    let cfg = root.join("rustshot").join("config.toml");
+    let before = std::fs::read_to_string(&cfg).unwrap();
+    key(hwnd, 'D' as u32); // Line
+    // WM_MOUSEWHEEL: one notch up (the delta in the high word), past the
+    // wheel's 160 ms throttle from the capture's start.
+    std::thread::sleep(Duration::from_millis(300));
+    post(hwnd, 0x020A, WPARAM((120usize) << 16), pack(300, 300));
+    std::thread::sleep(Duration::from_millis(100));
+    key(hwnd, 0x1B); // the tool off
+    key(hwnd, 0x1B); // cancel
+    assert_eq!(wait_exit(&mut child, 5000), Some(2));
+    let after = std::fs::read_to_string(&cfg).unwrap();
+    assert!(after.starts_with(&before), "the file is kept: {after:?}");
+    assert!(after.contains("tool_line_size = 4"), "{after:?}");
+}

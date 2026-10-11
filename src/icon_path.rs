@@ -64,6 +64,11 @@ pub const ICONS: &[(&str, &[Shape])] = &[
     ("x", &[Path("M18 6 6 18"), Path("m6 6 12 12")]),
     ("check", &[Path("M20 6 9 17l-5-5")]),
     ("chevron", &[Path("m6 9 6 6 6-6")]), // chevron-down
+    ("pipette", &[ // pipette
+        Path("m12 9-8.414 8.414A2 2 0 0 0 3 18.828v1.344a2 2 0 0 1-.586 1.414A2 2 0 0 1 3.828 21h1.344a2 2 0 0 0 1.414-.586L15 12"),
+        Path("m18 9 .4.4a1 1 0 1 1-3 3l-3.8-3.8a1 1 0 1 1 3-3l.4.4 3.4-3.4a1 1 0 1 1 3 3z"),
+        Path("m2 22 .414-.414"),
+    ]),
     ("okc", &[Circle(12.0, 12.0, 10.0), Path("m9 12 2 2 4-4")]), // circle-check
     ("info", &[Circle(12.0, 12.0, 10.0), Path("M12 16v-4"), Path("M12 8h.01")]),
     ("alert", &[Circle(12.0, 12.0, 10.0), Path("M12 8v4"), Path("M12 16h.01")]), // circle-alert

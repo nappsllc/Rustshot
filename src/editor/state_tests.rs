@@ -389,7 +389,7 @@ fn every_tool_drafts_then_commits_on_release() {
                 *a == Pt::new(200.0, 200.0) && *b == Pt::new(300.0, 260.0)
             }
             (Tool::Marker, Obj::Marker { a, b, color, width }) => {
-                *a == Pt::new(200.0, 200.0) && *b == Pt::new(300.0, 260.0) && color.a == 90 && *width == e.sizes.marker
+                *a == Pt::new(200.0, 200.0) && *b == Pt::new(300.0, 260.0) && color.a == 90 && *width == e.mem.size(Tool::Marker)
             }
             (Tool::Rect, Obj::Rect { r: rr, .. })
             | (Tool::Ellipse, Obj::Ellipse { r: rr, .. })
@@ -582,7 +582,7 @@ fn text_commit_cancel_and_click_outside() {
     assert!(e.text.is_none() && !e.done, "Enter commits the draft, not the capture");
     assert_eq!(
         e.objects,
-        vec![Obj::Text { pos: Pt::new(300.0, 300.0), text: "Hello  ".into(), color: e.color, size: e.sizes.font }]
+        vec![Obj::Text { pos: Pt::new(300.0, 300.0), text: "Hello  ".into(), color: e.mem.color(Tool::Text), size: e.mem.size(Tool::Text) }]
     );
     // Shift+Enter neither commits nor inserts (single-line drafts).
     let mut a = typing("x");
@@ -607,10 +607,10 @@ fn text_commit_cancel_and_click_outside() {
     click(&mut a, 700, 600);
     assert_eq!(ed(&mut a).text.as_ref().map(|t| t.pos), Some(Pt::new(700.0, 600.0)));
     // The wheel does not change sizes while typing.
-    let before = ed(&mut a).sizes.font;
+    let before = ed(&mut a).mem.size(Tool::Text);
     ed(&mut a).last_wheel = a_second_ago();
     a.on_event(Ev::Wheel { delta: 120, x: 0, y: 0 });
-    assert_eq!(ed(&mut a).sizes.font, before);
+    assert_eq!(ed(&mut a).mem.size(Tool::Text), before);
 }
 
 // ---- history -----------------------------------------------------------------
@@ -689,21 +689,28 @@ fn wheel_and_size_acts_change_the_active_tool_size() {
         ed(a).last_wheel = a_second_ago();
         a.on_event(Ev::Wheel { delta, x: 10, y: 10 });
     };
-    let line = ed(&mut a).sizes.line;
+    // No tool chosen yet: the pencil's size (the first tool).
+    let line = ed(&mut a).mem.size(Tool::Path);
     wheel(&mut a, 120);
-    assert_eq!(ed(&mut a).sizes.line, line + 1.0);
+    assert_eq!(ed(&mut a).mem.size(Tool::Path), line + 1.0);
+    assert_eq!(ed(&mut a).mem.size(Tool::Line), line, "every tool has its own");
     assert_eq!(ed(&mut a).notice.as_ref().map(|t| t.text.clone()), Some(format!("Size {}", line as i32 + 1)));
     // A second notch within 160 ms is ignored, as is a zero delta.
     a.on_event(Ev::Wheel { delta: 120, x: 10, y: 10 });
     wheel(&mut a, 0);
-    assert_eq!(ed(&mut a).sizes.line, line + 1.0);
-    for (k, lo, hi, unit) in [('R', 1.0, 50.0, "shape"), ('M', 1.0, 50.0, "mark"), ('B', 4.0, 100.0, "block"), ('I', 4.0, 100.0, "block"), ('T', 8.0, 96.0, "text"), ('D', 1.0, 50.0, "line")] {
+    assert_eq!(ed(&mut a).mem.size(Tool::Path), line + 1.0);
+    // Invert has no size: the wheel does nothing, the readout is empty.
+    key(&mut a, 'I' as u32);
+    wheel(&mut a, 120);
+    assert_eq!(ed(&mut a).size_label(), "");
+    assert_eq!(ed(&mut a).mem.size(Tool::Pixelate), 12.0, "not the pixelate size");
+    key(&mut a, 'I' as u32);
+    for (k, lo, hi) in [('R', 1.0, 50.0), ('M', 1.0, 50.0), ('B', 4.0, 100.0), ('T', 8.0, 96.0), ('D', 1.0, 50.0)] {
         key(&mut a, k as u32);
-        assert_eq!(ed(&mut a).size_label().1, unit, "{k}");
         for _ in 0..120 {
             wheel(&mut a, -120);
         }
-        let v = |a: &mut App| ed(a).size_label().0.parse::<f32>().unwrap();
+        let v = |a: &mut App| ed(a).size_label().parse::<f32>().unwrap();
         assert_eq!(v(&mut a), lo, "{k}: floor");
         for _ in 0..120 {
             let State::Edit(e) = std::mem::replace(&mut a.st, State::Hidden) else { unreachable!() };
@@ -731,7 +738,7 @@ fn palette_opens_only_with_a_selection_and_picks_a_colour() {
     assert!(!dots.is_empty() && dots.len() <= palette_colors(&ed(&mut a).cfg).len());
     let (c, dr) = *dots.last().unwrap();
     click(&mut a, (dr.x + dr.w / 2.0) as i32, (dr.y + dr.h / 2.0) as i32);
-    assert_eq!(ed(&mut a).color, c);
+    assert_eq!(ed(&mut a).color(), c);
     assert!(!ed(&mut a).palette_open, "picking a colour closes it");
 }
 
@@ -763,10 +770,10 @@ fn toolbar_buttons_act_and_consume_the_press() {
     click(&mut a, ux, uy);
     assert!(ed(&mut a).objects.is_empty() && matches!(ed(&mut a).interact, Interact::None));
     // Size buttons and the palette button.
-    let line = ed(&mut a).sizes.shape;
+    let line = ed(&mut a).mem.size(Tool::Rect);
     let (sx, sy) = button(&mut a, Act::Size(1));
     click(&mut a, sx, sy);
-    assert_eq!(ed(&mut a).sizes.shape, line + 1.0);
+    assert_eq!(ed(&mut a).mem.size(Tool::Rect), line + 1.0);
     let (px, py) = button(&mut a, Act::Palette);
     click(&mut a, px, py);
     assert!(ed(&mut a).palette_open);
@@ -1139,7 +1146,7 @@ fn begin_capture_maps_the_region_and_takes_the_overrides() {
     let e = ed(&mut a);
     assert_eq!(e.sel, Some(r(40.0, 50.0, 300.0, 200.0)), "global → image coordinates");
     assert_eq!(e.cfg.filename_pattern, "%F_x");
-    assert_eq!(e.color, C4::rgb(0, 255, 0));
+    assert_eq!(e.color(), C4::rgb(0, 255, 0));
     assert!(e.shot.image.as_raw().is_empty() && e.base.dimensions() == (1440, 900), "pixels held once");
     assert!(matches!(e.tasks[..], [Task::Geometry]));
     assert!(a.pending.is_none());
@@ -1308,7 +1315,7 @@ fn record_popover_camera_bubble() {
     click(&mut a, cx, cy);
     let shown = ed(&mut a).rec.cam.shown.clone().expect("bubble shown");
     assert_eq!(shown.0, "", "the first camera");
-    assert_eq!(shown.1, crate::cam::Look { shape: crate::cam::Shape::Circle, size: crate::cam::CamSize::M, mirror: true });
+    assert_eq!(shown.1, crate::cam::Look::new(crate::cam::Shape::Circle, crate::cam::CamSize::M));
     assert_eq!(shown.2, (100, 100, 600, 400), "anchored to the selection");
     // Pick the second camera from its list.
     let (bx, by) = item(&mut a, |k| matches!(k, toolbar::Kind::DevBox { dev: toolbar::Dev::Cam, .. }));
