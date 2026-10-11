@@ -423,6 +423,33 @@ fn tiny_strokes_are_dropped() {
     assert_eq!(ed(&mut a).objects.len(), 1);
 }
 
+/// Shift-drawn shapes keep their press point as a corner in every drag
+/// direction and are square (the editor side of "draws with Shift jump and
+/// get cut off": that was the overlay window being moved, see
+/// `wind::imp::tests::overlay_ignores_outside_moves_and_never_enters_move_size`).
+#[test]
+fn shift_shapes_keep_the_press_point_in_every_direction() {
+    for k in ['R', 'C', 'B', 'I'] {
+        for (dx, dy) in [(60, 200), (-60, 200), (60, -200), (-60, -200), (200, 60), (-200, -60)] {
+            let mut a = app(Some(r(100.0, 100.0, 800.0, 600.0)));
+            key(&mut a, k as u32);
+            {
+                let _m = hold(SHIFT);
+                drag(&mut a, (500, 400), (500 + dx, 400 + dy));
+            }
+            let rr = match ed(&mut a).objects[..] {
+                [Obj::Rect { r, .. } | Obj::Ellipse { r, .. } | Obj::Pixelate { r, .. } | Obj::Invert { r }] => r,
+                ref o => panic!("{k}: {o:?}"),
+            };
+            let side = dx.abs().max(dy.abs()) as f32;
+            let x = if dx < 0 { 500.0 - side } else { 500.0 };
+            let y = if dy < 0 { 400.0 - side } else { 400.0 };
+            let want = r(x, y, side, side);
+            assert_eq!(rr, want, "{k} ({dx}, {dy})");
+        }
+    }
+}
+
 #[test]
 fn shift_constrains_lines_and_shapes() {
     let mut a = app(Some(r(0.0, 0.0, 1440.0, 900.0)));

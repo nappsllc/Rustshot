@@ -165,7 +165,15 @@ unsafe extern "system" fn wndproc(
             return DefWindowProcW(hwnd, msg, wp, lp);
         }
         let drv = &mut **slot;
+        #[cfg(test)]
+        if msg == WM_ENTERSIZEMOVE {
+            tests::MOVE_SIZE_LOOPS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        if let Some(r) = overlay_frame(hwnd, msg, wp, lp) {
+            return r;
+        }
         if msg == WM_DESTROY {
+            unpin(hwnd);
             drv.on_quit();
             forget_tick(hwnd);
             PostQuitMessage(0);
@@ -329,11 +337,62 @@ fn present(hdc: windows::Win32::Graphics::Gdi::HDC, fb: &mut PixBuf) {
     }
 }
 
+/// Where each overlay belongs (`show_at`): `(hwnd, [x, y, w, h])`.
+static PINS: std::sync::Mutex<Vec<(usize, [i32; 4])>> = std::sync::Mutex::new(Vec::new());
+
+fn pins() -> std::sync::MutexGuard<'static, Vec<(usize, [i32; 4])>> {
+    PINS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn pin(hwnd: HWND, at: [i32; 4]) {
+    let mut p = pins();
+    p.retain(|e| e.0 != hwnd.0 as usize);
+    p.push((hwnd.0 as usize, at));
+}
+
+fn unpin(hwnd: HWND) {
+    pins().retain(|e| e.0 != hwnd.0 as usize);
+}
+
+/// The overlay's frame is ours alone. Window-zoning tools (FancyZones,
+/// VirtualZones: Shift+drag snaps the dragged window into a zone) and
+/// Aero Snap move or resize foreground windows from outside; the overlay
+/// must cover exactly the shot (a moved overlay drew the shot shifted and
+/// half cut off). So: every position/size change is pinned back to the
+/// `show_at` rect, hit tests are always client (no caption or border to
+/// start a system move/size loop), the window menu's move/size/maximize/
+/// minimize/restore do nothing, and a DPI change keeps the rect.
+/// `None` = not an overlay frame message.
+unsafe fn overlay_frame(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> Option<LRESULT> {
+    match msg {
+        WM_WINDOWPOSCHANGING => {
+            let at = pins().iter().find(|e| e.0 == hwnd.0 as usize).map(|e| e.1)?;
+            // SAFETY: lParam of WM_WINDOWPOSCHANGING is a valid WINDOWPOS.
+            let pos = unsafe { &mut *(lp.0 as *mut WINDOWPOS) };
+            if !pos.flags.contains(SWP_NOMOVE) {
+                (pos.x, pos.y) = (at[0], at[1]);
+            }
+            if !pos.flags.contains(SWP_NOSIZE) {
+                (pos.cx, pos.cy) = (at[2], at[3]);
+            }
+            Some(LRESULT(0))
+        }
+        WM_NCHITTEST => Some(LRESULT(HTCLIENT as isize)),
+        WM_SYSCOMMAND => {
+            let cmd = (wp.0 & 0xFFF0) as u32;
+            [SC_MOVE, SC_SIZE, SC_MAXIMIZE, SC_MINIMIZE, SC_RESTORE].contains(&cmd).then_some(LRESULT(0))
+        }
+        WM_DPICHANGED => Some(LRESULT(0)),
+        _ => None,
+    }
+}
+
 /// Position + show the overlay at an exact physical rect and take focus.
 pub fn show_at(hwnd: HWND, x: i32, y: i32, w: i32, h: i32) {
     if hwnd.is_invalid() {
         return;
     }
+    pin(hwnd, [x, y, w, h]);
     unsafe {
         let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), x, y, w, h, SWP_SHOWWINDOW);
         let _ = ShowWindow(hwnd, SW_SHOW);
@@ -741,6 +800,9 @@ mod tests {
         }
     }
 
+    /// WM_ENTERSIZEMOVE seen by an overlay (a system move/size loop began).
+    pub(super) static MOVE_SIZE_LOOPS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
     /// Every `(hwnd, ms)` the backend's `retime` was asked for.
     pub(super) static RETIMES: std::sync::Mutex<Vec<(isize, u64)>> = std::sync::Mutex::new(Vec::new());
 
@@ -1105,5 +1167,108 @@ mod tests {
             println!("centre pixel {:#08x?}, want {want:#08x}", d.sampled);
             assert_eq!(d.sampled, Some(want));
         }
+    }
+
+    /// What the pinned-overlay test saw after outside code tried to move it.
+    #[derive(Default)]
+    struct PinSeen {
+        rects: Vec<(&'static str, RECT)>,
+        hit: Option<LRESULT>,
+    }
+
+    /// Stands in for the editor: shows the overlay at a fixed rect, then a
+    /// helper thread plays a window-zoning tool (FancyZones / VirtualZones
+    /// style: SetWindowPos / MoveWindow / maximize from another thread)
+    /// and a Shift-drag across the client area, and closes it.
+    struct Pinned {
+        at: RECT,
+        seen: std::sync::Arc<std::sync::Mutex<PinSeen>>,
+        helper: Option<std::thread::JoinHandle<()>>,
+        fb: PixBuf,
+    }
+
+    impl Driver for Pinned {
+        fn on_create(&mut self, hwnd: HWND) {
+            let a = self.at;
+            show_at(hwnd, a.left, a.top, a.right - a.left, a.bottom - a.top);
+            let raw = hwnd.0 as usize;
+            let seen = self.seen.clone();
+            self.helper = Some(std::thread::spawn(move || unsafe {
+                let hwnd = HWND(raw as *mut core::ffi::c_void);
+                let rect = |name: &'static str| {
+                    let mut r = RECT::default();
+                    let _ = GetWindowRect(hwnd, &mut r);
+                    seen.lock().unwrap().rects.push((name, r));
+                };
+                rect("shown");
+                let _ = SetWindowPos(hwnd, None, a.left + 500, a.top + 300, 160, 90, SWP_NOZORDER | SWP_NOACTIVATE);
+                rect("SetWindowPos");
+                let _ = SetWindowPos(hwnd, None, 0, 0, 100, 50, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+                rect("SetWindowPos size only");
+                let _ = MoveWindow(hwnd, a.left - 700, a.top + 40, 900, 900, false);
+                rect("MoveWindow");
+                let _ = SendMessageW(hwnd, WM_SYSCOMMAND, Some(WPARAM(SC_MAXIMIZE as usize)), Some(LPARAM(0)));
+                rect("SC_MAXIMIZE");
+                let _ = ShowWindow(hwnd, SW_MAXIMIZE);
+                rect("SW_MAXIMIZE");
+                let _ = ShowWindow(hwnd, SW_RESTORE);
+                rect("SW_RESTORE");
+                // A hit test anywhere in the window is client: never a caption
+                // or border that would start a system move/size loop.
+                let (cx, cy) = (a.left + 5, a.top + 5);
+                let hit = SendMessageW(hwnd, WM_NCHITTEST, Some(WPARAM(0)), Some(LPARAM(((cy as isize) << 16) | (cx as isize & 0xffff))));
+                seen.lock().unwrap().hit = Some(hit);
+                // A Shift-drag through the client area.
+                let mk = WPARAM(0x0001 | 0x0004); // MK_LBUTTON | MK_SHIFT
+                let at = |x: i32, y: i32| LPARAM(((y as isize) << 16) | (x as isize & 0xffff));
+                let _ = SendMessageW(hwnd, WM_LBUTTONDOWN, Some(mk), Some(at(10, 10)));
+                for i in 1..20 {
+                    let _ = SendMessageW(hwnd, WM_MOUSEMOVE, Some(mk), Some(at(10 + i * 8, 10 + i * 3)));
+                }
+                let _ = SendMessageW(hwnd, WM_LBUTTONUP, Some(WPARAM(0x0004)), Some(at(170, 67)));
+                rect("Shift-drag");
+                let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
+            }));
+        }
+        fn on_event(&mut self, _ev: Ev) -> bool {
+            false
+        }
+        fn frame(&mut self) -> Option<&mut PixBuf> {
+            Some(&mut self.fb)
+        }
+        fn cursor(&self) -> Cursor {
+            Cursor::Arrow
+        }
+    }
+
+    /// The overlay stays exactly where `show_at` put it whatever another
+    /// thread or process asks (window-zoning tools snap the "dragged"
+    /// window into a zone: the overlay jumped and half of it was cut off),
+    /// hit tests are always client, and a Shift-drag never enters a system
+    /// move/size loop. Shown far off screen, so nothing flashes.
+    #[test]
+    fn overlay_ignores_outside_moves_and_never_enters_move_size() {
+        let _guard = windows_lock();
+        let at = RECT { left: -30000, top: -30000, right: -30000 + 320, bottom: -30000 + 240 };
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(PinSeen::default()));
+        let mut d = Pinned { at, seen: seen.clone(), helper: None, fb: PixBuf::new(320, 240) };
+        let before = MOVE_SIZE_LOOPS.load(std::sync::atomic::Ordering::SeqCst);
+        std::thread::spawn(move || {
+            assert_eq!(run(&mut d), 0);
+            d.helper.take().expect("helper").join().expect("helper thread");
+        })
+        .join()
+        .expect("overlay thread");
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.rects.len(), 8, "{:?}", seen.rects.iter().map(|r| r.0).collect::<Vec<_>>());
+        for (name, r) in &seen.rects {
+            assert_eq!(
+                (r.left, r.top, r.right, r.bottom),
+                (at.left, at.top, at.right, at.bottom),
+                "{name}: the overlay moved"
+            );
+        }
+        assert_eq!(seen.hit, Some(LRESULT(HTCLIENT as isize)), "hit test");
+        assert_eq!(MOVE_SIZE_LOOPS.load(std::sync::atomic::Ordering::SeqCst), before, "no move/size loop");
     }
 }
