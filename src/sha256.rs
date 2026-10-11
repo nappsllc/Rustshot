@@ -116,7 +116,7 @@ pub fn digest(data: &[u8]) -> [u8; 32] {
 }
 
 /// Lowercase hex.
-#[cfg(test)]
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))] // tests; the OpenH264 pins (Linux)
 pub fn hex(bytes: &[u8]) -> String {
     const D: &[u8; 16] = b"0123456789abcdef";
     let mut s = String::with_capacity(bytes.len() * 2);

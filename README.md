@@ -294,8 +294,12 @@ Limitations:
 
 - **Linux** needs an **X11** session (or XWayland). Native Wayland capture and
   hotkeys are not supported yet. Runtime dependencies: `libx11`, `libxrandr`.
-  Screen recording on X11 records MP4 with `ffmpeg` (sound through `parec`,
-  from `pulseaudio-utils`; it works on PipeWire too) and GIF without it.
+  Screen recording on X11 records MP4 with `ffmpeg` and GIF without it.
+  Without ffmpeg, the first MP4 recording offers to download Cisco's
+  OpenH264 (about 1 MB, checked against a pinned SHA-256; the sound is then
+  encoded with the system's `libopus`). Sound is read through
+  `libpulse-simple` (or `parec` from `pulseaudio-utils`); it works on
+  PipeWire too.
   X11 cannot keep a window out of a recording, so the control bar sits
   beside the recorded area or on another monitor; when you record the whole
   screen of your only monitor it shrinks to a small pill (timer and Stop)

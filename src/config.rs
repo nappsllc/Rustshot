@@ -250,6 +250,13 @@ pub fn rewrite_loses(text: &str) -> bool {
 /// file is created with defaults). Written atomically.
 #[cfg_attr(target_os = "macos", allow(dead_code))] // macOS: no update dialog yet
 pub fn save_skip_version_at(path: &std::path::Path, version: &str) -> std::io::Result<()> {
+    save_top_key_at(path, "skip_version", version)
+}
+
+/// Set the top-level string `key` to `value` in the config file at
+/// `path`, keeping everything else as written (`skip_version`, the Linux
+/// recording encoder chosen in the first-use dialog).
+pub fn save_top_key_at(path: &std::path::Path, key: &str, value: &str) -> std::io::Result<()> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => to_toml(&Config::default()),
@@ -258,15 +265,22 @@ pub fn save_skip_version_at(path: &std::path::Path, version: &str) -> std::io::R
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir)?;
     }
-    write_atomic(path, with_skip_version(&text, version).as_bytes())
+    write_atomic(path, with_top_key(&text, key, value).as_bytes())
 }
 
 /// `text` with its top-level `skip_version` line replaced by `version`
 /// (inserted before the first `[table]`, or appended, when absent).
+#[cfg(test)]
 pub fn with_skip_version(text: &str, version: &str) -> String {
+    with_top_key(text, "skip_version", version)
+}
+
+/// `text` with its top-level `key` line set to the string `value` (see
+/// [`with_skip_version`]).
+pub fn with_top_key(text: &str, key: &str, version: &str) -> String {
     let crlf = text.contains("\r\n");
     let nl = if crlf { "\r\n" } else { "\n" };
-    let line = format!("skip_version = {}", toml_str(version));
+    let line = format!("{key} = {}", toml_str(version));
     let mut out = String::with_capacity(text.len() + line.len() + 2);
     let mut done = false;
     let mut top = true;
@@ -281,7 +295,7 @@ pub fn with_skip_version(text: &str, version: &str) -> String {
                 done = true;
             }
         }
-        let is_key = top && body.split_once('=').is_some_and(|(k, _)| k.trim() == "skip_version");
+        let is_key = top && body.split_once('=').is_some_and(|(k, _)| k.trim() == key);
         if is_key && !done {
             out.push_str(&line);
             out.push_str(if raw.ends_with('\n') { nl } else { "" });

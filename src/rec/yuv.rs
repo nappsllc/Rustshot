@@ -1,11 +1,15 @@
-//! BGRA → NV12 (BT.709, limited range), with a box-filter downscale for
-//! areas larger than the MP4 limit.
+//! BGRA → NV12 / I420 (BT.709, limited range), with a box-filter
+//! downscale for areas larger than the MP4 limit. Shared by the MP4
+//! encoders: Media Foundation (NV12, Windows) and OpenH264 (I420, Linux).
 //!
 //! NV12 is a full-size Y plane followed by an interleaved U/V plane at half
-//! resolution in both directions. Chroma is taken from the average of each
-//! 2×2 block. Fixed point, 16 fractional bits.
+//! resolution in both directions; I420 has the U and V planes one after the
+//! other instead. Chroma is taken from the average of each 2×2 block. Fixed
+//! point, 16 fractional bits.
+#![cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))] // no MP4 encoder on macOS yet
 
 // The MP4 size limit and fit are shared with the Linux encoders.
+#[cfg(any(windows, test))]
 pub use crate::rec::mp4_fit as fit;
 #[cfg(test)]
 use crate::rec::{MP4_MAX_H as MAX_H, MP4_MAX_W as MAX_W};
@@ -45,6 +49,38 @@ pub fn convert_into(
     } else {
         box_scale(bgra, w as usize, h as usize, out_w as usize, out_h as usize, scratch);
         to_nv12(scratch, out_w as usize * 4, out_w as usize, out_h as usize, out);
+    }
+}
+
+/// [`convert_into`], then the U/V plane split into I420's U and V planes
+/// (`out` is Y, U, V; `nv12` is scratch).
+#[allow(clippy::too_many_arguments)]
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))] // OpenH264 (Linux)
+pub fn convert_i420_into(
+    bgra: &[u8],
+    w: u32,
+    h: u32,
+    out_w: u32,
+    out_h: u32,
+    out: &mut Vec<u8>,
+    nv12: &mut Vec<u8>,
+    scratch: &mut Vec<u8>,
+) {
+    convert_into(bgra, w, h, out_w, out_h, nv12, scratch);
+    nv12_to_i420(nv12, out_w, out_h, out);
+}
+
+/// An NV12 picture (`w`×`h`, even) as I420.
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+pub fn nv12_to_i420(nv12: &[u8], w: u32, h: u32, out: &mut Vec<u8>) {
+    let ys = w as usize * h as usize;
+    let cs = ys / 4;
+    out.resize(ys + 2 * cs, 0);
+    out[..ys].copy_from_slice(&nv12[..ys]);
+    let (u, v) = out[ys..].split_at_mut(cs);
+    for ((uv, u), v) in nv12[ys..ys + 2 * cs].as_chunks::<2>().0.iter().zip(u).zip(v) {
+        *u = uv[0];
+        *v = uv[1];
     }
 }
 
@@ -195,6 +231,23 @@ mod tests {
         let (u, v) = (nv[4], nv[5]);
         assert!((170..=172).contains(&u), "{u}");
         assert!((178..=180).contains(&v), "{v}");
+    }
+
+    #[test]
+    fn i420_splits_the_chroma_planes() {
+        // 4×2: left half red, right half blue.
+        let mut px = Vec::new();
+        for _ in 0..2 {
+            for x in 0..4 {
+                px.extend_from_slice(if x < 2 { &[0, 0, 255, 255] } else { &[255, 0, 0, 255] });
+            }
+        }
+        let (mut out, mut nv, mut scratch) = (Vec::new(), Vec::new(), Vec::new());
+        convert_i420_into(&px, 4, 2, 4, 2, &mut out, &mut nv, &mut scratch);
+        assert_eq!(out.len(), 12);
+        assert_eq!(&out[..8], &[63, 63, 32, 32, 63, 63, 32, 32]);
+        assert_eq!(&out[8..10], &[102, 240], "U: red, blue");
+        assert_eq!(&out[10..12], &[240, 118], "V: red, blue");
     }
 
     #[test]

@@ -17,6 +17,16 @@ Rustshot does not collect, store or transmit personal data or telemetry.
   `objects.githubusercontent.com` / `release-assets.githubusercontent.com`).
   These requests carry no data about you or your screenshots; GitHub sees
   your IP address and a `rustshot/<version>` user agent, as with any download.
+- Screen recording: the screen, sound and camera are captured only while a
+  recording runs (the camera also while its bubble is shown before one).
+  Recordings are saved locally; nothing is uploaded.
+- OpenH264 (Linux without ffmpeg, only if you choose **Download OpenH264**
+  when you first record MP4): Rustshot downloads Cisco's OpenH264 library
+  once from Cisco (`http://ciscobinary.openh264.org/`, plain HTTP as Cisco
+  serves it; the file is checked against a SHA-256 built into Rustshot) and
+  keeps it in `~/.local/share/rustshot/openh264/`. The request carries no
+  data about you or your recordings; Cisco sees your IP address, as with any
+  download.
 - Rustshot makes no other network requests.
 
 Questions: https://github.com/nappsllc/rustshot/issues

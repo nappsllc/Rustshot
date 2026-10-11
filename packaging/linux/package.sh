@@ -34,7 +34,7 @@ Rustshot $version (linux x86_64, X11)
        rustshot daemon
 
 Requires libX11, libXrandr, libXext and libXfixes at runtime (present on every X11/Xorg desktop).
-Recording MP4 needs ffmpeg (with sound: PulseAudio or PipeWire, and parec + pactl from pulseaudio-utils); GIF needs nothing more.
+Recording MP4 uses ffmpeg, or else Cisco's OpenH264 (downloaded on first use) with libopus; sound needs PulseAudio or PipeWire (libpulse, pactl from pulseaudio-utils). GIF needs nothing more.
 Wayland sessions are not supported yet; run under XWayland for capture only.
 EOF
 

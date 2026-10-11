@@ -58,8 +58,8 @@ pub fn x11_session(wayland_display: Option<&std::ffi::OsStr>, session_type: Opti
     wayland_display.is_none_or(|d| d.is_empty()) && !session_type.is_some_and(|t| t.eq_ignore_ascii_case("wayland"))
 }
 
-/// Why MP4 is off on Linux without ffmpeg (the MP4 segment's tooltip).
-pub const NO_MP4: &str = "MP4 needs ffmpeg (install it, or wait for the built-in fallback)";
+/// Why MP4 is off (the MP4 segment's tooltip).
+pub const NO_MP4: &str = "MP4 needs an encoder (ffmpeg or OpenH264)";
 
 /// The MP4 segment's tooltip while ffmpeg is being asked.
 pub const CHECKING_MP4: &str = "Checking whether ffmpeg can record MP4";
@@ -81,12 +81,13 @@ thread_local! {
     pub static FAKE_MP4: std::cell::Cell<Mp4> = const { std::cell::Cell::new(Mp4::Yes) };
 }
 
-/// Whether MP4 can be recorded, without waiting: on Linux only with ffmpeg
-/// installed and able to encode H.264 (`ffmpeg -encoders`, a VA-API-only
-/// ffmpeg tried once; cached, each probe stopped after 3 s), asked on a
-/// background thread ([`Mp4::Checking`] until it answers; [`warm_mp4`]
-/// asks at start). Windows checks Media Foundation when the recording
-/// starts.
+/// Whether MP4 can be recorded, without waiting. On Linux it always can:
+/// with ffmpeg when it encodes H.264 (`ffmpeg -encoders`, a VA-API-only
+/// ffmpeg tried once; cached, each probe stopped after 3 s, asked on a
+/// background thread: [`Mp4::Checking`] until it answers, [`warm_mp4`]
+/// asks at start), with a downloaded OpenH264, or else after the first-use
+/// dialog when the recording starts (see [`linux_encoder`]). Windows
+/// checks Media Foundation when the recording starts.
 pub fn mp4_status() -> Mp4 {
     #[cfg(test)]
     {
@@ -94,12 +95,17 @@ pub fn mp4_status() -> Mp4 {
     }
     #[cfg(all(target_os = "linux", not(test)))]
     {
-        use crate::rec::linux::ffmpeg;
+        use crate::rec::linux::{ffmpeg, openh264};
+        if openh264::installed().is_some() {
+            return Mp4::Yes;
+        }
+        // Without a usable ffmpeg the first-use dialog offers OpenH264,
+        // when there is a build for this machine.
+        let ask = if crate::rec::openh264_pins::this_machine().is_some() { Mp4::Yes } else { Mp4::No };
         match ffmpeg::find().map(|exe| ffmpeg::caps_now(&exe)) {
-            None => Mp4::No,
             Some(None) => Mp4::Checking,
             Some(Some(c)) if c.h264.is_some() => Mp4::Yes,
-            Some(Some(_)) => Mp4::No,
+            _ => ask,
         }
     }
     #[cfg(all(not(target_os = "linux"), not(test)))]
@@ -114,6 +120,49 @@ pub fn warm_mp4() {
     #[cfg(all(target_os = "linux", not(test)))]
     if let Some(exe) = crate::rec::linux::ffmpeg::find() {
         crate::rec::linux::ffmpeg::warm(&exe);
+    }
+}
+
+/// A recording the user chose not to start after all (the first-use
+/// encoder dialog's Cancel / Install ffmpeg): ends like a countdown cancel.
+#[derive(Debug)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))] // only Linux asks
+pub struct NotStarted;
+
+impl std::fmt::Display for NotStarted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the recording was not started")
+    }
+}
+
+impl std::error::Error for NotStarted {}
+
+/// Linux: the MP4 encoder for `spec` (by `rec_linux_encoder`: ffmpeg,
+/// else the downloaded OpenH264, else the first-use dialog asks). The
+/// dialog can turn the recording into a GIF, or call it off
+/// ([`NotStarted`]). Blocks while the dialog is open; `ffmpeg::caps` is
+/// known by now (the popover waits for it).
+#[cfg(target_os = "linux")]
+fn linux_encoder(spec: &mut RecSpec) -> anyhow::Result<crate::rec::linux::native::Pick> {
+    use crate::rec::linux::codec_dialog::{self, Choice};
+    use crate::rec::linux::native::{pick, Pick};
+    use crate::rec::linux::{ffmpeg, openh264};
+    if spec.format != RecFormat::Mp4 {
+        return Ok(Pick::Ffmpeg);
+    }
+    let cfg = crate::config::load();
+    let ff = ffmpeg::find().is_some_and(|e| ffmpeg::caps(&e).h264.is_some());
+    match pick(&cfg.rec_linux_encoder, ff, openh264::installed().is_some()) {
+        Pick::Ask => {}
+        p => return Ok(p),
+    }
+    match codec_dialog::ask() {
+        Choice::DownloadOpenH264 => Ok(Pick::OpenH264),
+        Choice::Gif => {
+            *spec = spec.as_gif(cfg.rec_gif_fps);
+            Ok(Pick::Ffmpeg)
+        }
+        Choice::InstallFfmpeg | Choice::Cancel => Err(anyhow::Error::new(NotStarted)),
     }
 }
 
@@ -789,8 +838,10 @@ impl Run {
         _nudge: crate::wind::Hwnd,
         bubble: Option<crate::cam::Bubble>,
     ) -> anyhow::Result<Run> {
+        let mut spec = spec;
+        let enc = linux_encoder(&mut spec)?;
         let mic = MicFlags::default();
-        let ui = x11::Recorder::start(spec, geom, th, mic.clone(), bubble)?;
+        let ui = x11::Recorder::start(spec, geom, th, mic.clone(), enc, bubble)?;
         let mut run = Run {
             m: Machine::new(),
             mic,

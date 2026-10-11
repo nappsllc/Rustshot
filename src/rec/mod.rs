@@ -13,6 +13,9 @@
 //! wait for the encoder, and encoders stream to disk.
 
 pub mod gif;
+pub mod mp4;
+pub mod openh264_pins;
+pub mod yuv;
 pub mod mix;
 // Linux: XShm frames, the ffmpeg encoder, PulseAudio device lists. The
 // pure parts (argument building, parsing) are unit-tested everywhere.
@@ -312,6 +315,20 @@ impl RecSpec {
             system_audio: !gif && cfg.rec_system_audio,
             mic: (!gif && cfg.rec_mic).then(|| cfg.rec_mic_device.clone()),
             out: crate::export::auto_save_path_ext(cfg, now, format.ext()),
+        }
+    }
+
+    /// The same recording as a GIF at `fps` (no sound, `.gif`): what the
+    /// Linux first-use dialog's "Record GIF instead" records.
+    #[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+    pub fn as_gif(&self, fps: u32) -> RecSpec {
+        RecSpec {
+            format: RecFormat::Gif,
+            fps,
+            system_audio: false,
+            mic: None,
+            out: self.out.with_extension(RecFormat::Gif.ext()),
+            ..self.clone()
         }
     }
 

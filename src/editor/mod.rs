@@ -515,6 +515,7 @@ impl App {
                     crate::tray::set_recording(true);
                 }
             }
+            Err(e) if e.is::<rec_ui::NotStarted>() => self.recording_over(rec_ui::End::Cancelled),
             Err(e) => self.recording_over(rec_ui::End::Failed(format!("{e:#}"))),
         }
     }

@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Install X11 headers, validators and ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxrandr-dev libxext-dev libxfixes-dev desktop-file-utils appstream xvfb xauth ffmpeg pulseaudio pulseaudio-utils
+        run: sudo apt-get update && sudo apt-get install -y libx11-dev libxrandr-dev libxext-dev libxfixes-dev desktop-file-utils appstream xvfb xauth ffmpeg pulseaudio pulseaudio-utils libopus0 libpulse0 bzip2
       - name: Validate desktop entry and AppStream metadata
         run: |
           desktop-file-validate packaging/linux/io.github.nappsllc.rustshot.desktop
@@ -104,6 +104,26 @@ jobs:
           if grep -q "SKIP:" "$RUNNER_TEMP/test-logs/xvfb-rec7.log"; then
             echo "::error::the recording-with-sound test was skipped"; exit 1
           fi
+      # Recording without ffmpeg: Cisco's OpenH264 2.6.0 downloaded by the
+      # real code path (http://ciscobinary.openh264.org/, both pinned SHA-256s
+      # checked, unpacked with /usr/bin/bzip2) into a temporary XDG_DATA_HOME,
+      # the system's libopus and the built-in MP4 muxer: 1 s of synthetic
+      # frames and a tone (ffprobe: h264 + opus, 1 +- 0.1 s each; ffmpeg
+      # decodes it without an error), and a session with a pause. Every pinned
+      # file (x86_64 and aarch64) is downloaded and checked against its pins.
+      - name: Recording without ffmpeg (OpenH264 from Cisco, Opus, built-in MP4)
+        timeout-minutes: 6
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/test-logs"
+          export XDG_DATA_HOME="$RUNNER_TEMP/xdg"
+          timeout 300 cargo test --bin rustshot -- --ignored --test-threads=1 --nocapture live_oh264_ 2>&1 | tee "$RUNNER_TEMP/test-logs/oh264.log"
+          sha256sum "$XDG_DATA_HOME"/rustshot/openh264/*.so
+          stat -c '%a %n' "$XDG_DATA_HOME/rustshot/openh264"
+          grep -o "OH264 .*\|PULSE .*" "$RUNNER_TEMP/test-logs/oh264.log" "$RUNNER_TEMP/test-logs/xvfb-rec.log" | while read -r line; do
+            echo "::notice title=Recording without ffmpeg::$line"
+          done
+          grep -q "test result: ok. 3 passed" "$RUNNER_TEMP/test-logs/oh264.log" || { echo "::error::the OpenH264 tests did not all run"; exit 1; }
       - name: Upload Xvfb test log
         if: failure()
         uses: actions/upload-artifact@v4

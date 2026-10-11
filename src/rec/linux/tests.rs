@@ -333,3 +333,199 @@ fn live_rec_linux_xshm_frames() {
     assert_eq!((f.w, f.h, f.bgra.len()), (250, 150, 250 * 150 * 4));
     assert!(f.bgra.as_chunks::<4>().0.iter().all(|p| p[3] == 255), "opaque");
 }
+
+/// A 440 Hz tone at 0.4 for `n` stereo frames from frame `from`.
+fn tone(from: u64, n: u64) -> Vec<f32> {
+    (from..from + n)
+        .flat_map(|i| {
+            let v = ((i as f64) * 440.0 * std::f64::consts::TAU / 48_000.0).sin() as f32 * 0.4;
+            [v, v]
+        })
+        .collect()
+}
+
+/// A `w`×`h` frame with a white bar at column `n * 8`.
+fn bar_frame(w: u32, h: u32, n: u32, ts: Duration) -> crate::rec::Frame {
+    let mut bgra = vec![60u8; (w * h * 4) as usize];
+    let x = (n * 8) % w;
+    for y in 0..h {
+        for dx in 0..4 {
+            let i = ((y * w + (x + dx) % w) * 4) as usize;
+            bgra[i..i + 4].copy_from_slice(&[255, 255, 255, 255]);
+        }
+    }
+    crate::rec::Frame { w, h, bgra, ts }
+}
+
+/// Per-stream durations from `ffprobe -show_entries stream=codec_type,duration`.
+fn stream_durations(st: &str) -> std::collections::HashMap<String, f64> {
+    let mut durs = std::collections::HashMap::new();
+    let mut kind = String::new();
+    for l in st.lines() {
+        if let Some(k) = l.strip_prefix("codec_type=") {
+            kind = k.to_string();
+        } else if let Some(d) = l.strip_prefix("duration=") {
+            durs.insert(kind.clone(), d.parse::<f64>().unwrap_or(f64::NAN));
+        }
+    }
+    durs
+}
+
+/// Decode every frame of `path` with ffmpeg: its error output (empty
+/// when the file decodes cleanly).
+fn decode_errors(path: &Path) -> String {
+    let exe = ffmpeg::find().expect("ffmpeg is installed (to check the file)");
+    let o = Command::new(exe).args(["-v", "error", "-i"]).arg(path).args(["-f", "null", "-"]).stdin(Stdio::null()).output().unwrap();
+    assert!(o.status.success(), "ffmpeg could not decode {}: {}", path.display(), String::from_utf8_lossy(&o.stderr));
+    String::from_utf8_lossy(&o.stderr).trim().to_string()
+}
+
+/// The library and libopus, downloading OpenH264 first if needed (CI sets
+/// `XDG_DATA_HOME` to a temporary folder).
+fn openh264_and_opus() -> (std::sync::Arc<super::openh264::OpenH264>, std::sync::Arc<super::opus::Opus>) {
+    use super::openh264;
+    if openh264::installed().is_none() {
+        let t = Instant::now();
+        let p = openh264::download(&|_, _| true).expect("download OpenH264 from Cisco");
+        eprintln!("downloaded {} in {:?}", p.display(), t.elapsed());
+    }
+    let lib = openh264::OpenH264::load().expect("load OpenH264");
+    let opus = super::opus::Opus::load().expect("load libopus");
+    (lib, opus)
+}
+
+/// The real path without ffmpeg: the pinned OpenH264 from Cisco, the
+/// system's libopus and the built-in muxer, 1 s of synthetic frames and a
+/// tone; ffprobe must see H.264 and Opus of 1 s each, and ffmpeg must
+/// decode it without an error.
+#[test]
+#[ignore = "downloads OpenH264 from Cisco; needs libopus and ffmpeg (to check)"]
+fn live_oh264_one_second_of_frames_and_a_tone() {
+    let (lib, opus) = openh264_and_opus();
+    let dir = out_dir("oh264");
+    let path = dir.join("oh264.mp4");
+    let mut enc = super::native::NativeEncoder::create(&path, 641, 361, 30, Quality::Medium, lib, Some(opus)).unwrap();
+    assert!(enc.audio());
+    let mut sent = 0u64;
+    for n in 0..30u32 {
+        let ts = Duration::from_secs_f64(f64::from(n) / 30.0);
+        enc.push_video(&bar_frame(641, 361, n, ts)).unwrap();
+        // The sound in 10 ms pieces up to this frame's end.
+        let until = (f64::from(n + 1) / 30.0 * 48_000.0) as u64;
+        while sent < until {
+            let k = 480.min(until - sent);
+            enc.push_audio(&tone(sent, k), Duration::from_secs_f64(sent as f64 / 48_000.0)).unwrap();
+            sent += k;
+        }
+    }
+    Box::new(enc).finish().unwrap();
+    assert!(ffmpeg::has_moov(&path));
+    let fmt = ffprobe(&path, "format=duration,format_name");
+    let st = ffprobe(&path, "stream=codec_type,codec_name,width,height,duration,nb_frames");
+    eprintln!("ffprobe:\n{fmt}{st}");
+    let durs = stream_durations(&st);
+    let (v, a) = (durs.get("video").copied().unwrap_or(f64::NAN), durs.get("audio").copied().unwrap_or(f64::NAN));
+    let errors = decode_errors(&path);
+    let vol = mean_volume(&path);
+    eprintln!("OH264 one second: video={v:.3}s audio={a:.3}s mean_volume={vol:.1}dB size={}", std::fs::metadata(&path).unwrap().len());
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(st.contains("codec_name=h264") && st.contains("codec_name=opus"), "{st}");
+    assert_eq!((value(&st, "width"), value(&st, "height")), ("640", "360"), "odd sizes cropped to even");
+    assert!((v - 1.0).abs() <= 0.1, "video {v} s, want 1 ± 0.1");
+    assert!((a - 1.0).abs() <= 0.1, "audio {a} s, want 1 ± 0.1");
+    assert!(errors.is_empty(), "decode errors: {errors}");
+    assert!(vol > -30.0, "the tone is in the recording (mean_volume {vol} dB)");
+}
+
+/// The same encoder under a session: frames paced by the capture loop
+/// and a live tone mixed by the session, 2 s with a pause; the picture and
+/// the sound must come out the same length.
+#[test]
+#[ignore = "downloads OpenH264 from Cisco; needs libopus and ffmpeg (to check)"]
+fn live_oh264_session_keeps_picture_and_sound_in_step() {
+    let (lib, opus) = openh264_and_opus();
+    let dir = out_dir("oh264-session");
+    let spec = spec(RecFormat::Mp4, 30, (0, 0, 320, 240), dir.join("session.mp4"));
+    let enc = super::native::NativeEncoder::create(&spec.part_path(), 320, 240, 30, Quality::Low, lib, Some(opus)).unwrap();
+    let now = Instant::now();
+    let src = StallingFrames { w: 320, h: 240, start: now, at: Duration::from_secs(3600), stall: Duration::ZERO, stalled: false, n: 0 };
+    let audio: Vec<Box<dyn AudioSource>> = vec![Box::new(LiveTone { start: now, sent: 0 })];
+    let s = Session::start(spec, Box::new(src), audio, Box::new(enc)).unwrap();
+    std::thread::sleep(Duration::from_millis(1000));
+    s.pause();
+    std::thread::sleep(Duration::from_millis(500));
+    s.resume();
+    std::thread::sleep(Duration::from_millis(1000));
+    let path = s.stop().unwrap();
+    let fmt = ffprobe(&path, "format=duration");
+    let st = ffprobe(&path, "stream=codec_type,codec_name,duration");
+    eprintln!("ffprobe:\n{fmt}{st}");
+    let durs = stream_durations(&st);
+    let (v, a) = (durs.get("video").copied().unwrap_or(f64::NAN), durs.get("audio").copied().unwrap_or(f64::NAN));
+    let errors = decode_errors(&path);
+    eprintln!("OH264 session: video={v:.3}s audio={a:.3}s");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!((1.7..=2.3).contains(&v), "video {v} s, want 2 ± 0.3 (the pause is cut)");
+    assert!((v - a).abs() <= 0.1, "video {v} s and audio {a} s differ by more than 0.1 s");
+    assert!(errors.is_empty(), "decode errors: {errors}");
+}
+
+/// Every pinned OpenH264 (x86_64 and aarch64) as Cisco serves it today:
+/// the download's and the unpacked library's SHA-256 match the pins.
+#[test]
+#[ignore = "downloads every pinned OpenH264 from Cisco"]
+fn live_oh264_pins_match_ciscos_files() {
+    use super::openh264::{unpack_bzip2, verify_and_unpack};
+    let dir = out_dir("pins");
+    for pin in crate::rec::openh264_pins::PINS {
+        let bz2 = dir.join(format!("{}.download", pin.file));
+        crate::export::download_http_exact(&pin.url(), &bz2, pin.bz2_size, &|_, _| true).expect("download");
+        let got = crate::sha256::hex(&crate::sha256::file_digest(&bz2).unwrap());
+        eprintln!("OH264 pin {}: sha256 {got} (pinned {})", pin.file, pin.bz2_sha256);
+        verify_and_unpack(&bz2, &pin, &dir.join(pin.so), unpack_bzip2).expect("matches the pin");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// libpulse-simple reads the null sink's monitor while a tone plays into
+/// it: sound comes, with capture times close to now.
+#[test]
+#[ignore = "records PulseAudio through libpulse-simple"]
+fn live_rec_linux_pulse_simple_hears_the_tone() {
+    use super::pulse::{self, Sound};
+    assert!(pulse::available(), "libpulse-simple.so.0 is installed");
+    let all = super::pulse_list::list();
+    let Ok(system) = super::pulse_list::system_source(all.as_deref()) else {
+        eprintln!("SKIP: no sound server");
+        return;
+    };
+    let wav = std::env::temp_dir().join(format!("rustshot-tone-simple-{}.wav", std::process::id()));
+    tone_wav(&wav, 440.0, 5.0);
+    let paplay = ffmpeg::find_tool("paplay", None).expect("paplay (pulseaudio-utils)");
+    let mut player = Command::new(paplay).arg(&wav).stdin(Stdio::null()).spawn().expect("play the tone");
+    std::thread::sleep(Duration::from_millis(300));
+    let mut s = Sound::open(&system).expect("open the monitor");
+    assert_eq!(s.via(), "libpulse-simple");
+    let mut got = Vec::new();
+    let mut stamps = Vec::new();
+    let end = Instant::now() + Duration::from_millis(1500);
+    while Instant::now() < end {
+        let (n, at) = s.read_timed(&mut got);
+        if n > 0 {
+            stamps.push((Instant::now(), at));
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    drop(s);
+    let _ = player.kill(); // our own child, by its PID
+    let _ = player.wait();
+    let _ = std::fs::remove_file(&wav);
+    let rms = (got.iter().map(|v| v * v).sum::<f32>() / got.len().max(1) as f32).sqrt();
+    eprintln!("PULSE simple: {} samples, rms {rms:.3}, {} reads", got.len(), stamps.len());
+    assert!(got.len() > 48_000, "about 1.5 s of stereo sound, got {}", got.len());
+    assert!(rms > 0.05, "the tone is heard (rms {rms})");
+    for (now, at) in stamps {
+        let at = at.expect("a capture time");
+        assert!(at <= now && now - at < Duration::from_millis(500), "capture time {:?} before the read", now - at);
+    }
+}

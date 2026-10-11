@@ -541,3 +541,20 @@ fn spec_from_config() {
     assert_eq!(Quality::from_config("HIGH"), Quality::High);
     assert_eq!(RecFormat::from_config(" Gif "), RecFormat::Gif);
 }
+
+#[test]
+fn a_spec_turned_into_a_gif_has_no_sound_and_a_gif_name() {
+    let mp4 = RecSpec {
+        format: RecFormat::Mp4,
+        fps: 60,
+        quality: Quality::High,
+        area: (1, 2, 30, 40),
+        system_audio: true,
+        mic: Some(String::new()),
+        out: PathBuf::from("out").join("Rec 2026-10-10.mp4"),
+    };
+    let gif = mp4.as_gif(15);
+    assert_eq!((gif.format, gif.fps, gif.system_audio, gif.mic.as_deref()), (RecFormat::Gif, 15, false, None));
+    assert_eq!(gif.out, PathBuf::from("out").join("Rec 2026-10-10.gif"));
+    assert_eq!(gif.area, mp4.area);
+}

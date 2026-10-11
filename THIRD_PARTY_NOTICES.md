@@ -104,6 +104,26 @@ Butler), Apache-2.0.
 | windows-threading 0.2.1 | MIT OR Apache-2.0 |
 | zlib-rs 0.6.8 | Zlib |
 
+## Optional libraries loaded at run time (Linux, not shipped)
+
+Rustshot does not ship or link these; it loads them with `dlopen` when they
+are present, for recording.
+
+- **OpenH264** (Linux MP4 recording without ffmpeg). Downloaded by the user,
+  on request, directly from Cisco (`http://ciscobinary.openh264.org/`,
+  version 2.6.0, SHA-256 pinned in `src/rec/openh264_pins.rs`); Rustshot
+  never bundles or redistributes it. OpenH264 Video Codec provided by Cisco
+  Systems, Inc. The source code is BSD-2-Clause
+  (https://github.com/cisco/openh264/blob/master/LICENSE); Cisco's binary is
+  distributed under Cisco's binary license
+  (http://www.openh264.org/BINARY_LICENSE.txt), under which Cisco pays the
+  MPEG LA H.264/AVC patent royalties for the binaries it distributes.
+- **libopus** (`libopus.so.0`, the system's; Opus sound in those MP4s) —
+  BSD-3-Clause (https://opus-codec.org/license/).
+- **libpulse-simple** (`libpulse-simple.so.0`, the system's; reading
+  PulseAudio / PipeWire sound) — LGPL-2.1-or-later, used as a dynamically
+  loaded library (https://www.freedesktop.org/wiki/Software/PulseAudio/).
+
 ## Independent JPEG Group
 
 JPEG output uses the jpeg-encoder crate, whose forward DCT is ported from

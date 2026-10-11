@@ -85,6 +85,12 @@ impl PcmRing {
         }
     }
 
+    /// How long samples now wait in the server before they are read (a
+    /// source that can ask, like libpulse-simple, updates it every read).
+    pub fn set_latency(&mut self, latency: Duration) {
+        self.latency = latency;
+    }
+
     /// Append every whole frame waiting to `out`; how many samples, and
     /// when the first of them was captured: the newest was read at the
     /// last push, about one parec latency after it was captured, and the

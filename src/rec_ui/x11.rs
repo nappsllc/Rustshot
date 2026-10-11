@@ -24,7 +24,10 @@ use crate::editor::style::Ui;
 use crate::objects::Pt;
 use crate::rec::gif::GifEncoder;
 use crate::rec::linux::ffmpeg::{self, FfmpegEncoder};
-use crate::rec::linux::parec::ParecSource;
+use crate::rec::linux::native::{NativeEncoder, Pick};
+use crate::rec::linux::openh264::OpenH264;
+use crate::rec::linux::opus::Opus;
+use crate::rec::linux::pulse::Sound;
 use crate::rec::linux::pulse_list;
 use crate::rec::linux::xshm::XShmSource;
 use crate::rec::{AudioSource, FrameSource, RecFormat, RecSpec, VideoEncoder};
@@ -492,11 +495,12 @@ impl CountWin {
 }
 
 /// Open the capture, the sound and the encoder for `spec`, as on Windows:
-/// the sound is read in-app (parec) and mixed by the session; what cannot
-/// be recorded is left out and said. Runs on the recording worker, which
-/// outlives the parec and ffmpeg children it starts (see
-/// `rec::linux::child`).
-fn prepare(spec: &RecSpec, mic: MicFlags) -> Result<Parts> {
+/// the sound is read in-app (libpulse-simple, else parec) and mixed by the
+/// session; what cannot be recorded is left out and said. MP4 goes
+/// through ffmpeg or, when `enc` says so, OpenH264 with Opus in the
+/// built-in muxer. Runs on the recording worker, which outlives the
+/// children it starts (see `rec::linux::child`).
+fn prepare(spec: &RecSpec, mic: MicFlags, enc: Pick) -> Result<Parts> {
     if let Some(dir) = spec.out.parent() {
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
     }
@@ -506,37 +510,38 @@ fn prepare(spec: &RecSpec, mic: MicFlags) -> Result<Parts> {
     let mut late: Vec<Late> = Vec::new();
     let mut audio: Vec<Box<dyn AudioSource>> = Vec::new();
     let part = spec.part_path();
-    let enc: Box<dyn VideoEncoder> = match spec.format {
-        RecFormat::Mp4 => {
+    let enc: Box<dyn VideoEncoder> = match (spec.format, enc) {
+        (RecFormat::Mp4, Pick::OpenH264) => {
+            let lib = OpenH264::load().context("load OpenH264")?;
+            let sound = spec.system_audio || spec.mic.is_some();
+            let opus = if sound {
+                match Opus::load() {
+                    Ok(o) => Some(o),
+                    Err(e) => {
+                        warnings.push(format!("sound not recorded: {e:#} (install libopus)"));
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            if opus.is_some() {
+                open_sound(spec, &mic, Ok(()), &mut audio, &mut warnings, &mut late);
+            }
+            let e = NativeEncoder::create(&part, w, h, spec.capture_fps(), spec.quality, lib, opus.filter(|_| !audio.is_empty()))?;
+            eprintln!("rustshot: recording {w}x{h} with OpenH264, {} sound source(s)", audio.len());
+            Box::new(e)
+        }
+        (RecFormat::Mp4, _) => {
             let exe = ffmpeg::find().ok_or_else(|| anyhow!("{}", super::NO_MP4))?;
             let caps = ffmpeg::caps(&exe);
-            if spec.system_audio || spec.mic.is_some() {
-                let all = if caps.aac { pulse_list::list() } else { None };
-                let why = |e: String| if caps.aac { e } else { format!("{} has no AAC encoder", exe.display()) };
-                if spec.system_audio {
-                    match pulse_list::system_source(all.as_deref()).map_err(why).and_then(|s| ParecSource::open(&s).map_err(|e| format!("{e:#}"))) {
-                        Ok(a) => {
-                            late.push(ended_note("system sound", a.ended()));
-                            audio.push(Box::new(a));
-                        }
-                        Err(e) => warnings.push(format!("system sound not recorded: {e}")),
-                    }
-                }
-                if let Some(id) = &spec.mic {
-                    match pulse_list::mic_source(all.as_deref(), id).map_err(why).and_then(|s| ParecSource::open(&s).map_err(|e| format!("{e:#}"))) {
-                        Ok(a) => {
-                            late.push(ended_note("microphone", a.ended()));
-                            audio.push(Box::new(mic.opened(a)));
-                        }
-                        Err(e) => warnings.push(format!("microphone not recorded: {e}")),
-                    }
-                }
-            }
+            let ok = if caps.aac { Ok(()) } else { Err(format!("{} has no AAC encoder", exe.display())) };
+            open_sound(spec, &mic, ok, &mut audio, &mut warnings, &mut late);
             let e = FfmpegEncoder::create(&part, w, h, spec.capture_fps(), spec.quality, !audio.is_empty())?;
             eprintln!("rustshot: recording {w}x{h} with ffmpeg ({}), {} sound source(s)", e.codec().name(), audio.len());
             Box::new(e)
         }
-        RecFormat::Gif => Box::new(GifEncoder::create(&part, w, h, spec.capture_fps())?),
+        (RecFormat::Gif, _) => Box::new(GifEncoder::create(&part, w, h, spec.capture_fps())?),
     };
     for w in &warnings {
         eprintln!("rustshot: {w}");
@@ -545,7 +550,56 @@ fn prepare(spec: &RecSpec, mic: MicFlags) -> Result<Parts> {
     Ok(Parts { src, audio, enc, warnings, late })
 }
 
-/// The warning for a sound source whose parec stopped mid-recording.
+/// Open the system sound and the microphone `spec` asks for (unless
+/// `usable` says why sound cannot be recorded at all).
+fn open_sound(
+    spec: &RecSpec,
+    mic: &MicFlags,
+    usable: Result<(), String>,
+    audio: &mut Vec<Box<dyn AudioSource>>,
+    warnings: &mut Vec<String>,
+    late: &mut Vec<Late>,
+) {
+    if !spec.system_audio && spec.mic.is_none() {
+        return;
+    }
+    let all = if usable.is_ok() { pulse_list::list() } else { None };
+    // Without pactl (Flatpak, Snap) libpulse-simple still opens the
+    // server's defaults by name.
+    let blind = all.is_none() && crate::rec::linux::pulse::available();
+    let open = |name: Result<String, String>| {
+        usable.clone()?;
+        let s = Sound::open(&name?).map_err(|e| format!("{e:#}"))?;
+        eprintln!("rustshot: sound through {}", s.via());
+        Ok::<_, String>(s)
+    };
+    if spec.system_audio {
+        let name = if blind { Ok(pulse_list::DEFAULT_MONITOR.into()) } else { pulse_list::system_source(all.as_deref()) };
+        match open(name) {
+            Ok(a) => {
+                late.push(ended_note("system sound", a.ended()));
+                audio.push(Box::new(a));
+            }
+            Err(e) => warnings.push(format!("system sound not recorded: {e}")),
+        }
+    }
+    if let Some(id) = &spec.mic {
+        let name = if blind {
+            Ok(if id.is_empty() { pulse_list::DEFAULT_SOURCE.into() } else { id.clone() })
+        } else {
+            pulse_list::mic_source(all.as_deref(), id)
+        };
+        match open(name) {
+            Ok(a) => {
+                late.push(ended_note("microphone", a.ended()));
+                audio.push(Box::new(mic.opened(a)));
+            }
+            Err(e) => warnings.push(format!("microphone not recorded: {e}")),
+        }
+    }
+}
+
+/// The warning for a sound source that stopped mid-recording.
 fn ended_note(what: &'static str, ended: crate::rec::linux::parec::Ended) -> Late {
     Box::new(move || {
         let why = ended.lock().unwrap_or_else(|e| e.into_inner()).clone()?;
@@ -568,8 +622,8 @@ pub struct Recorder {
 }
 
 impl Recorder {
-    pub fn start(spec: RecSpec, geom: Geom, th: Theme, mic: MicFlags, bubble: Option<crate::cam::Bubble>) -> Result<Recorder> {
-        let mut r = Recorder::start_with(spec, geom, th, Box::new(move |s: &RecSpec| prepare(s, mic)))?;
+    pub fn start(spec: RecSpec, geom: Geom, th: Theme, mic: MicFlags, enc: Pick, bubble: Option<crate::cam::Bubble>) -> Result<Recorder> {
+        let mut r = Recorder::start_with(spec, geom, th, Box::new(move |s: &RecSpec| prepare(s, mic, enc)))?;
         r.bubble = bubble;
         Ok(r)
     }

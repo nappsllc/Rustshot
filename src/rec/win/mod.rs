@@ -5,7 +5,7 @@
 pub mod dxgi;
 pub mod gdi_poll;
 pub mod mf;
-pub mod nv12;
+pub use super::yuv as nv12;
 pub mod wasapi;
 
 pub use dxgi::DxgiSource;

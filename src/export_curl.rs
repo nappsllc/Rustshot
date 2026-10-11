@@ -20,7 +20,31 @@ pub fn download_to(
     if !is_safe_download_url(url) {
         return Err("refusing to download from an unexpected URL".into());
     }
-    let r = run_curl(url, dest, progress);
+    let https = ["-fsSL", "--proto", "=https", "--proto-redir", "=https", "--max-redirs", "5"];
+    let r = run_curl(url, dest, &https, progress, &is_allowed_download_hop);
+    if r.is_err() {
+        let _ = std::fs::remove_file(dest);
+    }
+    r
+}
+
+/// Download exactly `url` (plain HTTP, no redirects, at most `max` bytes)
+/// to `dest`: for Cisco's OpenH264 binaries, which Cisco serves over HTTP
+/// only. The caller checks the URL is pinned and verifies the file's
+/// SHA-256 before using it. A partial file is deleted on any failure.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))] // the Linux encoder without ffmpeg
+pub fn download_http_exact(
+    url: &str,
+    dest: &Path,
+    max: u64,
+    progress: &dyn Fn(u64, Option<u64>) -> bool,
+) -> Result<(), String> {
+    if !url.starts_with("http://") || url.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return Err("refusing to download from an unexpected URL".into());
+    }
+    let max = max.to_string();
+    let args = ["-fsS", "--proto", "=http", "--max-redirs", "0", "--max-filesize", &max];
+    let r = run_curl(url, dest, &args, progress, &|eff| eff == url);
     if r.is_err() {
         let _ = std::fs::remove_file(dest);
     }
@@ -30,13 +54,15 @@ pub fn download_to(
 fn run_curl(
     url: &str,
     dest: &Path,
+    args: &[&str],
     progress: &dyn Fn(u64, Option<u64>) -> bool,
+    allowed_end: &dyn Fn(&str) -> bool,
 ) -> Result<(), String> {
     // A stale file must not be reused (curl would truncate it in place).
     let _ = std::fs::remove_file(dest);
     let mut child = Command::new("curl")
         .arg("-q") // first argument: ignore ~/.curlrc
-        .args(["-fsSL", "--proto", "=https", "--proto-redir", "=https", "--max-redirs", "5"])
+        .args(args)
         .args(["--connect-timeout", "15", "-w", "%{url_effective}", "-o"])
         .arg(dest)
         .arg(url)
@@ -69,7 +95,7 @@ fn run_curl(
         return Err(format!("curl: {}", String::from_utf8_lossy(&out.stderr).trim()));
     }
     let effective = String::from_utf8_lossy(&out.stdout);
-    if !is_allowed_download_hop(effective.trim()) {
+    if !allowed_end(effective.trim()) {
         return Err("refusing a download redirected to an unexpected host".into());
     }
     let got = size();

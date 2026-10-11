@@ -559,6 +559,8 @@ pub use imp::*;
 #[cfg(not(windows))]
 #[path = "export_curl.rs"]
 mod curl;
+#[cfg(target_os = "linux")]
+pub use curl::download_http_exact;
 #[cfg(not(windows))]
 pub use curl::download_to;
 
