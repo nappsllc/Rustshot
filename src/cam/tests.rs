@@ -8,7 +8,7 @@ pub(crate) static REMEMBERED_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(
 #[cfg(windows)]
 pub(crate) static LIVE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-const LOOK: Look = Look { shape: Shape::Circle, size: CamSize::M, mirror: false };
+const LOOK: Look = Look { shape: Shape::Circle, size: CamSize::M, mirror: false, ring: None, ring_w: 3 };
 
 #[test]
 fn config_values_round_trip() {
@@ -81,7 +81,7 @@ fn ring_hugs_the_edge_in_the_accent() {
     for shape in Shape::ALL {
         let t = template(Look { shape, ..LOOK }, 1.0, &DARK);
         let d = t.d as usize;
-        let rw = ring_width(1.0);
+        let rw = ring_width(3, 1.0);
         for y in 0..d {
             for x in 0..d {
                 let e = sdf(shape, d as f32, x as f32 + 0.5, y as f32 + 0.5);
@@ -102,6 +102,39 @@ fn ring_hugs_the_edge_in_the_accent() {
         let p = &out[((pad + d / 2) * w + pad + 1) * 4..][..4];
         assert_eq!([p[2], p[1], p[0], p[3]], [DARK.accent.r, DARK.accent.g, DARK.accent.b, 255], "{shape:?}");
     }
+}
+
+/// The ring takes the look's colour and width (logical px, scaled); at 0
+/// there is none and the picture fills the shape.
+#[test]
+fn ring_colour_and_width_follow_the_look() {
+    let green = C4::rgb(0, 200, 80);
+    let at = |t: &Template, out: &[u8], x: usize| {
+        let (w, pad, d) = (t.w as usize, t.pad as usize, t.d as usize);
+        let p = &out[((pad + d / 2) * w + pad + x) * 4..][..4];
+        [p[2], p[1], p[0], p[3]]
+    };
+    for (s, rw) in [(1.0f32, 8u8), (2.0, 8)] {
+        let t = template(Look { ring: Some(green), ring_w: rw, ..LOOK }, s, &DARK);
+        let mut out = Vec::new();
+        compose(&t, Some(&halves(t.d)), false, &mut out);
+        let px = (rw as f32 * s) as usize;
+        assert_eq!(at(&t, &out, 1), [0, 200, 80, 255], "{s}x: the ring's colour");
+        assert_eq!(at(&t, &out, px - 2), [0, 200, 80, 255], "{s}x: still the ring");
+        assert_eq!(at(&t, &out, px + 2), [255, 0, 0, 255], "{s}x: the picture inside it");
+        assert!(t.ring.contains(&255));
+    }
+    // No ring: the picture right to the edge.
+    let t = template(Look { ring_w: 0, ..LOOK }, 1.0, &DARK);
+    assert!(t.ring.iter().all(|&v| v == 0) && t.pic == t.mask);
+    let mut out = Vec::new();
+    compose(&t, Some(&halves(t.d)), false, &mut out);
+    assert_eq!(at(&t, &out, 1), [255, 0, 0, 255]);
+    // A translucent colour is drawn opaque.
+    let t = template(Look { ring: Some(green.with_alpha(40)), ..LOOK }, 1.0, &DARK);
+    let mut out = Vec::new();
+    compose(&t, None, false, &mut out);
+    assert_eq!(at(&t, &out, 1), [0, 200, 80, 255]);
 }
 
 /// A test picture: left half red, right half blue.
@@ -500,7 +533,7 @@ fn render_bubble_previews() {
                     CamSize::ALL
                         .iter()
                         .map(|&size| {
-                            let t = template(Look { shape, size, mirror: false }, s, th);
+                            let t = template(Look { shape, size, ..LOOK }, s, th);
                             let f = fit_square(&pic, t.d);
                             (t, f)
                         })
@@ -531,8 +564,8 @@ fn render_bubble_previews() {
         }
         // Mirror and placeholder, M circle and rounded at 2x.
         for (name, look, frame) in [
-            ("mirror-off", Look { shape: Shape::Rounded, size: CamSize::M, mirror: false }, true),
-            ("mirror-on", Look { shape: Shape::Rounded, size: CamSize::M, mirror: true }, true),
+            ("mirror-off", Look { shape: Shape::Rounded, ..LOOK }, true),
+            ("mirror-on", Look { shape: Shape::Rounded, mirror: true, ..LOOK }, true),
             ("placeholder", LOOK, false),
         ] {
             let t = template(look, 2.0, th);

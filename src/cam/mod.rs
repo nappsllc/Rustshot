@@ -271,6 +271,19 @@ pub struct Look {
     pub size: CamSize,
     /// Flip left-right (a mirror image, what people expect of themselves).
     pub mirror: bool,
+    /// The ring's colour (opaque); `None` = the theme's accent.
+    pub ring: Option<C4>,
+    /// The ring's width in logical px; 0 = no ring.
+    pub ring_w: u8,
+}
+
+impl Look {
+    /// `shape` and `size`, mirrored, with the default accent ring (tests).
+    #[cfg(test)]
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
+    pub fn new(shape: Shape, size: CamSize) -> Look {
+        Look { shape, size, mirror: true, ring: None, ring_w: crate::config::RING_WIDTH_DEFAULT as u8 }
+    }
 }
 
 /// The bubble's side in physical px at UI scale `scale`.
@@ -283,9 +296,9 @@ pub fn pad(scale: f32) -> u32 {
     (16.0 * scale.clamp(1.0, 4.0)).ceil() as u32
 }
 
-/// The accent ring's width (physical px).
-pub fn ring_width(scale: f32) -> f32 {
-    (3.0 * scale.clamp(1.0, 4.0)).round()
+/// The ring's width (physical px) for `logical` px at UI scale `scale`.
+pub fn ring_width(logical: u8, scale: f32) -> f32 {
+    (logical as f32 * scale.clamp(1.0, 4.0)).round()
 }
 
 /// Corner radius of the rounded square: a fifth of its side.
@@ -335,13 +348,14 @@ pub struct Template {
     placeholder: Vec<u8>,
 }
 
-/// The template for `look` at `scale` in theme `th` (ring in its accent).
+/// The template for `look` at `scale` in theme `th` (the ring in the
+/// look's colour, else the theme's accent).
 pub fn template(look: Look, scale: f32, th: &Theme) -> Template {
     let d = side(look.size, scale);
     let pad = pad(scale);
     let w = d + 2 * pad;
     let s = scale.clamp(1.0, 4.0);
-    let (df, rw) = (d as f32, ring_width(scale));
+    let (df, rw) = (d as f32, ring_width(look.ring_w, scale));
     // A soft shadow, falling a little: from the distance to the shape
     // moved down, faded out over `blur` (smoothstep).
     let (dy, blur) = (3.0 * s, 10.0 * s);
@@ -362,7 +376,8 @@ pub fn template(look: Look, scale: f32, th: &Theme) -> Template {
         for x in 0..d {
             let e = sdf(look.shape, df, x as f32 + 0.5, y as f32 + 0.5);
             let inside = (0.5 - e).clamp(0.0, 1.0);
-            let inner = (0.5 - (e + rw)).clamp(0.0, 1.0).min(inside);
+            // No ring: the picture fills the shape.
+            let inner = if rw <= 0.0 { inside } else { (0.5 - (e + rw)).clamp(0.0, 1.0).min(inside) };
             let i = (y * d + x) as usize;
             mask[i] = (inside * 255.0).round() as u8;
             // The picture only inside the ring; the ring takes the rest of
@@ -383,7 +398,7 @@ pub fn template(look: Look, scale: f32, th: &Theme) -> Template {
     for p in ph.as_chunks_mut::<4>().0 {
         p.swap(0, 2);
     }
-    Template { d, pad, w, shadow, mask, ring, pic, ring_c: th.accent, placeholder: ph }
+    Template { d, pad, w, shadow, mask, ring, pic, ring_c: look.ring.unwrap_or(th.accent).with_alpha(255), placeholder: ph }
 }
 
 /// The bubble's pixels: `t`'s shadow, the picture `frame` (`t.d` square,

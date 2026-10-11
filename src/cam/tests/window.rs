@@ -56,7 +56,7 @@ fn rect(h: HWND) -> RECT {
     r
 }
 
-const M: Look = Look { shape: Shape::Circle, size: CamSize::M, mirror: true };
+const M: Look = Look { shape: Shape::Circle, size: CamSize::M, mirror: true, ring: None, ring_w: 3 };
 
 #[test]
 fn bubble_shows_pictures_follows_the_area_and_releases_the_camera() {
@@ -130,7 +130,7 @@ fn live_cam_bubble_shows_the_camera() {
         return;
     }
     assert!(b.has_picture(), "pictures within a second");
-    b.set_look(Look { shape: Shape::Rounded, size: CamSize::S, mirror: false }, &DARK);
+    b.set_look(Look { shape: Shape::Rounded, size: CamSize::S, mirror: false, ..M }, &DARK);
     pump(1000);
     assert!(b.has_picture() && b.error().is_none());
     let t = Instant::now();

@@ -213,6 +213,10 @@ pub struct RecOpts {
     pub cam_shape: Shape,
     pub cam_size: CamSize,
     pub cam_mirror: bool,
+    /// The bubble's ring colour; `None` = the theme's accent.
+    pub cam_ring: Option<crate::uifb::C4>,
+    /// The ring's width in logical px (0 = no ring).
+    pub cam_ring_w: u32,
 }
 
 impl RecOpts {
@@ -229,12 +233,20 @@ impl RecOpts {
             cam_shape: Shape::from_config(&cfg.rec_camera_shape),
             cam_size: CamSize::from_config(&cfg.rec_camera_size),
             cam_mirror: cfg.rec_camera_mirror,
+            cam_ring: crate::config::parse_color(&cfg.rec_camera_ring_color).map(|(r, g, b, _)| crate::uifb::C4::rgb(r, g, b)),
+            cam_ring_w: cfg.rec_camera_ring_width.min(crate::config::RING_WIDTH_MAX),
         }
     }
 
     /// How the camera bubble looks.
     pub fn cam_look(&self) -> Look {
-        Look { shape: self.cam_shape, size: self.cam_size, mirror: self.cam_mirror }
+        Look {
+            shape: self.cam_shape,
+            size: self.cam_size,
+            mirror: self.cam_mirror,
+            ring: self.cam_ring,
+            ring_w: self.cam_ring_w.min(crate::config::RING_WIDTH_MAX) as u8,
+        }
     }
 
     /// The frame rate of the chosen format.

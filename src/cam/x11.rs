@@ -468,7 +468,7 @@ mod tests {
 
     #[test]
     fn the_input_shape_is_the_bubble_not_its_shadow() {
-        let look = Look { shape: super::super::Shape::Circle, size: super::super::CamSize::S, mirror: true };
+        let look = Look::new(super::super::Shape::Circle, super::super::CamSize::S);
         let t = super::super::template(look, 1.0, &crate::theme::DARK);
         let runs = input_runs(&t);
         let (pad, d) = (t.pad as i16, t.d as i16);

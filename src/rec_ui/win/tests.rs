@@ -342,7 +342,7 @@ fn live_rec_camera_failure_is_said_with_the_file() {
     let dir = worker_dir("live-cam");
     let s = spec(RecFormat::Gif, 10, geom.area, dir.join("a.gif"));
     let mut ui = Recorder::start_with(s, geom, crate::theme::DARK, HWND::default(), fake_parts(None, Arc::new(AtomicBool::new(false)), vec![])).unwrap();
-    let look = crate::cam::Look { shape: crate::cam::Shape::Circle, size: crate::cam::CamSize::S, mirror: true };
+    let look = crate::cam::Look::new(crate::cam::Shape::Circle, crate::cam::CamSize::S);
     let open: crate::cam::Opener = Box::new(|| bail!("The camera was disconnected or taken by another app"));
     let bubble = crate::cam::Bubble::show_with(look, "", (200, 200, 400, 300), 1.0, &crate::theme::DARK, HWND::default(), open).unwrap();
     let bh = bubble.hwnd();
