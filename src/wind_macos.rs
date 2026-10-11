@@ -236,13 +236,19 @@ static PRESENT: AtomicBool = AtomicBool::new(false);
 /// Window of the running overlay (0 = none); read by `capture_macos`.
 pub static MAIN_WINDOW: AtomicUsize = AtomicUsize::new(0);
 /// Cached overlay class (NSWindow subclass), created on first use.
+/// NSWindowCollectionBehavior of the overlay and the recording windows:
+/// CanJoinAllSpaces (1 << 0) | Stationary (1 << 4) | IgnoresCycle (1 << 6)
+/// | FullScreenAuxiliary (1 << 8).
+const COLLECT_OVERLAY: u64 = (1 << 0) | (1 << 4) | (1 << 6) | (1 << 8);
+
 static OVERLAY_CLASS: AtomicUsize = AtomicUsize::new(0);
 
 std::thread_local! {
-    /// Window frame in points as last set by `show_at` (pump thread only):
-    /// NSEvent locations are window-local with y up, Quartz is global with
-    /// y down, and this is the flip between them.
-    static WIN_FRAME: Cell<(i32, i32, i32)> = const { Cell::new((0, 0, 0)) };
+    /// The overlay as last placed by `show_at` (pump thread only): its
+    /// top-left in pixels, its height in points and the pixels per point
+    /// (`capture::backing`). NSEvent locations are window-local points
+    /// with y up; the driver's are global pixels with y down.
+    static WIN_FRAME: Cell<(f64, f64, f64, f64)> = const { Cell::new((0.0, 0.0, 0.0, 1.0)) };
 }
 
 // --- public API -----------------------------------------------------------
@@ -263,26 +269,22 @@ pub fn invalidate(hwnd: Hwnd) {
 /// The event loops read `tick_ms(win)` each pass; nothing to re-arm.
 pub fn retime(_hwnd: Hwnd, _ms: u64) {}
 
-/// Position + show the overlay at an exact rect (points, Quartz space) and
-/// take focus.
+/// Position + show the overlay at an exact rect (the shared code's pixels,
+/// see `capture_macos`; placed in points) and take focus.
 pub fn show_at(hwnd: Hwnd, x: i32, y: i32, w: i32, h: i32) {
     if hwnd.0 == 0 {
         return;
     }
     unsafe {
         let window = hwnd.0 as *mut c_void;
-        WIN_FRAME.with(|f| f.set((x, y, h)));
-        let size = CGSize {
-            width: w as f64,
-            height: h as f64,
-        };
+        let k = crate::capture::backing();
+        let (px, py, pw, ph) = crate::capture::pts::rect_pt((x, y, w.max(0) as u32, h.max(0) as u32), k);
+        WIN_FRAME.with(|f| f.set((f64::from(x), f64::from(y), ph, k)));
+        let size = CGSize { width: pw, height: ph };
         let _: () = msg1(window, objc_sel(c"setContentSize:"), size);
-        // Quartz top-down origin → Cocoa bottom-up frame, same points space
-        // (a borderless window's frame equals its content rect).
-        let origin = CGPoint {
-            x: x as f64,
-            y: crate::capture::main_display_height() - y as f64 - h as f64,
-        };
+        // Quartz top-down origin → Cocoa bottom-up frame (a borderless
+        // window's frame equals its content rect).
+        let origin = CGPoint { x: px, y: crate::capture::main_display_height() - py - ph };
         let _: () = msg1(window, objc_sel(c"setFrameOrigin:"), origin);
         let app = objc_cls(c"NSApplication");
         let app: *mut c_void = msg0(app, objc_sel(c"sharedApplication"));
@@ -365,7 +367,7 @@ fn pump_loop(driver: &mut dyn Driver) -> i32 {
             eprintln!("failed to create overlay window");
             return 1;
         }
-        WIN_FRAME.with(|f| f.set((0, 0, 0)));
+        WIN_FRAME.with(|f| f.set((0.0, 0.0, 0.0, 1.0)));
         MAIN_WINDOW.store(window as usize, Ordering::SeqCst);
         driver.on_create(Hwnd(window as usize));
 
@@ -465,7 +467,7 @@ fn pump_loop(driver: &mut dyn Driver) -> i32 {
         let _: () = msg0(window, objc_sel(c"close"));
         let _: () = msg0(window, objc_sel(c"release"));
         MAIN_WINDOW.store(0, Ordering::SeqCst);
-        WIN_FRAME.with(|f| f.set((0, 0, 0)));
+        WIN_FRAME.with(|f| f.set((0.0, 0.0, 0.0, 1.0)));
         0
     }
 }
@@ -479,12 +481,15 @@ fn create_window() -> *mut c_void {
             return core::ptr::null_mut();
         }
         let w: *mut c_void = msg0(class, objc_sel(c"alloc"));
-        let w: *mut c_void = msg3(
+        // The designated initializer (there is no public
+        // `initWithStyleMask:backing:defer:`); the frame is set later.
+        let w: *mut c_void = msg4(
             w,
-            objc_sel(c"initWithStyleMask:backing:defer:"),
-            0i64, // NSWindowStyleMaskBorderless (no chrome, outer == inner)
-            2i64, // NSBackingStoreBuffered
-            0i64, // defer = NO
+            objc_sel(c"initWithContentRect:styleMask:backing:defer:"),
+            CGRect::default(),
+            0u64, // NSWindowStyleMaskBorderless (no chrome, outer == inner)
+            2u64, // NSBackingStoreBuffered
+            0i8,  // defer = NO
         );
         if w.is_null() {
             return core::ptr::null_mut();
@@ -494,13 +499,15 @@ fn create_window() -> *mut c_void {
         // screensaver/menu-bar levels (kCGFloatingWindowLevelKey = 5 → 3).
         let level = CGWindowLevelForKey(5) as i64;
         let _: () = msg1(w, objc_sel(c"setLevel:"), level);
-        // CanJoinAllSpaces | FullScreenAuxiliary: follow the user onto every
-        // Space and over full-screen apps (WS_EX_TOPMOST parity).
-        let _: () = msg1(w, objc_sel(c"setCollectionBehavior:"), (1i64 << 0) | (1i64 << 2));
+        // NSWindowCollectionBehavior: CanJoinAllSpaces (1 << 0) | Stationary
+        // (1 << 4) | IgnoresCycle (1 << 6) | FullScreenAuxiliary (1 << 8):
+        // on every Space and over full-screen apps (WS_EX_TOPMOST parity),
+        // not moved by Exposé, not in the Cmd-` window cycle.
+        let _: () = msg1(w, objc_sel(c"setCollectionBehavior:"), COLLECT_OVERLAY);
         let _: () = msg1(w, objc_sel(c"setAcceptsMouseMovedEvents:"), 1i64);
         let _: () = msg1(w, objc_sel(c"setHasShadow:"), 0i64);
         let bg: *mut c_void = msg0(objc_cls(c"NSColor"), objc_sel(c"blackColor"));
-        let _: () = msg1(w, objc_sel(c"setBackground:"), bg);
+        let _: () = msg1(w, objc_sel(c"setBackgroundColor:"), bg);
         let view: *mut c_void = msg0(objc_cls(c"NSView"), objc_sel(c"alloc"));
         let view: *mut c_void = msg1(view, objc_sel(c"initWithFrame:"), CGRect::default());
         if view.is_null() {
@@ -763,7 +770,9 @@ mod window {
             let mons = crate::capture::monitors().unwrap_or_default();
             if let Some(m) = mons.iter().find(|m| m.contains(cx, cy)).or(mons.first()) {
                 let outer_h = h + title_bar_height(win);
-                let (x, y) = centre_in((m.x, m.y, m.w as i32, m.h as i32), w as i32, outer_h.round() as i32);
+                // Monitors are in pixels; the window is placed in points.
+                let (mx, my, mw, mh) = crate::capture::to_points_i((m.x, m.y, m.w, m.h));
+                let (x, y) = centre_in((mx, my, mw as i32, mh as i32), w as i32, outer_h.round() as i32);
                 let top_left = CGPoint { x: x as f64, y: crate::capture::main_display_height() - y as f64 };
                 let _: () = msg1(win, objc_sel(c"setFrameTopLeftPoint:"), top_left);
             } else {
@@ -1085,12 +1094,10 @@ fn key_down(ev: *mut c_void, driver: &mut dyn Driver) {
     }
 }
 
+/// A window-local event location (points, y up) → global pixels, y down.
 fn client_pos(p: CGPoint) -> (i32, i32) {
-    let (fx, fy, fh) = WIN_FRAME.with(|f| f.get());
-    (
-        (fx as f64 + p.x).round() as i32,
-        (fy as f64 + fh as f64 - p.y).round() as i32,
-    )
+    let (fx, fy, fh, k) = WIN_FRAME.with(|f| f.get());
+    ((fx + p.x * k).round() as i32, (fy + (fh - p.y) * k).round() as i32)
 }
 
 /// NSEventModifierFlag bits: shift 1<<17, control 1<<18, option 1<<19,
@@ -1269,6 +1276,9 @@ fn present(window: *mut c_void, fb: &PixBuf) {
             let tx = objc_cls(c"CATransaction");
             let _: () = msg0(tx, objc_sel(c"begin"));
             let _: () = msg1(tx, objc_sel(c"setDisableActions:"), 0i64);
+            // The frame is in pixels, the layer in points.
+            let k = WIN_FRAME.with(|f| f.get().3);
+            let _: () = msg1(layer, objc_sel(c"setContentsScale:"), k);
             let _: () = msg1(layer, objc_sel(c"setContents:"), image);
             let _: () = msg0(tx, objc_sel(c"commit"));
             let _: () = msg0(tx, objc_sel(c"flush"));
@@ -1347,6 +1357,13 @@ std::thread_local! {
     static AUX: RefCell<Vec<(usize, Frame, AuxFn)>> = const { RefCell::new(Vec::new()) };
 }
 
+/// NSEventType values of pointer events: left/right down, up (1–4), moved
+/// (5), left/right dragged (6, 7), entered/exited (8, 9), scroll wheel (22),
+/// other button down/up/dragged (25–27).
+fn is_mouse_event(ty: u64) -> bool {
+    matches!(ty, 1..=9 | 22 | 25..=27)
+}
+
 /// Hand an event for an auxiliary window to its handler; true when it was
 /// for one (the overlay's driver never sees those).
 fn aux_event(ev: *mut c_void) -> bool {
@@ -1361,7 +1378,17 @@ fn aux_event(ev: *mut c_void) -> bool {
         LEFT_DOWN => AuxKind::Down,
         LEFT_DRAGGED => AuxKind::Drag,
         LEFT_UP => AuxKind::Up,
-        _ => return true,
+        // Other pointer events on it: taken (the overlay must not see a
+        // click or a move meant for the bar or the bubble).
+        t if is_mouse_event(t) => return true,
+        // Everything else (window, app-defined, system events): AppKit's.
+        _ => {
+            unsafe {
+                let app: *mut c_void = msg0(objc_cls(c"NSApplication"), objc_sel(c"sharedApplication"));
+                let _: () = msg1(app, objc_sel(c"sendEvent:"), ev);
+            }
+            return true;
+        }
     };
     let p: CGPoint = unsafe { msg0(ev, objc_sel(c"locationInWindow")) };
     let (x, y, _, h) = frame.get();
@@ -1417,8 +1444,7 @@ impl Layer {
             let _: () = msg1(w, objc_sel(c"setHidesOnDeactivate:"), 0i8);
             // Above the overlay (floating level).
             let _: () = msg1(w, objc_sel(c"setLevel:"), CGWindowLevelForKey(5) as i64 + 1);
-            // CanJoinAllSpaces | Stationary | IgnoresCycle | FullScreenAuxiliary
-            let _: () = msg1(w, objc_sel(c"setCollectionBehavior:"), 1u64 | (1 << 4) | (1 << 6) | (1 << 8));
+            let _: () = msg1(w, objc_sel(c"setCollectionBehavior:"), COLLECT_OVERLAY);
             let _: () = msg1(w, objc_sel(c"setIgnoresMouseEvents:"), i8::from(click_through));
             if private {
                 let _: () = msg1(w, objc_sel(c"setSharingType:"), 0u64); // NSWindowSharingNone
@@ -1426,6 +1452,13 @@ impl Layer {
             let view: *mut c_void = msg0(objc_cls(c"NSView"), objc_sel(c"alloc"));
             let view: *mut c_void = msg1(view, objc_sel(c"initWithFrame:"), rect);
             if !view.is_null() {
+                // Layer-hosting (setLayer: before setWantsLayer:): AppKit
+                // leaves our layer's contents alone (a layer-backed view's
+                // layer is AppKit's to redraw).
+                let layer: *mut c_void = msg0(objc_cls(c"CALayer"), objc_sel(c"layer"));
+                if !layer.is_null() {
+                    let _: () = msg1(view, objc_sel(c"setLayer:"), layer);
+                }
                 let _: () = msg1(view, objc_sel(c"setWantsLayer:"), 1i8);
                 let _: () = msg1(w, objc_sel(c"setContentView:"), view);
                 let _: () = msg0(view, objc_sel(c"release"));
@@ -1509,6 +1542,10 @@ impl Layer {
             if image.is_null() {
                 return;
             }
+            // Size the window (and with it the layer) first, then give the
+            // layer its picture: contents never shown stretched to the old
+            // size.
+            self.place(x, y, f64::from(w) / s, f64::from(h) / s);
             let view: *mut c_void = msg0(self.win, objc_sel(c"contentView"));
             let layer: *mut c_void = if view.is_null() { core::ptr::null_mut() } else { msg0(view, objc_sel(c"layer")) };
             if !layer.is_null() {
@@ -1521,7 +1558,6 @@ impl Layer {
             }
             CGImageRelease(image);
         }
-        self.place(x, y, f64::from(w) / s, f64::from(h) / s);
         unsafe {
             // No display cycle runs: hand the new contents over now.
             let _: () = msg0(objc_cls(c"CATransaction"), objc_sel(c"flush"));

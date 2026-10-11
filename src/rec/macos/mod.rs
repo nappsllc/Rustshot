@@ -72,6 +72,11 @@ pub struct CMTime {
 impl CMTime {
     /// `kCMTimeFlags_Valid`.
     pub const VALID: u32 = 1;
+    /// `kCMTimeFlags_HasBeenRounded` (does not make a time unusable).
+    pub const ROUNDED: u32 = 1 << 1;
+    /// `kCMTimeFlags_ImpliedValueFlagsMask`: positive / negative infinity,
+    /// indefinite.
+    pub const IMPLIED: u32 = (1 << 2) | (1 << 3) | (1 << 4);
 
     /// `CMTimeMake(value, timescale)`.
     pub fn new(value: i64, timescale: i32) -> CMTime {
@@ -80,8 +85,9 @@ impl CMTime {
 
     /// In seconds (`None` when invalid, indefinite or infinite).
     pub fn seconds(self) -> Option<f64> {
-        // Valid and none of positive/negative infinity, indefinite.
-        (self.flags & 0x1F == CMTime::VALID && self.timescale > 0).then(|| self.value as f64 / f64::from(self.timescale))
+        // Valid and none of positive/negative infinity, indefinite; the
+        // has-been-rounded flag does not matter.
+        (self.flags & (CMTime::VALID | CMTime::IMPLIED) == CMTime::VALID && self.timescale > 0).then(|| self.value as f64 / f64::from(self.timescale))
     }
 }
 
@@ -339,6 +345,66 @@ pub fn plan_filter(apps: &[i32], windows: &[(u32, i32)], me: i32, keep: &[u32]) 
     }
 }
 
+/// `SCFrameStatusComplete`: a frame with new content. The others (idle,
+/// blank, suspended, started, stopped) carry no new picture.
+pub const FRAME_COMPLETE: i64 = 0;
+
+/// Whether a screen sample buffer is a new picture, by its
+/// `SCStreamFrameInfoStatus` attachment (`None` when it has none: then
+/// whether it has an image decides).
+pub fn frame_is_new(status: Option<i64>) -> bool {
+    status.is_none_or(|s| s == FRAME_COMPLETE)
+}
+
+/// Sound waiting for the writer's audio input, at most `cap` frames: when
+/// more comes, the oldest goes (and is counted). The encode thread never
+/// waits for the writer; what is queued goes in as the input takes it.
+#[derive(Debug, Default)]
+pub struct SoundQueue {
+    q: std::collections::VecDeque<(Vec<f32>, Duration)>,
+    frames: usize,
+    cap: usize,
+    /// Stereo frames dropped because the writer fell behind.
+    pub dropped: u64,
+}
+
+impl SoundQueue {
+    pub fn new(cap: usize) -> SoundQueue {
+        SoundQueue { cap, ..SoundQueue::default() }
+    }
+
+    /// Queue interleaved stereo `pcm` starting at `ts`.
+    pub fn push(&mut self, pcm: &[f32], ts: Duration) {
+        if pcm.len() < 2 {
+            return;
+        }
+        self.frames += pcm.len() / 2;
+        self.q.push_back((pcm.to_vec(), ts));
+        while self.frames > self.cap && self.q.len() > 1 {
+            if let Some((old, _)) = self.q.pop_front() {
+                self.frames -= old.len() / 2;
+                self.dropped += (old.len() / 2) as u64;
+            }
+        }
+    }
+
+    /// The oldest queued sound.
+    pub fn pop(&mut self) -> Option<(Vec<f32>, Duration)> {
+        let v = self.q.pop_front()?;
+        self.frames -= v.0.len() / 2;
+        Some(v)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.q.is_empty()
+    }
+
+    /// Stereo frames queued.
+    pub fn frames(&self) -> usize {
+        self.frames
+    }
+}
+
 /// The presentation time of a frame stamped `ts`, in
 /// [`VIDEO_TIMESCALE`]: strictly after `last` (a frame stamped at a pause
 /// repeats the time; the writer refuses equal or earlier times).
@@ -413,17 +479,12 @@ pub use mac::*;
 mod mac {
     use crate::capture::{CGPoint, CGRect};
     use anyhow::{bail, Result};
-    use core::ffi::c_void;
 
     #[link(name = "CoreGraphics", kind = "framework")]
     unsafe extern "C" {
         fn CGPreflightScreenCaptureAccess() -> bool;
         fn CGRequestScreenCaptureAccess() -> bool;
         fn CGDisplayBounds(id: u32) -> CGRect;
-        fn CGDisplayCopyDisplayMode(id: u32) -> *mut c_void;
-        fn CGDisplayModeGetPixelWidth(mode: *mut c_void) -> usize;
-        fn CGDisplayModeGetWidth(mode: *mut c_void) -> usize;
-        fn CGDisplayModeRelease(mode: *mut c_void);
         fn CGGetDisplaysWithPoint(p: CGPoint, max: u32, ids: *mut u32, count: *mut u32) -> i32;
     }
 
@@ -447,15 +508,7 @@ mod mac {
 
     /// Pixels per point of display `id` (2 on Retina; 1 when unknown).
     pub fn display_scale(id: u32) -> f64 {
-        unsafe {
-            let m = CGDisplayCopyDisplayMode(id);
-            if m.is_null() {
-                return 1.0;
-            }
-            let (px, pt) = (CGDisplayModeGetPixelWidth(m), CGDisplayModeGetWidth(m));
-            CGDisplayModeRelease(m);
-            if px > 0 && pt > 0 { px as f64 / pt as f64 } else { 1.0 }
-        }
+        crate::capture::display_scale(id)
     }
 
     /// Pixels per point of the display at (x, y) global points.

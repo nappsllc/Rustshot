@@ -38,6 +38,8 @@ struct Shared {
     cv: Condvar,
     ended: Mutex<Option<String>>,
     audio: Option<Arc<PcmFeed>>,
+    /// `SCStreamFrameInfoStatus` (an NSString key; null if missing).
+    status_key: usize,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -49,6 +51,10 @@ impl Shared {
     fn sample(&self, m: &Media, sbuf: *mut c_void, ty: isize) {
         match ty {
             0 => {
+                // Idle, blank, suspended… frames: nothing new to take.
+                if !super::frame_is_new(unsafe { frame_status(m, sbuf, self.status_key as *mut c_void) }) {
+                    return;
+                }
                 let mut buf = std::mem::take(&mut lock(&self.latest).spare);
                 // Idle and blank frames carry no image: the last one stays.
                 let got = unsafe { media::copy_pixels(m, sbuf, &mut buf) };
@@ -71,13 +77,31 @@ impl Shared {
     }
 }
 
+/// The `SCStreamFrameInfoStatus` of a screen sample buffer (`None`
+/// without the attachment).
+unsafe fn frame_status(m: &Media, sbuf: *mut c_void, key: *mut c_void) -> Option<i64> {
+    unsafe {
+        if key.is_null() {
+            return None;
+        }
+        let arr = (m.cm.CMSampleBufferGetSampleAttachmentsArray)(sbuf, 0);
+        let first = *objc::items(arr).first()?;
+        let v: *mut c_void = msg1(first, objc_sel(c"objectForKey:"), key);
+        if v.is_null() {
+            return None;
+        }
+        Some(msg0::<isize>(v, objc_sel(c"integerValue")) as i64)
+    }
+}
+
 /// The screen stream (and with it the system sound).
 pub struct SckSource {
     shared: Arc<Shared>,
     stream: Id,
     video_q: Queue,
     audio_q: Option<Queue>,
-    _sink: SampleSink,
+    /// `None` once leaked (see `Drop`).
+    sink: Option<SampleSink>,
 }
 
 /// A stream that was opened: the frames, and the system sound when it
@@ -189,6 +213,7 @@ pub fn open(area: IRect, fps: u32, mp4: bool, sound: bool, keep: &[u32]) -> Resu
             cv: Condvar::new(),
             ended: Mutex::new(None),
             audio: audio.clone(),
+            status_key: media::sck().map_or(0, |lib| objc::const_obj(lib as *mut c_void, c"SCStreamFrameInfoStatus") as usize),
         });
         let (s1, s2) = (shared.clone(), shared.clone());
         let sink = SampleSink::new(
@@ -237,7 +262,7 @@ pub fn open(area: IRect, fps: u32, mp4: bool, sound: bool, keep: &[u32]) -> Resu
                 Err(objc::error_text(err))
             });
         }
-        let src = SckSource { shared, stream, video_q, audio_q, _sink: sink };
+        let src = SckSource { shared, stream, video_q, audio_q, sink: Some(sink) };
         let (block, rx) = objc::completion(1, |a| (a[0] != 0).then(|| objc::error_text(a[0] as *mut c_void)));
         let _: () = msg1(src.stream.ptr(), objc_sel(c"startCaptureWithCompletionHandler:"), block.as_ptr());
         match rx.recv_timeout(ANSWER) {
@@ -286,11 +311,19 @@ impl Drop for SckSource {
         unsafe {
             let _: () = msg1(self.stream.ptr(), objc_sel(c"stopCaptureWithCompletionHandler:"), block.as_ptr());
         }
-        let _ = rx.recv_timeout(ANSWER);
+        let stopped = rx.recv_timeout(ANSWER).is_ok();
         // Callbacks in progress finish before the sink goes.
         self.video_q.drain();
         if let Some(q) = &self.audio_q {
             q.drain();
+        }
+        if !stopped {
+            // The stream did not say it stopped: it may still call the
+            // delegate after this. Its context (and the closures, which
+            // hold `Shared`) is leaked rather than freed under it — a
+            // small, one-off leak against a use-after-free.
+            eprintln!("rustshot: the screen stream did not stop in time; its delegate is leaked");
+            std::mem::forget(self.sink.take());
         }
     }
 }

@@ -28,6 +28,10 @@ fn cmtime_seconds_only_when_valid_and_finite() {
     assert_eq!(CMTime { flags: 0, ..CMTime::new(1, 1) }.seconds(), None, "invalid");
     assert_eq!(CMTime { flags: CMTime::VALID | 4, ..CMTime::new(1, 1) }.seconds(), None, "positive infinity");
     assert_eq!(CMTime::new(1, 0).seconds(), None);
+    assert_eq!(CMTime { flags: CMTime::VALID | CMTime::ROUNDED, ..CMTime::new(3, 2) }.seconds(), Some(1.5), "rounded is still usable");
+    assert_eq!(CMTime { flags: CMTime::VALID | 2, ..CMTime::new(1, 4) }.seconds(), Some(0.25));
+    assert_eq!(CMTime { flags: CMTime::VALID | 8, ..CMTime::new(1, 1) }.seconds(), None, "negative infinity");
+    assert_eq!(CMTime { flags: CMTime::VALID | 16, ..CMTime::new(1, 1) }.seconds(), None, "indefinite");
 }
 
 #[test]
@@ -209,4 +213,33 @@ fn a_frame_fills_a_padded_buffer_and_black_elsewhere() {
 #[cfg(not(target_os = "macos"))]
 fn recording_is_unavailable_off_macos() {
     assert!(!available());
+}
+
+#[test]
+fn only_complete_frames_are_new() {
+    assert!(frame_is_new(Some(FRAME_COMPLETE)));
+    assert!(frame_is_new(None), "no status: the image decides");
+    for idle in 1..=5 {
+        assert!(!frame_is_new(Some(idle)), "status {idle}");
+    }
+}
+
+#[test]
+fn the_sound_queue_is_bounded_and_drops_the_oldest() {
+    let ms = Duration::from_millis;
+    let mut q = SoundQueue::new(4);
+    q.push(&[0.0; 4], ms(0)); // 2 frames
+    q.push(&[1.0; 4], ms(1));
+    assert_eq!((q.frames(), q.dropped), (4, 0));
+    q.push(&[2.0; 2], ms(2));
+    assert_eq!((q.frames(), q.dropped), (3, 2), "the oldest packet went");
+    assert_eq!(q.pop().unwrap(), (vec![1.0; 4], ms(1)));
+    assert_eq!(q.frames(), 1);
+    assert_eq!(q.pop().unwrap().1, ms(2));
+    assert!(q.is_empty() && q.pop().is_none());
+    // One packet larger than the cap is kept (the queue never empties itself).
+    q.push(&[0.0; 20], ms(3));
+    assert_eq!(q.frames(), 10);
+    q.push(&[0.0; 1], ms(4));
+    assert_eq!(q.frames(), 10, "half a frame is nothing");
 }

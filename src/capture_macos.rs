@@ -1,8 +1,13 @@
 //! macOS capture: Quartz display enumeration, `CGWindowListCreateImage`
 //! desktop snapshots and the global cursor position (replaces xcap/GDI).
-//! Every coordinate here is in points in Quartz screen space (origin at the
-//! top-left of the main display, y down) — the same space `wind_macos` uses
-//! for the overlay window, so no conversion happens between the two.
+//!
+//! Units: Quartz works in points (origin at the top-left of the main
+//! display, y down). Everything this module hands to the shared code —
+//! [`monitors`], [`cursor_pos`], the rects [`gdi_capture`] takes — is in
+//! pixels: points × [`backing`] (see [`super::pts`]), so a Retina screen
+//! is captured and edited at its full density. `wind_macos`, the recorder
+//! and the camera bubble convert back to points with [`to_points`] /
+//! [`to_points_i`] / [`from_points`] where they call AppKit.
 
 use super::*;
 
@@ -44,7 +49,10 @@ unsafe extern "C" {
     fn CGGetActiveDisplayList(max: u32, ids: *mut u32, count: *mut u32) -> i32;
     fn CGDisplayBounds(id: u32) -> CGRect;
     fn CGMainDisplayID() -> u32;
-    fn CGDisplayPixelsWide(id: u32) -> usize;
+    fn CGDisplayCopyDisplayMode(id: u32) -> *mut c_void;
+    fn CGDisplayModeGetPixelWidth(mode: *mut c_void) -> usize;
+    fn CGDisplayModeGetWidth(mode: *mut c_void) -> usize;
+    fn CGDisplayModeRelease(mode: *mut c_void);
     // Deprecated in macOS 14 (ScreenCaptureKit replaces it) but still the
     // only FFI-only desktop snapshot API; never compiled, never warned here.
     fn CGWindowListCreateImage(
@@ -75,59 +83,92 @@ unsafe extern "C" {
 // --- public API -----------------------------------------------------------
 
 /// No per-process DPI switch exists on macOS: Quartz reports points
-/// everywhere, which is exactly this module's coordinate space.
+/// everywhere; this module scales them to pixels itself.
 pub fn enable_dpi_awareness() {}
 
-/// Active displays via `CGGetActiveDisplayList`, sorted by (x, y) so
-/// `screenN` numbering in the CLI stays stable across calls.
-pub fn monitors() -> Result<Vec<MonInfo>> {
+/// Pixels per point of display `id` (`CGDisplayModeGetPixelWidth /
+/// GetWidth`: 2 on Retina, also in scaled modes; 1 when unknown).
+/// `CGDisplayPixelsWide` would not do: it reports points in HiDPI modes.
+pub fn display_scale(id: u32) -> f64 {
     unsafe {
-        let mut ids = [0u32; 32];
-        let mut count = 0u32;
-        if CGGetActiveDisplayList(32, ids.as_mut_ptr(), &mut count) != 0 || count == 0 {
-            return Err(anyhow!("no monitors found"));
+        let m = CGDisplayCopyDisplayMode(id);
+        if m.is_null() {
+            return 1.0;
         }
-        let primary = CGMainDisplayID();
-        let mut out = Vec::with_capacity(count as usize);
-        for &id in &ids[..count as usize] {
-            let b = CGDisplayBounds(id);
-            let (w, h) = (b.size.width, b.size.height);
-            out.push(MonInfo {
-                x: b.origin.x.round() as i32,
-                y: b.origin.y.round() as i32,
-                w: w.max(0.0).round() as u32,
-                h: h.max(0.0).round() as u32,
-                scale: if w > 0.0 {
-                    (CGDisplayPixelsWide(id) as f64 / w) as f32
-                } else {
-                    1.0
-                },
-                primary: id == primary,
-            });
-        }
-        out.sort_by_key(|m| (m.x, m.y));
-        Ok(out)
+        let s = super::pts::mode_scale(CGDisplayModeGetPixelWidth(m), CGDisplayModeGetWidth(m));
+        CGDisplayModeRelease(m);
+        s
     }
 }
 
-/// Capture a virtual-screen rect (points) with `CGWindowListCreateImage`.
-/// Always returns a `w x h` buffer: on HiDPI displays the snapshot comes
-/// back at native resolution and is box-filtered down to the request.
+/// The active displays and their bounds (points).
+fn displays() -> Vec<(u32, CGRect)> {
+    unsafe {
+        let mut ids = [0u32; 32];
+        let mut count = 0u32;
+        if CGGetActiveDisplayList(32, ids.as_mut_ptr(), &mut count) != 0 {
+            return Vec::new();
+        }
+        ids[..(count as usize).min(32)].iter().map(|&id| (id, CGDisplayBounds(id))).collect()
+    }
+}
+
+/// Pixels per point of the shared code's coordinates: the largest scale
+/// of the active displays (see [`super::pts`]).
+pub fn backing() -> f64 {
+    let scales: Vec<f64> = displays().iter().map(|d| display_scale(d.0)).collect();
+    super::pts::factor(&scales)
+}
+
+/// A rect of the shared code (pixels) in global points.
+pub fn to_points(r: IRect) -> (f64, f64, f64, f64) {
+    super::pts::rect_pt(r, backing())
+}
+
+/// [`to_points`] in whole points.
+pub fn to_points_i(r: IRect) -> IRect {
+    super::pts::rect_pt_i(r, backing())
+}
+
+/// A rect in global points as the shared code's pixels.
+pub fn from_points(r: (f64, f64, f64, f64)) -> IRect {
+    super::pts::rect_px(r, backing())
+}
+
+/// Active displays via `CGGetActiveDisplayList`, in pixels (points ×
+/// [`backing`]; every monitor's `scale` is that factor, the density its
+/// shot is drawn at), sorted by (x, y) so `screenN` numbering in the CLI
+/// stays stable across calls.
+pub fn monitors() -> Result<Vec<MonInfo>> {
+    let ds = displays();
+    if ds.is_empty() {
+        return Err(anyhow!("no monitors found"));
+    }
+    let k = super::pts::factor(&ds.iter().map(|d| display_scale(d.0)).collect::<Vec<_>>());
+    let primary = unsafe { CGMainDisplayID() };
+    let mut out: Vec<MonInfo> = ds
+        .iter()
+        .map(|&(id, b)| {
+            let (x, y, w, h) = super::pts::rect_px((b.origin.x, b.origin.y, b.size.width, b.size.height), k);
+            MonInfo { x, y, w, h, scale: k as f32, primary: id == primary }
+        })
+        .collect();
+    out.sort_by_key(|m| (m.x, m.y));
+    Ok(out)
+}
+
+/// Capture a virtual-screen rect (pixels, see the module docs) with
+/// `CGWindowListCreateImage`. Always returns a `w x h` buffer: the
+/// snapshot comes back at each display's native resolution and is
+/// resampled to the request when that differs (a 1× display beside a
+/// Retina one).
 pub fn gdi_capture(x: i32, y: i32, w: u32, h: u32) -> Result<PixBuf> {
     if w == 0 || h == 0 {
         return Err(anyhow!("empty capture region"));
     }
+    let (px, py, pw, ph) = to_points((x, y, w, h));
     unsafe {
-        let rect = CGRect {
-            origin: CGPoint {
-                x: x as f64,
-                y: y as f64,
-            },
-            size: CGSize {
-                width: w as f64,
-                height: h as f64,
-            },
-        };
+        let rect = CGRect { origin: CGPoint { x: px, y: py }, size: CGSize { width: pw, height: ph } };
         let image = CGWindowListCreateImage(
             rect,
             1, // kCGWindowListOptionOnScreenOnly
@@ -143,7 +184,7 @@ pub fn gdi_capture(x: i32, y: i32, w: u32, h: u32) -> Result<PixBuf> {
     }
 }
 
-/// Global cursor position in points (`CGEventCreate` never fails in
+/// Global cursor position in pixels (`CGEventCreate` never fails in
 /// practice; fall back to the main display origin if it somehow does).
 pub fn cursor_pos() -> (i32, i32) {
     unsafe {
@@ -153,7 +194,8 @@ pub fn cursor_pos() -> (i32, i32) {
         }
         let p = CGEventGetLocation(ev);
         CFRelease(ev);
-        (p.x.round() as i32, p.y.round() as i32)
+        let k = backing();
+        (super::pts::px(p.x, k), super::pts::px(p.y, k))
     }
 }
 

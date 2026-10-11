@@ -15,7 +15,10 @@
 //! pump before the overlay sees them (`wind_macos::aux_event`) and queued
 //! for the driver's next tick ([`Recorder::take_clicks`]). Geometry is in
 //! points (the space of the overlay and the area); the pixels are drawn at
-//! the display's density.
+//! the display's density. The editor hands over pixels (points × the
+//! backing factor, see `capture::pts`): [`Recorder::start`] converts its
+//! geometry to points once ([`Geom::in_points`]), and [`prepare`] the
+//! recorded area for ScreenCaptureKit.
 
 use super::bar::{self, BarAct, BarView};
 pub(crate) use super::worker::{Opener, Parts, Worker};
@@ -35,11 +38,6 @@ use std::sync::mpsc;
 /// Pixels per point at (x, y) points.
 fn scale_at(x: i32, y: i32) -> f32 {
     (recmac::backing_scale_at(f64::from(x), f64::from(y)) as f32).clamp(1.0, 4.0)
-}
-
-/// `geom` with every scale 1: placement in points.
-fn in_points(geom: &Geom) -> Geom {
-    Geom { area: geom.area, monitors: geom.monitors.iter().map(|m| (m.0, 1.0)).collect(), scale: 1.0 }
 }
 
 /// Input on the control bar, queued for the owner's tick.
@@ -89,9 +87,8 @@ impl BarWin {
     /// and again when its size changes.
     fn show(&mut self, geom: &Geom, th: &Theme, v: &BarView) {
         let font = Some(crate::fonts::ui_font());
-        let pts = in_points(geom);
         let spot = super::spot_bar_with(
-            &pts,
+            geom,
             self.spot,
             |s| {
                 let p = bar::layout(&Ui { th, s, font }, v).panel;
@@ -175,18 +172,27 @@ fn prepare(spec: &RecSpec, mic_flags: MicFlags, keep: &[u32]) -> Result<Parts> {
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
     }
     let mp4 = spec.format == RecFormat::Mp4;
-    let opened = sck::open(spec.area, spec.capture_fps(), mp4, mp4 && spec.system_audio, keep)?;
+    // The area is in the editor's pixels; the stream wants points.
+    let area = crate::capture::to_points_i(spec.area);
+    let opened = sck::open(area, spec.capture_fps(), mp4, mp4 && spec.system_audio, keep)?;
     let (w, h) = opened.video.size();
     let mut audio: Vec<Box<dyn AudioSource>> = Vec::new();
     let mut warnings = Vec::new();
+    let mut late: Vec<super::worker::Late> = Vec::new();
     match opened.audio {
-        Some(Ok(a)) => audio.push(Box::new(a)),
+        Some(Ok(a)) => {
+            late.push(dropped_note("system sound", a.feed.clone()));
+            audio.push(Box::new(a));
+        }
         Some(Err(e)) => warnings.push(format!("system sound not recorded: {e}")),
         None => {}
     }
     if mp4 && let Some(id) = &spec.mic {
         match mic::open(id) {
-            Ok(a) => audio.push(Box::new(mic_flags.opened(a))),
+            Ok(a) => {
+                late.push(dropped_note("microphone", a.feed.clone()));
+                audio.push(Box::new(mic_flags.opened(a)));
+            }
             Err(e) => warnings.push(format!("microphone not recorded: {e:#}")),
         }
     }
@@ -198,7 +204,13 @@ fn prepare(spec: &RecSpec, mic_flags: MicFlags, keep: &[u32]) -> Result<Parts> {
         RecFormat::Mp4 => Box::new(AvWriterEncoder::create(&part, w, h, spec.capture_fps(), spec.quality, !audio.is_empty())?),
         RecFormat::Gif => Box::new(GifEncoder::create(&part, w, h, spec.capture_fps())?),
     };
-    Ok(Parts { src: Box::new(opened.video), audio, enc, warnings, late: Vec::new() })
+    Ok(Parts { src: Box::new(opened.video), audio, enc, warnings, late })
+}
+
+/// Said with the saved file when some of `what`'s sound was dropped
+/// (unreadable buffers, unusable timestamps).
+fn dropped_note(what: &'static str, feed: std::sync::Arc<crate::rec::macos::media::PcmFeed>) -> super::worker::Late {
+    Box::new(move || feed.problem().map(|e| format!("{what} partly not recorded: {e}")))
 }
 
 /// The windows and the worker of one recording.
@@ -219,6 +231,8 @@ impl Recorder {
     /// application). When a window or the worker cannot be made, the ones
     /// already up are taken down (dropped) before the error returns.
     pub fn start(spec: RecSpec, geom: Geom, th: Theme, mic: MicFlags, bubble: Option<crate::cam::Bubble>) -> Result<Recorder> {
+        // `geom` is in pixels; the windows are placed in points.
+        let geom = geom.in_points(crate::capture::backing());
         let border = show_border(&geom)?;
         let bar = BarWin::new()?;
         let count = CountWin { layer: Layer::new(true, true)?, drawn: None };

@@ -49,6 +49,7 @@ table!(
         CMSampleBufferGetPresentationTimeStamp: unsafe extern "C" fn(Cf) -> CMTime,
         CMSampleBufferGetFormatDescription: unsafe extern "C" fn(Cf) -> Cf,
         CMSampleBufferGetNumSamples: unsafe extern "C" fn(Cf) -> isize,
+        CMSampleBufferGetSampleAttachmentsArray: unsafe extern "C" fn(Cf, u8) -> Cf,
         CMAudioFormatDescriptionGetStreamBasicDescription: unsafe extern "C" fn(Cf) -> *const Asbd,
         CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer:
             unsafe extern "C" fn(Cf, *mut usize, *mut AudioBufferList, usize, Cf, Cf, u32, *mut Cf) -> i32,
@@ -287,46 +288,80 @@ pub struct PcmFeed {
     end: Mutex<Option<f64>>,
     /// The clock the timestamps are in (null = host time).
     clock: Mutex<usize>,
-    warned: AtomicBool,
+    /// The clock is known: packets before that are dropped (their times
+    /// would be read in the wrong clock).
+    ready: AtomicBool,
+    /// The first problem with the sound (some of it was dropped), said
+    /// once with the saved file ([`PcmFeed::problem`]).
+    problem: Mutex<Option<String>>,
     scratch: Mutex<Vec<f32>>,
 }
 
 impl PcmFeed {
+    /// A feed timed in host time (ScreenCaptureKit).
     pub fn new() -> Arc<PcmFeed> {
+        PcmFeed::make(true)
+    }
+
+    /// A feed timed by a clock given later with [`PcmFeed::set_clock`]
+    /// (an `AVCaptureSession`'s, known once it runs); nothing is taken
+    /// before.
+    pub fn awaiting_clock() -> Arc<PcmFeed> {
+        PcmFeed::make(false)
+    }
+
+    fn make(ready: bool) -> Arc<PcmFeed> {
         Arc::new(PcmFeed {
             ring: Ring::new(super::RATE as usize * 2),
             rate: AtomicU32::new(super::RATE),
             end: Mutex::new(None),
             clock: Mutex::new(0),
-            warned: AtomicBool::new(false),
+            ready: AtomicBool::new(ready),
+            problem: Mutex::new(None),
             scratch: Mutex::new(Vec::new()),
         })
     }
 
-    /// Timestamps are in `clock` (a `CMClock`, kept alive by its owner).
+    /// Timestamps are in `clock` (a `CMClock`, kept alive by its owner;
+    /// null = host time). Packets are taken from now on.
     pub fn set_clock(&self, clock: Cf) {
         *self.clock.lock().unwrap_or_else(|e| e.into_inner()) = clock as usize;
+        self.ready.store(true, Ordering::Release);
+    }
+
+    /// The first problem that dropped sound, if any (a recording warning).
+    pub fn problem(&self) -> Option<String> {
+        self.problem.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Note a problem once (logged and kept for [`PcmFeed::problem`]).
+    fn warn(&self, e: String) {
+        let mut p = self.problem.lock().unwrap_or_else(|e| e.into_inner());
+        if p.is_none() {
+            eprintln!("rustshot: sound dropped: {e}");
+            *p = Some(e);
+        }
     }
 
     /// Queue a sample buffer's sound (on the capture queue).
     pub unsafe fn push(&self, m: &Media, sbuf: Cf) {
+        if !self.ready.load(Ordering::Acquire) {
+            return;
+        }
         let mut data = self.scratch.lock().unwrap_or_else(|e| e.into_inner());
         data.clear();
         let (frames, rate) = match unsafe { stereo_of(m, sbuf, &mut data) } {
             Ok(v) => v,
-            Err(e) => {
-                if !self.warned.swap(true, Ordering::Relaxed) {
-                    eprintln!("rustshot: sound dropped: {e}");
-                }
-                return;
-            }
+            Err(e) => return self.warn(e),
         };
         if frames == 0 || rate <= 0.0 {
             return;
         }
         let clock = *self.clock.lock().unwrap_or_else(|e| e.into_inner()) as Cf;
         let pts = unsafe { (m.cm.CMSampleBufferGetPresentationTimeStamp)(sbuf) };
-        let Some((at, start)) = (unsafe { instant_of(m, pts, clock) }) else { return };
+        let Some((at, start)) = (unsafe { instant_of(m, pts, clock) }) else {
+            return self.warn(format!("sound without a usable time (CMTime flags {:#x})", pts.flags));
+        };
         let r = rate.round() as u32;
         if self.rate.swap(r, Ordering::Relaxed) != r {
             self.ring.set_cap(r as usize * 2);

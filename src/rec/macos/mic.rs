@@ -36,7 +36,9 @@ pub fn open(id: &str) -> Result<FeedSource> {
             (k.AVLinearPCMIsBigEndianKey, objc::num_bool(false)),
         ]);
         let _: () = msg1(out.ptr(), objc_sel(c"setAudioSettings:"), settings);
-        let feed = PcmFeed::new();
+        // Packets that come before the session's clock is known (it is
+        // read once the session runs) are dropped, not timed in host time.
+        let feed = PcmFeed::awaiting_clock();
         let f = feed.clone();
         let sink = SampleSink::new(move |sbuf, _| f.push(m, sbuf), None)?;
         let cap = Capture::start(dev, out, sink, core::ptr::null_mut())?;

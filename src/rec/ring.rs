@@ -76,11 +76,9 @@ impl Ring {
         q.len -= n;
         (n, Some(at))
     }
-}
 
-
-impl Ring {
     /// Hold at most `cap` samples from now on.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))] // the rate is known up front elsewhere
     pub(crate) fn set_cap(&self, cap: usize) {
         self.cap.store(cap, Ordering::Relaxed);
     }
@@ -114,5 +112,4 @@ mod tests {
         assert_eq!(out, vec![7.0, 8.0, 9.0]);
         assert_eq!(r.lock().len, 0);
     }
-
 }

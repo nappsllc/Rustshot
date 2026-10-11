@@ -484,3 +484,17 @@ fn misplaced_windows_get_a_hint() {
     assert_eq!(placement_hint(area, Some((400, 300, 200, 44)), None), Some(BAR_INSIDE));
     assert_eq!(placement_hint(area, Some((0, 0, 100, 100)), None), None, "touching the corner is outside");
 }
+
+#[test]
+fn macos_geometry_converts_to_points() {
+    let g = Geom {
+        area: (200, 100, 1281, 721),
+        monitors: vec![((0, 0, 2880, 1800), 2.0), ((2880, 0, 3840, 2160), 2.0)],
+        scale: 2.0,
+    };
+    let p = g.in_points(2.0);
+    assert_eq!(p.area, (100, 50, 641, 361), "edges rounded");
+    assert_eq!(p.monitors, vec![((0, 0, 1440, 900), 1.0), ((1440, 0, 1920, 1080), 1.0)]);
+    assert_eq!(p.scale, 1.0);
+    assert_eq!(g.in_points(1.0).area, g.area);
+}

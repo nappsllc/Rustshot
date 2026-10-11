@@ -3,7 +3,7 @@
 //!
 //! - [`Block`]: a block literal in the clang block ABI, for completion
 //!   handlers. It is laid out like a *stack* block (`_NSConcreteStackBlock`
-//!   with copy/dispose helpers): a callee that keeps it calls `Block_copy`,
+//!   with copy/dispose helpers and a type signature): a callee that keeps it calls `Block_copy`,
 //!   which moves a copy to the heap and runs our copy helper (one more
 //!   reference to the shared closure); `Block_release` of that copy runs
 //!   the dispose helper. Our own literal lives until [`Block`] drops, which
@@ -27,15 +27,26 @@ use std::sync::Arc;
 
 /// `BLOCK_HAS_COPY_DISPOSE`: the descriptor has copy and dispose helpers.
 pub const BLOCK_HAS_COPY_DISPOSE: i32 = 1 << 25;
+/// `BLOCK_HAS_SIGNATURE`: the descriptor has the block's type signature
+/// (after the helpers), for callees that inspect it (NSInvocation,
+/// `-[NSBlockOperation ...]`, some framework argument checks).
+pub const BLOCK_HAS_SIGNATURE: i32 = 1 << 30;
 
-/// `Block_descriptor_1` + `Block_descriptor_2`.
+/// `Block_descriptor_1` + `Block_descriptor_2` + `Block_descriptor_3`.
 #[repr(C)]
 pub struct BlockDesc {
     reserved: usize,
     size: usize,
     copy: unsafe extern "C" fn(dst: *mut BlockLit, src: *const BlockLit),
     dispose: unsafe extern "C" fn(b: *const BlockLit),
+    /// ObjC type encoding of the invoke function (`v<size>@?0...`).
+    signature: *const core::ffi::c_char,
+    /// Extended layout (unused: no `BLOCK_HAS_EXTENDED_LAYOUT`).
+    layout: *const core::ffi::c_char,
 }
+
+// Immutable statics: function pointers and C string literals.
+unsafe impl Sync for BlockDesc {}
 
 /// `Block_layout` with our one captured variable: the shared closure.
 #[repr(C)]
@@ -53,8 +64,21 @@ type Body = dyn Fn(&[usize]) + Send + Sync;
 /// What every copy of a block shares (one `Arc` reference per copy).
 struct Ctx(Box<Body>);
 
-static DESC: BlockDesc =
-    BlockDesc { reserved: 0, size: std::mem::size_of::<BlockLit>(), copy: copy_helper, dispose: dispose_helper };
+const fn desc(signature: &'static core::ffi::CStr) -> BlockDesc {
+    BlockDesc {
+        reserved: 0,
+        size: std::mem::size_of::<BlockLit>(),
+        copy: copy_helper,
+        dispose: dispose_helper,
+        signature: signature.as_ptr(),
+        layout: core::ptr::null(),
+    }
+}
+
+/// One descriptor per arity: `void (^)(void)`, `void (^)(word)`,
+/// `void (^)(word, word)`; the words are typed `^v` (any pointer-sized
+/// argument: objects, NSInteger; a BOOL is widened by the caller).
+static DESCS: [BlockDesc; 3] = [desc(c"v8@?0"), desc(c"v16@?0^v8"), desc(c"v24@?0^v8^v16")];
 
 /// `Block_copy` moved `src` to `dst` (bytes copied): `dst` holds a reference too.
 unsafe extern "C" fn copy_helper(dst: *mut BlockLit, src: *const BlockLit) {
@@ -117,6 +141,7 @@ unsafe impl Send for Block {}
 
 impl Block {
     pub fn new(arity: usize, f: impl Fn(&[usize]) + Send + Sync + 'static) -> Block {
+        let arity = arity.min(2);
         let invoke = match arity {
             0 => invoke0 as *const c_void,
             1 => invoke1 as *const c_void,
@@ -126,10 +151,10 @@ impl Block {
         Block {
             lit: Box::new(BlockLit {
                 isa: stack_isa(),
-                flags: BLOCK_HAS_COPY_DISPOSE,
+                flags: BLOCK_HAS_COPY_DISPOSE | BLOCK_HAS_SIGNATURE,
                 reserved: 0,
                 invoke,
-                desc: &DESC,
+                desc: &DESCS[arity],
                 ctx,
             }),
         }
@@ -233,7 +258,24 @@ mod mac {
     /// context, conforming to `protocols` (those the runtime knows) and
     /// implementing `methods` (selector, function, type encoding). Made
     /// once; later calls return the registered class.
+    ///
+    /// Each name is made under its own `OnceLock` (a registry keyed by the
+    /// name): a second thread asking for the same class waits for the
+    /// first to register it, never sees it half-built.
     pub fn make_class(name: &CStr, protocols: &[&CStr], methods: &[(&CStr, *const c_void, &CStr)]) -> *mut c_void {
+        use std::collections::HashMap;
+        use std::sync::{Mutex, OnceLock};
+        static CLASSES: Mutex<Option<HashMap<std::ffi::CString, &'static OnceLock<usize>>>> = Mutex::new(None);
+        let once: &'static OnceLock<usize> = {
+            let mut m = CLASSES.lock().unwrap_or_else(|e| e.into_inner());
+            m.get_or_insert_with(HashMap::new)
+                .entry(name.to_owned())
+                .or_insert_with(|| Box::leak(Box::new(OnceLock::new())))
+        };
+        *once.get_or_init(|| build_class(name, protocols, methods) as usize) as *mut c_void
+    }
+
+    fn build_class(name: &CStr, protocols: &[&CStr], methods: &[(&CStr, *const c_void, &CStr)]) -> *mut c_void {
         unsafe {
             let have = objc_cls(name);
             if !have.is_null() {
@@ -241,7 +283,7 @@ mod mac {
             }
             let cls = objc_allocateClassPair(objc_cls(c"NSObject"), name.as_ptr(), 0);
             if cls.is_null() {
-                return objc_cls(name); // made meanwhile
+                return objc_cls(name);
             }
             class_addIvar(cls, IVAR.as_ptr(), 8, 3, c"^v".as_ptr());
             for p in protocols {
@@ -514,12 +556,25 @@ mod tests {
         assert_eq!(offset_of!(BlockLit, desc), 24);
         assert_eq!(offset_of!(BlockLit, ctx), 32);
         assert_eq!(size_of::<BlockLit>(), 40);
-        // reserved, size, copy, dispose
+        // reserved, size, copy, dispose, signature, layout
         assert_eq!(offset_of!(BlockDesc, size), 8);
         assert_eq!(offset_of!(BlockDesc, copy), 16);
         assert_eq!(offset_of!(BlockDesc, dispose), 24);
-        assert_eq!(DESC.size, 40);
+        assert_eq!(offset_of!(BlockDesc, signature), 32);
+        assert_eq!(offset_of!(BlockDesc, layout), 40);
+        assert_eq!(size_of::<BlockDesc>(), 48);
         assert_eq!(BLOCK_HAS_COPY_DISPOSE, 0x0200_0000);
+        assert_eq!(BLOCK_HAS_SIGNATURE, 0x4000_0000);
+        let sig = |d: &BlockDesc| unsafe { core::ffi::CStr::from_ptr(d.signature) }.to_str().unwrap().to_owned();
+        for (i, want) in ["v8@?0", "v16@?0^v8", "v24@?0^v8^v16"].iter().enumerate() {
+            assert_eq!(DESCS[i].size, 40);
+            assert_eq!(&sig(&DESCS[i]), want);
+            assert!(DESCS[i].layout.is_null());
+            let b = Block::new(i, |_| {});
+            let l = unsafe { &*lit(&b) };
+            assert_eq!(l.flags, BLOCK_HAS_COPY_DISPOSE | BLOCK_HAS_SIGNATURE);
+            assert!(std::ptr::eq(l.desc, &DESCS[i]), "arity {i} gets its own signature");
+        }
     }
 
     fn lit(b: &Block) -> *mut BlockLit {
@@ -533,7 +588,7 @@ mod tests {
         let b = Block::new(2, move |a| g.lock().unwrap().extend_from_slice(a));
         unsafe {
             let l = lit(&b);
-            assert_eq!((*l).flags, BLOCK_HAS_COPY_DISPOSE);
+            assert_eq!((*l).flags, BLOCK_HAS_COPY_DISPOSE | BLOCK_HAS_SIGNATURE);
             let f: unsafe extern "C" fn(*const BlockLit, usize, usize) = std::mem::transmute((*l).invoke);
             f(l, 7, 0x1_0000_0001); // a BOOL comes in the low byte
         }

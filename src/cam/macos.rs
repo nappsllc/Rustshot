@@ -6,8 +6,9 @@
 //! accent ring and shadow ([`super::compose`]), kept relative to the area,
 //! dragged and snapped to its corners, off the overlay's toolbar.
 //!
-//! The bubble is placed in points (the overlay's and the area's space) and
-//! drawn at the display's pixel density. Its window lives on the main
+//! The bubble is placed in points and drawn at the display's pixel
+//! density; its API takes the editor's pixels (points × the backing
+//! factor, see `capture::pts`) and converts them on the way in. Its window lives on the main
 //! thread (AppKit); a camera thread opens the camera, fits each picture to
 //! the bubble and asks the main thread to repaint (through the main
 //! dispatch queue, which the overlay's event pump serves). The bubble is
@@ -316,10 +317,11 @@ pub struct Bubble {
 
 impl Bubble {
     /// Show the bubble for camera `device` ("" = the first) with `look`,
-    /// placed where it was last left relative to `area` (points). `_scale`
+    /// placed where it was last left relative to `area` (pixels). `_scale`
     /// and `_nudge` are not needed here: the bubble is placed in points
     /// and drawn at its display's density, and it repaints itself.
     pub fn show(look: Look, device: &str, area: IRect, _scale: f32, th: &Theme, _nudge: crate::wind::Hwnd) -> Result<Bubble> {
+        let area = crate::capture::to_points_i(area);
         let layer = Layer::new(false, false)?;
         let px = scale_of(area);
         let mut geo = Geo {
@@ -366,10 +368,12 @@ impl Bubble {
         lock(&self.ui.shared.error).clone()
     }
 
-    /// The shape's top-left on screen (points).
+    /// The shape's top-left on screen (pixels).
     #[allow(dead_code)] // Windows tests use it; kept alike
     pub fn pos(&self) -> Option<(i32, i32)> {
-        Some(self.ui.geo.borrow().pos)
+        let (x, y) = self.ui.geo.borrow().pos;
+        let (px, py, _, _) = crate::capture::from_points((f64::from(x), f64::from(y), 0.0, 0.0));
+        Some((px, py))
     }
 
     /// The window's id: the recording keeps it in (see `rec::macos::sck`).
@@ -401,6 +405,7 @@ impl Bubble {
     /// Follow `area` (placed where it was left relative to it). Not while
     /// dragged.
     pub fn set_anchor(&mut self, area: IRect, _scale: f32) {
+        let area = crate::capture::to_points_i(area);
         let px = scale_of(area);
         {
             let mut g = self.ui.geo.borrow_mut();
@@ -420,6 +425,13 @@ impl Bubble {
     /// Keep off `avoid` (the overlay's toolbar and Record popover), going
     /// outside a small area within `screen` if it must. Not while dragged.
     pub fn set_avoid(&mut self, avoid: &[IRect], screen: IRect) {
+        // Pixels in, points here.
+        let avoid: Vec<IRect> = avoid.iter().map(|&r| crate::capture::to_points_i(r)).collect();
+        let screen = crate::capture::to_points_i(screen);
+        self.set_avoid_pt(&avoid, screen);
+    }
+
+    fn set_avoid_pt(&mut self, avoid: &[IRect], screen: IRect) {
         {
             let mut g = self.ui.geo.borrow_mut();
             if (g.avoid.as_slice(), g.screen) == (avoid, screen) || g.drag.is_some() {
@@ -439,7 +451,7 @@ impl Bubble {
     /// Keep off nothing any more (the overlay is gone).
     pub fn clear_avoid(&mut self) {
         let screen = self.ui.geo.borrow().screen;
-        self.set_avoid(&[], screen);
+        self.set_avoid_pt(&[], screen);
     }
 
     /// Change the shape, size or mirroring (and the theme's accent).

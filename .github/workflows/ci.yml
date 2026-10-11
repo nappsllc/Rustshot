@@ -332,7 +332,9 @@ jobs:
           security list-keychains -d user -s "$kc"
           id=$(security find-identity -v -p codesigning "$kc" | sed -n 's/.*"\(.*\)".*/\1/p' | head -n1)
           echo "signing with: $id"
-          codesign --force --options runtime --timestamp --sign "$id" dist/Rustshot.app
+          # Hardened runtime: the microphone and camera need entitlements.
+          codesign --force --options runtime --timestamp \
+            --entitlements packaging/macos/devid.entitlements --sign "$id" dist/Rustshot.app
           ditto -c -k --keepParent dist/Rustshot.app "$RUNNER_TEMP/notarize.zip"
           xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
             --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \

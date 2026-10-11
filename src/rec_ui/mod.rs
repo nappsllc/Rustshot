@@ -841,6 +841,15 @@ impl Geom {
         self.scale_at(self.area.0 + self.area.2 as i32 / 2, self.area.1 + self.area.3 as i32 / 2)
     }
 
+    /// macOS: this geometry (pixels = points × `k`, see
+    /// `capture::pts`) in whole points, every scale 1: what the recording
+    /// windows are placed in.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub fn in_points(&self, k: f64) -> Geom {
+        let p = |r: IRect| crate::capture::pts::rect_pt_i(r, k);
+        Geom { area: p(self.area), monitors: self.monitors.iter().map(|m| (p(m.0), 1.0)).collect(), scale: 1.0 }
+    }
+
     /// Each monitor with the border's thickness there.
     #[cfg_attr(target_os = "macos", allow(dead_code))] // macOS draws it in points
     pub fn border_monitors(&self) -> Vec<(IRect, i32)> {

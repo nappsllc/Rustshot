@@ -234,6 +234,67 @@ pub fn crop_global(shot: &Shot, rect: (i32, i32, u32, u32)) -> Result<PixBuf> {
     Ok(shot.image.crop(x, y, w, h))
 }
 
+/// macOS units. Quartz lays displays out in points; the shared code
+/// (monitors, shots, the editor's selection, the recording area, the
+/// camera bubble's area) works in pixels. On macOS those pixels are global
+/// points × one backing factor `k` for the whole desktop: the largest
+/// display scale (2 with a Retina display; 1 without). So shots and the
+/// overlay are drawn at Retina density, a 1× display beside a Retina one
+/// is captured at `k` too (the window server scales it down), and every
+/// AppKit / CoreGraphics / ScreenCaptureKit call converts back to points
+/// with these helpers. Platform-neutral so they are tested everywhere.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub mod pts {
+    use super::IRect;
+
+    /// The backing factor for displays of these pixels-per-point scales:
+    /// the largest (finite, positive) one, at least 1.
+    pub fn factor(scales: &[f64]) -> f64 {
+        scales.iter().copied().filter(|s| s.is_finite() && *s > 0.0).fold(1.0, f64::max)
+    }
+
+    /// Pixels per point of a display mode `px_w` pixels wide that is
+    /// `pt_w` points wide (1 when unknown).
+    pub fn mode_scale(px_w: usize, pt_w: usize) -> f64 {
+        if px_w > 0 && pt_w > 0 { px_w as f64 / pt_w as f64 } else { 1.0 }
+    }
+
+    fn k_of(k: f64) -> f64 {
+        if k.is_finite() && k > 0.0 { k } else { 1.0 }
+    }
+
+    /// A coordinate in points → pixels.
+    pub fn px(v: f64, k: f64) -> i32 {
+        (v * k_of(k)).round() as i32
+    }
+
+    /// A coordinate in pixels → points.
+    pub fn pt(v: i32, k: f64) -> f64 {
+        f64::from(v) / k_of(k)
+    }
+
+    /// A rect in points (x, y, w, h) → pixels; the edges are rounded (so
+    /// rects that touch in points touch in pixels).
+    pub fn rect_px((x, y, w, h): (f64, f64, f64, f64), k: f64) -> IRect {
+        let (x0, y0, x1, y1) = (px(x, k), px(y, k), px(x + w.max(0.0), k), px(y + h.max(0.0), k));
+        (x0, y0, (x1 - x0).max(0) as u32, (y1 - y0).max(0) as u32)
+    }
+
+    /// A rect in pixels → points (exact).
+    pub fn rect_pt(r: IRect, k: f64) -> (f64, f64, f64, f64) {
+        (pt(r.0, k), pt(r.1, k), f64::from(r.2) / k_of(k), f64::from(r.3) / k_of(k))
+    }
+
+    /// A rect in pixels → whole points (edges rounded).
+    pub fn rect_pt_i(r: IRect, k: f64) -> IRect {
+        let k = k_of(k);
+        let e = |v: i64| (v as f64 / k).round() as i32;
+        let (x0, y0) = (e(i64::from(r.0)), e(i64::from(r.1)));
+        let (x1, y1) = (e(i64::from(r.0) + i64::from(r.2)), e(i64::from(r.1) + i64::from(r.3)));
+        (x0, y0, (x1 - x0).max(0) as u32, (y1 - y0).max(0) as u32)
+    }
+}
+
 #[cfg(windows)]
 #[path = "capture_win.rs"]
 mod imp;
@@ -249,6 +310,32 @@ pub use imp::*;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn macos_points_and_pixels_convert_by_the_backing_factor() {
+        assert_eq!(pts::factor(&[1.0, 2.0]), 2.0, "the largest display scale");
+        assert_eq!(pts::factor(&[]), 1.0);
+        assert_eq!(pts::factor(&[0.0, f64::NAN, 0.5]), 1.0, "never below 1");
+        assert_eq!(pts::mode_scale(2880, 1440), 2.0, "Retina");
+        assert_eq!(pts::mode_scale(3360, 1680), 2.0, "a scaled 'more space' mode");
+        assert_eq!(pts::mode_scale(1920, 1920), 1.0);
+        assert_eq!(pts::mode_scale(0, 1440), 1.0, "unknown");
+        // A display at -1440 pt left of the main one.
+        assert_eq!(pts::rect_px((-1440.0, 0.0, 1440.0, 900.0), 2.0), (-2880, 0, 2880, 1800));
+        assert_eq!(pts::rect_pt((-2880, 0, 2880, 1800), 2.0), (-1440.0, 0.0, 1440.0, 900.0));
+        assert_eq!(pts::rect_pt((1, 3, 5, 7), 2.0), (0.5, 1.5, 2.5, 3.5), "odd pixels are half points");
+        // Edges are rounded (halves away from zero), not the size.
+        assert_eq!(pts::rect_pt_i((-2881, 1, 2882, 1801), 2.0), (-1441, 1, 1442, 900));
+        assert_eq!(pts::rect_pt_i((201, 99, 2000, 1000), 2.0), (101, 50, 1000, 500));
+        assert_eq!(pts::px(10.25, 2.0), 21);
+        assert_eq!(pts::pt(21, 2.0), 10.5);
+        // Round trips, and k = 1 changes nothing.
+        for r in [(0, 0, 640, 360), (-1920, 200, 1920, 1080), (7, 9, 3, 5)] {
+            assert_eq!(pts::rect_px(pts::rect_pt(r, 2.0), 2.0), r);
+            assert_eq!(pts::rect_pt_i(r, 1.0), r);
+        }
+        assert_eq!(pts::rect_pt((4, 4, 4, 4), 0.0), (4.0, 4.0, 4.0, 4.0), "a bad factor is 1");
+    }
 
     #[test]
     fn monitors_in_shot_are_image_relative_and_clipped() {

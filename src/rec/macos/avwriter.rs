@@ -2,12 +2,14 @@
 //! platforms; the system picks the hardware encoder) from BGRA pixel
 //! buffers (the encoder converts), and AAC 48 kHz stereo at 160 kbit/s
 //! from the mixer's f32 PCM. Real-time inputs: a frame that comes while
-//! the video input is busy is dropped; sound waits a little for it.
+//! the video input is busy is dropped; sound is queued (bounded,
+//! [`SoundQueue`]) and handed over as the audio input takes it, so the
+//! encode thread never waits for the writer.
 //! Presentation times come from the session clock (video in µs, made
 //! strictly increasing; sound by sample index from 0).
 
 use super::media::{self, CFRelease, Media};
-use super::{Asbd, CMTime};
+use super::{Asbd, CMTime, SoundQueue};
 use crate::macos_objc::{self as objc, Id};
 use crate::rec::{Frame, Quality, VideoEncoder};
 use crate::wind::{msg0, msg1, msg2, msg3, objc_cls, objc_sel};
@@ -18,8 +20,10 @@ use std::time::{Duration, Instant};
 
 /// How long finishing the file may take.
 const FINISH: Duration = Duration::from_secs(60);
-/// How long a sound buffer waits for the audio input.
-const SOUND_WAIT: Duration = Duration::from_millis(200);
+/// The most sound queued for a busy audio input (2 s).
+const SOUND_QUEUE: usize = super::RATE as usize * 2;
+/// How long finishing waits for the audio input to take what is queued.
+const SOUND_DRAIN: Duration = Duration::from_secs(1);
 
 /// `AVAssetWriterStatusCompleted`.
 const COMPLETED: isize = 2;
@@ -30,6 +34,8 @@ pub struct AvWriterEncoder {
     video: Id,
     adaptor: Id,
     audio: Option<Id>,
+    /// Sound the audio input was not ready for yet.
+    sound: SoundQueue,
     /// The LPCM format of the sound handed to the writer.
     fmt: *mut c_void,
     size: (u32, u32),
@@ -127,6 +133,7 @@ impl AvWriterEncoder {
                 video,
                 adaptor,
                 audio,
+                sound: SoundQueue::new(SOUND_QUEUE),
                 fmt,
                 size: (w, h),
                 last: None,
@@ -158,6 +165,62 @@ impl AvWriterEncoder {
     fn ready(input: &Id) -> bool {
         let r: i8 = unsafe { msg0(input.ptr(), objc_sel(c"isReadyForMoreMediaData")) };
         r != 0
+    }
+
+    /// Hand queued sound to the audio input while it takes more; returns
+    /// at once when it is busy (what is left goes later).
+    fn feed_sound(&mut self) -> Result<()> {
+        while self.audio.as_ref().is_some_and(Self::ready) {
+            let Some((pcm, ts)) = self.sound.pop() else { break };
+            unsafe { self.append_sound(&pcm, ts)? };
+        }
+        Ok(())
+    }
+
+    /// One buffer of sound into the (ready) audio input.
+    unsafe fn append_sound(&mut self, pcm: &[f32], ts: Duration) -> Result<()> {
+        let Some(audio) = &self.audio else { return Ok(()) };
+        let frames = pcm.len() / 2;
+        unsafe {
+            let cm = &self.m.cm;
+            let bytes = frames * 8;
+            let mut block: *mut c_void = core::ptr::null_mut();
+            let st = (cm.CMBlockBufferCreateWithMemoryBlock)(
+                core::ptr::null_mut(),
+                core::ptr::null_mut(),
+                bytes,
+                core::ptr::null_mut(),
+                core::ptr::null(),
+                0,
+                bytes,
+                1, // kCMBlockBufferAssureMemoryNowFlag
+                &mut block,
+            );
+            if st != 0 || block.is_null() {
+                bail!("no buffer for the sound ({st})");
+            }
+            (cm.CMBlockBufferReplaceDataBytes)(pcm.as_ptr().cast(), block, 0, bytes);
+            let mut sbuf: *mut c_void = core::ptr::null_mut();
+            let st = (cm.CMAudioSampleBufferCreateReadyWithPacketDescriptions)(
+                core::ptr::null_mut(),
+                block,
+                self.fmt,
+                frames as isize,
+                CMTime::new(super::audio_pts(ts), super::RATE as i32),
+                core::ptr::null(),
+                &mut sbuf,
+            );
+            CFRelease(block);
+            if st != 0 || sbuf.is_null() {
+                bail!("no sample buffer for the sound ({st})");
+            }
+            let ok: i8 = msg1(audio.ptr(), objc_sel(c"appendSampleBuffer:"), sbuf);
+            CFRelease(sbuf);
+            if ok == 0 {
+                return Err(self.fail("write the sound"));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -193,6 +256,7 @@ impl VideoEncoder for AvWriterEncoder {
             bail!("{e}");
         }
         let _pool = objc::Pool::new();
+        self.feed_sound()?;
         if !Self::ready(&self.video) {
             self.dropped += 1;
             return Ok(());
@@ -237,69 +301,41 @@ impl VideoEncoder for AvWriterEncoder {
     }
 
     fn push_audio(&mut self, pcm: &[f32], ts: Duration) -> Result<()> {
-        let Some(audio) = &self.audio else { return Ok(()) };
+        if self.audio.is_none() {
+            return Ok(());
+        }
         if let Some(e) = &self.failed {
             bail!("{e}");
         }
-        let frames = pcm.len() / 2;
-        if frames == 0 {
+        if pcm.len() < 2 {
             return Ok(());
         }
         let _pool = objc::Pool::new();
-        let end = Instant::now() + SOUND_WAIT;
-        while !Self::ready(audio) {
-            if Instant::now() >= end {
-                return Ok(()); // the writer is behind: this bit of sound is lost
-            }
-            std::thread::sleep(Duration::from_millis(2));
-        }
-        unsafe {
-            let cm = &self.m.cm;
-            let bytes = frames * 8;
-            let mut block: *mut c_void = core::ptr::null_mut();
-            let st = (cm.CMBlockBufferCreateWithMemoryBlock)(
-                core::ptr::null_mut(),
-                core::ptr::null_mut(),
-                bytes,
-                core::ptr::null_mut(),
-                core::ptr::null(),
-                0,
-                bytes,
-                1, // kCMBlockBufferAssureMemoryNowFlag
-                &mut block,
-            );
-            if st != 0 || block.is_null() {
-                bail!("no buffer for the sound ({st})");
-            }
-            (cm.CMBlockBufferReplaceDataBytes)(pcm.as_ptr().cast(), block, 0, bytes);
-            let mut sbuf: *mut c_void = core::ptr::null_mut();
-            let st = (cm.CMAudioSampleBufferCreateReadyWithPacketDescriptions)(
-                core::ptr::null_mut(),
-                block,
-                self.fmt,
-                frames as isize,
-                CMTime::new(super::audio_pts(ts), super::RATE as i32),
-                core::ptr::null(),
-                &mut sbuf,
-            );
-            CFRelease(block);
-            if st != 0 || sbuf.is_null() {
-                bail!("no sample buffer for the sound ({st})");
-            }
-            let ok: i8 = msg1(audio.ptr(), objc_sel(c"appendSampleBuffer:"), sbuf);
-            CFRelease(sbuf);
-            if ok == 0 {
-                return Err(self.fail("write the sound"));
-            }
-        }
-        Ok(())
+        self.sound.push(pcm, ts);
+        self.feed_sound()
     }
 
     fn finish(mut self: Box<Self>) -> Result<()> {
         let _pool = objc::Pool::new();
         self.done = true;
+        // The sound still queued: the input gets a moment to take it
+        // (once, at the end; not on the way).
+        let end = Instant::now() + SOUND_DRAIN;
+        while self.failed.is_none() && !self.sound.is_empty() && Instant::now() < end {
+            let before = self.sound.frames();
+            if self.feed_sound().is_err() {
+                break;
+            }
+            if self.sound.frames() == before {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
         if self.dropped > 0 {
             eprintln!("rustshot: {} frames dropped (the encoder was busy)", self.dropped);
+        }
+        let lost = self.sound.dropped + self.sound.frames() as u64;
+        if lost > 0 {
+            eprintln!("rustshot: {:.2} s of sound dropped (the writer was busy)", lost as f64 / f64::from(super::RATE));
         }
         if let Some(e) = self.failed.take() {
             unsafe {
@@ -355,7 +391,11 @@ mod tests {
     use super::*;
 
     /// A future Mac: record 2 s through ScreenCaptureKit into this
-    /// encoder and check the file's duration with AVAsset.
+    /// encoder and check the file's duration with AVAsset. Screen only:
+    /// an unbundled test binary has no Info.plist, and TCC kills a process
+    /// that opens the microphone or the camera without
+    /// `NSMicrophoneUsageDescription` / `NSCameraUsageDescription` — try
+    /// those from the bundled Rustshot.app (packaging/macos/bundle.sh).
     #[test]
     #[ignore = "needs a Mac with Screen Recording permission"]
     fn live_rec_macos_records_two_seconds() {
@@ -375,7 +415,7 @@ mod tests {
             mic: None,
             out: out.clone(),
         };
-        let opened = super::super::sck::open(area, 30, true, false, &[]).unwrap();
+        let opened = super::super::sck::open(crate::capture::to_points_i(area), 30, true, false, &[]).unwrap();
         let (w, h) = opened.video.size();
         let enc = AvWriterEncoder::create(&spec.part_path(), w, h, 30, Quality::Medium, false).unwrap();
         let s = Session::start(spec, Box::new(opened.video), Vec::new(), Box::new(enc)).unwrap();
