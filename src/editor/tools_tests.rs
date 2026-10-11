@@ -653,10 +653,10 @@ fn ring_controls_change_the_bubble() {
 }
 
 /// The ring's picker dismissed without a change keeps the ring on the
-/// accent (`None`, not the accent's colour) and adds no recent colour; the
-/// tool's picker likewise remembers nothing.
+/// accent (`None`, not the accent's colour) and adds no recent colour.
+#[cfg(any(windows, target_os = "linux"))]
 #[test]
-fn pickers_closed_unchanged_change_nothing() {
+fn ring_picker_closed_unchanged_keeps_the_accent() {
     let mut a = app_big();
     ed(&mut a).cfg.recent_colors = vec!["#123456".into()];
     let rec = item(&mut a, |k| *k == toolbar::Kind::Btn(Act::Record));
@@ -692,8 +692,14 @@ fn pickers_closed_unchanged_change_nothing() {
     let e = ed(&mut a);
     assert_eq!(e.rec.opts.cam_ring, Some(C4::rgb(0, 255, 0)));
     assert_eq!(e.cfg.recent_colors, ["#00ff00", "#123456"]);
-    // The tool's picker, closed on its own colour.
-    key(&mut a, key_esc()); // the Record popover closes
+}
+
+/// The tool's picker closed on the colour it opened with remembers
+/// nothing and adds no recent colour.
+#[test]
+fn tool_picker_closed_unchanged_remembers_nothing() {
+    let mut a = app_big();
+    ed(&mut a).cfg.recent_colors = vec!["#00ff00".into(), "#123456".into()];
     key(&mut a, 'D' as u32);
     ed(&mut a).pending.take();
     open_picker(&mut a);
