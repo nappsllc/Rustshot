@@ -58,9 +58,11 @@ struct XKeyEvent {
     same_screen: c_int,
 }
 
+/// Xlib's `XEvent` is a union (192 bytes on LP64): every member starts at
+/// offset 0, `type_` overlaps each member's own `type` field.
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct XEvent {
+union XEvent {
     type_: c_int,
     key: XKeyEvent,
     pad: [c_ulong; 24],
@@ -200,10 +202,10 @@ fn hotkey_thread(specs: [(i32, String, HotEvent); SLOTS], tx: mpsc::Sender<HotEv
             }
             let mut ev: XEvent = core::mem::zeroed();
             XNextEvent(dpy, &mut ev);
-            let keycode = ev.key.detail as u8;
-            match ev.type_ {
+            let (type_, keycode, state) = key_fields(&ev);
+            match type_ {
                 KEY_PRESS => {
-                    let state = ev.key.state & MOD_BASE_MASK;
+                    let state = state & MOD_BASE_MASK;
                     let Some((_, _, idx)) = grabs
                         .iter()
                         .find(|(k, m, _)| *k == keycode && (*m & MOD_BASE_MASK) == state)
@@ -224,7 +226,8 @@ fn hotkey_thread(specs: [(i32, String, HotEvent); SLOTS], tx: mpsc::Sender<HotEv
                     if XPending(dpy) > 0 {
                         let mut next: XEvent = core::mem::zeroed();
                         XPeekEvent(dpy, &mut next);
-                        if next.type_ == KEY_PRESS && next.key.detail as u8 == keycode {
+                        let (t, k, _) = key_fields(&next);
+                        if t == KEY_PRESS && k == keycode {
                             continue;
                         }
                     }
@@ -238,6 +241,14 @@ fn hotkey_thread(specs: [(i32, String, HotEvent); SLOTS], tx: mpsc::Sender<HotEv
         }
         XCloseDisplay(dpy);
     }
+}
+
+/// An event's type, keycode and modifier state (the last two only mean
+/// something for KeyPress/KeyRelease).
+fn key_fields(ev: &XEvent) -> (c_int, u8, c_uint) {
+    // SAFETY: every member of the union is plain old data starting at
+    // offset 0, and Xlib filled the whole event.
+    unsafe { (ev.type_, ev.key.detail as u8, ev.key.state) }
 }
 
 /// Win32 `MOD_*` flags (from `parse_hotkey`) → X11 modifier masks.
@@ -282,4 +293,48 @@ fn keysym_of_vk(vk: u32) -> Option<c_ulong> {
         k if k == key::PRINTSCREEN => 0xff61,
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::mem::{offset_of, size_of};
+
+    /// Xlib's layout (X11/Xlib.h on LP64): a 192-byte union whose members
+    /// all start at 0; in XKeyEvent `state` is at 80 and `keycode` at 84. A
+    /// struct with `key` after `type_` read both 8 bytes late, so no grab
+    /// ever matched.
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn xevent_layout_matches_xlib() {
+        assert_eq!(size_of::<XEvent>(), 192);
+        assert_eq!(offset_of!(XEvent, type_), 0);
+        assert_eq!(offset_of!(XEvent, key), 0);
+        assert_eq!(size_of::<XKeyEvent>(), 96);
+        assert_eq!(offset_of!(XKeyEvent, serial), 8);
+        assert_eq!(offset_of!(XKeyEvent, display), 24);
+        assert_eq!(offset_of!(XKeyEvent, window), 32);
+        assert_eq!(offset_of!(XKeyEvent, time), 56);
+        assert_eq!(offset_of!(XKeyEvent, x), 64);
+        assert_eq!(offset_of!(XKeyEvent, x_root), 72);
+        assert_eq!(offset_of!(XKeyEvent, state), 80);
+        assert_eq!(offset_of!(XKeyEvent, detail), 84);
+        assert_eq!(offset_of!(XKeyEvent, same_screen), 88);
+    }
+
+    /// A KeyPress as Xlib writes it (raw bytes) decodes to its keycode and state.
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn key_fields_reads_a_raw_key_press() {
+        let mut raw = [0u8; 192];
+        raw[0..4].copy_from_slice(&KEY_PRESS.to_ne_bytes());
+        raw[80..84].copy_from_slice(&(CONTROL_MASK | SHIFT_MASK | MOD2_MASK).to_ne_bytes());
+        raw[84..88].copy_from_slice(&29u32.to_ne_bytes());
+        // SAFETY: XEvent is plain old data of exactly 192 bytes.
+        let ev: XEvent = unsafe { core::mem::transmute(raw) };
+        let (t, k, st) = key_fields(&ev);
+        assert_eq!(t, KEY_PRESS);
+        assert_eq!(k, 29);
+        assert_eq!(st & MOD_BASE_MASK, CONTROL_MASK | SHIFT_MASK);
+    }
 }

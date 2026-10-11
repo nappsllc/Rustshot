@@ -13,6 +13,12 @@
 //! there. The session stays open (and the stream with it) while the
 //! [`Cast`] lives; dropping it closes the session.
 //!
+//! Screenshot: `Screenshot` without the dialog (`interactive` false; a
+//! desktop may still ask once whether Rustshot may take screenshots): a
+//! PNG file's URI, read and removed by [`grab_screen`]. On Wayland this is
+//! the only way to see the screen (X11 `GetImage` of the XWayland root
+//! fails with BadMatch).
+//!
 //! Camera: `IsCameraPresent`, `AccessCamera` (asks the user once; the
 //! permission store remembers), then `OpenPipeWireRemote`, on which only
 //! cameras are visible.
@@ -31,6 +37,7 @@ pub const DESKTOP: &str = "org.freedesktop.portal.Desktop";
 pub const DESKTOP_PATH: &str = "/org/freedesktop/portal/desktop";
 pub const SCREENCAST: &str = "org.freedesktop.portal.ScreenCast";
 pub const CAMERA: &str = "org.freedesktop.portal.Camera";
+pub const SCREENSHOT: &str = "org.freedesktop.portal.Screenshot";
 const REQUEST: &str = "org.freedesktop.portal.Request";
 const SESSION: &str = "org.freedesktop.portal.Session";
 
@@ -251,6 +258,69 @@ pub fn access_camera(bus: &mut dyn Bus) -> Result<Fd> {
     open_remote(bus, CAMERA, None)
 }
 
+/// Take a screenshot of the whole desktop without the portal's dialog:
+/// the picture file's URI.
+pub fn screenshot(bus: &mut dyn Bus) -> Result<String> {
+    let opts = vec![("interactive", Value::Bool(false)), ("modal", Value::Bool(false))];
+    let r = request(bus, SCREENSHOT, "Screenshot", vec![Value::str("")], opts, DIALOG)?;
+    r.get("uri").and_then(Value::as_str).map(String::from).ok_or_else(|| anyhow!("Screenshot: no picture in the answer"))
+}
+
+/// The local path of a `file://` URI (percent-decoded); `None` for any
+/// other scheme, a remote host or a path that is not UTF-8.
+pub fn file_uri_path(uri: &str) -> Option<String> {
+    let rest = uri.strip_prefix("file://")?;
+    let rest = rest.strip_prefix("localhost").unwrap_or(rest);
+    if !rest.starts_with('/') {
+        return None;
+    }
+    let b = rest.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' {
+            let hex = std::str::from_utf8(b.get(i + 1..i + 3)?).ok()?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+/// `rect` (X screen coordinates, the screen being `screen` px) out of a
+/// screenshot `img` of that screen, which may be at another scale (a
+/// HiDPI output): nearest-neighbour to exactly `rect`'s size, the part
+/// outside the picture black. `None` for an empty rect or picture.
+pub fn crop_screen(img: &crate::pixbuf::PixBuf, screen: (u32, u32), rect: IRect) -> Option<crate::pixbuf::PixBuf> {
+    let (iw, ih) = img.dimensions();
+    let (sw, sh) = if screen.0 == 0 || screen.1 == 0 { (iw, ih) } else { screen };
+    if rect.2 == 0 || rect.3 == 0 || iw == 0 || ih == 0 {
+        return None;
+    }
+    if (sw, sh) == (iw, ih) && rect.0 >= 0 && rect.1 >= 0 && rect.0 as u32 + rect.2 <= iw && rect.1 as u32 + rect.3 <= ih {
+        return Some(img.crop(rect.0 as u32, rect.1 as u32, rect.2, rect.3));
+    }
+    let (kx, ky) = (iw as f64 / sw as f64, ih as f64 / sh as f64);
+    let src = img.as_raw();
+    let mut out = vec![0u8; rect.2 as usize * rect.3 as usize * 4];
+    for (y, row) in out.chunks_exact_mut(rect.2 as usize * 4).enumerate() {
+        let sy = ((rect.1 as f64 + y as f64 + 0.5) * ky).floor() as i64;
+        for (x, px) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            let sx = ((rect.0 as f64 + x as f64 + 0.5) * kx).floor() as i64;
+            *px = if sx >= 0 && sy >= 0 && (sx as u32) < iw && (sy as u32) < ih {
+                let i = (sy as usize * iw as usize + sx as usize) * 4;
+                [src[i], src[i + 1], src[i + 2], 255]
+            } else {
+                [0, 0, 0, 255]
+            };
+        }
+    }
+    crate::pixbuf::PixBuf::from_raw(rect.2, rect.3, out)
+}
+
 // ---------------------------------------------------------------------------
 // Where the shared monitor is, and the crop
 // ---------------------------------------------------------------------------
@@ -390,6 +460,19 @@ pub fn screencast_available() -> bool {
             }
         }
     })
+}
+
+/// A screenshot of the whole desktop through the Screenshot portal (no
+/// dialog). The portal's file is removed once read: it is ours, made only
+/// for this capture (some desktops put it in ~/Pictures).
+#[cfg(target_os = "linux")]
+pub fn grab_screen() -> Result<crate::pixbuf::PixBuf> {
+    let mut conn = dbus::Conn::session().context("connect to the session bus")?;
+    let uri = screenshot(&mut conn)?;
+    let path = file_uri_path(&uri).ok_or_else(|| anyhow!("Screenshot: not a local file: {uri}"))?;
+    let bytes = std::fs::read(&path).with_context(|| format!("read the screenshot {path}"))?;
+    let _ = std::fs::remove_file(&path);
+    crate::pixbuf::PixBuf::from_png(&bytes).with_context(|| format!("decode the screenshot {path}"))
 }
 
 /// A running screen cast: the bus connection that holds the session, the

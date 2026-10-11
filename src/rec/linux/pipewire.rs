@@ -19,6 +19,7 @@ use crate::rec::{Frame, FrameSource};
 use anyhow::{anyhow, bail, Result};
 use core::ffi::{c_char, c_int, c_void};
 use std::os::fd::{IntoRawFd, OwnedFd};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -202,6 +203,10 @@ struct Shared {
     streaming: Mutex<bool>,
     changed: Condvar,
     on_frame: Mutex<OnFrame>,
+    /// Buffers PipeWire handed over, and those of them with no usable
+    /// picture (empty or corrupted): diagnostics for a cast that shows nothing.
+    buffers: AtomicU64,
+    unusable: AtomicU64,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -274,6 +279,7 @@ unsafe extern "C" fn on_process(data: *mut c_void) {
     if b.is_null() {
         return;
     }
+    sh.buffers.fetch_add(1, Ordering::Relaxed);
     // SAFETY: a dequeued buffer's spa_buffer, metas, datas and chunks are
     // valid until it is queued again; mapped data (MAP_BUFFERS) is `maxsize`.
     unsafe {
@@ -308,6 +314,8 @@ unsafe extern "C" fn on_process(data: *mut c_void) {
         }
         if !corrupted && !planes.is_empty() {
             (lock(&sh.on_frame))(&Raw { fmt, planes, pts });
+        } else {
+            sh.unusable.fetch_add(1, Ordering::Relaxed);
         }
         (pw.stream_queue_buffer)(s, b);
     }
@@ -363,6 +371,8 @@ impl Stream {
             streaming: Mutex::new(false),
             changed: Condvar::new(),
             on_frame: Mutex::new(on_frame),
+            buffers: AtomicU64::new(0),
+            unusable: AtomicU64::new(0),
         });
         // SAFETY: libpipewire's documented call order; every object made
         // here is destroyed by `Drop` (or below when a step fails).
@@ -444,6 +454,11 @@ impl Stream {
     pub fn error(&self) -> Option<String> {
         lock(&self.shared.error).clone()
     }
+
+    /// (buffers received, of which without a usable picture).
+    pub fn buffer_counts(&self) -> (u64, u64) {
+        (self.shared.buffers.load(Ordering::Relaxed), self.shared.unusable.load(Ordering::Relaxed))
+    }
 }
 
 impl Drop for Stream {
@@ -487,6 +502,35 @@ impl<T> Slot<T> {
         self.cv.notify_all();
     }
 
+    /// Put `v` only when nothing has come yet (a stand-in never replaces a
+    /// real picture); whether it was put.
+    fn put_first(&self, v: T) -> bool {
+        let mut g = lock(&self.item);
+        if g.1 != 0 {
+            return false;
+        }
+        g.0 = Some(v);
+        g.1 = 1;
+        drop(g);
+        self.cv.notify_all();
+        true
+    }
+
+    /// Whether any picture has come, waiting until `deadline` for the first.
+    fn wait_first(&self, deadline: Instant) -> bool {
+        let mut g = lock(&self.item);
+        loop {
+            if g.1 > 0 {
+                return true;
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            g = self.cv.wait_timeout(g, deadline - now).unwrap_or_else(|e| e.into_inner()).0;
+        }
+    }
+
     /// The picture after number `seen`, waiting until `deadline`.
     fn take_after(&self, seen: u64, deadline: Instant) -> Option<(T, u64)> {
         let mut g = lock(&self.item);
@@ -509,32 +553,71 @@ impl<T> Slot<T> {
 // Screen
 // ---------------------------------------------------------------------------
 
-/// Frames of a portal screen cast: the area cropped from the shared
-/// monitor's pictures. Holds the cast (its session) while it lives.
-pub struct ScreenSource {
-    stream: Stream,
+/// The newest screen picture, repeated while nothing new comes: the
+/// compositor sends pictures only when the screen changes (a still screen
+/// sends nothing new, or nothing at all), and a recording needs one per tick (the
+/// DXGI path's WAIT_TIMEOUT case on Windows).
+struct Latest {
     slot: Arc<Slot<Vec<u8>>>,
     size: (u32, u32),
     seen: u64,
     last: Option<Frame>,
+}
+
+impl Latest {
+    /// A new picture when one comes before `deadline`, else the last one
+    /// again (`None` only before the first picture).
+    fn next(&mut self, deadline: Instant) -> Option<Frame> {
+        if let Some((bgra, n)) = self.slot.take_after(self.seen, deadline) {
+            self.seen = n;
+            let f = Frame { w: self.size.0, h: self.size.1, bgra, ts: Duration::ZERO };
+            self.last = Some(f.clone());
+            return Some(f);
+        }
+        self.last.clone()
+    }
+}
+
+/// A raw picture: its format, bytes and row stride.
+type RawCopy = (pod::VideoFmt, Vec<u8>, usize);
+
+/// Where the crop stands: unknown until the format is agreed (meanwhile
+/// the newest raw picture is kept: a still screen may never send another),
+/// then the rect and the output size.
+enum Crop {
+    Waiting(Option<RawCopy>),
+    Ready(IRect, (u32, u32)),
+}
+
+/// Frames of a portal screen cast: the area cropped from the shared
+/// monitor's pictures. Holds the cast (its session) while it lives.
+pub struct ScreenSource {
+    stream: Stream,
+    latest: Latest,
     _cast: super::portal::Cast,
 }
 
 /// How long the compositor may take to agree a format.
 const FORMAT_WAIT: Duration = Duration::from_secs(10);
+/// How long the compositor may take to send its first picture.
+const FIRST_FRAME_WAIT: Duration = Duration::from_secs(5);
+/// How long to wait for it before seeding the source with a screenshot.
+const SEED_AFTER: Duration = Duration::from_millis(1500);
+/// The error when it sends none.
+pub const NO_PICTURE: &str = "The screen share sent no picture";
 
 impl ScreenSource {
     /// Stream `cast` and crop what `crop` says from each picture (given the
-    /// agreed picture size: the crop rect and whether the area fit).
+    /// agreed picture size: the crop rect and whether the area fit). Fails
+    /// unless a first picture comes within [`FIRST_FRAME_WAIT`].
     pub fn open(mut cast: super::portal::Cast, crop: impl FnOnce((u32, u32)) -> IRect) -> Result<ScreenSource> {
         let fd = cast.fd.take().ok_or_else(|| anyhow!("the screen cast has no PipeWire socket"))?;
-        let rect = Arc::new(Mutex::new(None::<(IRect, (u32, u32))>));
+        let state = Arc::new(Mutex::new(Crop::Waiting(None)));
         let slot = Arc::new(Slot::new());
-        let (r2, s2) = (rect.clone(), slot.clone());
+        let (r2, s2) = (state.clone(), slot.clone());
         let mut buf: Vec<Vec<u8>> = Vec::new();
         let mut last_pts = None;
         let on_frame: OnFrame = Box::new(move |raw: &Raw| {
-            let Some((c, (ow, oh))) = *lock(&r2) else { return };
             // A picture older than one already delivered is dropped.
             if let (Some(p), Some(l)) = (raw.pts, last_pts)
                 && p < l
@@ -543,6 +626,15 @@ impl ScreenSource {
             }
             last_pts = raw.pts.or(last_pts);
             let Some(&(data, stride)) = raw.planes.first() else { return };
+            let mut st = lock(&r2);
+            let (c, (ow, oh)) = match &mut *st {
+                Crop::Ready(c, o) => (*c, *o),
+                Crop::Waiting(p) => {
+                    *p = Some((raw.fmt, data.to_vec(), stride));
+                    return;
+                }
+            };
+            drop(st);
             let mut out = buf.pop().unwrap_or_default();
             if pod::convert_screen(raw.fmt.format, data, stride, raw.fmt.w, raw.fmt.h, c, ow, oh, &mut out) {
                 s2.put(out);
@@ -561,31 +653,80 @@ impl ScreenSource {
         let fmt = stream.wait_format(FORMAT_WAIT)?;
         let c = crop((fmt.w, fmt.h));
         let size = (c.2.max(1), c.3.max(1));
-        *lock(&rect) = Some((c, size));
+        {
+            // A picture that came before the crop was known is not lost.
+            let mut st = lock(&state);
+            if let Crop::Waiting(Some((f, data, stride))) = core::mem::replace(&mut *st, Crop::Ready(c, size)) {
+                let mut out = Vec::new();
+                if pod::convert_screen(f.format, &data, stride, f.w, f.h, c, size.0, size.1, &mut out) {
+                    slot.put(out);
+                }
+            }
+        }
         eprintln!("rustshot: PipeWire {}x{} (format {}), recording {:?}", fmt.w, fmt.h, fmt.format, c);
-        Ok(ScreenSource { stream, slot, size, seen: 0, last: None, _cast: cast })
+        let end = Instant::now() + FIRST_FRAME_WAIT;
+        // Some compositors (xdg-desktop-portal-wlr) send a picture only
+        // once something on the screen changes: a still screen sends none.
+        // Like the Windows DXGI path seeds a still display with a GDI grab,
+        // the first picture is then a screenshot (Screenshot portal), which
+        // the source repeats until the cast sends one.
+        if !slot.wait_first(Instant::now() + SEED_AFTER) {
+            let s = &cast.info.stream;
+            let mon = s.pos.zip(s.size);
+            match super::portal::grab_screen() {
+                Ok(img) => match seed_picture(&img, mon, (fmt.w, fmt.h), c) {
+                    Some(px) => {
+                        if slot.put_first(px) {
+                            eprintln!("rustshot: the screen cast sent nothing yet; starting from a screenshot");
+                        }
+                    }
+                    None => eprintln!("rustshot: the screenshot does not fit the shared screen"),
+                },
+                Err(e) => eprintln!("rustshot: no screenshot to start the screen cast from: {e:#}"),
+            }
+        }
+        if !slot.wait_first(end) {
+            let (n, bad) = stream.buffer_counts();
+            let why = stream.error().map(|e| format!("; {e}")).unwrap_or_default();
+            bail!("{NO_PICTURE} within {} s ({n} buffers from PipeWire, {bad} without a picture{why})", FIRST_FRAME_WAIT.as_secs());
+        }
+        Ok(ScreenSource { stream, latest: Latest { slot, size, seen: 0, last: None }, _cast: cast })
     }
+}
+
+/// The part `c` of the shared screen (whose pictures are `frame` px; at
+/// `mon` = (position, size) in the compositor's layout, when known) cut
+/// from a screenshot `img` of the whole desktop, as BGRA of `c`'s size.
+fn seed_picture(img: &crate::pixbuf::PixBuf, mon: Option<((i32, i32), (i32, i32))>, frame: (u32, u32), c: IRect) -> Option<Vec<u8>> {
+    let (iw, ih) = img.dimensions();
+    let region = match mon {
+        _ if (iw, ih) == frame => (0, 0, iw, ih),
+        Some(((x, y), (w, h))) if x >= 0 && y >= 0 && w > 0 && h > 0 && (x + w) as u32 <= iw && (y + h) as u32 <= ih => {
+            (x as u32, y as u32, w as u32, h as u32)
+        }
+        _ => (0, 0, iw, ih),
+    };
+    let sub = img.crop(region.0, region.1, region.2, region.3);
+    let mut px = super::portal::crop_screen(&sub, frame, c)?.as_raw().clone();
+    for p in px.as_chunks_mut::<4>().0 {
+        p.swap(0, 2); // RGBA -> BGRA
+    }
+    Some(px)
 }
 
 impl FrameSource for ScreenSource {
     fn next(&mut self, deadline: Instant) -> Option<Frame> {
-        if let Some((bgra, n)) = self.slot.take_after(self.seen, deadline) {
-            self.seen = n;
-            let f = Frame { w: self.size.0, h: self.size.1, bgra, ts: Duration::ZERO };
-            self.last = Some(f.clone());
-            return Some(f);
-        }
-        if let Some(e) = self.stream.error()
-            && self.last.is_none()
+        let f = self.latest.next(deadline);
+        if f.is_none()
+            && let Some(e) = self.stream.error()
         {
             eprintln!("rustshot: screen cast: {e}");
         }
-        // The compositor sends pictures only when the screen changes.
-        self.last.clone()
+        f
     }
 
     fn size(&self) -> (u32, u32) {
-        self.size
+        self.latest.size
     }
 }
 
@@ -700,5 +841,63 @@ mod tests {
         let soon = Instant::now() + Duration::from_millis(10);
         assert_eq!(s.take_after(0, soon), Some((2, 2)));
         assert_eq!(s.take_after(2, soon), None, "nothing new");
+    }
+
+    #[test]
+    fn the_first_picture_wait_times_out() {
+        let s: Slot<u8> = Slot::new();
+        let t = Instant::now();
+        assert!(!s.wait_first(t + Duration::from_millis(30)));
+        assert!(t.elapsed() >= Duration::from_millis(30));
+        s.put(7);
+        assert!(s.wait_first(Instant::now()), "one has come");
+    }
+
+    #[test]
+    fn a_stand_in_never_replaces_a_real_picture() {
+        let s = Slot::new();
+        assert!(s.put_first(1));
+        assert_eq!(s.take_after(0, Instant::now()), Some((1, 1)));
+        let s = Slot::new();
+        s.put(2);
+        assert!(!s.put_first(1));
+        assert_eq!(s.take_after(0, Instant::now()), Some((2, 1)));
+    }
+
+    #[test]
+    fn the_seed_is_the_area_of_the_shared_screen() {
+        use crate::pixbuf::PixBuf;
+        // A 4x2 desktop of two 2x2 monitors; pixel (x, y) = [x, y, 7, 255].
+        let mut d = Vec::new();
+        for y in 0..2u8 {
+            for x in 0..4u8 {
+                d.extend([x, y, 7, 255]);
+            }
+        }
+        let img = PixBuf::from_raw(4, 2, d).unwrap();
+        // The right monitor, its pictures 2x2; the area is its (1, 0) 1x2.
+        let px = seed_picture(&img, Some(((2, 0), (2, 2))), (2, 2), (1, 0, 1, 2)).unwrap();
+        assert_eq!(px, [7, 0, 3, 255, 7, 1, 3, 255], "BGRA of x 3, y 0..2");
+        // The same size as the pictures: cut as is.
+        let px = seed_picture(&img, None, (4, 2), (0, 1, 1, 1)).unwrap();
+        assert_eq!(px, [7, 1, 0, 255]);
+    }
+
+    /// A still screen: one picture, then nothing; every tick still gets it.
+    #[test]
+    fn a_still_screen_repeats_its_last_picture() {
+        let slot = Arc::new(Slot::new());
+        let mut l = Latest { slot: slot.clone(), size: (1, 1), seen: 0, last: None };
+        let soon = || Instant::now() + Duration::from_millis(5);
+        assert!(l.next(soon()).is_none(), "nothing before the first picture");
+        slot.put(vec![1, 2, 3, 255]);
+        for _ in 0..5 {
+            let f = l.next(soon()).expect("the picture, again");
+            assert_eq!(f.bgra, [1, 2, 3, 255]);
+            assert_eq!((f.w, f.h), (1, 1));
+        }
+        slot.put(vec![9, 9, 9, 255]);
+        assert_eq!(l.next(soon()).unwrap().bgra, [9, 9, 9, 255], "a new picture wins");
+        assert_eq!(l.next(soon()).unwrap().bgra, [9, 9, 9, 255]);
     }
 }

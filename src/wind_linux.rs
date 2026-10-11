@@ -387,16 +387,20 @@ fn pointer_mask() -> Option<u32> {
         }
         unsafe {
             let root = XRootWindow(dpy, XDefaultScreen(dpy));
+            // Xlib writes every return argument unconditionally (NULL is
+            // not "don't care" here: it segfaulted on the first drag).
+            let (mut root_ret, mut child) = (0 as c_ulong, 0 as c_ulong);
+            let (mut rx, mut ry, mut wx, mut wy) = (0 as c_int, 0 as c_int, 0 as c_int, 0 as c_int);
             let mut mask = 0u32;
             if XQueryPointer(
                 dpy,
                 root,
-                core::ptr::null_mut(),
-                core::ptr::null_mut(),
-                core::ptr::null_mut(),
-                core::ptr::null_mut(),
-                core::ptr::null_mut(),
-                core::ptr::null_mut(),
+                &mut root_ret,
+                &mut child,
+                &mut rx,
+                &mut ry,
+                &mut wx,
+                &mut wy,
                 &mut mask,
             ) == 0
             {
@@ -1169,5 +1173,50 @@ fn set_cursor(dpy: *mut c_void, win: c_ulong, c: Cursor, cache: &mut [c_ulong; 8
             cache[slot] = XCreateFontCursor(dpy, shape);
         }
         XDefineCursor(dpy, win, cache[slot]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::mem::{offset_of, size_of};
+
+    /// Xlib's XEvent (LP64): a 192-byte union, every member at offset 0,
+    /// XKeyEvent/XButtonEvent's `state` at 80 and keycode/button at 84.
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn xevent_layout_matches_xlib() {
+        assert_eq!(size_of::<XEvent>(), 192);
+        assert_eq!(offset_of!(XEvent, key), 0);
+        assert_eq!(offset_of!(XKeyButtonEvent, time), 56);
+        assert_eq!(offset_of!(XKeyButtonEvent, x), 64);
+        assert_eq!(offset_of!(XKeyButtonEvent, state), 80);
+        assert_eq!(offset_of!(XKeyButtonEvent, detail), 84);
+        assert_eq!(offset_of!(XClientMessageEvent, data), 56);
+    }
+
+    /// `pointer_mask` (the overlay's live modifiers during a drag) used to
+    /// pass NULL for XQueryPointer's other return arguments, which Xlib
+    /// writes unconditionally: SIGSEGV on the first pointer move of every
+    /// drag. Named `live_window_lifecycle_*` so the CI/harness filter for
+    /// `live_window_lifecycle` runs it.
+    #[test]
+    #[ignore = "live display access"]
+    fn live_window_lifecycle_pointer_mods() {
+        let _guard = test_window_lock();
+        init_x11();
+        unsafe {
+            let dpy = XOpenDisplay(core::ptr::null());
+            assert!(!dpy.is_null(), "no X display");
+            RUN_DPY.with(|slot| slot.set(dpy));
+            let mask = pointer_mask();
+            let mods = current_mods();
+            let _ = meta_down();
+            RUN_DPY.with(|slot| slot.set(core::ptr::null_mut()));
+            XCloseDisplay(dpy);
+            assert!(mask.is_some(), "XQueryPointer on the root failed");
+            // Nothing is held under Xvfb.
+            assert!(!mods.shift && !mods.ctrl && !mods.alt);
+        }
     }
 }

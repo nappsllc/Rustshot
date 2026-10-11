@@ -153,9 +153,14 @@ pub fn monitors() -> Result<Vec<MonInfo>> {
 }
 
 /// Capture a root-window rect with `XGetImage` (the `BitBlt` equivalent).
+/// In a Wayland session (XWayland's root shows X clients only and
+/// `GetImage` of it fails with BadMatch) through the Screenshot portal.
 pub fn gdi_capture(x: i32, y: i32, w: u32, h: u32) -> Result<PixBuf> {
     if w == 0 || h == 0 {
         return Err(anyhow!("empty capture region"));
+    }
+    if crate::rec::linux::portal::wayland_now() {
+        return portal_capture(x, y, w, h);
     }
     crate::wind::init_x11();
     unsafe {
@@ -164,15 +169,45 @@ pub fn gdi_capture(x: i32, y: i32, w: u32, h: u32) -> Result<PixBuf> {
             return Err(anyhow!("cannot open X display"));
         }
         let root = XRootWindow(dpy, XDefaultScreen(dpy));
-        let img = XGetImage(dpy, root, x, y, w as c_uint, h as c_uint, ALL_PLANES, Z_PIXMAP);
-        if img.is_null() {
+        // A BadMatch (the rect is not on the screen, or an X server that
+        // cannot read its root) would make Xlib's default handler exit.
+        let (img, failed) = crate::wind::x_guarded(dpy, || XGetImage(dpy, root, x, y, w as c_uint, h as c_uint, ALL_PLANES, Z_PIXMAP));
+        if img.is_null() || failed {
+            if !img.is_null() {
+                XDestroyImage(img);
+            }
             XCloseDisplay(dpy);
-            return Err(anyhow!("XGetImage failed (region outside the screen?)"));
+            return Err(anyhow!("the X server refused to read the screen (XGetImage of {w}x{h} at {x},{y}; outside the screen, or a Wayland session without WAYLAND_DISPLAY set?)"));
         }
         let out = image_to_pixbuf(img);
         XDestroyImage(img);
         XCloseDisplay(dpy);
         out
+    }
+}
+
+/// [`gdi_capture`] on Wayland: the whole desktop from the Screenshot
+/// portal, cropped to the rect (X coordinates: XWayland's screen, which
+/// may be at another scale than the picture).
+fn portal_capture(x: i32, y: i32, w: u32, h: u32) -> Result<PixBuf> {
+    let img = crate::rec::linux::portal::grab_screen()
+        .map_err(|e| anyhow!("Wayland screen capture needs the Screenshot portal (xdg-desktop-portal): {e:#}"))?;
+    let screen = x_screen_size().unwrap_or(img.dimensions());
+    crate::rec::linux::portal::crop_screen(&img, screen, (x, y, w, h)).ok_or_else(|| anyhow!("empty screenshot"))
+}
+
+/// The X screen's size, when there is an X display.
+fn x_screen_size() -> Option<(u32, u32)> {
+    crate::wind::init_x11();
+    unsafe {
+        let dpy = XOpenDisplay(core::ptr::null());
+        if dpy.is_null() {
+            return None;
+        }
+        let s = XDefaultScreen(dpy);
+        let (w, h) = (XDisplayWidth(dpy, s), XDisplayHeight(dpy, s));
+        XCloseDisplay(dpy);
+        (w > 0 && h > 0).then_some((w as u32, h as u32))
     }
 }
 

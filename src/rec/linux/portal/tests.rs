@@ -314,3 +314,59 @@ fn the_token_lives_in_the_state_dir() {
     assert_eq!(token_path(Some("relative"), Some("/home/u")), p("/home/u/.local/state"));
     assert_eq!(token_path(None, None), None);
 }
+
+#[test]
+fn the_screenshot_portal_answers_with_a_file() {
+    let mut bus = Fake::new(|m| {
+        assert_eq!(m.iface.as_deref(), Some(SCREENSHOT));
+        assert_eq!(m.member.as_deref(), Some("Screenshot"));
+        assert_eq!(m.body[0].as_str(), Some(""), "no parent window");
+        assert_eq!(m.body[1].get("interactive").and_then(Value::as_bool), Some(false));
+        let handle = Value::path(&request_path(":1.42", &opts_token(m)));
+        Ok((vec![handle], Some((0, results(vec![("uri", Value::str("file:///tmp/out%20one.png"))])))))
+    });
+    let uri = screenshot(&mut bus).unwrap();
+    assert_eq!(file_uri_path(&uri).as_deref(), Some("/tmp/out one.png"));
+    assert!(bus.rules.is_empty(), "the Response match is removed");
+
+    let mut refused = Fake::new(|m| {
+        let handle = Value::path(&request_path(":1.42", &opts_token(m)));
+        Ok((vec![handle], Some((2, results(vec![])))))
+    });
+    assert!(screenshot(&mut refused).is_err());
+}
+
+#[test]
+fn file_uris_become_paths() {
+    assert_eq!(file_uri_path("file:///home/u/Pictures/Screenshot.png").as_deref(), Some("/home/u/Pictures/Screenshot.png"));
+    assert_eq!(file_uri_path("file://localhost/tmp/a%2Bb.png").as_deref(), Some("/tmp/a+b.png"));
+    assert_eq!(file_uri_path("file://host/tmp/a.png"), None, "a remote host");
+    assert_eq!(file_uri_path("https://x/a.png"), None);
+    assert_eq!(file_uri_path("file:///bad%zz"), None);
+    assert_eq!(file_uri_path("file:///cut%2"), None);
+}
+
+#[test]
+fn the_screenshot_is_cropped_to_the_rect() {
+    use crate::pixbuf::PixBuf;
+    // 4x2: pixel (x, y) has red x and green y.
+    let mut d = Vec::new();
+    for y in 0..2u8 {
+        for x in 0..4u8 {
+            d.extend([x, y, 0, 255]);
+        }
+    }
+    let img = PixBuf::from_raw(4, 2, d).unwrap();
+    let c = crop_screen(&img, (4, 2), (1, 1, 2, 1)).unwrap();
+    assert_eq!(c.as_raw(), &vec![1, 1, 0, 255, 2, 1, 0, 255]);
+    // A 2x HiDPI picture of a 2x1 screen.
+    let c = crop_screen(&img, (2, 1), (1, 0, 1, 1)).unwrap();
+    assert_eq!(c.dimensions(), (1, 1));
+    assert_eq!(c.get_pixel(0, 0), [3, 1, 0, 255]);
+    // Off the picture: black, still the asked size.
+    let c = crop_screen(&img, (4, 2), (3, 1, 2, 2)).unwrap();
+    assert_eq!(c.dimensions(), (2, 2));
+    assert_eq!(c.get_pixel(0, 0), [3, 1, 0, 255]);
+    assert_eq!(c.get_pixel(1, 1), [0, 0, 0, 255]);
+    assert!(crop_screen(&img, (4, 2), (0, 0, 0, 1)).is_none());
+}
