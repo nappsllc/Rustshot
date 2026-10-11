@@ -16,12 +16,16 @@ mod hotkey;
 mod icon_path;
 mod instance;
 mod keymap;
+// Blocks, delegate classes and dispatch for the macOS recorder; the block
+// layout is tested everywhere.
+#[cfg(any(target_os = "macos", test))]
+mod macos_objc;
 mod objects;
 mod pixbuf;
 #[cfg(windows)]
 mod proc_win;
 mod raster;
-// Screen recording pipeline; the Linux/macOS capture comes in later tasks.
+// Screen recording pipeline and its Windows, Linux and macOS back ends.
 #[cfg_attr(not(windows), allow(dead_code))]
 mod rec;
 mod rec_ui;

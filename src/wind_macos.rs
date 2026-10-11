@@ -170,7 +170,9 @@ impl Pool {
             if cls.is_null() {
                 return Pool(core::ptr::null_mut());
             }
-            Pool(msg0(cls, objc_sel(c"init")))
+            // `+new` (alloc + init): `init` sent to the class itself
+            // returned the class, whose `drain` does not exist.
+            Pool(msg0(cls, objc_sel(c"new")))
         }
     }
 }
@@ -423,6 +425,10 @@ fn pump_loop(driver: &mut dyn Driver) -> i32 {
                 );
                 if ev.is_null() {
                     break; // timeout or queue empty
+                }
+                // The recording's control bar and the camera bubble.
+                if aux_event(ev) {
+                    continue;
                 }
                 if dispatch_nsevent(ev, driver) {
                     repaint = true;
@@ -1306,6 +1312,240 @@ fn set_cursor(c: Cursor) {
         let obj: *mut c_void = msg0(cls, sel);
         if !obj.is_null() {
             let _: () = msg0(obj, objc_sel(c"set"));
+        }
+    }
+}
+
+// --- auxiliary windows (recording border, bar, countdown; camera bubble) ---
+
+use std::cell::RefCell;
+use std::rc::Rc;
+
+/// A pointer event on an auxiliary window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuxKind {
+    Down,
+    Drag,
+    Up,
+}
+
+/// [`AuxKind`] at `local` (points from the window's top-left) and
+/// `global` (Quartz points).
+#[derive(Clone, Copy, Debug)]
+pub struct AuxEv {
+    pub kind: AuxKind,
+    pub local: (f64, f64),
+    pub global: (f64, f64),
+}
+
+/// Where a layer window is: x, y, w, h in Quartz points.
+type Frame = Rc<Cell<(f64, f64, f64, f64)>>;
+type AuxFn = Rc<RefCell<dyn FnMut(AuxEv)>>;
+
+std::thread_local! {
+    /// The auxiliary windows taking pointer events (pump thread only).
+    static AUX: RefCell<Vec<(usize, Frame, AuxFn)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Hand an event for an auxiliary window to its handler; true when it was
+/// for one (the overlay's driver never sees those).
+fn aux_event(ev: *mut c_void) -> bool {
+    let target: *mut c_void = unsafe { msg0(ev, objc_sel(c"window")) };
+    if target.is_null() {
+        return false;
+    }
+    let hit = AUX.with(|a| a.borrow().iter().find(|e| e.0 == target as usize).map(|e| (e.1.clone(), e.2.clone())));
+    let Some((frame, f)) = hit else { return false };
+    let ty: u64 = unsafe { msg0(ev, objc_sel(c"type")) };
+    let kind = match ty {
+        LEFT_DOWN => AuxKind::Down,
+        LEFT_DRAGGED => AuxKind::Drag,
+        LEFT_UP => AuxKind::Up,
+        _ => return true,
+    };
+    let p: CGPoint = unsafe { msg0(ev, objc_sel(c"locationInWindow")) };
+    let (x, y, _, h) = frame.get();
+    let local = (p.x, h - p.y);
+    let ev = AuxEv { kind, local, global: (x + local.0, y + local.1) };
+    if let Ok(mut f) = f.try_borrow_mut() {
+        f(ev);
+    }
+    true
+}
+
+/// A borderless, transparent, non-activating panel above other windows
+/// (and above the overlay), on every Space: the recording's border, bar
+/// and countdown, and the camera bubble. Main thread only.
+pub struct Layer {
+    win: *mut c_void,
+    frame: Frame,
+    shown: bool,
+}
+
+impl Layer {
+    /// `click_through`: pointer events pass through it; `private`: kept
+    /// out of screen capture by other apps (`NSWindowSharingNone`; our own
+    /// recording filters our windows out anyway).
+    pub fn new(click_through: bool, private: bool) -> anyhow::Result<Layer> {
+        if !crate::macos_objc::is_main_thread() {
+            anyhow::bail!("recording windows must be made on the main thread");
+        }
+        unsafe {
+            let app: *mut c_void = msg0(objc_cls(c"NSApplication"), objc_sel(c"sharedApplication"));
+            if app.is_null() {
+                anyhow::bail!("AppKit is not available");
+            }
+            launch_app(app);
+            let rect = CGRect { origin: CGPoint { x: 0.0, y: 0.0 }, size: CGSize { width: 1.0, height: 1.0 } };
+            let w: *mut c_void = msg0(objc_cls(c"NSPanel"), objc_sel(c"alloc"));
+            let w: *mut c_void = msg4(
+                w,
+                objc_sel(c"initWithContentRect:styleMask:backing:defer:"),
+                rect,
+                1u64 << 7, // borderless | NSWindowStyleMaskNonactivatingPanel
+                2u64,      // NSBackingStoreBuffered
+                0i8,
+            );
+            if w.is_null() {
+                anyhow::bail!("create a recording window");
+            }
+            let _: () = msg1(w, objc_sel(c"setReleasedWhenClosed:"), 0i8);
+            let _: () = msg1(w, objc_sel(c"setOpaque:"), 0i8);
+            let clear: *mut c_void = msg0(objc_cls(c"NSColor"), objc_sel(c"clearColor"));
+            let _: () = msg1(w, objc_sel(c"setBackgroundColor:"), clear);
+            let _: () = msg1(w, objc_sel(c"setHasShadow:"), 0i8);
+            let _: () = msg1(w, objc_sel(c"setHidesOnDeactivate:"), 0i8);
+            // Above the overlay (floating level).
+            let _: () = msg1(w, objc_sel(c"setLevel:"), CGWindowLevelForKey(5) as i64 + 1);
+            // CanJoinAllSpaces | Stationary | IgnoresCycle | FullScreenAuxiliary
+            let _: () = msg1(w, objc_sel(c"setCollectionBehavior:"), 1u64 | (1 << 4) | (1 << 6) | (1 << 8));
+            let _: () = msg1(w, objc_sel(c"setIgnoresMouseEvents:"), i8::from(click_through));
+            if private {
+                let _: () = msg1(w, objc_sel(c"setSharingType:"), 0u64); // NSWindowSharingNone
+            }
+            let view: *mut c_void = msg0(objc_cls(c"NSView"), objc_sel(c"alloc"));
+            let view: *mut c_void = msg1(view, objc_sel(c"initWithFrame:"), rect);
+            if !view.is_null() {
+                let _: () = msg1(view, objc_sel(c"setWantsLayer:"), 1i8);
+                let _: () = msg1(w, objc_sel(c"setContentView:"), view);
+                let _: () = msg0(view, objc_sel(c"release"));
+            }
+            Ok(Layer { win: w, frame: Rc::new(Cell::new((0.0, 0.0, 1.0, 1.0))), shown: false })
+        }
+    }
+
+    /// The window's number (its `CGWindowID`, what ScreenCaptureKit lists).
+    pub fn id(&self) -> u32 {
+        let n: i64 = unsafe { msg0(self.win, objc_sel(c"windowNumber")) };
+        n as u32
+    }
+
+    /// Pointer events on it go to `f` (until it is dropped).
+    pub fn on_pointer(&self, f: impl FnMut(AuxEv) + 'static) {
+        let f: AuxFn = Rc::new(RefCell::new(f));
+        let me = self.win as usize;
+        AUX.with(|a| {
+            let mut a = a.borrow_mut();
+            a.retain(|e| e.0 != me);
+            a.push((me, self.frame.clone(), f));
+        });
+    }
+
+    fn place(&mut self, x: f64, y: f64, w: f64, h: f64) {
+        self.frame.set((x, y, w, h));
+        let cocoa = CGRect {
+            origin: CGPoint { x, y: crate::capture::main_display_height() - y - h },
+            size: CGSize { width: w, height: h },
+        };
+        unsafe {
+            let _: () = msg2(self.win, objc_sel(c"setFrame:display:"), cocoa, 0i8);
+            if !self.shown {
+                let _: () = msg0(self.win, objc_sel(c"orderFrontRegardless"));
+                self.shown = true;
+            }
+        }
+    }
+
+    /// A solid colour over (x, y, w, h) points.
+    pub fn fill(&mut self, (x, y, w, h): (f64, f64, f64, f64), rgb: [u8; 3]) {
+        unsafe {
+            let c = |v: u8| f64::from(v) / 255.0;
+            let col: *mut c_void =
+                msg4(objc_cls(c"NSColor"), objc_sel(c"colorWithSRGBRed:green:blue:alpha:"), c(rgb[0]), c(rgb[1]), c(rgb[2]), 1.0f64);
+            let _: () = msg1(self.win, objc_sel(c"setBackgroundColor:"), col);
+            let _: () = msg1(self.win, objc_sel(c"setOpaque:"), 1i8);
+        }
+        self.place(x, y, w, h);
+    }
+
+    /// Show premultiplied BGRA pixels (`w`×`h`) with their top-left at
+    /// (x, y) points, at `scale` pixels per point.
+    pub fn put(&mut self, (x, y): (f64, f64), scale: f64, w: u32, h: u32, bgra: &[u8]) {
+        let n = w as usize * h as usize * 4;
+        if w == 0 || h == 0 || bgra.len() < n {
+            self.hide();
+            return;
+        }
+        let s = if scale > 0.0 { scale } else { 1.0 };
+        unsafe {
+            let mut px = bgra[..n].to_vec();
+            let (len, cap, data) = (px.len(), px.capacity(), px.as_mut_ptr());
+            std::mem::forget(px);
+            let info = Box::into_raw(Box::new([len, cap])) as *mut c_void;
+            let provider = CGDataProviderCreateWithData(info, data.cast(), len, release_pixels);
+            if provider.is_null() {
+                release_pixels(info, data.cast(), len);
+                return;
+            }
+            let space = CGColorSpaceCreateDeviceRGB();
+            // kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little:
+            // B, G, R, A bytes, premultiplied.
+            let image =
+                CGImageCreate(w as usize, h as usize, 8, 32, w as usize * 4, space, 0x2002, provider, core::ptr::null(), false, 0);
+            CGDataProviderRelease(provider);
+            if !space.is_null() {
+                CGColorSpaceRelease(space);
+            }
+            if image.is_null() {
+                return;
+            }
+            let view: *mut c_void = msg0(self.win, objc_sel(c"contentView"));
+            let layer: *mut c_void = if view.is_null() { core::ptr::null_mut() } else { msg0(view, objc_sel(c"layer")) };
+            if !layer.is_null() {
+                let tx = objc_cls(c"CATransaction");
+                let _: () = msg0(tx, objc_sel(c"begin"));
+                let _: () = msg1(tx, objc_sel(c"setDisableActions:"), 1i8);
+                let _: () = msg1(layer, objc_sel(c"setContentsScale:"), s);
+                let _: () = msg1(layer, objc_sel(c"setContents:"), image);
+                let _: () = msg0(tx, objc_sel(c"commit"));
+            }
+            CGImageRelease(image);
+        }
+        self.place(x, y, f64::from(w) / s, f64::from(h) / s);
+        unsafe {
+            // No display cycle runs: hand the new contents over now.
+            let _: () = msg0(objc_cls(c"CATransaction"), objc_sel(c"flush"));
+        }
+    }
+
+    pub fn hide(&mut self) {
+        if self.shown {
+            unsafe {
+                let _: () = msg1(self.win, objc_sel(c"orderOut:"), core::ptr::null_mut::<c_void>());
+            }
+            self.shown = false;
+        }
+    }
+}
+
+impl Drop for Layer {
+    fn drop(&mut self) {
+        let me = self.win as usize;
+        AUX.with(|a| a.borrow_mut().retain(|e| e.0 != me));
+        unsafe {
+            let _: () = msg1(self.win, objc_sel(c"orderOut:"), core::ptr::null_mut::<c_void>());
+            let _: () = msg0(self.win, objc_sel(c"close"));
+            let _: () = msg0(self.win, objc_sel(c"release"));
         }
     }
 }

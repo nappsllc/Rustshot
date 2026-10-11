@@ -17,6 +17,9 @@ for t in x86_64-apple-darwin aarch64-apple-darwin; do
   fi
 done
 [ ${#built[@]} -gt 0 ] || { echo "error: no macos binary built" >&2; exit 1; }
+for b in "${built[@]}"; do
+  echo "size: $(wc -c < "$b" | tr -d ' ') bytes $b"
+done
 
 bin=""
 if [ ${#built[@]} -eq 2 ]; then
@@ -63,6 +66,8 @@ cat > "$app/Contents/Info.plist" <<EOF
   <key>NSHumanReadableCopyright</key><string>GPL-3.0-only</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
   <key>ITSAppUsesNonExemptEncryption</key><false/>
+  <key>NSMicrophoneUsageDescription</key><string>Rustshot records your microphone into a screen recording when you turn Microphone on.</string>
+  <key>NSCameraUsageDescription</key><string>Rustshot shows your camera in a bubble on screen while you record when you turn Camera on.</string>
 </dict>
 </plist>
 EOF

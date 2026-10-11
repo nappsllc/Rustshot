@@ -27,7 +27,7 @@ impl Pool {
             if cls.is_null() {
                 return Pool(core::ptr::null_mut());
             }
-            Pool(msg0(cls, objc_sel(c"init")))
+            Pool(msg0(cls, objc_sel(c"new"))) // alloc + init
         }
     }
 }

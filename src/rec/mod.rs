@@ -17,10 +17,17 @@ pub mod mp4;
 pub mod openh264_pins;
 pub mod yuv;
 pub mod mix;
+// Timestamped sound packets from a capture thread (WASAPI, macOS).
+#[cfg(any(windows, target_os = "macos", test))]
+pub(crate) mod ring;
 // Linux: XShm frames, the ffmpeg encoder, PulseAudio device lists. The
 // pure parts (argument building, parsing) are unit-tested everywhere.
 #[cfg(any(target_os = "linux", test))]
 pub mod linux;
+// macOS: ScreenCaptureKit, AVAssetWriter, AVCaptureSession. The pure
+// parts (layouts, geometry, PCM, times) are unit-tested everywhere.
+#[cfg(any(target_os = "macos", test))]
+pub mod macos;
 #[cfg(windows)]
 pub mod win;
 

@@ -3,10 +3,11 @@
 //! ([`Machine`]: idle → countdown → recording ⇄ paused → stopping → idle),
 //! where the control bar goes ([`place_bar`]) and a running recording
 //! ([`Run`]). The windows (red border, control bar, 3-2-1 countdown) are
-//! per platform: Windows (`win.rs`) and X11 (`x11.rs`); the worker thread
-//! that drives the pipeline is shared (`worker.rs`). On Wayland it needs
-//! the ScreenCast portal; on macOS the Record button is hidden.
-#![cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))] // no recording UI on macOS yet
+//! per platform: Windows (`win.rs`), X11 (`x11.rs`) and macOS (`macos.rs`);
+//! the worker thread that drives the pipeline is shared (`worker.rs`). On
+//! Wayland it needs the ScreenCast portal; on macOS ScreenCaptureKit
+//! (12.3+; the Record button is hidden before).
+#![cfg_attr(not(any(windows, target_os = "linux", target_os = "macos")), allow(dead_code))] // no recording UI elsewhere
 
 pub mod bar;
 pub mod border;
@@ -15,7 +16,9 @@ pub mod countdown;
 mod win;
 #[cfg(windows)]
 pub(crate) use win::Dib;
-#[cfg(any(windows, target_os = "linux"))]
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(any(windows, target_os = "linux", target_os = "macos"))]
 mod worker;
 #[cfg(target_os = "linux")]
 pub(crate) mod x11;
@@ -30,12 +33,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// Whether this platform records (shows the Record button): Windows, and
+/// Whether this platform records (shows the Record button): Windows;
 /// Linux: in an X11 session always (XShm); on Wayland and in Flatpak when
 /// the ScreenCast portal answers and libpipewire loads (XShm would see
 /// only XWayland windows there). Never waits: while the portal is being
 /// asked (in the background, from the first call or [`warm_mp4`]) it says
-/// no.
+/// no. macOS: when ScreenCaptureKit loads (12.3+).
 pub fn supported() -> bool {
     #[cfg(any(windows, test))]
     {
@@ -51,7 +54,11 @@ pub fn supported() -> bool {
         // Not known yet (the probe runs, 2 s at most): no Record button yet.
         portal::screencast_status() == Some(true) && pipewire::available()
     }
-    #[cfg(all(not(windows), not(target_os = "linux"), not(test)))]
+    #[cfg(all(target_os = "macos", not(test)))]
+    {
+        crate::rec::macos::available()
+    }
+    #[cfg(all(not(windows), not(target_os = "linux"), not(target_os = "macos"), not(test)))]
     {
         false
     }
@@ -283,7 +290,11 @@ pub fn mics() -> Vec<(String, String)> {
     {
         crate::rec::linux::pulse_list::sources().into_iter().map(|s| (s.name, s.description)).collect()
     }
-    #[cfg(all(not(windows), not(target_os = "linux"), not(test)))]
+    #[cfg(all(target_os = "macos", not(test)))]
+    {
+        crate::rec::macos::mic::list()
+    }
+    #[cfg(all(not(windows), not(target_os = "linux"), not(target_os = "macos"), not(test)))]
     {
         Vec::new()
     }
@@ -831,6 +842,7 @@ impl Geom {
     }
 
     /// Each monitor with the border's thickness there.
+    #[cfg_attr(target_os = "macos", allow(dead_code))] // macOS draws it in points
     pub fn border_monitors(&self) -> Vec<(IRect, i32)> {
         self.monitors.iter().map(|&(m, s)| (m, border::thickness(s))).collect()
     }
@@ -846,6 +858,8 @@ pub struct Run {
     ui: Option<win::Recorder>,
     #[cfg(target_os = "linux")]
     ui: Option<x11::Recorder>,
+    #[cfg(target_os = "macos")]
+    ui: Option<macos::Recorder>,
     /// Whether 3-2-1 comes before the first frame (once asking is over).
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     countdown: bool,
@@ -947,7 +961,43 @@ impl Run {
         Ok(run)
     }
 
-    #[cfg(not(any(windows, target_os = "linux")))]
+    /// macOS: as on Windows; the windows are made on the main thread (the
+    /// overlay's), the stream opens on the worker (ScreenCaptureKit asks
+    /// for Screen Recording permission the first time).
+    #[cfg(target_os = "macos")]
+    #[cfg_attr(test, allow(dead_code))] // tests record through `Run::fake`
+    pub fn start(
+        spec: RecSpec,
+        geom: Geom,
+        th: crate::theme::Theme,
+        countdown: bool,
+        _nudge: crate::wind::Hwnd,
+        bubble: Option<crate::cam::Bubble>,
+    ) -> anyhow::Result<Run> {
+        let mic = MicFlags::default();
+        let ui = macos::Recorder::start(spec, geom, th, mic.clone(), bubble)?;
+        let mut run = Run {
+            m: Machine::new(),
+            mic,
+            ui: Some(ui),
+            countdown,
+            hint_taken: false,
+            #[cfg(test)]
+            log: Vec::new(),
+            #[cfg(test)]
+            fake_end: None,
+            #[cfg(test)]
+            fake_ready: false,
+        };
+        let now = Instant::now();
+        if let Some(e) = run.m.start(countdown, now) {
+            run.apply(e);
+        }
+        run.show(now);
+        Ok(run)
+    }
+
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     pub fn start(
         _spec: RecSpec,
         _geom: Geom,
@@ -965,7 +1015,7 @@ impl Run {
         let mut run = Run {
             m: Machine::new(),
             mic: MicFlags { muted: Arc::default(), open: Arc::new(AtomicBool::new(mic)) },
-            #[cfg(any(windows, target_os = "linux"))]
+            #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
             ui: None,
             countdown,
             hint_taken: false,
@@ -997,11 +1047,11 @@ impl Run {
     }
 
     fn apply(&mut self, e: Effect) {
-        #[cfg(not(any(windows, target_os = "linux", test)))]
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos", test)))]
         let _ = e;
         #[cfg(test)]
         self.log.push(e);
-        #[cfg(any(windows, target_os = "linux"))]
+        #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
         if let Some(ui) = &mut self.ui {
             ui.send(e);
         }
@@ -1062,9 +1112,9 @@ impl Run {
         if let Some(e) = self.m.tick(now) {
             self.apply(e);
         }
-        #[cfg(any(windows, target_os = "linux"))]
+        #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
         let clicks = self.ui.as_mut().map(|u| u.take_clicks()).unwrap_or_default();
-        #[cfg(not(any(windows, target_os = "linux")))]
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         let clicks: Vec<bar::BarAct> = Vec::new();
         for c in clicks {
             match c {
@@ -1076,7 +1126,7 @@ impl Run {
         let end = self.poll_end();
         if let Some(end) = end {
             self.m.finish();
-            #[cfg(any(windows, target_os = "linux"))]
+            #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
             if let Some(ui) = &mut self.ui {
                 ui.close();
             }
@@ -1119,7 +1169,7 @@ impl Run {
         if let Some(e) = self.fake_end.take() {
             return Some(e);
         }
-        #[cfg(any(windows, target_os = "linux"))]
+        #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
         if let Some(ui) = &mut self.ui {
             return ui.poll_end();
         }
@@ -1128,10 +1178,11 @@ impl Run {
 
     /// Bring the windows up to date (border, bar, countdown).
     fn show(&mut self, now: Instant) {
-        #[cfg(any(windows, target_os = "linux"))]
+        #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
         {
             let view = self.view(now);
-            #[cfg(windows)]
+            // Windows and macOS keep the countdown out of the capture.
+            #[cfg(any(windows, target_os = "macos"))]
             let count = self.m.countdown(now);
             #[cfg(target_os = "linux")]
             let count = self.m.countdown_shown(now);
@@ -1139,7 +1190,7 @@ impl Run {
                 ui.show(&view, count);
             }
         }
-        #[cfg(not(any(windows, target_os = "linux")))]
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         let _ = now;
     }
 }

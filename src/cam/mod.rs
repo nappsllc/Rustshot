@@ -13,15 +13,17 @@
 //! Windows: Media Foundation capture (`win.rs`) and the layered window
 //! (`bubble.rs`). Linux: V4L2 (`rec::linux::v4l2`) on X11, the camera
 //! portal and PipeWire (`rec::linux::pipewire`) on Wayland and in Flatpak,
-//! and an X11 ARGB window (`x11.rs`). The camera is opened only while the bubble is shown and
-//! released when it closes. Background effects are the OS's (Windows
-//! Studio Effects apply to the feed by themselves); Rustshot adds none.
+//! and an X11 ARGB window (`x11.rs`). macOS: an `AVCaptureSession` and a
+//! transparent panel (`macos.rs`). The camera is opened only while the
+//! bubble is shown and released when it closes. Background effects are
+//! the OS's (Windows Studio Effects, macOS Center Stage and Portrait apply
+//! to the feed by themselves); Rustshot adds none.
 //!
 //! Position memory is in-memory (process lifetime, not in the config):
 //! the corner the bubble was last dropped at and its offset from that
 //! corner, so it follows the selection while the Record popover is open
 //! and comes back there for the next recording of the same daemon.
-#![cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))] // no bubble on macOS yet
+#![cfg_attr(not(any(windows, target_os = "linux", target_os = "macos")), allow(dead_code))] // no bubble elsewhere
 
 #[cfg(windows)]
 mod bubble;
@@ -31,12 +33,17 @@ mod win;
 #[cfg(target_os = "linux")]
 mod x11;
 
+#[cfg(target_os = "macos")]
+mod macos;
+
 #[cfg(windows)]
 pub use bubble::Bubble;
 #[cfg(all(windows, test))]
 pub(crate) use bubble::Opener;
 #[cfg(target_os = "linux")]
 pub use x11::Bubble;
+#[cfg(target_os = "macos")]
+pub use macos::Bubble;
 
 use crate::capture::IRect;
 use crate::theme::Theme;
@@ -45,7 +52,7 @@ use anyhow::Result;
 use std::sync::Mutex;
 
 /// The bubble on platforms without one (never made).
-#[cfg(not(any(windows, target_os = "linux")))]
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 pub struct Bubble;
 
 /// Linux: the id of the camera reached through the camera portal (the
@@ -99,7 +106,11 @@ pub fn list() -> Vec<CamDevice> {
     {
         linux_list()
     }
-    #[cfg(not(any(windows, target_os = "linux")))]
+    #[cfg(target_os = "macos")]
+    {
+        macos::list()
+    }
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     {
         Vec::new()
     }
@@ -142,7 +153,11 @@ pub fn open(id: &str, pref: (u32, u32)) -> Result<Box<dyn CamSource>> {
     {
         open_or_cancel(id, pref, &std::sync::atomic::AtomicBool::new(false))
     }
-    #[cfg(not(any(windows, target_os = "linux")))]
+    #[cfg(target_os = "macos")]
+    {
+        Ok(Box::new(macos::MacCam::open(id, pref)?))
+    }
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
     {
         let _ = (id, pref);
         anyhow::bail!("the camera is not supported on this platform yet")
@@ -609,6 +624,7 @@ pub fn pick_mode(modes: &[Mode], pref: (u32, u32)) -> std::result::Result<usize,
 }
 
 /// The YUV → RGB matrix of a camera's pictures.
+#[cfg_attr(target_os = "macos", allow(dead_code))] // Windows and Linux cameras
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Matrix {
     Bt601,
@@ -617,6 +633,7 @@ pub enum Matrix {
 
 /// How a camera's YUV is read: the matrix, and full range (0-255) or
 /// limited (16-235, the usual one; a bare [`Matrix`] means limited).
+#[cfg_attr(target_os = "macos", allow(dead_code))] // Windows and Linux cameras
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Yuv {
     pub matrix: Matrix,
@@ -630,6 +647,7 @@ impl From<Matrix> for Yuv {
 }
 
 /// Fixed-point (×256) conversion coefficients.
+#[cfg_attr(target_os = "macos", allow(dead_code))] // Windows and Linux cameras
 #[derive(Clone, Copy)]
 struct Coef {
     /// Y gain and offset.
@@ -642,6 +660,7 @@ struct Coef {
     bu: i32,
 }
 
+#[cfg_attr(target_os = "macos", allow(dead_code))] // Windows and Linux cameras
 fn coef(cs: Yuv) -> Coef {
     let (yk, yo) = if cs.full { (256, 0) } else { (298, 16) };
     let (rv, gu, gv, bu) = match (cs.matrix, cs.full) {
@@ -653,6 +672,7 @@ fn coef(cs: Yuv) -> Coef {
     Coef { yk, yo, rv, gu, gv, bu }
 }
 
+#[cfg_attr(target_os = "macos", allow(dead_code))] // Windows and Linux cameras
 #[inline(always)]
 fn yuv_px(y: u8, u: u8, v: u8, k: Coef, out: &mut [u8]) {
     let c = k.yk * (i32::from(y) - k.yo) + 128;
@@ -666,6 +686,7 @@ fn yuv_px(y: u8, u: u8, v: u8, k: Coef, out: &mut [u8]) {
 /// YUY2 (Y0 U Y1 V per pixel pair, rows `stride` bytes apart) to BGRA;
 /// `None` (and a blank `out`) when `src` is too short for the picture: the
 /// caller skips it rather than show black.
+#[cfg_attr(target_os = "macos", allow(dead_code))] // Windows and Linux cameras
 pub fn yuy2_to_bgra(src: &[u8], stride: usize, w: u32, h: u32, cs: impl Into<Yuv>, out: &mut Vec<u8>) -> Option<()> {
     let (w, h) = (w as usize & !1, h as usize);
     out.clear();
@@ -689,6 +710,7 @@ pub fn yuy2_to_bgra(src: &[u8], stride: usize, w: u32, h: u32, cs: impl Into<Yuv
 /// NV12 (a Y plane, then interleaved U V at half resolution, both with
 /// rows `stride` bytes apart) to BGRA; `None` when a plane is too short
 /// (as [`yuy2_to_bgra`]).
+#[cfg_attr(target_os = "macos", allow(dead_code))] // Windows and Linux cameras
 pub fn nv12_to_bgra(y_plane: &[u8], uv_plane: &[u8], stride: usize, w: u32, h: u32, cs: impl Into<Yuv>, out: &mut Vec<u8>) -> Option<()> {
     let (w, h) = (w as usize & !1, h as usize & !1);
     out.clear();
@@ -710,6 +732,7 @@ pub fn nv12_to_bgra(y_plane: &[u8], uv_plane: &[u8], stride: usize, w: u32, h: u
 }
 
 /// Where one picture sits in a locked camera buffer.
+#[cfg_attr(target_os = "macos", allow(dead_code))] // Windows and Linux cameras
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Layout {
     /// Bytes from one row to the next.
@@ -732,6 +755,7 @@ pub struct Layout {
 /// the UV plane's trailing padding is missing (`len / stride = rows +
 /// h / 2`); `h`. Padded heights count only when they are multiples of 8
 /// and less than 64 rows over `h`.
+#[cfg_attr(target_os = "macos", allow(dead_code))] // Windows and Linux cameras
 pub fn layout(fmt: Fmt, w: u32, h: u32, coded_h: u32, stride: usize, len: usize) -> Option<Layout> {
     match fmt {
         Fmt::Yuy2 => {
