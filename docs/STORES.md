@@ -79,6 +79,12 @@ Store upload package; end users cannot install it directly.
    → secret `SNAPCRAFT_STORE_CREDENTIALS`.
 3. Set `PUBLISH_SNAP=true`. Builds land on `edge`; promote with
    `snapcraft release rustshot <rev> stable`.
+4. Plugs: `x11`, `network`, `home`, `desktop` (auto-connected) and `camera`
+   (`snap connect rustshot:camera` unless the store grants auto-connection).
+   Recording on Wayland and the camera there go through xdg-desktop-portal
+   (ScreenCast, Screenshot, Camera), reached through the `desktop` plug; the
+   snap does not plug `screencast-legacy` (a privileged interface that needs
+   a store review and is only for apps that bypass the portal).
 
 ## AUR
 1. https://aur.archlinux.org account with an SSH key; private key → secret `AUR_SSH_KEY`.

@@ -20,11 +20,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # 0.8.4): with no GPU, sway renders with pixman (shm only), and trixie's
 # xdpw 0.7.1 then refuses every ScreenCast Start ("unable to receive a valid
 # format from wlr_screencopy": it wants a dmabuf format from screencopy v3).
-# xdpw 0.8 captures shm buffers. Pinned low, so nothing else comes from sid.
+# xdpw 0.8 captures shm buffers. Pinned low, so nothing else comes from sid,
+# and to the versions the harness was made green with: once sid moves on,
+# the image build fails instead of quietly testing against something else.
 RUN echo "deb http://deb.debian.org/debian sid main" > /etc/apt/sources.list.d/sid.list \
     && printf 'Package: *\nPin: release a=unstable\nPin-Priority: 100\n' > /etc/apt/preferences.d/sid \
     && apt-get update \
-    && apt-get install -y --no-install-recommends -t unstable sway xdg-desktop-portal-wlr \
+    && apt-get install -y --no-install-recommends -t unstable 'sway=1.12-*' 'xdg-desktop-portal-wlr=0.8.4-*' \
     && rm -rf /var/lib/apt/lists/*
 
 # xdg-desktop-portal (1.18+) exports the Screenshot portal only with an

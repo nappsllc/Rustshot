@@ -12,7 +12,8 @@ Docker, and leaves screenshots, recordings and logs to look at.
 
 The image (`rustshot-linux-test`, ~3 GB: Debian trixie from the pinned
 `rust:1.96` digest, plus sway 1.12 and xdg-desktop-portal-wlr 0.8.4 from
-Debian unstable, see the Dockerfile) is built on first use; `-Rebuild`
+Debian unstable, pinned to those versions, see the Dockerfile) is built on
+first use; `-Rebuild`
 rebuilds it. The repo is mounted read-only at `/src`; `run.sh` is read from
 the mount (editing it needs no rebuild) and puts `git archive <Ref>` (default
 `HEAD`, i.e. committed code, so a half-edited tree does not break the run)
@@ -85,7 +86,10 @@ export Screenshot). Then:
    user, holds the session, and `pw-cli ls Node` must list its node.
 2. `grim` screenshots.
 3. `live_rec_wayland_*` and `live_cam_linux_*` (and any ignored test named
-   wayland/portal/pipewire/screencast).
+   wayland/portal/pipewire/screencast), among them a recording whose share
+   is stopped mid-way (it must end saying "Screen sharing was stopped" and
+   keep a whole file). A portal test that skips ("SKIP: [wayland]": no
+   display, portal or libpipewire) fails the run (`live-wayland-ran`).
 4. The screen cast tests again with the animation stopped: xdpw sends no
    picture at all for a still screen, so the source starts from a
    Screenshot-portal picture and repeats it at the recording's rate.

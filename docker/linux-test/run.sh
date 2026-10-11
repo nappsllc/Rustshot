@@ -148,6 +148,18 @@ cargo_tests() {
     grep -a -o -E 'FFPROBE .*|OH264 .*|PULSE .*|WAYLAND .*|CAM .*' "$LOGS/$name.log" | sort -u | sed 's/^/       /' >> "$SUMMARY"
 }
 
+# no_wayland_skips NAME: in Wayland mode the portal tests must really run;
+# one that printed "SKIP: [wayland]" (no display, portal or libpipewire)
+# fails the run.
+no_wayland_skips() {
+    local n; n="$(grep -a -c -F 'SKIP: [wayland]' "$LOGS/$1.log")"
+    if [ "${n:-0}" -gt 0 ]; then
+        result "$1-ran" fail "$n live_rec_wayland_* test(s) skipped: $(grep -a -o 'SKIP: \[wayland\].*' "$LOGS/$1.log" | sort -u | tr '\n' ' ')"
+    else
+        result "$1-ran" pass "no portal test skipped"
+    fi
+}
+
 unit_tests() {
     log "cargo test --release"
     if cargo test --release >"$LOGS/unit.log" 2>&1; then
@@ -559,6 +571,7 @@ EOF
     if [ -n "${wl// }" ]; then
         # shellcheck disable=SC2086
         RUSTSHOT_TEST_AUTOCLOSE_MS=1000 RUSTSHOT_FFMPEG_LOG=1 cargo_tests live-wayland $wl
+        no_wayland_skips live-wayland
     else
         result live-wayland info "no ignored test named *wayland*/*portal*/*pipewire*/*screencast* yet"
     fi
@@ -569,6 +582,7 @@ EOF
         swaymsg output HEADLESS-1 bg "#2e5c8a" solid_color >/dev/null 2>&1
         sleep 1
         cargo_tests live-wayland-still live_rec_wayland_portal_frames live_rec_wayland_portal_gif_of_an_area
+        no_wayland_skips live-wayland-still
     fi
 
     # rustshot itself in this session (XWayland is up for X11 clients).
