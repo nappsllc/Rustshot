@@ -39,7 +39,7 @@ $run = @(
     '-v', "${Out}:/out",
     '-v', 'rustshot-target:/target',
     '-v', 'rustshot-cargo:/usr/local/cargo/registry',
-    '-e', 'RS_TEST_TIMEOUT', '-e', 'RS_ONLY', '-e', 'RS_GST_CHECK', '-e', "RS_REF=$Ref"
+    '-e', 'RS_TEST_TIMEOUT', '-e', 'RS_ONLY', '-e', 'RS_GST_CHECK', '-e', 'RS_WL_ANIM', '-e', "RS_REF=$Ref"
 )
 if ($Mode -eq 'shell') {
     docker @run -it --entrypoint bash $Image

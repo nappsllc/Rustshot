@@ -27,6 +27,14 @@ RUN echo "deb http://deb.debian.org/debian sid main" > /etc/apt/sources.list.d/s
     && apt-get install -y --no-install-recommends -t unstable sway xdg-desktop-portal-wlr \
     && rm -rf /var/lib/apt/lists/*
 
+# xdg-desktop-portal (1.18+) exports the Screenshot portal only with an
+# Access implementation (its permission dialog): xdg-desktop-portal-gtk,
+# from trixie. `rustshot full` on Wayland and the screen cast's first
+# picture of a still screen go through Screenshot.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends xdg-desktop-portal-gtk \
+    && rm -rf /var/lib/apt/lists/*
+
 # Non-root user (sway, PipeWire and the portal want a normal session).
 # Named volumes mounted on /target and the cargo registry take this ownership.
 RUN useradd -m -u 1000 -s /bin/bash tester \

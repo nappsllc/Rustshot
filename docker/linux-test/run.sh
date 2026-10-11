@@ -377,17 +377,31 @@ EOF
         result quit-hotkey fail "Ctrl+Alt+Shift+J (XTEST): daemon still running; killed"
         kill "$dpid"; fi
 
-    # A drag in the overlay (a one-shot run, so a crash takes nothing else down).
+    # A drag in the overlay (a one-shot run, so a crash takes nothing else
+    # down), then Ctrl+S: the saved PNG is the dragged 800x400.
     log "overlay drag"
+    local before; before="$(ls "$save"/*.png 2>/dev/null | wc -l)"
     RUSTSHOT_INSTANCE="docker-drag-$$" "$BIN" gui >"$LOGS/gui-drag.log" 2>&1 &
     gpid=$!
     wait_for 5 overlay_up; sleep 0.5
-    xdotool mousemove 400 300 mousedown 1 mousemove 800 500 mousemove 1200 700 mouseup 1
+    xdotool mousemove 400 300 mousedown 1 mousemove 600 400 mousemove 800 500 mousemove 1200 700
+    sleep 0.3
+    xdotool mouseup 1
     sleep 1
     if kill -0 "$gpid" 2>/dev/null; then
         shot_x 11-drag-selection
-        result overlay-drag pass "selection 800x400 drawn"
-        xdotool key Escape; wait_for 5 sh -c "! kill -0 $gpid" || kill "$gpid"
+        result overlay-drag pass "alive after the drag"
+        xdotool key ctrl+s
+        if wait_for 10 sh -c "[ \$(ls '$save'/*.png 2>/dev/null | wc -l) -gt $before ]"; then
+            local dpng; dpng="$(ls -t "$save"/*.png | head -1)"
+            local dsz; dsz="$(identify -format '%wx%h' "$dpng" 2>/dev/null)"
+            cp "$dpng" "$SHOTS/11b-saved-drag.png"
+            if [ "$dsz" = 800x400 ]; then result drag-save pass "$(basename "$dpng") $dsz"
+            else result drag-save fail "$(basename "$dpng") is $dsz, not the dragged 800x400"; fi
+        else
+            result drag-save fail "no new PNG in $save after the drag and Ctrl+S"
+        fi
+        wait_for 5 sh -c "! kill -0 $gpid" || { xdotool key Escape; wait_for 5 sh -c "! kill -0 $gpid" || kill "$gpid"; }
     else
         wait "$gpid"; local drc=$?
         result overlay-drag fail "rustshot gui died during a mouse drag (exit $drc$([ $drc = 139 ] && echo ', SIGSEGV'))"
@@ -440,6 +454,7 @@ EOF
 default=wlr;gtk
 org.freedesktop.impl.portal.ScreenCast=wlr
 org.freedesktop.impl.portal.Screenshot=wlr
+org.freedesktop.impl.portal.Access=gtk
 EOF
     cp "$cfg/xdg-desktop-portal/portals.conf" "$cfg/xdg-desktop-portal/sway-portals.conf"
     cat > "$cfg/xdg-desktop-portal-wlr/config" <<'EOF'
@@ -479,6 +494,11 @@ EOF
         else
             result portal-up fail "no ScreenCast interface; see logs/xdp.log"
         fi
+        if grep -q 'org.freedesktop.portal.Screenshot' "$LOGS/portal-introspect.txt"; then
+            result portal-screenshot pass "Screenshot interface exported"
+        else
+            result portal-screenshot fail "no Screenshot interface (needs an Access implementation); see logs/xdp.log"
+        fi
     else
         result portal-up fail "org.freedesktop.portal.Desktop not on the bus"
     fi
@@ -486,9 +506,17 @@ EOF
     # A ScreenCast session through the portal, with no chooser.
     log "portal ScreenCast session"
     # Damage: the background changes twice a second (a static headless output
-    # gives a screen cast nothing new to send).
-    ( c=0; while sleep 0.5; do c=$((1 - c)); swaymsg output HEADLESS-1 bg "$([ $c = 1 ] && echo "#2e5c8a" || echo "#8a2e5c")" solid_color >/dev/null 2>&1; done ) &
-    PIDS+=($!)
+    # gives a screen cast nothing new to send). RS_WL_ANIM=0: none at all,
+    # every test sees a still screen. Either way the screen cast tests run
+    # again on a still screen below (the source repeats its last picture).
+    ANIM_PID=
+    if [ "${RS_WL_ANIM:-1}" != 0 ]; then
+        ( c=0; while sleep 0.5; do c=$((1 - c)); swaymsg output HEADLESS-1 bg "$([ $c = 1 ] && echo "#2e5c8a" || echo "#8a2e5c")" solid_color >/dev/null 2>&1; done ) &
+        ANIM_PID=$!
+        PIDS+=("$ANIM_PID")
+    else
+        result screen-animation info "off (RS_WL_ANIM=0): a still screen"
+    fi
     local ready="$OUT/portal-nodes.txt"
     # RS_FRAME_PNG: the script also pulls one picture through the portal's
     # remote (GStreamer pipewiresrc on its fd), an independent consumer.
@@ -534,6 +562,14 @@ EOF
     else
         result live-wayland info "no ignored test named *wayland*/*portal*/*pipewire*/*screencast* yet"
     fi
+    # A still screen: the compositor sends one picture and then nothing;
+    # the frames must still come at the recording's rate.
+    if [ -n "$ANIM_PID" ]; then
+        kill "$ANIM_PID" 2>/dev/null; wait "$ANIM_PID" 2>/dev/null
+        swaymsg output HEADLESS-1 bg "#2e5c8a" solid_color >/dev/null 2>&1
+        sleep 1
+        cargo_tests live-wayland-still live_rec_wayland_portal_frames live_rec_wayland_portal_gif_of_an_area
+    fi
 
     # rustshot itself in this session (XWayland is up for X11 clients).
     export DISPLAY; DISPLAY="$(grep -o -m1 'DISPLAY=:[0-9]*' "$LOGS/sway.log" | cut -d= -f2)"
@@ -541,10 +577,13 @@ EOF
     log "rustshot full on Wayland (DISPLAY=$DISPLAY)"
     timeout 30 "$BIN" full --path "$SHOTS/03-rustshot-full.png" >"$LOGS/rustshot-full.log" 2>&1
     local frc=$?
-    if [ -s "$SHOTS/03-rustshot-full.png" ]; then
-        result rustshot-full info "rc=$frc wrote $(identify "$SHOTS/03-rustshot-full.png" 2>/dev/null | awk '{print $3}')"
+    # Through the Screenshot portal (GetImage of the XWayland root fails
+    # with BadMatch): a 1920x1080 PNG and exit 0.
+    local fsz; fsz="$(identify -format '%wx%h' "$SHOTS/03-rustshot-full.png" 2>/dev/null)"
+    if [ $frc -eq 0 ] && [ "$fsz" = 1920x1080 ]; then
+        result rustshot-full pass "Screenshot portal: $fsz"
     else
-        result rustshot-full info "rc=$frc no file: $(tail -2 "$LOGS/rustshot-full.log" | tr '\n' ' ')"
+        result rustshot-full fail "rc=$frc size '${fsz:-no file}': $(tail -2 "$LOGS/rustshot-full.log" | tr '\n' ' ')"
     fi
 }
 

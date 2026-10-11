@@ -168,7 +168,11 @@ jobs:
   # Wayland: headless sway, xdg-desktop-portal-wlr (no chooser) and PipeWire
   # in the Docker harness (docker/linux-test): a ScreenCast session through
   # the portal must produce a PipeWire node, and the live_rec_wayland_* /
-  # live_cam_linux_* tests run. In Docker, not on the runner: Ubuntu 24.04's
+  # live_cam_linux_* tests run (again on a still screen), and `rustshot full`
+  # must take a screenshot through the Screenshot portal. Then the harness's
+  # X11 daemon steps (RS_ONLY=daemon, same build volume): the global hotkeys
+  # through XTEST, a capture, a recording, and an overlay drag saved with
+  # Ctrl+S. In Docker, not on the runner: Ubuntu 24.04's
   # xdg-desktop-portal-wlr 0.7 refuses every Start without a GPU (no dmabuf
   # format from screencopy); the image takes sway 1.12 and xdpw 0.8 from
   # Debian unstable. Skipped on tags, so it never gates a release
@@ -176,7 +180,7 @@ jobs:
   linux-wayland:
     if: ${{ !startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - name: Build the harness image
@@ -186,7 +190,13 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/rs-out" && chmod 777 "$RUNNER_TEMP/rs-out"
           docker run --rm --init --shm-size=1g -v "$GITHUB_WORKSPACE:/src:ro" -v "$RUNNER_TEMP/rs-out:/out" \
-            rustshot-linux-test wayland
+            -v rs-target:/target rustshot-linux-test wayland
+      - name: X11 daemon (hotkeys, capture, recording, overlay drag)
+        if: always()
+        timeout-minutes: 10
+        run: |
+          docker run --rm --init --shm-size=1g -v "$GITHUB_WORKSPACE:/src:ro" -v "$RUNNER_TEMP/rs-out:/out" \
+            -v rs-target:/target -e RS_ONLY=daemon rustshot-linux-test x11
       - name: Upload Wayland outputs
         if: always()
         uses: actions/upload-artifact@v4

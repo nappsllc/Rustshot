@@ -38,7 +38,8 @@ skip the cargo tests), `RS_ONLY=portal` (wayland: stop after the portal
 check), `RS_TEST_TIMEOUT` (seconds per test group, default 600),
 `RS_GST_CHECK=1` (wayland: also read a picture with GStreamer on the
 portal's fd; xdpw 0.8.4 currently dies on that), `RS_WLR_RENDERER`
-(default `pixman`).
+(default `pixman`), `RS_WL_ANIM=0` (wayland: no background animation, so
+every screen cast sees a still screen).
 
 ## x11
 
@@ -65,7 +66,9 @@ dbus session, PipeWire + WirePlumber + pipewire-pulse with a null sink
    Escape; a recording: the record hotkey (else the overlay, Ctrl+A,
    Ctrl+R), Enter, a tone into the null sink and a changing desktop, then the
    hotkey (else a click on the bar's Stop), checked with `ffprobe` and a full
-   decode; the quit hotkey; last, a mouse drag in a one-shot overlay.
+   decode; the quit hotkey; last, a mouse drag (400,300 to 1200,700) in a
+   one-shot overlay and Ctrl+S: the saved PNG must be 800x400. Each hotkey
+   is pressed through XTEST (`xdotool key`) and is its own pass/fail step.
 
 ## wayland
 
@@ -73,7 +76,9 @@ dbus + the PipeWire stack, then `sway` on the headless wlroots backend
 (pixman renderer, one 1920x1080 output `HEADLESS-1`, XWayland on, the
 background changing twice a second so screen casts have damage),
 `xdg-desktop-portal-wlr` (`chooser_type=none`, `output_name=HEADLESS-1`) and
-`xdg-desktop-portal` (`portals.conf` prefers wlr). Then:
+`xdg-desktop-portal` (`portals.conf` prefers wlr; the Access portal from
+`xdg-desktop-portal-gtk`, without which xdg-desktop-portal 1.18+ does not
+export Screenshot). Then:
 
 1. `portal_screencast.py` drives `org.freedesktop.portal.ScreenCast`
    (CreateSession, SelectSources monitor, Start, OpenPipeWireRemote) with no
@@ -81,8 +86,11 @@ background changing twice a second so screen casts have damage),
 2. `grim` screenshots.
 3. `live_rec_wayland_*` and `live_cam_linux_*` (and any ignored test named
    wayland/portal/pipewire/screencast).
-4. `rustshot full` in that session (informational: what rustshot does on
-   Wayland today).
+4. The screen cast tests again with the animation stopped: xdpw sends no
+   picture at all for a still screen, so the source starts from a
+   Screenshot-portal picture and repeats it at the recording's rate.
+5. `rustshot full` in that session must write a 1920x1080 PNG (through
+   the Screenshot portal; X11 `GetImage` of the XWayland root fails).
 
 Why sway and xdpw from unstable: without a GPU sway renders with pixman (shm
 buffers only), and trixie's xdpw 0.7.1 (Ubuntu 24.04 has 0.7 too) refuses
@@ -94,7 +102,8 @@ cannot allocate, so a GLES2 sway does not help either.
 
 The `linux-wayland` job in `.github/workflows/ci.yml` builds this image on
 `ubuntu-latest` and runs `wayland` mode in it (the runner's own packages hit
-the xdpw 0.7 problem above). It is skipped on tags, so it never gates a
+the xdpw 0.7 problem above), then `RS_ONLY=daemon x11` on the same build
+volume (hotkeys, capture, recording, overlay drag). It is skipped on tags, so it never gates a
 release; its outputs are uploaded as `linux-wayland-out`.
 
 ## Without the wrapper
