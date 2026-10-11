@@ -266,10 +266,55 @@ pub fn read_at(path: &std::path::Path) -> Result<Option<Config>, String> {
 /// created): the whole file, as [`to_toml`] renders it, atomically.
 #[cfg_attr(target_os = "macos", allow(dead_code))] // macOS: no Settings window yet
 pub fn save_at(path: &std::path::Path, cfg: &Config) -> std::io::Result<()> {
-    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
-        std::fs::create_dir_all(dir)?;
+    with_config_lock(path, || {
+        if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+            std::fs::create_dir_all(dir)?;
+        }
+        write_atomic(path, to_toml(cfg).as_bytes())
+    })
+}
+
+/// The advisory lock file next to the config file `path`
+/// (`config.toml.lock`).
+pub fn lock_path(path: &std::path::Path) -> std::path::PathBuf {
+    let name = path.file_name().map_or_else(|| "config.toml".into(), |n| n.to_string_lossy().into_owned());
+    path.with_file_name(format!("{name}.lock"))
+}
+
+/// Run `f`, a read-modify-write of the config file at `path`, holding
+/// the process-wide config mutex and an advisory lock on [`lock_path`]
+/// (`LockFileEx` on Windows, `flock` on Unix, through `File::lock`), so
+/// neither another thread nor another rustshot process (`rustshot
+/// settings`, an update dialog) can write in between. Re-entrant on one
+/// thread (a nested call just runs `f`). Without a lock file (its folder
+/// cannot be created) only this process is serialised.
+pub fn with_config_lock<R>(path: &std::path::Path, f: impl FnOnce() -> R) -> R {
+    use std::cell::Cell;
+    static M: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    thread_local!(static HELD: Cell<bool> = const { Cell::new(false) });
+    if HELD.with(Cell::get) {
+        return f();
     }
-    write_atomic(path, to_toml(cfg).as_bytes())
+    let _g = M.lock().unwrap_or_else(|e| e.into_inner());
+    let lock = lock_path(path);
+    if let Some(dir) = lock.parent().filter(|d| !d.as_os_str().is_empty()) {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(&lock).ok();
+    let locked = file.as_ref().is_some_and(|f| f.lock().is_ok());
+    HELD.with(|h| h.set(true));
+    // Released even when `f` panics.
+    struct Release<'a>(Option<&'a std::fs::File>, bool);
+    impl Drop for Release<'_> {
+        fn drop(&mut self) {
+            HELD.with(|h| h.set(false));
+            if let (Some(f), true) = (self.0, self.1) {
+                let _ = f.unlock();
+            }
+        }
+    }
+    let _r = Release(file.as_ref(), locked);
+    f()
 }
 
 /// Whether rewriting the config file `text` with [`to_toml`] would lose
@@ -297,15 +342,17 @@ pub fn save_skip_version_at(path: &std::path::Path, version: &str) -> std::io::R
 /// `path`, keeping everything else as written (`skip_version`, the Linux
 /// recording encoder chosen in the first-use dialog).
 pub fn save_top_key_at(path: &std::path::Path, key: &str, value: &str) -> std::io::Result<()> {
-    let text = match std::fs::read_to_string(path) {
-        Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => to_toml(&Config::default()),
-        Err(e) => return Err(e),
-    };
-    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
-        std::fs::create_dir_all(dir)?;
-    }
-    write_atomic(path, with_top_key(&text, key, value).as_bytes())
+    with_config_lock(path, || {
+        let text = match std::fs::read_to_string(path) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => to_toml(&Config::default()),
+            Err(e) => return Err(e),
+        };
+        if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+            std::fs::create_dir_all(dir)?;
+        }
+        write_atomic(path, with_top_key(&text, key, value).as_bytes())
+    })
 }
 
 /// `text` with its top-level `skip_version` line replaced by `version`
@@ -323,53 +370,73 @@ pub fn with_top_key(text: &str, key: &str, value: &str) -> String {
 
 /// `text` with its top-level `key` line set to the TOML value `raw`
 /// (written as is: `"a string"`, `4`, `["#fff"]`), or removed (`None`).
-/// The line keeps its place; a new key goes after the last top-level line
-/// (before the first `[table]`, a key after which would belong to it).
-/// Duplicates collapse into one; comments, other keys and the line
-/// endings (LF or CRLF) stay as written.
+/// The line keeps its place; a new key goes right after the last
+/// top-level key line (never between a table and the comment that heads
+/// it, nor after the table, where it would belong to it); with no keys
+/// yet, before the first table's leading comment block. Duplicates
+/// collapse into one; comments, other keys and the line endings (LF or
+/// CRLF) stay as written.
 pub fn with_top_raw(text: &str, key: &str, raw: Option<&str>) -> String {
     let crlf = text.contains("\r\n");
     let nl = if crlf { "\r\n" } else { "\n" };
     let line = raw.map(|v| format!("{key} = {v}"));
-    let mut out = String::with_capacity(text.len() + line.as_ref().map_or(0, |l| l.len() + 2));
+    let mut out = String::with_capacity(text.len() + line.as_ref().map_or(0, |l| l.len() + 4));
     // A removal has nothing to insert.
     let mut done = line.is_none();
     let mut top = true;
-    // `out.len()` after the last non-blank top-level line.
-    let mut last = 0;
+    // `out.len()` after the last top-level key line.
+    let mut last_key: Option<usize> = None;
+    // Where the run of comment lines just before this line starts.
+    let mut block: Option<usize> = None;
+    // Where a new key goes when the first table is reached: (position,
+    // after a key line, lines between it and the table).
+    let mut at_table: Option<(usize, bool, bool)> = None;
     for raw in text.split_inclusive('\n') {
         let body = strip_comment(raw).trim();
         if top && body.starts_with('[') {
             top = false;
-            if let (false, Some(l)) = (done, &line) {
-                // After the last top-level line; a blank line before the
-                // table when there is none yet.
-                let gap = out.len() > last;
-                let ins = if gap { format!("{l}{nl}") } else { format!("{l}{nl}{nl}") };
-                out.insert_str(last, &ins);
-                done = true;
-            }
+            at_table = Some(match last_key {
+                Some(p) => (p, true, out.len() > p),
+                None => (block.unwrap_or(out.len()), false, true),
+            });
         }
         let is_key = top && body.split_once('=').is_some_and(|(k, _)| k.trim() == key);
+        if top {
+            if body.is_empty() {
+                // A comment line extends the block; a blank one ends it.
+                if raw.trim().is_empty() {
+                    block = None;
+                } else {
+                    block.get_or_insert(out.len());
+                }
+            } else {
+                block = None;
+            }
+        }
         if is_key {
             if let (false, Some(l)) = (done, &line) {
                 out.push_str(l);
                 out.push_str(if raw.ends_with('\n') { nl } else { "" });
                 done = true;
+                last_key = Some(out.len());
             }
-        } else {
-            out.push_str(raw);
+            continue;
         }
-        if top && !raw.trim().is_empty() {
-            last = out.len();
+        out.push_str(raw);
+        if top && !body.is_empty() {
+            last_key = Some(out.len());
         }
     }
     if let (false, Some(l)) = (done, &line) {
-        if !out.is_empty() && !out.ends_with('\n') {
-            out.push_str(nl);
-        }
-        out.push_str(l);
-        out.push_str(nl);
+        let (pos, blank) = match at_table {
+            // A blank line between the new key and the table (or its
+            // comment) unless one is there already.
+            Some((p, after_key, gap)) => (p, !(after_key && gap)),
+            None => (last_key.unwrap_or(out.len()), false),
+        };
+        let lead = if pos > 0 && !out[..pos].ends_with('\n') { nl } else { "" };
+        let ins = format!("{lead}{l}{nl}{}", if blank { nl } else { "" });
+        out.insert_str(pos, &ins);
     }
     out
 }
@@ -380,19 +447,21 @@ pub fn with_top_raw(text: &str, key: &str, raw: Option<&str>) -> String {
 /// A file that does not parse is left alone (an `InvalidData` error): a
 /// remembered size is never worth touching a file the user is fixing.
 pub fn edit_top_keys_at(path: &std::path::Path, edits: &[(String, Option<String>)]) -> std::io::Result<()> {
-    let text = match std::fs::read_to_string(path) {
-        Ok(t) => t,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => to_toml(&Config::default()),
-        Err(e) => return Err(e),
-    };
-    if let Err(e) = parse_config(&text) {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("config.toml does not parse ({e})")));
-    }
-    let out = edits.iter().fold(text, |t, (k, v)| with_top_raw(&t, k, v.as_deref()));
-    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
-        std::fs::create_dir_all(dir)?;
-    }
-    write_atomic(path, out.as_bytes())
+    with_config_lock(path, || {
+        let text = match std::fs::read_to_string(path) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => to_toml(&Config::default()),
+            Err(e) => return Err(e),
+        };
+        if let Err(e) = parse_config(&text) {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("config.toml does not parse ({e})")));
+        }
+        let out = edits.iter().fold(text, |t, (k, v)| with_top_raw(&t, k, v.as_deref()));
+        if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+            std::fs::create_dir_all(dir)?;
+        }
+        write_atomic(path, out.as_bytes())
+    })
 }
 
 /// Copy the value of the remembered key `key` (a `tool_<id>_size` or
@@ -429,11 +498,6 @@ pub fn toml_num(v: f32) -> String {
     format!("{v}")
 }
 
-/// The TOML text of a string value.
-pub fn toml_string(s: &str) -> String {
-    toml_str(s)
-}
-
 /// The TOML text of an array of strings.
 pub fn toml_strings(v: &[String]) -> String {
     format!("[{}]", v.iter().map(|s| toml_str(s)).collect::<Vec<_>>().join(", "))
@@ -442,48 +506,87 @@ pub fn toml_strings(v: &[String]) -> String {
 /// One batch of key edits for [`edit_top_keys_at`], and who waits for it.
 type KeyJob = (std::path::PathBuf, Vec<(String, Option<String>)>, Option<std::sync::mpsc::Sender<()>>);
 
+/// What the writer thread does with one batch.
+type EditFn = fn(&std::path::Path, &[(String, Option<String>)]);
+
+/// [`edit_top_keys_at`], failures reported on stderr (a remembered size is
+/// not worth a dialog).
+fn write_key_edits(p: &std::path::Path, e: &[(String, Option<String>)]) {
+    if let Err(err) = edit_top_keys_at(p, e) {
+        eprintln!("rustshot: could not save tool settings to {}: {err}", p.display());
+    }
+}
+
+/// How long a waiting [`queue_key_edits`] waits for the writer.
+const KEY_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Apply `edits` to the config file at `path` off the calling thread, in
 /// order with earlier batches (one writer thread for the process); with
-/// `wait`, return once it is written. Failures are reported on stderr (a
-/// remembered size is not worth a dialog). Tests write synchronously.
+/// `wait`, return once it is written (or after [`KEY_WAIT`]). Tests write
+/// synchronously (the writer itself is tested through [`KeyWriter`]).
 pub fn queue_key_edits(path: &std::path::Path, edits: Vec<(String, Option<String>)>, wait: bool) {
     if edits.is_empty() {
         return;
     }
-    let run = |p: &std::path::Path, e: &[(String, Option<String>)]| {
-        if let Err(err) = edit_top_keys_at(p, e) {
-            eprintln!("rustshot: could not save tool settings to {}: {err}", p.display());
-        }
-    };
     if cfg!(test) {
-        run(path, &edits);
+        write_key_edits(path, &edits);
         return;
     }
-    static TX: std::sync::Mutex<Option<std::sync::mpsc::Sender<KeyJob>>> = std::sync::Mutex::new(None);
-    let mut tx = TX.lock().unwrap_or_else(|e| e.into_inner());
-    let sender = tx.get_or_insert_with(|| {
-        let (tx, rx) = std::sync::mpsc::channel::<KeyJob>();
-        std::thread::spawn(move || {
-            for (p, e, done) in rx {
-                run(&p, &e);
-                if let Some(d) = done {
-                    let _ = d.send(());
+    static W: std::sync::Mutex<KeyWriter> = std::sync::Mutex::new(KeyWriter::new(write_key_edits));
+    // Sent under the lock (batches stay in order), waited for without it.
+    let done = W.lock().unwrap_or_else(|e| e.into_inner()).send(path, edits, wait);
+    KeyWriter::wait(done, KEY_WAIT);
+}
+
+/// The background writer behind [`queue_key_edits`]: one thread, started
+/// on the first batch, applying batches in the order they were sent.
+struct KeyWriter {
+    tx: Option<std::sync::mpsc::Sender<KeyJob>>,
+    run: EditFn,
+}
+
+impl KeyWriter {
+    const fn new(run: EditFn) -> Self {
+        KeyWriter { tx: None, run }
+    }
+
+    /// Queue one batch (starting the thread if needed); with `wait`, the
+    /// receiver that hears when it is written. A writer that is gone
+    /// (it never should be) is dropped and the batch is written here.
+    fn send(
+        &mut self,
+        path: &std::path::Path,
+        edits: Vec<(String, Option<String>)>,
+        wait: bool,
+    ) -> Option<std::sync::mpsc::Receiver<()>> {
+        let run = self.run;
+        let tx = self.tx.get_or_insert_with(|| {
+            let (tx, rx) = std::sync::mpsc::channel::<KeyJob>();
+            std::thread::spawn(move || {
+                for (p, e, done) in rx {
+                    run(&p, &e);
+                    if let Some(d) = done {
+                        let _ = d.send(());
+                    }
                 }
-            }
+            });
+            tx
         });
-        tx
-    });
-    let (dtx, drx) = std::sync::mpsc::channel();
-    if sender.send((path.to_path_buf(), edits.clone(), wait.then_some(dtx))).is_err() {
-        // The writer is gone (it never should be): write here.
-        *tx = None;
-        drop(tx);
-        run(path, &edits);
-        return;
+        let (dtx, drx) = std::sync::mpsc::channel();
+        match tx.send((path.to_path_buf(), edits, wait.then_some(dtx))) {
+            Ok(()) => wait.then_some(drx),
+            Err(std::sync::mpsc::SendError((p, e, _))) => {
+                self.tx = None;
+                run(&p, &e);
+                None
+            }
+        }
     }
-    drop(tx);
-    if wait {
-        let _ = drx.recv_timeout(std::time::Duration::from_secs(5));
+
+    /// Wait up to `timeout` for a batch `send` returned a receiver for;
+    /// false when it timed out.
+    fn wait(done: Option<std::sync::mpsc::Receiver<()>>, timeout: std::time::Duration) -> bool {
+        done.is_none_or(|rx| rx.recv_timeout(timeout).is_ok())
     }
 }
 
@@ -524,7 +627,7 @@ pub fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()>
 }
 
 /// A TOML basic string.
-fn toml_str(s: &str) -> String {
+pub fn toml_str(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
@@ -1083,6 +1186,8 @@ oops
     fn only(dir: &std::path::Path) -> Vec<String> {
         let mut v: Vec<String> =
             std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        // The advisory lock's sidecar stays (see `with_config_lock`).
+        v.retain(|n| !n.ends_with(".lock"));
         v.sort();
         v
     }
@@ -1456,7 +1561,7 @@ bogus = 1
         assert_eq!((c.tool_sizes.get("line"), c.theme.as_str()), (Some(&6.0), "auto"));
         // Comments survive; several edits at once; removals.
         std::fs::write(&p, "# keep me\ntheme = \"light\"\ntool_line_size = 6\n").unwrap();
-        let edits = [("tool_line_size".to_string(), None), ("tool_pencil_color".to_string(), Some(toml_string("#010203")))];
+        let edits = [("tool_line_size".to_string(), None), ("tool_pencil_color".to_string(), Some(toml_str("#010203")))];
         edit_top_keys_at(&p, &edits).unwrap();
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "# keep me\ntheme = \"light\"\ntool_pencil_color = \"#010203\"\n");
         assert_eq!(only(&dir), ["config.toml"], "no temp file left");
@@ -1520,5 +1625,169 @@ bogus = 1
         assert!(back.save_dialog);
         assert_eq!(parse_config("save_format = \" BMP \"").unwrap().save_format, "bmp");
         assert_eq!(parse_config("jpeg_quality = 100").unwrap().jpeg_quality, 100);
+    }
+
+    #[test]
+    fn new_keys_go_after_the_last_key_not_into_a_table_comment() {
+        // The comment heading the first table stays with it.
+        let t = "theme = \"dark\"\n\n# Keyboard shortcuts\n[shortcuts]\nsave = \"S\"\n";
+        assert_eq!(
+            with_top_raw(t, "tool_line_size", Some("4")),
+            "theme = \"dark\"\ntool_line_size = 4\n\n# Keyboard shortcuts\n[shortcuts]\nsave = \"S\"\n"
+        );
+        // No blank line: still after the key, the comment stays on the table.
+        let t = "theme = \"dark\"\n# Keyboard shortcuts\n[shortcuts]\n";
+        assert_eq!(with_top_raw(t, "a", Some("1")), "theme = \"dark\"\na = 1\n# Keyboard shortcuts\n[shortcuts]\n");
+        // After the last key even with comments after it at the top level.
+        let t = "a = 1\n# about b\nb = 2\n# trailing note\n\n# Table\n[t]\n";
+        assert_eq!(with_top_raw(t, "c", Some("3")), "a = 1\n# about b\nb = 2\nc = 3\n# trailing note\n\n# Table\n[t]\n");
+        // No keys: before the table's leading comment block (a file
+        // header above it stays first).
+        let t = "# rustshot settings\n\n# Keyboard shortcuts\n# (any order)\n[shortcuts]\n";
+        assert_eq!(
+            with_top_raw(t, "a", Some("1")),
+            "# rustshot settings\n\na = 1\n\n# Keyboard shortcuts\n# (any order)\n[shortcuts]\n"
+        );
+        let t = "# Keyboard shortcuts\r\n[shortcuts]\r\n";
+        assert_eq!(with_top_raw(t, "a", Some("1")), "a = 1\r\n\r\n# Keyboard shortcuts\r\n[shortcuts]\r\n");
+        // No table: after the last key; a file of comments only: appended.
+        assert_eq!(with_top_raw("a = 1\n# end\n", "b", Some("2")), "a = 1\nb = 2\n# end\n");
+        assert_eq!(with_top_raw("# only a comment\n", "b", Some("2")), "# only a comment\nb = 2\n");
+        // The defaults file: the new key lands after a key line, and every
+        // comment that headed a table still does.
+        let d = to_toml(&Config::default());
+        let out = with_top_raw(&d, "tool_line_size", Some("9"));
+        assert_eq!(parse_config(&out).unwrap().tool_sizes.get("line"), Some(&9.0));
+        let (before, after) = out.split_once("tool_line_size = 9\n").unwrap();
+        let prev = before.lines().last().unwrap_or("");
+        assert!(!strip_comment(prev).trim().is_empty(), "after a key line: {prev:?}");
+        assert!(!after.trim_start().starts_with('['), "not straight into a table");
+        for (a, b) in d.lines().zip(d.lines().skip(1)) {
+            if b.starts_with('[') && a.starts_with('#') {
+                assert!(out.contains(&format!("{a}\n{b}")), "{a:?} still heads {b:?}");
+            }
+        }
+    }
+
+    /// Many threads editing different keys at once: every edit lands (the
+    /// read-modify-writes never interleave).
+    #[test]
+    fn concurrent_key_writers_lose_nothing() {
+        let dir = scratch("concurrent");
+        let p = dir.join("config.toml");
+        std::fs::write(&p, "# mine\ntheme = \"dark\"\n\n[shortcuts]\nsave = \"Ctrl+S\"\n").unwrap();
+        let ids = ["pencil", "line", "arrow", "rect", "ellipse", "marker", "text", "counter"];
+        std::thread::scope(|s| {
+            for (n, id) in ids.iter().enumerate() {
+                let p = &p;
+                s.spawn(move || {
+                    for i in 1..=20 {
+                        let v = (n * 100 + i) as f32;
+                        edit_top_keys_at(p, &[(format!("tool_{id}_size"), Some(toml_num(v)))]).unwrap();
+                    }
+                });
+            }
+            // Settings saving the whole file at the same time keeps them too
+            // (it merges onto the file as read under the lock).
+            let p = &p;
+            s.spawn(move || {
+                for _ in 0..10 {
+                    with_config_lock(p, || {
+                        let cfg = parse_config(&std::fs::read_to_string(p).unwrap()).unwrap();
+                        save_at(p, &cfg).unwrap();
+                    });
+                }
+            });
+        });
+        let c = parse_config(&std::fs::read_to_string(&p).unwrap()).unwrap();
+        for (n, id) in ids.iter().enumerate() {
+            assert_eq!(c.tool_sizes.get(*id), Some(&((n * 100 + 20) as f32)), "{id}");
+        }
+        assert_eq!(c.shortcuts.get("save").map(String::as_str), Some("Ctrl+S"));
+        assert!(lock_path(&p).exists(), "the sidecar lock file");
+        assert_eq!(only(&dir), ["config.toml"], "no temp file left");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The advisory lock keeps out a writer of another process: while the
+    /// sidecar is locked (as `rustshot settings` would hold it), an edit
+    /// waits, then goes through.
+    #[test]
+    fn a_locked_sidecar_holds_writers_back() {
+        let dir = scratch("flock");
+        let p = dir.join("config.toml");
+        std::fs::write(&p, "theme = \"dark\"\n").unwrap();
+        let other = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(lock_path(&p)).unwrap();
+        other.lock().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let q = p.clone();
+        let h = std::thread::spawn(move || {
+            edit_top_keys_at(&q, &[("tool_line_size".into(), Some("5".into()))]).unwrap();
+            tx.send(()).unwrap();
+        });
+        assert!(rx.recv_timeout(std::time::Duration::from_millis(300)).is_err(), "waits for the lock");
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "theme = \"dark\"\n");
+        other.unlock().unwrap();
+        rx.recv_timeout(std::time::Duration::from_secs(10)).expect("written once unlocked");
+        h.join().unwrap();
+        assert!(std::fs::read_to_string(&p).unwrap().contains("tool_line_size = 5"));
+        // Re-entrant on one thread: a nested write does not deadlock.
+        with_config_lock(&p, || save_top_key_at(&p, "skip_version", "1.2.3").unwrap());
+        assert_eq!(parse_config(&std::fs::read_to_string(&p).unwrap()).unwrap().skip_version, "1.2.3");
+        drop(other);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The background writer (as the app runs it, here with its own path
+    /// and thread): batches apply in the order sent, `wait` returns once
+    /// written or after its timeout, and a writer that is gone falls back
+    /// to writing on the caller's thread.
+    #[test]
+    fn key_writer_thread_order_wait_and_fallback() {
+        static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+        fn record(p: &std::path::Path, e: &[(String, Option<String>)]) {
+            if e.iter().any(|(k, _)| k == "tool_counter_size") {
+                std::thread::sleep(std::time::Duration::from_millis(400));
+            }
+            write_key_edits(p, e);
+            SEEN.lock().unwrap().extend(e.iter().filter(|(k, _)| k != "tool_counter_size").filter_map(|(_, v)| v.clone()));
+        }
+        let dir = scratch("writer");
+        let p = dir.join("config.toml");
+        std::fs::write(&p, "# keep\ntheme = \"dark\"\n").unwrap();
+        let mut w = KeyWriter::new(record);
+        for i in 1..=30 {
+            assert!(w.send(&p, vec![("tool_line_size".into(), Some(i.to_string()))], false).is_none());
+        }
+        let done = w.send(&p, vec![("tool_rect_size".into(), Some("31".into()))], true);
+        assert!(KeyWriter::wait(done, std::time::Duration::from_secs(10)), "written");
+        let want: Vec<String> = (1..=31).map(|i| i.to_string()).collect();
+        assert_eq!(*SEEN.lock().unwrap(), want, "in the order sent");
+        let c = parse_config(&std::fs::read_to_string(&p).unwrap()).unwrap();
+        assert_eq!((c.tool_sizes.get("line"), c.tool_sizes.get("rect")), (Some(&30.0), Some(&31.0)));
+        assert!(std::fs::read_to_string(&p).unwrap().starts_with("# keep\n"));
+        // A slow write: `wait` gives up after its timeout; the write still
+        // happens.
+        let t0 = std::time::Instant::now();
+        let slow = vec![("tool_counter_size".into(), Some("1".into())), ("tool_text_size".into(), Some("40".into()))];
+        let done = w.send(&p, slow, true);
+        assert!(!KeyWriter::wait(done, std::time::Duration::from_millis(50)), "timed out");
+        assert!(t0.elapsed() < std::time::Duration::from_millis(350), "did not wait for the write");
+        let done = w.send(&p, vec![("tool_pencil_size".into(), Some("2".into()))], true);
+        assert!(KeyWriter::wait(done, std::time::Duration::from_secs(10)));
+        let c = parse_config(&std::fs::read_to_string(&p).unwrap()).unwrap();
+        assert_eq!((c.tool_sizes.get("text"), c.tool_sizes.get("pencil")), (Some(&40.0), Some(&2.0)));
+        // The writer is gone (its receiver dropped): written here, at once.
+        let (tx, rx) = std::sync::mpsc::channel::<KeyJob>();
+        drop(rx);
+        w.tx = Some(tx);
+        assert!(w.send(&p, vec![("tool_arrow_size".into(), Some("7".into()))], true).is_none());
+        assert!(w.tx.is_none(), "dropped; the next batch starts a new thread");
+        let c = parse_config(&std::fs::read_to_string(&p).unwrap()).unwrap();
+        assert_eq!(c.tool_sizes.get("arrow"), Some(&7.0));
+        let done = w.send(&p, vec![("tool_arrow_size".into(), Some("8".into()))], true);
+        assert!(KeyWriter::wait(done, std::time::Duration::from_secs(10)) && w.tx.is_some());
+        assert_eq!(parse_config(&std::fs::read_to_string(&p).unwrap()).unwrap().tool_sizes.get("arrow"), Some(&8.0));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

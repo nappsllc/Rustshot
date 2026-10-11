@@ -6,10 +6,11 @@
 //!
 //! Lines are split on `\n`, stacked `line_height` apart from `top`, and each
 //! line starts at `top.x`. Coverage is blended with the object colour by
-//! [`Surf::blend_px`]; the backend only produces a grayscale mask.
+//! [`Surf::blend_px`] once per pixel through one [`Mask`] for the whole
+//! text; the backend only produces grayscale coverage.
 
 use crate::objects::Pt;
-use crate::raster::{Blend, Surf};
+use crate::raster::{Blend, Mask, Surf};
 use crate::uifb::C4;
 
 #[cfg(windows)]
@@ -67,17 +68,28 @@ impl AnnotFont {
 
     /// Draw `text` with its top-left at `top`, clipped to the surface.
     pub fn render(&self, sf: &mut Surf, text: &str, px: f32, top: Pt, color: C4) {
-        let m = self.metrics(px);
+        let (w, h, m) = self.measure(text, px);
+        // One mask for every glyph of every line (max coverage), blended
+        // once: touching or overlapping glyphs of a translucent colour do
+        // not darken where they meet. The pad covers overhang past the
+        // advance box (as the backends' own pad does).
+        let pad = (px / 3.0).ceil() + 3.0;
+        let mut mask = Mask::new(
+            sf,
+            (top.x - pad).floor() as i32,
+            (top.y - pad).floor() as i32,
+            (top.x + w + pad).ceil() as i32,
+            (top.y + h + pad).ceil() as i32,
+        );
         let clip = sf.bounds();
         let mut y = top.y;
         for line in text.split('\n') {
             if !line.trim().is_empty() {
-                self.0.draw(line, px, Pt::new(top.x, y), m.ascent, clip, &mut |x, y, cov| {
-                    sf.blend_px(x, y, color, cov, Blend::Normal);
-                });
+                self.0.draw(line, px, Pt::new(top.x, y), m.ascent, clip, &mut |x, y, cov| mask.put(x, y, cov));
             }
             y += m.line_height;
         }
+        mask.blend(sf, color, Blend::Normal);
     }
 }
 

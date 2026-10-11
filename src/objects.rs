@@ -1,6 +1,6 @@
 use crate::text::AnnotFont;
 use crate::pixbuf::PixBuf;
-use crate::raster::{Blend, Surf};
+use crate::raster::{Blend, Mask, Surf};
 use crate::uifb::C4;
 
 /// A point in image (physical pixel) coordinates.
@@ -355,8 +355,12 @@ impl Obj {
             }
             Obj::Arrow { a, b, color, width } => {
                 if let Some((shaft, head)) = arrow_geometry(*a, *b, *width) {
-                    sf.stroke_polyline(&shaft, *width, *color, Blend::Normal);
-                    sf.fill_convex(&head, *color, Blend::Normal);
+                    // One mask for shaft and head: a translucent arrow is
+                    // blended once where they overlap (no darker join).
+                    let mut m = Mask::around(sf, &[shaft[0], shaft[1], head[0], head[1], head[2]], width.max(0.5) / 2.0 + 1.0);
+                    m.polyline(&shaft, *width);
+                    m.convex(&head);
+                    m.blend(sf, *color, Blend::Normal);
                 } else {
                     sf.stroke_polyline(&[*a, *b], *width, *color, Blend::Normal);
                 }
@@ -526,6 +530,54 @@ mod tests {
                 assert_ne!(*p, [0, 0, 0, 0], "window ({wx}, {wy}): pixel {i} cleared");
             }
         }
+    }
+
+    /// A 50 % arrow: shaft and head are one mask, so every fully covered
+    /// pixel around the head's base has the same value (no darker
+    /// semicircle where the shaft's round cap sits under the head).
+    #[test]
+    fn translucent_arrow_blends_once_at_the_join() {
+        for (a, b) in [
+            (Pt::new(10.0, 50.0), Pt::new(110.0, 50.0)),
+            (Pt::new(110.0, 50.0), Pt::new(10.0, 50.0)),
+        ] {
+            let mut img = PixBuf::new(120, 100);
+            for p in img.as_raw_mut().as_chunks_mut::<4>().0 {
+                *p = [255, 255, 255, 255];
+            }
+            Obj::Arrow { a, b, color: C4::new(0, 0, 0, 128), width: 8.0 }.render(&mut img, None);
+            // Head length 24: the base is 24 px before the tip; the shaft's
+            // cap would reach 4 px into the head.
+            let base = if b.x > a.x { b.x - 24.0 } else { b.x + 24.0 };
+            let mut vals = std::collections::BTreeSet::new();
+            for y in 47..53 {
+                for x in (base as i32 - 8)..(base as i32 + 8) {
+                    vals.insert(img.get_pixel(x as u32, y as u32)[0]);
+                }
+            }
+            assert_eq!(vals.len(), 1, "{a:?}->{b:?}: values around the base {vals:?}");
+            let v = *vals.first().unwrap();
+            assert!((126..=128).contains(&v), "half of white: {v}");
+        }
+    }
+
+    /// The other objects that draw several primitives (text: glyphs and
+    /// lines) also blend once: overlapping glyphs of a translucent colour
+    /// are no darker than one glyph.
+    #[test]
+    fn translucent_text_is_one_alpha() {
+        let Some(font) = AnnotFont::load() else { return };
+        let mut img = PixBuf::new(200, 80);
+        for p in img.as_raw_mut().as_chunks_mut::<4>().0 {
+            *p = [255, 255, 255, 255];
+        }
+        // "ll" squeezed: at 40 px the stems are wide; "WW" overlap in most
+        // fonts' AA edges. Every pixel is at least half of white.
+        Obj::Text { pos: Pt::new(6.0, 6.0), text: "WWAVffll\nWW".into(), color: C4::new(0, 0, 0, 128), size: 30.0 }
+            .render(&mut img, Some(&font));
+        let darkest = img.as_raw().as_chunks::<4>().0.iter().map(|p| p[0]).min().unwrap();
+        assert!(darkest >= 126, "a pixel blended twice: {darkest}");
+        assert!(darkest <= 128, "the text was drawn: {darkest}");
     }
 
     #[test]

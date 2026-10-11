@@ -106,6 +106,36 @@ impl Drop for Scratch {
     }
 }
 
+// ---- translucent objects --------------------------------------------------
+
+/// A 50 % black arrow through the export: around the head's base every
+/// covered pixel is the capture at half brightness, blended once (a
+/// double blend would leave a darker semicircle where the shaft's cap
+/// sits under the head).
+#[test]
+fn translucent_arrow_through_the_export() {
+    let mut a = app_big();
+    let plain = ed(&mut a).export(BIG);
+    let e = ed(&mut a);
+    e.objects.push(Obj::Arrow { a: Pt::new(300.0, 400.0), b: Pt::new(700.0, 400.0), color: C4::new(0, 0, 0, 128), width: 8.0 });
+    e.dirty = true;
+    let State::Edit(e) = std::mem::replace(&mut a.st, State::Hidden) else { unreachable!() };
+    let mut e = *e;
+    a.finish(&mut e, false);
+    let State::Finish(job) = &a.st else { panic!("finish job") };
+    // Image (676, 400) is the base (head length 24); the crop starts at BIG.
+    let (ox, oy) = (BIG.x as u32, BIG.y as u32);
+    for y in 397..403u32 {
+        for x in 668..684u32 {
+            let (got, under) = (job.img.get_pixel(x - ox, y - oy), plain.get_pixel(x - ox, y - oy));
+            for c in 0..3 {
+                let want = (under[c] as f32 * (1.0 - 128.0 / 255.0)).round() as i32;
+                assert!((got[c] as i32 - want).abs() <= 1, "({x}, {y}) channel {c}: {} over {}, want {want}", got[c], under[c]);
+            }
+        }
+    }
+}
+
 // ---- per-tool memory ---------------------------------------------------------
 
 /// Each tool keeps its own size and colour; the next capture starts from
@@ -412,7 +442,13 @@ fn eyedropper_samples_the_screenshot() {
     e.prepare(None, BLUE_AT, Instant::now());
     let l = e.scene.as_ref().unwrap().loupe.clone().expect("loupe");
     assert_eq!(l.px[chrome::LOUPE_N * chrome::LOUPE_N / 2], BLUE);
-    assert!(l.r.x > BLUE_AT.0 as f32 && l.r.y > BLUE_AT.1 as f32, "below right of the pointer");
+    // Below right of the pointer would cover the picker: on another side.
+    let t = e.toolbar.as_ref().unwrap();
+    for o in std::iter::once(t.bar).chain(t.pop) {
+        assert!(l.r.x1() <= o.x || o.x1() <= l.r.x || l.r.y1() <= o.y || o.y1() <= l.r.y, "{:?} over {o:?}", l.r);
+    }
+    let (px, py) = (BLUE_AT.0 as f32, BLUE_AT.1 as f32);
+    assert!((l.r.x > px || l.r.x1() < px) && (l.r.y > py || l.r.y1() < py), "beside the pointer");
     // Esc: the eyedropper off, the picker still open.
     key(&mut a, key_esc());
     assert!(ed(&mut a).pick.as_ref().is_some_and(|p| !p.eyedrop) && ed(&mut a).loupe.is_none());
@@ -432,16 +468,58 @@ fn eyedropper_samples_the_screenshot() {
     assert_eq!(ed(&mut a).sample(Pt::new(-5.0, -5.0)), C4::rgb(0, 0, 0));
 }
 
-/// The loupe stays on the monitor near its edges.
+/// The loupe stays on the monitor near its edges, and off the toolbar.
 #[test]
 fn loupe_flips_at_the_edges() {
     let th = theme::DARK;
     let ui = chrome::Ui { th: &th, s: 1.0, font: None };
     let area = r(0.0, 0.0, 1000.0, 800.0);
-    let l = chrome::loupe_rect(&ui, Pt::new(100.0, 100.0), area);
+    let l = chrome::loupe_rect(&ui, Pt::new(100.0, 100.0), area, &[]);
     assert_eq!((l.x, l.y), (120.0, 120.0));
-    let l = chrome::loupe_rect(&ui, Pt::new(990.0, 790.0), area);
+    let l = chrome::loupe_rect(&ui, Pt::new(990.0, 790.0), area, &[]);
     assert!(l.x1() <= 970.0 && l.y1() <= 770.0, "{l:?}");
+    // A bar below right of the pointer: the loupe goes to the other side.
+    let bar = r(100.0, 320.0, 600.0, 48.0);
+    let l = chrome::loupe_rect(&ui, Pt::new(120.0, 300.0), area, &[bar]);
+    assert!(l.y1() <= bar.y && l.x == 140.0, "above the bar: {l:?}");
+    let l = chrome::loupe_rect(&ui, Pt::new(300.0, 400.0), area, &[r(320.0, 300.0, 200.0, 300.0)]);
+    assert!(l.x1() <= 320.0 && l.y == 420.0, "left of the popover: {l:?}");
+    // No room on the other side: on the monitor wins (over the bar).
+    let l = chrome::loupe_rect(&ui, Pt::new(10.0, 10.0), area, &[r(0.0, 0.0, 1000.0, 800.0)]);
+    assert_eq!((l.x, l.y), (30.0, 30.0));
+}
+
+/// Five monitors around the selection's: with the pointer on another one,
+/// the loupe stays on the monitor under the pointer (not the selection's).
+#[test]
+fn loupe_uses_the_monitor_under_the_pointer() {
+    let mut shot = synthetic_shot();
+    let (c, left, right, above, below) =
+        ((480, 300, 480, 300), (0, 300, 480, 300), (960, 300, 480, 300), (480, 0, 480, 300), (480, 600, 480, 300));
+    shot.monitors = vec![c, left, right, above, below];
+    let mut a = preview_app_with(theme::DARK, Some(r(560.0, 380.0, 300.0, 120.0)), shot);
+    a.focus_tries = u8::MAX;
+    key(&mut a, 'D' as u32);
+    open_picker(&mut a);
+    let mon = |m: (i32, i32, u32, u32)| r(m.0 as f32, m.1 as f32, m.2 as f32, m.3 as f32);
+    for (name, m, p) in [
+        ("left, near its right edge", left, (470, 450)),
+        ("right, near its top-right", right, (1430, 310)),
+        ("above, near its bottom", above, (700, 290)),
+        ("below, near its top", below, (700, 610)),
+        ("below, bottom-left corner", below, (485, 895)),
+    ] {
+        let e = ed(&mut a);
+        e.pick.as_mut().unwrap().eyedrop = true;
+        e.loupe = Some(Pt::new(p.0 as f32, p.1 as f32));
+        e.prepare(None, p, Instant::now());
+        let l = e.scene.as_ref().unwrap().loupe.clone().unwrap_or_else(|| panic!("{name}: loupe")).r;
+        let m = mon(m);
+        assert!(l.x >= m.x && l.y >= m.y && l.x1() <= m.x1() && l.y1() <= m.y1(), "{name}: {l:?} on {m:?}");
+        if let Some(t) = e.toolbar.as_ref() {
+            assert!(!toolbar::hit(t.bar, Pt::new(l.x + l.w / 2.0, l.y + l.h / 2.0)), "{name}: on the bar");
+        }
+    }
 }
 
 // ---- dirty rects -------------------------------------------------------------
@@ -510,9 +588,15 @@ fn ring_controls_change_the_bubble() {
     let cam = item(&mut a, |k| matches!(k, toolbar::Kind::Switch { act: Act::RecCamera, .. }));
     click(&mut a, mid(cam));
     assert!(ed(&mut a).rec.opts.camera);
+    // What the bubble shows (after the pump that keeps it in step), which
+    // is what the popover asks for.
     let look = |a: &mut App| {
+        a.pump();
         let e = ed(a);
-        e.cam_want(&e.rec_geom(&[])).look
+        let want = e.cam_want(&e.rec_geom(&[])).look;
+        let shown = e.rec.cam.shown.as_ref().map(|s| s.1).expect("the bubble is shown");
+        assert_eq!(shown, want, "the bubble shows the look");
+        shown
     };
     assert_eq!((look(&mut a).ring, look(&mut a).ring_w), (None, 3), "the accent, 3 px");
     let plus = item(&mut a, |k| *k == toolbar::Kind::Btn(Act::RingSize(1)));
@@ -566,6 +650,124 @@ fn ring_controls_change_the_bubble() {
     key(&mut a, key_esc());
     assert_eq!(a.cfg.rec_camera_ring_width, 1);
     assert_eq!(a.rec_opts.as_ref().map(|o| o.cam_ring_w), Some(1));
+}
+
+/// The ring's picker dismissed without a change keeps the ring on the
+/// accent (`None`, not the accent's colour) and adds no recent colour; the
+/// tool's picker likewise remembers nothing.
+#[test]
+fn pickers_closed_unchanged_change_nothing() {
+    let mut a = app_big();
+    ed(&mut a).cfg.recent_colors = vec!["#123456".into()];
+    let rec = item(&mut a, |k| *k == toolbar::Kind::Btn(Act::Record));
+    click(&mut a, mid(rec));
+    let cam = item(&mut a, |k| matches!(k, toolbar::Kind::Switch { act: Act::RecCamera, .. }));
+    click(&mut a, mid(cam));
+    assert_eq!(ed(&mut a).rec.opts.cam_ring, None);
+    let open_ring = |a: &mut App| {
+        let sw = item(a, |k| matches!(k, toolbar::Kind::Swatch { act: Act::RingPalette, .. }));
+        click(a, mid(sw));
+        let rb = item(a, |k| *k == toolbar::Kind::Rainbow(Act::RingWheel));
+        click(a, mid(rb));
+        assert_eq!(ed(a).pick.as_ref().map(|p| p.target), Some(Target::Ring));
+    };
+    // Enter at once.
+    open_ring(&mut a);
+    key(&mut a, wind::key::RETURN);
+    // Moved away and back, then a click outside.
+    open_ring(&mut a);
+    key(&mut a, wind::key::RIGHT);
+    key(&mut a, wind::key::LEFT);
+    assert_eq!(ed(&mut a).pick.as_ref().unwrap().color(), ed(&mut a).th.accent);
+    click(&mut a, (BIG.x as i32 + 30, BIG.y as i32 + 30));
+    let e = ed(&mut a);
+    assert!(e.pick.is_none());
+    assert_eq!(e.rec.opts.cam_ring, None, "still the accent");
+    assert_eq!(e.cfg.recent_colors, ["#123456"], "no recent");
+    assert_eq!(e.pending.get("rec_camera_ring_color"), None, "nothing to write");
+    // Changed: kept, remembered, a recent one.
+    open_ring(&mut a);
+    type_str(&mut a, "#00ff00");
+    key(&mut a, wind::key::RETURN);
+    let e = ed(&mut a);
+    assert_eq!(e.rec.opts.cam_ring, Some(C4::rgb(0, 255, 0)));
+    assert_eq!(e.cfg.recent_colors, ["#00ff00", "#123456"]);
+    // The tool's picker, closed on its own colour.
+    key(&mut a, key_esc()); // the Record popover closes
+    key(&mut a, 'D' as u32);
+    ed(&mut a).pending.take();
+    open_picker(&mut a);
+    key(&mut a, wind::key::RETURN);
+    let e = ed(&mut a);
+    assert_eq!(e.cfg.recent_colors, ["#00ff00", "#123456"], "no recent");
+    assert!(e.pending.is_empty(), "nothing remembered");
+}
+
+/// Quitting the daemon under an open picker keeps the picked colour (as
+/// closing the overlay does) and writes it before the process goes.
+#[test]
+fn quitting_keeps_the_picked_colour_and_flushes() {
+    let file = Scratch::new("quit", "theme = \"dark\"\n");
+    let mut a = app_big();
+    a.kind = RunKind::Daemon;
+    ed(&mut a).cfg_path = Some(file.0.clone());
+    key(&mut a, 'D' as u32);
+    open_picker(&mut a);
+    type_str(&mut a, "#0a0b0c");
+    assert!(!file.text().contains("tool_line_color"), "not yet");
+    a.save_before_exit();
+    let e = ed(&mut a);
+    assert!(e.pick.is_none() && e.pending.is_empty());
+    assert_eq!(e.mem.color(Tool::Line), C4::rgb(10, 11, 12));
+    let cfg = crate::config::parse_config(&file.text()).unwrap();
+    assert_eq!(cfg.tool_colors.get("line").map(String::as_str), Some("#0a0b0c"));
+    assert_eq!(cfg.recent_colors, ["#0a0b0c"]);
+}
+
+/// Space (the palette's key) and the wheel do nothing for the tools
+/// without a colour.
+#[test]
+fn no_palette_for_pixelate_and_invert() {
+    let mut a = app_big();
+    for k in ['B', 'I'] {
+        key(&mut a, k as u32);
+        assert!(!tools::has_color(ed(&mut a).cur_tool()));
+        act(&mut a, Act::Palette);
+        assert!(!ed(&mut a).palette_open, "{k}: no palette");
+        act(&mut a, Act::Wheel);
+        assert!(ed(&mut a).pick.is_none(), "{k}: no picker");
+    }
+    key(&mut a, 'D' as u32);
+    act(&mut a, Act::Palette);
+    assert!(ed(&mut a).palette_open);
+}
+
+/// A popover below the bar puts its controls' tooltips below them, never
+/// over the bar.
+#[test]
+fn popover_tips_stay_off_the_bar() {
+    let mut a = app_big();
+    act(&mut a, Act::Palette);
+    let rb = item(&mut a, |k| matches!(k, toolbar::Kind::Rainbow(_)));
+    let (bar, pop) = {
+        let t = ed(&mut a).toolbar.as_ref().unwrap();
+        (t.bar, t.pop.expect("palette"))
+    };
+    assert!(pop.y >= bar.y1(), "the palette is below the bar here");
+    let i = ed(&mut a).toolbar.as_ref().unwrap().items.iter().position(|it| it.r == rb).unwrap();
+    let e = ed(&mut a);
+    e.hover = Some(i);
+    e.hover_at = Instant::now() - Duration::from_secs(2);
+    let p = mid(rb);
+    e.prepare(None, p, Instant::now());
+    let tip = e.scene.as_ref().unwrap().tip.clone().expect("tooltip");
+    assert!(tip.below, "below the swatch");
+    // A bar button's tip stays above it.
+    let copy = e.toolbar.as_ref().unwrap().items.iter().position(|it| it.kind == toolbar::Kind::Btn(Act::Copy)).unwrap();
+    e.hover = Some(copy);
+    e.hover_at = Instant::now() - Duration::from_secs(2);
+    e.prepare(None, p, Instant::now());
+    assert!(!e.scene.as_ref().unwrap().tip.clone().expect("tooltip").below);
 }
 
 /// Ring settings from the config reach the bubble's look.

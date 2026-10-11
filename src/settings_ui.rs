@@ -726,11 +726,17 @@ impl Settings {
 
     /// Write the changed values onto the file as it is now.
     fn commit(&mut self, close: bool) -> Vec<Act> {
-        // The file as it is now (it may have changed, or broken, since).
-        let Ok(onto) = self.disk() else { return vec![] };
-        let onto = onto.unwrap_or_else(|| self.loaded.clone());
-        let cfg = self.form.apply(&self.loaded, &onto);
-        if let Err(e) = config::save_at(&self.path, &cfg) {
+        // The file as it is now (it may have changed, or broken, since),
+        // read and written under the config lock: nothing (the overlay's
+        // remembered sizes, another process) writes in between.
+        let path = self.path.clone();
+        let saved = config::with_config_lock(&path, || {
+            let onto = self.disk().ok()?.unwrap_or_else(|| self.loaded.clone());
+            let cfg = self.form.apply(&self.loaded, &onto);
+            Some((config::save_at(&path, &cfg), cfg))
+        });
+        let Some((res, cfg)) = saved else { return vec![] };
+        if let Err(e) = res {
             self.modal = Some(Modal::Error(format!("Could not save {}: {e}", self.path.display())));
             return vec![];
         }
@@ -799,15 +805,19 @@ impl Settings {
         let Some(Modal::Broken(e)) = &self.modal else { return vec![] };
         self.modal = Some(Modal::Reset(e.clone()));
         let bak = backup_path(&self.path);
-        if self.path.exists()
-            && let Err(e) = std::fs::copy(&self.path, &bak)
-        {
-            self.modal = Some(Modal::Error(format!("Could not back up config.toml to {}: {e}", bak.display())));
-            return vec![];
-        }
         let cfg = Config::default();
-        if let Err(e) = config::save_at(&self.path, &cfg) {
-            self.modal = Some(Modal::Error(format!("Could not save {}: {e}", self.path.display())));
+        // The backup and the rewrite under the config lock.
+        let path = self.path.clone();
+        let res = config::with_config_lock(&path, || {
+            if path.exists()
+                && let Err(e) = std::fs::copy(&path, &bak)
+            {
+                return Err(format!("Could not back up config.toml to {}: {e}", bak.display()));
+            }
+            config::save_at(&path, &cfg).map_err(|e| format!("Could not save {}: {e}", path.display()))
+        });
+        if let Err(e) = res {
+            self.modal = Some(Modal::Error(e));
             return vec![];
         }
         self.modal = None;

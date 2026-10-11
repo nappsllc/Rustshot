@@ -120,73 +120,9 @@ impl<'a> Surf<'a> {
 
     /// Stroke a polyline (or a single point) with round caps/joins and AA.
     pub fn stroke_polyline(&mut self, pts: &[Pt], width: f32, c: C4, blend: Blend) {
-        if pts.is_empty() {
-            return;
-        }
-        let half = width.max(0.5) / 2.0;
-        let margin = half + 1.0;
-        let mut minx = f32::MAX;
-        let mut miny = f32::MAX;
-        let mut maxx = f32::MIN;
-        let mut maxy = f32::MIN;
-        for p in pts {
-            minx = minx.min(p.x);
-            miny = miny.min(p.y);
-            maxx = maxx.max(p.x);
-            maxy = maxy.max(p.y);
-        }
-        let bounds = self.bounds();
-        let (x0, y0, x1, y1) = clamp_bbox(
-            (minx - margin).floor() as i32,
-            (miny - margin).floor() as i32,
-            (maxx + margin).ceil() as i32,
-            (maxy + margin).ceil() as i32,
-            bounds,
-        );
-        if x1 <= x0 || y1 <= y0 {
-            return;
-        }
-        let (mw, mh) = ((x1 - x0) as u32, (y1 - y0) as u32);
-        let mut mask = vec![0u8; (mw * mh) as usize];
-        let band = half + 0.5;
-        let mut segs: Vec<(Pt, Pt)> = Vec::with_capacity(pts.len());
-        if pts.len() == 1 {
-            segs.push((pts[0], pts[0]));
-        } else {
-            for s in pts.windows(2) {
-                segs.push((s[0], s[1]));
-            }
-        }
-        for (a, b) in segs {
-            let (lx0, ly0, lx1, ly1) = clamp_bbox(
-                (a.x.min(b.x) - margin).floor() as i32,
-                (a.y.min(b.y) - margin).floor() as i32,
-                (a.x.max(b.x) + margin).ceil() as i32,
-                (a.y.max(b.y) + margin).ceil() as i32,
-                bounds,
-            );
-            for y in ly0.max(y0)..ly1.min(y1) {
-                for x in lx0.max(x0)..lx1.min(x1) {
-                    let d = dist_seg(x as f32 + 0.5, y as f32 + 0.5, a.x, a.y, b.x, b.y);
-                    let cov = (band - d).clamp(0.0, 1.0);
-                    if cov > 0.0 {
-                        let mi = ((y - y0) as u32 * mw + (x - x0) as u32) as usize;
-                        let v = (cov * 255.0).round() as u8;
-                        if v > mask[mi] {
-                            mask[mi] = v;
-                        }
-                    }
-                }
-            }
-        }
-        for y in 0..mh {
-            for x in 0..mw {
-                let v = mask[(y * mw + x) as usize];
-                if v > 0 {
-                    self.blend_px(x0 + x as i32, y0 + y as i32, c, v as f32 / 255.0, blend);
-                }
-            }
-        }
+        let mut m = Mask::around(self, pts, width.max(0.5) / 2.0 + 1.0);
+        m.polyline(pts, width);
+        m.blend(self, c, blend);
     }
 
     /// Stroke an ellipse via its signed-distance field.
@@ -274,58 +210,151 @@ impl<'a> Surf<'a> {
         }
     }
 
-    /// Fill a convex polygon with analytic edge coverage.
+    /// Fill a convex polygon with analytic edge coverage (objects build a
+    /// [`Mask`] instead, to combine it with other parts).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn fill_convex(&mut self, pts: &[Pt], c: C4, blend: Blend) {
+        let mut m = Mask::around(self, pts, 0.0);
+        m.convex(pts);
+        m.blend(self, c, blend);
+    }
+}
+
+/// A coverage mask over a window of image pixels. Several primitives add
+/// to it with `max` and it is blended once, so the parts of one object
+/// (an arrow's shaft and head, overlapping glyphs) never blend twice where
+/// they overlap: a translucent object has one uniform alpha.
+pub struct Mask {
+    x0: i32,
+    y0: i32,
+    x1: i32,
+    y1: i32,
+    a: Vec<u8>,
+}
+
+impl Mask {
+    /// A mask over `[x0, x1) x [y0, y1)` clipped to the surface window.
+    pub fn new(sf: &Surf, x0: i32, y0: i32, x1: i32, y1: i32) -> Self {
+        let (x0, y0, x1, y1) = clamp_bbox(x0, y0, x1, y1, sf.bounds());
+        let (x1, y1) = (x1.max(x0), y1.max(y0));
+        Mask { x0, y0, x1, y1, a: vec![0; ((x1 - x0) * (y1 - y0)) as usize] }
+    }
+
+    /// A mask over the bounding box of `pts` grown by `margin`.
+    pub fn around(sf: &Surf, pts: &[Pt], margin: f32) -> Self {
+        let (mut minx, mut miny, mut maxx, mut maxy) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for p in pts {
+            (minx, miny, maxx, maxy) = (minx.min(p.x), miny.min(p.y), maxx.max(p.x), maxy.max(p.y));
+        }
+        if pts.is_empty() {
+            return Mask::new(sf, 0, 0, 0, 0);
+        }
+        Mask::new(
+            sf,
+            (minx - margin).floor() as i32,
+            (miny - margin).floor() as i32,
+            (maxx + margin).ceil() as i32,
+            (maxy + margin).ceil() as i32,
+        )
+    }
+
+    /// Raise pixel (`x`, `y`) (image coordinates) to coverage `cov`.
+    #[inline]
+    pub fn put(&mut self, x: i32, y: i32, cov: f32) {
+        if x < self.x0 || y < self.y0 || x >= self.x1 || y >= self.y1 || cov <= 0.0 {
+            return;
+        }
+        let i = ((y - self.y0) * (self.x1 - self.x0) + (x - self.x0)) as usize;
+        let v = (cov.min(1.0) * 255.0).round() as u8;
+        if v > self.a[i] {
+            self.a[i] = v;
+        }
+    }
+
+    /// A polyline's (or a single point's) stroke with round caps/joins.
+    pub fn polyline(&mut self, pts: &[Pt], width: f32) {
+        if pts.is_empty() {
+            return;
+        }
+        let half = width.max(0.5) / 2.0;
+        let (margin, band) = (half + 1.0, half + 0.5);
+        let mut segs: Vec<(Pt, Pt)> = Vec::with_capacity(pts.len());
+        if pts.len() == 1 {
+            segs.push((pts[0], pts[0]));
+        } else {
+            for s in pts.windows(2) {
+                segs.push((s[0], s[1]));
+            }
+        }
+        let win = (self.x0, self.y0, self.x1, self.y1);
+        for (a, b) in segs {
+            let (lx0, ly0, lx1, ly1) = clamp_bbox(
+                (a.x.min(b.x) - margin).floor() as i32,
+                (a.y.min(b.y) - margin).floor() as i32,
+                (a.x.max(b.x) + margin).ceil() as i32,
+                (a.y.max(b.y) + margin).ceil() as i32,
+                win,
+            );
+            for y in ly0..ly1 {
+                for x in lx0..lx1 {
+                    let d = dist_seg(x as f32 + 0.5, y as f32 + 0.5, a.x, a.y, b.x, b.y);
+                    self.put(x, y, (band - d).clamp(0.0, 1.0));
+                }
+            }
+        }
+    }
+
+    /// A convex polygon's fill with analytic edge coverage.
+    pub fn convex(&mut self, pts: &[Pt]) {
         if pts.len() < 3 {
             return;
         }
         let n = pts.len();
         let mut area = 0.0;
         for i in 0..n {
-            let a = pts[i];
-            let b = pts[(i + 1) % n];
+            let (a, b) = (pts[i], pts[(i + 1) % n]);
             area += a.x * b.y - b.x * a.y;
         }
         if area == 0.0 {
             return;
         }
         let orient = if area > 0.0 { 1.0 } else { -1.0 };
-        let mut minx = f32::MAX;
-        let mut miny = f32::MAX;
-        let mut maxx = f32::MIN;
-        let mut maxy = f32::MIN;
+        let (mut minx, mut miny, mut maxx, mut maxy) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
         for p in pts {
-            minx = minx.min(p.x);
-            miny = miny.min(p.y);
-            maxx = maxx.max(p.x);
-            maxy = maxy.max(p.y);
+            (minx, miny, maxx, maxy) = (minx.min(p.x), miny.min(p.y), maxx.max(p.x), maxy.max(p.y));
         }
-        let bounds = self.bounds();
         let (x0, y0, x1, y1) = clamp_bbox(
             minx.floor() as i32,
             miny.floor() as i32,
             maxx.ceil() as i32,
             maxy.ceil() as i32,
-            bounds,
+            (self.x0, self.y0, self.x1, self.y1),
         );
         for y in y0..y1 {
             for x in x0..x1 {
                 let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
                 let mut min_d = f32::MAX;
                 for i in 0..n {
-                    let a = pts[i];
-                    let b = pts[(i + 1) % n];
+                    let (a, b) = (pts[i], pts[(i + 1) % n]);
                     let (ex, ey) = (b.x - a.x, b.y - a.y);
                     let len = (ex * ex + ey * ey).sqrt().max(1e-6);
-                    let cross = ex * (py - a.y) - ey * (px - a.x);
-                    let d = orient * cross / len;
-                    if d < min_d {
-                        min_d = d;
-                    }
+                    min_d = min_d.min(orient * (ex * (py - a.y) - ey * (px - a.x)) / len);
                 }
-                let cov = (min_d + 0.5).clamp(0.0, 1.0);
-                if cov > 0.0 {
-                    self.blend_px(x, y, c, cov, blend);
+                self.put(x, y, (min_d + 0.5).clamp(0.0, 1.0));
+            }
+        }
+    }
+
+    /// Blend `c` through the mask, once per pixel.
+    pub fn blend(&self, sf: &mut Surf, c: C4, blend: Blend) {
+        let w = (self.x1 - self.x0) as usize;
+        if w == 0 {
+            return;
+        }
+        for (r, row) in self.a.chunks_exact(w).enumerate() {
+            for (i, &v) in row.iter().enumerate() {
+                if v > 0 {
+                    sf.blend_px(self.x0 + i as i32, self.y0 + r as i32, c, v as f32 / 255.0, blend);
                 }
             }
         }

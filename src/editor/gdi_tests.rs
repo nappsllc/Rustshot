@@ -231,6 +231,15 @@ fn gdi_export_matches_crop() {
     e.objects.push(Obj::Invert { r: FRect { x: 1100.0, y: 100.0, w: 200.0, h: 150.0 } });
     e.objects.push(Obj::Pixelate { r: FRect { x: 300.0, y: 450.0, w: 100.0, h: 300.0 }, cell: 7.0 });
     cases.push(("pixelate invert partly outside", app, BIG));
+    // Translucent objects (one alpha per object: the arrow's shaft and
+    // head, the text's glyphs share one mask).
+    let mut app = annotated(theme::DARK, BIG);
+    let e = edit_of(&mut app);
+    let half = C4::new(20, 200, 90, 128);
+    e.objects.push(Obj::Arrow { a: Pt::new(300.0, 700.0), b: Pt::new(900.0, 300.0), color: half, width: 12.0 });
+    e.objects.push(Obj::Rect { r: FRect { x: 500.0, y: 200.0, w: 300.0, h: 200.0 }, color: half, width: 9.0 });
+    e.objects.push(Obj::Text { pos: Pt::new(400.0, 500.0), text: "Half WW".into(), color: half, size: 40.0 });
+    cases.push(("translucent", app, BIG));
     for (name, mut app, sel) in cases {
         settled(&mut app);
         let e = edit_of(&mut app);

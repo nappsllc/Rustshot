@@ -3,8 +3,18 @@
 //! eyedropper and the recent colours. The picker edits a colour live (the
 //! tool or the camera ring shows it as it changes); Enter, or a click
 //! outside, keeps it, Esc puts the old one back.
+//!
+//! Also the editor's side of it (`impl Edit` below): opening and closing
+//! the picker, its pointer and keyboard input, the recent colours, and the
+//! eyedropper's loupe and sampling.
 
+use super::{chrome, compose, config, toolbar, tools, wind, Edit, Interact};
+use crate::objects::{FRect, Pt};
+use crate::raster::Order;
 use crate::uifb::C4;
+use crate::wind::Mods;
+use compose::PixBufBackdrop;
+use std::time::Instant;
 
 /// What the picker colours.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -116,6 +126,9 @@ pub struct Picker {
     /// The colour when the picker opened (Esc puts it back); `None` for a
     /// ring that was the theme's accent.
     pub orig: Option<C4>,
+    /// The colour shown when it opened (the accent for such a ring):
+    /// closing on it changes nothing.
+    pub start: C4,
 }
 
 impl Picker {
@@ -133,8 +146,10 @@ impl Picker {
             focus: None,
             eyedrop: false,
             orig,
+            start: c,
         };
         p.set_color(c);
+        p.start = p.color();
         p
     }
 
@@ -282,6 +297,247 @@ impl Picker {
             }
             _ => false,
         }
+    }
+}
+
+// ---- the editor's side ------------------------------------------------------
+
+impl Edit {
+    /// The picker's recent colours, newest first.
+    pub(super) fn recents(&self) -> Vec<C4> {
+        self.cfg.recent_colors.iter().filter_map(|s| tools::parse(s)).take(config::RECENT_MAX).collect()
+    }
+
+    /// `c` heads the recent colours (once; at most [`config::RECENT_MAX`]).
+    pub(super) fn add_recent(&mut self, c: C4, now: Instant) {
+        let mut v = self.recents();
+        v.retain(|x| *x != c);
+        v.insert(0, c);
+        v.truncate(config::RECENT_MAX);
+        let list: Vec<String> = v.iter().map(|c| tools::hex(*c)).collect();
+        self.pending.set("recent_colors".into(), Some(config::toml_strings(&list)), now);
+        self.cfg.recent_colors = list;
+    }
+
+    /// Open the colour picker for `target` at its colour.
+    pub(super) fn open_picker(&mut self, target: Target) {
+        let p = match target {
+            Target::Tool => Picker::new(target, self.color(), Some(self.color())),
+            Target::Ring => {
+                let ring = self.rec.opts.cam_ring;
+                Picker::new(target, ring.unwrap_or(self.th.accent), ring)
+            }
+        };
+        self.pick = Some(p);
+        self.palette_open = false;
+        self.loupe = None;
+    }
+
+    /// The picker's colour shows on its target as it changes.
+    pub(super) fn pick_changed(&mut self) {
+        let Some(p) = &self.pick else { return };
+        let c = p.color();
+        match p.target {
+            Target::Tool => {
+                let t = self.cur_tool();
+                self.mem.set_color(t, c);
+            }
+            Target::Ring => self.rec.opts.cam_ring = Some(c),
+        }
+    }
+
+    /// Close the picker: `keep` its colour (remembered, and a recent one
+    /// when it changed), or put the old one back.
+    pub(super) fn close_picker(&mut self, keep: bool) {
+        let Some(p) = self.pick.take() else { return };
+        self.loupe = None;
+        if matches!(self.interact, Interact::Pick(_)) {
+            self.interact = Interact::None;
+        }
+        let now = Instant::now();
+        let c = p.color();
+        // Kept but not changed (dismissed, or moved and put back): as
+        // Esc. Nothing is remembered and no recent is added; a ring that
+        // followed the accent keeps following it.
+        let keep = keep && c != p.start;
+        match (p.target, keep) {
+            (Target::Tool, true) => {
+                self.set_tool_color(c, now);
+                self.add_recent(c, now);
+            }
+            (Target::Tool, false) => {
+                let t = self.cur_tool();
+                if let Some(o) = p.orig {
+                    self.mem.set_color(t, o);
+                }
+            }
+            (Target::Ring, true) => {
+                self.rec.opts.cam_ring = Some(c);
+                self.remember_ring(now);
+                self.add_recent(c, now);
+            }
+            (Target::Ring, false) => self.rec.opts.cam_ring = p.orig,
+        }
+    }
+
+    /// The rect of the picker item `kind` (as laid out last).
+    pub(super) fn pick_rect(&self, kind: toolbar::Kind) -> Option<FRect> {
+        self.toolbar.as_ref()?.items.iter().find(|it| it.kind == kind).map(|it| it.r)
+    }
+
+    /// A press on picker part `part` at `p`: it takes the focus; the ring,
+    /// the square and the slider follow the pointer until it is released.
+    pub(super) fn pick_press(&mut self, part: Part, p: Pt) {
+        let Some(pk) = self.pick.as_mut() else { return };
+        pk.focus = Some(part);
+        pk.eyedrop = false;
+        pk.hex_fresh = part == Part::Hex;
+        self.loupe = None;
+        if matches!(part, Part::Hue | Part::Sv | Part::Alpha) {
+            self.interact = Interact::Pick(part);
+            self.pick_drag(part, p);
+        }
+    }
+
+    /// The pointer at `p` while dragging `part`.
+    pub(super) fn pick_drag(&mut self, part: Part, p: Pt) {
+        let kind = match part {
+            Part::Hue => toolbar::Kind::PickHue,
+            Part::Sv => toolbar::Kind::PickSv,
+            Part::Alpha => toolbar::Kind::PickAlpha,
+            _ => return,
+        };
+        let Some(r) = self.pick_rect(kind) else { return };
+        let s = self.ui_scale();
+        let Some(pk) = self.pick.as_mut() else { return };
+        match part {
+            Part::Hue => {
+                let (dx, dy) = (p.x - (r.x + r.w / 2.0), p.y - (r.y + r.h / 2.0));
+                if dx != 0.0 || dy != 0.0 {
+                    pk.set_hue(dx.atan2(-dy).to_degrees());
+                }
+            }
+            Part::Sv => pk.set_sv((p.x - r.x) / r.w, 1.0 - (p.y - r.y) / r.h),
+            _ => {
+                let (x0, x1) = (r.x + 8.0 * s, r.x1() - 8.0 * s);
+                pk.set_alpha((p.x - x0) / (x1 - x0).max(1.0));
+            }
+        }
+        self.pick_changed();
+    }
+
+    /// A key while the picker is open (it takes them all).
+    pub(super) fn pick_key(&mut self, vk: u32, mods: Mods) {
+        let recents = self.recents();
+        let n = recents.len();
+        let Some(pk) = self.pick.as_mut() else { return };
+        let k = wind::key::RETURN;
+        match vk {
+            wind::key::ESCAPE if pk.eyedrop => {
+                pk.eyedrop = false;
+                self.loupe = None;
+            }
+            wind::key::ESCAPE => self.close_picker(false),
+            wind::key::TAB => pk.tab(mods.shift, n),
+            wind::key::BACK if pk.focus == Some(Part::Hex) => {
+                pk.backspace();
+                self.pick_changed();
+            }
+            v if v == k || v == wind::key::SPACE => match pk.focus {
+                Some(Part::Eyedrop) => {
+                    pk.eyedrop = !pk.eyedrop;
+                    self.loupe = None;
+                }
+                Some(Part::Recent(i)) if i < n => {
+                    pk.set_color(recents[i]);
+                    self.pick_changed();
+                    if v == k {
+                        self.close_picker(true);
+                    }
+                }
+                // Enter keeps the colour (not while the field reads as none).
+                _ if v == k && (pk.hex_ok || pk.focus != Some(Part::Hex)) => self.close_picker(true),
+                _ => {}
+            },
+            wind::key::LEFT | wind::key::RIGHT | wind::key::UP | wind::key::DOWN => {
+                let (dx, dy) = match vk {
+                    wind::key::LEFT => (-1, 0),
+                    wind::key::RIGHT => (1, 0),
+                    wind::key::UP => (0, -1),
+                    _ => (0, 1),
+                };
+                if pk.nudge(dx, dy, mods.shift, n) {
+                    self.pick_changed();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// A character typed while the picker is open: into the hex field
+    /// (which takes the focus).
+    pub(super) fn pick_char(&mut self, ch: char) {
+        let Some(pk) = self.pick.as_mut() else { return };
+        if ch.is_control() || (ch == ' ' && pk.focus != Some(Part::Hex)) {
+            return;
+        }
+        if pk.focus != Some(Part::Hex) {
+            pk.focus = Some(Part::Hex);
+            pk.hex_fresh = true;
+        }
+        pk.type_char(ch);
+        self.pick_changed();
+    }
+
+    /// The pointer moved: the eyedropper's loupe follows it; true when it
+    /// must be drawn again.
+    pub(super) fn track_loupe(&mut self, p: Pt) -> bool {
+        if self.pick.as_ref().is_some_and(|k| k.eyedrop) {
+            self.loupe = Some(p);
+            true
+        } else {
+            self.loupe.take().is_some()
+        }
+    }
+
+    /// The capture's pixels (with the objects) in `r` (inside the image),
+    /// RGBA row by row.
+    pub(super) fn backdrop_pixels(&self, r: compose::PxRect) -> Vec<u8> {
+        let mut buf = vec![0u8; r.w() as usize * r.h() as usize * 4];
+        if r.is_empty() {
+            return buf;
+        }
+        use compose::Backdrop;
+        #[cfg(windows)]
+        if let Some(scr) = self.gdi.as_ref() {
+            super::gdi::GdiBackdrop { scr, opaque: true }.fill(r, compose::Source::Plain, &mut buf, r.w() as usize, Order::Rgba);
+            return buf;
+        }
+        PixBufBackdrop { img: self.composed(), dim: self.th.dim }.fill(r, compose::Source::Plain, &mut buf, r.w() as usize, Order::Rgba);
+        buf
+    }
+
+    /// The loupe's pixels around `p` (black off the image), row by row.
+    pub(super) fn loupe_pixels(&self, p: Pt) -> Vec<C4> {
+        let n = chrome::LOUPE_N as i32;
+        let (x0, y0) = (p.x.floor() as i32 - n / 2, p.y.floor() as i32 - n / 2);
+        let r = compose::PxRect::new(x0, y0, x0 + n, y0 + n);
+        let q = r.intersect(&compose::PxRect::image(self.shot.size));
+        let mut out = vec![C4::rgb(0, 0, 0); (n * n) as usize];
+        let buf = self.backdrop_pixels(q);
+        for y in q.y0..q.y1 {
+            for x in q.x0..q.x1 {
+                let i = (((y - q.y0) * q.w() + (x - q.x0)) * 4) as usize;
+                out[((y - y0) * n + (x - x0)) as usize] = C4::rgb(buf[i], buf[i + 1], buf[i + 2]);
+            }
+        }
+        out
+    }
+
+    /// The colour of the pixel at `p` (the eyedropper).
+    pub(super) fn sample(&self, p: Pt) -> C4 {
+        let n = chrome::LOUPE_N;
+        self.loupe_pixels(p)[n * n / 2]
     }
 }
 

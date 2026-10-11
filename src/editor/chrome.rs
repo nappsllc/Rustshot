@@ -962,20 +962,32 @@ const LOUPE_CELL: f32 = 8.0;
 const LOUPE_PAD: f32 = 6.0;
 const LOUPE_LABEL: f32 = 24.0;
 
-/// Where the loupe goes for pointer `p`: below right of it, flipped to
-/// stay on the monitor.
-pub fn loupe_rect(ui: &Ui, p: Pt, area: FRect) -> FRect {
+/// Where the loupe goes for pointer `p` on monitor `area` (the one under
+/// the pointer): below right of it, flipped to stay on the monitor, and
+/// flipped to the other side when it would cover one of `avoid` (the
+/// toolbar and its popover) while that side has room.
+pub fn loupe_rect(ui: &Ui, p: Pt, area: FRect, avoid: &[FRect]) -> FRect {
     let g = LOUPE_N as f32 * LOUPE_CELL;
     let (w, h) = (ui.px(g + 2.0 * LOUPE_PAD), ui.px(g + 2.0 * LOUPE_PAD + LOUPE_LABEL));
     let off = ui.px(20.0);
-    let mut x = p.x + off;
-    if x + w > area.x1() {
-        x = p.x - off - w;
-    }
-    let mut y = p.y + off;
-    if y + h > area.y1() {
-        y = p.y - off - h;
-    }
+    let (right, left) = (p.x + off, p.x - off - w);
+    let (below, above) = (p.y + off, p.y - off - h);
+    let fits_x = |x: f32| x >= area.x && x + w <= area.x1();
+    let fits_y = |y: f32| y >= area.y && y + h <= area.y1();
+    let clear = |r: FRect| {
+        let gap = ui.px(6.0);
+        avoid.iter().all(|a| {
+            r.x1() + gap <= a.x || a.x1() + gap <= r.x || r.y1() + gap <= a.y || a.y1() + gap <= r.y
+        })
+    };
+    let at = |x: f32, y: f32| FRect { x, y, w, h };
+    let cands = [(right, below), (left, below), (right, above), (left, above)];
+    // On the monitor and clear of the toolbar; else on the monitor (the
+    // old rule: each axis flips only when it does not fit).
+    let (x, y) = cands
+        .into_iter()
+        .find(|&(x, y)| fits_x(x) && fits_y(y) && clear(at(x, y)))
+        .unwrap_or((if right + w > area.x1() { left } else { right }, if below + h > area.y1() { above } else { below }));
     round(FRect { x: x.max(area.x), y: y.max(area.y), w, h })
 }
 

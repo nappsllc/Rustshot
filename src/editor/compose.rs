@@ -603,10 +603,14 @@ impl Edit {
                 && let Some(it) = self.hover.and_then(|i| tb.items.get(i))
             {
                 let k = anim::ease_out(shown_ms / 80.0);
+                // A control of a popover below the bar: its tip goes below
+                // it (above, it would cover the bar).
+                let c = Pt::new(it.r.x + it.r.w / 2.0, it.r.y + it.r.h / 2.0);
+                let pop_below = tb.pop.is_some_and(|p| toolbar::hit(p, c) && p.y >= tb.bar.y1() - 0.5);
                 match it.kind {
                     toolbar::Kind::Btn(act) | toolbar::Kind::Rainbow(act) | toolbar::Kind::Swatch { act: act @ toolbar::Act::RingPalette, .. } => {
                         let (label, keys) = chrome::act_tip(act, &self.keys);
-                        tip = Some(TipUi { anchor: it.r, act, label, keys, area, below: false, k });
+                        tip = Some(TipUi { anchor: it.r, act, label, keys, area, below: pop_below, k });
                     }
                     // Why the Camera row does nothing: below its switch,
                     // clear of the Microphone row above.
@@ -618,7 +622,7 @@ impl Edit {
                     // Why MP4 is off (Linux without ffmpeg, or still asking it).
                     toolbar::Kind::Seg { act: act @ toolbar::Act::RecFormat(crate::rec::RecFormat::Mp4), .. } if it.disabled => {
                         let label = if self.rec.mp4 == crate::rec_ui::Mp4::Checking { crate::rec_ui::CHECKING_MP4 } else { crate::rec_ui::NO_MP4 };
-                        tip = Some(TipUi { anchor: it.r, act, label, keys: Vec::new(), area, below: false, k });
+                        tip = Some(TipUi { anchor: it.r, act, label, keys: Vec::new(), area, below: pop_below, k });
                     }
                     _ => {}
                 }
@@ -645,7 +649,11 @@ impl Edit {
         let loupe = match (self.pick.as_ref().filter(|p| p.eyedrop), self.loupe) {
             (Some(_), Some(p)) if !on_chrome(p) => {
                 let ui = Ui { th: &self.th, s, font: self.ui_font };
-                Some(LoupeUi { r: chrome::loupe_rect(&ui, p, area), px: self.loupe_pixels(p) })
+                // The monitor under the pointer (the eyedropper can pick on
+                // any monitor, not only the selection's), clear of the bar.
+                let mon = super::monitor_at(&self.shot.monitors, p).unwrap_or(area);
+                let avoid: Vec<FRect> = self.toolbar.iter().flat_map(|t| std::iter::once(t.bar).chain(t.pop)).collect();
+                Some(LoupeUi { r: chrome::loupe_rect(&ui, p, mon, &avoid), px: self.loupe_pixels(p) })
             }
             _ => None,
         };
