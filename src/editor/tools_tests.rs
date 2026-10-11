@@ -2,8 +2,9 @@
 //! and colour memory (restored by the next capture, written to the config
 //! after a pause or when the overlay closes), the colour picker (hue ring,
 //! square, hex field, opacity, eyedropper, recent colours) and the camera
-//! ring's controls; plus their preview PNGs. A child of `editor::tests`.
+//! ring's controls; plus their preview PNGs.
 
+use super::tests::{annotated, assert_dirty_covers, edit_of, preview_app, preview_app_with, settled, settled_frame, snap_all, synthetic_shot};
 use super::*;
 use pick::{Part, Target};
 

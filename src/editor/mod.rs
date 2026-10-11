@@ -3098,6 +3098,8 @@ fn pick_area(monitors: &[capture::IRect], sel: Option<FRect>, pointer: Pt) -> FR
 
 #[cfg(test)]
 mod state_tests;
+#[cfg(test)]
+mod tools_tests;
 
 #[cfg(test)]
 mod tests {
@@ -3971,7 +3973,7 @@ mod tests {
         }
     }
 
-    fn snap_all(app: &mut App) {
+    pub(super) fn snap_all(app: &mut App) {
         let e = edit_of(app);
         for t in [&mut e.mo.dim, &mut e.mo.bar, &mut e.mo.pop, &mut e.mo.hint, &mut e.mo.hover] {
             t.snap(t.target());
@@ -3979,7 +3981,7 @@ mod tests {
     }
 
     /// Settle every tween (some start in `frame()`), then paint.
-    fn settled(app: &mut App) -> PixBuf {
+    pub(super) fn settled(app: &mut App) -> PixBuf {
         snap_all(app);
         app.frame();
         snap_all(app);
@@ -4149,7 +4151,7 @@ mod tests {
 
     /// Paint, apply `change`, paint again: every pixel that differs lies in
     /// `dirty_rects(before, after)`. Returns the dirty area fraction.
-    fn assert_dirty_covers(app: &mut App, name: &str, change: impl FnOnce(&mut App)) -> f64 {
+    pub(super) fn assert_dirty_covers(app: &mut App, name: &str, change: impl FnOnce(&mut App)) -> f64 {
         let before = app.frame().expect("frame").clone();
         let prev = edit_of(app).scene.clone().expect("scene");
         change(app);
@@ -4469,7 +4471,4 @@ mod tests {
     #[cfg(windows)]
     #[path = "../gdi_tests.rs"]
     mod gdi_path;
-
-    #[path = "../tools_tests.rs"]
-    mod tools_tests;
 }
