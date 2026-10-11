@@ -1,7 +1,8 @@
 //! The Settings window: **General** (theme, renderer, start at login,
 //! update check, global hotkeys), **Saving** (folder, daily subfolders,
 //! format and JPEG quality, the Save As toggle and a file-name pattern
-//! editor with a live preview) and **Shortcuts** (the editor keymap), with
+//! editor with a live preview; "Reset tool sizes & colours" for the
+//! drawing tools' remembered settings) and **Shortcuts** (the editor keymap), with
 //! **OK** / **Cancel** / **Apply**. Opened from the tray ("Settings…") and
 //! by `rustshot settings` ([`show`], [`run_here`]).
 //!
@@ -438,6 +439,9 @@ pub enum Click {
     Restore,
     Clear,
     ResetAll,
+    /// "Reset tool sizes & colours": the tools' remembered settings go
+    /// (from the file, at once).
+    ResetTools,
     /// The broken file's "Reset to defaults…".
     ResetDefaults,
     /// The reset question's Replace.
@@ -496,6 +500,8 @@ pub struct Settings {
     /// The hotkeys the daemon could not register as saved
     /// ([`hotkey::outstanding`]).
     pub hotkey_failures: Vec<hotkey::Failure>,
+    /// The tools' sizes and colours were reset (a note says so).
+    tools_reset: bool,
     set_autostart: fn(bool) -> Result<(), String>,
 }
 
@@ -517,6 +523,7 @@ impl Settings {
             conflict_row: None,
             folder_probe: None,
             hotkey_failures: Vec::new(),
+            tools_reset: false,
             set_autostart: crate::autostart::set,
         }
     }
@@ -701,6 +708,7 @@ impl Settings {
                 self.form.keys = Keymap::defaults();
                 vec![]
             }
+            Click::ResetTools => self.reset_tools(),
             Click::Escape | Click::Enter => vec![],
         }
     }
@@ -744,6 +752,37 @@ impl Settings {
             acts.push(Act::Close);
         }
         acts
+    }
+
+    /// Remove every `tool_<id>_size` / `tool_<id>_color` from the file
+    /// (only those lines; a file that does not parse is left alone and the
+    /// window shows its error); the daemon reloads, so the next capture
+    /// starts every tool from the defaults.
+    fn reset_tools(&mut self) -> Vec<Act> {
+        if !self.path.exists() {
+            self.tools_reset = true;
+            return vec![];
+        }
+        let edits: Vec<(String, Option<String>)> = config::TOOL_IDS
+            .iter()
+            .flat_map(|id| [(format!("tool_{id}_size"), None), (format!("tool_{id}_color"), None)])
+            .collect();
+        match config::edit_top_keys_at(&self.path, &edits) {
+            Ok(()) => {
+                self.loaded.tool_sizes.clear();
+                self.loaded.tool_colors.clear();
+                self.tools_reset = true;
+                vec![Act::Reload]
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+                let _ = self.disk(); // the error state
+                vec![]
+            }
+            Err(e) => {
+                self.modal = Some(Modal::Error(format!("Could not reset the tools in {}: {e}", self.path.display())));
+                vec![]
+            }
+        }
     }
 
     /// The reset question's Replace: read the file again (fixed
@@ -825,6 +864,20 @@ fn paint(ui: &mut Ui, s: &mut Settings) -> Option<Click> {
                 ui.row(|ui| {
                     if ui.link("open_config", "Open config file") {
                         click = Some(Click::OpenConfig);
+                    }
+                })
+            });
+        }
+        // Saving: the drawing tools' remembered sizes and colours.
+        if s.tab == 1 {
+            let done = s.tools_reset;
+            ui.area(bar, |ui| {
+                ui.row(|ui| {
+                    if ui.button("reset_tools", "Reset tool sizes & colours", false) {
+                        click = Some(Click::ResetTools);
+                    }
+                    if done {
+                        ui.note("Done");
                     }
                 })
             });

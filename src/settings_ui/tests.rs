@@ -205,6 +205,54 @@ fn apply_rebuilds_the_form() {
 
 const BROKEN: &str = "theme = \"dark\"\noops\n";
 
+/// "Reset tool sizes & colours" removes just those lines (comments and
+/// everything else stay) and makes the daemon reload; a broken file is
+/// never touched.
+#[test]
+fn reset_tools_removes_only_their_keys() {
+    let dir = scratch("reset-tools");
+    let p = dir.join("config.toml");
+    let text = "# mine\ntheme = \"dark\" # why\ntool_line_size = 7\ntool_line_color = \"#00ff00\"\ntool_pixelate_size = 20\n\
+                recent_colors = [\"#123456\"]\nrec_camera_ring_width = 5\n\n[shortcuts]\nsave = \"Ctrl+S\"\n";
+    std::fs::write(&p, text).unwrap();
+    let mut s = settings_at(&p);
+    assert_eq!(s.loaded.tool_sizes.len(), 2);
+    assert_eq!(s.on(Click::ResetTools), vec![Act::Reload]);
+    assert_eq!(
+        std::fs::read_to_string(&p).unwrap(),
+        "# mine\ntheme = \"dark\" # why\nrecent_colors = [\"#123456\"]\nrec_camera_ring_width = 5\n\n[shortcuts]\nsave = \"Ctrl+S\"\n"
+    );
+    assert!(s.loaded.tool_sizes.is_empty() && s.loaded.tool_colors.is_empty() && s.tools_reset);
+    assert!(!s.dirty(), "nothing else to save");
+    // Broken meanwhile: left alone, the window shows the error.
+    std::fs::write(&p, BROKEN).unwrap();
+    assert_eq!(s.on(Click::ResetTools), vec![]);
+    assert!(s.broken());
+    assert_eq!(std::fs::read_to_string(&p).unwrap(), BROKEN);
+    // No file: nothing to reset, nothing written.
+    let gone = dir.join("none.toml");
+    let mut s = Settings::new(Config::default(), None, gone.clone());
+    assert_eq!(s.on(Click::ResetTools), vec![]);
+    assert!(!gone.exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The button sits at the left of the Saving tab's bottom bar and clicks
+/// where it is drawn, at 100 % and 150 %.
+#[test]
+fn reset_tools_button_clicks() {
+    for k in [1.0f32, 1.5] {
+        let mut s = sample();
+        s.tab = 1;
+        let y = H as f32 - PAD - 16.0;
+        let (_, c) = render(&mut s, &DARK, k, &click_at(PAD + 30.0, y, k), &mut FocusState::default());
+        assert_eq!(c, Some(Click::ResetTools), "k={k}");
+        s.tab = 0;
+        let (_, c) = render(&mut s, &DARK, k, &click_at(PAD + 30.0, y, k), &mut FocusState::default());
+        assert_eq!(c, Some(Click::OpenConfig), "General keeps the link there");
+    }
+}
+
 /// A file that does not parse opens in the error state: nothing can be
 /// written over it, only opened, reset or closed.
 #[test]
@@ -614,6 +662,12 @@ fn preview_settings_pngs() {
         s.table.selected = Some(17);
         let (img, _) = render(&mut s, th, 1.0, &Input::default(), &mut FocusState::default());
         preview::save(&format!("settings-conflict-{tname}.png"), &img);
+        // The tools were reset.
+        let mut s = sample();
+        s.tab = 1;
+        s.tools_reset = true;
+        let (img, _) = render(&mut s, th, 1.0, &Input::default(), &mut FocusState::default());
+        preview::save(&format!("settings-tools-reset-{tname}.png"), &img);
         // The rewrite question.
         let mut s = sample();
         s.tab = 1;

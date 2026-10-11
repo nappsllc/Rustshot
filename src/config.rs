@@ -86,9 +86,44 @@ pub struct Config {
     pub record_hotkey: String,
     /// Linux MP4 encoder: "auto", "ffmpeg" or "openh264".
     pub rec_linux_encoder: String,
+    /// Recording: the camera bubble's ring colour (`#rrggbb`); empty = the
+    /// theme's accent.
+    pub rec_camera_ring_color: String,
+    /// Recording: the ring's width in logical px (0 = no ring).
+    pub rec_camera_ring_width: u32,
+    /// The colour picker's recent custom colours, newest first (at most
+    /// [`RECENT_MAX`]).
+    pub recent_colors: Vec<String>,
+    /// Each drawing tool's last size (`tool_<id>_size`, ids in
+    /// [`TOOL_IDS`]); a tool without one starts from the `draw_*` default.
+    pub tool_sizes: BTreeMap<String, f32>,
+    /// Each drawing tool's last colour (`tool_<id>_color`).
+    pub tool_colors: BTreeMap<String, String>,
     /// Editor shortcut overrides from the `[shortcuts]` table
     /// (`action id -> "Ctrl+Shift+S"`; see `keymap`).
     pub shortcuts: BTreeMap<String, String>,
+}
+
+/// The drawing tools whose size and colour are remembered
+/// (`tool_<id>_size`, `tool_<id>_color`).
+pub const TOOL_IDS: [&str; 9] = ["pencil", "line", "arrow", "rect", "ellipse", "marker", "text", "counter", "pixelate"];
+
+/// How many recent custom colours are kept.
+pub const RECENT_MAX: usize = 8;
+
+/// The camera ring's default width (logical px) and the widest it gets.
+pub const RING_WIDTH_DEFAULT: u32 = 3;
+pub const RING_WIDTH_MAX: u32 = 16;
+
+/// `tool_<id>_size` / `tool_<id>_color` split into (id, is_size), for a
+/// known tool id.
+fn tool_key(key: &str) -> Option<(&str, bool)> {
+    let rest = key.strip_prefix("tool_")?;
+    let (id, size) = match rest.strip_suffix("_size") {
+        Some(id) => (id, true),
+        None => (rest.strip_suffix("_color")?, false),
+    };
+    TOOL_IDS.contains(&id).then_some((id, size))
 }
 
 impl Default for Config {
@@ -140,6 +175,11 @@ impl Default for Config {
             rec_countdown: true,
             record_hotkey: "Meta+Shift+R".into(),
             rec_linux_encoder: "auto".into(),
+            rec_camera_ring_color: String::new(),
+            rec_camera_ring_width: RING_WIDTH_DEFAULT,
+            recent_colors: Vec::new(),
+            tool_sizes: BTreeMap::new(),
+            tool_colors: BTreeMap::new(),
             shortcuts: BTreeMap::new(),
         }
     }
@@ -278,40 +318,173 @@ pub fn with_skip_version(text: &str, version: &str) -> String {
 /// `text` with its top-level `key` line set to the string `value` (see
 /// [`with_skip_version`]).
 pub fn with_top_key(text: &str, key: &str, value: &str) -> String {
+    with_top_raw(text, key, Some(&toml_str(value)))
+}
+
+/// `text` with its top-level `key` line set to the TOML value `raw`
+/// (written as is: `"a string"`, `4`, `["#fff"]`), or removed (`None`).
+/// The line keeps its place; a new key goes after the last top-level line
+/// (before the first `[table]`, a key after which would belong to it).
+/// Duplicates collapse into one; comments, other keys and the line
+/// endings (LF or CRLF) stay as written.
+pub fn with_top_raw(text: &str, key: &str, raw: Option<&str>) -> String {
     let crlf = text.contains("\r\n");
     let nl = if crlf { "\r\n" } else { "\n" };
-    let line = format!("{key} = {}", toml_str(value));
-    let mut out = String::with_capacity(text.len() + line.len() + 2);
-    let mut done = false;
+    let line = raw.map(|v| format!("{key} = {v}"));
+    let mut out = String::with_capacity(text.len() + line.as_ref().map_or(0, |l| l.len() + 2));
+    // A removal has nothing to insert.
+    let mut done = line.is_none();
     let mut top = true;
+    // `out.len()` after the last non-blank top-level line.
+    let mut last = 0;
     for raw in text.split_inclusive('\n') {
         let body = strip_comment(raw).trim();
         if top && body.starts_with('[') {
             top = false;
-            if !done {
-                out.push_str(&line);
-                out.push_str(nl);
-                out.push_str(nl);
+            if let (false, Some(l)) = (done, &line) {
+                // After the last top-level line; a blank line before the
+                // table when there is none yet.
+                let gap = out.len() > last;
+                let ins = if gap { format!("{l}{nl}") } else { format!("{l}{nl}{nl}") };
+                out.insert_str(last, &ins);
                 done = true;
             }
         }
         let is_key = top && body.split_once('=').is_some_and(|(k, _)| k.trim() == key);
-        if is_key && !done {
-            out.push_str(&line);
-            out.push_str(if raw.ends_with('\n') { nl } else { "" });
-            done = true;
-        } else if !is_key {
+        if is_key {
+            if let (false, Some(l)) = (done, &line) {
+                out.push_str(l);
+                out.push_str(if raw.ends_with('\n') { nl } else { "" });
+                done = true;
+            }
+        } else {
             out.push_str(raw);
         }
+        if top && !raw.trim().is_empty() {
+            last = out.len();
+        }
     }
-    if !done {
+    if let (false, Some(l)) = (done, &line) {
         if !out.is_empty() && !out.ends_with('\n') {
             out.push_str(nl);
         }
-        out.push_str(&line);
+        out.push_str(l);
         out.push_str(nl);
     }
     out
+}
+
+/// Set (`Some(raw TOML value)`) or remove (`None`) top-level keys of the
+/// config file at `path`, editing only their lines ([`with_top_raw`]);
+/// written atomically. A missing file is created with the defaults first.
+/// A file that does not parse is left alone (an `InvalidData` error): a
+/// remembered size is never worth touching a file the user is fixing.
+pub fn edit_top_keys_at(path: &std::path::Path, edits: &[(String, Option<String>)]) -> std::io::Result<()> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => to_toml(&Config::default()),
+        Err(e) => return Err(e),
+    };
+    if let Err(e) = parse_config(&text) {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("config.toml does not parse ({e})")));
+    }
+    let out = edits.iter().fold(text, |t, (k, v)| with_top_raw(&t, k, v.as_deref()));
+    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir)?;
+    }
+    write_atomic(path, out.as_bytes())
+}
+
+/// Copy the value of the remembered key `key` (a `tool_<id>_size` or
+/// `_color`, `recent_colors`, the camera ring's) from `from` to `to`.
+pub fn copy_key(from: &Config, to: &mut Config, key: &str) {
+    match key {
+        "recent_colors" => to.recent_colors = from.recent_colors.clone(),
+        "rec_camera_ring_color" => to.rec_camera_ring_color = from.rec_camera_ring_color.clone(),
+        "rec_camera_ring_width" => to.rec_camera_ring_width = from.rec_camera_ring_width,
+        k => match tool_key(k) {
+            Some((id, true)) => match from.tool_sizes.get(id) {
+                Some(v) => {
+                    to.tool_sizes.insert(id.into(), *v);
+                }
+                None => {
+                    to.tool_sizes.remove(id);
+                }
+            },
+            Some((id, false)) => match from.tool_colors.get(id) {
+                Some(v) => {
+                    to.tool_colors.insert(id.into(), v.clone());
+                }
+                None => {
+                    to.tool_colors.remove(id);
+                }
+            },
+            None => {}
+        },
+    }
+}
+
+/// The TOML text of a size value (`4`, `2.5`).
+pub fn toml_num(v: f32) -> String {
+    format!("{v}")
+}
+
+/// The TOML text of a string value.
+pub fn toml_string(s: &str) -> String {
+    toml_str(s)
+}
+
+/// The TOML text of an array of strings.
+pub fn toml_strings(v: &[String]) -> String {
+    format!("[{}]", v.iter().map(|s| toml_str(s)).collect::<Vec<_>>().join(", "))
+}
+
+/// One batch of key edits for [`edit_top_keys_at`], and who waits for it.
+type KeyJob = (std::path::PathBuf, Vec<(String, Option<String>)>, Option<std::sync::mpsc::Sender<()>>);
+
+/// Apply `edits` to the config file at `path` off the calling thread, in
+/// order with earlier batches (one writer thread for the process); with
+/// `wait`, return once it is written. Failures are reported on stderr (a
+/// remembered size is not worth a dialog). Tests write synchronously.
+pub fn queue_key_edits(path: &std::path::Path, edits: Vec<(String, Option<String>)>, wait: bool) {
+    if edits.is_empty() {
+        return;
+    }
+    let run = |p: &std::path::Path, e: &[(String, Option<String>)]| {
+        if let Err(err) = edit_top_keys_at(p, e) {
+            eprintln!("rustshot: could not save tool settings to {}: {err}", p.display());
+        }
+    };
+    if cfg!(test) {
+        run(path, &edits);
+        return;
+    }
+    static TX: std::sync::Mutex<Option<std::sync::mpsc::Sender<KeyJob>>> = std::sync::Mutex::new(None);
+    let mut tx = TX.lock().unwrap_or_else(|e| e.into_inner());
+    let sender = tx.get_or_insert_with(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<KeyJob>();
+        std::thread::spawn(move || {
+            for (p, e, done) in rx {
+                run(&p, &e);
+                if let Some(d) = done {
+                    let _ = d.send(());
+                }
+            }
+        });
+        tx
+    });
+    let (dtx, drx) = std::sync::mpsc::channel();
+    if sender.send((path.to_path_buf(), edits.clone(), wait.then_some(dtx))).is_err() {
+        // The writer is gone (it never should be): write here.
+        *tx = None;
+        drop(tx);
+        run(path, &edits);
+        return;
+    }
+    drop(tx);
+    if wait {
+        let _ = drx.recv_timeout(std::time::Duration::from_secs(5));
+    }
 }
 
 /// Replace `path` with `bytes` via a uniquely named temp file in the same
@@ -534,7 +707,26 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
                 cfg.rec_linux_encoder =
                     one_of(val, &["auto", "ffmpeg", "openh264"]).map_err(|e| bad("value", &e))?
             }
-            _ => {} // unknown keys are ignored, as with serde's default
+            "rec_camera_ring_color" => {
+                cfg.rec_camera_ring_color = as_string(val).map_err(|e| bad("string", &e))?
+            }
+            "rec_camera_ring_width" => {
+                cfg.rec_camera_ring_width = as_u64(val)
+                    .ok()
+                    .filter(|w| *w <= RING_WIDTH_MAX as u64)
+                    .ok_or_else(|| bad(&format!("number (0-{RING_WIDTH_MAX})"), val))? as u32
+            }
+            "recent_colors" => cfg.recent_colors = as_array(val).map_err(|e| bad("array", &e))?,
+            k => match tool_key(k) {
+                Some((id, true)) => {
+                    let v = as_f64(val).ok().filter(|v| v.is_finite() && *v > 0.0).ok_or_else(|| bad("number", val))?;
+                    cfg.tool_sizes.insert(id.to_string(), v as f32);
+                }
+                Some((id, false)) => {
+                    cfg.tool_colors.insert(id.to_string(), as_string(val).map_err(|e| bad("string", &e))?);
+                }
+                None => {} // unknown keys are ignored, as with serde's default
+            },
         }
     }
     Ok(cfg)
@@ -586,7 +778,10 @@ pub fn to_toml(c: &Config) -> String {
          rec_camera_mirror = {}\n\
          rec_countdown = {}\n\
          record_hotkey = {}\n\
-         rec_linux_encoder = {}\n",
+         rec_linux_encoder = {}\n\
+         rec_camera_ring_color = {}\n\
+         rec_camera_ring_width = {}\n\
+         recent_colors = [{}]\n",
         q(&c.save_path),
         c.save_subfolder,
         q(&c.subfolder_pattern),
@@ -627,7 +822,18 @@ pub fn to_toml(c: &Config) -> String {
         c.rec_countdown,
         q(&c.record_hotkey),
         q(&c.rec_linux_encoder),
+        q(&c.rec_camera_ring_color),
+        c.rec_camera_ring_width,
+        c.recent_colors.iter().map(|s| q(s)).collect::<Vec<_>>().join(", "),
     );
+    for id in TOOL_IDS {
+        if let Some(v) = c.tool_sizes.get(id) {
+            out.push_str(&format!("tool_{id}_size = {v}\n"));
+        }
+        if let Some(v) = c.tool_colors.get(id) {
+            out.push_str(&format!("tool_{id}_color = {}\n", q(v)));
+        }
+    }
     if !c.shortcuts.is_empty() {
         out.push_str("
 [shortcuts]
@@ -1184,6 +1390,104 @@ bogus = 1
         for ok in ["rec_fps = 60", "rec_gif_fps = 10", "rec_camera_shape = \"circle\"", "rec_linux_encoder = \"auto\""] {
             assert!(parse_config(ok).is_ok(), "{ok}");
         }
+    }
+
+    #[test]
+    fn tool_keys_parse_and_roundtrip() {
+        let text = "tool_line_size = 5\ntool_line_color = \"#00ff00\"\ntool_marker_size = 2.5\ntool_counter_size = 9\n\
+                    tool_bogus_size = 1\nrecent_colors = [\"#112233\", \"#44556680\"]\n\
+                    rec_camera_ring_color = \"#ff0000\"\nrec_camera_ring_width = 0\n";
+        let c = parse_config(text).unwrap();
+        assert_eq!(c.tool_sizes.get("line"), Some(&5.0));
+        assert_eq!(c.tool_sizes.get("marker"), Some(&2.5));
+        assert_eq!(c.tool_sizes.get("counter"), Some(&9.0), "a known id");
+        assert!(!c.tool_sizes.contains_key("bogus"), "unknown tools are ignored like unknown keys");
+        assert_eq!(c.tool_colors.get("line").map(String::as_str), Some("#00ff00"));
+        assert_eq!(c.recent_colors, ["#112233", "#44556680"]);
+        assert_eq!((c.rec_camera_ring_color.as_str(), c.rec_camera_ring_width), ("#ff0000", 0));
+        let back = parse_config(&to_toml(&c)).unwrap();
+        assert_eq!(back, c, "every value survives");
+        assert!(!rewrite_loses(&to_toml(&c)));
+        let d = Config::default();
+        assert_eq!((d.rec_camera_ring_color.as_str(), d.rec_camera_ring_width), ("", 3));
+        assert!(d.recent_colors.is_empty() && d.tool_sizes.is_empty() && !to_toml(&d).contains("tool_"));
+        for bad in ["tool_line_size = \"5\"", "tool_line_size = -1", "tool_line_size = 0", "tool_text_color = 3", "recent_colors = \"#fff\"", "rec_camera_ring_width = 17", "rec_camera_ring_width = -1", "rec_camera_ring_color = 1"] {
+            let e = parse_config(bad).expect_err(bad);
+            let key = bad.split(' ').next().unwrap();
+            assert!(e.contains(&format!("'{key}'")), "{bad}: {e}");
+        }
+    }
+
+    #[test]
+    fn line_edits_keep_the_rest_of_the_file() {
+        let text = "# mine\ntheme = \"dark\" # why\ntool_line_size = 3\nbogus = 1\n\n[shortcuts]\nsave = \"Ctrl+S\"\n";
+        // Set in place.
+        let out = with_top_raw(text, "tool_line_size", Some("7"));
+        assert_eq!(out, text.replace("tool_line_size = 3", "tool_line_size = 7"));
+        // Added after the last top-level line, before the table.
+        let out = with_top_raw(text, "tool_arrow_color", Some("\"#00ff00\""));
+        assert_eq!(out, "# mine\ntheme = \"dark\" # why\ntool_line_size = 3\nbogus = 1\ntool_arrow_color = \"#00ff00\"\n\n[shortcuts]\nsave = \"Ctrl+S\"\n");
+        // Removed; a missing key removed changes nothing.
+        let out = with_top_raw(text, "tool_line_size", None);
+        assert_eq!(out, text.replace("tool_line_size = 3\n", ""));
+        assert_eq!(with_top_raw(text, "tool_text_size", None), text);
+        // A key inside a table is not the top-level one.
+        let t = "[shortcuts]\ntool_line_size = \"x\"\n";
+        assert_eq!(with_top_raw(t, "tool_line_size", Some("2")), format!("tool_line_size = 2\n\n{t}"));
+        assert_eq!(with_top_raw(t, "tool_line_size", None), t);
+        // CRLF kept, several keys in a row, arrays.
+        let crlf = "theme = \"dark\"\r\n\r\n[shortcuts]\r\nsave = \"Ctrl+S\"\r\n";
+        let out = [("tool_line_size", "4"), ("recent_colors", "[\"#fff\"]")].iter().fold(crlf.to_string(), |t, (k, v)| with_top_raw(&t, k, Some(v)));
+        assert_eq!(out, "theme = \"dark\"\r\ntool_line_size = 4\r\nrecent_colors = [\"#fff\"]\r\n\r\n[shortcuts]\r\nsave = \"Ctrl+S\"\r\n");
+        let c = parse_config(&out).unwrap();
+        assert_eq!((c.tool_sizes.get("line"), c.recent_colors.as_slice()), (Some(&4.0), &["#fff".to_string()][..]));
+        // An empty file, one without a final newline.
+        assert_eq!(with_top_raw("", "a", Some("1")), "a = 1\n");
+        assert_eq!(with_top_raw("theme = \"dark\"", "a", Some("1")), "theme = \"dark\"\na = 1\n");
+    }
+
+    #[test]
+    fn key_edits_on_disk() {
+        let dir = scratch("keyedits");
+        let p = dir.join("config.toml");
+        // A missing file: the defaults plus the key.
+        edit_top_keys_at(&p, &[("tool_line_size".into(), Some("6".into()))]).unwrap();
+        let c = parse_config(&std::fs::read_to_string(&p).unwrap()).unwrap();
+        assert_eq!((c.tool_sizes.get("line"), c.theme.as_str()), (Some(&6.0), "auto"));
+        // Comments survive; several edits at once; removals.
+        std::fs::write(&p, "# keep me\ntheme = \"light\"\ntool_line_size = 6\n").unwrap();
+        let edits = [("tool_line_size".to_string(), None), ("tool_pencil_color".to_string(), Some(toml_string("#010203")))];
+        edit_top_keys_at(&p, &edits).unwrap();
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "# keep me\ntheme = \"light\"\ntool_pencil_color = \"#010203\"\n");
+        assert_eq!(only(&dir), ["config.toml"], "no temp file left");
+        // A file that does not parse is refused and left as it is.
+        std::fs::write(&p, "theme = \"dark\"\noops\n").unwrap();
+        let e = edit_top_keys_at(&p, &[("tool_line_size".into(), Some("2".into()))]).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "theme = \"dark\"\noops\n");
+        // Through the queue (tests: synchronous).
+        std::fs::write(&p, "theme = \"dark\"\n").unwrap();
+        queue_key_edits(&p, vec![("recent_colors".into(), Some(toml_strings(&["#abcdef".into()])))], true);
+        assert_eq!(parse_config(&std::fs::read_to_string(&p).unwrap()).unwrap().recent_colors, ["#abcdef"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn copy_key_moves_one_remembered_value() {
+        let mut from = Config::default();
+        from.tool_sizes.insert("line".into(), 9.0);
+        from.tool_colors.insert("text".into(), "#123456".into());
+        from.recent_colors = vec!["#fff".into()];
+        from.rec_camera_ring_width = 7;
+        let mut to = Config::default();
+        to.tool_sizes.insert("arrow".into(), 2.0);
+        for k in ["tool_line_size", "tool_text_color", "recent_colors", "rec_camera_ring_width", "tool_arrow_size"] {
+            copy_key(&from, &mut to, k);
+        }
+        assert_eq!(to.tool_sizes.get("line"), Some(&9.0));
+        assert!(!to.tool_sizes.contains_key("arrow"), "gone from `from`: gone");
+        assert_eq!(to.tool_colors.get("text").map(String::as_str), Some("#123456"));
+        assert_eq!((to.recent_colors.len(), to.rec_camera_ring_width), (1, 7));
     }
 
     #[test]
