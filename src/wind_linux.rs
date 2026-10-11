@@ -591,10 +591,13 @@ struct WinSlot {
     win: c_ulong,
     quit: bool,
     present: bool,
+    /// `Xft.dpi / 96` (the UI size goes on top in `scale`).
     scale: f32,
+    /// Not resizable: [`resize`] keeps min = max.
+    fixed: bool,
 }
 
-const NO_SLOT: WinSlot = WinSlot { win: 0, quit: false, present: false, scale: 1.0 };
+const NO_SLOT: WinSlot = WinSlot { win: 0, quit: false, present: false, scale: 1.0, fixed: false };
 
 std::thread_local! {
     static WINDOWED: Cell<WinSlot> = const { Cell::new(NO_SLOT) };
@@ -613,7 +616,7 @@ fn with_slot(hwnd: Hwnd, f: impl FnOnce(&mut WinSlot)) -> bool {
     })
 }
 
-pub use window::{run_window, scale};
+pub use window::{resize, run_window, scale};
 
 /// The decorated window proper (`run_window`: update dialog, Settings).
 mod window {
@@ -637,6 +640,7 @@ mod window {
         fn XSetWMNormalHints(dpy: *mut c_void, w: c_ulong, hints: *mut XSizeHints);
         fn XSetWMHints(dpy: *mut c_void, w: c_ulong, hints: *mut XWMHints) -> c_int;
         fn XResourceManagerString(dpy: *mut c_void) -> *mut c_char;
+        fn XResizeWindow(dpy: *mut c_void, w: c_ulong, width: c_uint, height: c_uint) -> c_int;
     }
 
     const FOCUS_IN: c_int = 9;
@@ -644,12 +648,40 @@ mod window {
     const CONFIGURE_NOTIFY: c_int = 22;
     const CLIENT_MESSAGE: c_int = 33;
 
-    /// DPI scale of a `run_window` window (from `Xft.dpi`, 1.0 = 96 dpi); 1.0
-    /// for anything else (the overlay works in physical pixels).
+    /// UI scale of a `run_window` window: its DPI (from `Xft.dpi`, 1.0 = 96
+    /// dpi) times the UI size; 1.0 for anything else (the overlay works in
+    /// physical pixels).
     pub fn scale(hwnd: Hwnd) -> f32 {
-        let mut out = 1.0;
-        with_slot(hwnd, |s| out = s.scale);
-        out
+        let mut out = None;
+        with_slot(hwnd, |s| out = Some(s.scale));
+        out.map_or(1.0, crate::uisize::apply)
+    }
+
+    /// Give a `run_window` window the client size `w`×`h` (logical px) at
+    /// its current [`scale`] (the UI size changed); `Ev::Resize` follows
+    /// from the event loop. The window manager keeps its top-left.
+    pub fn resize(hwnd: Hwnd, w: u32, h: u32) {
+        let mut fixed = None;
+        with_slot(hwnd, |s| fixed = Some(s.fixed));
+        let Some(fixed) = fixed else { return };
+        let s = scale(hwnd);
+        let (pw, ph) = (to_phys(w, s), to_phys(h, s));
+        RUN_DPY.with(|slot| {
+            let dpy = slot.get();
+            if dpy.is_null() {
+                return;
+            }
+            unsafe {
+                if fixed {
+                    let mut hints = XSizeHints { flags: P_MIN_SIZE | P_MAX_SIZE, ..Default::default() };
+                    (hints.min_width, hints.min_height) = (pw as c_int, ph as c_int);
+                    (hints.max_width, hints.max_height) = (pw as c_int, ph as c_int);
+                    XSetWMNormalHints(dpy, hwnd.0, &mut hints);
+                }
+                XResizeWindow(dpy, hwnd.0, pw, ph);
+                XFlush(dpy);
+            }
+        });
     }
 
     /// XSizeHints (Xutil.h).
@@ -751,7 +783,9 @@ mod window {
                 xft_scale(&core::ffi::CStr::from_ptr(rm).to_string_lossy())
             }
             .unwrap_or(1.0);
-            let (pw, ph) = (to_phys(spec.w, s), to_phys(spec.h, s));
+            // The UI size on top of the DPI (as `scale` gives it).
+            let k = crate::uisize::apply(s);
+            let (pw, ph) = (to_phys(spec.w, k), to_phys(spec.h, k));
             let (x, y) = centre_in(monitor_under_cursor(), pw as i32, ph as i32);
             let screen = XDefaultScreen(dpy);
             let root = XRootWindow(dpy, screen);
@@ -797,7 +831,7 @@ mod window {
             XSetWMProtocols(dpy, win, &mut wm_delete, 1);
             let mut hints = XSizeHints { flags: US_POSITION | P_POSITION | P_MIN_SIZE, x, y, ..Default::default() };
             if spec.resizable {
-                (hints.min_width, hints.min_height) = (to_phys(spec.min.0, s) as c_int, to_phys(spec.min.1, s) as c_int);
+                (hints.min_width, hints.min_height) = (to_phys(spec.min.0, k) as c_int, to_phys(spec.min.1, k) as c_int);
             } else {
                 hints.flags |= P_MAX_SIZE;
                 (hints.min_width, hints.min_height) = (pw as c_int, ph as c_int);
@@ -809,7 +843,7 @@ mod window {
             let gc = XCreateGC(dpy, win, 0, core::ptr::null_mut());
 
             let prev_dpy = RUN_DPY.with(|c| c.replace(dpy));
-            let prev_slot = WINDOWED.with(|c| c.replace(WinSlot { win, quit: false, present: false, scale: s }));
+            let prev_slot = WINDOWED.with(|c| c.replace(WinSlot { win, quit: false, present: false, scale: s, fixed: !spec.resizable }));
             let quit = || WINDOWED.with(|c| c.get().quit);
             let mut size = (pw, ph);
             driver.on_create(Hwnd(win));
@@ -1078,6 +1112,11 @@ fn vk_of(ks: c_ulong) -> u32 {
         0x41..=0x5a => ks as u32,                       // A..Z
         0x61..=0x7a => ks as u32 - 0x20,                // a..z → 'A'..'Z'
         0x30..=0x39 => ks as u32,                       // 0..9
+        0x3d | 0x2b => key::EQUALS,                     // = and + (one key on US layouts)
+        0x2d | 0x5f => key::MINUS,                      // - and _
+        0xffab => key::ADD,                             // KP_Add
+        0xffad => key::SUBTRACT,                        // KP_Subtract
+        0xffb0..=0xffb9 => key::NUMPAD0 + (ks - 0xffb0) as u32, // KP_0..KP_9
         _ => 0,
     }
 }

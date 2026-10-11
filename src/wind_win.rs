@@ -550,11 +550,47 @@ unsafe fn register_window_class(h: HINSTANCE) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// DPI scale of a window (1.0 = 96 dpi): logical -> physical px factor.
+/// UI scale of a `run_window` window: its DPI (1.0 = 96 dpi) times the
+/// UI size; the logical -> physical px factor its driver draws at.
 pub fn scale(hwnd: HWND) -> f32 {
-    match unsafe { GetDpiForWindow(hwnd) } {
+    crate::uisize::apply(match unsafe { GetDpiForWindow(hwnd) } {
         0 => 1.0,
         dpi => dpi as f32 / 96.0,
+    })
+}
+
+/// Posted by [`resize`]: the new client size (logical px) in the params.
+const WM_RESIZE_CLIENT: u32 = WM_APP + 0x31;
+
+/// Give a `run_window` window the client size `w`×`h` (logical px) at its
+/// current [`scale`] (the UI size changed), keeping its centre on its
+/// monitor's work area. Posted, so it is safe from a driver callback:
+/// the `Ev::Resize` follows from the message loop.
+pub fn resize(hwnd: HWND, w: u32, h: u32) {
+    unsafe {
+        let _ = PostMessageW(Some(hwnd), WM_RESIZE_CLIENT, WPARAM(w as usize), LPARAM(h as isize));
+    }
+}
+
+/// [`resize`]'s message: the outer rect for the client size, centred where
+/// the window was.
+unsafe fn resize_client(hwnd: HWND, st: &WinState<'_>, w: u32, h: u32) {
+    unsafe {
+        let dpi = GetDpiForWindow(hwnd).max(96);
+        let s = scale(hwnd);
+        let mut rc = RECT { left: 0, top: 0, right: to_phys(w, s) as i32, bottom: to_phys(h, s) as i32 };
+        let _ = AdjustWindowRectExForDpi(&mut rc, st.style, false, st.ex_style, dpi);
+        let (ow, oh) = (rc.right - rc.left, rc.bottom - rc.top);
+        let mut wr = RECT::default();
+        let _ = GetWindowRect(hwnd, &mut wr);
+        let (cx, cy) = ((wr.left + wr.right) / 2, (wr.top + wr.bottom) / 2);
+        let mon = MonitorFromPoint(POINT { x: cx, y: cy }, MONITOR_DEFAULTTONEAREST);
+        let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+        let _ = GetMonitorInfoW(mon, &mut mi);
+        let wa = mi.rcWork;
+        let x = (cx - ow / 2).min(wa.right - ow).max(wa.left);
+        let y = (cy - oh / 2).min(wa.bottom - oh).max(wa.top);
+        let _ = SetWindowPos(hwnd, None, x, y, ow, oh, SWP_NOZORDER | SWP_NOACTIVATE);
     }
 }
 
@@ -574,7 +610,7 @@ unsafe extern "system" fn wndproc_window(hwnd: HWND, msg: u32, wp: WPARAM, lp: L
             WM_GETMINMAXINFO => {
                 if st.resizable {
                     let dpi = GetDpiForWindow(hwnd).max(96);
-                    let s = dpi as f32 / 96.0;
+                    let s = crate::uisize::apply(dpi as f32 / 96.0);
                     let mut rc = RECT {
                         left: 0,
                         top: 0,
@@ -600,6 +636,10 @@ unsafe extern "system" fn wndproc_window(hwnd: HWND, msg: u32, wp: WPARAM, lp: L
                     r.bottom - r.top,
                     SWP_NOZORDER | SWP_NOACTIVATE,
                 );
+                return LRESULT(0);
+            }
+            WM_RESIZE_CLIENT => {
+                resize_client(hwnd, st, wp.0 as u32, lp.0 as u32);
                 return LRESULT(0);
             }
             WM_NCDESTROY => {
@@ -693,7 +733,8 @@ unsafe fn window_loop(spec: &WindowSpec, drv: &mut dyn Driver) -> anyhow::Result
         let _ = GetMonitorInfoW(mon, &mut mi);
         let (mut dx, mut dy) = (96u32, 96u32);
         let dpi = if GetDpiForMonitor(mon, MDT_EFFECTIVE_DPI, &mut dx, &mut dy).is_ok() { dx.max(96) } else { 96 };
-        let s = dpi as f32 / 96.0;
+        // The UI size on top of the monitor's DPI (as `scale` gives it).
+        let s = crate::uisize::apply(dpi as f32 / 96.0);
         let style = if spec.resizable {
             WS_OVERLAPPEDWINDOW
         } else {
@@ -949,6 +990,72 @@ mod tests {
             h.join().expect("resize helper");
         }
         d
+    }
+
+    /// Records the client sizes a `run_window` window gets while the UI
+    /// size changes under it: 150 % at open, then back to Auto with a
+    /// `resize` (as Settings does on Apply).
+    struct Sizer {
+        hwnd: HWND,
+        fb: PixBuf,
+        dpi: u32,
+        sizes: Vec<(u32, u32)>,
+    }
+
+    impl Driver for Sizer {
+        fn on_create(&mut self, hwnd: HWND) {
+            self.hwnd = hwnd;
+            self.dpi = unsafe { GetDpiForWindow(hwnd) }.max(96);
+        }
+        fn on_event(&mut self, ev: Ev) -> bool {
+            if let Ev::Resize(w, h) = ev {
+                self.sizes.push((w, h));
+                self.fb = PixBuf::new(w.max(1), h.max(1));
+                match self.sizes.len() {
+                    1 => {
+                        crate::uisize::set(crate::uisize::UiSize::Auto);
+                        resize(self.hwnd, 400, 300);
+                    }
+                    _ => close(self.hwnd),
+                }
+            }
+            false
+        }
+        fn frame(&mut self) -> Option<&mut PixBuf> {
+            Some(&mut self.fb)
+        }
+        fn cursor(&self) -> Cursor {
+            Cursor::Arrow
+        }
+    }
+
+    /// A dialog opens at its logical size times the monitor's DPI times
+    /// the UI size, and `resize` gives it the size for a new UI size.
+    #[test]
+    fn run_window_follows_the_ui_size() {
+        let _guard = windows_lock();
+        struct Restore;
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                crate::uisize::set(crate::uisize::UiSize::Auto);
+            }
+        }
+        let _restore = Restore;
+        crate::uisize::set(crate::uisize::UiSize::Pct(150));
+        let d = std::thread::spawn(|| {
+            let mut d = Sizer { hwnd: HWND::default(), fb: PixBuf::new(1, 1), dpi: 96, sizes: Vec::new() };
+            let spec = WindowSpec { title: "rustshot ui size test".into(), w: 400, h: 300, resizable: false, min: (400, 300) };
+            run_window(spec, &mut d).expect("window loop");
+            (d.dpi, d.sizes)
+        })
+        .join()
+        .expect("window thread");
+        let (dpi, sizes) = d;
+        let os = dpi as f32 / 96.0;
+        let want = |k: f32| (to_phys(400, k), to_phys(300, k));
+        assert_eq!(sizes.len(), 2, "{sizes:?}");
+        assert_eq!(sizes[0], want(os * 1.5), "opened at 150 % of {os}");
+        assert_eq!(sizes[1], want(os), "back to Auto");
     }
 
     /// `run_window` on a non-main thread: the loop survives an ignored

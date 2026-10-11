@@ -404,7 +404,14 @@ fn key_vk(lower: &str) -> Option<u32> {
         "left" => key::LEFT,
         "right" => key::RIGHT,
         "printscreen" | "prtsc" | "print" => key::PRINTSCREEN,
-        _ => return None,
+        "=" | "equals" | "plus" => key::EQUALS,
+        "-" | "minus" => key::MINUS,
+        "numpadadd" => key::ADD,
+        "numpadsubtract" => key::SUBTRACT,
+        _ => {
+            let n = lower.strip_prefix("numpad")?.parse::<u32>().ok().filter(|n| *n <= 9)?;
+            key::NUMPAD0 + n
+        }
     };
     Some(vk)
 }
@@ -435,6 +442,11 @@ pub fn key_name(vk: u32) -> Option<String> {
         key::LEFT => "Left",
         key::RIGHT => "Right",
         key::PRINTSCREEN => "PrintScreen",
+        key::EQUALS => "=",
+        key::MINUS => "-",
+        key::ADD => "NumpadAdd",
+        key::SUBTRACT => "NumpadSubtract",
+        k if (key::NUMPAD0..=key::NUMPAD0 + 9).contains(&k) => return Some(format!("Numpad{}", k - key::NUMPAD0)),
         _ => return None,
     };
     Some(name.into())
@@ -628,7 +640,7 @@ mod tests {
             let n = key_name(vk).unwrap();
             assert_eq!(key_vk(&n.to_ascii_lowercase()), Some(vk), "{n}");
         }
-        for vk in [key::SPACE, key::RETURN, key::ESCAPE, key::DELETE, key::PRINTSCREEN, key::LEFT] {
+        for vk in [key::SPACE, key::RETURN, key::ESCAPE, key::DELETE, key::PRINTSCREEN, key::LEFT, key::EQUALS, key::MINUS, key::ADD, key::SUBTRACT, key::NUMPAD0, key::NUMPAD0 + 9] {
             let n = key_name(vk).unwrap();
             assert_eq!(key_vk(&n.to_ascii_lowercase()), Some(vk), "{n}");
         }

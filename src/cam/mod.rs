@@ -288,17 +288,17 @@ impl Look {
 
 /// The bubble's side in physical px at UI scale `scale`.
 pub fn side(size: CamSize, scale: f32) -> u32 {
-    (size.logical() as f32 * scale.clamp(1.0, 4.0)).round() as u32
+    (size.logical() as f32 * crate::uisize::clamp(scale)).round() as u32
 }
 
 /// Room around the shape for the shadow (physical px).
 pub fn pad(scale: f32) -> u32 {
-    (16.0 * scale.clamp(1.0, 4.0)).ceil() as u32
+    (16.0 * crate::uisize::clamp(scale)).ceil() as u32
 }
 
 /// The ring's width (physical px) for `logical` px at UI scale `scale`.
 pub fn ring_width(logical: u8, scale: f32) -> f32 {
-    (logical as f32 * scale.clamp(1.0, 4.0)).round()
+    (logical as f32 * crate::uisize::clamp(scale)).round()
 }
 
 /// Corner radius of the rounded square: a fifth of its side.
@@ -354,7 +354,7 @@ pub fn template(look: Look, scale: f32, th: &Theme) -> Template {
     let d = side(look.size, scale);
     let pad = pad(scale);
     let w = d + 2 * pad;
-    let s = scale.clamp(1.0, 4.0);
+    let s = crate::uisize::clamp(scale);
     let (df, rw) = (d as f32, ring_width(look.ring_w, scale));
     // A soft shadow, falling a little: from the distance to the shape
     // moved down, faded out over `blur` (smoothstep).

@@ -98,7 +98,8 @@ Open **Settings…** from the tray menu (Windows), or run `rustshot settings`
 on Linux and macOS, where there is no tray icon, this is the way in). On
 Linux the Settings window is *(experimental)*. Three tabs:
 
-- **General:** theme (Auto follows the OS), the overlay renderer
+- **General:** theme (Auto follows the OS), UI size (Auto follows each
+  display's scaling; 75-200 % on top of it), the overlay renderer
   (Windows), start at login (hidden for store installs), the daily update
   check, and the global capture and quit hotkeys (click a box, then press
   the keys; <kbd>Backspace</kbd> clears it). *Open config file* opens
@@ -172,6 +173,7 @@ subfolder pattern `/` nests folders (`%Y/%m`) and `..` is dropped.
 | Save As (always asks) | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> |
 | Select the whole screen | <kbd>Ctrl</kbd>+<kbd>A</kbd> |
 | Toggle the color palette | <kbd>Space</kbd> |
+| Bigger / smaller UI, back to Auto | <kbd>Ctrl</kbd>+<kbd>=</kbd> (or <kbd>Ctrl</kbd>+<kbd>+</kbd>, keypad <kbd>+</kbd>) / <kbd>Ctrl</kbd>+<kbd>-</kbd> / <kbd>Ctrl</kbd>+<kbd>0</kbd> |
 | Accept (save, or run the `--clip`/`--path` tasks) | <kbd>Enter</kbd> |
 | Drop the current tool / cancel | <kbd>Esc</kbd> |
 | Move / resize the selection | arrow keys / <kbd>Shift</kbd>+arrows |
@@ -196,7 +198,8 @@ bound twice):
 tool_pencil = "P"         # tool_line, tool_arrow, tool_rectangle, tool_circle,
                           # tool_marker, tool_text, tool_pixelate, tool_invert
 save_as = "Ctrl+Shift+S"  # copy, save, upload, undo, select_all, toggle_palette,
-redo = "Ctrl+Shift+Z, Ctrl+Y"  # accept (Enter), cancel (Esc)
+redo = "Ctrl+Shift+Z, Ctrl+Y"  # accept (Enter), cancel (Esc),
+ui_bigger = "Ctrl+=, Ctrl+Shift+=, Ctrl+NumpadAdd"  # ui_smaller, ui_reset
 ```
 
 `record` (unbound by default) opens the Record popover for the selection
@@ -229,6 +232,8 @@ save_format = "png"               # "png", "jpg" or "bmp" (clipboard and upload 
 jpeg_quality = 90                 # 1-100
 save_dialog = false               # true = Ctrl+S always asks where to save
 theme = "auto"                    # "auto" (follow the OS), "dark" or "light"
+ui_scale = "auto"                 # UI size: "auto" (each display's scaling) or 75, 90, 100,
+                                  # 125, 150, 200 (% on top of it); Ctrl+= / Ctrl+- / Ctrl+0
 ui_color = ""                     # accent override, e.g. "#8b93ff" ("" = theme accent)
 contrast_opacity = 148            # dim strength outside the selection (0-255)
 draw_color = "#f04438"

@@ -35,6 +35,7 @@ use crate::pixbuf::PixBuf;
 use crate::theme::Theme;
 use crate::ui::layout::{GAP, H as ROW};
 use crate::ui::{Col, FocusState, Input, Row, TableState, TextState, Ui};
+use crate::uisize::{self, UiSize};
 use crate::wind::{self, Cursor, Driver, Ev, Hwnd, WindowSpec};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -148,6 +149,8 @@ fn chord_text(c: Option<Chord>) -> String {
 #[derive(Clone, Debug)]
 pub struct Form {
     pub theme: usize,
+    /// The UI size ([`uisize::LABELS`] index).
+    pub ui_size: usize,
     pub renderer: usize,
     /// Start at login; `None` hides it (store installs).
     pub autostart: Option<bool>,
@@ -168,6 +171,7 @@ impl Form {
     pub fn new(cfg: &Config, autostart: Option<bool>) -> Form {
         Form {
             theme: theme_index(&cfg.theme),
+            ui_size: cfg.ui_scale.index(),
             renderer: !cfg.use_gdi() as usize,
             autostart,
             check_updates: cfg.check_updates,
@@ -193,6 +197,9 @@ impl Form {
         let mut c = onto.clone();
         if self.theme != was.theme {
             c.theme = THEMES[self.theme].1.into();
+        }
+        if self.ui_size != was.ui_size {
+            c.ui_scale = UiSize::from_index(self.ui_size);
         }
         if self.renderer != was.renderer {
             c.renderer = RENDERERS[self.renderer].1.into();
@@ -984,8 +991,12 @@ fn general(ui: &mut Ui, s: &mut Settings, body: FRect) {
         ui.lay.gap = if roomy { 12.0 } else if tight { 6.0 } else { 8.0 };
         let note_h = if tight { 18.0 } else { ROW };
         ui.heading("Appearance");
+        // Theme and UI size share a row (the tab has no room for another).
         field(ui, "Theme", |ui| {
             ui.dropdown("theme", &labels(&THEMES), &mut f.theme);
+            ui.space(GAP);
+            ui.label("UI size");
+            ui.dropdown("ui_size", &uisize::LABELS, &mut f.ui_size);
         });
         if show_renderer {
             field(ui, "Overlay renderer", |ui| {
@@ -1274,6 +1285,10 @@ fn run(rx: Receiver<Msg>) {
     let mut s = Settings::open(config::config_path(), autostart);
     s.hotkey_failures = hotkey::outstanding();
     let th = crate::theme::resolve(&s.loaded);
+    // Opened without a daemon (`rustshot settings`): the file's UI size.
+    if !s.stale {
+        uisize::set(s.loaded.ui_scale);
+    }
     let mut w = Window::new(s, th, rx);
     let spec = WindowSpec { title: "Rustshot Settings".into(), w: W, h: H, resizable: false, min: (W, H) };
     if let Err(e) = wind::run_window(spec, &mut w) {
@@ -1342,6 +1357,13 @@ impl Window {
             Act::Close => self.closing = true,
             Act::Saved(cfg) => {
                 self.th = crate::theme::resolve(&cfg);
+                // A new UI size: this window lays out again at once (the
+                // resize brings the new size and a frame), the overlay at
+                // its next capture.
+                if cfg.ui_scale != uisize::current() {
+                    uisize::set(cfg.ui_scale);
+                    wind::resize(self.hwnd, W, H);
+                }
                 reload_daemon();
             }
             Act::Reload => reload_daemon(),

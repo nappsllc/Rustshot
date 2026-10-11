@@ -40,6 +40,7 @@ mod tray;
 mod tray_win;
 mod ui;
 mod uifb;
+mod uisize;
 mod update;
 mod update_install;
 mod update_ui;

@@ -11,6 +11,7 @@ use crate::theme::{self, Theme};
 use crate::raster::Order;
 use crate::rec_ui::{self, RecOpts};
 use crate::uifb::C4;
+use crate::uisize::UiSize;
 use compose::PixBufBackdrop;
 use crate::wind::{self, Cursor, Driver, Ev, Hwnd, Mods};
 use crate::fonts::UiFont;
@@ -167,6 +168,8 @@ pub fn run(
     upload_slot: UploadSlot,
     instance: Option<crate::instance::Guard>,
 ) -> i32 {
+    // Settings, the update dialog and the notice follow the UI size too.
+    publish_ui_size(cfg.ui_scale);
     let hot = match kind {
         RunKind::Daemon => Some(Hotkeys::new(&cfg)),
         RunKind::OneShot => None,
@@ -570,6 +573,7 @@ impl App {
         }
         // The Record popover starts from the (new) defaults again.
         self.rec_opts = None;
+        publish_ui_size(cfg.ui_scale);
         self.cfg = cfg;
     }
 
@@ -922,6 +926,21 @@ impl App {
             return;
         }
 
+        // The UI size keys (Ctrl/Alt chords) work in every mode, the text
+        // draft and the colour picker included.
+        if (mods.ctrl || mods.alt)
+            && (edit.text.is_some() || edit.pick.is_some())
+            && let Some(a @ (Action::UiBigger | Action::UiSmaller | Action::UiReset)) = edit.keys.resolve(vk, mods)
+        {
+            let now = Instant::now();
+            match a {
+                Action::UiBigger => edit.set_ui_size(edit.cfg.ui_scale.bigger(), now),
+                Action::UiSmaller => edit.set_ui_size(edit.cfg.ui_scale.smaller(), now),
+                _ => edit.set_ui_size(UiSize::Auto, now),
+            }
+            return;
+        }
+
         // Text editing mode consumes keys.
         if edit.text.is_some() {
             if escape {
@@ -997,6 +1016,9 @@ impl App {
 
         let Some(action) = edit.keys.resolve(vk, mods) else { return };
         match action {
+            Action::UiBigger => edit.set_ui_size(edit.cfg.ui_scale.bigger(), Instant::now()),
+            Action::UiSmaller => edit.set_ui_size(edit.cfg.ui_scale.smaller(), Instant::now()),
+            Action::UiReset => edit.set_ui_size(UiSize::Auto, Instant::now()),
             Action::Cancel => cancel_key(edit),
             // In record mode (or with the Record popover open) Enter
             // records; never in a run with tasks (`gui --copy`: no Record).
@@ -1711,6 +1733,7 @@ fn act_of(a: Action) -> Option<Act> {
         Action::TogglePalette => Act::Palette,
         Action::Record => Act::Record,
         Action::SelectAll | Action::Accept | Action::Cancel => return None,
+        Action::UiBigger | Action::UiSmaller | Action::UiReset => return None,
     })
 }
 
@@ -2409,8 +2432,22 @@ impl Edit {
         if tools::has_size(t) { (self.mem.size(t) as i32).to_string() } else { String::new() }
     }
 
+    /// The overlay's UI scale: the shot's OS scale times the UI size.
     fn ui_scale(&self) -> f32 {
-        self.shot.scale.clamp(1.0, 4.0)
+        self.cfg.ui_scale.apply(self.shot.scale)
+    }
+
+    /// Ctrl+= / Ctrl+- / Ctrl+0: the UI size steps (or goes back to
+    /// Auto) live: the next frame lays out again at the new scale and,
+    /// the scale being part of the scene, repaints in full. Saved like the
+    /// tools' sizes (debounced, flushed on close); a toast says the size.
+    fn set_ui_size(&mut self, size: UiSize, now: Instant) {
+        if size != self.cfg.ui_scale {
+            self.cfg.ui_scale = size;
+            self.pending.set("ui_scale".into(), Some(size.to_toml()), now);
+            publish_ui_size(size);
+        }
+        self.notice = Some(Toast::new(size.describe(), ToastKind::Info));
     }
 
     /// The selection as a recording area (physical virtual-screen px,
@@ -2429,7 +2466,7 @@ impl Edit {
                 .map(|m| {
                     let r = (m.0 + ox, m.1 + oy, m.2, m.3);
                     let (cx, cy) = (r.0 + r.2 as i32 / 2, r.1 + r.3 as i32 / 2);
-                    let s = mons.iter().find(|i| i.contains(cx, cy)).map_or(self.ui_scale(), |i| i.scale.clamp(1.0, 4.0));
+                    let s = mons.iter().find(|i| i.contains(cx, cy)).map_or(self.ui_scale(), |i| self.cfg.ui_scale.apply(i.scale));
                     (r, s)
                 })
                 .collect(),
@@ -2509,6 +2546,16 @@ impl Edit {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Make `s` the process-wide UI size (the windows without a config of
+/// their own read it). Not in tests: they run in parallel and the window
+/// tests read it.
+fn publish_ui_size(s: UiSize) {
+    #[cfg(not(test))]
+    crate::uisize::set(s);
+    #[cfg(test)]
+    let _ = s;
+}
 
 fn hit(r: FRect, p: Pt) -> bool {
     p.x >= r.x && p.x < r.x1() && p.y >= r.y && p.y < r.y1()
@@ -2887,6 +2934,8 @@ fn monitor_at(monitors: &[capture::IRect], p: Pt) -> Option<FRect> {
 mod state_tests;
 #[cfg(test)]
 mod tools_tests;
+#[cfg(test)]
+mod uisize_tests;
 
 #[cfg(test)]
 mod tests {

@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use crate::uisize::UiSize;
 
 /// Settings, mirroring Flameshot's key names where they apply.
 #[derive(Debug, Clone, PartialEq)]
@@ -26,6 +27,9 @@ pub struct Config {
     pub ui_color: String,
     /// Overlay theme: "auto" (follow the OS), "dark" or "light".
     pub theme: String,
+    /// UI size: "auto" (each monitor's OS scale) or a percentage of it
+    /// (75, 90, 100, 125, 150, 200; see `uisize`).
+    pub ui_scale: UiSize,
     /// Darkness of the dimmed area outside the selection (0-255).
     pub contrast_opacity: u8,
     pub draw_color: String,
@@ -138,6 +142,7 @@ impl Default for Config {
             save_dialog: false,
             ui_color: String::new(),
             theme: "auto".into(),
+            ui_scale: UiSize::Auto,
             contrast_opacity: 148,
             draw_color: "#f04438".into(),
             draw_thickness: 3.0,
@@ -471,6 +476,7 @@ pub fn copy_key(from: &Config, to: &mut Config, key: &str) {
         "recent_colors" => to.recent_colors = from.recent_colors.clone(),
         "rec_camera_ring_color" => to.rec_camera_ring_color = from.rec_camera_ring_color.clone(),
         "rec_camera_ring_width" => to.rec_camera_ring_width = from.rec_camera_ring_width,
+        "ui_scale" => to.ui_scale = from.ui_scale,
         k => match tool_key(k) {
             Some((id, true)) => match from.tool_sizes.get(id) {
                 Some(v) => {
@@ -727,6 +733,11 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
             }
             "ui_color" => cfg.ui_color = as_string(val).map_err(|e| bad("string", &e))?,
             "theme" => cfg.theme = as_string(val).map_err(|e| bad("string", &e))?,
+            "ui_scale" => {
+                let v = if val.starts_with('"') { as_string(val).map_err(|e| bad("string", &e))? } else { val.to_string() };
+                cfg.ui_scale = UiSize::parse(&v)
+                    .ok_or_else(|| bad("value (expected \"auto\", 75, 90, 100, 125, 150 or 200)", val))?
+            }
             "draw_color" => cfg.draw_color = as_string(val).map_err(|e| bad("string", &e))?,
             "capture_hotkey" => {
                 cfg.capture_hotkey = as_string(val).map_err(|e| bad("string", &e))?
@@ -851,6 +862,7 @@ pub fn to_toml(c: &Config) -> String {
          save_dialog = {}\n\
          ui_color = {}\n\
          theme = {}\n\
+         ui_scale = {}\n\
          contrast_opacity = {}\n\
          draw_color = {}\n\
          draw_thickness = {}\n\
@@ -894,6 +906,7 @@ pub fn to_toml(c: &Config) -> String {
         c.save_dialog,
         q(&c.ui_color),
         q(&c.theme),
+        c.ui_scale.to_toml(),
         c.contrast_opacity,
         q(&c.draw_color),
         c.draw_thickness,
@@ -1355,6 +1368,45 @@ bogus = 1
         };
         let w = shortcut_warnings(&clash);
         assert_eq!(w, ["[shortcuts] P is bound to tool_pencil, cancel; tool_pencil wins"]);
+    }
+
+    /// `ui_scale`: "auto" by default; a step of the list as a number or a
+    /// string; anything else refused; round-trips and line-edits.
+    #[test]
+    fn ui_scale_parses_validates_and_roundtrips() {
+        assert_eq!(Config::default().ui_scale, UiSize::Auto);
+        assert!(to_toml(&Config::default()).contains("ui_scale = \"auto\"\n"));
+        for (text, want) in [
+            ("ui_scale = \"auto\"", UiSize::Auto),
+            ("ui_scale = \"Auto\"", UiSize::Auto),
+            ("ui_scale = 75", UiSize::Pct(75)),
+            ("ui_scale = 90", UiSize::Pct(90)),
+            ("ui_scale = 100", UiSize::Pct(100)),
+            ("ui_scale = 125  # bigger", UiSize::Pct(125)),
+            ("ui_scale = \"150\"", UiSize::Pct(150)),
+            ("ui_scale = \"200%\"", UiSize::Pct(200)),
+        ] {
+            assert_eq!(parse_config(text).unwrap().ui_scale, want, "{text}");
+        }
+        for bad in ["ui_scale = 80", "ui_scale = 0", "ui_scale = 1.5", "ui_scale = \"big\"", "ui_scale = true", "ui_scale = 300"] {
+            let e = parse_config(bad).unwrap_err();
+            assert!(e.contains("ui_scale") && e.contains("\"auto\""), "{bad}: {e}");
+        }
+        for s in std::iter::once(UiSize::Auto).chain(crate::uisize::STEPS.map(UiSize::Pct)) {
+            let text = to_toml(&Config { ui_scale: s, ..Config::default() });
+            assert_eq!(parse_config(&text).unwrap().ui_scale, s);
+            assert!(!rewrite_loses(&text));
+        }
+        // The overlay's line edit (Ctrl+=) keeps the rest of the file.
+        let text = "# mine\ntheme = \"dark\"\n";
+        let out = with_top_raw(text, "ui_scale", Some(&UiSize::Pct(125).to_toml()));
+        assert!(out.starts_with("# mine\ntheme = \"dark\"\n"), "{out}");
+        assert_eq!(parse_config(&out).unwrap().ui_scale, UiSize::Pct(125));
+        let back = with_top_raw(&out, "ui_scale", Some(&UiSize::Auto.to_toml()));
+        assert_eq!(parse_config(&back).unwrap().ui_scale, UiSize::Auto);
+        let mut to = Config::default();
+        copy_key(&Config { ui_scale: UiSize::Pct(90), ..Config::default() }, &mut to, "ui_scale");
+        assert_eq!(to.ui_scale, UiSize::Pct(90));
     }
 
     #[test]

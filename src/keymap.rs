@@ -34,10 +34,15 @@ pub enum Action {
     /// The overlay is hidden while recording, so stopping is not an
     /// overlay action: the record hotkey toggles, the bar and the tray stop.
     Record,
+    /// The overlay's UI one size bigger / smaller / back to Auto
+    /// (`ui_scale`; saved like the tools' sizes).
+    UiBigger,
+    UiSmaller,
+    UiReset,
 }
 
 impl Action {
-    pub const ALL: [Action; 20] = [
+    pub const ALL: [Action; 23] = [
         Action::ToolPencil,
         Action::ToolLine,
         Action::ToolArrow,
@@ -58,6 +63,9 @@ impl Action {
         Action::Accept,
         Action::Cancel,
         Action::Record,
+        Action::UiBigger,
+        Action::UiSmaller,
+        Action::UiReset,
     ];
 
     /// Config key in the `[shortcuts]` table.
@@ -96,6 +104,10 @@ impl Action {
             Action::Accept => ("accept", "Accept (default action)", &["Enter"]),
             Action::Cancel => ("cancel", "Cancel", &["Esc"]),
             Action::Record => ("record", "Record screen", &[]),
+            // Ctrl+Shift+= is Ctrl+Plus on US keyboards.
+            Action::UiBigger => ("ui_bigger", "Bigger UI", &["Ctrl+=", "Ctrl+Shift+=", "Ctrl+NumpadAdd"]),
+            Action::UiSmaller => ("ui_smaller", "Smaller UI", &["Ctrl+-", "Ctrl+NumpadSubtract"]),
+            Action::UiReset => ("ui_reset", "UI size: Auto", &["Ctrl+0", "Ctrl+Numpad0"]),
         }
     }
 
@@ -271,7 +283,7 @@ mod tests {
     #[test]
     fn defaults_match_spec_table() {
         let km = Keymap::defaults();
-        let want: [(Action, &[&str]); 20] = [
+        let want: [(Action, &[&str]); 23] = [
             (Action::ToolPencil, &["P"]),
             (Action::ToolLine, &["D"]),
             (Action::ToolArrow, &["A"]),
@@ -292,6 +304,9 @@ mod tests {
             (Action::Accept, &["Enter"]),
             (Action::Cancel, &["Esc"]),
             (Action::Record, &[]),
+            (Action::UiBigger, &["Ctrl+=", "Ctrl+Shift+=", "Ctrl+NumpadAdd"]),
+            (Action::UiSmaller, &["Ctrl+-", "Ctrl+NumpadSubtract"]),
+            (Action::UiReset, &["Ctrl+0", "Ctrl+Numpad0"]),
         ];
         for (a, keys) in want {
             assert_eq!(shown(&km, a), keys, "{a:?}");
@@ -318,13 +333,15 @@ mod tests {
 
     #[test]
     fn parse_display_round_trip() {
-        for s in ["Ctrl+Shift+S", "Meta+X", "Del", "Space", "Q", "F5", "F12", "Ctrl+Alt+Shift+Meta+7", "Esc", "Enter"] {
+        for s in ["Ctrl+Shift+S", "Meta+X", "Del", "Space", "Q", "F5", "F12", "Ctrl+Alt+Shift+Meta+7", "Esc", "Enter", "Ctrl+=", "Ctrl+-", "Ctrl+NumpadAdd", "Ctrl+NumpadSubtract", "Ctrl+Numpad0", "Numpad9"] {
             let c = Chord::parse(s).unwrap_or_else(|| panic!("{s}"));
             assert_eq!(c.display(), s);
             assert_eq!(Chord::parse(&c.display()), Some(c));
         }
         assert_eq!(Chord::parse("shift+ctrl+s").unwrap().display(), "Ctrl+Shift+S");
         assert_eq!(Chord::parse("Win+delete").unwrap().display(), "Meta+Del");
+        assert_eq!(Chord::parse("ctrl+plus").unwrap().display(), "Ctrl+=");
+        assert_eq!(Chord::parse("Ctrl+Minus").unwrap().display(), "Ctrl+-");
         assert_eq!(Chord::parse("Meta+Shift+X").unwrap().label(), format!("Shift+{META_NAME}+X"));
         assert_eq!(Chord::parse("Ctrl+S").unwrap().label(), "Ctrl+S");
         // The default capture hotkey is written in the display order.
@@ -333,7 +350,7 @@ mod tests {
         let c = Chord::parse("Meta+X").unwrap();
         assert!(c.meta && !c.ctrl && c.vk == 'X' as u32);
         assert_eq!(Chord::parse("Del").unwrap().vk, key::DELETE);
-        for bad in ["", "Ctrl", "Ctrl+", "Foo", "A+B", "F13"] {
+        for bad in ["", "Ctrl", "Ctrl+", "Foo", "A+B", "F13", "Numpad10", "Numpad"] {
             assert_eq!(Chord::parse(bad), None, "{bad}");
         }
     }
@@ -404,6 +421,15 @@ mod tests {
         assert_eq!(km.resolve(key::RETURN, NONE), Some(Action::Accept));
         assert_eq!(km.resolve(key::ESCAPE, NONE), Some(Action::Cancel));
         assert_eq!(km.resolve(key::DELETE, NONE), None);
+        let ctrl = m(true, false, false);
+        assert_eq!(km.resolve(key::EQUALS, ctrl), Some(Action::UiBigger));
+        assert_eq!(km.resolve(key::EQUALS, m(true, true, false)), Some(Action::UiBigger), "Ctrl+Plus");
+        assert_eq!(km.resolve(key::ADD, ctrl), Some(Action::UiBigger));
+        assert_eq!(km.resolve(key::MINUS, ctrl), Some(Action::UiSmaller));
+        assert_eq!(km.resolve(key::SUBTRACT, ctrl), Some(Action::UiSmaller));
+        assert_eq!(km.resolve('0' as u32, ctrl), Some(Action::UiReset));
+        assert_eq!(km.resolve(key::NUMPAD0, ctrl), Some(Action::UiReset));
+        assert_eq!(km.resolve(key::EQUALS, NONE), None, "a bare = is text");
         // Meta chords never fire (no meta state in `Mods`).
         let (km, _) = Keymap::from_config(&cfg(&[("copy", "Meta+C")]));
         assert_eq!(km.resolve('C' as u32, m(true, false, false)), None);

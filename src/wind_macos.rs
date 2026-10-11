@@ -594,7 +594,7 @@ fn with_slot(hwnd: Hwnd, f: impl FnOnce(&mut WinSlot)) -> bool {
 }
 
 #[cfg_attr(not(test), allow(unused_imports))]
-pub use window::{run_window, scale};
+pub use window::{resize, run_window, scale};
 
 /// The decorated window proper (no caller outside tests until the update
 /// dialog / Settings land, hence the dead-code allowance). Compile-checked
@@ -653,12 +653,31 @@ mod window {
     }
 
     /// Backing scale of a window (2.0 on Retina): points -> pixels.
-    pub fn scale(hwnd: Hwnd) -> f32 {
+    fn backing(hwnd: Hwnd) -> f32 {
         if hwnd.0 == 0 {
             return 1.0;
         }
         let s: f64 = unsafe { msg0(hwnd.0 as *mut c_void, objc_sel(c"backingScaleFactor")) };
         if s > 0.0 { s as f32 } else { 1.0 }
+    }
+
+    /// UI scale of a `run_window` window: its backing scale times the UI
+    /// size (its content is the spec's size times the UI size, in points).
+    pub fn scale(hwnd: Hwnd) -> f32 {
+        crate::uisize::apply(backing(hwnd))
+    }
+
+    /// Give a `run_window` window the content size `w`×`h` (logical px)
+    /// at the current UI size; `Ev::Resize` follows from the pump.
+    pub fn resize(hwnd: Hwnd, w: u32, h: u32) {
+        if hwnd.0 == 0 {
+            return;
+        }
+        let m = f64::from(crate::uisize::mult());
+        let size = CGSize { width: f64::from(w) * m, height: f64::from(h) * m };
+        unsafe {
+            let _: () = msg1(hwnd.0 as *mut c_void, objc_sel(c"setContentSize:"), size);
+        }
     }
 
     static WINDOW_CLASS: AtomicUsize = AtomicUsize::new(0);
@@ -734,7 +753,9 @@ mod window {
             if class.is_null() {
                 anyhow::bail!("failed to create the window class");
             }
-            let (w, h) = (spec.w.max(1) as f64, spec.h.max(1) as f64);
+            // Logical px are points times the UI size.
+            let m = f64::from(crate::uisize::mult());
+            let (w, h) = (spec.w.max(1) as f64 * m, spec.h.max(1) as f64 * m);
             let content = CGRect { origin: CGPoint { x: 0.0, y: 0.0 }, size: CGSize { width: w, height: h } };
             // Titled | Closable | Miniaturizable (| Resizable)
             let style: u64 = 1 | 2 | 4 | if spec.resizable { 8 } else { 0 };
@@ -753,7 +774,7 @@ mod window {
             let _: () = msg1(win, objc_sel(c"setReleasedWhenClosed:"), 0i64);
             let _: () = msg1(win, objc_sel(c"setTitle:"), ns_string(&spec.title));
             if spec.resizable {
-                let min = CGSize { width: spec.min.0 as f64, height: spec.min.1 as f64 };
+                let min = CGSize { width: spec.min.0 as f64 * m, height: spec.min.1 as f64 * m };
                 let _: () = msg1(win, objc_sel(c"setContentMinSize:"), min);
             }
             let _: () = msg1(win, objc_sel(c"setAcceptsMouseMovedEvents:"), 1i64);
@@ -779,7 +800,7 @@ mod window {
                 let _: () = msg0(win, objc_sel(c"center"));
             }
             let hwnd = Hwnd(win as usize);
-            let mut s = scale(hwnd) as f64;
+            let mut s = backing(hwnd) as f64;
             set_layer_scale(win, s);
             let prev = WINDOWED.with(|c| c.replace(WinSlot { win: hwnd.0, ..NO_SLOT }));
             let quit = || WINDOWED.with(|c| c.get().quit);
@@ -840,7 +861,7 @@ mod window {
                     driver.on_event(Ev::Close);
                     repaint = true;
                 }
-                let now_s = scale(hwnd) as f64;
+                let now_s = backing(hwnd) as f64;
                 if now_s != s {
                     s = now_s;
                     set_layer_scale(win, s);

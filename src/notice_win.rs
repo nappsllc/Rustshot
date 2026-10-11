@@ -74,7 +74,8 @@ fn create() -> Option<HWND> {
     Some(hwnd)
 }
 
-/// The work area (physical px) and scale of the monitor nearest `at`.
+/// The work area (physical px) and UI scale (its DPI times the UI size)
+/// of the monitor nearest `at`.
 fn monitor_at(at: (i32, i32)) -> (crate::capture::IRect, f32) {
     unsafe {
         let mon = MonitorFromPoint(POINT { x: at.0, y: at.1 }, MONITOR_DEFAULTTONEAREST);
@@ -85,7 +86,7 @@ fn monitor_at(at: (i32, i32)) -> (crate::capture::IRect, f32) {
         if GetDpiForMonitor(mon, MDT_EFFECTIVE_DPI, &mut dx, &mut dy).is_err() {
             dx = 96;
         }
-        ((r.left, r.top, (r.right - r.left).max(0) as u32, (r.bottom - r.top).max(0) as u32), (dx as f32 / 96.0).max(0.5))
+        ((r.left, r.top, (r.right - r.left).max(0) as u32, (r.bottom - r.top).max(0) as u32), crate::uisize::apply((dx as f32 / 96.0).max(0.5)))
     }
 }
 

@@ -98,13 +98,15 @@ impl BarWin {
         );
         let moved = self.spot != Some(spot);
         self.spot = Some(spot);
-        let s = scale_at(spot.pos.0 + spot.size.0 / 2, spot.pos.1 + spot.size.1 / 2);
+        // Pixels per point there; the UI size on top (`spot.scale`).
+        let px = scale_at(spot.pos.0 + spot.size.0 / 2, spot.pos.1 + spot.size.1 / 2);
+        let s = px * spot.scale;
         let ui = Ui { th, s, font };
         let l = bar::layout(&ui, v);
         let pressed = {
             let mut b = self.input.borrow_mut();
             b.layout = Some(l.clone());
-            b.scale = f64::from(s);
+            b.scale = f64::from(px);
             b.pressed
         };
         let state = (v.clone(), pressed, s);
@@ -112,9 +114,10 @@ impl BarWin {
             return;
         }
         let (w, h) = l.size;
-        let px = super::render_layer(w as usize, h as usize, |f| bar::draw(f, &ui, &l, v, None, pressed));
-        let at = (f64::from(spot.pos.0) - f64::from(bar::MARGIN), f64::from(spot.pos.1) - f64::from(bar::MARGIN));
-        self.layer.put(at, f64::from(s), w, h, &px);
+        let pixels = super::render_layer(w as usize, h as usize, |f| bar::draw(f, &ui, &l, v, None, pressed));
+        let m = f64::from(bar::MARGIN * spot.scale);
+        let at = (f64::from(spot.pos.0) - m, f64::from(spot.pos.1) - m);
+        self.layer.put(at, f64::from(px), w, h, &pixels);
         self.drawn = Some(state);
     }
 
@@ -140,13 +143,15 @@ impl CountWin {
             return;
         };
         let a = geom.area;
-        let s = scale_at(a.0 + a.2 as i32 / 2, a.1 + a.3 as i32 / 2);
+        // Pixels per point there, the UI size on top.
+        let k = scale_at(a.0 + a.2 as i32 / 2, a.1 + a.3 as i32 / 2);
+        let s = k * geom.area_scale();
         let ui = Ui { th, s, font: Some(crate::fonts::ui_font()) };
         let (w, h) = countdown::size(s);
         let px = super::render_layer(w as usize, h as usize, |f| countdown::draw(f, &ui, n));
-        let pts = ((f64::from(w) / f64::from(s)).round() as i32, (f64::from(h) / f64::from(s)).round() as i32);
+        let pts = ((f64::from(w) / f64::from(k)).round() as i32, (f64::from(h) / f64::from(k)).round() as i32);
         let (x, y) = super::centre_on(a, pts);
-        self.layer.put((f64::from(x), f64::from(y)), f64::from(s), w, h, &px);
+        self.layer.put((f64::from(x), f64::from(y)), f64::from(k), w, h, &px);
     }
 }
 

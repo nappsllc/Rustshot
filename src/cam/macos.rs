@@ -156,7 +156,9 @@ struct Geo {
     drag: Option<((f64, f64), (i32, i32))>,
     /// Pixels per point it is drawn at.
     px: f32,
-    /// The pixels' template (at `px`).
+    /// The UI size's multiplier (logical px per point).
+    ui: f32,
+    /// The pixels' template (at `px` × `ui`).
     tpl: Template,
     frame: Option<CamFrame>,
 }
@@ -164,13 +166,13 @@ struct Geo {
 impl Geo {
     /// The shape's side in points.
     fn d(&self) -> i32 {
-        super::side(self.look.size, 1.0) as i32
+        super::side(self.look.size, self.ui) as i32
     }
 
     fn home(&self) -> (i32, i32) {
         let d = self.d();
-        let p = super::place(super::remembered(), self.area, d, 1.0);
-        super::clear_of(p, self.area, d, 1.0, &self.avoid, self.screen)
+        let p = super::place(super::remembered(), self.area, d, self.ui);
+        super::clear_of(p, self.area, d, self.ui, &self.avoid, self.screen)
     }
 }
 
@@ -226,7 +228,7 @@ impl Ui {
     /// A new template for the look and scale (the picture is fitted again).
     fn retemplate(&self, g: &mut Geo) {
         let d = g.tpl.d;
-        g.tpl = super::template(g.look, g.px, &g.th);
+        g.tpl = super::template(g.look, g.px * g.ui, &g.th);
         if g.tpl.d != d {
             g.frame = None;
         }
@@ -241,11 +243,11 @@ impl Ui {
                 AuxKind::Drag => {
                     let Some((c0, p0)) = g.drag else { return };
                     let at = (p0.0 + (ev.global.0 - c0.0).round() as i32, p0.1 + (ev.global.1 - c0.1).round() as i32);
-                    g.pos = super::snap(at, g.area, g.d(), 1.0);
+                    g.pos = super::snap(at, g.area, g.d(), g.ui);
                 }
                 AuxKind::Up => {
                     if g.drag.take().is_some() {
-                        super::remember(super::rel_of(g.pos, g.area, g.d(), 1.0));
+                        super::remember(super::rel_of(g.pos, g.area, g.d(), g.ui));
                     }
                     return;
                 }
@@ -333,7 +335,8 @@ impl Bubble {
             pos: (0, 0),
             drag: None,
             px,
-            tpl: super::template(look, px, th),
+            ui: crate::uisize::mult(),
+            tpl: super::template(look, px * crate::uisize::mult(), th),
             frame: None,
         };
         geo.pos = geo.home();

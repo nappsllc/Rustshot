@@ -205,6 +205,34 @@ fn apply_rebuilds_the_form() {
 
 const BROKEN: &str = "theme = \"dark\"\noops\n";
 
+/// The UI size dropdown: Auto by default, written on Apply, kept as it
+/// was when left alone; the General tab has room for it.
+#[test]
+fn ui_size_is_a_general_setting() {
+    let cfg = Config::default();
+    let f = Form::new(&cfg, None);
+    assert_eq!(uisize::LABELS[f.ui_size], "Auto");
+    assert_eq!(Form::new(&Config { ui_scale: UiSize::Pct(150), ..cfg.clone() }, None).ui_size, 5);
+    let mut f = Form::new(&cfg, None);
+    f.ui_size = 4;
+    assert_eq!(f.apply(&cfg, &cfg).ui_scale, UiSize::Pct(125));
+    // Left alone: the file's own value stays (the overlay set it meanwhile).
+    let f = Form::new(&cfg, None);
+    let onto = Config { ui_scale: UiSize::Pct(90), ..cfg.clone() };
+    assert_eq!(f.apply(&cfg, &onto).ui_scale, UiSize::Pct(90));
+    // Apply writes it.
+    let dir = scratch("uisize");
+    let p = dir.join("config.toml");
+    config::save_at(&p, &Config::default()).unwrap();
+    let mut s = settings_at(&p);
+    s.form.ui_size = 6;
+    assert!(s.dirty());
+    assert!(matches!(&s.on(Click::Apply)[..], [Act::Saved(c)] if c.ui_scale == UiSize::Pct(200)));
+    assert_eq!(config::read_at(&p).unwrap().unwrap().ui_scale, UiSize::Pct(200));
+    assert!(!s.dirty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// "Reset tool sizes & colours" removes just those lines (comments and
 /// everything else stay) and makes the daemon reload; a broken file is
 /// never touched.
@@ -713,6 +741,15 @@ fn preview_settings_pngs() {
         s.folder_probe = Some((PathBuf::from(r"C:\"), Some("Drive Q: is not on this computer.".into())));
         let (img, _) = render(&mut s, th, 1.0, &Input::default(), &mut FocusState::default());
         preview::save(&format!("settings-folder-note-{tname}.png"), &img);
+    }
+    // The General tab (with the UI size row) at every UI size.
+    for (pct, k) in [(75, 0.75f32), (150, 1.5), (200, 2.0)] {
+        for (tname, th) in [("dark", &DARK), ("light", &LIGHT)] {
+            let mut s = sample();
+            s.form.ui_size = UiSize::Pct(pct).index();
+            let (img, _) = render(&mut s, th, k, &Input::default(), &mut FocusState::default());
+            preview::save(&format!("settings-general-uisize-{pct}-{tname}.png"), &img);
+        }
     }
     // JPEG chosen (quality enabled), a hotkey warning, at 150 %.
     let mut s = sample();

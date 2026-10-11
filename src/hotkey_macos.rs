@@ -376,6 +376,20 @@ fn mac_keycode(vk: u32) -> Option<u16> {
         key::RIGHT => 0x7C,
         // No PrintScreen on mac keyboards: F13 plays the role.
         key::PRINTSCREEN => 0x69,
+        key::EQUALS => 0x18,
+        key::MINUS => 0x1B,
+        key::ADD => 0x45,
+        key::SUBTRACT => 0x4E,
+        0x60 => 0x52, // keypad 0..9
+        0x61 => 0x53,
+        0x62 => 0x54,
+        0x63 => 0x55,
+        0x64 => 0x56,
+        0x65 => 0x57,
+        0x66 => 0x58,
+        0x67 => 0x59,
+        0x68 => 0x5B,
+        0x69 => 0x5C,
         _ => return None,
     };
     Some(code)

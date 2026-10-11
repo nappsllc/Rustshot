@@ -233,6 +233,15 @@ pub mod key {
     pub const DELETE: u32 = 0x2E;
     pub const INSERT: u32 = 0x2D;
     pub const PRINTSCREEN: u32 = 0x2C;
+    /// VK_NUMPAD0 (the keypad digits follow: 0x60..=0x69).
+    pub const NUMPAD0: u32 = 0x60;
+    /// VK_ADD / VK_SUBTRACT: the keypad's + and -.
+    pub const ADD: u32 = 0x6B;
+    pub const SUBTRACT: u32 = 0x6D;
+    /// VK_OEM_PLUS: the =/+ key (US layout; the + key elsewhere).
+    pub const EQUALS: u32 = 0xBB;
+    /// VK_OEM_MINUS: the -/_ key.
+    pub const MINUS: u32 = 0xBD;
 }
 
 #[cfg(windows)]
