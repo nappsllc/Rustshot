@@ -43,7 +43,7 @@ fn live_rec_border_and_bar_are_not_recorded() {
     let border = Border::show(inner, &[(area, 4)]).unwrap();
     let geom = Geom { area, monitors: vec![(area, 1.0)], scale: 1.0 };
     let mut bar = BarWin::new(0).unwrap();
-    let v = BarView { elapsed: Duration::from_secs(5), paused: false, mic: Some(false), stopping: false, compact: false };
+    let v = BarView { elapsed: Duration::from_secs(5), paused: false, mic: Some(false), stopping: false, compact: false, asking: false };
     bar.show(&geom, &crate::theme::DARK, &v);
     let mut count = CountWin { layer: Layer::new(true).unwrap(), drawn: None };
     count.show(&geom, &crate::theme::DARK, Some(3));
@@ -98,7 +98,7 @@ fn live_rec_bar_clicks_queue() {
     crate::capture::enable_dpi_awareness();
     let geom = Geom { area: (200, 200, 400, 300), monitors: vec![((0, 0, 1280, 720), 1.0)], scale: 1.0 };
     let mut bar = BarWin::new(0).unwrap();
-    let v = BarView { elapsed: Duration::ZERO, paused: false, mic: None, stopping: false, compact: false };
+    let v = BarView { elapsed: Duration::ZERO, paused: false, mic: None, stopping: false, compact: false, asking: false };
     bar.show(&geom, &crate::theme::LIGHT, &v);
     pump(100);
     let l = BAR.with(|b| b.borrow().layout.clone()).unwrap();
@@ -314,8 +314,11 @@ fn live_rec_windows_close_when_the_start_fails() {
         m: super::super::Machine::new(),
         mic: super::super::MicFlags::default(),
         ui: Some(ui),
+        countdown: true,
+        hint_taken: false,
         log: Vec::new(),
         fake_end: None,
+        fake_ready: false,
     };
     let t = Instant::now();
     run.m.start(true, t);

@@ -132,6 +132,7 @@ fn linux_list() -> Vec<CamDevice> {
 
 /// Open camera `id` ("" = the first one) at the mode nearest `pref`.
 #[cfg_attr(test, allow(dead_code))] // tests use fake cameras
+#[cfg_attr(all(target_os = "linux", not(test)), allow(dead_code))] // the bubble opens with `open_or_cancel` there
 pub fn open(id: &str, pref: (u32, u32)) -> Result<Box<dyn CamSource>> {
     #[cfg(windows)]
     {
@@ -139,18 +140,25 @@ pub fn open(id: &str, pref: (u32, u32)) -> Result<Box<dyn CamSource>> {
     }
     #[cfg(target_os = "linux")]
     {
-        let _ = pref; // 1280x720 asked for; V4L2 falls back to 640x480
-        let portal = id == PORTAL_CAM || (id.is_empty() && crate::rec::linux::portal::needs_portal_now() && portal_camera() == Some(true));
-        if portal {
-            Ok(Box::new(crate::rec::linux::pipewire::PwCam::open()?))
-        } else {
-            Ok(Box::new(crate::rec::linux::v4l2::V4l2Cam::open(id)?))
-        }
+        open_or_cancel(id, pref, &std::sync::atomic::AtomicBool::new(false))
     }
     #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = (id, pref);
         anyhow::bail!("the camera is not supported on this platform yet")
+    }
+}
+
+/// Linux: [`open`], with the camera portal's dialog (Wayland, Flatpak)
+/// called off once `cancel` is set (the bubble closed meanwhile).
+#[cfg(target_os = "linux")]
+pub fn open_or_cancel(id: &str, pref: (u32, u32), cancel: &std::sync::atomic::AtomicBool) -> Result<Box<dyn CamSource>> {
+    let _ = pref; // 1280x720 asked for; V4L2 falls back to 640x480
+    let portal = id == PORTAL_CAM || (id.is_empty() && crate::rec::linux::portal::needs_portal_now() && portal_camera() == Some(true));
+    if portal {
+        Ok(Box::new(crate::rec::linux::pipewire::PwCam::open(Some(cancel))?))
+    } else {
+        Ok(Box::new(crate::rec::linux::v4l2::V4l2Cam::open(id)?))
     }
 }
 
@@ -655,13 +663,15 @@ fn yuv_px(y: u8, u: u8, v: u8, k: Coef, out: &mut [u8]) {
     out[3] = 255;
 }
 
-/// YUY2 (Y0 U Y1 V per pixel pair, rows `stride` bytes apart) to BGRA.
-pub fn yuy2_to_bgra(src: &[u8], stride: usize, w: u32, h: u32, cs: impl Into<Yuv>, out: &mut Vec<u8>) {
+/// YUY2 (Y0 U Y1 V per pixel pair, rows `stride` bytes apart) to BGRA;
+/// `None` (and a blank `out`) when `src` is too short for the picture: the
+/// caller skips it rather than show black.
+pub fn yuy2_to_bgra(src: &[u8], stride: usize, w: u32, h: u32, cs: impl Into<Yuv>, out: &mut Vec<u8>) -> Option<()> {
     let (w, h) = (w as usize & !1, h as usize);
     out.clear();
     out.resize(w * h * 4, 0);
     if h == 0 || stride < w * 2 || src.len() < stride * (h - 1) + w * 2 {
-        return;
+        return None;
     }
     let k = coef(cs.into());
     for y in 0..h {
@@ -673,16 +683,18 @@ pub fn yuy2_to_bgra(src: &[u8], stride: usize, w: u32, h: u32, cs: impl Into<Yuv
             yuv_px(q[2], q[1], q[3], k, b);
         }
     }
+    Some(())
 }
 
 /// NV12 (a Y plane, then interleaved U V at half resolution, both with
-/// rows `stride` bytes apart) to BGRA.
-pub fn nv12_to_bgra(y_plane: &[u8], uv_plane: &[u8], stride: usize, w: u32, h: u32, cs: impl Into<Yuv>, out: &mut Vec<u8>) {
+/// rows `stride` bytes apart) to BGRA; `None` when a plane is too short
+/// (as [`yuy2_to_bgra`]).
+pub fn nv12_to_bgra(y_plane: &[u8], uv_plane: &[u8], stride: usize, w: u32, h: u32, cs: impl Into<Yuv>, out: &mut Vec<u8>) -> Option<()> {
     let (w, h) = (w as usize & !1, h as usize & !1);
     out.clear();
     out.resize(w * h * 4, 0);
     if h == 0 || stride < w || y_plane.len() < stride * (h - 1) + w || uv_plane.len() < stride * (h / 2 - 1) + w {
-        return;
+        return None;
     }
     let k = coef(cs.into());
     for y in 0..h {
@@ -694,6 +706,7 @@ pub fn nv12_to_bgra(y_plane: &[u8], uv_plane: &[u8], stride: usize, w: u32, h: u
             yuv_px(row[x], c[0], c[1], k, &mut o[x * 4..][..4]);
         }
     }
+    Some(())
 }
 
 /// Where one picture sits in a locked camera buffer.

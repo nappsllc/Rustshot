@@ -69,8 +69,9 @@ fn bubble_shows_pictures_follows_the_area_and_releases_the_camera() {
     let b = Bubble::show_with(M, "", area, 1.0, &DARK, HWND::default(), open);
     let mut b = b.unwrap();
     let h = b.hwnd();
-    pump(400);
-    assert!(b.has_picture(), "the camera's pictures arrive");
+    // Waited for, not a fixed pump: under a loaded test run the camera
+    // thread may take far longer than a few hundred ms to deliver.
+    assert!(b.wait_picture(Duration::from_secs(10)), "the camera's pictures arrive");
     unsafe {
         assert!(IsWindowVisible(h).as_bool());
         // In the recording: not excluded from capture.
@@ -93,11 +94,11 @@ fn bubble_shows_pictures_follows_the_area_and_releases_the_camera() {
     assert_eq!(rect(h).left, 16 - pad);
     // Larger: still at its corner, the window grows.
     b.set_look(Look { size: CamSize::L, ..M }, &DARK);
-    pump(100);
     assert_eq!(b.pos(), Some((16, 700 - 16 - 320)));
     let r = rect(h);
     assert_eq!(r.right - r.left, 320 + 2 * pad);
-    assert!(b.has_picture(), "pictures at the new size");
+    // A picture of the old size is dropped; one of the new size comes.
+    assert!(b.wait_picture(Duration::from_secs(10)), "pictures at the new size");
     assert!(b.error().is_none());
     // Closed: the window is gone and the camera released.
     drop(b);

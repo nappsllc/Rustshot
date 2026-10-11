@@ -152,18 +152,115 @@ fn truncated_and_bad_messages_fail_cleanly() {
 }
 
 #[test]
+fn signatures_need_their_nul_and_padding_must_be_zero() {
+    // A variant whose signature is not NUL-terminated.
+    let mut w = Writer::new();
+    w.put(&Value::variant(Value::Byte(9))).unwrap();
+    assert_eq!(w.buf, [1, b'y', 0, 9]);
+    let mut bad = w.buf.clone();
+    bad[2] = b'!';
+    assert!(Reader::new(&bad, 0, true).get(&Ty::Variant).is_err());
+    assert!(Reader::new(&w.buf, 0, true).get(&Ty::Variant).is_ok());
+    // A u32 after a byte: three padding bytes, which must be zero.
+    let mut w = Writer::new();
+    w.put(&Value::Struct(vec![Value::Byte(1), Value::U32(2)])).unwrap();
+    let ty = parse_sig("(yu)").unwrap();
+    assert!(Reader::new(&w.buf, 0, true).get(&ty[0]).is_ok());
+    let mut bad = w.buf.clone();
+    bad[2] = 0xff;
+    assert!(Reader::new(&bad, 0, true).get(&ty[0]).is_err());
+}
+
+/// A signal of `body` with its body signature replaced by `sig` (same
+/// length), for messages whose header reads but whose body does not.
+fn with_sig(m: &Message, serial: u32, from: &str, to: &str) -> Vec<u8> {
+    let mut b = m.encode(serial).unwrap();
+    let mut pat = vec![8, 1, b'g', 0, from.len() as u8];
+    pat.extend_from_slice(from.as_bytes());
+    let at = b.windows(pat.len()).position(|w| w == pat.as_slice()).expect("signature field") + 5;
+    b[at..at + to.len()].copy_from_slice(to.as_bytes());
+    b
+}
+
+/// `Conn::read` against a fake bus on a socket pair: a message that does
+/// not parse is dropped with its descriptor and the next one still reads
+/// (with its own descriptor); a stream that loses its framing breaks the
+/// connection; so does the peer hanging up.
+#[cfg(target_os = "linux")]
+#[test]
+fn garbage_from_the_bus_is_dropped_or_breaks_the_connection() {
+    use std::io::{Read, Write};
+    use std::os::fd::AsRawFd;
+    use std::os::unix::net::UnixStream;
+    use std::time::Instant;
+    let soon = || Instant::now() + Duration::from_secs(2);
+
+    let (ours, theirs) = UnixStream::pair().unwrap();
+    let mut c = Conn::over(ours);
+    let mut fake = Conn::over(theirs);
+    // A bad boolean (the u32 5 read as `b`), sent with a descriptor.
+    let mut bad = Message::signal("/x", "a.b", "Bad", vec![Value::U32(5), Value::Fd(0)]);
+    bad.push_fd(dummy_fd());
+    let bad = with_sig(&bad, 1, "uh", "bh");
+    let (r0, w0) = crate::rec::linux::child::pipe().unwrap();
+    fake.write_raw(&bad, &[w0.as_raw_fd()]).unwrap();
+    drop(w0);
+    // Then a good one with another descriptor.
+    let (r1, w1) = crate::rec::linux::child::pipe().unwrap();
+    let mut good = Message::signal("/x", "a.b", "Good", vec![Value::Fd(0)]);
+    good.push_fd(w1);
+    fake.send(good).unwrap();
+
+    let e = c.read(soon()).unwrap_err();
+    assert!(format!("{e:#}").contains("dropped"), "{e:#}");
+    // The bad message's descriptor was closed: its pipe reads EOF.
+    let mut s = String::new();
+    std::fs::File::from(r0).read_to_string(&mut s).unwrap();
+    assert_eq!(s, "");
+    let mut m = c.read(soon()).unwrap().expect("the good message");
+    assert!(m.is("a.b", "Good"));
+    let mut f = std::fs::File::from(m.take_fd(&Value::Fd(0)).unwrap());
+    f.write_all(b"ok").unwrap();
+    drop(f);
+    std::fs::File::from(r1).read_to_string(&mut s).unwrap();
+    assert_eq!(s, "ok", "the good message got its own descriptor");
+    assert!(c.read(Instant::now() + Duration::from_millis(50)).unwrap().is_none(), "nothing else");
+
+    // Bytes that are no message at all: the connection is broken for good.
+    fake.write_raw(b"this is not D-Bus at all", &[]).unwrap();
+    let e = c.read(soon()).unwrap_err();
+    assert!(format!("{e:#}").contains("byte order"), "{e:#}");
+    fake.send(Message::signal("/x", "a.b", "Late", vec![])).unwrap();
+    let e = c.read(soon()).unwrap_err();
+    assert!(format!("{e:#}").contains("broken"), "{e:#}");
+    assert!(c.send(Message::signal("/x", "a.b", "S", vec![])).is_err());
+
+    // The peer hanging up mid-message.
+    let (ours, mut theirs) = UnixStream::pair().unwrap();
+    let mut c = Conn::over(ours);
+    let whole = Message::signal("/x", "a.b", "S", vec![Value::str("cut")]).encode(1).unwrap();
+    theirs.write_all(&whole[..whole.len() - 3]).unwrap();
+    drop(theirs);
+    let e = c.read(soon()).unwrap_err();
+    assert!(format!("{e:#}").contains("closed"), "{e:#}");
+}
+
+#[test]
 fn file_descriptors_are_taken_by_index() {
     let mut m = Message::signal("/x", "a.b", "S", vec![]);
-    m.fds.push(dummy_fd());
+    m.push_fd(dummy_fd());
     let v = Value::Fd(0);
     assert!(m.take_fd(&Value::Fd(3)).is_err());
     assert!(m.take_fd(&v).is_ok());
     assert!(m.take_fd(&v).is_err(), "taken once");
+    // Taking one leaves the others where their `h` values say.
+    assert_eq!(m.push_fd(dummy_fd()), 1);
+    assert!(m.take_fd(&Value::Fd(1)).is_ok());
     // A fd value needs its descriptor; one with it says UNIX_FDS.
     let m = Message::signal("/x", "a.b", "S", vec![Value::Fd(0)]);
     assert!(m.encode(1).is_err());
     let mut m = Message::signal("/x", "a.b", "S", vec![Value::Fd(0)]);
-    m.fds.push(dummy_fd());
+    m.push_fd(dummy_fd());
     let (_, nfd) = Message::decode(&m.encode(1).unwrap()).unwrap();
     assert_eq!(nfd, 1);
 }
@@ -240,7 +337,7 @@ fn live_dbus_session_bus() {
     let (r, w) = crate::rec::linux::child::pipe().unwrap();
     let mut m = Message::call(&me, "/io/github/nappsllc/test", "io.github.nappsllc.Test", "TakeFd", vec![Value::Fd(0)]);
     m.flags = NO_REPLY;
-    m.fds.push(w);
+    m.push_fd(w);
     c.send(m).unwrap();
     let mut call = c.wait_call(Duration::from_secs(5)).unwrap().expect("our call");
     assert!(call.is("io.github.nappsllc.Test", "TakeFd"));

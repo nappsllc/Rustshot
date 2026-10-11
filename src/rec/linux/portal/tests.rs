@@ -1,4 +1,5 @@
 use super::*;
+use anyhow::bail;
 use crate::dbus::{Kind, Message, Value};
 use std::collections::VecDeque;
 
@@ -21,6 +22,9 @@ struct Fake {
     calls: Vec<Message>,
     rules: Vec<String>,
     sent: Vec<Message>,
+    /// Who sends the Response signals (the portal's owner, `:1.5`, unless
+    /// a test spoofs it).
+    responder: String,
 }
 
 impl Fake {
@@ -34,6 +38,7 @@ impl Fake {
             calls: Vec::new(),
             rules: Vec::new(),
             sent: Vec::new(),
+            responder: ":1.5".into(),
         }
     }
 
@@ -56,6 +61,8 @@ impl Bus for Fake {
         call.serial = self.calls.len() as u32 + 1;
         let member = call.member.clone().unwrap_or_default();
         let reply = match member.as_str() {
+            // Not recorded: every request asks it first.
+            "GetNameOwner" => return Ok(Message::reply(&call, vec![Value::str(":1.5")])),
             "AddMatch" => {
                 self.rules.push(call.body[0].as_str().unwrap().into());
                 Message::reply(&call, vec![])
@@ -82,13 +89,13 @@ impl Bus for Fake {
                     // Only delivered when subscribed before the call (a fast portal).
                     if self.rules.iter().any(|r| r.contains(&format!("path='{path}'"))) || self.path_override.is_some() {
                         let mut s = Message::signal(&path, REQUEST, "Response", vec![Value::U32(code), results]);
-                        s.sender = Some(":1.5".into());
+                        s.sender = Some(self.responder.clone());
                         self.signals.push_back(s);
                     }
                 }
                 let mut r = Message::reply(&call, body);
                 if member == "OpenPipeWireRemote" {
-                    r.fds.push(crate::dbus::tests::dummy_fd());
+                    r.push_fd(crate::dbus::tests::dummy_fd());
                 }
                 r
             }
@@ -255,7 +262,7 @@ fn the_camera_portal_asks_then_opens_the_remote() {
     });
     bus.props.push((CAMERA, "IsCameraPresent", Value::Bool(true)));
     assert!(camera_present(&mut bus).unwrap());
-    assert!(access_camera(&mut bus).is_ok());
+    assert!(access_camera(&mut bus, None).is_ok());
     let opw = bus.calls.iter().find(|m| m.member.as_deref() == Some("OpenPipeWireRemote")).unwrap();
     assert_eq!(opw.iface.as_deref(), Some(CAMERA));
     assert_eq!(opw.body.len(), 1, "options only");
@@ -325,7 +332,7 @@ fn the_screenshot_portal_answers_with_a_file() {
         let handle = Value::path(&request_path(":1.42", &opts_token(m)));
         Ok((vec![handle], Some((0, results(vec![("uri", Value::str("file:///tmp/out%20one.png"))])))))
     });
-    let uri = screenshot(&mut bus).unwrap();
+    let uri = screenshot(&mut bus, Duration::from_secs(3)).unwrap();
     assert_eq!(file_uri_path(&uri).as_deref(), Some("/tmp/out one.png"));
     assert!(bus.rules.is_empty(), "the Response match is removed");
 
@@ -333,7 +340,7 @@ fn the_screenshot_portal_answers_with_a_file() {
         let handle = Value::path(&request_path(":1.42", &opts_token(m)));
         Ok((vec![handle], Some((2, results(vec![])))))
     });
-    assert!(screenshot(&mut refused).is_err());
+    assert!(screenshot(&mut refused, Duration::from_secs(3)).is_err());
 }
 
 #[test]
@@ -369,4 +376,120 @@ fn the_screenshot_is_cropped_to_the_rect() {
     assert_eq!(c.get_pixel(0, 0), [3, 1, 0, 255]);
     assert_eq!(c.get_pixel(1, 1), [0, 0, 0, 255]);
     assert!(crop_screen(&img, (4, 2), (0, 0, 0, 1)).is_none());
+}
+
+#[test]
+fn a_response_from_anyone_but_the_portal_is_ignored() {
+    let mut bus = Fake::new(happy);
+    bus.responder = ":1.66".into();
+    let e = screencast(&mut bus, None).unwrap_err();
+    assert!(e.is::<NoAnswer>(), "a spoofed Response is not taken: {e:#}");
+}
+
+#[test]
+fn a_waiting_request_can_be_called_off() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    // Called off before it starts: nothing is asked.
+    let mut bus = Fake::new(happy);
+    let off = AtomicBool::new(true);
+    assert!(screencast_or_cancel(&mut bus, None, Some(&off)).unwrap_err().is::<Cancelled>());
+    assert!(bus.members().iter().all(|m| m != "CreateSession"));
+    // Called off while the dialog is open: the dialog and the session close.
+    let flag = Arc::new(AtomicBool::new(false));
+    let f2 = flag.clone();
+    let mut bus = Fake::new(move |m: &Message| {
+        if m.member.as_deref() == Some("Start") {
+            f2.store(true, Ordering::SeqCst); // the user pressed Stop meanwhile
+            return Ok((vec![Value::path(&request_path(":1.42", &opts_token(m)))], None));
+        }
+        happy(m)
+    });
+    let e = screencast_or_cancel(&mut bus, None, Some(&flag)).unwrap_err();
+    assert!(e.is::<Cancelled>(), "{e:#}");
+    let closed: Vec<_> = bus.sent.iter().filter(|m| m.member.as_deref() == Some("Close")).filter_map(|m| m.iface.clone()).collect();
+    assert_eq!(closed, ["org.freedesktop.portal.Request", "org.freedesktop.portal.Session"]);
+    assert!(bus.rules.is_empty());
+}
+
+#[test]
+fn a_restored_choice_that_does_not_come_back_is_asked_again() {
+    // With the token, Start never answers (the portal lost it): the token
+    // is dropped and a fresh dialog answers.
+    let mut bus = Fake::new(|m: &Message| {
+        let restoring = m.member.as_deref() == Some("SelectSources") && m.body[1].get("restore_token").is_some();
+        thread_local!(static RESTORING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) });
+        if m.member.as_deref() == Some("SelectSources") {
+            RESTORING.with(|r| r.set(restoring));
+        }
+        if m.member.as_deref() == Some("Start") && RESTORING.with(|r| r.get()) {
+            return Ok((vec![Value::path(&request_path(":1.42", &opts_token(m)))], None));
+        }
+        happy(m)
+    });
+    let mut forgot = 0;
+    let info = negotiate(&mut bus, Some("old"), (2000, 10, 100, 100), &[], None, &mut || forgot += 1).unwrap();
+    assert_eq!(forgot, 1);
+    assert_eq!(info.restore_token.as_deref(), Some("tok-2"));
+    let starts = bus.calls.iter().filter(|m| m.member.as_deref() == Some("Start")).count();
+    assert_eq!(starts, 2);
+    // A restored choice of another monitor than the selection's: asked again too.
+    let mut bus = Fake::new(happy);
+    let mut forgot = 0;
+    negotiate(&mut bus, Some("old"), (10, 10, 100, 100), &[(0, 0, 1920, 1080), (1920, 0, 1280, 720)], None, &mut || forgot += 1).unwrap();
+    assert_eq!(forgot, 1, "the share is at 1920,0; the selection is not");
+    // Without a token nothing is retried.
+    let mut bus = Fake::new(happy);
+    let mut forgot = 0;
+    negotiate(&mut bus, None, (10, 10, 100, 100), &[(0, 0, 1920, 1080), (1920, 0, 1280, 720)], None, &mut || forgot += 1).unwrap();
+    assert_eq!(forgot, 0);
+}
+
+/// KDE with "X applications scale themselves" at 2x: XWayland's
+/// coordinates are the logical layout times 2; the portal speaks logical.
+#[test]
+fn kde_style_scaled_x_coordinates_are_mapped() {
+    let mons = [(0, 0, 2560, 1440), (2560, 0, 2560, 1440)];
+    let s = StreamInfo { node: 1, pos: Some((1280, 0)), size: Some((1280, 720)) };
+    let area = (2600, 100, 800, 600);
+    let r = stream_rect(&s, (2560, 1440), area, &mons);
+    assert_eq!(r, Some((2560, 0, 2560, 1440)), "the right monitor, in X px");
+    assert_eq!(crop_for(area, r, (2560, 1440)), ((40, 100, 800, 600), true));
+    // The left one.
+    let s = StreamInfo { node: 1, pos: Some((0, 0)), size: Some((1280, 720)) };
+    assert_eq!(stream_rect(&s, (2560, 1440), (10, 10, 5, 5), &mons), Some((0, 0, 2560, 1440)));
+}
+
+/// GNOME: X clients see the logical layout (the compositor scales them);
+/// the pictures come at the monitor's 2x.
+#[test]
+fn gnome_style_logical_x_coordinates_are_mapped() {
+    let mons = [(0, 0, 1280, 720), (1280, 0, 1280, 720)];
+    let s = StreamInfo { node: 1, pos: Some((1280, 0)), size: Some((1280, 720)) };
+    let area = (1300, 10, 100, 100);
+    let r = stream_rect(&s, (2560, 1440), area, &mons);
+    assert_eq!(r, Some((1280, 0, 1280, 720)));
+    assert_eq!(crop_for(area, r, (2560, 1440)), ((40, 20, 200, 200), true));
+}
+
+/// When the X monitors and the portal disagree (no X monitor is at the
+/// portal's place, or its shape differs), the whole shared screen is
+/// recorded and the user told.
+#[test]
+fn disagreeing_layouts_record_the_whole_shared_screen() {
+    // At the right place but of another shape.
+    let mons = [(0, 0, 1920, 1080), (1920, 0, 1920, 1200)];
+    let s = StreamInfo { node: 1, pos: Some((1920, 0)), size: Some((1280, 720)) };
+    let area = (2000, 10, 100, 100);
+    let r = stream_rect(&s, (1280, 720), area, &mons);
+    assert_eq!(r, None);
+    assert_eq!(crop_for(area, r, (1280, 720)), ((0, 0, 1280, 720), false));
+    // Nowhere near: none either.
+    let s = StreamInfo { node: 1, pos: Some((5000, 5000)), size: Some((1280, 720)) };
+    assert_eq!(stream_rect(&s, (1280, 720), area, &mons), None);
+    // A single monitor is the shared one when the shapes agree.
+    let s = StreamInfo { node: 1, pos: Some((0, 0)), size: Some((1280, 720)) };
+    assert_eq!(stream_rect(&s, (1920, 1080), (5, 5, 5, 5), &mons[..1]), Some((0, 0, 1920, 1080)));
+    // The pictures of another shape than the monitor: none.
+    assert_eq!(stream_rect(&s, (1000, 1000), (5, 5, 5, 5), &mons[..1]), None);
 }

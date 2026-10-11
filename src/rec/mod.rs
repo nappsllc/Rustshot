@@ -144,6 +144,12 @@ pub trait FrameSource: Send {
     fn next(&mut self, deadline: Instant) -> Option<Frame>;
     /// Frame size in pixels.
     fn size(&self) -> (u32, u32);
+    /// Why the source can give no more frames (the screen share was
+    /// stopped under it), once that happened: the session then stops,
+    /// keeps the file and reports this as its failure.
+    fn ended(&self) -> Option<String> {
+        None
+    }
 }
 
 /// Produces PCM samples as they arrive.
@@ -496,6 +502,8 @@ pub struct Session {
     queue: Arc<FrameQueue>,
     frames: Arc<AtomicU64>,
     failed: Arc<AtomicBool>,
+    /// Why the frame source ended the recording ([`FrameSource::ended`]).
+    source_end: Arc<Mutex<Option<String>>>,
     capture: Option<JoinHandle<()>>,
     encode: Option<JoinHandle<EncodeEnd>>,
     out: PathBuf,
@@ -534,11 +542,17 @@ impl Session {
         let failed = Arc::new(AtomicBool::new(false));
         let (ctl, rx) = mpsc::channel();
         let interval = Duration::from_secs_f64(1.0 / spec.capture_fps() as f64);
+        let source_end = Arc::new(Mutex::new(None));
         let capture = {
             let (clock, queue, time) = (clock.clone(), queue.clone(), time.clone());
-            std::thread::Builder::new()
-                .name("rec-capture".into())
-                .spawn(move || capture_loop(source, interval, &clock, &time, &queue, &rx))
+            let (failed, source_end) = (failed.clone(), source_end.clone());
+            std::thread::Builder::new().name("rec-capture".into()).spawn(move || {
+                let end = capture_loop(source, interval, &clock, &time, &queue, &rx);
+                if let Some(why) = end {
+                    *source_end.lock().unwrap_or_else(|e| e.into_inner()) = Some(why);
+                    failed.store(true, Ordering::Relaxed);
+                }
+            })
         };
         let capture = match capture {
             Ok(h) => h,
@@ -575,6 +589,7 @@ impl Session {
             queue,
             frames,
             failed,
+            source_end,
             capture: Some(capture),
             encode: Some(encode),
             out: spec.out,
@@ -630,6 +645,12 @@ impl Session {
         let Some(h) = self.encode.take() else { return Err(anyhow!("recording already stopped")) };
         let part = part_path(&self.out);
         let (mut push_err, finished) = h.join().unwrap_or_else(|_| (None, Err(anyhow!("the encoder crashed"))));
+        // The source ended it (the screen share stopped): a failure, the file kept.
+        if push_err.is_none()
+            && let Some(why) = self.source_end.lock().unwrap_or_else(|e| e.into_inner()).take()
+        {
+            push_err = Some(anyhow!(why));
+        }
         let finished = match finished {
             // Failed, but the file plays: kept, and the failure reported.
             Err(e) if e.is::<Salvaged>() => {
@@ -677,7 +698,7 @@ fn capture_loop(
     time: &TimeFn,
     queue: &FrameQueue,
     rx: &mpsc::Receiver<Ctl>,
-) {
+) -> Option<String> {
     // Pacing (`tick`, the deadline given to the source) is real time,
     // `Instant::now`; the session's `time` only stamps frames. The session
     // tests depend on this: their stepped source does not keep to the
@@ -713,6 +734,10 @@ fn capture_loop(
                 break;
             }
         }
+        if let Some(why) = source.ended() {
+            queue.close();
+            return Some(why);
+        }
         // Next tick; after a stall, resume from now instead of bursting.
         tick += interval;
         let now = Instant::now();
@@ -721,6 +746,7 @@ fn capture_loop(
         }
     }
     queue.close();
+    None
 }
 
 fn encode_loop(

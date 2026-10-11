@@ -442,6 +442,14 @@ impl App {
     /// Advance the recording; once it is over, say how it went.
     fn tick_recording(&mut self) {
         let Some(run) = self.rec.as_mut() else { return };
+        // Wayland: the desktop put the bubble or the bar in a bad place.
+        if let Some(hint) = run.take_hint() {
+            eprintln!("rustshot: {hint}");
+            if !self.one_shot() {
+                crate::tray::notify(hint);
+            }
+        }
+        let Some(run) = self.rec.as_mut() else { return };
         let Some(end) = run.tick(Instant::now()) else { return };
         self.rec = None;
         self.recording_over(end);

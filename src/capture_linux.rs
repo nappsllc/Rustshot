@@ -190,7 +190,7 @@ pub fn gdi_capture(x: i32, y: i32, w: u32, h: u32) -> Result<PixBuf> {
 /// portal, cropped to the rect (X coordinates: XWayland's screen, which
 /// may be at another scale than the picture).
 fn portal_capture(x: i32, y: i32, w: u32, h: u32) -> Result<PixBuf> {
-    let img = crate::rec::linux::portal::grab_screen()
+    let img = crate::rec::linux::portal::grab_screen(std::time::Duration::from_secs(60))
         .map_err(|e| anyhow!("Wayland screen capture needs the Screenshot portal (xdg-desktop-portal): {e:#}"))?;
     let screen = x_screen_size().unwrap_or(img.dimensions());
     crate::rec::linux::portal::crop_screen(&img, screen, (x, y, w, h)).ok_or_else(|| anyhow!("empty screenshot"))

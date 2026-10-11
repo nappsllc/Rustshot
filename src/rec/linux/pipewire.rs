@@ -207,15 +207,22 @@ struct Shared {
     /// picture (empty or corrupted): diagnostics for a cast that shows nothing.
     buffers: AtomicU64,
     unusable: AtomicU64,
+    /// When the agreed format was taken away (`param_changed` with no
+    /// Format: the peer node unlinked, e.g. the portal closed the session)
+    /// and none came back since.
+    lost: Mutex<Option<Instant>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-unsafe extern "C" fn on_state(data: *mut c_void, _old: c_int, state: c_int, error: *const c_char) {
+unsafe extern "C" fn on_state(data: *mut c_void, old: c_int, state: c_int, error: *const c_char) {
     // SAFETY: `data` is the stream's `Shared`, alive while the listener is.
     let sh = unsafe { &*(data as *const Shared) };
+    if matches!(state, STATE_ERROR | STATE_UNCONNECTED) {
+        eprintln!("rustshot: PipeWire stream state {old} -> {state}");
+    }
     match state {
         STATE_ERROR => {
             let msg = if error.is_null() { "the stream failed".to_string() } else { unsafe { std::ffi::CStr::from_ptr(error) }.to_string_lossy().into_owned() };
@@ -234,11 +241,24 @@ unsafe extern "C" fn on_state(data: *mut c_void, _old: c_int, state: c_int, erro
 }
 
 unsafe extern "C" fn on_param(data: *mut c_void, id: u32, param: *const u8) {
-    if id != pod::PARAM_FORMAT || param.is_null() {
+    if id != pod::PARAM_FORMAT {
         return;
     }
     // SAFETY: as in `on_state`; a pod is its 8-byte header plus `size` bytes.
     let sh = unsafe { &*(data as *const Shared) };
+    if param.is_null() {
+        // The format is gone: the node we were linked to went away (or a
+        // renegotiation, which brings a new one at once).
+        let mut lost = lock(&sh.lost);
+        if lock(&sh.fmt).is_some() && lost.is_none() {
+            eprintln!("rustshot: PipeWire: the stream lost its format");
+            *lost = Some(Instant::now());
+            drop(lost);
+            sh.changed.notify_all();
+        }
+        return;
+    }
+    *lock(&sh.lost) = None;
     let p = unsafe {
         let size = (param as *const u32).read_unaligned() as usize;
         core::slice::from_raw_parts(param, 8 + size)
@@ -373,6 +393,7 @@ impl Stream {
             on_frame: Mutex::new(on_frame),
             buffers: AtomicU64::new(0),
             unusable: AtomicU64::new(0),
+            lost: Mutex::new(None),
         });
         // SAFETY: libpipewire's documented call order; every object made
         // here is destroyed by `Drop` (or below when a step fails).
@@ -452,7 +473,14 @@ impl Stream {
 
     /// The stream failed or ended.
     pub fn error(&self) -> Option<String> {
-        lock(&self.shared.error).clone()
+        if let Some(e) = lock(&self.shared.error).clone() {
+            return Some(e);
+        }
+        // Unlinked (the format taken away) and not back after a while: the
+        // source node is gone (xdg-desktop-portal-wlr leaves the stream
+        // paused, not unconnected, when its session closes).
+        let lost = *lock(&self.shared.lost);
+        (lost.is_some_and(|t| t.elapsed() >= RELINK_WAIT) && !*lock(&self.shared.streaming)).then(|| "the stream ended".into())
     }
 
     /// (buffers received, of which without a usable picture).
@@ -594,15 +622,35 @@ enum Crop {
 pub struct ScreenSource {
     stream: Stream,
     latest: Latest,
-    _cast: super::portal::Cast,
+    cast: super::portal::Cast,
+    /// Why the share stopped under the recording, once it did.
+    ended: Option<String>,
+    /// Set to close the portal session from the next `next` (tests: the
+    /// desktop's "stop sharing" under a running recording).
+    #[cfg(test)]
+    stop_req: Arc<std::sync::atomic::AtomicBool>,
 }
 
+impl ScreenSource {
+    /// See `stop_req`.
+    #[cfg(test)]
+    pub fn stop_handle(&self) -> Arc<std::sync::atomic::AtomicBool> {
+        self.stop_req.clone()
+    }
+}
+
+/// How long a stream may be without a format (unlinked) before it counts
+/// as ended.
+const RELINK_WAIT: Duration = Duration::from_secs(2);
 /// How long the compositor may take to agree a format.
 const FORMAT_WAIT: Duration = Duration::from_secs(10);
 /// How long the compositor may take to send its first picture.
 const FIRST_FRAME_WAIT: Duration = Duration::from_secs(5);
 /// How long to wait for it before seeding the source with a screenshot.
 const SEED_AFTER: Duration = Duration::from_millis(1500);
+/// How long the seed screenshot may take (the Screenshot portal); without
+/// it the source waits for the cast's first picture as before.
+const SEED_WAIT: Duration = Duration::from_secs(3);
 /// The error when it sends none.
 pub const NO_PICTURE: &str = "The screen share sent no picture";
 
@@ -673,7 +721,7 @@ impl ScreenSource {
         if !slot.wait_first(Instant::now() + SEED_AFTER) {
             let s = &cast.info.stream;
             let mon = s.pos.zip(s.size);
-            match super::portal::grab_screen() {
+            match super::portal::grab_screen(SEED_WAIT) {
                 Ok(img) => match seed_picture(&img, mon, (fmt.w, fmt.h), c) {
                     Some(px) => {
                         if slot.put_first(px) {
@@ -690,7 +738,14 @@ impl ScreenSource {
             let why = stream.error().map(|e| format!("; {e}")).unwrap_or_default();
             bail!("{NO_PICTURE} within {} s ({n} buffers from PipeWire, {bad} without a picture{why})", FIRST_FRAME_WAIT.as_secs());
         }
-        Ok(ScreenSource { stream, latest: Latest { slot, size, seen: 0, last: None }, _cast: cast })
+        Ok(ScreenSource {
+            stream,
+            latest: Latest { slot, size, seen: 0, last: None },
+            cast,
+            ended: None,
+            #[cfg(test)]
+            stop_req: Arc::default(),
+        })
     }
 }
 
@@ -715,24 +770,69 @@ fn seed_picture(img: &crate::pixbuf::PixBuf, mon: Option<((i32, i32), (i32, i32)
 }
 
 impl FrameSource for ScreenSource {
+    /// The newest picture (the last one again on a still screen), unless
+    /// the share stopped: the stream failed or ended, or the portal closed
+    /// the session (looked at on every call), which ends the recording
+    /// ([`FrameSource::ended`]).
     fn next(&mut self, deadline: Instant) -> Option<Frame> {
-        let f = self.latest.next(deadline);
-        if f.is_none()
-            && let Some(e) = self.stream.error()
-        {
-            eprintln!("rustshot: screen cast: {e}");
+        #[cfg(test)]
+        if self.stop_req.swap(false, Ordering::SeqCst) {
+            self.cast.close_now();
         }
-        f
+        if self.ended.is_none() {
+            if let Some(e) = self.stream.error() {
+                eprintln!("rustshot: screen cast: {e}");
+                self.ended = Some(format!("{} (PipeWire: {e})", super::portal::SHARING_STOPPED));
+            } else if self.cast.closed() {
+                self.ended = Some(super::portal::SHARING_STOPPED.into());
+            }
+        }
+        if self.ended.is_some() {
+            return None;
+        }
+        self.latest.next(deadline)
     }
 
     fn size(&self) -> (u32, u32) {
         self.latest.size
+    }
+
+    fn ended(&self) -> Option<String> {
+        self.ended.clone()
     }
 }
 
 // ---------------------------------------------------------------------------
 // Camera
 // ---------------------------------------------------------------------------
+
+/// One camera buffer (`planes` of a `fmt` picture) as BGRA into `f`;
+/// false when it holds no whole picture (too short, another format): the
+/// frame is skipped rather than shown black.
+fn cam_picture(fmt: pod::VideoFmt, planes: &[(&[u8], usize)], f: &mut crate::cam::CamFrame) -> bool {
+    let (w, h) = (fmt.w, fmt.h);
+    let Some(&(y, stride)) = planes.first() else { return false };
+    let cs = crate::cam::Matrix::Bt601;
+    let ok = match fmt.format {
+        pod::VF_YUY2 => {
+            let stride = if stride == 0 { w as usize * 2 } else { stride };
+            (f.w, f.h) = (w & !1, h);
+            crate::cam::yuy2_to_bgra(y, stride, w, h, cs, &mut f.bgra)
+        }
+        pod::VF_NV12 => {
+            let stride = if stride == 0 { w as usize } else { stride };
+            let (yp, uv) = match planes.get(1) {
+                Some(&(uv, _)) => (y, uv),
+                None if y.len() > stride * h as usize => y.split_at(stride * h as usize),
+                None => return false,
+            };
+            (f.w, f.h) = (w & !1, h & !1);
+            crate::cam::nv12_to_bgra(yp, uv, stride, w, h, cs, &mut f.bgra)
+        }
+        _ => None,
+    };
+    ok.is_some() && f.w > 0 && f.bgra.len() == (f.w * f.h * 4) as usize
+}
 
 /// A camera through the camera portal's PipeWire remote.
 pub struct PwCam {
@@ -745,41 +845,22 @@ pub struct PwCam {
 }
 
 impl PwCam {
-    /// Ask the camera portal for the camera (a dialog the first time) and
-    /// stream the default one at about 1280×720.
-    pub fn open() -> Result<PwCam> {
+    /// Ask the camera portal for the camera (a dialog the first time; `cancel`
+    /// calls it off) and stream the default one at about 1280×720.
+    pub fn open(cancel: Option<&super::portal::CancelFlag>) -> Result<PwCam> {
         let mut conn = crate::dbus::Conn::session()?;
-        let fd = super::portal::access_camera(&mut conn).map_err(|e| {
+        let fd = super::portal::access_camera(&mut conn, cancel).map_err(|e| {
             if e.is::<super::portal::Cancelled>() { anyhow!("camera access was not allowed") } else { e }
         })?;
         let slot = Arc::new(Slot::new());
         let s2 = slot.clone();
         let mut spare = crate::cam::CamFrame::default();
         let on_frame: OnFrame = Box::new(move |raw: &Raw| {
-            let (w, h) = (raw.fmt.w, raw.fmt.h);
-            let Some(&(y, stride)) = raw.planes.first() else { return };
-            let cs = crate::cam::Matrix::Bt601;
             let mut f = std::mem::take(&mut spare);
-            match raw.fmt.format {
-                pod::VF_YUY2 => {
-                    let stride = if stride == 0 { w as usize * 2 } else { stride };
-                    crate::cam::yuy2_to_bgra(y, stride, w, h, cs, &mut f.bgra);
-                    (f.w, f.h) = (w & !1, h);
-                }
-                pod::VF_NV12 => {
-                    let stride = if stride == 0 { w as usize } else { stride };
-                    let (yp, uv) = match raw.planes.get(1) {
-                        Some(&(uv, _)) => (y, uv),
-                        None if y.len() > stride * h as usize => y.split_at(stride * h as usize),
-                        None => return,
-                    };
-                    crate::cam::nv12_to_bgra(yp, uv, stride, w, h, cs, &mut f.bgra);
-                    (f.w, f.h) = (w & !1, h & !1);
-                }
-                _ => return,
-            }
-            if f.bgra.len() == (f.w * f.h * 4) as usize && f.w > 0 {
+            if cam_picture(raw.fmt, &raw.planes, &mut f) {
                 s2.put(f);
+            } else {
+                spare = f; // a short or odd buffer: skipped, not shown black
             }
         });
         let want = Want {
@@ -881,6 +962,23 @@ mod tests {
         // The same size as the pictures: cut as is.
         let px = seed_picture(&img, None, (4, 2), (0, 1, 1, 1)).unwrap();
         assert_eq!(px, [7, 1, 0, 255]);
+    }
+
+    /// A camera buffer shorter than its picture is skipped (no black frame).
+    #[test]
+    fn short_camera_buffers_are_skipped() {
+        let fmt = pod::VideoFmt { format: pod::VF_YUY2, w: 4, h: 2 };
+        let mut f = crate::cam::CamFrame::default();
+        let whole = [16u8, 128, 16, 128].repeat(4);
+        assert!(cam_picture(fmt, &[(&whole, 8)], &mut f));
+        assert_eq!((f.w, f.h, f.bgra.len()), (4, 2, 32));
+        assert!(!cam_picture(fmt, &[(&whole[..10], 8)], &mut f), "half a picture");
+        let nv = pod::VideoFmt { format: pod::VF_NV12, w: 4, h: 2 };
+        assert!(!cam_picture(nv, &[(&[16u8; 8], 4)], &mut f), "no chroma");
+        assert!(cam_picture(nv, &[(&[16u8; 8], 4), (&[128u8; 4], 4)], &mut f));
+        assert!(!cam_picture(nv, &[(&[16u8; 8], 4), (&[128u8; 2], 4)], &mut f), "short chroma");
+        assert!(!cam_picture(pod::VideoFmt { format: pod::VF_BGRX, w: 4, h: 2 }, &[(&whole, 8)], &mut f));
+        assert!(!cam_picture(fmt, &[], &mut f));
     }
 
     /// A still screen: one picture, then nothing; every tick still gets it.

@@ -5,7 +5,9 @@
 use super::End;
 use crate::rec::{AudioSource, FrameSource, RecSpec, Session, VideoEncoder};
 use anyhow::{Context, Result};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::Arc;
 use std::time::Duration;
 
 pub(crate) enum Cmd {
@@ -35,17 +37,23 @@ pub(crate) struct Parts {
 /// `prepare`; tests inject their own).
 pub(crate) type Opener = Box<dyn FnOnce(&RecSpec) -> Result<Parts> + Send>;
 
-pub(crate) fn work(spec: RecSpec, open: Opener, rx: Receiver<Cmd>) -> End {
+pub(crate) fn work(spec: RecSpec, open: Opener, rx: Receiver<Cmd>, ready: &AtomicBool) -> End {
     #[cfg(windows)]
     crate::rec::win::com_init();
     let part = spec.part_path();
     let Parts { src, mut audio, enc, mut warnings, late } = match open(&spec) {
         Ok(p) => p,
+        // Called off while opening (the portal's dialog closed, or Stop).
+        Err(e) if e.is::<super::NotStarted>() => {
+            let _ = std::fs::remove_file(&part);
+            return End::Cancelled;
+        }
         Err(e) => {
             let _ = std::fs::remove_file(&part);
             return End::Failed(format!("{e:#}"));
         }
     };
+    ready.store(true, Ordering::SeqCst);
     loop {
         match rx.recv() {
             Ok(Cmd::Go) => break,
@@ -98,6 +106,10 @@ pub(crate) fn work(spec: RecSpec, open: Opener, rx: Receiver<Cmd>) -> End {
 pub(crate) struct Worker {
     pub(crate) tx: Sender<Cmd>,
     pub(crate) rx: Receiver<End>,
+    /// The parts opened (on Wayland: the screen was chosen in the portal's
+    /// dialog); the countdown may begin.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))] // Windows asks nothing first
+    pub(crate) ready: Arc<AtomicBool>,
     join: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -105,13 +117,15 @@ impl Worker {
     pub(crate) fn spawn(spec: RecSpec, open: Opener) -> Result<Worker> {
         let (tx, crx) = mpsc::channel();
         let (etx, rx) = mpsc::channel();
+        let ready = Arc::new(AtomicBool::new(false));
+        let r2 = ready.clone();
         let join = std::thread::Builder::new()
             .name("rec-worker".into())
             .spawn(move || {
-                let _ = etx.send(work(spec, open, crx));
+                let _ = etx.send(work(spec, open, crx, &r2));
             })
             .context("start the recording thread")?;
-        Ok(Worker { tx, rx, join: Some(join) })
+        Ok(Worker { tx, rx, ready, join: Some(join) })
     }
 }
 

@@ -431,6 +431,9 @@ impl<'a> Reader<'a> {
         if self.pos + p > self.buf.len() {
             bail!("message truncated");
         }
+        if self.buf[self.pos..self.pos + p].iter().any(|&b| b != 0) {
+            bail!("non-zero padding");
+        }
         self.pos += p;
         Ok(())
     }
@@ -469,6 +472,9 @@ impl<'a> Reader<'a> {
     fn sig(&mut self) -> Result<String> {
         let n = self.take(1)?[0] as usize;
         let s = self.take(n + 1)?;
+        if s[n] != 0 {
+            bail!("signature not terminated");
+        }
         String::from_utf8(s[..n].to_vec()).map_err(|_| anyhow!("bad signature"))
     }
 
@@ -587,8 +593,9 @@ pub struct Message {
     pub dest: Option<String>,
     pub sender: Option<String>,
     pub body: Vec<Value>,
-    /// Descriptors sent with it (`h` values index them).
-    pub fds: Vec<Fd>,
+    /// Descriptors sent with it (`h` values index them); a taken one
+    /// leaves `None`, so the other indices stay valid.
+    pub fds: Vec<Option<Fd>>,
 }
 
 const MAX_MESSAGE: usize = 128 << 20;
@@ -663,14 +670,22 @@ impl Message {
         self.iface.as_deref() == Some(iface) && self.member.as_deref() == Some(member)
     }
 
-    /// Take descriptor `v` (an `h` value) out of the message.
+    /// Attach `f`; its index (the `h` value that refers to it).
+    #[allow(dead_code)] // tests; the StatusNotifierItem tray
+    pub fn push_fd(&mut self, f: Fd) -> u32 {
+        self.fds.push(Some(f));
+        (self.fds.len() - 1) as u32
+    }
+
+    /// Take descriptor `v` (an `h` value) out of the message; the others
+    /// keep their indices.
     pub fn take_fd(&mut self, v: &Value) -> Result<Fd> {
         let Value::Fd(i) = v.inner() else { bail!("not a file descriptor") };
         let i = *i as usize;
-        if i >= self.fds.len() {
-            bail!("the message carries no file descriptor {i}");
+        match self.fds.get_mut(i) {
+            None => bail!("the message carries no file descriptor {i}"),
+            Some(slot) => slot.take().ok_or_else(|| anyhow!("file descriptor {i} was already taken")),
         }
-        Ok(self.fds.remove(i))
     }
 
     /// The wire form (little-endian), with `serial`.
@@ -751,6 +766,27 @@ impl Message {
     /// Parse one whole message (no descriptors attached yet); also the
     /// number of descriptors it says it carries.
     pub fn decode(buf: &[u8]) -> Result<(Message, u32)> {
+        let (mut m, h) = Message::header(buf)?;
+        let le = buf[0] == b'l';
+        let mut br = Reader::new(&buf[h.body_at..h.end], h.body_at, le);
+        for t in parse_sig(&h.sig)? {
+            m.body.push(br.get(&t)?);
+        }
+        if br.pos != h.end - h.body_at {
+            bail!("body longer than its signature");
+        }
+        Ok((m, h.nfd))
+    }
+
+    /// The number of descriptors the (whole) message in `buf` says it
+    /// carries, when at least its header can be read.
+    pub fn declared_fds(buf: &[u8]) -> Option<u32> {
+        Message::header(buf).ok().map(|(_, h)| h.nfd)
+    }
+
+    /// The header of the whole message at the start of `buf` (the message
+    /// without its body) and where its body is.
+    fn header(buf: &[u8]) -> Result<(Message, Header)> {
         let Some(n) = Message::wire_len(buf)? else { bail!("message truncated") };
         if buf.len() < n {
             bail!("message truncated");
@@ -796,15 +832,16 @@ impl Message {
         if r.pos + body_len != n {
             bail!("body length mismatch");
         }
-        let mut br = Reader::new(&buf[r.pos..n], r.pos, le);
-        for t in parse_sig(&sig)? {
-            m.body.push(br.get(&t)?);
-        }
-        if br.pos != body_len {
-            bail!("body longer than its signature");
-        }
-        Ok((m, nfd))
+        Ok((m, Header { sig, nfd, body_at: r.pos, end: n }))
     }
+}
+
+/// Where a message's body is and what it holds.
+struct Header {
+    sig: String,
+    nfd: u32,
+    body_at: usize,
+    end: usize,
 }
 
 fn has_fd(v: &Value) -> bool {
@@ -1021,12 +1058,21 @@ mod conn {
         infds: VecDeque<OwnedFd>,
         /// Signals (and calls to us) not yet asked for.
         kept: VecDeque<Message>,
+        /// Why the connection can no longer be used (the stream lost its
+        /// framing, or descriptors were cut off): every later use fails.
+        broken: Option<String>,
     }
 
     impl Conn {
         /// Connect to the session bus (`DBUS_SESSION_BUS_ADDRESS`, else
         /// `$XDG_RUNTIME_DIR/bus`), authenticate and say `Hello`.
         pub fn session() -> Result<Conn> {
+            Conn::session_within(CALL_TIMEOUT)
+        }
+
+        /// [`Conn::session`], each step (connecting, authenticating,
+        /// `Hello`) given `timeout` at most.
+        pub fn session_within(timeout: Duration) -> Result<Conn> {
             let addr = std::env::var("DBUS_SESSION_BUS_ADDRESS").ok().filter(|s| !s.is_empty());
             let addrs = match addr {
                 Some(a) => parse_address(&a),
@@ -1037,7 +1083,7 @@ mod conn {
             }
             let mut last = anyhow!("no usable session bus address");
             for a in &addrs {
-                match Conn::connect(a) {
+                match Conn::connect(a, timeout) {
                     Ok(c) => return Ok(c),
                     Err(e) => last = e,
                 }
@@ -1046,7 +1092,7 @@ mod conn {
         }
 
         /// Connect to `a`, authenticate and say `Hello`.
-        pub fn connect(a: &Addr) -> Result<Conn> {
+        pub fn connect(a: &Addr, timeout: Duration) -> Result<Conn> {
             let sock = match a {
                 Addr::Path(p) => UnixStream::connect(p).map_err(|e| anyhow!("connect to the session bus {p}: {e}"))?,
                 Addr::Abstract(n) => {
@@ -1055,15 +1101,48 @@ mod conn {
                     UnixStream::connect_addr(&sa).map_err(|e| anyhow!("connect to the session bus @{n}: {e}"))?
                 }
             };
-            sock.set_read_timeout(Some(CALL_TIMEOUT))?;
+            sock.set_read_timeout(Some(timeout))?;
             sock.set_write_timeout(Some(CALL_TIMEOUT))?;
-            let mut c =
-                Conn { sock, serial: 0, name: String::new(), inbuf: Vec::new(), infds: VecDeque::new(), kept: VecDeque::new() };
+            let mut c = Conn::over(sock);
             c.auth()?;
             c.sock.set_read_timeout(None)?;
-            let r = bus_call(&mut c, "Hello", Vec::new())?;
+            let r = c.call(Message::call(BUS_NAME, BUS_PATH, BUS_NAME, "Hello", Vec::new()), timeout)?;
             c.name = r.body.first().and_then(|v| v.as_str()).ok_or_else(|| anyhow!("Hello: no name"))?.into();
             Ok(c)
+        }
+
+        /// A connection over `sock` before authentication (tests: a fake
+        /// bus on the other end of a socket pair).
+        pub(crate) fn over(sock: UnixStream) -> Conn {
+            Conn {
+                sock,
+                serial: 0,
+                name: String::new(),
+                inbuf: Vec::new(),
+                infds: VecDeque::new(),
+                kept: VecDeque::new(),
+                broken: None,
+            }
+        }
+
+        /// Mark the connection unusable for `why`; the error to return.
+        fn fail(&mut self, why: String) -> anyhow::Error {
+            self.inbuf.clear();
+            self.infds.clear();
+            self.broken = Some(why.clone());
+            anyhow!(why)
+        }
+
+        /// Why the connection broke, once it did.
+        pub fn broken(&self) -> Option<&str> {
+            self.broken.as_deref()
+        }
+
+        fn check(&self) -> Result<()> {
+            match &self.broken {
+                Some(why) => bail!("the session bus connection is broken ({why})"),
+                None => Ok(()),
+            }
         }
 
         fn line(&mut self) -> Result<String> {
@@ -1106,12 +1185,26 @@ mod conn {
         }
 
         fn write(&mut self, mut m: Message) -> Result<u32> {
+            self.check()?;
             let serial = self.next_serial();
             if m.fds.len() > MAX_FDS {
                 bail!("too many file descriptors in one message");
             }
             let bytes = m.encode(serial)?;
-            let fds: Vec<RawFd> = m.fds.iter().map(|f| f.as_raw_fd()).collect();
+            let Some(fds) = m.fds.iter().map(|f| f.as_ref().map(|f| f.as_raw_fd())).collect::<Option<Vec<RawFd>>>() else {
+                bail!("a file descriptor of the message was taken");
+            };
+            self.write_raw(&bytes, &fds)?;
+            m.fds.clear(); // ours were sent as copies; close them here
+            Ok(serial)
+        }
+
+        /// Send `bytes`, `fds` with the first of them (tests: a fake bus
+        /// writing whatever it likes).
+        pub(crate) fn write_raw(&mut self, bytes: &[u8], fds: &[RawFd]) -> Result<()> {
+            if fds.len() > MAX_FDS {
+                bail!("too many file descriptors in one message");
+            }
             let mut sent = 0;
             while sent < bytes.len() {
                 let mut iov = IoVec { base: bytes[sent..].as_ptr() as *mut c_void, len: bytes.len() - sent };
@@ -1144,8 +1237,7 @@ mod conn {
                 }
                 sent += n as usize;
             }
-            m.fds.clear(); // ours were sent as copies; close them here
-            Ok(serial)
+            Ok(())
         }
 
         /// Wait up to `until` for readable data; false on timeout.
@@ -1188,15 +1280,12 @@ mod conn {
                     if e.kind() == std::io::ErrorKind::Interrupted {
                         continue;
                     }
-                    bail!("read from the session bus: {e}");
+                    return Err(self.fail(format!("read from the session bus: {e}")));
                 }
                 break n as usize;
             };
             if n == 0 {
-                bail!("the session bus closed the connection");
-            }
-            if h.flags & MSG_CTRUNC != 0 {
-                eprintln!("rustshot: D-Bus: file descriptors were cut off");
+                return Err(self.fail("the session bus closed the connection".into()));
             }
             let base = ctl.as_ptr() as *const u8;
             let mut off = 0;
@@ -1217,30 +1306,65 @@ mod conn {
                 }
                 off += len.next_multiple_of(8);
             }
+            if h.flags & MSG_CTRUNC != 0 {
+                // Which message the lost descriptors belonged to is unknown:
+                // the stream can no longer be trusted (those received close).
+                return Err(self.fail("D-Bus: file descriptors were cut off".into()));
+            }
             self.inbuf.extend_from_slice(&buf[..n]);
             Ok(())
         }
 
-        /// The next message, waiting until `until`; `None` on timeout.
-        fn read(&mut self, until: Instant) -> Result<Option<Message>> {
+        /// The next message, waiting until `until`; `None` on timeout. A
+        /// message that does not parse is dropped (its bytes and its
+        /// descriptors) and is an error; a stream that lost its framing
+        /// breaks the connection.
+        pub(crate) fn read(&mut self, until: Instant) -> Result<Option<Message>> {
+            self.check()?;
             loop {
-                if let Some(n) = Message::wire_len(&self.inbuf)?
+                let n = match Message::wire_len(&self.inbuf) {
+                    Err(e) => return Err(self.fail(format!("D-Bus stream: {e}"))),
+                    Ok(n) => n,
+                };
+                if let Some(n) = n
                     && self.inbuf.len() >= n
                 {
-                    let (mut m, nfd) = Message::decode(&self.inbuf[..n])?;
+                    let got = Message::decode(&self.inbuf[..n]);
+                    let nfd = match &got {
+                        Ok((_, nfd)) => Some(*nfd),
+                        Err(_) => Message::declared_fds(&self.inbuf[..n]),
+                    };
                     self.inbuf.drain(..n);
+                    let Some(nfd) = nfd else {
+                        // Its descriptors cannot be told from the next ones'.
+                        return Err(self.fail(format!("D-Bus: unreadable message header ({:#})", got.expect_err("an error"))));
+                    };
+                    let mut fds = Vec::new();
                     for _ in 0..nfd {
                         match self.infds.pop_front() {
-                            Some(f) => m.fds.push(f),
-                            None => bail!("a message lacks its file descriptors"),
+                            Some(f) => fds.push(f),
+                            None => return Err(self.fail("D-Bus: a message lacks its file descriptors".into())),
                         }
                     }
+                    let (mut m, _) = got.map_err(|e| e.context("D-Bus: a message was dropped"))?; // `fds` close here
+                    m.fds = fds.into_iter().map(Some).collect();
                     return Ok(Some(m));
                 }
                 if !self.readable(until)? {
                     return Ok(None);
                 }
                 self.fill()?;
+            }
+        }
+
+        /// [`Conn::read`], passing over a message that was dropped (said on
+        /// stderr): one bad message does not fail a call waiting for another.
+        fn next_msg(&mut self, until: Instant) -> Result<Option<Message>> {
+            loop {
+                match self.read(until) {
+                    Err(e) if self.broken.is_none() => eprintln!("rustshot: {e:#}"),
+                    r => return r,
+                }
             }
         }
 
@@ -1259,7 +1383,7 @@ mod conn {
                 return Ok(self.kept.remove(i));
             }
             let until = Instant::now() + timeout;
-            while let Some(m) = self.read(until)? {
+            while let Some(m) = self.next_msg(until)? {
                 if m.kind == Kind::Call {
                     return Ok(Some(m));
                 }
@@ -1279,7 +1403,7 @@ mod conn {
             let serial = self.write(m)?;
             let until = Instant::now() + timeout;
             loop {
-                let Some(r) = self.read(until)? else { bail!("{what}: no reply within {} s", timeout.as_secs_f32()) };
+                let Some(r) = self.next_msg(until)? else { bail!("{what}: no reply within {} s", timeout.as_secs_f32()) };
                 match r.kind {
                     Kind::Return if r.reply_to == Some(serial) => return Ok(r),
                     Kind::Error if r.reply_to == Some(serial) => {
@@ -1301,7 +1425,7 @@ mod conn {
                 return Ok(self.kept.remove(i));
             }
             let until = Instant::now() + timeout;
-            while let Some(m) = self.read(until)? {
+            while let Some(m) = self.next_msg(until)? {
                 if m.kind == Kind::Signal && want(&m) {
                     return Ok(Some(m));
                 }

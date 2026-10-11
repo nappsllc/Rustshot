@@ -422,8 +422,8 @@ mod dev {
                 let stride = self.pix.bytesperline as usize;
                 let l = crate::cam::layout(self.fmt, w, h, h, stride.max(1), n)?;
                 match self.fmt {
-                    Fmt::Nv12 => crate::cam::nv12_to_bgra(&data[..l.uv], &data[l.uv..l.len], l.stride, w, h, self.yuv, &mut into.bgra),
-                    _ => crate::cam::yuy2_to_bgra(data, l.stride, w, h, self.yuv, &mut into.bgra),
+                    Fmt::Nv12 => crate::cam::nv12_to_bgra(&data[..l.uv], &data[l.uv..l.len], l.stride, w, h, self.yuv, &mut into.bgra)?,
+                    _ => crate::cam::yuy2_to_bgra(data, l.stride, w, h, self.yuv, &mut into.bgra)?,
                 }
                 into.w = w & !1;
                 into.h = if self.fmt == Fmt::Nv12 { h & !1 } else { h };

@@ -295,12 +295,15 @@ impl WinCam {
             return false;
         };
         let data = &data[..l.len];
-        match mode.fmt {
+        let converted = match mode.fmt {
             Fmt::Yuy2 => super::yuy2_to_bgra(data, l.stride, w, h, yuv, &mut out.bgra),
             _ => {
                 let (y, uv) = data.split_at(l.uv);
-                super::nv12_to_bgra(y, uv, l.stride, w, h, yuv, &mut out.bgra);
+                super::nv12_to_bgra(y, uv, l.stride, w, h, yuv, &mut out.bgra)
             }
+        };
+        if converted.is_none() {
+            return false;
         }
         if flip {
             super::flip_rows(&mut out.bgra, w, h);

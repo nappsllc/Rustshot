@@ -35,13 +35,14 @@ use crate::rec::linux::opus::Opus;
 use crate::rec::linux::pulse::Sound;
 use crate::rec::linux::pulse_list;
 use crate::rec::linux::pipewire::ScreenSource;
-use crate::rec::linux::portal::{self, Cast};
+use crate::rec::linux::portal::{self, CancelFlag, Cast};
 use crate::rec::linux::xshm::XShmSource;
 use crate::rec::{AudioSource, FrameSource, RecFormat, RecSpec, VideoEncoder};
 use crate::theme::Theme;
 use anyhow::{anyhow, bail, Context, Result};
 use core::ffi::{c_char, c_int, c_long, c_short, c_uint, c_ulong, c_ushort, c_void};
 use std::sync::mpsc;
+use std::sync::Arc;
 
 #[repr(C)]
 struct XSetWindowAttributes {
@@ -109,10 +110,31 @@ struct XClientMessageEvent {
     data: [c_long; 5],
 }
 
+/// `XConfigureEvent`: where a window is now (the compositor's word on a
+/// managed one).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(crate) struct XConfigureEvent {
+    pub(crate) type_: c_int,
+    serial: c_ulong,
+    send_event: c_int,
+    display: *mut c_void,
+    event: c_ulong,
+    pub(crate) window: c_ulong,
+    pub(crate) x: c_int,
+    pub(crate) y: c_int,
+    pub(crate) width: c_int,
+    pub(crate) height: c_int,
+    border_width: c_int,
+    above: c_ulong,
+    override_redirect: c_int,
+}
+
 #[repr(C)]
 pub(crate) union XEvent {
     pub(crate) type_: c_int,
     pub(crate) pointer: XPointerEvent,
+    pub(crate) configure: XConfigureEvent,
     client: XClientMessageEvent,
     pad: [c_long; 24],
 }
@@ -243,11 +265,13 @@ const BUTTON_RELEASE_MASK: c_long = 1 << 3;
 const LEAVE_WINDOW_MASK: c_long = 1 << 5;
 const POINTER_MOTION_MASK: c_long = 1 << 6;
 const EXPOSURE_MASK: c_long = 1 << 15;
+const STRUCTURE_NOTIFY_MASK: c_long = 1 << 17;
 const BUTTON_PRESS: c_int = 4;
 const BUTTON_RELEASE: c_int = 5;
 const MOTION_NOTIFY: c_int = 6;
 const LEAVE_NOTIFY: c_int = 8;
 const EXPOSE: c_int = 12;
+const CONFIGURE_NOTIFY: c_int = 22;
 const CLIENT_MESSAGE: c_int = 33;
 const XA_ATOM: c_ulong = 4;
 const PROP_MODE_REPLACE: c_int = 0;
@@ -360,6 +384,7 @@ pub(crate) const EV_BUTTON_PRESS: c_int = BUTTON_PRESS;
 pub(crate) const EV_BUTTON_RELEASE: c_int = BUTTON_RELEASE;
 pub(crate) const EV_MOTION: c_int = MOTION_NOTIFY;
 pub(crate) const EV_EXPOSE: c_int = EXPOSE;
+pub(crate) const EV_CONFIGURE: c_int = CONFIGURE_NOTIFY;
 
 /// Rows of `bgra` (`w`×`h`) cut into runs of pixels at least half opaque,
 /// as (x, y, w, h) rectangles one pixel high (a window's shape).
@@ -428,6 +453,10 @@ impl Win {
             } else {
                 EXPOSURE_MASK
             };
+            if kind != Kind::Overlay {
+                // Where the compositor really put it (`ConfigureNotify`).
+                a.event_mask |= STRUCTURE_NOTIFY_MASK;
+            }
             let mut mask = CW_BACK_PIXEL | CW_BORDER_PIXEL | CW_OVERRIDE_REDIRECT | CW_EVENT_MASK;
             let argb = d.argb.filter(|_| solid.is_none());
             let (visual, depth) = match argb {
@@ -565,6 +594,8 @@ struct BarWin {
     drawn: Option<(BarView, Option<BarAct>, Option<BarAct>)>,
     /// Shown as the compact pill (see `show`).
     compact: Option<bool>,
+    /// Where the compositor put the window (managed: `ConfigureNotify`).
+    placed: Option<(i32, i32, u32, u32)>,
 }
 
 impl BarWin {
@@ -656,14 +687,21 @@ impl CountWin {
 /// through ffmpeg or, when `enc` says so, OpenH264 with Opus in the
 /// built-in muxer. Runs on the recording worker, which outlives the
 /// children it starts (see `rec::linux::child`).
-fn prepare(spec: &RecSpec, mic: MicFlags, enc: Pick, cast: Option<(Cast, Vec<crate::capture::IRect>)>) -> Result<Parts> {
+fn prepare(spec: &RecSpec, mic: MicFlags, enc: Pick, cast: Option<(Arc<CancelFlag>, Vec<crate::capture::IRect>)>) -> Result<Parts> {
     if let Some(dir) = spec.out.parent() {
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
     }
     let mut warnings = Vec::new();
     let src: Box<dyn FrameSource> = match cast {
-        // Wayland / Flatpak: the area cropped from the shared monitor.
-        Some((cast, mons)) => {
+        // Wayland / Flatpak: the portal's dialog (here, on the worker: the UI
+        // stays live and Stop calls it off), then the area cropped from the
+        // shared monitor.
+        Some((cancel, mons)) => {
+            let cast = match Cast::start_or_cancel(spec.area, &mons, Some(&cancel)) {
+                Ok(c) => c,
+                Err(e) if e.is::<portal::Cancelled>() => return Err(anyhow::Error::new(super::NotStarted)),
+                Err(e) => return Err(e.context("the screen cast portal")),
+            };
             let (area, info) = (spec.area, cast.info.stream.clone());
             let mut fits = true;
             let s = ScreenSource::open(cast, |frame| {
@@ -786,14 +824,22 @@ pub struct Recorder {
     border: Vec<Win>,
     bar: Option<BarWin>,
     count: Option<CountWin>,
-    /// The camera bubble (none on Linux yet): up until the recording is over.
+    /// The camera bubble: up until the recording is over.
     bubble: Option<crate::cam::Bubble>,
+    /// Set to call the portal's dialog off (Wayland / Flatpak, while asking).
+    cancel: Option<Arc<CancelFlag>>,
+    /// The bar and the bubble are managed windows (Wayland): the compositor
+    /// places them.
+    managed: bool,
+    /// The placement hint was given.
+    hinted: bool,
     /// Last: the windows above go first.
     disp: Disp,
 }
 
 impl Recorder {
-    /// `cast`: the portal's screen cast (Wayland, Flatpak), else XShm.
+    /// `portal`: the screen comes from the ScreenCast portal (Wayland,
+    /// Flatpak), asked for on the worker; else XShm.
     pub fn start(
         spec: RecSpec,
         geom: Geom,
@@ -801,13 +847,14 @@ impl Recorder {
         mic: MicFlags,
         enc: Pick,
         bubble: Option<crate::cam::Bubble>,
-        cast: Option<Cast>,
+        portal: bool,
     ) -> Result<Recorder> {
-        let mons = geom.rects();
-        let cast = cast.map(|c| (c, mons));
+        let cancel = portal.then(|| Arc::new(CancelFlag::new(false)));
+        let cast = cancel.clone().map(|c| (c, geom.rects()));
         let wayland = portal::wayland_now();
         let mut r = Recorder::start_with(spec, geom, th, Box::new(move |s: &RecSpec| prepare(s, mic, enc, cast)), wayland)?;
         r.bubble = bubble;
+        r.cancel = cancel;
         Ok(r)
     }
 
@@ -834,16 +881,35 @@ impl Recorder {
             clicks: Vec::new(),
             drawn: None,
             compact: None,
+            placed: None,
         };
         let count = CountWin { win: Win::new(&disp, false, None)?, drawn: None };
         unsafe {
             XFlush(disp.dpy);
         }
         let worker = Worker::spawn(spec, open)?;
-        Ok(Recorder { worker, geom, th, border, bar: Some(bar), count: Some(count), bubble: None, disp })
+        Ok(Recorder {
+            worker,
+            geom,
+            th,
+            border,
+            bar: Some(bar),
+            count: Some(count),
+            bubble: None,
+            cancel: None,
+            managed: wayland,
+            hinted: false,
+            disp,
+        })
     }
 
     pub fn send(&mut self, e: Effect) {
+        if e == Effect::Cancel
+            && let Some(c) = &self.cancel
+        {
+            // The portal's dialog, if it is still up, closes.
+            c.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
         if e == Effect::Go
             && let Some(c) = &mut self.count
         {
@@ -874,11 +940,39 @@ impl Recorder {
                 if let Some(b) = &mut self.bar
                     && p.window == b.win.win
                 {
-                    b.event(&p);
+                    if p.type_ == CONFIGURE_NOTIFY {
+                        let c = ev.configure;
+                        b.placed = Some((c.x, c.y, c.width.max(0) as u32, c.height.max(0) as u32));
+                    } else {
+                        b.event(&p);
+                    }
                 }
             }
         }
         self.bar.as_mut().map(|b| std::mem::take(&mut b.clicks)).unwrap_or_default()
+    }
+
+    /// The parts are open (the screen was chosen): the countdown may begin.
+    pub fn ready(&self) -> bool {
+        self.worker.ready.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Wayland: once the compositor said where it put the bar and the
+    /// bubble, a hint (given once) when the bubble lies outside the
+    /// recorded area or the bar inside it.
+    pub fn placement_hint(&mut self) -> Option<&'static str> {
+        if !self.managed || self.hinted {
+            return None;
+        }
+        let bar = self.bar.as_ref().and_then(|b| {
+            let (x, y, w, h) = b.placed?;
+            let m = (bar::MARGIN * b.spot?.scale).round() as i32;
+            Some((x + m, y + m, (w as i32 - 2 * m).max(1) as u32, (h as i32 - 2 * m).max(1) as u32))
+        });
+        let bubble = self.bubble.as_ref().and_then(|b| b.placed());
+        let hint = super::placement_hint(self.geom.area, bar, bubble);
+        self.hinted = hint.is_some();
+        hint
     }
 
     pub fn poll_end(&mut self) -> Option<End> {

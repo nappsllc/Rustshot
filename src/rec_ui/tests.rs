@@ -357,11 +357,12 @@ fn render_recording_previews() {
         for s in [1.0f32, 2.0] {
             let ui = Ui { th, s, font: Some(crate::fonts::ui_font()) };
             let views = [
-                ("recording", bar::BarView { elapsed: secs(83.0), paused: false, mic: Some(false), stopping: false, compact: false }, Some(bar::BarAct::Stop)),
-                ("paused", bar::BarView { elapsed: secs(754.0), paused: true, mic: Some(true), stopping: false, compact: false }, None),
-                ("nomic", bar::BarView { elapsed: secs(5.0), paused: false, mic: None, stopping: false, compact: false }, Some(bar::BarAct::Pause)),
-                ("stopping", bar::BarView { elapsed: secs(9.0), paused: false, mic: None, stopping: true, compact: false }, None),
-                ("compact", bar::BarView { elapsed: secs(42.0), paused: false, mic: Some(false), stopping: false, compact: true }, None),
+                ("recording", bar::BarView { elapsed: secs(83.0), paused: false, mic: Some(false), stopping: false, compact: false, asking: false }, Some(bar::BarAct::Stop)),
+                ("paused", bar::BarView { elapsed: secs(754.0), paused: true, mic: Some(true), stopping: false, compact: false, asking: false }, None),
+                ("nomic", bar::BarView { elapsed: secs(5.0), paused: false, mic: None, stopping: false, compact: false, asking: false }, Some(bar::BarAct::Pause)),
+                ("stopping", bar::BarView { elapsed: secs(9.0), paused: false, mic: None, stopping: true, compact: false, asking: false }, None),
+                ("compact", bar::BarView { elapsed: secs(42.0), paused: false, mic: Some(false), stopping: false, compact: true, asking: false }, None),
+                ("asking", bar::BarView { elapsed: secs(0.0), paused: false, mic: None, stopping: false, compact: false, asking: true }, None),
             ];
             for (vn, v, hover) in views {
                 let l = bar::layout(&ui, &v);
@@ -429,4 +430,57 @@ fn x11_sessions_are_told_from_wayland_ones() {
     assert!(!x11_session(Some(OsStr::new("wayland-0")), Some("x11")), "XWayland under a Wayland compositor");
     assert!(!x11_session(None, Some("wayland")));
     assert!(!x11_session(None, Some("Wayland")));
+}
+
+/// Wayland: the portal's dialog first (asking), then the countdown; Stop
+/// while asking calls it off.
+#[test]
+fn asking_comes_before_the_countdown_and_stop_calls_it_off() {
+    let t = t0();
+    let mut m = Machine::new();
+    m.ask();
+    assert_eq!(m.phase(), Phase::Asking);
+    assert_eq!(m.tick(t + secs(10.0)), None, "no countdown while asking");
+    assert_eq!(m.countdown(t), None);
+    assert_eq!(m.asked(true, t), None);
+    assert_eq!(m.phase(), Phase::Countdown);
+    assert_eq!(m.tick(t + secs(3.0)), Some(Effect::Go));
+    // Without a countdown: straight to Go.
+    let mut m = Machine::new();
+    m.ask();
+    assert_eq!(m.asked(false, t), Some(Effect::Go));
+    assert_eq!(m.asked(false, t), None, "once");
+    // Stop while asking.
+    let mut m = Machine::new();
+    m.ask();
+    assert_eq!(m.stop(t), Some(Effect::Cancel));
+    assert_eq!(m.phase(), Phase::Stopping);
+    assert_eq!(m.asked(true, t), None, "too late");
+
+    // The run: the bar says Asking with only Stop; the parts open, 3-2-1.
+    let mut r = Run::fake_asking(true);
+    assert!(r.view(t).asking);
+    assert_eq!(r.tick(t), None);
+    assert!(r.log.is_empty() && r.phase() == Phase::Asking);
+    r.fake_ready = true;
+    assert_eq!(r.tick(t), None);
+    assert_eq!(r.phase(), Phase::Countdown);
+    assert!(!r.view(t).asking);
+    // Stopped while asking: cancelled, nothing recorded.
+    let mut r = Run::fake_asking(false);
+    r.stop(t);
+    assert_eq!(r.log, [Effect::Cancel]);
+    r.fake_end = Some(End::Cancelled);
+    assert_eq!(r.tick(t), Some(End::Cancelled));
+}
+
+#[test]
+fn misplaced_windows_get_a_hint() {
+    let area = (100, 100, 800, 600);
+    assert_eq!(placement_hint(area, None, None), None, "nothing known yet");
+    assert_eq!(placement_hint(area, Some((100, 720, 200, 44)), Some((116, 444, 240, 240))), None, "bar below, bubble inside");
+    assert_eq!(placement_hint(area, None, Some((0, 0, 240, 240))), Some(BUBBLE_OUTSIDE));
+    assert_eq!(placement_hint(area, None, Some((800, 500, 240, 240))), Some(BUBBLE_OUTSIDE), "half out");
+    assert_eq!(placement_hint(area, Some((400, 300, 200, 44)), None), Some(BAR_INSIDE));
+    assert_eq!(placement_hint(area, Some((0, 0, 100, 100)), None), None, "touching the corner is outside");
 }

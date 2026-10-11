@@ -49,7 +49,7 @@ const FRAME_GAP: Duration = Duration::from_millis(25);
 #[cfg(not(test))]
 const CLOSE_WAIT: Duration = Duration::ZERO;
 #[cfg(test)]
-const CLOSE_WAIT: Duration = Duration::from_secs(2);
+const CLOSE_WAIT: Duration = Duration::from_secs(5);
 
 /// Opens the camera on the camera thread (tests inject their own).
 pub(crate) type Opener = Box<dyn FnOnce() -> Result<Box<dyn CamSource>> + Send>;

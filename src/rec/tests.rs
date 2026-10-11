@@ -558,3 +558,38 @@ fn a_spec_turned_into_a_gif_has_no_sound_and_a_gif_name() {
     assert_eq!(gif.out, PathBuf::from("out").join("Rec 2026-10-10.gif"));
     assert_eq!(gif.area, mp4.area);
 }
+
+/// Two frames, then the source ends (the screen share was stopped).
+struct EndingSource {
+    given: usize,
+}
+
+impl FrameSource for EndingSource {
+    fn next(&mut self, deadline: Instant) -> Option<Frame> {
+        std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
+        if self.given >= 2 {
+            return None;
+        }
+        self.given += 1;
+        Some(Frame { w: 4, h: 4, bgra: vec![1; 64], ts: Duration::ZERO })
+    }
+    fn size(&self) -> (u32, u32) {
+        (4, 4)
+    }
+    fn ended(&self) -> Option<String> {
+        (self.given >= 2).then(|| "Screen sharing was stopped".to_string())
+    }
+}
+
+#[test]
+fn session_stops_when_its_source_ends_and_keeps_the_file() {
+    let run = setup("ended", RecFormat::Mp4, 50);
+    let file = std::fs::File::create(run.spec.part_path()).unwrap();
+    let enc = FakeEncoder { file, log: run.log.clone(), opts: Opts::default() };
+    let s = Session::start(run.spec.clone(), Box::new(EndingSource { given: 0 }), Vec::new(), Box::new(enc)).unwrap();
+    wait_until("the source's end", || s.stats().failed);
+    let e = format!("{:#}", s.stop().unwrap_err());
+    assert!(e.contains("Screen sharing was stopped") && e.contains("saved") && e.contains("clip.mp4"), "{e}");
+    assert_eq!(run.files(), ["clip.mp4"], "the file is kept");
+    assert_eq!(run.log.lock().unwrap().frames.len(), 2);
+}

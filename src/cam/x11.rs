@@ -32,8 +32,19 @@ use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
-/// Opens the camera on the camera thread (tests inject their own).
-pub(crate) type Opener = Box<dyn FnOnce() -> Result<Box<dyn CamSource>> + Send>;
+/// Opens the camera on the camera thread (tests inject their own); the
+/// flag is set when the bubble closes meanwhile (the camera portal's
+/// dialog is then called off).
+pub(crate) type Opener = Box<dyn FnOnce(&AtomicBool) -> Result<Box<dyn CamSource>> + Send>;
+
+/// How long closing waits for the camera thread to let go of the camera,
+/// as on Windows: not at all in the app (the thread stops after its
+/// current read, 200 ms at most, and releases the camera on its own, which
+/// must not hold up the UI thread at Stop); tests wait to check the release.
+#[cfg(not(test))]
+const CLOSE_WAIT: Duration = Duration::ZERO;
+#[cfg(test)]
+const CLOSE_WAIT: Duration = Duration::from_secs(5);
 
 /// Pictures closer together than this are skipped (about 30 fps at most).
 const FRAME_GAP: Duration = Duration::from_millis(25);
@@ -63,6 +74,9 @@ struct Geo {
     drag: Option<((i32, i32), (i32, i32))>,
     /// The picture shown (fitted to `tpl.d`).
     frame: Option<CamFrame>,
+    /// Where the compositor put the shape's top-left (a managed window on
+    /// Wayland: `ConfigureNotify`).
+    placed: Option<(i32, i32)>,
 }
 
 impl Geo {
@@ -96,7 +110,7 @@ pub struct Bubble {
 
 fn camera_thread(open: Opener, sh: Arc<Shared>, done: mpsc::Sender<()>) {
     let r = (|| -> Result<()> {
-        let mut src = open()?;
+        let mut src = open(&sh.stop)?;
         let mut last: Option<Instant> = None;
         let (mut raw, mut tmp) = (CamFrame::default(), Vec::new());
         while !sh.stop.load(Ordering::SeqCst) {
@@ -197,6 +211,12 @@ fn window_thread(sh: Arc<Shared>, managed: bool, ready: mpsc::Sender<Result<()>>
                     }
                 }
                 xw::EV_EXPOSE => g.paint_gen += 1,
+                xw::EV_CONFIGURE if win.is_managed() => {
+                    // SAFETY: a ConfigureNotify event.
+                    let c = unsafe { ev.configure };
+                    let pad = g.tpl.pad as i32;
+                    g.placed = Some((c.x + pad, c.y + pad));
+                }
                 _ => {}
             }
         }
@@ -254,7 +274,7 @@ impl Bubble {
     #[cfg_attr(test, allow(dead_code))]
     pub fn show(look: Look, device: &str, area: IRect, scale: f32, th: &Theme, _nudge: crate::wind::Hwnd) -> Result<Bubble> {
         let id = device.to_string();
-        let open: Opener = Box::new(move || super::open(&id, super::PREF));
+        let open: Opener = Box::new(move |stop| super::open_or_cancel(&id, super::PREF, stop));
         Bubble::show_with(look, device, area, scale, th, _nudge, open)
     }
 
@@ -282,6 +302,7 @@ impl Bubble {
             paint_gen: 0,
             drag: None,
             frame: None,
+            placed: None,
         };
         geo.pos = geo.home();
         let side = geo.tpl.d;
@@ -335,6 +356,12 @@ impl Bubble {
     #[allow(dead_code)] // Windows tests use it; kept alike
     pub fn pos(&self) -> Option<(i32, i32)> {
         Some(lock(&self.shared.geo).pos)
+    }
+
+    /// Where the compositor put the bubble's shape (Wayland), once it said.
+    pub fn placed(&self) -> Option<IRect> {
+        let g = lock(&self.shared.geo);
+        g.placed.map(|(x, y)| (x, y, g.tpl.d, g.tpl.d))
     }
 
     /// A camera picture is shown.
@@ -419,14 +446,19 @@ impl Bubble {
 }
 
 impl Drop for Bubble {
-    /// Stop the camera (its thread lets go of it within a frame) and take
-    /// the window down.
+    /// Stop the camera (its thread lets go of it after its current read;
+    /// waited for up to [`CLOSE_WAIT`]) and take the window down (its
+    /// thread is joined; it stops within one tick).
     fn drop(&mut self) {
         self.shared.stop.store(true, Ordering::SeqCst);
+        if let Some(rx) = self.cam_done.take()
+            && !CLOSE_WAIT.is_zero()
+        {
+            let _ = rx.recv_timeout(CLOSE_WAIT);
+        }
         if let Some(ui) = self.ui.take() {
             let _ = ui.join();
         }
-        let _ = self.cam_done.take();
     }
 }
 

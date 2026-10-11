@@ -33,7 +33,9 @@ use std::time::{Duration, Instant};
 /// Whether this platform records (shows the Record button): Windows, and
 /// Linux: in an X11 session always (XShm); on Wayland and in Flatpak when
 /// the ScreenCast portal answers and libpipewire loads (XShm would see
-/// only XWayland windows there).
+/// only XWayland windows there). Never waits: while the portal is being
+/// asked (in the background, from the first call or [`warm_mp4`]) it says
+/// no.
 pub fn supported() -> bool {
     #[cfg(any(windows, test))]
     {
@@ -42,8 +44,12 @@ pub fn supported() -> bool {
     #[cfg(all(target_os = "linux", not(test)))]
     {
         use crate::rec::linux::{pipewire, portal};
-        static OK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        *OK.get_or_init(|| !portal::needs_portal_now() || (portal::screencast_available() && pipewire::available()))
+        static PORTAL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if !*PORTAL.get_or_init(portal::needs_portal_now) {
+            return true;
+        }
+        // Not known yet (the probe runs, 2 s at most): no Record button yet.
+        portal::screencast_status() == Some(true) && pipewire::available()
     }
     #[cfg(all(not(windows), not(target_os = "linux"), not(test)))]
     {
@@ -122,12 +128,10 @@ pub fn warm_mp4() {
         if let Some(exe) = crate::rec::linux::ffmpeg::find() {
             crate::rec::linux::ffmpeg::warm(&exe);
         }
-        // Wayland: whether the ScreenCast portal answers (cached), so the
-        // overlay does not wait for the bus when it first asks.
+        // Wayland: ask whether the ScreenCast portal answers (in the
+        // background), so it is known when the overlay opens.
         if crate::rec::linux::portal::needs_portal_now() {
-            let _ = std::thread::Builder::new().name("portal-probe".into()).spawn(|| {
-                let _ = supported();
-            });
+            let _ = crate::rec::linux::portal::screencast_status();
         }
     }
 }
@@ -348,6 +352,9 @@ pub const HIDE_BEFORE_GO: Duration = Duration::from_millis(60);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
     Idle,
+    /// Waiting for the screen to be chosen (Wayland: the portal's dialog is
+    /// open on the recording worker); the countdown comes after.
+    Asking,
     Countdown,
     Recording,
     Paused,
@@ -394,6 +401,25 @@ impl Machine {
 
     pub fn phase(&self) -> Phase {
         self.phase
+    }
+
+    /// Idle → asking: the screen is being chosen ([`Machine::asked`] goes on).
+    #[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+    pub fn ask(&mut self) {
+        if self.phase == Phase::Idle {
+            *self = Machine::new();
+            self.phase = Phase::Asking;
+        }
+    }
+
+    /// Asking → the countdown or recording, as [`Machine::start`].
+    #[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+    pub fn asked(&mut self, countdown: bool, now: Instant) -> Option<Effect> {
+        if self.phase != Phase::Asking {
+            return None;
+        }
+        self.phase = Phase::Idle;
+        self.start(countdown, now)
     }
 
     /// Idle → countdown (`countdown`), or straight to recording ([`Effect::Go`]).
@@ -463,11 +489,11 @@ impl Machine {
         }
     }
 
-    /// Stop: the bar, the record hotkey, the tray. During the countdown it
-    /// cancels; twice is once.
+    /// Stop: the bar, the record hotkey, the tray. While asking or during
+    /// the countdown it cancels; twice is once.
     pub fn stop(&mut self, now: Instant) -> Option<Effect> {
         match self.phase {
-            Phase::Countdown => {
+            Phase::Asking | Phase::Countdown => {
                 self.phase = Phase::Stopping;
                 Some(Effect::Cancel)
             }
@@ -635,6 +661,28 @@ pub fn spot_bar_with(
     if s == first.scale { first } else { at(s) }
 }
 
+/// The hint when the desktop put the camera bubble outside the recording.
+pub const BUBBLE_OUTSIDE: &str = "Your desktop placed the camera bubble outside the recording \u{2014} drag it in";
+/// The hint when it put the control bar inside the recording.
+pub const BAR_INSIDE: &str = "Your desktop placed the recording bar inside the recording (it is recorded) \u{2014} drag it out";
+
+/// Wayland, where the compositor places the recording's windows: a hint
+/// when the camera bubble (its shape, as placed) is not within the
+/// recorded `area`, or the control bar's panel overlaps it. `None` while a
+/// place is not known.
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+pub fn placement_hint(area: IRect, bar: Option<IRect>, bubble: Option<IRect>) -> Option<&'static str> {
+    let within = |r: IRect| r.0 >= area.0 && r.1 >= area.1 && x1(r) <= x1(area) && y1(r) <= y1(area);
+    let overlaps = |r: IRect| r.0 < x1(area) && area.0 < x1(r) && r.1 < y1(area) && area.1 < y1(r);
+    if bubble.is_some_and(|b| !within(b)) {
+        return Some(BUBBLE_OUTSIDE);
+    }
+    if bar.is_some_and(overlaps) {
+        return Some(BAR_INSIDE);
+    }
+    None
+}
+
 /// Where the countdown goes: centred on the area.
 pub fn centre_on(area: IRect, (w, h): (i32, i32)) -> (i32, i32) {
     (area.0 + (area.2 as i32 - w) / 2, area.1 + (area.3 as i32 - h) / 2)
@@ -798,12 +846,21 @@ pub struct Run {
     ui: Option<win::Recorder>,
     #[cfg(target_os = "linux")]
     ui: Option<x11::Recorder>,
+    /// Whether 3-2-1 comes before the first frame (once asking is over).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    countdown: bool,
+    /// The placement hint was handed out (once per recording).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    hint_taken: bool,
     /// Effects carried out (tests run without windows or a worker).
     #[cfg(test)]
     pub(crate) log: Vec<Effect>,
     /// An end reported without a worker (tests).
     #[cfg(test)]
     pub(crate) fake_end: Option<End>,
+    /// The parts are open, without a worker (tests).
+    #[cfg(test)]
+    pub(crate) fake_ready: bool,
 }
 
 impl Run {
@@ -827,10 +884,14 @@ impl Run {
             m: Machine::new(),
             mic,
             ui: Some(ui),
+            countdown,
+            hint_taken: false,
             #[cfg(test)]
             log: Vec::new(),
             #[cfg(test)]
             fake_end: None,
+            #[cfg(test)]
+            fake_ready: false,
         };
         let now = Instant::now();
         if let Some(e) = run.m.start(countdown, now) {
@@ -842,8 +903,11 @@ impl Run {
 
     /// Linux: as on Windows (the sound is read in-app, so the microphone
     /// can be muted from the bar once it opened). On Wayland and in
-    /// Flatpak the portal asks which screen first (blocking, like the
-    /// first-use encoder dialog); closing its dialog calls the recording off.
+    /// Flatpak the portal asks which screen first, on the recording worker
+    /// (the UI, hotkeys and tray stay live): the recording is
+    /// [`Phase::Asking`] meanwhile, the bar says so, and Stop (bar, hotkey,
+    /// tray) calls the dialog off; closing the dialog calls the recording
+    /// off. The countdown comes once the screen is chosen.
     #[cfg(target_os = "linux")]
     #[cfg_attr(test, allow(dead_code))] // tests record through `Run::fake`
     pub fn start(
@@ -857,30 +921,26 @@ impl Run {
         use crate::rec::linux::portal;
         let mut spec = spec;
         let enc = linux_encoder(&mut spec)?;
-        // Wayland / Flatpak: the portal's dialog (the user picks the
-        // screen) before the countdown, not during it.
-        let cast = if portal::needs_portal_now() {
-            match portal::Cast::start(spec.area, &geom.rects()) {
-                Ok(c) => Some(c),
-                Err(e) if e.is::<portal::Cancelled>() => return Err(anyhow::Error::new(NotStarted)),
-                Err(e) => return Err(e.context("the screen cast portal")),
-            }
-        } else {
-            None
-        };
+        let asking = portal::needs_portal_now();
         let mic = MicFlags::default();
-        let ui = x11::Recorder::start(spec, geom, th, mic.clone(), enc, bubble, cast)?;
+        let ui = x11::Recorder::start(spec, geom, th, mic.clone(), enc, bubble, asking)?;
         let mut run = Run {
             m: Machine::new(),
             mic,
             ui: Some(ui),
+            countdown,
+            hint_taken: false,
             #[cfg(test)]
             log: Vec::new(),
             #[cfg(test)]
             fake_end: None,
+            #[cfg(test)]
+            fake_ready: false,
         };
         let now = Instant::now();
-        if let Some(e) = run.m.start(countdown, now) {
+        if asking {
+            run.m.ask();
+        } else if let Some(e) = run.m.start(countdown, now) {
             run.apply(e);
         }
         run.show(now);
@@ -907,12 +967,27 @@ impl Run {
             mic: MicFlags { muted: Arc::default(), open: Arc::new(AtomicBool::new(mic)) },
             #[cfg(any(windows, target_os = "linux"))]
             ui: None,
+            countdown,
+            hint_taken: false,
             log: Vec::new(),
             fake_end: None,
+            #[cfg(test)]
+            fake_ready: false,
         };
         if let Some(e) = run.m.start(countdown, now) {
             run.apply(e);
         }
+        run
+    }
+
+    /// [`Run::fake`] waiting for the screen to be chosen (Wayland).
+    #[cfg(test)]
+    pub fn fake_asking(countdown: bool) -> Run {
+        let mut run = Run::fake(false, false, Instant::now());
+        run.m = Machine::new();
+        run.log.clear();
+        run.countdown = countdown;
+        run.m.ask();
         run
     }
 
@@ -970,12 +1045,20 @@ impl Run {
             mic: self.has_mic().then(|| self.muted()),
             stopping: self.m.phase() == Phase::Stopping,
             compact: false,
+            asking: self.m.phase() == Phase::Asking,
         }
     }
 
     /// Advance: the countdown, clicks on the control bar, the pipeline's
     /// end (returned once, when the recording is over and its windows gone).
     pub fn tick(&mut self, now: Instant) -> Option<End> {
+        // The screen was chosen: on to the countdown.
+        if self.m.phase() == Phase::Asking
+            && self.ready()
+            && let Some(e) = self.m.asked(self.countdown, now)
+        {
+            self.apply(e);
+        }
         if let Some(e) = self.m.tick(now) {
             self.apply(e);
         }
@@ -1001,6 +1084,34 @@ impl Run {
         }
         self.show(now);
         None
+    }
+
+    /// The recording's parts are open (the screen chosen).
+    fn ready(&self) -> bool {
+        #[cfg(test)]
+        if self.fake_ready {
+            return true;
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(ui) = &self.ui {
+            return ui.ready();
+        }
+        false
+    }
+
+    /// A hint about where the desktop put the recording's windows (Wayland:
+    /// the camera bubble outside the recorded area, or the bar inside it),
+    /// once per recording.
+    pub fn take_hint(&mut self) -> Option<&'static str> {
+        if self.hint_taken {
+            return None;
+        }
+        #[cfg(target_os = "linux")]
+        let hint = self.ui.as_mut().and_then(|u| u.placement_hint());
+        #[cfg(not(target_os = "linux"))]
+        let hint: Option<&'static str> = None;
+        self.hint_taken = hint.is_some();
+        hint
     }
 
     fn poll_end(&mut self) -> Option<End> {

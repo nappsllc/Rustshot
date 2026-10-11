@@ -29,7 +29,7 @@
 
 use crate::capture::IRect;
 use crate::dbus::{self, Bus, Fd, Message, Value};
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -45,6 +45,12 @@ const SESSION: &str = "org.freedesktop.portal.Session";
 const QUICK: Duration = Duration::from_secs(20);
 /// How long the user may take in a portal dialog.
 const DIALOG: Duration = Duration::from_secs(300);
+/// How long `Start` with a stored restore token may take: a restored
+/// choice comes back at once. Longer, and the token is dropped and the
+/// dialog asked afresh (a portal that no longer knows the token).
+const RESTORED: Duration = Duration::from_secs(15);
+/// How often a waiting request looks whether it was called off.
+const CANCEL_POLL: Duration = Duration::from_millis(100);
 
 /// ScreenCast source types and cursor modes.
 const MONITOR: u32 = 1;
@@ -64,6 +70,44 @@ impl std::fmt::Display for Cancelled {
 }
 
 impl std::error::Error for Cancelled {}
+
+/// The portal did not answer a request in time (its dialog was closed).
+#[derive(Debug)]
+pub struct NoAnswer {
+    pub method: String,
+    pub secs: u64,
+}
+
+impl std::fmt::Display for NoAnswer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: the portal did not answer within {} s", self.method, self.secs)
+    }
+}
+
+impl std::error::Error for NoAnswer {}
+
+/// The portal said no (response 2: refused, or an error behind it).
+#[derive(Debug)]
+pub struct Refused {
+    pub method: String,
+    pub code: u32,
+}
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: the portal refused (response {})", self.method, self.code)
+    }
+}
+
+impl std::error::Error for Refused {}
+
+/// Set from another thread to call a waiting request off (its dialog is
+/// closed and the request ends as [`Cancelled`]).
+pub type CancelFlag = std::sync::atomic::AtomicBool;
+
+fn cancelled(c: Option<&CancelFlag>) -> bool {
+    c.is_some_and(|c| c.load(std::sync::atomic::Ordering::SeqCst))
+}
 
 /// Whether capture must go through the portal: a Wayland session (XShm of
 /// the X root under XWayland sees only X clients) or a Flatpak sandbox.
@@ -105,10 +149,37 @@ fn response_rule(path: &str) -> String {
     dbus::signal_rule(DESKTOP, path, REQUEST, "Response")
 }
 
+/// The unique name that owns the portal (`GetNameOwner`): only its
+/// Response signals are taken.
+fn portal_owner(bus: &mut dyn Bus) -> Result<String> {
+    let r = dbus::bus_call(bus, "GetNameOwner", vec![Value::str(DESKTOP)]).context("the desktop portal is not running")?;
+    r.body.first().and_then(Value::as_str).map(String::from).ok_or_else(|| anyhow!("GetNameOwner: no name"))
+}
+
 /// Call portal method `iface.method` with `args` and an options dict (plus
 /// our `handle_token`), then wait up to `timeout` for its Response; the
-/// results dict. A dialog closed by the user is [`Cancelled`].
-pub fn request(bus: &mut dyn Bus, iface: &str, method: &str, mut args: Vec<Value>, mut options: Vec<(&str, Value)>, timeout: Duration) -> Result<Value> {
+/// results dict. A dialog closed by the user is [`Cancelled`]; no answer in
+/// time is [`NoAnswer`].
+pub fn request(bus: &mut dyn Bus, iface: &str, method: &str, args: Vec<Value>, options: Vec<(&str, Value)>, timeout: Duration) -> Result<Value> {
+    request_or_cancel(bus, iface, method, args, options, timeout, None)
+}
+
+/// [`request`] that `cancel` can call off while it waits (the dialog is
+/// closed, the result [`Cancelled`]). Only a Response sent by the portal's
+/// owner (`GetNameOwner`) counts: anyone may send signals on the bus.
+pub fn request_or_cancel(
+    bus: &mut dyn Bus,
+    iface: &str,
+    method: &str,
+    mut args: Vec<Value>,
+    mut options: Vec<(&str, Value)>,
+    timeout: Duration,
+    cancel: Option<&CancelFlag>,
+) -> Result<Value> {
+    if cancelled(cancel) {
+        return Err(anyhow::Error::new(Cancelled));
+    }
+    let owner = portal_owner(bus)?;
     let tok = token();
     let path = request_path(bus.unique_name(), &tok);
     options.push(("handle_token", Value::Str(tok)));
@@ -127,10 +198,28 @@ pub fn request(bus: &mut dyn Bus, iface: &str, method: &str, mut args: Vec<Value
         // An old portal (before 0.9) with its own path: follow it there.
         dbus::add_match(bus, &response_rule(&handle))?;
     }
-    let got = bus.wait_signal(
-        &|m| m.is(REQUEST, "Response") && m.path.as_deref().is_some_and(|p| p == path || p == handle),
-        timeout,
-    );
+    let want = |m: &Message| {
+        m.is(REQUEST, "Response") && m.sender.as_deref() == Some(owner.as_str()) && m.path.as_deref().is_some_and(|p| p == path || p == handle)
+    };
+    // In slices, so a cancel is seen within one.
+    let end = std::time::Instant::now() + timeout;
+    let mut got = Ok(None);
+    let mut called_off = false;
+    loop {
+        let left = end.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            break;
+        }
+        let slice = if cancel.is_some() { left.min(CANCEL_POLL) } else { left };
+        got = bus.wait_signal(&want, slice);
+        if !matches!(got, Ok(None)) || cancel.is_none() {
+            break;
+        }
+        if cancelled(cancel) {
+            called_off = true;
+            break;
+        }
+    }
     let _ = dbus::remove_match(bus, &response_rule(&path));
     if handle != path {
         let _ = dbus::remove_match(bus, &response_rule(&handle));
@@ -138,14 +227,17 @@ pub fn request(bus: &mut dyn Bus, iface: &str, method: &str, mut args: Vec<Value
     let Some(sig) = got? else {
         // Take the dialog down rather than leave it waiting for nobody.
         let _ = bus.send(close_msg(&handle, REQUEST));
-        bail!("{method}: the portal did not answer within {} s", timeout.as_secs());
+        if called_off {
+            return Err(anyhow::Error::new(Cancelled));
+        }
+        return Err(anyhow::Error::new(NoAnswer { method: method.into(), secs: timeout.as_secs() }));
     };
     let code = sig.body.first().and_then(Value::as_u32).ok_or_else(|| anyhow!("{method}: bad Response"))?;
     let results = sig.body.get(1).cloned().unwrap_or(Value::Dict("s".into(), "v".into(), Vec::new()));
     match code {
         0 => Ok(results),
         1 => Err(anyhow::Error::new(Cancelled)),
-        _ => bail!("{method}: the portal refused (response {code})"),
+        _ => Err(anyhow::Error::new(Refused { method: method.into(), code })),
     }
 }
 
@@ -188,10 +280,16 @@ fn pair(v: Option<&Value>) -> Option<(i32, i32)> {
 /// Run the ScreenCast handshake up to `Start`: one monitor, the cursor in
 /// the picture, the choice remembered (`restore` = the stored token).
 pub fn screencast(bus: &mut dyn Bus, restore: Option<&str>) -> Result<CastInfo> {
+    screencast_or_cancel(bus, restore, None)
+}
+
+/// [`screencast`] that `cancel` can call off. With a restore token `Start`
+/// may take [`RESTORED`] at most (a restored choice needs no dialog).
+pub fn screencast_or_cancel(bus: &mut dyn Bus, restore: Option<&str>, cancel: Option<&CancelFlag>) -> Result<CastInfo> {
     let version = prop_u32(bus, SCREENCAST, "version").context("the ScreenCast portal is not available")?;
     let cursors = prop_u32(bus, SCREENCAST, "AvailableCursorModes").unwrap_or(0);
     let sess_tok = token();
-    let r = request(bus, SCREENCAST, "CreateSession", vec![], vec![("session_handle_token", Value::Str(sess_tok))], QUICK)?;
+    let r = request_or_cancel(bus, SCREENCAST, "CreateSession", vec![], vec![("session_handle_token", Value::Str(sess_tok))], QUICK, cancel)?;
     let session = r.get("session_handle").and_then(Value::as_str).ok_or_else(|| anyhow!("CreateSession: no session"))?.to_string();
     let run = |bus: &mut dyn Bus| -> Result<CastInfo> {
         let mut opts = vec![("types", Value::U32(MONITOR)), ("multiple", Value::Bool(false))];
@@ -200,14 +298,16 @@ pub fn screencast(bus: &mut dyn Bus, restore: Option<&str>) -> Result<CastInfo> 
         } else if cursors & CURSOR_HIDDEN != 0 {
             opts.push(("cursor_mode", Value::U32(CURSOR_HIDDEN)));
         }
+        let mut wait = DIALOG;
         if version >= 4 {
             opts.push(("persist_mode", Value::U32(PERSIST)));
             if let Some(t) = restore.filter(|t| !t.is_empty()) {
                 opts.push(("restore_token", Value::str(t)));
+                wait = RESTORED;
             }
         }
-        request(bus, SCREENCAST, "SelectSources", vec![Value::path(&session)], opts, QUICK)?;
-        let r = request(bus, SCREENCAST, "Start", vec![Value::path(&session), Value::str("")], vec![], DIALOG)?;
+        request_or_cancel(bus, SCREENCAST, "SelectSources", vec![Value::path(&session)], opts, QUICK, cancel)?;
+        let r = request_or_cancel(bus, SCREENCAST, "Start", vec![Value::path(&session), Value::str("")], vec![], wait, cancel)?;
         let streams = r.get("streams").ok_or_else(|| anyhow!("Start: no streams"))?;
         let first = streams.items().first().ok_or_else(|| anyhow!("Start: no screen was shared"))?;
         let f = first.items();
@@ -226,6 +326,39 @@ pub fn screencast(bus: &mut dyn Bus, restore: Option<&str>) -> Result<CastInfo> 
         let _ = bus.send(close_msg(&session, SESSION));
     }
     out
+}
+
+/// The screen cast for a recording of `area` on `mons`, with the `stored`
+/// restore token: a restored choice that does not come back within
+/// [`RESTORED`], is refused, or is of a monitor the area is not on, is
+/// dropped (`forget`) and the dialog asked afresh.
+pub fn negotiate(
+    bus: &mut dyn Bus,
+    stored: Option<&str>,
+    area: IRect,
+    mons: &[IRect],
+    cancel: Option<&CancelFlag>,
+    forget: &mut dyn FnMut(),
+) -> Result<CastInfo> {
+    let mut info = match screencast_or_cancel(bus, stored, cancel) {
+        Err(e) if stored.is_some() && (e.is::<NoAnswer>() || e.is::<Refused>()) => {
+            eprintln!("rustshot: the remembered screen did not come back ({e:#}); asking again");
+            forget();
+            return screencast_or_cancel(bus, None, cancel);
+        }
+        r => r?,
+    };
+    if stored.is_some() {
+        let s = &info.stream;
+        let known = s.pos.is_some() && s.size.is_some();
+        if known && !touches(area, stream_rect(s, (0, 0), area, mons)) {
+            eprintln!("rustshot: the remembered screen is not where the selection is; asking again");
+            close_session(bus, &info.session);
+            forget();
+            info = screencast_or_cancel(bus, None, cancel)?;
+        }
+    }
+    Ok(info)
 }
 
 /// `OpenPipeWireRemote` of `iface` (ScreenCast: for `session`; Camera:
@@ -252,17 +385,19 @@ pub fn camera_present(bus: &mut dyn Bus) -> Result<bool> {
     v.as_bool().ok_or_else(|| anyhow!("IsCameraPresent is not a boolean"))
 }
 
-/// Ask for the camera (a dialog the first time), then its PipeWire socket.
-pub fn access_camera(bus: &mut dyn Bus) -> Result<Fd> {
-    request(bus, CAMERA, "AccessCamera", vec![], vec![], DIALOG)?;
+/// Ask for the camera (a dialog the first time), then its PipeWire socket;
+/// `cancel` calls the dialog off.
+pub fn access_camera(bus: &mut dyn Bus, cancel: Option<&CancelFlag>) -> Result<Fd> {
+    request_or_cancel(bus, CAMERA, "AccessCamera", vec![], vec![], DIALOG, cancel)?;
     open_remote(bus, CAMERA, None)
 }
 
-/// Take a screenshot of the whole desktop without the portal's dialog:
-/// the picture file's URI.
-pub fn screenshot(bus: &mut dyn Bus) -> Result<String> {
+/// Take a screenshot of the whole desktop without the portal's dialog
+/// (waiting up to `timeout`: a desktop may still ask once): the picture
+/// file's URI.
+pub fn screenshot(bus: &mut dyn Bus, timeout: Duration) -> Result<String> {
     let opts = vec![("interactive", Value::Bool(false)), ("modal", Value::Bool(false))];
-    let r = request(bus, SCREENSHOT, "Screenshot", vec![Value::str("")], opts, DIALOG)?;
+    let r = request(bus, SCREENSHOT, "Screenshot", vec![Value::str("")], opts, timeout)?;
     r.get("uri").and_then(Value::as_str).map(String::from).ok_or_else(|| anyhow!("Screenshot: no picture in the answer"))
 }
 
@@ -329,20 +464,43 @@ fn contains(r: IRect, x: i32, y: i32) -> bool {
     x >= r.0 && y >= r.1 && x < r.0 + r.2 as i32 && y < r.1 + r.3 as i32
 }
 
-/// Where the shared monitor is on the X screen: the portal's position and
-/// size when it gives both; else the monitor of `mons` that has the
-/// portal's size (or the picture's, `frame`), the one with the area's
-/// centre first; else the monitor with the area's centre when there is
-/// only one monitor. `None`: not known (the whole picture is recorded).
+/// Whether `a` and `b` (w, h) have the same aspect, within 1 %.
+fn same_aspect(a: (u32, u32), b: (u32, u32)) -> bool {
+    let (l, r) = (a.0 as f64 * b.1 as f64, a.1 as f64 * b.0 as f64);
+    l > 0.0 && r > 0.0 && (l - r).abs() <= 0.01 * l.max(r)
+}
+
+/// Where the shared monitor is in X screen coordinates (those of `area`
+/// and of the XRandR monitors `mons`), so the selection can be cut from
+/// its `frame`-sized pictures; `None` when that cannot be told (the whole
+/// shared screen is recorded and the user is told).
+///
+/// The portal gives the monitor's position and size in the compositor's
+/// logical layout. X clients (XWayland) see either that same layout
+/// (GNOME; KDE scaling X clients itself off) or one scaled by the X scale
+/// (KDE with "X applications scale themselves": X px = logical × scale). So
+/// the XRandR monitor whose place is the portal's times some scale `k`
+/// (k = 1 included) is the one; with a single monitor, that one. Its size
+/// must agree with the portal's (and the pictures') aspect, else `None`.
+/// Without any XRandR monitors the portal's rect is taken as it is.
+/// Without a position: the monitor of the portal's size (or the
+/// picture's), the one with the area's centre first; else the only one.
 pub fn stream_rect(s: &StreamInfo, frame: (u32, u32), area: IRect, mons: &[IRect]) -> Option<IRect> {
-    if let (Some(p), Some(z)) = (s.pos, s.size)
-        && z.0 > 0
-        && z.1 > 0
-    {
-        return Some((p.0, p.1, z.0 as u32, z.1 as u32));
+    let size = s.size.filter(|z| z.0 > 0 && z.1 > 0).map(|z| (z.0 as u32, z.1 as u32));
+    let pictures_agree = |m: &IRect| frame.0 == 0 || frame.1 == 0 || same_aspect((m.2, m.3), frame);
+    if let (Some(p), Some(z)) = (s.pos, size) {
+        if mons.is_empty() {
+            return Some((p.0, p.1, z.0, z.1));
+        }
+        let near = |a: i32, b: f64| (a as f64 - b).abs() <= 2.0;
+        let placed = mons.iter().find(|m| {
+            let k = m.2 as f64 / z.0 as f64;
+            near(m.3 as i32, z.1 as f64 * k) && near(m.0, p.0 as f64 * k) && near(m.1, p.1 as f64 * k)
+        });
+        let m = placed.or_else(|| (mons.len() == 1).then(|| &mons[0]))?;
+        return (same_aspect((m.2, m.3), z) && pictures_agree(m)).then_some(*m);
     }
     let (cx, cy) = (area.0 + area.2 as i32 / 2, area.1 + area.3 as i32 / 2);
-    let size = s.size.filter(|z| z.0 > 0 && z.1 > 0).map(|z| (z.0 as u32, z.1 as u32));
     let fits = |m: &&IRect| size.is_some_and(|z| (m.2, m.3) == z) || (m.2, m.3) == frame;
     let mut cands: Vec<&IRect> = mons.iter().filter(fits).collect();
     cands.sort_by_key(|m| !contains(**m, cx, cy));
@@ -440,46 +598,96 @@ pub fn save_token(t: Option<&str>) {
 // Live (Linux)
 // ---------------------------------------------------------------------------
 
-/// Whether the ScreenCast portal answers (cached; asked once, 2 s at most).
+/// How long the ScreenCast probe may take (connecting, authenticating and
+/// reading the portal's `version`), all told.
+#[cfg(target_os = "linux")]
+pub const PROBE: Duration = Duration::from_secs(2);
+
+#[cfg(target_os = "linux")]
+static PROBED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// Whether the ScreenCast portal answers, without waiting: `None` while it
+/// is being asked (the first call starts the probe on its own thread; it
+/// takes [`PROBE`] at most), then the answer, cached.
+#[cfg(target_os = "linux")]
+pub fn screencast_status() -> Option<bool> {
+    static START: std::sync::Once = std::sync::Once::new();
+    if let Some(v) = PROBED.get() {
+        return Some(*v);
+    }
+    START.call_once(|| {
+        let spawned = std::thread::Builder::new().name("portal-probe".into()).spawn(|| {
+            let _ = PROBED.set(probe_screencast());
+        });
+        if spawned.is_err() {
+            let _ = PROBED.set(probe_screencast());
+        }
+    });
+    PROBED.get().copied()
+}
+
+/// [`screencast_status`], waiting for the answer (tests, the command line).
 #[cfg(target_os = "linux")]
 pub fn screencast_available() -> bool {
-    static OK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *OK.get_or_init(|| {
-        let r = (|| -> Result<u32> {
-            let mut c = dbus::Conn::session()?;
-            prop_u32(&mut c, SCREENCAST, "version")
-        })();
-        match r {
-            Ok(v) => {
-                eprintln!("rustshot: ScreenCast portal version {v}");
-                true
-            }
-            Err(e) => {
-                eprintln!("rustshot: no ScreenCast portal ({e:#}); recording is off");
-                false
-            }
+    let end = std::time::Instant::now() + PROBE + Duration::from_millis(500);
+    loop {
+        if let Some(v) = screencast_status() {
+            return v;
         }
-    })
+        if std::time::Instant::now() >= end {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn probe_screencast() -> bool {
+    let r = (|| -> Result<u32> {
+        let end = std::time::Instant::now() + PROBE;
+        let mut c = dbus::Conn::session_within(PROBE)?;
+        let left = end.saturating_duration_since(std::time::Instant::now());
+        let m = Message::call(DESKTOP, DESKTOP_PATH, "org.freedesktop.DBus.Properties", "Get", vec![Value::str(SCREENCAST), Value::str("version")]);
+        let r = c.call(m, left.max(Duration::from_millis(1)))?;
+        r.body.first().and_then(Value::as_u32).ok_or_else(|| anyhow!("ScreenCast.version is not a number"))
+    })();
+    match r {
+        Ok(v) => {
+            eprintln!("rustshot: ScreenCast portal version {v}");
+            true
+        }
+        Err(e) => {
+            eprintln!("rustshot: no ScreenCast portal ({e:#}); recording is off");
+            false
+        }
+    }
 }
 
 /// A screenshot of the whole desktop through the Screenshot portal (no
-/// dialog). The portal's file is removed once read: it is ours, made only
-/// for this capture (some desktops put it in ~/Pictures).
+/// dialog), waiting up to `timeout` for it. The portal's file is removed
+/// once read: it is ours, made only for this capture (some desktops put it
+/// in ~/Pictures).
 #[cfg(target_os = "linux")]
-pub fn grab_screen() -> Result<crate::pixbuf::PixBuf> {
-    let mut conn = dbus::Conn::session().context("connect to the session bus")?;
-    let uri = screenshot(&mut conn)?;
+pub fn grab_screen(timeout: Duration) -> Result<crate::pixbuf::PixBuf> {
+    let mut conn = dbus::Conn::session_within(timeout.min(dbus::CALL_TIMEOUT)).context("connect to the session bus")?;
+    let uri = screenshot(&mut conn, timeout)?;
     let path = file_uri_path(&uri).ok_or_else(|| anyhow!("Screenshot: not a local file: {uri}"))?;
     let bytes = std::fs::read(&path).with_context(|| format!("read the screenshot {path}"))?;
     let _ = std::fs::remove_file(&path);
     crate::pixbuf::PixBuf::from_png(&bytes).with_context(|| format!("decode the screenshot {path}"))
 }
 
+/// What a recording ends with when the screen share stops under it (the
+/// desktop's "stop sharing", the portal closing the session).
+pub const SHARING_STOPPED: &str = "Screen sharing was stopped";
+
 /// A running screen cast: the bus connection that holds the session, the
 /// PipeWire socket (taken by the frame source) and the stream.
 #[cfg(target_os = "linux")]
 pub struct Cast {
     conn: dbus::Conn,
+    /// The portal's unique name (its `Closed` signal comes from it).
+    owner: String,
     pub info: CastInfo,
     pub fd: Option<Fd>,
 }
@@ -488,26 +696,55 @@ pub struct Cast {
 impl Cast {
     /// Ask for a screen (the portal's dialog unless a stored choice is
     /// restored) for a recording of `area` on `mons`. A restored choice of
-    /// a monitor that `area` is not on is asked again. Blocks while the
-    /// dialog is open.
+    /// a monitor that `area` is not on, or one that does not come back
+    /// within [`RESTORED`] (or is refused), is asked again. Blocks while
+    /// the dialog is open.
+    #[allow(dead_code)] // tests; the app calls it off with `start_or_cancel`
     pub fn start(area: IRect, mons: &[IRect]) -> Result<Cast> {
+        Cast::start_or_cancel(area, mons, None)
+    }
+
+    /// [`Cast::start`] that `cancel` calls off ([`Cancelled`], the dialog
+    /// closed), for a worker thread while the UI stays live.
+    pub fn start_or_cancel(area: IRect, mons: &[IRect], cancel: Option<&CancelFlag>) -> Result<Cast> {
         let mut conn = dbus::Conn::session().context("connect to the session bus")?;
-        let stored = load_token();
-        let mut info = screencast(&mut conn, stored.as_deref())?;
-        if stored.is_some() {
-            let s = &info.stream;
-            let known = s.pos.is_some() && s.size.is_some();
-            if known && !touches(area, stream_rect(s, (0, 0), area, mons)) {
-                eprintln!("rustshot: the remembered screen is not where the selection is; asking again");
-                close_session(&mut conn, &info.session);
-                save_token(None);
-                info = screencast(&mut conn, None)?;
+        let owner = portal_owner(&mut conn)?;
+        let info = negotiate(&mut conn, load_token().as_deref(), area, mons, cancel, &mut || save_token(None))?;
+        save_token(info.restore_token.as_deref());
+        // From here on dropping the cast closes the session.
+        let mut cast = Cast { conn, owner, info, fd: None };
+        let rule = dbus::signal_rule(DESKTOP, &cast.info.session, SESSION, "Closed");
+        if let Err(e) = dbus::add_match(&mut cast.conn, &rule) {
+            eprintln!("rustshot: the screen cast session's end will not be noticed: {e:#}");
+        }
+        cast.fd = Some(open_remote(&mut cast.conn, SCREENCAST, Some(&cast.info.session))?);
+        let i = &cast.info;
+        eprintln!("rustshot: screen cast node {} at {:?} size {:?}", i.stream.node, i.stream.pos, i.stream.size);
+        Ok(cast)
+    }
+
+    /// Whether the portal closed the session (looked at without waiting),
+    /// or the bus connection that holds it broke.
+    pub fn closed(&mut self) -> bool {
+        let (session, owner) = (self.info.session.clone(), self.owner.clone());
+        let want = |m: &Message| m.is(SESSION, "Closed") && m.path.as_deref() == Some(&session) && m.sender.as_deref() == Some(&owner);
+        match self.conn.wait_signal(&want, Duration::ZERO) {
+            Ok(Some(_)) => {
+                eprintln!("rustshot: the portal closed the screen cast session");
+                true
+            }
+            Ok(None) => false,
+            Err(e) => {
+                eprintln!("rustshot: screen cast session bus: {e:#}");
+                self.conn.broken().is_some()
             }
         }
-        save_token(info.restore_token.as_deref());
-        let fd = open_remote(&mut conn, SCREENCAST, Some(&info.session))?;
-        eprintln!("rustshot: screen cast node {} at {:?} size {:?}", info.stream.node, info.stream.pos, info.stream.size);
-        Ok(Cast { conn, info, fd: Some(fd) })
+    }
+
+    /// Close the session now (tests: the share stopping under a recording).
+    #[allow(dead_code)]
+    pub fn close_now(&mut self) {
+        close_session(&mut self.conn, &self.info.session);
     }
 }
 

@@ -247,9 +247,10 @@ fn yuy2_and_nv12_to_bgra() {
     nv12_to_bgra(&[63, 63, 63, 63], &[102, 240], 2, 2, 2, Matrix::Bt709, &mut out);
     let p = &out[..4];
     assert!(p[2] >= 254 && p[1] <= 2 && p[0] <= 2, "{p:?}");
-    // Short input: no panic, a blank picture.
-    nv12_to_bgra(&[0; 3], &[], 2, 2, 2, Matrix::Bt601, &mut out);
-    assert_eq!(out, [0; 16]);
+    // Short input: no panic and no picture (the caller skips it).
+    assert!(nv12_to_bgra(&[0; 3], &[], 2, 2, 2, Matrix::Bt601, &mut out).is_none());
+    assert!(yuy2_to_bgra(&[0; 3], 4, 2, 1, Matrix::Bt601, &mut out).is_none());
+    assert!(yuy2_to_bgra(&[16, 128, 16, 128], 4, 2, 1, Matrix::Bt601, &mut out).is_some());
 }
 
 /// Full range (0-255): black is 0 and white 255 without the 16-235

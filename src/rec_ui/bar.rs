@@ -41,7 +41,13 @@ pub struct BarView {
     /// sit inside the recorded area (a full-screen recording on the only
     /// monitor), where it is recorded too.
     pub compact: bool,
+    /// The screen is being chosen (Wayland: the portal's dialog is open):
+    /// [`ASKING`] instead of the timer, and only Stop (which calls it off).
+    pub asking: bool,
 }
+
+/// What the bar says while the screen is being chosen.
+pub const ASKING: &str = "Asking…";
 
 /// The bar in its window (physical px; the panel sits `MARGIN` inside).
 #[derive(Clone, Debug, PartialEq)]
@@ -66,7 +72,7 @@ fn text(f: &mut Fb, ui: &Ui, size: f32, s: &str, x: f32, cy: f32, c: C4) {
 
 /// The timer's text.
 fn timer_text(v: &BarView) -> String {
-    super::fmt_time(v.elapsed)
+    if v.asking { ASKING.into() } else { super::fmt_time(v.elapsed) }
 }
 
 /// Lay the bar out for `v` at scale `ui.s` (the timer is as wide as
@@ -77,7 +83,7 @@ pub fn layout(ui: &Ui, v: &BarView) -> BarLayout {
     let digits = tw(ui, TEXT, "00:00").max(tw(ui, TEXT, &tt)) / s;
     let timer_w = TIMER_PAD + 2.0 * DOT + DOT_GAP + digits.ceil() + 4.0;
     let mut acts = Vec::new();
-    if !v.compact {
+    if !v.compact && !v.asking {
         acts.push(BarAct::Pause);
         if v.mic.is_some() {
             acts.push(BarAct::Mute);
@@ -129,7 +135,7 @@ pub fn draw(f: &mut Fb, ui: &Ui, l: &BarLayout, v: &BarView, hover: Option<BarAc
     // Timer: a red dot (grey while paused) and the time.
     let cy = l.timer.y + l.timer.h / 2.0;
     let dx = l.timer.x + TIMER_PAD * s + DOT * s;
-    let dot = if v.paused || v.stopping { th.text_muted } else { super::RED };
+    let dot = if v.paused || v.stopping || v.asking { th.text_muted } else { super::RED };
     f.fill_circle(dx, cy, DOT * s, dot);
     let tc = if v.paused { th.text_muted } else { th.text };
     text(f, ui, TEXT, &timer_text(v), dx + DOT * s + DOT_GAP * s, cy, tc);
@@ -183,7 +189,7 @@ mod tests {
     }
 
     fn view(mic: Option<bool>) -> BarView {
-        BarView { elapsed: Duration::from_secs(65), paused: false, mic, stopping: false, compact: false }
+        BarView { elapsed: Duration::from_secs(65), paused: false, mic, stopping: false, compact: false, asking: false }
     }
 
     #[test]
@@ -209,6 +215,15 @@ mod tests {
         assert_eq!(acts, [BarAct::Stop]);
         assert_eq!(full.size.0 as f32 - l.size.0 as f32, 2.0 * (BTN + BTN_GAP));
         assert_eq!(l.timer, full.timer);
+    }
+
+    #[test]
+    fn asking_shows_the_word_and_stop_only() {
+        let l = layout(&ui(1.0), &BarView { asking: true, ..view(Some(false)) });
+        let acts: Vec<BarAct> = l.buttons.iter().map(|b| b.0).collect();
+        assert_eq!(acts, [BarAct::Stop]);
+        assert_eq!(timer_text(&BarView { asking: true, ..view(None) }), ASKING);
+        assert_eq!(timer_text(&view(None)), "1:05");
     }
 
     #[test]
