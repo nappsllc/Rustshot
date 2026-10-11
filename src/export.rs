@@ -377,9 +377,23 @@ pub fn png_bytes(img: &PixBuf) -> Result<Vec<u8>> {
     img.to_png()
 }
 
+/// What one export task did, for the confirmation toast.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Done {
+    Copied,
+    Saved(PathBuf),
+    /// (task, reason): "Copy", "Save" or "Upload".
+    Failed(&'static str, String),
+}
+
+/// The save dialog's Cancel: the export says so, nothing failed.
+pub const SAVE_CANCELLED: &str = "save dialog cancelled";
+
 pub struct ExportResult {
     pub messages: Vec<String>,
     pub error: bool,
+    /// What Copy, Save and Upload did (Upload: only when it could not start).
+    pub done: Vec<Done>,
     /// Handle for a spawned upload; the caller must wait for it.
     pub upload: Option<Receiver<Result<String, String>>>,
 }
@@ -395,6 +409,7 @@ pub fn run_export(
     let mut messages = Vec::new();
     let mut error = false;
     let mut upload = None;
+    let mut done = Vec::new();
 
     for task in tasks {
         match task {
@@ -417,9 +432,13 @@ pub fn run_export(
                 }
             },
             Task::Copy => match copy_to_clipboard(img) {
-                Ok(()) => messages.push("copied to clipboard".to_string()),
+                Ok(()) => {
+                    messages.push("copied to clipboard".to_string());
+                    done.push(Done::Copied);
+                }
                 Err(e) => {
                     messages.push(format!("error: clipboard: {e:#}"));
+                    done.push(Done::Failed("Copy", format!("{e:#}")));
                     error = true;
                 }
             },
@@ -427,15 +446,22 @@ pub fn run_export(
                 Ok(p) => {
                     let target = unique_path(&p);
                     match save_image(img, &target, cfg.jpeg_quality) {
-                        Ok(()) => messages.push(format!("saved: {}", target.display())),
+                        Ok(()) => {
+                            messages.push(format!("saved: {}", target.display()));
+                            done.push(Done::Saved(target));
+                        }
                         Err(e) => {
                             messages.push(format!("error: save: {e:#}"));
+                            done.push(Done::Failed("Save", format!("{e:#}")));
                             error = true;
                         }
                     }
                 }
                 Err(e) => {
                     messages.push(format!("error: save: {e:#}"));
+                    if e.to_string() != SAVE_CANCELLED {
+                        done.push(Done::Failed("Save", format!("{e:#}")));
+                    }
                     error = true;
                 }
             },
@@ -444,6 +470,7 @@ pub fn run_export(
                     Ok(b) => b,
                     Err(e) => {
                         messages.push(format!("error: encode for upload: {e:#}"));
+                        done.push(Done::Failed("Upload", format!("{e:#}")));
                         error = true;
                         continue;
                     }
@@ -455,6 +482,7 @@ pub fn run_export(
     ExportResult {
         messages,
         error,
+        done,
         upload,
     }
 }
@@ -484,7 +512,7 @@ fn resolve_save_path(path: &Option<PathBuf>, ask: bool, cfg: &Config) -> Result<
                     let _ = std::fs::remove_dir(d); // only succeeds if empty
                 }
             }
-            let mut p = chosen.ok_or_else(|| anyhow!("save dialog cancelled"))?;
+            let mut p = chosen.ok_or_else(|| anyhow!(SAVE_CANCELLED))?;
             if p.extension().is_none() {
                 p.set_extension(ext);
             }

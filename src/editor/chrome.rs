@@ -427,6 +427,13 @@ fn toast_rect(ui: &Ui, msg: &str, area: FRect, k: f32) -> FRect {
     FRect { x: area.x + (area.w - w) / 2.0, y: area.y1() - ui.px(28.0) - h + rise, w, h }
 }
 
+/// The toast panel's (w, h) for `msg`, uncapped (the post-capture notice
+/// window is sized to it).
+pub fn toast_size(ui: &Ui, msg: &str) -> (f32, f32) {
+    let r = toast_rect(ui, msg, FRect { x: 0.0, y: 0.0, w: f32::MAX, h: 0.0 }, 1.0);
+    (r.w, r.h)
+}
+
 /// Bottom-centre notice; `k` drives both fade and the 4 px rise.
 pub fn toast(f: &mut Fb, ui: &Ui, msg: &str, kind: ToastKind, area: FRect, k: f32) {
     let th = ui.th;

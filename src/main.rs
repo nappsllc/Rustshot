@@ -20,6 +20,7 @@ mod keymap;
 // layout is tested everywhere.
 #[cfg(any(target_os = "macos", test))]
 mod macos_objc;
+mod notice;
 mod objects;
 mod pixbuf;
 #[cfg(windows)]

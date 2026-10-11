@@ -1025,14 +1025,18 @@ fn upload_results_become_toasts() {
 }
 
 /// Ctrl+U in the daemon: the overlay hides, the upload runs, and its
-/// result reaches the user outside the hidden overlay (a tray balloon).
-fn daemon_upload(fake: crate::export::FakeUpload) -> (App, Vec<String>) {
+/// result reaches the user outside the hidden overlay: in the notice
+/// (shown as "Uploading…"), or a tray balloon once `gone` took it down.
+fn daemon_upload(fake: crate::export::FakeUpload, gone: bool) -> (App, Vec<crate::notice::Note>, Vec<String>) {
     crate::export::FAKE_UPLOAD.with(|f| f.set(Some(fake)));
-    let _ = crate::tray::take_notes();
-    let mut a = app(Some(r(10.0, 10.0, 50.0, 50.0)));
+    let _ = (crate::tray::take_notes(), crate::notice::take_shown());
+    let mut a = app(Some(r(100.0, 80.0, 300.0, 200.0)));
     a.kind = RunKind::Daemon;
     key_m(&mut a, 'U' as u32, CTRL);
     assert!(hidden(&a), "the overlay closed");
+    if gone {
+        crate::notice::hide();
+    }
     let t0 = Instant::now();
     while a.upload_slot.lock().unwrap().is_some() {
         assert!(t0.elapsed() < Duration::from_secs(10), "upload never finished");
@@ -1040,20 +1044,69 @@ fn daemon_upload(fake: crate::export::FakeUpload) -> (App, Vec<String>) {
         a.on_event(Ev::Timer);
     }
     crate::export::FAKE_UPLOAD.with(|f| f.set(None));
-    (a, crate::tray::take_notes())
+    let shown = crate::notice::take_shown();
+    // Bottom-centre of the monitor under the capture: its centre is the anchor.
+    assert!(shown.iter().all(|(_, at)| *at == (250, 180)), "{shown:?}");
+    (a, shown.into_iter().map(|(n, _)| n).collect(), crate::tray::take_notes())
+}
+
+fn texts(notes: &[crate::notice::Note]) -> Vec<&str> {
+    notes.iter().map(|n| n.text.as_str()).collect()
 }
 
 #[test]
 fn daemon_upload_result_is_shown_after_the_overlay_hides() {
-    let (a, notes) = daemon_upload(|png| {
-        assert!(png.starts_with(b"\x89PNG"), "a PNG is uploaded");
-        Ok("https://i.imgur.com/x.png".into())
-    });
+    let (a, shown, balloons) = daemon_upload(
+        |png| {
+            assert!(png.starts_with(b"\x89PNG"), "a PNG is uploaded");
+            Ok("https://i.imgur.com/x.png".into())
+        },
+        false,
+    );
     assert_eq!(code(&a), 0);
-    assert_eq!(notes, ["Uploaded\nhttps://i.imgur.com/x.png"]);
+    assert_eq!(texts(&shown), ["Uploading\u{2026}", "Uploaded \u{b7} i.imgur.com/x.png"]);
+    assert!(balloons.is_empty(), "{balloons:?}");
 
-    let (_, notes) = daemon_upload(|_| Err("HTTP 429".into()));
-    assert_eq!(notes, ["Upload failed: HTTP 429"]);
+    let (_, shown, balloons) = daemon_upload(|_| Err("HTTP 429".into()), false);
+    assert_eq!(texts(&shown), ["Uploading\u{2026}", "Upload failed: HTTP 429"]);
+    assert_eq!(shown[1].kind, ToastKind::Error);
+    assert!(balloons.is_empty(), "{balloons:?}");
+}
+
+#[test]
+fn a_late_upload_result_is_a_tray_balloon() {
+    let (_, shown, balloons) = daemon_upload(|_| Ok("https://i.imgur.com/x.png".into()), true);
+    assert!(shown.is_empty(), "the notice was gone: {shown:?}");
+    assert_eq!(balloons, ["Uploaded\nhttps://i.imgur.com/x.png"]);
+    let (_, _, balloons) = daemon_upload(|_| Err("HTTP 429".into()), true);
+    assert_eq!(balloons, ["Upload failed: HTTP 429"]);
+}
+
+#[test]
+fn a_daemon_save_says_so_after_the_overlay_hides() {
+    let dir = TempDir::new("notice");
+    let _ = crate::notice::take_shown();
+    let mut a = app(Some(r(100.0, 80.0, 300.0, 200.0)));
+    a.kind = RunKind::Daemon;
+    ed(&mut a).tasks = vec![Task::Save { path: Some(dir.0.clone()), ask: false }];
+    ed(&mut a).cfg.filename_pattern = "shot".into();
+    key(&mut a, key::RETURN);
+    assert!(hidden(&a));
+    let shown = crate::notice::take_shown();
+    assert_eq!(shown.len(), 1, "{shown:?}");
+    assert_eq!((shown[0].0.text.as_str(), shown[0].1), ("Saved \u{b7} shot.png", (250, 180)));
+
+    // A one-shot run says it on stdout: no notice.
+    let mut a = app(Some(r(100.0, 80.0, 300.0, 200.0)));
+    ed(&mut a).tasks = vec![Task::Save { path: Some(dir.0.clone()), ask: false }];
+    key(&mut a, key::RETURN);
+    assert!(crate::notice::take_shown().is_empty());
+
+    // The next capture takes the notice down.
+    crate::notice::show(crate::notice::compose(&[crate::export::Done::Copied], false).unwrap(), (0, 0), crate::theme::DARK);
+    queue(Err(anyhow::anyhow!("no screen")));
+    a.begin_capture(Pending::editor());
+    assert!(crate::notice::take_shown().is_empty(), "hidden when a capture begins");
 }
 
 // ---- begin_capture ---------------------------------------------------------

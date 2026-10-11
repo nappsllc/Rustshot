@@ -29,6 +29,7 @@ mod compose;
 /// Chrome styling shared with the window control kit (`crate::ui`).
 pub(crate) mod style {
     pub(crate) use super::chrome::{chord_caps, fill, ring, round, surface, Ui, ALL_LAYERS};
+    pub(crate) use super::chrome::{toast, toast_size, ToastKind};
     pub(crate) use super::toolbar::BTN;
 }
 #[cfg(windows)]
@@ -622,6 +623,8 @@ impl App {
     }
 
     fn begin_capture(&mut self, mut pending: Pending) {
+        // The last capture's notice never sits over the new one.
+        crate::notice::hide();
         let mut cfg = self.cfg.clone();
         if let Some(f) = pending.filename.take() {
             cfg.filename_pattern = f;
@@ -813,6 +816,14 @@ impl App {
         if res.error {
             self.exit_code.store(1, Ordering::SeqCst);
         }
+        // The overlay is gone: a notice says what happened (the daemon's
+        // only window left; a one-shot run says it on stdout).
+        if self.kind == RunKind::Daemon
+            && let Some(note) = crate::notice::compose(&res.done, res.upload.is_some())
+        {
+            let at = (job.sel_global.0 + job.img.width() as i32 / 2, job.sel_global.1 + job.img.height() as i32 / 2);
+            crate::notice::show(note, at, theme::resolve(&job.cfg));
+        }
         *self.upload_slot.lock().unwrap() = res.upload;
         wind::hide(self.hwnd);
         match self.kind {
@@ -822,35 +833,39 @@ impl App {
     }
 
     /// An upload finished: copy its link and say so. A capture's overlay
-    /// is hidden once it is exported, so the daemon says it in a tray
-    /// balloon; only over a newer capture is it the overlay's toast.
+    /// is hidden once it is exported, so the daemon says it in the
+    /// notice still showing "Uploading…", or in a tray balloon once that
+    /// is gone; only over a newer capture is it the overlay's toast.
     fn poll_upload(&mut self) {
         let slot = self.upload_slot.clone();
         let mut guard = slot.lock().unwrap();
         let Some(rx) = guard.take() else { return };
-        let (text, kind) = match rx.try_recv() {
-            Ok(Ok(url)) => {
-                println!("uploaded: {url}");
-                let copied = self.cfg.copy_url_after_upload
-                    && export::copy_text_to_clipboard(&url)
-                        .map_err(|e| eprintln!("warning: could not copy URL: {e:#}"))
-                        .is_ok();
-                let head = if copied { "Uploaded \u{2014} link copied" } else { "Uploaded" };
-                (format!("{head}\n{url}"), ToastKind::Success)
-            }
-            Ok(Err(e)) => {
-                eprintln!("error: upload failed: {e}");
-                (format!("Upload failed: {e}"), ToastKind::Error)
-            }
+        let res = match rx.try_recv() {
+            Ok(res) => res,
             Err(std::sync::mpsc::TryRecvError::Empty) => {
                 *guard = Some(rx);
                 return;
             }
             Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
         };
+        let (text, kind, copied) = match &res {
+            Ok(url) => {
+                println!("uploaded: {url}");
+                let copied = self.cfg.copy_url_after_upload
+                    && export::copy_text_to_clipboard(url)
+                        .map_err(|e| eprintln!("warning: could not copy URL: {e:#}"))
+                        .is_ok();
+                let head = if copied { "Uploaded \u{2014} link copied" } else { "Uploaded" };
+                (format!("{head}\n{url}"), ToastKind::Success, copied)
+            }
+            Err(e) => {
+                eprintln!("error: upload failed: {e}");
+                (format!("Upload failed: {e}"), ToastKind::Error, false)
+            }
+        };
         if matches!(self.st, State::Edit(_)) || self.one_shot() {
             self.notice = Some(Toast::new(text.replace('\n', " "), kind));
-        } else {
+        } else if !crate::notice::replace(crate::notice::upload_note(&res, copied)) {
             crate::tray::notify(&text);
         }
     }
