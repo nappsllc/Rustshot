@@ -6,6 +6,9 @@ mod autostart;
 mod cam;
 mod capture;
 mod config;
+// D-Bus client (portals; the StatusNotifierItem tray later). Pure parts tested everywhere.
+#[cfg(any(target_os = "linux", test))]
+mod dbus;
 mod editor;
 mod export;
 mod fonts;

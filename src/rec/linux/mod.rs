@@ -19,10 +19,17 @@ pub mod native;
 pub mod openh264;
 pub mod opus;
 pub mod parec;
+#[cfg(target_os = "linux")]
+pub mod pipewire;
+pub mod pipewire_pod;
+pub mod portal;
 pub mod pulse;
 pub mod pulse_list;
+pub mod v4l2;
 #[cfg(target_os = "linux")]
 pub mod xshm;
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests;
+#[cfg(all(test, target_os = "linux"))]
+mod tests_wayland;
