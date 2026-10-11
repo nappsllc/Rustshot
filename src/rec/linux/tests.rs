@@ -500,7 +500,7 @@ fn live_rec_linux_pulse_simple_hears_the_tone() {
         return;
     };
     let wav = std::env::temp_dir().join(format!("rustshot-tone-simple-{}.wav", std::process::id()));
-    tone_wav(&wav, 440.0, 5.0);
+    tone_wav(&wav, 440.0, 12.0);
     let paplay = ffmpeg::find_tool("paplay", None).expect("paplay (pulseaudio-utils)");
     let mut player = Command::new(paplay).arg(&wav).stdin(Stdio::null()).spawn().expect("play the tone");
     std::thread::sleep(Duration::from_millis(300));
@@ -508,8 +508,11 @@ fn live_rec_linux_pulse_simple_hears_the_tone() {
     assert_eq!(s.via(), "libpulse-simple");
     let mut got = Vec::new();
     let mut stamps = Vec::new();
-    let end = Instant::now() + Duration::from_millis(1500);
-    while Instant::now() < end {
+    // The CI null sink takes up to ~2 s to deliver after waking up: up to
+    // 8 s for a second of sound.
+    let t0 = Instant::now();
+    let end = t0 + Duration::from_secs(8);
+    while Instant::now() < end && got.len() < 96_000 {
         let (n, at) = s.read_timed(&mut got);
         if n > 0 {
             stamps.push((Instant::now(), at));
@@ -521,8 +524,8 @@ fn live_rec_linux_pulse_simple_hears_the_tone() {
     let _ = player.wait();
     let _ = std::fs::remove_file(&wav);
     let rms = (got.iter().map(|v| v * v).sum::<f32>() / got.len().max(1) as f32).sqrt();
-    eprintln!("PULSE simple: {} samples, rms {rms:.3}, {} reads", got.len(), stamps.len());
-    assert!(got.len() > 48_000, "about 1.5 s of stereo sound, got {}", got.len());
+    eprintln!("PULSE simple: {} samples in {:?}, rms {rms:.3}, {} reads", got.len(), t0.elapsed(), stamps.len());
+    assert!(got.len() >= 96_000, "a second of stereo sound, got {}", got.len());
     assert!(rms > 0.05, "the tone is heard (rms {rms})");
     for (now, at) in stamps {
         let at = at.expect("a capture time");

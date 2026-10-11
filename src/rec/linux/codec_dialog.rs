@@ -348,6 +348,23 @@ mod imp {
     }
 
     impl Dialog {
+        fn new(cmd: Option<&'static str>, th: Theme) -> Dialog {
+            let (tx, rx) = std::sync::mpsc::channel();
+            Dialog {
+                hwnd: Hwnd::default(),
+                m: Machine::new(cmd),
+                th,
+                input: Input::default(),
+                focus: FocusState::default(),
+                canvas: PixBuf::default(),
+                out: PixBuf::default(),
+                tx,
+                rx,
+                cancel: Arc::new(AtomicBool::new(false)),
+                choice: None,
+            }
+        }
+
         fn perform(&mut self, acts: Vec<Act>) {
             for a in acts {
                 match a {
@@ -481,20 +498,7 @@ mod imp {
         let cfg = crate::config::load();
         let th = crate::theme::resolve(&cfg);
         let os = std::fs::read_to_string("/etc/os-release").or_else(|_| std::fs::read_to_string("/usr/lib/os-release")).unwrap_or_default();
-        let (tx, rx) = std::sync::mpsc::channel();
-        let mut d = Dialog {
-            hwnd: Hwnd::default(),
-            m: Machine::new(install_command(&os)),
-            th,
-            input: Input::default(),
-            focus: FocusState::default(),
-            canvas: PixBuf::default(),
-            out: PixBuf::default(),
-            tx,
-            rx,
-            cancel: Arc::new(AtomicBool::new(false)),
-            choice: None,
-        };
+        let mut d = Dialog::new(install_command(&os), th);
         let spec = WindowSpec { title: "Rustshot".into(), w: W, h: H, resizable: false, min: (W, H) };
         if let Err(e) = wind::run_window(spec, &mut d) {
             eprintln!("rustshot: encoder dialog: {e:#}");
@@ -508,6 +512,28 @@ mod imp {
             }
         }
         choice
+    }
+
+    #[cfg(test)]
+    mod window {
+        use super::*;
+
+        /// Smoke (CI runs it under Xvfb): the real dialog opens, draws and
+        /// closes after about a second.
+        #[test]
+        #[ignore = "opens a window"]
+        fn encoder_dialog_window_smoke() {
+            if !wind::has_display() {
+                eprintln!("no display; skipped");
+                return;
+            }
+            let _guard = wind::test_window_lock();
+            let mut dlg = Dialog::new(Some("sudo apt install ffmpeg"), crate::theme::resolve(&crate::config::Config::default()));
+            let mut d = wind::AutoClose::new(&mut dlg, 1000);
+            let spec = WindowSpec { title: "Rustshot".into(), w: W, h: H, resizable: false, min: (W, H) };
+            wind::run_window(spec, &mut d).expect("encoder dialog");
+            assert!(d.frames > 0, "drew a frame");
+        }
     }
 }
 
