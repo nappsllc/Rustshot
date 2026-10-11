@@ -165,6 +165,35 @@ jobs:
             dist/*.deb
             dist/*.AppImage
 
+  # Wayland: headless sway, xdg-desktop-portal-wlr (no chooser) and PipeWire
+  # in the Docker harness (docker/linux-test): a ScreenCast session through
+  # the portal must produce a PipeWire node, and the live_rec_wayland_* /
+  # live_cam_linux_* tests run. In Docker, not on the runner: Ubuntu 24.04's
+  # xdg-desktop-portal-wlr 0.7 refuses every Start without a GPU (no dmabuf
+  # format from screencopy); the image takes sway 1.12 and xdpw 0.8 from
+  # Debian unstable. Skipped on tags, so it never gates a release
+  # (release.yml reuses this file).
+  linux-wayland:
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the harness image
+        run: docker build -t rustshot-linux-test docker/linux-test
+      - name: Wayland session, portal ScreenCast, live tests
+        timeout-minutes: 15
+        run: |
+          mkdir -p "$RUNNER_TEMP/rs-out" && chmod 777 "$RUNNER_TEMP/rs-out"
+          docker run --rm --init --shm-size=1g -v "$GITHUB_WORKSPACE:/src:ro" -v "$RUNNER_TEMP/rs-out:/out" \
+            rustshot-linux-test wayland
+      - name: Upload Wayland outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-wayland-out
+          path: ${{ runner.temp }}/rs-out
+
   # Line coverage per file into the job summary (no threshold yet). Never
   # turns a run red.
   coverage:
