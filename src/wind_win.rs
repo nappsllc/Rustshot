@@ -9,10 +9,10 @@ use windows::Win32::Foundation::{
     GetLastError, ERROR_CLASS_ALREADY_EXISTS, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateRectRgn, DeleteObject, EndPaint, GetMonitorInfoW, GetRegionData,
-    GetUpdateRgn, InvalidateRect, MonitorFromPoint, ScreenToClient, StretchDIBits, UpdateWindow,
+    BeginPaint, CombineRgn, CreateRectRgn, DeleteObject, EndPaint, GetMonitorInfoW, GetRegionData,
+    GetUpdateRgn, InvalidateRect, InvalidateRgn, MonitorFromPoint, SetRectRgn, ScreenToClient, StretchDIBits, UpdateWindow,
     BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-    PAINTSTRUCT, RGNDATA, RGNDATAHEADER, SRCCOPY,
+    PAINTSTRUCT, RGNDATA, RGNDATAHEADER, RGN_OR, SRCCOPY,
 };
 use windows::Win32::UI::HiDpi::{
     AdjustWindowRectExForDpi, GetDpiForMonitor, GetDpiForWindow, SetThreadDpiAwarenessContext,
@@ -85,20 +85,47 @@ pub fn invalidate(hwnd: HWND) {
     if hwnd.is_invalid() {
         return;
     }
+    crate::perf::invalidated();
     unsafe {
         let _ = InvalidateRect(Some(hwnd), None, false);
     }
 }
 
 /// Invalidate rects `[x0, y0, x1, y1]` of the client area (no erase).
+///
+/// One InvalidateRgn of their union: a single InvalidateRect took 30 to
+/// 400 us on a 5120x1440 overlay, so a dozen per mouse move at 1 kHz kept
+/// the thread busy with moves (four per paint) and starved WM_PAINT.
 pub fn invalidate_rects(hwnd: HWND, rects: &[[i32; 4]]) {
-    if hwnd.is_invalid() {
+    if hwnd.is_invalid() || rects.is_empty() {
         return;
     }
-    for r in rects {
-        let rc = RECT { left: r[0], top: r[1], right: r[2], bottom: r[3] };
-        unsafe {
-            let _ = InvalidateRect(Some(hwnd), Some(&rc), false);
+    let _p = crate::perf::span(crate::perf::K::Inval);
+    crate::perf::invalidated();
+    let rc = |r: &[i32; 4]| RECT { left: r[0], top: r[1], right: r[2], bottom: r[3] };
+    unsafe {
+        if let [r] = rects {
+            let _ = InvalidateRect(Some(hwnd), Some(&rc(r)), false);
+            return;
+        }
+        let all = CreateRectRgn(rects[0][0], rects[0][1], rects[0][2], rects[0][3]);
+        let one = CreateRectRgn(0, 0, 0, 0);
+        if all.is_invalid() || one.is_invalid() {
+            // Out of GDI handles: rect by rect.
+            for r in rects {
+                let _ = InvalidateRect(Some(hwnd), Some(&rc(r)), false);
+            }
+        } else {
+            for r in &rects[1..] {
+                let _ = SetRectRgn(one, r[0], r[1], r[2], r[3]);
+                CombineRgn(Some(all), Some(all), Some(one), RGN_OR);
+            }
+            let _ = InvalidateRgn(hwnd, Some(all), false);
+        }
+        for g in [one, all] {
+            if !g.is_invalid() {
+                let _ = DeleteObject(g.into());
+            }
         }
     }
 }
@@ -191,6 +218,7 @@ unsafe fn common(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM, drv: &mut dyn Dri
             WM_MOUSEMOVE => {
                 // No automatic repaint: the driver calls `invalidate` itself
                 // when a move actually changes what should be on screen.
+                let _m = crate::perf::mouse_move();
                 drv.on_event(Ev::Move {
                     x: x_of(lp),
                     y: y_of(lp),
@@ -254,17 +282,20 @@ unsafe fn common(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM, drv: &mut dyn Dri
                 LRESULT(0)
             }
             WM_PAINT => {
+                let t0 = std::time::Instant::now();
                 let rects = update_rects(hwnd);
                 let mut ps: PAINTSTRUCT = std::mem::zeroed();
                 let hdc = BeginPaint(hwnd, &mut ps);
                 let rc = ps.rcPaint;
                 let rects = if rects.is_empty() { vec![[rc.left, rc.top, rc.right, rc.bottom]] } else { rects };
+                crate::perf::update(rects.len(), rects.iter().map(|r| (r[2] - r[0]) as u64 * (r[3] - r[1]) as u64).sum());
                 if !drv.paint(hdc, &rects)
                     && let Some(fb) = drv.frame()
                 {
                     present(hdc, fb);
                 }
                 let _ = EndPaint(hwnd, &ps);
+                crate::perf::painted(t0);
                 LRESULT(0)
             }
             WM_SETCURSOR => {

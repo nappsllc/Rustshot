@@ -1095,6 +1095,7 @@ impl App {
     }
 
     fn pointer_move(&mut self, x: i32, y: i32) {
+        let _p = crate::perf::span(crate::perf::K::Ptr);
         self.edit_tx(|_this, edit| {
             if matches!(edit.interact, Interact::None) {
                 return;
@@ -1411,12 +1412,14 @@ impl Driver for App {
         let State::Edit(edit) = &mut self.st else { return None };
         let edit: &mut Edit = edit;
         edit.gdi.as_ref()?;
+        let _p = crate::perf::span(crate::perf::K::Damage);
         let now = Instant::now();
         edit.prepare(self.notice.as_ref(), self.mouse, now);
         wind::set_fast_timer(self.hwnd, animating(edit, self.notice.as_ref(), now));
         let rects = compose::merge_rects(edit.dirty_rects(edit.painted.as_ref()));
         // The target state: every pixel that differs from it is invalid now.
         edit.painted = edit.scene.clone();
+        crate::perf::damage(rects.len(), rects.iter().map(|r| r.w() as u64 * r.h() as u64).sum());
         if rects.len() > MAX_DAMAGE_RECTS {
             return None;
         }
@@ -3757,6 +3760,61 @@ mod tests {
         settled(&mut neg);
         assert_dirty_covers(&mut neg, "offscreen start", |a| set(a, FRect { x: -30.5, y: -20.0, w: 300.0, h: 200.0 }, 9.0));
         assert_dirty_covers(&mut neg, "offscreen grow", |a| set(a, FRect { x: -30.5, y: -20.0, w: 340.0, h: 230.0 }, 9.0));
+    }
+
+    /// Selection resizes repaint the moving edges and the ends of the
+    /// strips that stay, not the whole outline, and still cover every
+    /// changed pixel (each handle, both directions, tiny selections, the
+    /// image edge, a hot handle).
+    #[test]
+    fn dirty_rects_cover_selection_resizes() {
+        let big = FRect { x: 240.0, y: 140.0, w: 960.0, h: 540.0 };
+        let mut app = annotated(theme::DARK, big);
+        settled(&mut app);
+        let set = |r: FRect| {
+            move |app: &mut App| {
+                let e = edit_of(app);
+                e.interact = Interact::Resize { handle: Handle::SE, orig: big, aspect: 1.0 };
+                e.sel = Some(r);
+            }
+        };
+        assert_dirty_covers(&mut app, "start", set(big));
+        let se = FRect { w: big.w + 3.0, h: big.h + 1.0, ..big };
+        assert_dirty_covers(&mut app, "se", set(se));
+        // The middle of the top and left edges stays.
+        let rects = {
+            let prev = edit_of(&mut app).scene.clone().unwrap();
+            set(FRect { w: se.w + 3.0, h: se.h + 1.0, ..se })(&mut app);
+            let _ = app.frame();
+            edit_of(&mut app).dirty_rects(Some(&prev))
+        };
+        for (x, y) in [(big.x + big.w * 0.3, big.y), (big.x, big.y + big.h * 0.3)] {
+            assert!(!rects.iter().any(|r| r.contains_px(x as i32, y as i32)), "({x}, {y}) repainted: {rects:?}");
+        }
+        let steps = [
+            ("nw", FRect { x: big.x - 4.0, y: big.y - 2.0, w: big.w + 4.0, h: big.h + 2.0 }),
+            ("nw back", FRect { x: big.x + 5.0, y: big.y + 3.0, w: big.w - 5.0, h: big.h - 3.0 }),
+            ("e", FRect { x: big.x + 5.0, y: big.y + 3.0, w: big.w + 40.0, h: big.h - 3.0 }),
+            ("s", FRect { x: big.x + 5.0, y: big.y + 3.0, w: big.w + 40.0, h: big.h - 60.0 }),
+            ("w", FRect { x: big.x - 30.0, y: big.y + 3.0, w: big.w + 75.0, h: big.h - 60.0 }),
+            ("n", FRect { x: big.x - 30.0, y: big.y - 50.0, w: big.w + 75.0, h: big.h - 7.0 }),
+            ("thin", FRect { x: 400.0, y: 300.0, w: 3.0, h: 200.0 }),
+            ("tiny", FRect { x: 400.0, y: 300.0, w: 3.0, h: 2.0 }),
+            ("tiny grows", FRect { x: 400.0, y: 300.0, w: 9.0, h: 7.0 }),
+            ("flat", FRect { x: 400.0, y: 300.0, w: 300.0, h: 4.0 }),
+            ("to the edge", FRect { x: 0.0, y: 0.0, w: 1440.0, h: 900.0 }),
+            ("off the edge", FRect { x: 0.0, y: 0.0, w: 1200.0, h: 900.0 }),
+            ("back", se),
+        ];
+        for (name, r) in steps {
+            assert_dirty_covers(&mut app, name, set(r));
+        }
+        assert_dirty_covers(&mut app, "hot", |app| edit_of(app).hot_handle = Some(4));
+        assert_dirty_covers(&mut app, "hot resize", set(FRect { w: se.w + 7.0, ..se }));
+        assert_dirty_covers(&mut app, "cold resize", |app| {
+            set(FRect { w: se.w + 9.0, ..se })(app);
+            edit_of(app).hot_handle = None;
+        });
     }
 
     #[test]

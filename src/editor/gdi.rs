@@ -153,6 +153,7 @@ struct PaintLists {
     tmp: Vec<PxRect>,
     runs: Vec<(PxRect, Source)>,
     slow: Vec<PxRect>,
+    clips: Vec<PxRect>,
 }
 
 /// The annotation layer: `plain` with every committed object rendered on
@@ -393,6 +394,7 @@ impl GdiScreen {
     /// Paint backdrop run `q` straight to `hdc`; false when it needs the
     /// compose path (a double dim from a fractional selection).
     fn blit(&self, hdc: HDC, q: PxRect, src: Source) -> bool {
+        let _p = crate::perf::span(crate::perf::K::Blit);
         let (x, y, w, h) = (q.x0, q.y0, q.w(), q.h());
         let (dc, extra) = self.source(src);
         unsafe {
@@ -433,6 +435,7 @@ fn put(hdc: HDC, r: PxRect, buf: &[u8]) {
 /// Write `r.h()` rows of `buf` (BGRA, `stride` pixels per row, top-down;
 /// row 0 lands at `r.y0`), from column `x_src`, at `r` in `hdc`.
 fn put_from(hdc: HDC, r: PxRect, buf: &[u8], stride: i32, x_src: i32) {
+    let _p = crate::perf::span(crate::perf::K::Put);
     assert!(buf.len() >= r.h() as usize * stride as usize * 4 && x_src >= 0 && x_src + r.w() <= stride);
     let b = bmi(stride, r.h());
     unsafe {
@@ -500,26 +503,46 @@ impl Edit {
     /// the capture shows, the chrome composed in band-sized buffers on top.
     /// Each pixel is written once (no flicker under DWM). Committed objects
     /// are never rendered here: they are in the layer.
+    ///
+    /// A chrome bound is composed once per paint, over the bounding box of
+    /// its overlap with `rects`, when that box is mostly overlap: the
+    /// update region of a drag comes in dozens of bands, and composing per
+    /// band redrew the toolbar (0.5 to 2 ms a time at 5120 px) three to
+    /// seven times. Pixels of the box outside `rects` are exact too (and
+    /// clipped away by `BeginPaint`). A sparse overlap (the moving edges of
+    /// a big pixelate draft) is composed piece by piece.
     pub(super) fn paint_gdi(&self, hdc: HDC, rects: &[PxRect]) {
         let (Some(sc), Some(scr)) = (self.scene.as_ref(), self.gdi.as_ref()) else { return };
         let img = PxRect::image(sc.size);
         let bd = GdiBackdrop { scr, opaque: false };
         let mut lists = scr.lists.borrow_mut();
-        let PaintLists { over, ov, bg, tmp, runs, slow } = &mut *lists;
+        let PaintLists { over, ov, bg, tmp, runs, slow, clips } = &mut *lists;
+        clips.clear();
+        clips.extend(rects.iter().map(|r| r.intersect(&img)).filter(|r| !r.is_empty()));
         over.clear();
         sc.chrome_rects_into(over);
-        for clip in rects.iter().map(|r| r.intersect(&img)).filter(|r| !r.is_empty()) {
-            ov.clear();
-            ov.extend(over.iter().map(|o| o.intersect(&clip)));
-            *ov = compose::merge_rects(std::mem::take(ov));
+        ov.clear();
+        let area = |r: &PxRect| r.w() as i64 * r.h() as i64;
+        for o in over.iter() {
+            // `clips` are disjoint (an update region), so are the parts.
+            let parts = clips.iter().map(|c| o.intersect(c)).filter(|r| !r.is_empty());
+            let (bbox, sum) = parts.clone().fold((PxRect::default(), 0), |(u, s), p| (u.union(&p), s + area(&p)));
+            if area(&bbox) <= 2 * sum {
+                ov.extend((!bbox.is_empty()).then_some(bbox));
+            } else {
+                ov.extend(parts);
+            }
+        }
+        *ov = compose::merge_rects(std::mem::take(ov));
+        slow.clear();
+        for clip in clips.iter() {
             bg.clear();
-            bg.push(clip);
-            for o in ov.iter() {
+            bg.push(*clip);
+            for o in ov.iter().filter(|o| o.intersects(clip)) {
                 tmp.clear();
                 tmp.extend(bg.iter().flat_map(|p| p.minus_iter(o)));
                 std::mem::swap(bg, tmp);
             }
-            slow.clear();
             for p in bg.iter() {
                 runs.clear();
                 compose::backdrop_runs_into(sc.sel, sc.size, sc.dim_alpha, *p, runs);
@@ -545,9 +568,9 @@ impl Edit {
                     }
                 }
             }
-            for o in ov.iter().chain(slow.iter()) {
-                self.compose_put(hdc, *o, &bd);
-            }
+        }
+        for o in ov.iter().chain(slow.iter()) {
+            self.compose_put(hdc, *o, &bd);
         }
     }
 
@@ -560,9 +583,12 @@ impl Edit {
         // each cell once per paint (not once per band it straddles).
         let grid = self.scene.as_ref().and_then(|sc| sc.draft_grid());
         let h = self.shot.size.1 as i32;
+        // At most an image-wide band of pixels: a narrow rect (the toolbar,
+        // a selection edge) in few bands, each drawing its chrome once.
+        let rows = (self.shot.size.0 as i32 * BAND / r.w().max(1)).max(BAND);
         let mut y = r.y0;
         while y < r.y1 {
-            let end = grid.map_or(y + BAND, |g| g.row_edge(y + BAND, h));
+            let end = grid.map_or(y + rows, |g| g.row_edge(y + rows, h));
             let band = PxRect::new(r.x0, y, r.x1, end.min(r.y1));
             let n = band.w() as usize * band.h() as usize * 4;
             if buf.len() < n {

@@ -690,6 +690,7 @@ impl Edit {
         if r.is_empty() {
             return;
         }
+        let _p = crate::perf::span(crate::perf::K::Compose);
         let (w, h) = (r.w() as usize, r.h() as usize);
         let out = &mut out[..w * h * 4];
         let hits = |e: El| sc.rects(e).iter().any(|b| b.intersects(&r));
@@ -714,7 +715,9 @@ impl Edit {
                 out[(y - r.y0) as usize * n..][..n].copy_from_slice(&tmp[si..si + n]);
             }
         } else {
+            let p = crate::perf::span(crate::perf::K::Bg);
             compose_bg(sc, r, bd, out, order);
+            drop(p);
             if let Some(d) = &sc.draft
                 && hits(El::Draft)
             {
@@ -727,11 +730,13 @@ impl Edit {
         if let Some(u) = &sc.sel_ui
             && hits(El::Sel)
         {
+            let _p = crate::perf::span(crate::perf::K::Sel);
             chrome::selection(&mut f, &ui, u.sr, u.hot, 1.0);
         }
         if let Some(l) = &sc.label
             && hits(El::Label)
         {
+            let _p = crate::perf::span(crate::perf::K::Label);
             chrome::size_label(&mut f, &ui, l.sr, l.show_pos, l.area, l.avoid, 1.0);
         }
         if let Some(t) = &sc.text
@@ -763,6 +768,7 @@ impl Edit {
         if let Some(b) = &sc.bar
             && hits(El::Bar)
         {
+            let _p = crate::perf::span(crate::perf::K::Bar);
             let st = BarState {
                 hover: b.hover,
                 hover_k: b.hover_k,
@@ -811,6 +817,41 @@ fn stable_draft(prev: &Scene, now: &Scene) -> Option<PxRect> {
     Some(PxRect::new(x0, y0, x1, y1)).filter(|r| !r.is_empty())
 }
 
+/// The selection chrome that may differ between `prev` and `now` (same
+/// hot handle), appended to `out`; `false` = not comparable, repaint all.
+/// A border strip whose line stays put changes only near its ends, where
+/// the crossing edges, corners and handles are: its middle is kept (a
+/// resize repaints the moving edges and the strips' ends, not the whole
+/// outline). Every stroke pixel lies in its own strip and every handle in
+/// its box, so a pixel changed by a moved edge or handle is in that edge's
+/// or handle's rects, which are repainted whole.
+fn sel_dirty(prev: &Scene, now: &Scene, out: &mut Vec<PxRect>) -> bool {
+    let (Some(a), Some(b)) = (&prev.sel_ui, &now.sel_ui) else { return false };
+    // Four strips (top, bottom, left, right), then the eight handles.
+    let (p, n) = (prev.rects(El::Sel), now.rects(El::Sel));
+    if a.hot != b.hot || p.len() != 12 || n.len() != 12 {
+        return false;
+    }
+    for (i, (&r, &s)) in p.iter().zip(n).enumerate() {
+        if i >= 4 {
+            if r != s {
+                out.extend([r, s]);
+            }
+            continue;
+        }
+        // The crossing edges lie in the first and last strip-width pixels.
+        let keep = if i < 2 && (r.y0, r.y1) == (s.y0, s.y1) {
+            PxRect::new(r.x0.max(s.x0) + r.h(), r.y0, r.x1.min(s.x1) - r.h(), r.y1)
+        } else if i >= 2 && (r.x0, r.x1) == (s.x0, s.x1) {
+            PxRect::new(r.x0, r.y0.max(s.y0) + r.w(), r.x1, r.y1.min(s.y1) - r.w())
+        } else {
+            PxRect::default()
+        };
+        out.extend(r.minus_iter(&keep).chain(s.minus_iter(&keep)));
+    }
+    true
+}
+
 /// Rects (clipped to the image, possibly overlapping) covering every pixel
 /// that may differ between scenes `prev` and `now`: old and new bounds of
 /// each changed element, the symmetric difference of the selections, and
@@ -839,6 +880,9 @@ pub fn dirty_rects(prev: Option<&Scene>, now: &Scene, font: Option<&crate::text:
     }
     for e in ELS {
         if prev.same(now, e) {
+            continue;
+        }
+        if e == El::Sel && sel_dirty(prev, now, &mut out) {
             continue;
         }
         if e == El::Draft

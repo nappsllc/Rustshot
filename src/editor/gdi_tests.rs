@@ -507,3 +507,72 @@ fn pixelate_draft_scratch_is_small_and_released() {
     let _ = app.damage();
     assert_eq!(edit_of(&mut app).draft_buf.borrow().capacity(), 0, "released after the drag");
 }
+
+/// Selection drags at 5120x1440 (resize by the SE handle, move, a new
+/// selection): per mouse move, `pointer_move` + `damage()` + paint of the
+/// damaged rects, as the overlay runs them.
+/// `cargo test --release perf_gdi_sel_drag -- --ignored --nocapture`
+#[test]
+#[ignore = "benchmark; run in release"]
+fn perf_gdi_sel_drag() {
+    let (w, h) = (5120u32, 1440u32);
+    let sel = FRect { x: 1000.0, y: 200.0, w: 2000.0, h: 900.0 };
+    let pct = |v: &mut Vec<f64>, q: f64| {
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        v[((v.len() - 1) as f64 * q) as usize]
+    };
+    for name in ["resize SE", "move", "new sel"] {
+        let mut app = preview_app_with(theme::DARK, Some(sel), tiled_shot(w, h));
+        settled(&mut app);
+        attach(&mut app);
+        let t = Target::new(w, h);
+        let _ = app.damage();
+        edit_of(&mut app).paint_gdi(t.dc, &[PxRect::image((w, h))]);
+        let start = match name {
+            "resize SE" => Pt::new(sel.x + sel.w, sel.y + sel.h),
+            "move" => Pt::new(sel.x + 50.0, sel.y + 50.0),
+            _ => Pt::new(300.0, 100.0),
+        };
+        edit_of(&mut app).interact = match name {
+            "resize SE" => Interact::Resize { handle: Handle::SE, orig: sel, aspect: sel.w / sel.h },
+            "move" => Interact::MoveSel { start, orig: sel },
+            _ => Interact::NewSel { anchor: start, moved: false },
+        };
+        let (mut tm, mut td, mut tp, mut tt, mut n, mut area) = (vec![], vec![], vec![], vec![], vec![], vec![]);
+        crate::perf::force_on();
+        let _ = crate::perf::take();
+        for k in 0..300 {
+            let (dx, dy) = ((k % 150) as f32 * 3.0, (k % 150) as f32 * 1.0);
+            let (x, y) = ((start.x + dx) as i32, (start.y + dy) as i32);
+            let t0 = Instant::now();
+            app.mouse = (x, y);
+            app.pointer_move(x, y);
+            let t1 = Instant::now();
+            let rects = app.damage().unwrap_or_else(|| vec![[0, 0, w as i32, h as i32]]);
+            let t2 = Instant::now();
+            let rects: Vec<PxRect> = rects.iter().map(|r| PxRect::new(r[0], r[1], r[2], r[3])).collect();
+            edit_of(&mut app).paint_gdi(t.dc, &rects);
+            let _ = t.pixels();
+            let t3 = Instant::now();
+            let ms = |a: Instant, b: Instant| (b - a).as_secs_f64() * 1000.0;
+            tm.push(ms(t0, t1));
+            td.push(ms(t1, t2));
+            tp.push(ms(t2, t3));
+            tt.push(ms(t0, t3));
+            n.push(rects.len() as f64);
+            area.push(rects.iter().map(|r| r.w() as f64 * r.h() as f64).sum::<f64>());
+        }
+        println!(
+            "GDI BENCH sel drag {name}: total median {:.2} p90 {:.2} max {:.2} ms | move {:.3} damage {:.3} paint {:.2} ms | rects {:.0} area {:.0} px (max {:.0})",
+            pct(&mut tt.clone(), 0.5), pct(&mut tt.clone(), 0.9), pct(&mut tt, 1.0),
+            pct(&mut tm, 0.5), pct(&mut td, 0.5), pct(&mut tp, 0.5),
+            pct(&mut n, 0.5), pct(&mut area.clone(), 0.5), pct(&mut area, 1.0)
+        );
+        let per: Vec<String> = crate::perf::NAMES
+            .iter()
+            .zip(crate::perf::take())
+            .map(|(k, (ms, c))| format!("{k} {:.3} ms ({:.1} calls)", ms / 300.0, c as f64 / 300.0))
+            .collect();
+        println!("  per move: {}", per.join(", "));
+    }
+}

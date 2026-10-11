@@ -131,15 +131,46 @@ impl<'a> Fb<'a> {
         }
     }
 
+    /// [`Fb::blend_px`] of `c` over pixels `x0..x1` of row `y`, which
+    /// must lie inside the window: the same arithmetic, without the
+    /// per-pixel clipping and channel swaps.
+    fn blend_span(&mut self, y: i32, x0: i32, x1: i32, c: C4) {
+        if x1 <= x0 || c.a == 0 {
+            return;
+        }
+        let i = ((y - self.oy) as usize * self.stride + (x0 - self.ox) as usize) * 4;
+        let Some(row) = self.d.get_mut(i..i + (x1 - x0) as usize * 4) else {
+            return;
+        };
+        // Byte offsets of red and blue in this buffer's order.
+        let (ri, bi) = if self.order == Order::Bgra { (2, 0) } else { (0, 2) };
+        let a = c.a as u32;
+        if a == 255 {
+            let mut p = [0u8; 4];
+            (p[ri], p[1], p[bi], p[3]) = (c.r, c.g, c.b, 255);
+            for px in row.as_chunks_mut::<4>().0 {
+                *px = p;
+            }
+            return;
+        }
+        let ia = 255 - a;
+        let (cr, cg, cb) = (c.r as u32 * a, c.g as u32 * a, c.b as u32 * a);
+        for px in row.as_chunks_mut::<4>().0 {
+            px[ri] = div255(cr + px[ri] as u32 * ia) as u8;
+            px[1] = div255(cg + px[1] as u32 * ia) as u8;
+            px[bi] = div255(cb + px[bi] as u32 * ia) as u8;
+            px[3] = (a + div255(px[3] as u32 * ia)).min(255) as u8;
+        }
+    }
+
     pub fn fill_rect(&mut self, x0: i32, y0: i32, w: i32, h: i32, c: C4) {
         if w <= 0 || h <= 0 {
             return;
         }
         let (bx0, by0, bx1, by1) = self.bounds();
+        let (xs, xe) = (x0.max(bx0), (x0 + w).min(bx1));
         for y in y0.max(by0)..(y0 + h).min(by1) {
-            for x in x0.max(bx0)..(x0 + w).min(bx1) {
-                self.blend_px(x, y, c);
-            }
+            self.blend_span(y, xs, xe, c);
         }
     }
 
@@ -162,25 +193,48 @@ impl<'a> Fb<'a> {
         let band = |e: f32| ((e - half - 1.0).floor() as i32, (e + half + 1.0).ceil() as i32);
         let (top, bottom, left, right) = (band(y0), band(y1), band(x0), band(x1));
         let in_band = |v: i32, b: (i32, i32)| v >= b.0 && v < b.1;
+        let qx_at = |x: i32| (x as f32 + 0.5 - x0 - w / 2.0).abs() - w / 2.0;
+        // The colour at (x, y), from the signed distance to the rectangle
+        // (negative inside); alpha 0 = untouched.
+        let at = |x: i32, y: i32| {
+            let cy = y as f32 + 0.5;
+            let qx = qx_at(x);
+            let qy = (cy - y0 - h / 2.0).abs() - h / 2.0;
+            let dx = qx.max(0.0);
+            let dy = qy.max(0.0);
+            let sdf = (dx * dx + dy * dy).sqrt() + qx.max(qy).min(0.0);
+            let cov = (half + 0.5 - sdf.abs()).clamp(0.0, 1.0);
+            let mut col = c;
+            col.a = if cov > 0.0 { ((c.a as f32 * cov) as u32).min(255) as u8 } else { 0 };
+            col
+        };
         for y in ys..ye {
             let cols = if in_band(y, top) || in_band(y, bottom) || left.1 >= right.0 {
-                [(xs, xe), (xe, xe)]
+                // Along a horizontal edge, where `qx` is at most `qy` (at
+                // most 0 outside the rectangle), `dx` is 0 and the
+                // distance is `qy`'s alone: one colour for the run (an
+                // interval, `qx` being V-shaped in x), blended as a span.
+                let qy = (y as f32 + 0.5 - y0 - h / 2.0).abs() - h / 2.0;
+                let flat = |x: i32| qx_at(x) <= qy.min(0.0);
+                let mut ms = xs;
+                while ms < xe && !flat(ms) {
+                    ms += 1;
+                }
+                let mut me = xe;
+                while me > ms && !flat(me - 1) {
+                    me -= 1;
+                }
+                if ms < me {
+                    let col = at(ms, y);
+                    self.blend_span(y, ms, me, col);
+                }
+                [(xs, ms), (me, xe)]
             } else {
                 [(xs, left.1.min(xe)), (right.0.max(xs), xe)]
             };
             for x in cols.into_iter().flat_map(|(a, b)| a..b) {
-                let cx = x as f32 + 0.5;
-                let cy = y as f32 + 0.5;
-                // Signed distance to the rectangle (negative inside).
-                let qx = (cx - x0 - w / 2.0).abs() - w / 2.0;
-                let qy = (cy - y0 - h / 2.0).abs() - h / 2.0;
-                let dx = qx.max(0.0);
-                let dy = qy.max(0.0);
-                let sdf = (dx * dx + dy * dy).sqrt() + qx.max(qy).min(0.0);
-                let cov = (half + 0.5 - sdf.abs()).clamp(0.0, 1.0);
-                if cov > 0.0 {
-                    let mut col = c;
-                    col.a = ((c.a as f32 * cov) as u32).min(255) as u8;
+                let col = at(x, y);
+                if col.a > 0 {
                     self.blend_px(x, y, col);
                 }
             }
@@ -194,8 +248,28 @@ impl<'a> Fb<'a> {
         }
         let r = r.min(w as f32 / 2.0).min(h as f32 / 2.0);
         let (bx0, by0, bx1, by1) = self.bounds();
+        let (xs, xe) = (x0.max(bx0), (x0 + w).min(bx1));
         for y in y0.max(by0)..(y0 + h).min(by1) {
-            for x in x0.max(bx0)..(x0 + w).min(bx1) {
+            // Rows clear of the corners: one alpha across (the per-pixel
+            // path below gives every pixel of such a row `c.a`).
+            let cy = y as f32 + 0.5;
+            if r <= 0.0 || (cy >= y0 as f32 + r && cy <= (y0 + h) as f32 - r) {
+                self.blend_span(y, xs, xe, c);
+                continue;
+            }
+            // A corner row: pixels between the corners (`!outx` below,
+            // monotonic in x) are one span as well.
+            let (inx0, inx1) = (x0 as f32 + r, (x0 + w) as f32 - r);
+            let mut ms = xs;
+            while ms < xe && (ms as f32 + 0.5) < inx0 {
+                ms += 1;
+            }
+            let mut me = ms;
+            while me < xe && (me as f32 + 0.5) <= inx1 {
+                me += 1;
+            }
+            self.blend_span(y, ms, me, c);
+            for x in (xs..ms).chain(me..xe) {
                 let mut a = c.a;
                 if r > 0.0 {
                     let cx = x as f32 + 0.5;

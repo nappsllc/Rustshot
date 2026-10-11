@@ -67,6 +67,7 @@ pub fn surface(f: &mut Fb, ui: &Ui, r: FRect, radius: f32, layers: &[usize], k: 
 /// Draw `s` vertically centred on `cy`; returns the advance width.
 fn text(f: &mut Fb, ui: &Ui, size: f32, s: &str, x: f32, cy: f32, c: C4) -> f32 {
     let Some(font) = ui.font else { return 0.0 };
+    let _p = crate::perf::span(crate::perf::K::Text);
     let px = ui.px(size);
     f.draw_text(font, px, s, x, cy - text_height(font, px) / 2.0, c)
 }
