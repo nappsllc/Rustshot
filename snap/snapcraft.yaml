@@ -20,7 +20,9 @@ apps:
     command: bin/rustshot
     common-id: io.github.nappsllc.rustshot
     desktop: usr/share/applications/io.github.nappsllc.rustshot.desktop
-    plugs: [x11, network, home, desktop]
+    # screencast-legacy: record the screen through the ScreenCast portal
+    # (Wayland); camera: the camera bubble (V4L2 / camera portal).
+    plugs: [x11, network, home, desktop, screencast-legacy, camera]
 
 parts:
   rustshot:

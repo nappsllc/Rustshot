@@ -11,7 +11,9 @@
 //! [`yuy2_to_bgra`], [`nv12_to_bgra`], [`fit_square`]).
 //!
 //! Windows: Media Foundation capture (`win.rs`) and the layered window
-//! (`bubble.rs`). The camera is opened only while the bubble is shown and
+//! (`bubble.rs`). Linux: V4L2 (`rec::linux::v4l2`) on X11, the camera
+//! portal and PipeWire (`rec::linux::pipewire`) on Wayland and in Flatpak,
+//! and an X11 ARGB window (`x11.rs`). The camera is opened only while the bubble is shown and
 //! released when it closes. Background effects are the OS's (Windows
 //! Studio Effects apply to the feed by themselves); Rustshot adds none.
 //!
@@ -19,17 +21,22 @@
 //! the corner the bubble was last dropped at and its offset from that
 //! corner, so it follows the selection while the Record popover is open
 //! and comes back there for the next recording of the same daemon.
-#![cfg_attr(not(windows), allow(dead_code))] // the bubble is Windows-only for now
+#![cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))] // no bubble on macOS yet
 
 #[cfg(windows)]
 mod bubble;
 #[cfg(windows)]
 mod win;
 
+#[cfg(target_os = "linux")]
+mod x11;
+
 #[cfg(windows)]
 pub use bubble::Bubble;
 #[cfg(all(windows, test))]
 pub(crate) use bubble::Opener;
+#[cfg(target_os = "linux")]
+pub use x11::Bubble;
 
 use crate::capture::IRect;
 use crate::theme::Theme;
@@ -38,14 +45,20 @@ use anyhow::Result;
 use std::sync::Mutex;
 
 /// The bubble on platforms without one (never made).
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 pub struct Bubble;
+
+/// Linux: the id of the camera reached through the camera portal (the
+/// portal picks the device; PipeWire's default camera is used).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub const PORTAL_CAM: &str = "portal";
 
 /// The capture size asked for first.
 pub const PREF: (u32, u32) = (1280, 720);
 /// The Camera row's tooltip when there is none.
 pub const NO_CAMERA: &str = "No camera found";
 pub const MJPG_ONLY: &str = "This camera only offers MJPG, which Rustshot doesn't support yet";
+#[cfg_attr(not(windows), allow(dead_code))]
 pub const ACCESS_OFF: &str = "Camera access is off in Windows Settings › Privacy › Camera";
 pub const NO_FORMAT: &str = "This camera offers no picture format Rustshot supports";
 
@@ -67,6 +80,7 @@ pub struct CamFrame {
 /// An open camera.
 pub trait CamSource: Send {
     /// The picture size it delivers.
+    #[cfg_attr(not(windows), allow(dead_code))]
     fn size(&self) -> (u32, u32);
     /// The next picture into `into` (its buffer is reused; blocks for
     /// about one frame); false when the camera had nothing this time (a
@@ -75,15 +89,45 @@ pub trait CamSource: Send {
 }
 
 /// The cameras on this system (none where there is no capture yet).
+#[cfg_attr(test, allow(dead_code))] // tests list fake cameras
 pub fn list() -> Vec<CamDevice> {
     #[cfg(windows)]
     {
         win::list()
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        linux_list()
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         Vec::new()
     }
+}
+
+/// Whether the camera portal says there is a camera (`None`: no portal).
+#[cfg(target_os = "linux")]
+fn portal_camera() -> Option<bool> {
+    let mut c = crate::dbus::Conn::session().ok()?;
+    crate::rec::linux::portal::camera_present(&mut c).ok()
+}
+
+/// Wayland and Flatpak: the camera portal's camera (one entry; the portal
+/// chooses the device). X11, or Wayland without a camera portal: V4L2.
+#[cfg(target_os = "linux")]
+#[cfg_attr(test, allow(dead_code))]
+fn linux_list() -> Vec<CamDevice> {
+    use crate::rec::linux::portal;
+    if portal::needs_portal_now() {
+        match portal_camera() {
+            Some(true) => return vec![CamDevice { id: PORTAL_CAM.into(), name: "Camera".into() }],
+            Some(false) => return Vec::new(),
+            // No /dev access in Flatpak without the portal.
+            None if portal::in_flatpak() => return Vec::new(),
+            None => {}
+        }
+    }
+    crate::rec::linux::v4l2::list()
 }
 
 /// Open camera `id` ("" = the first one) at the mode nearest `pref`.
@@ -93,7 +137,17 @@ pub fn open(id: &str, pref: (u32, u32)) -> Result<Box<dyn CamSource>> {
     {
         Ok(Box::new(win::WinCam::open(id, pref)?))
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        let _ = pref; // 1280x720 asked for; V4L2 falls back to 640x480
+        let portal = id == PORTAL_CAM || (id.is_empty() && crate::rec::linux::portal::needs_portal_now() && portal_camera() == Some(true));
+        if portal {
+            Ok(Box::new(crate::rec::linux::pipewire::PwCam::open()?))
+        } else {
+            Ok(Box::new(crate::rec::linux::v4l2::V4l2Cam::open(id)?))
+        }
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = (id, pref);
         anyhow::bail!("the camera is not supported on this platform yet")
@@ -496,6 +550,7 @@ pub fn clear_of(pos: (i32, i32), area: IRect, d: i32, scale: f32, avoid: &[IRect
 
 /// A camera's pixel format, as far as Rustshot cares.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(windows), allow(dead_code))] // MJPG and others are only listed on Windows
 pub enum Fmt {
     Nv12,
     Yuy2,
@@ -505,6 +560,7 @@ pub enum Fmt {
 
 /// A mode a camera offers.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[cfg_attr(not(windows), allow(dead_code))]
 pub struct Mode {
     pub fmt: Fmt,
     pub w: u32,
@@ -516,6 +572,7 @@ pub struct Mode {
 /// first (24-30 fps, then faster, then 15+, then slower: a USB 2 camera
 /// often has 720p YUY2 only at 10 fps and 480p at 30), then the size
 /// nearest `pref` (smaller before larger), NV12 before YUY2.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn pick_mode(modes: &[Mode], pref: (u32, u32)) -> std::result::Result<usize, &'static str> {
     let want = u64::from(pref.0) * u64::from(pref.1);
     let best = modes
@@ -698,6 +755,7 @@ pub fn layout(fmt: Fmt, w: u32, h: u32, coded_h: u32, stride: usize, len: usize)
 }
 
 /// Turn a BGRA `w`x`h` picture upside down (from a bottom-up buffer).
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn flip_rows(bgra: &mut [u8], w: u32, h: u32) {
     let row = w as usize * 4;
     let h = h as usize;

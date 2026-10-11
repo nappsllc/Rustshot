@@ -4,8 +4,8 @@
 //! where the control bar goes ([`place_bar`]) and a running recording
 //! ([`Run`]). The windows (red border, control bar, 3-2-1 countdown) are
 //! per platform: Windows (`win.rs`) and X11 (`x11.rs`); the worker thread
-//! that drives the pipeline is shared (`worker.rs`). Elsewhere (macOS,
-//! Wayland sessions) the Record button is hidden.
+//! that drives the pipeline is shared (`worker.rs`). On Wayland it needs
+//! the ScreenCast portal; on macOS the Record button is hidden.
 #![cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))] // no recording UI on macOS yet
 
 pub mod bar;
@@ -18,7 +18,7 @@ pub(crate) use win::Dib;
 #[cfg(any(windows, target_os = "linux"))]
 mod worker;
 #[cfg(target_os = "linux")]
-mod x11;
+pub(crate) mod x11;
 
 use crate::cam::{CamDevice, CamSize, Look, Shape};
 use crate::capture::IRect;
@@ -31,8 +31,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Whether this platform records (shows the Record button): Windows, and
-/// Linux in an X11 session (a Wayland session needs the ScreenCast portal,
-/// which comes later; XShm would see only XWayland windows there).
+/// Linux: in an X11 session always (XShm); on Wayland and in Flatpak when
+/// the ScreenCast portal answers and libpipewire loads (XShm would see
+/// only XWayland windows there).
 pub fn supported() -> bool {
     #[cfg(any(windows, test))]
     {
@@ -40,10 +41,9 @@ pub fn supported() -> bool {
     }
     #[cfg(all(target_os = "linux", not(test)))]
     {
-        static X11: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        *X11.get_or_init(|| {
-            x11_session(std::env::var_os("WAYLAND_DISPLAY").as_deref(), std::env::var("XDG_SESSION_TYPE").ok().as_deref())
-        })
+        use crate::rec::linux::{pipewire, portal};
+        static OK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *OK.get_or_init(|| !portal::needs_portal_now() || (portal::screencast_available() && pipewire::available()))
     }
     #[cfg(all(not(windows), not(target_os = "linux"), not(test)))]
     {
@@ -118,8 +118,17 @@ pub fn mp4_status() -> Mp4 {
 /// starts this so the Record popover knows when it opens).
 pub fn warm_mp4() {
     #[cfg(all(target_os = "linux", not(test)))]
-    if let Some(exe) = crate::rec::linux::ffmpeg::find() {
-        crate::rec::linux::ffmpeg::warm(&exe);
+    {
+        if let Some(exe) = crate::rec::linux::ffmpeg::find() {
+            crate::rec::linux::ffmpeg::warm(&exe);
+        }
+        // Wayland: whether the ScreenCast portal answers (cached), so the
+        // overlay does not wait for the bus when it first asks.
+        if crate::rec::linux::portal::needs_portal_now() {
+            let _ = std::thread::Builder::new().name("portal-probe".into()).spawn(|| {
+                let _ = supported();
+            });
+        }
     }
 }
 
@@ -831,8 +840,10 @@ impl Run {
         Ok(run)
     }
 
-    /// X11: as on Windows (the sound is read in-app, so the microphone
-    /// can be muted from the bar once it opened).
+    /// Linux: as on Windows (the sound is read in-app, so the microphone
+    /// can be muted from the bar once it opened). On Wayland and in
+    /// Flatpak the portal asks which screen first (blocking, like the
+    /// first-use encoder dialog); closing its dialog calls the recording off.
     #[cfg(target_os = "linux")]
     #[cfg_attr(test, allow(dead_code))] // tests record through `Run::fake`
     pub fn start(
@@ -843,10 +854,22 @@ impl Run {
         _nudge: crate::wind::Hwnd,
         bubble: Option<crate::cam::Bubble>,
     ) -> anyhow::Result<Run> {
+        use crate::rec::linux::portal;
         let mut spec = spec;
         let enc = linux_encoder(&mut spec)?;
+        // Wayland / Flatpak: the portal's dialog (the user picks the
+        // screen) before the countdown, not during it.
+        let cast = if portal::needs_portal_now() {
+            match portal::Cast::start(spec.area, &geom.rects()) {
+                Ok(c) => Some(c),
+                Err(e) if e.is::<portal::Cancelled>() => return Err(anyhow::Error::new(NotStarted)),
+                Err(e) => return Err(e.context("the screen cast portal")),
+            }
+        } else {
+            None
+        };
         let mic = MicFlags::default();
-        let ui = x11::Recorder::start(spec, geom, th, mic.clone(), enc, bubble)?;
+        let ui = x11::Recorder::start(spec, geom, th, mic.clone(), enc, bubble, cast)?;
         let mut run = Run {
             m: Machine::new(),
             mic,

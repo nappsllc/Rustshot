@@ -1828,7 +1828,7 @@ impl RecPop {
 }
 
 /// What the camera bubble should show, and where.
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]
 struct CamWant {
     dev: String,
     look: crate::cam::Look,
@@ -1852,7 +1852,7 @@ type FakeCam = Box<dyn Fn(&str) -> crate::cam::Opener>;
 /// overlay on every other way out).
 #[derive(Default)]
 struct CamSlot {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     bubble: Option<crate::cam::Bubble>,
     /// Tests: the camera the bubble opens (no bubble without one).
     #[cfg(all(windows, test))]
@@ -1869,19 +1869,24 @@ struct CamSlot {
 
 impl CamSlot {
     fn close(&mut self) {
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         {
             self.bubble = None;
         }
         self.shown = None;
     }
 
-    /// A bubble can be made (tests: only with a fake camera).
-    #[cfg(windows)]
+    /// A bubble can be made (tests: only with a fake camera; none on
+    /// Linux, whose test runs have no display).
+    #[cfg(any(windows, target_os = "linux"))]
     fn can_open(&self) -> bool {
-        #[cfg(test)]
+        #[cfg(all(windows, test))]
         {
             self.fake.is_some()
+        }
+        #[cfg(all(target_os = "linux", test))]
+        {
+            false
         }
         #[cfg(not(test))]
         {
@@ -1890,15 +1895,15 @@ impl CamSlot {
     }
 
     /// Open a bubble for `w`.
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     fn open(&mut self, w: &CamWant, nudge: Hwnd) -> anyhow::Result<crate::cam::Bubble> {
-        #[cfg(test)]
+        #[cfg(all(windows, test))]
         {
             let open = self.fake.as_ref().map(|f| f(&w.dev)).ok_or_else(|| anyhow::anyhow!("no fake camera"))?;
             self.opened += 1;
             crate::cam::Bubble::show_with(w.look, &w.dev, w.area, w.scale, &w.th, nudge, open)
         }
-        #[cfg(not(test))]
+        #[cfg(not(all(windows, test)))]
         {
             crate::cam::Bubble::show(w.look, &w.dev, w.area, w.scale, &w.th, nudge)
         }
@@ -1906,9 +1911,9 @@ impl CamSlot {
 
     /// Show `w`; the camera's error when it could not be opened or
     /// stopped (the bubble is closed then).
-    #[cfg_attr(not(windows), allow(unused_variables))]
+    #[cfg_attr(not(any(windows, target_os = "linux")), allow(unused_variables))]
     fn sync(&mut self, w: &CamWant, nudge: Hwnd) -> Option<String> {
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         if self.can_open() {
             if self.bubble.as_ref().is_some_and(|b| b.device() != w.dev) {
                 self.bubble = None; // another camera: reopen
@@ -1939,9 +1944,9 @@ impl CamSlot {
     /// A bubble for a recording started without the popover's: opened
     /// now; with `wait`, shown once its first picture is in (or `wait`
     /// is over). None when the camera cannot be opened (said on stderr).
-    #[cfg_attr(not(windows), allow(unused_variables))]
+    #[cfg_attr(not(any(windows, target_os = "linux")), allow(unused_variables))]
     fn open_now(&mut self, w: &CamWant, nudge: Hwnd, wait: Option<Duration>) -> Option<crate::cam::Bubble> {
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         if self.can_open() {
             match self.open(w, nudge) {
                 Ok(b) => {
@@ -1962,7 +1967,7 @@ impl CamSlot {
     /// now (the toolbar is gone).
     fn take(&mut self) -> Option<crate::cam::Bubble> {
         self.shown = None;
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         {
             let mut b = self.bubble.take();
             if let Some(b) = &mut b {
@@ -1970,7 +1975,7 @@ impl CamSlot {
             }
             b
         }
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, target_os = "linux")))]
         {
             None
         }

@@ -12,6 +12,11 @@
 //! pill in the area's corner, and is recorded). The countdown is taken down
 //! `HIDE_BEFORE_GO` before the first frame.
 //!
+//! On Wayland (XWayland) the frames come from the ScreenCast portal and
+//! PipeWire (`rec::linux::pipewire`), the compositor shows its own
+//! screen-sharing indicator, so there is no border, and the bar is a
+//! normal small (managed, undecorated, always-on-top) window.
+//!
 //! With a compositor the bar and countdown use a 32-bit ARGB visual;
 //! without one they are cut to shape (alpha ≥ 50%) with the Shape
 //! extension. The border and countdown take no input (an empty input
@@ -29,6 +34,8 @@ use crate::rec::linux::openh264::OpenH264;
 use crate::rec::linux::opus::Opus;
 use crate::rec::linux::pulse::Sound;
 use crate::rec::linux::pulse_list;
+use crate::rec::linux::pipewire::ScreenSource;
+use crate::rec::linux::portal::{self, Cast};
 use crate::rec::linux::xshm::XShmSource;
 use crate::rec::{AudioSource, FrameSource, RecFormat, RecSpec, VideoEncoder};
 use crate::theme::Theme;
@@ -72,27 +79,41 @@ struct XVisualInfo {
 /// Button, motion and crossing events share this head.
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct XPointerEvent {
+pub(crate) struct XPointerEvent {
+    pub(crate) type_: c_int,
+    serial: c_ulong,
+    send_event: c_int,
+    display: *mut c_void,
+    pub(crate) window: c_ulong,
+    root: c_ulong,
+    subwindow: c_ulong,
+    time: c_ulong,
+    pub(crate) x: c_int,
+    pub(crate) y: c_int,
+    pub(crate) x_root: c_int,
+    pub(crate) y_root: c_int,
+    state: c_uint,
+    pub(crate) button: c_uint,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct XClientMessageEvent {
     type_: c_int,
     serial: c_ulong,
     send_event: c_int,
     display: *mut c_void,
     window: c_ulong,
-    root: c_ulong,
-    subwindow: c_ulong,
-    time: c_ulong,
-    x: c_int,
-    y: c_int,
-    x_root: c_int,
-    y_root: c_int,
-    state: c_uint,
-    button: c_uint,
+    message_type: c_ulong,
+    format: c_int,
+    data: [c_long; 5],
 }
 
 #[repr(C)]
-union XEvent {
-    type_: c_int,
-    pointer: XPointerEvent,
+pub(crate) union XEvent {
+    pub(crate) type_: c_int,
+    pub(crate) pointer: XPointerEvent,
+    client: XClientMessageEvent,
     pad: [c_long; 24],
 }
 
@@ -178,6 +199,20 @@ unsafe extern "C" {
     fn XNextEvent(dpy: *mut c_void, event: *mut XEvent) -> c_int;
     fn XFlush(dpy: *mut c_void) -> c_int;
     fn XSync(dpy: *mut c_void, discard: c_int) -> c_int;
+    fn XConnectionNumber(dpy: *mut c_void) -> c_int;
+    fn XStoreName(dpy: *mut c_void, w: c_ulong, name: *const c_char) -> c_int;
+    fn XChangeProperty(
+        dpy: *mut c_void,
+        w: c_ulong,
+        property: c_ulong,
+        ty: c_ulong,
+        format: c_int,
+        mode: c_int,
+        data: *const u8,
+        n: c_int,
+    ) -> c_int;
+    fn XUngrabPointer(dpy: *mut c_void, time: c_ulong) -> c_int;
+    fn XSendEvent(dpy: *mut c_void, w: c_ulong, propagate: c_int, mask: c_long, event: *mut XEvent) -> c_int;
 }
 
 #[link(name = "Xext")]
@@ -213,6 +248,11 @@ const BUTTON_RELEASE: c_int = 5;
 const MOTION_NOTIFY: c_int = 6;
 const LEAVE_NOTIFY: c_int = 8;
 const EXPOSE: c_int = 12;
+const CLIENT_MESSAGE: c_int = 33;
+const XA_ATOM: c_ulong = 4;
+const PROP_MODE_REPLACE: c_int = 0;
+const SUBSTRUCTURE_NOTIFY_MASK: c_long = 1 << 19;
+const SUBSTRUCTURE_REDIRECT_MASK: c_long = 1 << 20;
 const SHAPE_BOUNDING: c_int = 0;
 const SHAPE_INPUT: c_int = 2;
 const SHAPE_SET: c_int = 0;
@@ -220,8 +260,8 @@ const UNSORTED: c_int = 0;
 
 /// The recorder's Display: the screen, and the ARGB visual when a
 /// compositor runs (else windows are cut to shape).
-struct Disp {
-    dpy: *mut c_void,
+pub(crate) struct Disp {
+    pub(crate) dpy: *mut c_void,
     screen: c_int,
     root: c_ulong,
     argb: Option<(*mut c_void, c_ulong)>,
@@ -230,7 +270,7 @@ struct Disp {
 }
 
 impl Disp {
-    fn open() -> Result<Disp> {
+    pub(crate) fn open() -> Result<Disp> {
         crate::wind::init_x11();
         unsafe {
             let dpy = XOpenDisplay(core::ptr::null());
@@ -265,6 +305,62 @@ impl Drop for Disp {
     }
 }
 
+fn atom(dpy: *mut c_void, name: &str) -> c_ulong {
+    let c = std::ffi::CString::new(name).expect("no NUL");
+    // SAFETY: an open Display and a C string.
+    unsafe { XInternAtom(dpy, c.as_ptr(), 0) }
+}
+
+/// Undecorated, above others, out of the task bar, named `title`.
+unsafe fn managed_props(dpy: *mut c_void, win: c_ulong, title: &str) {
+    unsafe {
+        let t = std::ffi::CString::new(title).expect("no NUL");
+        XStoreName(dpy, win, t.as_ptr());
+        // _MOTIF_WM_HINTS: flags = decorations, decorations = none.
+        let motif: [c_long; 5] = [2, 0, 0, 0, 0];
+        let m = atom(dpy, "_MOTIF_WM_HINTS");
+        XChangeProperty(dpy, win, m, m, 32, PROP_MODE_REPLACE, motif.as_ptr() as *const u8, 5);
+        let state: Vec<c_long> = ["_NET_WM_STATE_ABOVE", "_NET_WM_STATE_SKIP_TASKBAR", "_NET_WM_STATE_SKIP_PAGER"]
+            .iter()
+            .map(|n| atom(dpy, n) as c_long)
+            .collect();
+        XChangeProperty(dpy, win, atom(dpy, "_NET_WM_STATE"), XA_ATOM, 32, PROP_MODE_REPLACE, state.as_ptr() as *const u8, state.len() as c_int);
+        let ty: [c_long; 1] = [atom(dpy, "_NET_WM_WINDOW_TYPE_UTILITY") as c_long];
+        XChangeProperty(dpy, win, atom(dpy, "_NET_WM_WINDOW_TYPE"), XA_ATOM, 32, PROP_MODE_REPLACE, ty.as_ptr() as *const u8, 1);
+    }
+}
+
+/// The Display's connection descriptor (to wait for events).
+pub(crate) fn conn_fd(d: &Disp) -> c_int {
+    // SAFETY: an open Display.
+    unsafe { XConnectionNumber(d.dpy) }
+}
+
+/// The next queued event, if any (without waiting).
+pub(crate) fn next_event(d: &Disp) -> Option<XEvent> {
+    // SAFETY: an open Display used by the calling thread.
+    unsafe {
+        if XPending(d.dpy) == 0 {
+            return None;
+        }
+        let mut ev: XEvent = core::mem::zeroed();
+        XNextEvent(d.dpy, &mut ev);
+        Some(ev)
+    }
+}
+
+pub(crate) fn flush(d: &Disp) {
+    // SAFETY: an open Display.
+    unsafe {
+        XFlush(d.dpy);
+    }
+}
+
+pub(crate) const EV_BUTTON_PRESS: c_int = BUTTON_PRESS;
+pub(crate) const EV_BUTTON_RELEASE: c_int = BUTTON_RELEASE;
+pub(crate) const EV_MOTION: c_int = MOTION_NOTIFY;
+pub(crate) const EV_EXPOSE: c_int = EXPOSE;
+
 /// Rows of `bgra` (`w`×`h`) cut into runs of pixels at least half opaque,
 /// as (x, y, w, h) rectangles one pixel high (a window's shape).
 pub(crate) fn alpha_runs(bgra: &[u8], w: usize, h: usize) -> Vec<(i16, i16, u16, u16)> {
@@ -287,25 +383,44 @@ pub(crate) fn alpha_runs(bgra: &[u8], w: usize, h: usize) -> Vec<(i16, i16, u16,
     out
 }
 
-/// An override-redirect window showing premultiplied BGRA pixels.
-struct Win {
+/// A window showing premultiplied BGRA pixels: override-redirect, or (on
+/// Wayland, under XWayland) a managed, undecorated, always-on-top toplevel
+/// whose place the compositor has the last word on.
+pub(crate) struct Win {
     dpy: *mut c_void,
-    win: c_ulong,
+    pub(crate) win: c_ulong,
     gc: *mut c_void,
     visual: *mut c_void,
     depth: c_int,
     argb: bool,
     mapped: bool,
     at: (i32, i32, u32, u32),
+    managed: bool,
+    /// The bounding shape last set (no compositor), so an unchanged one is
+    /// not sent again.
+    shape: Vec<(i16, i16, u16, u16)>,
+}
+
+/// How a [`Win`] is made.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Kind {
+    /// Override-redirect: placed exactly, above normal windows.
+    Overlay,
+    /// A managed toplevel named so (Wayland).
+    Managed(&'static str),
 }
 
 impl Win {
     /// `input`: gets pointer events (else click-through). `solid`: a
     /// plain colour window (the border), drawn by the server.
     fn new(d: &Disp, input: bool, solid: Option<u32>) -> Result<Win> {
+        Win::with_kind(d, input, solid, Kind::Overlay)
+    }
+
+    pub(crate) fn with_kind(d: &Disp, input: bool, solid: Option<u32>, kind: Kind) -> Result<Win> {
         unsafe {
             let mut a: XSetWindowAttributes = core::mem::zeroed();
-            a.override_redirect = 1;
+            a.override_redirect = c_int::from(kind == Kind::Overlay);
             a.border_pixel = 0;
             a.background_pixel = solid.map_or(0, c_ulong::from);
             a.event_mask = if input {
@@ -330,12 +445,51 @@ impl Win {
             if !input {
                 XShapeCombineRectangles(d.dpy, win, SHAPE_INPUT, 0, 0, core::ptr::null_mut(), 0, SHAPE_SET, UNSORTED);
             }
+            if let Kind::Managed(title) = kind {
+                managed_props(d.dpy, win, title);
+            }
             let gc = XCreateGC(d.dpy, win, 0, core::ptr::null_mut());
-            Ok(Win { dpy: d.dpy, win, gc, visual, depth, argb: argb.is_some(), mapped: false, at: (0, 0, 0, 0) })
+            let managed = kind != Kind::Overlay;
+            Ok(Win { dpy: d.dpy, win, gc, visual, depth, argb: argb.is_some(), mapped: false, at: (0, 0, 0, 0), managed, shape: Vec::new() })
         }
     }
 
-    fn place(&mut self, x: i32, y: i32, w: u32, h: u32) {
+    /// Pointer input only where `runs` (rows of the window) are: clicks
+    /// elsewhere go through to what is below.
+    pub(crate) fn set_input(&mut self, runs: &[(i16, i16, u16, u16)]) {
+        let mut rects: Vec<XRectangle> = runs.iter().map(|&(x, y, width, height)| XRectangle { x, y, width, height }).collect();
+        unsafe {
+            XShapeCombineRectangles(self.dpy, self.win, SHAPE_INPUT, 0, 0, rects.as_mut_ptr(), rects.len() as c_int, SHAPE_SET, UNSORTED);
+        }
+    }
+
+    /// Let the window manager move the window with the pointer (pressed at
+    /// `root`): a managed window cannot place itself on Wayland.
+    pub(crate) fn start_move(&mut self, d: &Disp, root: (i32, i32)) {
+        unsafe {
+            XUngrabPointer(self.dpy, 0);
+            let mut ev: XEvent = core::mem::zeroed();
+            ev.client = XClientMessageEvent {
+                type_: CLIENT_MESSAGE,
+                serial: 0,
+                send_event: 1,
+                display: self.dpy,
+                window: self.win,
+                message_type: atom(self.dpy, "_NET_WM_MOVERESIZE"),
+                format: 32,
+                // x, y, direction 8 = move, button 1, source 1 = application.
+                data: [root.0 as c_long, root.1 as c_long, 8, 1, 1],
+            };
+            XSendEvent(self.dpy, d.root, 0, SUBSTRUCTURE_REDIRECT_MASK | SUBSTRUCTURE_NOTIFY_MASK, &mut ev);
+            XFlush(self.dpy);
+        }
+    }
+
+    pub(crate) fn is_managed(&self) -> bool {
+        self.managed
+    }
+
+    pub(crate) fn place(&mut self, x: i32, y: i32, w: u32, h: u32) {
         unsafe {
             if self.at != (x, y, w, h) {
                 XMoveResizeWindow(self.dpy, self.win, x, y, w.max(1), h.max(1));
@@ -351,19 +505,21 @@ impl Win {
     }
 
     /// Show `bgra` (`w`×`h`, premultiplied) at (x, y).
-    fn put(&mut self, x: i32, y: i32, w: u32, h: u32, bgra: &[u8]) {
+    pub(crate) fn put(&mut self, x: i32, y: i32, w: u32, h: u32, bgra: &[u8]) {
         if w == 0 || h == 0 || bgra.len() < (w * h * 4) as usize {
             self.hide();
             return;
         }
         unsafe {
             if !self.argb {
-                let mut rects: Vec<XRectangle> = alpha_runs(bgra, w as usize, h as usize)
-                    .into_iter()
-                    .map(|(x, y, width, height)| XRectangle { x, y, width, height })
-                    .collect();
-                let n = rects.len() as c_int;
-                XShapeCombineRectangles(self.dpy, self.win, SHAPE_BOUNDING, 0, 0, rects.as_mut_ptr(), n, SHAPE_SET, UNSORTED);
+                let runs = alpha_runs(bgra, w as usize, h as usize);
+                if runs != self.shape {
+                    let mut rects: Vec<XRectangle> =
+                        runs.iter().map(|&(x, y, width, height)| XRectangle { x, y, width, height }).collect();
+                    let n = rects.len() as c_int;
+                    XShapeCombineRectangles(self.dpy, self.win, SHAPE_BOUNDING, 0, 0, rects.as_mut_ptr(), n, SHAPE_SET, UNSORTED);
+                    self.shape = runs;
+                }
             }
             self.place(x, y, w, h);
             let mut px = bgra[..(w * h * 4) as usize].to_vec();
@@ -377,7 +533,7 @@ impl Win {
         }
     }
 
-    fn hide(&mut self) {
+    pub(crate) fn hide(&mut self) {
         if self.mapped {
             unsafe {
                 XUnmapWindow(self.dpy, self.win);
@@ -500,13 +656,29 @@ impl CountWin {
 /// through ffmpeg or, when `enc` says so, OpenH264 with Opus in the
 /// built-in muxer. Runs on the recording worker, which outlives the
 /// children it starts (see `rec::linux::child`).
-fn prepare(spec: &RecSpec, mic: MicFlags, enc: Pick) -> Result<Parts> {
+fn prepare(spec: &RecSpec, mic: MicFlags, enc: Pick, cast: Option<(Cast, Vec<crate::capture::IRect>)>) -> Result<Parts> {
     if let Some(dir) = spec.out.parent() {
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
     }
-    let src = XShmSource::open(spec.area)?;
-    let (w, h) = src.size();
     let mut warnings = Vec::new();
+    let src: Box<dyn FrameSource> = match cast {
+        // Wayland / Flatpak: the area cropped from the shared monitor.
+        Some((cast, mons)) => {
+            let (area, info) = (spec.area, cast.info.stream.clone());
+            let mut fits = true;
+            let s = ScreenSource::open(cast, |frame| {
+                let (c, ok) = portal::crop_for(area, portal::stream_rect(&info, frame, area, &mons), frame);
+                fits = ok;
+                c
+            })?;
+            if !fits {
+                warnings.push(portal::WHOLE_SCREEN.to_string());
+            }
+            Box::new(s)
+        }
+        None => Box::new(XShmSource::open(spec.area)?),
+    };
+    let (w, h) = src.size();
     let mut late: Vec<Late> = Vec::new();
     let mut audio: Vec<Box<dyn AudioSource>> = Vec::new();
     let part = spec.part_path();
@@ -546,7 +718,6 @@ fn prepare(spec: &RecSpec, mic: MicFlags, enc: Pick) -> Result<Parts> {
     for w in &warnings {
         eprintln!("rustshot: {w}");
     }
-    let src: Box<dyn FrameSource> = Box::new(src);
     Ok(Parts { src, audio, enc, warnings, late })
 }
 
@@ -622,24 +793,40 @@ pub struct Recorder {
 }
 
 impl Recorder {
-    pub fn start(spec: RecSpec, geom: Geom, th: Theme, mic: MicFlags, enc: Pick, bubble: Option<crate::cam::Bubble>) -> Result<Recorder> {
-        let mut r = Recorder::start_with(spec, geom, th, Box::new(move |s: &RecSpec| prepare(s, mic, enc)))?;
+    /// `cast`: the portal's screen cast (Wayland, Flatpak), else XShm.
+    pub fn start(
+        spec: RecSpec,
+        geom: Geom,
+        th: Theme,
+        mic: MicFlags,
+        enc: Pick,
+        bubble: Option<crate::cam::Bubble>,
+        cast: Option<Cast>,
+    ) -> Result<Recorder> {
+        let mons = geom.rects();
+        let cast = cast.map(|c| (c, mons));
+        let wayland = portal::wayland_now();
+        let mut r = Recorder::start_with(spec, geom, th, Box::new(move |s: &RecSpec| prepare(s, mic, enc, cast)), wayland)?;
         r.bubble = bubble;
         Ok(r)
     }
 
-    pub(crate) fn start_with(spec: RecSpec, geom: Geom, th: Theme, open: Opener) -> Result<Recorder> {
+    /// `wayland`: no border (the compositor shows that the screen is
+    /// shared) and the bar is a managed window.
+    pub(crate) fn start_with(spec: RecSpec, geom: Geom, th: Theme, open: Opener, wayland: bool) -> Result<Recorder> {
         let disp = Disp::open()?;
         let mut border = Vec::new();
         let red = super::RED;
         let pixel = (u32::from(red.r) << 16) | (u32::from(red.g) << 8) | u32::from(red.b);
-        for (x, y, w, h) in border::strips_outside(geom.area, &geom.border_monitors()) {
+        let strips = if wayland { Vec::new() } else { border::strips_outside(geom.area, &geom.border_monitors()) };
+        for (x, y, w, h) in strips {
             let mut win = Win::new(&disp, false, Some(pixel))?;
             win.place(x, y, w, h);
             border.push(win);
         }
+        let kind = if wayland { Kind::Managed("Rustshot recording") } else { Kind::Overlay };
         let bar = BarWin {
-            win: Win::new(&disp, true, None)?,
+            win: Win::with_kind(&disp, true, None, kind)?,
             spot: None,
             layout: None,
             hover: None,
