@@ -821,25 +821,37 @@ impl App {
         }
     }
 
+    /// An upload finished: copy its link and say so. A capture's overlay
+    /// is hidden once it is exported, so the daemon says it in a tray
+    /// balloon; only over a newer capture is it the overlay's toast.
     fn poll_upload(&mut self) {
         let slot = self.upload_slot.clone();
         let mut guard = slot.lock().unwrap();
         let Some(rx) = guard.take() else { return };
-        match rx.try_recv() {
+        let (text, kind) = match rx.try_recv() {
             Ok(Ok(url)) => {
                 println!("uploaded: {url}");
-                if self.cfg.copy_url_after_upload
-                    && let Err(e) = export::copy_text_to_clipboard(&url) {
-                        eprintln!("warning: could not copy URL: {e:#}");
-                    }
-                self.notice = Some(Toast::new(format!("Uploaded {url}"), ToastKind::Success));
+                let copied = self.cfg.copy_url_after_upload
+                    && export::copy_text_to_clipboard(&url)
+                        .map_err(|e| eprintln!("warning: could not copy URL: {e:#}"))
+                        .is_ok();
+                let head = if copied { "Uploaded \u{2014} link copied" } else { "Uploaded" };
+                (format!("{head}\n{url}"), ToastKind::Success)
             }
             Ok(Err(e)) => {
                 eprintln!("error: upload failed: {e}");
-                self.notice = Some(Toast::new(format!("Upload failed: {e}"), ToastKind::Error));
+                (format!("Upload failed: {e}"), ToastKind::Error)
             }
-            Err(std::sync::mpsc::TryRecvError::Empty) => *guard = Some(rx),
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                *guard = Some(rx);
+                return;
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
+        };
+        if matches!(self.st, State::Edit(_)) || self.one_shot() {
+            self.notice = Some(Toast::new(text.replace('\n', " "), kind));
+        } else {
+            crate::tray::notify(&text);
         }
     }
 

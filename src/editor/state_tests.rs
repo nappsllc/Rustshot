@@ -1024,6 +1024,38 @@ fn upload_results_become_toasts() {
     assert!(a.upload_slot.lock().unwrap().is_none() && a.notice.is_none());
 }
 
+/// Ctrl+U in the daemon: the overlay hides, the upload runs, and its
+/// result reaches the user outside the hidden overlay (a tray balloon).
+fn daemon_upload(fake: crate::export::FakeUpload) -> (App, Vec<String>) {
+    crate::export::FAKE_UPLOAD.with(|f| f.set(Some(fake)));
+    let _ = crate::tray::take_notes();
+    let mut a = app(Some(r(10.0, 10.0, 50.0, 50.0)));
+    a.kind = RunKind::Daemon;
+    key_m(&mut a, 'U' as u32, CTRL);
+    assert!(hidden(&a), "the overlay closed");
+    let t0 = Instant::now();
+    while a.upload_slot.lock().unwrap().is_some() {
+        assert!(t0.elapsed() < Duration::from_secs(10), "upload never finished");
+        std::thread::sleep(Duration::from_millis(5));
+        a.on_event(Ev::Timer);
+    }
+    crate::export::FAKE_UPLOAD.with(|f| f.set(None));
+    (a, crate::tray::take_notes())
+}
+
+#[test]
+fn daemon_upload_result_is_shown_after_the_overlay_hides() {
+    let (a, notes) = daemon_upload(|png| {
+        assert!(png.starts_with(b"\x89PNG"), "a PNG is uploaded");
+        Ok("https://i.imgur.com/x.png".into())
+    });
+    assert_eq!(code(&a), 0);
+    assert_eq!(notes, ["Uploaded\nhttps://i.imgur.com/x.png"]);
+
+    let (_, notes) = daemon_upload(|_| Err("HTTP 429".into()));
+    assert_eq!(notes, ["Upload failed: HTTP 429"]);
+}
+
 // ---- begin_capture ---------------------------------------------------------
 
 fn queue(shot: anyhow::Result<Shot>) {

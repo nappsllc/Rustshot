@@ -56,6 +56,7 @@ pub fn spawn(tx: Sender<HotEvent>) {
 }
 
 /// Show `text` as a tray balloon (from any thread; the tray window shows it).
+#[cfg_attr(test, allow(dead_code))] // tests collect notes instead (`tray::take_notes`)
 pub fn notify(text: &str) {
     *SAVED.lock().unwrap() = None;
     post_balloon(text);

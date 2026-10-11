@@ -97,10 +97,26 @@ pub fn spawn(tx: Sender<HotEvent>) {
 /// Tell the user `text` outside any window: a tray balloon on Windows,
 /// stderr elsewhere (for now).
 pub fn notify(text: &str) {
-    #[cfg(windows)]
+    // Tests never pop balloons on the user's daemon: they read `take_notes`.
+    #[cfg(test)]
+    {
+        NOTES.with(|n| n.borrow_mut().push(text.to_string()));
+    }
+    #[cfg(all(windows, not(test)))]
     crate::tray_win::notify(text);
     #[cfg(not(windows))]
     eprintln!("rustshot: {text}");
+}
+
+#[cfg(test)]
+thread_local! {
+    static NOTES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Tests: the balloons this thread asked for since the last call.
+#[cfg(test)]
+pub fn take_notes() -> Vec<String> {
+    NOTES.with(|n| std::mem::take(&mut *n.borrow_mut()))
 }
 
 /// Tray glyph on a 16-unit grid: four rounded corner brackets (stroked) and a centre dot.

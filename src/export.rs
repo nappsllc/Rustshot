@@ -533,9 +533,26 @@ pub fn wait_upload(rx: Receiver<Result<String, String>>, copy_url: bool) -> Opti
     }
 }
 
+/// Tests: what an upload returns (no network ever: unset, it fails).
+#[cfg(test)]
+pub type FakeUpload = fn(&[u8]) -> Result<String, String>;
+
+#[cfg(test)]
+thread_local! {
+    pub static FAKE_UPLOAD: std::cell::Cell<Option<FakeUpload>> = const { std::cell::Cell::new(None) };
+}
+
 fn spawn_upload(png: Vec<u8>, client_id: String) -> Receiver<Result<String, String>> {
     let (tx, rx) = mpsc::channel();
+    #[cfg(test)]
+    let fake = FAKE_UPLOAD.with(|f| f.get());
     std::thread::spawn(move || {
+        #[cfg(test)]
+        let r = {
+            let _ = client_id;
+            fake.map_or_else(|| Err("no uploader in tests".to_string()), |f| f(&png))
+        };
+        #[cfg(not(test))]
         let r = do_upload(&png, &client_id);
         let _ = tx.send(r);
     });
