@@ -968,6 +968,9 @@ fn timer_repaints_only_while_something_changes() {
     for t in [&mut e.mo.dim, &mut e.mo.bar, &mut e.mo.pop, &mut e.mo.hint, &mut e.mo.hover] {
         t.snap(t.target());
     }
+    // The last frame was drawn mid-fade: one at the end values is owed.
+    assert!(a.on_event(Ev::Timer), "the settled frame");
+    ed(&mut a).prepare(None, (0, 0), Instant::now());
     assert!(!a.on_event(Ev::Timer), "settled: no frame");
     // Hidden: only a state change asks for a frame.
     a.st = State::Hidden;
