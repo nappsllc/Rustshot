@@ -502,8 +502,8 @@ fn run_direct(cfg: &Config, args: &CaptureArgs, shot: Shot, region: Option<(i32,
     let mut code = if res.error { 1 } else { 0 };
     // History keeps direct captures too (never the tests' ones).
     let keeps = tasks.iter().any(|t| matches!(t, Task::Copy | Task::Save { .. } | Task::SaveDesktop | Task::Upload));
-    let root = history::default_root();
-    let entry = (!cfg!(test) && keeps).then(|| {
+    let root = history::find_root().unwrap_or_default();
+    let entry = (!cfg!(test) && keeps && !root.as_os_str().is_empty()).then(|| {
         let saved = res.done.iter().rev().find_map(|d| match d {
             export::Done::Saved(p) | export::Done::SavedDesktop(p) => Some(p.clone()),
             _ => None,

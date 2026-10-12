@@ -101,9 +101,11 @@ pub enum Target {
     ClearCheck,
     ClearCancel,
     ClearOk,
-    /// The empty state's link, the off state's switch.
+    /// The empty state's link, the off state's switch and its "Clear
+    /// history…" (captures still kept).
     Settings,
     TurnOn,
+    OffClear,
     /// The scrolling area's empty space (a marquee starts here).
     Space,
     /// Anywhere else (the panel's body, a dialog's body).
@@ -411,15 +413,17 @@ pub fn menu_lay(lay: &Lay, h: &History, items: &[(FRect, Target)]) -> Option<(FR
     Some((r, rows))
 }
 
-/// The "Clear history?" dialog: its rect, the checkbox row, Cancel, Clear.
+/// The "Clear history?" / "Delete N captures?" dialog: its rect, the
+/// checkbox row (Clear only), Cancel, the button.
 pub fn dialog_lay(ui: &Ui, lay: &Lay, h: &History) -> (FRect, FRect, FRect, FRect) {
-    let (p, _) = h.clear_texts();
+    let (_, p, check, okl) = h.dialog_texts();
     let lines = crate::ui::controls::wrap(&p, DLG_W - 40.0, |s| ui.text_w(12.0, s)).len().max(1) as f32;
-    let dh = 20.0 + 18.0 + 10.0 + lines * 18.0 + 10.0 + 18.0 + 10.0 + 6.0 + 28.0 + 20.0;
+    let check_h = if check.is_some() { 18.0 + 10.0 } else { 0.0 };
+    let dh = 20.0 + 18.0 + 10.0 + lines * 18.0 + 10.0 + check_h + 6.0 + 28.0 + 20.0;
     let r = FRect { x: ((lay.w - DLG_W) / 2.0).round(), y: ((lay.h - dh) / 2.0).round(), w: DLG_W, h: dh };
     let cb = FRect { x: r.x + 20.0, y: r.y + 20.0 + 18.0 + 10.0 + lines * 18.0 + 10.0, w: DLG_W - 40.0, h: 18.0 };
     let by = r.y1() - 20.0 - 28.0;
-    let cw = (ui.text_w(12.0, "Clear history") + 24.0).ceil();
+    let cw = (ui.text_w(12.0, okl) + 24.0).ceil();
     let ok = FRect { x: r.x1() - 20.0 - cw, y: by, w: cw, h: 28.0 };
     let kw = (ui.text_w(12.0, "Cancel") + 24.0).ceil();
     let cancel = FRect { x: ok.x - 8.0 - kw, y: by, w: kw, h: 28.0 };
@@ -437,6 +441,27 @@ pub fn empty_lay(ui: &Ui, lay: &Lay, h: &History) -> FRect {
     }
     let lw = ui.text_w(12.0, "History settings");
     FRect { x: a.x + (a.w - lw) / 2.0, y: cy + 46.0, w: lw, h: 18.0 }
+}
+
+/// The off state's caption.
+const OFF_CAPTION: &str = "Captures aren't kept after you close them. Saved and uploaded files are not affected.";
+
+/// The off state's "N captures still kept · Clear history…" while the
+/// history still holds captures (they expire as usual): the text's left
+/// end, its line's center y, and the link's rect.
+pub fn off_kept_lay(ui: &Ui, lay: &Lay, h: &History) -> Option<(String, f32, f32, FRect)> {
+    let n = h.entries.len();
+    if h.on() || n == 0 {
+        return None;
+    }
+    let a = lay.area;
+    let lines = crate::ui::controls::wrap(OFF_CAPTION, a.w - 48.0, |s| ui.text_w(12.0, s)).len() as f32;
+    let cy = empty_lay(ui, lay, h).y1() + 18.0 + lines * 18.0 + 12.0;
+    let pre = format!("{n} capture{} still kept \u{b7} ", if n == 1 { "" } else { "s" });
+    let link = "Clear history\u{2026}";
+    let (pw, lw) = (ui.text_w(12.0, &pre), ui.text_w(12.0, link));
+    let x = a.x + (a.w - pw - lw) / 2.0;
+    Some((pre, x, cy, FRect { x: x + pw, y: cy - 9.0, w: lw, h: 18.0 }))
 }
 
 fn inside(r: FRect, x: f32, y: f32) -> bool {
@@ -469,6 +494,9 @@ pub fn targets(ui: &Ui, lay: &Lay, h: &History, mouse: (f32, f32)) -> Vec<(FRect
         t.push((empty_lay(ui, lay, h), Target::Settings));
     } else if !h.on() {
         t.push((empty_lay(ui, lay, h), Target::TurnOn));
+        if let Some((_, _, _, link)) = off_kept_lay(ui, lay, h) {
+            t.push((link, Target::OffClear));
+        }
     } else {
         t.push((lay.area, Target::Space));
         let list = h.view == View::List;
@@ -519,11 +547,13 @@ pub fn targets(ui: &Ui, lay: &Lay, h: &History, mouse: (f32, f32)) -> Vec<(FRect
         t.push((r, Target::Inert));
         t.extend(rows.into_iter().map(|(r, a)| (r, Target::MenuItem(a))));
     }
-    if h.clear.is_some() {
+    if h.asking() {
         let (r, cb, cancel, ok) = dialog_lay(ui, lay, h);
         t.push((FRect { x: 0.0, y: 0.0, w: lay.w, h: lay.h }, Target::Inert));
         t.push((r, Target::Inert));
-        t.push((cb, Target::ClearCheck));
+        if h.clear.is_some() {
+            t.push((cb, Target::ClearCheck));
+        }
         t.push((cancel, Target::ClearCancel));
         t.push((ok, Target::ClearOk));
     }
@@ -624,7 +654,7 @@ pub fn paint(ui: &mut Ui, h: &mut History, lay: &Lay, hover: Option<&Target>, no
         }
     }
     paint_menu(ui, h, lay, &t, hover);
-    if h.clear.is_some() {
+    if h.asking() {
         paint_dialog(ui, h, lay, &t, hover);
     }
 }
@@ -1230,27 +1260,30 @@ fn paint_dialog(ui: &mut Ui, h: &History, lay: &Lay, t: &WTok, hover: Option<&Ta
     paint::shadow(&mut ui.fb, t, q, 12.0 * k, k, &[0, 1, 2, 3]);
     fill(ui, r, 12.0, t.win);
     ring(ui, r, 12.0, t.bd);
-    text(ui, 14.0, "Clear history?", r.x + 20.0, r.y + 20.0 + 9.0, t.tx, true);
-    let (para, check) = h.clear_texts();
+    let (title, para, check, okl) = h.dialog_texts();
+    text(ui, 14.0, &title, r.x + 20.0, r.y + 20.0 + 9.0, t.tx, true);
     let lines = crate::ui::controls::wrap(&para, DLG_W - 40.0, |s| ui.text_w(12.0, s));
     let mut y = r.y + 20.0 + 18.0 + 10.0;
     for l in &lines {
         text(ui, 12.0, l, r.x + 20.0, y + 9.0, t.tx2, false);
         y += 18.0;
     }
-    let on = h.clear == Some(true);
-    let bx = FRect { x: cb.x, y: cb.y + 1.0, w: 16.0, h: 16.0 };
-    if on {
-        fill(ui, bx, 4.0, t.ac);
-        icon(ui, "check", bx.x + 2.0, bx.y + 2.0, 12.0, C4::rgb(0x0E, 0x10, 0x20));
-    } else {
-        let qb = p(ui, bx);
-        ui.fb.stroke_rounded(FRect { x: qb.x + 0.75 * k, y: qb.y + 0.75 * k, w: qb.w - 1.5 * k, h: qb.h - 1.5 * k }, 3.25 * k, 1.5 * k, t.cb);
+    if let Some(check) = check {
+        let on = h.clear == Some(true);
+        let bx = FRect { x: cb.x, y: cb.y + 1.0, w: 16.0, h: 16.0 };
+        if on {
+            fill(ui, bx, 4.0, t.ac);
+            icon(ui, "check", bx.x + 2.0, bx.y + 2.0, 12.0, C4::rgb(0x0E, 0x10, 0x20));
+        } else {
+            let qb = p(ui, bx);
+            ui.fb.stroke_rounded(FRect { x: qb.x + 0.75 * k, y: qb.y + 0.75 * k, w: qb.w - 1.5 * k, h: qb.h - 1.5 * k }, 3.25 * k, 1.5 * k, t.cb);
+        }
+        let check = ui.fit_text(12.0, &check, cb.w - 24.0);
+        text(ui, 12.0, &check, cb.x + 24.0, cb.y + 9.0, t.tx, false);
     }
-    let check = ui.fit_text(12.0, &check, cb.w - 24.0);
-    text(ui, 12.0, &check, cb.x + 24.0, cb.y + 9.0, t.tx, false);
     button(ui, cancel, "Cancel", None, Style::Plain, hover == Some(&Target::ClearCancel), t);
-    button(ui, ok, "Clear history", None, Style::Solid, hover == Some(&Target::ClearOk), t);
+    let style = if h.ask_delete.is_some() { Style::Danger } else { Style::Solid };
+    button(ui, ok, okl, None, style, hover == Some(&Target::ClearOk), t);
 }
 
 fn key_caps(ui: &mut Ui, keys: &[String], x: f32, cy: f32, t: &WTok) -> f32 {
@@ -1326,12 +1359,18 @@ fn paint_off(ui: &mut Ui, h: &History, lay: &Lay, t: &WTok, hover: Option<&Targe
     ui.fb.fill_circle((tr.x + 9.0) * k, (tr.y + 9.0) * k + 0.5 * k, 7.5 * k, C4::new(0, 0, 0, 80));
     ui.fb.fill_circle((tr.x + 9.0) * k, (tr.y + 9.0) * k, 7.0 * k, C4::rgb(255, 255, 255));
     text(ui, 12.5, "Keep a history of captures", tr.x + 42.0, tr.y + 9.0, t.tx, false);
-    let cap = "Captures aren't kept after you close them. Saved and uploaded files are not affected.";
-    let lines = crate::ui::controls::wrap(cap, a.w - 48.0, |s| ui.text_w(12.0, s));
+    let lines = crate::ui::controls::wrap(OFF_CAPTION, a.w - 48.0, |s| ui.text_w(12.0, s));
     let mut y = sw.y1() + 18.0;
     for l in lines {
         text(ui, 12.0, &l, cx - ui.text_w(12.0, &l) / 2.0, y, t.tx3, false);
         y += 18.0;
+    }
+    if let Some((pre, x, cy, link)) = off_kept_lay(ui, lay, h) {
+        text(ui, 12.0, &pre, x, cy, t.tx2, false);
+        let w = text(ui, 12.0, "Clear history\u{2026}", link.x, cy, t.acfg, true);
+        if hover == Some(&Target::OffClear) {
+            line_h(ui, link.x, cy + 7.0, w, t.acfg);
+        }
     }
 }
 

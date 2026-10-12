@@ -160,8 +160,8 @@ fn bmp_bytes(img: &PixBuf) -> Result<Vec<u8>> {
     u32le(&mut o, size - HEADER); // image size
     u32le(&mut o, 2835); // 72 DPI in pixels per metre
     u32le(&mut o, 2835);
-    u32le(&mut o, 0); // colours used
-    u32le(&mut o, 0); // important colours
+    u32le(&mut o, 0); // colors used
+    u32le(&mut o, 0); // important colors
     for mask in [0x00FF_0000, 0x0000_FF00, 0x0000_00FF] {
         u32le(&mut o, mask); // R, G, B
     }
@@ -400,8 +400,10 @@ pub fn unique_path(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
-/// Write `img` in the format named by the path's extension.
-fn save_image(img: &PixBuf, path: &Path, jpeg_quality: u8) -> Result<()> {
+/// Write `img` in the format named by the path's extension, replacing
+/// the file if it is there ([`write_atomic`]: a crash or a full disk
+/// leaves the old file as it was).
+pub fn save_image(img: &PixBuf, path: &Path, jpeg_quality: u8) -> Result<()> {
     let ext = path
         .extension()
         .map(|e| e.to_string_lossy().to_string())
@@ -418,7 +420,68 @@ fn save_image(img: &PixBuf, path: &Path, jpeg_quality: u8) -> Result<()> {
     {
         std::fs::create_dir_all(parent).context("create save directory")?;
     }
-    std::fs::write(path, bytes).context("write image")?;
+    write_atomic(path, &bytes).context("write image")?;
+    Ok(())
+}
+
+/// The suffix of [`write_atomic`]'s temporary files.
+pub const TMP_SUFFIX: &str = ".rustshot.tmp";
+
+/// A temporary file's name next to `path`, never the same twice (the
+/// process and a counter): `<name>.<pid>-<n>.rustshot.tmp`.
+fn tmp_path(path: &Path) -> PathBuf {
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let name = path.file_name().map_or_else(|| "file".into(), |n| n.to_string_lossy().into_owned());
+    path.with_file_name(format!("{name}.{}-{n}{TMP_SUFFIX}", std::process::id()))
+}
+
+/// Write `bytes` to `path` all at once: into a temporary file in the
+/// same folder, flushed to disk, then renamed over `path` (replacing it).
+/// A reader sees the old file or the new one, never half of one; on an
+/// error `path` is left as it was and the temporary file is removed.
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    let tmp = tmp_path(path);
+    let res = (|| -> Result<()> {
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp)
+            .with_context(|| format!("create {}", tmp.display()))?;
+        f.write_all(bytes).with_context(|| format!("write {}", tmp.display()))?;
+        f.sync_all().with_context(|| format!("flush {}", tmp.display()))?;
+        drop(f);
+        replace_file(&tmp, path).with_context(|| format!("replace {}", path.display()))
+    })();
+    if res.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    res
+}
+
+/// Rename `from` over `to` (replacing it), on the same volume.
+#[cfg(windows)]
+fn replace_file(from: &Path, to: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::Storage::FileSystem::{MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW};
+    let w = |p: &Path| p.as_os_str().encode_wide().chain(Some(0)).collect::<Vec<u16>>();
+    let (f, t) = (w(from), w(to));
+    // SAFETY: both are NUL-terminated UTF-16 strings that outlive the call.
+    unsafe { MoveFileExW(windows::core::PCWSTR(f.as_ptr()), windows::core::PCWSTR(t.as_ptr()), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) }
+        .map_err(|e| std::io::Error::from_raw_os_error(e.code().0 & 0xFFFF))
+}
+
+/// Rename `from` over `to` (replacing it), then flush the folder so the
+/// rename itself survives a power loss.
+#[cfg(unix)]
+fn replace_file(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::rename(from, to)?;
+    if let Some(dir) = to.parent().filter(|d| !d.as_os_str().is_empty())
+        && let Ok(d) = std::fs::File::open(dir)
+    {
+        let _ = d.sync_all();
+    }
     Ok(())
 }
 
@@ -947,6 +1010,33 @@ mod tests {
         let u = unique_path(&f);
         assert_ne!(u, f);
         let _ = std::fs::remove_file(&f);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A save over an existing file replaces it whole under its own name
+    /// (no temporary file left); a save that fails leaves it as it was.
+    #[test]
+    fn saves_replace_files_atomically() {
+        let dir = std::env::temp_dir().join(format!("rustshot_test_atomic_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("shot.png");
+        std::fs::write(&f, b"old bytes").unwrap();
+        let img = PixBuf::from_pixel(3, 2, [9, 8, 7, 255]);
+        save_image(&img, &f, 80).unwrap();
+        assert_eq!(PixBuf::from_png(&std::fs::read(&f).unwrap()).unwrap().dimensions(), (3, 2));
+        let names: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(names, [std::ffi::OsString::from("shot.png")]);
+        // Writing into a folder that is not there fails; nothing changes.
+        let gone = dir.join("missing").join("x.png");
+        assert!(write_atomic(&gone, b"x").is_err());
+        // The target is a folder: the rename fails, the temporary file goes.
+        let sub = dir.join("sub.png");
+        std::fs::create_dir_all(&sub).unwrap();
+        assert!(write_atomic(&sub, b"x").is_err());
+        assert!(sub.is_dir());
+        let left = std::fs::read_dir(&dir).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().ends_with(TMP_SUFFIX)).count();
+        assert_eq!(left, 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

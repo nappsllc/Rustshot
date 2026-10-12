@@ -84,6 +84,22 @@ pub enum Act {
     TurnOn,
 }
 
+/// How many decoded thumbnails stay in memory (about 110 KB each).
+pub const THUMBS_KEPT: usize = 200;
+
+/// A decoded thumbnail (None: none or unreadable), when it was last
+/// used, and its file's size and time (an edit writes a new one).
+pub struct Thumb {
+    pub pic: Option<PixBuf>,
+    pub used: u64,
+    pub stamp: Option<(u64, std::time::SystemTime)>,
+}
+
+/// `thumb.png`'s size and modification time.
+fn thumb_stamp(e: &Entry) -> Option<(u64, std::time::SystemTime)> {
+    std::fs::metadata(e.thumb()).ok().and_then(|m| Some((m.len(), m.modified().ok()?)))
+}
+
 /// The window's state.
 pub struct History {
     pub store: Store,
@@ -110,8 +126,12 @@ pub struct History {
     pub usage: u64,
     /// A short message at the bottom (and when).
     pub toast: Option<(String, crate::editor::style::ToastKind, std::time::Instant)>,
-    /// Decoded thumbnails by id (None: none or unreadable).
-    pub thumbs: HashMap<String, Option<PixBuf>>,
+    /// Decoded thumbnails by id (the last used [`THUMBS_KEPT`]).
+    pub thumbs: HashMap<String, Thumb>,
+    /// Counts [`History::thumb_of`] calls (the cache's "last used").
+    pub thumb_clock: u64,
+    /// "Delete N captures?" (more than one selected) asks first.
+    pub ask_delete: Option<Vec<String>>,
     /// The pointer between frames (press, marquee, double-click).
     pub ptr: window::Pointer,
     /// The search field has the keyboard (keys are its); focus it next frame.
@@ -144,6 +164,8 @@ impl History {
             usage: 0,
             toast: None,
             thumbs: HashMap::new(),
+            thumb_clock: 0,
+            ask_delete: None,
             ptr: Default::default(),
             search_focused: false,
             focus_search: false,
@@ -157,25 +179,47 @@ impl History {
     /// List the store again (selection kept where its entries still are).
     pub fn reload(&mut self) {
         self.listed = history::generation();
-        self.entries = self.store.list();
-        self.usage = self.entries.iter().map(|e| e.size).sum();
-        let ids: Vec<&str> = self.entries.iter().map(|e| e.id.as_str()).collect();
-        self.sel.retain(|s| ids.contains(&s.as_str()));
-        self.thumbs.retain(|k, _| ids.contains(&k.as_str()));
+        let entries = self.store.list();
+        self.take(entries);
     }
 
-    /// The thumbnail of `id`, decoded once.
-    pub fn thumb_of(&mut self, id: &str) -> Option<&PixBuf> {
-        if !self.thumbs.contains_key(id) {
-            let pic = self
-                .entries
-                .iter()
-                .find(|e| e.id == id)
-                .and_then(|e| std::fs::read(e.thumb()).ok())
-                .and_then(|b| PixBuf::from_png(&b).ok());
-            self.thumbs.insert(id.to_string(), pic);
+    /// Show `entries` (a listing of the store): the selection stays where
+    /// its entries still are; thumbnails of gone or changed ones go.
+    pub fn take(&mut self, entries: Vec<Entry>) {
+        self.entries = entries;
+        self.usage = self.entries.iter().map(|e| e.size).sum();
+        let ids: std::collections::HashSet<&str> = self.entries.iter().map(|e| e.id.as_str()).collect();
+        self.sel.retain(|s| ids.contains(s.as_str()));
+        let changed: Vec<String> = self
+            .thumbs
+            .iter()
+            .filter(|(k, c)| !ids.contains(k.as_str()) || self.entry(k).is_none_or(|e| thumb_stamp(e) != c.stamp))
+            .map(|(k, _)| k.clone())
+            .collect();
+        for k in changed {
+            self.thumbs.remove(&k);
         }
-        self.thumbs.get(id).and_then(Option::as_ref)
+    }
+
+    /// The thumbnail of `id`, decoded once (the [`THUMBS_KEPT`] last used
+    /// stay decoded).
+    pub fn thumb_of(&mut self, id: &str) -> Option<&PixBuf> {
+        self.thumb_clock += 1;
+        let now = self.thumb_clock;
+        if !self.thumbs.contains_key(id) {
+            let e = self.entries.iter().find(|e| e.id == id);
+            let stamp = e.and_then(thumb_stamp);
+            let pic = e.and_then(|e| std::fs::read(e.thumb()).ok()).and_then(|b| PixBuf::from_png(&b).ok());
+            if self.thumbs.len() >= THUMBS_KEPT
+                && let Some(old) = self.thumbs.iter().min_by_key(|(_, c)| c.used).map(|(k, _)| k.clone())
+            {
+                self.thumbs.remove(&old);
+            }
+            self.thumbs.insert(id.to_string(), Thumb { pic, used: now, stamp });
+        }
+        let c = self.thumbs.get_mut(id)?;
+        c.used = now;
+        c.pic.as_ref()
     }
 
     pub fn entry(&self, id: &str) -> Option<&Entry> {
@@ -269,7 +313,7 @@ impl History {
     /// Esc: closes a menu or the question, else clears the search, else
     /// the selection. Returns whether it did something.
     pub fn escape(&mut self) -> bool {
-        if self.menu.take().is_some() || self.clear.take().is_some() {
+        if self.menu.take().is_some() || self.clear.take().is_some() || self.ask_delete.take().is_some() {
             return true;
         }
         if !self.search.text.is_empty() {
@@ -312,6 +356,53 @@ impl History {
 
     pub fn note(&mut self, text: impl Into<String>, kind: crate::editor::style::ToastKind) {
         self.toast = Some((text.into(), kind, std::time::Instant::now()));
+    }
+
+    /// A question is open ("Clear history?", "Delete N captures?").
+    pub fn asking(&self) -> bool {
+        self.clear.is_some() || self.ask_delete.is_some()
+    }
+
+    /// Delete `ids`: one at once, several after "Delete N captures?".
+    pub fn delete(&mut self, ids: Vec<String>) -> Vec<Act> {
+        if ids.len() > 1 {
+            self.ask_delete = Some(ids);
+            Vec::new()
+        } else {
+            vec![Act::Delete(ids)]
+        }
+    }
+
+    /// The question's title, text, checkbox (Clear only) and button.
+    pub fn dialog_texts(&self) -> (String, String, Option<String>, &'static str) {
+        if let Some(ids) = &self.ask_delete {
+            let n = ids.len();
+            return (
+                format!("Delete {n} captures?"),
+                format!("Removes {n} captures from History. Saved files are kept. This can't be undone."),
+                None,
+                "Delete",
+            );
+        }
+        let (para, check) = self.clear_texts();
+        ("Clear history?".into(), para, Some(check), "Clear history")
+    }
+
+    /// The question's button (or Enter).
+    pub fn dialog_ok(&mut self) -> Vec<Act> {
+        if let Some(ids) = self.ask_delete.take() {
+            return vec![Act::Delete(ids)];
+        }
+        match self.clear.take() {
+            Some(files) => vec![Act::Clear(files)],
+            None => Vec::new(),
+        }
+    }
+
+    /// Cancel (or Esc).
+    pub fn dialog_cancel(&mut self) {
+        self.clear = None;
+        self.ask_delete = None;
     }
 }
 

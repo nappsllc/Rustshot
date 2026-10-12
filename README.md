@@ -255,10 +255,12 @@ what is known about it (when, the size, the file it was saved to, the
 monitor, the window and app it came from, the uploaded link). Recordings
 keep their file's place and a poster. Entries older than 30 days go, then
 the oldest until the history fits in 2 GB (`history_days`,
-`history_max_mb`; Settings › Capture › History). Turning *Keep a history
-of captures* off (`history = false`) keeps nothing; saved and uploaded
-files are never touched (only **Clear history…** with *Also delete saved
-files* removes them).
+`history_max_mb`; Settings › Capture › History), checked when Rustshot
+starts, every hour and when the limits change. Turning *Keep a history
+of captures* off (`history = false`) keeps nothing new; what is already
+kept still expires (History shows how many and offers **Clear
+history…**). Saved and uploaded files are never touched (only **Clear
+history…** with *Also delete saved files* removes them).
 
 **History** (<kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd>, `history_hotkey`,
 or the tray's **History…**, which shows how many captures today) lists
@@ -268,7 +270,7 @@ a click shows the details on the right, <kbd>Ctrl</kbd>/<kbd>Shift</kbd>+click
 or a drag on empty space selects several (Copy, Save to folder…, Delete).
 Hovering a card offers Edit, Copy, Save, Upload, Pin and more; a
 double-click (or <kbd>Enter</kbd>, <kbd>E</kbd>) edits. <kbd>Del</kbd>
-removes from History only.
+removes from History only (several after asking).
 
 The **Edit window** reopens a capture with its annotations as objects: the
 overlay's toolbar docked at the top, every tool and object edit (the
@@ -286,13 +288,15 @@ reorder, <kbd>Del</kbd> removes; collapses to a rail).
 
 (`zoom_in`, `zoom_out`, `zoom_fit`, `zoom_actual` in `[shortcuts]`.)
 **Save** (<kbd>Ctrl</kbd>+<kbd>S</kbd>) asks whether to **overwrite the
-original** (the file it was saved to; the History entry stays) or **save as
+original** (the file it was saved to, replaced in place; the History
+entry stays) or **save as
 a new file** (`<name>-edited.png`), with *Don't ask again*
 (`edit_save = "overwrite"` or `"new"`); closing with unsaved changes asks
 first (Discard, Save as copy, Save). The entry is marked *Edited* and keeps
 the new annotations; `original.png` is never changed, so a capture can
 always be edited again. Save As, Save to Desktop, Copy and Upload work as
-in the overlay. On macOS the History and Edit windows are not available
+in the overlay. Quitting Rustshot asks each Edit window with unsaved
+changes first, and an update waits for them. On macOS the History and Edit windows are not available
 yet (the history folder opens instead).
 
 ### Selecting

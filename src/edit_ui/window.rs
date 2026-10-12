@@ -15,11 +15,13 @@ use crate::wind::{self, Cursor, Driver, Ev, Hwnd, Mods, key};
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
 
-/// A worker's result: a message, and the uploaded link to keep.
+/// A worker's result: a message, the uploaded link to keep, and a save
+/// (the objects it saved: the edits are saved only once it succeeded).
 struct Done {
     text: String,
     kind: ToastKind,
     uploaded: Option<String>,
+    saved: Option<(Vec<crate::objects::Obj>, super::Saved)>,
 }
 
 pub struct Window {
@@ -39,6 +41,9 @@ pub struct Window {
     pub last_frame: Duration,
     /// Tests: the scale to draw at (no window to ask).
     pub scale: Option<f32>,
+    /// Told after every event: there are unsaved edits (the daemon's
+    /// quit and an update's restart wait for them).
+    pub unsaved: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Window {
@@ -57,6 +62,7 @@ impl Window {
             hover: None,
             last_frame: Duration::ZERO,
             scale: None,
+            unsaved: Default::default(),
         }
     }
 
@@ -71,6 +77,14 @@ impl Window {
     #[cfg(test)]
     pub fn pixels(&self) -> &PixBuf {
         &self.canvas
+    }
+
+    /// A worker's export result, applied as the timer would (tests).
+    #[cfg(test)]
+    pub fn apply_done_for_tests(&mut self, res: crate::export::ExportResult, saves: bool, objs: Vec<crate::objects::Obj>) {
+        let d = export_done(res, saves, &self.e.store, &self.e.entry.id.clone(), objs, &self.e.cfg);
+        let _ = self.done.0.send(d);
+        self.tick();
     }
 
     /// The window was closed: what the tools remember is written.
@@ -200,7 +214,7 @@ impl Window {
             std::thread::spawn(move || {
                 let res = crate::ocr::recognize(&img);
                 let note = crate::ocr::finish(&res);
-                let _ = tx.send(Done { text: note.text, kind: note.kind, uploaded: None });
+                let _ = tx.send(Done { text: note.text, kind: note.kind, uploaded: None, saved: None });
             });
             return;
         }
@@ -209,38 +223,13 @@ impl Window {
         let tx = self.done.0.clone();
         std::thread::spawn(move || {
             let res = crate::export::run_export(&img, (0, 0), std::slice::from_ref(&task), &cfg);
-            // A save is an edit of the entry: its objects and the file.
-            if saves && let Some(p) = res.done.iter().find_map(|d| match d {
-                crate::export::Done::Saved(p) | crate::export::Done::SavedDesktop(p) => Some(p.clone()),
-                _ => None,
-            }) {
-                let bytes = std::fs::metadata(&p).map_or(0, |m| m.len());
-                let _ = store.save_edit(&id, &objs, Some((p, bytes)));
-                crate::history::changed();
-            }
-            let done = match res.upload.map(|rx| rx.recv()) {
-                Some(Ok(Ok(url))) => {
-                    let copied = cfg.copy_url_after_upload && crate::export::copy_text_to_clipboard(&url).is_ok();
-                    Done { text: if copied { "Uploaded \u{2014} link copied".into() } else { "Uploaded".into() }, kind: ToastKind::Success, uploaded: Some(url) }
-                }
-                Some(Ok(Err(e))) => Done { text: format!("Upload failed: {e}"), kind: ToastKind::Error, uploaded: None },
-                Some(Err(_)) => Done { text: "Upload failed".into(), kind: ToastKind::Error, uploaded: None },
-                None => match crate::notice::compose(&res.done, false) {
-                    Some(n) => Done { text: n.text, kind: n.kind, uploaded: None },
-                    None => Done { text: String::new(), kind: ToastKind::Info, uploaded: None },
-                },
-            };
-            let _ = tx.send(Done { ..done });
-            let _ = saves;
+            let _ = tx.send(export_done(res, saves, &store, &id, objs, &cfg));
         });
-        if saves {
-            // The file is written on the worker; the objects are the saved ones.
-            self.e.canvas.mark_saved();
-        }
     }
 
     fn settle(&mut self) {
         self.handle_requests();
+        self.e.settle_quit();
         if self.e.closing {
             wind::close(self.hwnd);
         }
@@ -339,7 +328,7 @@ impl Window {
                 if down {
                     self.e.canvas.middle_press(p);
                 } else {
-                    self.e.canvas.release(p);
+                    self.e.canvas.middle_release(p);
                 }
             }
             Ev::Move { x, y } => {
@@ -426,11 +415,19 @@ impl Window {
     /// Timer: raise requests, workers, tool memory, animations.
     fn tick(&mut self) -> bool {
         let mut changed = false;
-        while let Ok(Msg::Raise) = self.rx.try_recv() {
+        while let Ok(m) = self.rx.try_recv() {
             #[cfg(windows)]
             wind::raise(self.hwnd);
+            if matches!(m, Msg::Quit) {
+                self.e.quit();
+                self.settle();
+                changed = true;
+            }
         }
         while let Ok(d) = self.done.1.try_recv() {
+            if let Some((objs, s)) = d.saved {
+                self.e.saved(objs, &s);
+            }
             if let Some(u) = d.uploaded {
                 let u2 = u.clone();
                 let _ = self.e.store.update(&self.e.entry.id, move |m| m.uploaded = Some(u2));
@@ -455,6 +452,35 @@ impl Window {
     }
 }
 
+/// A worker's export finished: a save (`saves`) that wrote a file is an
+/// edit of the entry (its objects and the file) and saves the edits; a
+/// cancelled or failed one saves nothing.
+fn export_done(res: crate::export::ExportResult, saves: bool, store: &crate::history::Store, id: &str, objs: Vec<crate::objects::Obj>, cfg: &crate::config::Config) -> Done {
+    let file = res.done.iter().find_map(|d| match d {
+        crate::export::Done::Saved(p) | crate::export::Done::SavedDesktop(p) => Some(p.clone()),
+        _ => None,
+    });
+    if saves && let Some(p) = file {
+        let bytes = std::fs::metadata(&p).map_or(0, |m| m.len());
+        let recorded = super::record_save(store, id, &objs, &p, bytes);
+        let s = super::Saved { path: p, bytes, recorded };
+        return Done { text: s.note(), kind: if recorded { ToastKind::Success } else { ToastKind::Info }, uploaded: None, saved: Some((objs, s)) };
+    }
+    let plain = |text: String, kind| Done { text, kind, uploaded: None, saved: None };
+    match res.upload.map(|rx| rx.recv()) {
+        Some(Ok(Ok(url))) => {
+            let copied = cfg.copy_url_after_upload && crate::export::copy_text_to_clipboard(&url).is_ok();
+            Done { uploaded: Some(url), ..plain(if copied { "Uploaded \u{2014} link copied".into() } else { "Uploaded".into() }, ToastKind::Success) }
+        }
+        Some(Ok(Err(e))) => plain(format!("Upload failed: {e}"), ToastKind::Error),
+        Some(Err(_)) => plain("Upload failed".into(), ToastKind::Error),
+        None => match crate::notice::compose(&res.done, false) {
+            Some(n) => plain(n.text, n.kind),
+            None => plain(String::new(), ToastKind::Info),
+        },
+    }
+}
+
 /// The light board's soft edge under the picture.
 const C4_SHADOW: crate::uifb::C4 = crate::uifb::C4 { r: 0, g: 0, b: 0, a: 22 };
 
@@ -467,6 +493,7 @@ impl Driver for Window {
         let timer = matches!(ev, Ev::Timer);
         let mv = matches!(ev, Ev::Move { .. });
         let due = self.event(ev);
+        self.unsaved.store(self.e.canvas.unsaved(), std::sync::atomic::Ordering::SeqCst);
         if due {
             self.render();
             if mv {

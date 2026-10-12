@@ -283,6 +283,8 @@ pub fn run(
         restart_pending: false,
         updating: false,
         idle_reply: None,
+        edits: crate::edit_ui::windows(),
+        quit_pending: false,
         font,
         ui_font,
         notice: None,
@@ -295,7 +297,7 @@ pub fn run(
         rec_area: None,
         wait_pins: false,
         // Tests never write the user's history.
-        history_root: (!cfg!(test)).then(crate::history::default_root),
+        history_root: (!cfg!(test)).then(crate::history::find_root).flatten(),
         last_entry: None,
         upload_entry: None,
         rec_poster: None,
@@ -306,6 +308,7 @@ pub fn run(
         #[cfg(test)]
         rec_bubble: None,
     };
+    app.keep_pruned();
     if wind::run(&mut app) != 0 {
         return 1;
     }
@@ -383,6 +386,11 @@ struct App {
     updating: bool,
     /// Told (once) as soon as we are idle; the worker installs only then.
     idle_reply: Option<std::sync::mpsc::Sender<()>>,
+    /// This process's Edit windows: quitting asks those with unsaved
+    /// edits, an update's restart waits for them.
+    edits: &'static crate::edit_ui::Windows,
+    /// Quit was asked while Edit windows ask "Save changes?".
+    quit_pending: bool,
     font: Option<AnnotFont>,
     ui_font: Option<&'static UiFont>,
     notice: Option<Toast>,
@@ -431,7 +439,7 @@ impl App {
         wind::close(self.hwnd);
     }
 
-    /// Quitting under an open capture: an open picker keeps its colour (as
+    /// Quitting under an open capture: an open picker keeps its color (as
     /// closing the overlay does), then the remembered tool settings are
     /// written before we go.
     fn save_before_exit(&mut self) {
@@ -520,6 +528,8 @@ impl App {
             self.wait_pins = false;
             wind::close(self.hwnd);
         }
+        // Quitting once the Edit windows have answered.
+        self.quit_gate();
         // An update waits for us to go idle before it installs.
         self.idle_gate();
         // An update is restarting us: quit as soon as no capture is open
@@ -533,6 +543,11 @@ impl App {
     fn on_hot(&mut self, ev: HotEvent) -> bool {
         match ev {
             HotEvent::Quit => {
+                // Edit windows with unsaved edits ask first.
+                if self.edits.ask_quit() > 0 {
+                    self.quit_pending = true;
+                    return true;
+                }
                 self.request_exit(0);
                 return false;
             }
@@ -878,6 +893,18 @@ impl App {
         }
         publish_ui_size(cfg.ui_scale);
         self.cfg = cfg;
+        // New limits apply at once.
+        self.keep_pruned();
+    }
+
+    /// The daemon keeps the history within its limits (on or off; at
+    /// start, hourly, when they change).
+    fn keep_pruned(&self) {
+        if self.kind == RunKind::Daemon
+            && let Some(root) = &self.history_root
+        {
+            crate::history::keep_pruned(root, &self.cfg);
+        }
     }
 
     /// No capture, editor, recording or export is open or about to open,
@@ -888,6 +915,23 @@ impl App {
             && self.rec.is_none()
             && self.upload_slot.lock().unwrap_or_else(|e| e.into_inner()).is_none()
             && self.ocr.is_empty()
+            && self.edits.unsaved() == 0
+    }
+
+    /// A quit asked while Edit windows asked about their unsaved edits:
+    /// done once none is left, given up when one was cancelled.
+    fn quit_gate(&mut self) {
+        if !self.quit_pending {
+            return;
+        }
+        match crate::edit_ui::quit_gate(self.edits.unsaved(), self.edits.take_cancelled()) {
+            crate::edit_ui::QuitGate::Now => {
+                self.quit_pending = false;
+                self.request_exit(0);
+            }
+            crate::edit_ui::QuitGate::Abort => self.quit_pending = false,
+            crate::edit_ui::QuitGate::Wait => {}
+        }
     }
 
     /// Answer a waiting update worker once we are idle. Captures stay
@@ -1067,7 +1111,7 @@ impl App {
     /// (so a native save dialog is never covered by the overlay).
     fn finish(&mut self, edit: &mut Edit, cancelled: bool) {
         wind::set_fast_timer(self.hwnd, false);
-        // An open picker keeps its colour; what the tools remember is
+        // An open picker keeps its color; what the tools remember is
         // written now and taken by the next capture.
         edit.close_picker(true);
         edit.flush_pending(true);
@@ -1812,7 +1856,7 @@ enum Interact {
     Drawing {
         start: Pt,
     },
-    /// Dragging in the colour picker (the hue ring, the square, opacity).
+    /// Dragging in the color picker (the hue ring, the square, opacity).
     Pick(pick::Part),
     /// Moving the selected objects (`orig`: as they were, in selection
     /// order; `bx`: their box); `hit` was pressed, `was_sel` already
@@ -2288,16 +2332,16 @@ struct Edit {
     draft: Option<Obj>,
     stroke_pts: Vec<Pt>,
     interact: Interact,
-    /// Every tool's size and colour (remembered across captures).
+    /// Every tool's size and color (remembered across captures).
     mem: tools::ToolMem,
-    /// The tool whose size and colour the toolbar shows while none is
+    /// The tool whose size and color the toolbar shows while none is
     /// chosen: the last one chosen.
     last_tool: Tool,
     /// Remembered settings waiting to be written to the config.
     pending: tools::Pending,
     /// The config file they go to (`None`: not written; tests).
     cfg_path: Option<std::path::PathBuf>,
-    /// The colour picker while it is open.
+    /// The color picker while it is open.
     pick: Option<pick::Picker>,
     /// The pointer while the eyedropper is on (the loupe follows it).
     loupe: Option<Pt>,
@@ -2572,13 +2616,13 @@ impl Edit {
         self.dirty = true;
     }
 
-    /// The tool whose size and colour apply: the chosen one, else the
+    /// The tool whose size and color apply: the chosen one, else the
     /// last one chosen.
     fn cur_tool(&self) -> Tool {
         self.tool.unwrap_or(self.last_tool)
     }
 
-    /// The current tool's colour.
+    /// The current tool's color.
     fn color(&self) -> C4 {
         self.mem.color(self.cur_tool())
     }
@@ -2603,7 +2647,7 @@ impl Edit {
         self.pending.set(format!("tool_{id}_size"), Some(config::toml_num(v)), now);
     }
 
-    /// Set the current tool's colour (remembered).
+    /// Set the current tool's color (remembered).
     fn set_tool_color(&mut self, c: C4, now: Instant) {
         let t = self.cur_tool();
         if !tools::has_color(t) {
@@ -2613,7 +2657,7 @@ impl Edit {
         self.remember_color(t, now);
     }
 
-    /// Queue `t`'s colour for the config.
+    /// Queue `t`'s color for the config.
     fn remember_color(&mut self, t: Tool, now: Instant) {
         let Some(id) = tools::id(t).filter(|_| tools::has_color(t)) else { return };
         let v = tools::hex(self.mem.color(t));
@@ -2862,7 +2906,7 @@ impl Edit {
         }
     }
 
-    /// Queue the camera ring's colour and width for the config.
+    /// Queue the camera ring's color and width for the config.
     fn remember_ring(&mut self, now: Instant) {
         let c = self.rec.opts.cam_ring.map(|c| tools::hex(c.with_alpha(255))).unwrap_or_default();
         let w = self.rec.opts.cam_ring_w;
@@ -3134,7 +3178,7 @@ fn text_box_rect(win_w: f32, td: &TextDraft, font_px: f32, font: Option<&AnnotFo
     FRect { x, y: td.pos.y - pad, w, h }
 }
 
-/// The marker's translucency on top of the colour's own opacity.
+/// The marker's translucency on top of the color's own opacity.
 fn marker_color(c: C4) -> C4 {
     c.with_alpha(((c.a as u32 * 90 + 127) / 255) as u8)
 }
@@ -3190,7 +3234,7 @@ fn blink_on(at: Instant) -> bool {
     (at.elapsed().as_millis() / 530).is_multiple_of(2)
 }
 
-/// Blends toward a dim colour by alpha `a`, two RGBA pixels per `u64`
+/// Blends toward a dim color by alpha `a`, two RGBA pixels per `u64`
 /// (SWAR, 16-bit lanes): per channel `(v * (255 - a) + c * a + 127) / 255`.
 /// For integer inputs that is exactly the rounding of the former per-pixel
 /// float blend (`n / 255` is never within float error of a half), so the
@@ -3453,6 +3497,63 @@ mod tests {
         assert!(!app.restart_pending && !app.restart_due(), "once");
     }
 
+    /// An Edit window with unsaved edits holds an update's restart (and
+    /// its install) until it is saved or closed; one without does not.
+    #[test]
+    fn restart_waits_for_unsaved_edit_windows() {
+        let mut app = preview_app(theme::DARK, None);
+        app.st = State::Hidden;
+        let clean = app.edits.add_for_tests("2026-10-05/143200", false);
+        let dirty = app.edits.add_for_tests("2026-10-05/143300", true);
+        app.restart_pending = true;
+        assert!(!app.restart_due(), "unsaved edits");
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.idle_reply = Some(tx);
+        app.idle_gate();
+        assert!(rx.try_recv().is_err(), "no install meanwhile");
+        dirty.store(false, Ordering::SeqCst); // saved
+        app.idle_gate();
+        assert_eq!(rx.try_recv(), Ok(()));
+        assert!(app.restart_due(), "saved: restart");
+        drop(clean);
+    }
+
+    /// Quit asks the Edit windows with unsaved edits and waits for their
+    /// answers: done once none is left, given up on Cancel; with none
+    /// unsaved it quits at once.
+    #[test]
+    fn quit_asks_unsaved_edit_windows_first() {
+        use crate::edit_ui::{QuitGate, quit_gate};
+        assert_eq!(quit_gate(0, false), QuitGate::Now);
+        assert_eq!(quit_gate(2, false), QuitGate::Wait);
+        assert_eq!(quit_gate(1, true), QuitGate::Abort);
+        assert_eq!(quit_gate(0, true), QuitGate::Abort);
+
+        let mut app = preview_app(theme::DARK, None);
+        app.st = State::Hidden;
+        let a = app.edits.add_for_tests("2026-10-05/143200", true);
+        let _b = app.edits.add_for_tests("2026-10-05/143300", false);
+        assert!(app.on_hot(HotEvent::Quit), "still running: the window asks");
+        assert!(app.quit_pending);
+        app.quit_gate();
+        assert!(app.quit_pending, "waiting for the answer");
+        // Cancel in the window's question: the quit is off.
+        app.edits.cancel_for_tests();
+        app.quit_gate();
+        assert!(!app.quit_pending);
+        // Again; this time the window is saved (or closed).
+        assert!(app.on_hot(HotEvent::Quit));
+        a.store(false, Ordering::SeqCst);
+        app.edits.remove_for_tests("2026-10-05/143200");
+        app.quit_gate();
+        assert!(!app.quit_pending, "quit");
+        // Nothing unsaved: quit at once.
+        let mut app = preview_app(theme::DARK, None);
+        app.st = State::Hidden;
+        let _c = app.edits.add_for_tests("2026-10-05/143400", false);
+        assert!(!app.on_hot(HotEvent::Quit));
+    }
+
     /// An upload still in flight keeps the daemon from being idle.
     pub(super) fn upload_in_flight(app: &App) -> std::sync::mpsc::Sender<Result<String, String>> {
         let (tx, rx) = std::sync::mpsc::channel();
@@ -3561,6 +3662,8 @@ mod tests {
             restart_pending: false,
             updating: false,
             idle_reply: None,
+            edits: Box::leak(Box::new(crate::edit_ui::Windows::new())),
+            quit_pending: false,
             font,
             ui_font,
             notice: None,
@@ -4378,7 +4481,7 @@ mod tests {
         e.pressed = Some(4);
         e.hot_handle = Some(2);
         v.push(("objects hover pressed", app));
-        // The colour picker (recents, a translucent colour, a focus), the
+        // The color picker (recents, a translucent color, a focus), the
         // eyedropper's loupe, the camera ring's palette.
         let mut app = annotated(theme::DARK, big);
         let e = edit_of(&mut app);

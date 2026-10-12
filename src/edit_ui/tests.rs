@@ -61,7 +61,143 @@ fn edited_names() {
     assert_eq!(edited_path(&p), r.0.join("2026-10-05_14-32-edited_1.png"));
     let cfg = Config::default();
     assert_eq!(target(Choice::Overwrite, Some(&p), &cfg), p);
-    assert!(target(Choice::New, None, &cfg).to_string_lossy().contains("-edited"));
+    // Never saved: a new file either way.
+    let auto = target(Choice::Overwrite, None, &cfg);
+    assert!(!auto.exists() && auto.extension().is_some());
+}
+
+/// Overwrite replaces the saved file's bytes under its own name (no
+/// `_1` copy next to it) and the entry keeps pointing at it; Save as new
+/// file writes `-edited` and the entry points there.
+#[test]
+fn overwrite_replaces_the_saved_file_in_place() {
+    let (r, mut w) = window("over", page(400, 300), Vec::new(), DARK, 1.0);
+    let saved = r.0.join("2026-10-05_14-32.png");
+    let before = std::fs::read(&saved).unwrap();
+    w.e.canvas.edit_mut_for_tests().push(Obj::Rect { r: FRect { x: 10.0, y: 10.0, w: 50.0, h: 40.0 }, color: red(), width: 3.0 });
+    w.e.perform(Do::Write { choice: Choice::Overwrite, close: false, remember: false });
+    let after = std::fs::read(&saved).unwrap();
+    assert_ne!(after, before, "the bytes are replaced");
+    let pic = PixBuf::from_png(&after).unwrap();
+    assert_eq!(&pic.as_raw()[(10 * 400 + 30) * 4..][..3], &[0xF0, 0x44, 0x38], "the rectangle is in it");
+    let names: Vec<String> = std::fs::read_dir(&r.0).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.ends_with(".png") || n.ends_with(".tmp")).collect();
+    assert_eq!(names, ["2026-10-05_14-32.png"], "no copy, no temporary file");
+    let e = w.e.store.get(&w.e.entry.id).unwrap();
+    assert_eq!(e.meta.saved.as_deref(), Some(saved.as_path()), "the entry is the same file");
+    assert_eq!(e.meta.bytes, after.len() as u64);
+    assert!(e.meta.edited && !w.e.canvas.unsaved());
+    // Again: still the same file.
+    w.e.canvas.edit_mut_for_tests().push(Obj::Rect { r: FRect { x: 100.0, y: 100.0, w: 50.0, h: 40.0 }, color: red(), width: 3.0 });
+    w.e.perform(Do::Write { choice: Choice::Overwrite, close: false, remember: false });
+    assert!(!r.0.join("2026-10-05_14-32_1.png").exists());
+    assert_eq!(w.e.entry.meta.saved.as_deref(), Some(saved.as_path()));
+    // Save as new file: next to it, and the entry follows.
+    w.e.canvas.edit_mut_for_tests().pop();
+    w.e.perform(Do::Write { choice: Choice::New, close: false, remember: false });
+    let edited = r.0.join("2026-10-05_14-32-edited.png");
+    assert!(edited.is_file());
+    assert_eq!(std::fs::read(&saved).unwrap().len() as u64, std::fs::metadata(&saved).unwrap().len());
+    assert_eq!(w.e.store.get(&w.e.entry.id).unwrap().meta.saved.as_deref(), Some(edited.as_path()));
+    assert_eq!(w.e.entry.meta.saved.as_deref(), Some(edited.as_path()), "the window's entry is refreshed");
+}
+
+/// A Save As that was cancelled (or failed) saves nothing: the edits stay
+/// unsaved, so closing still asks. One that wrote a file saves the
+/// objects it wrote, not the ones added since.
+#[test]
+fn a_cancelled_save_as_keeps_the_edits_unsaved() {
+    let (r, mut w) = window("saveas", page(400, 300), Vec::new(), DARK, 1.0);
+    let rect = Obj::Rect { r: FRect { x: 10.0, y: 10.0, w: 50.0, h: 40.0 }, color: red(), width: 3.0 };
+    w.e.canvas.edit_mut_for_tests().push(rect.clone());
+    let objs = w.e.canvas.objects().to_vec();
+    let cancelled = crate::export::ExportResult { messages: vec![], error: true, done: vec![], upload: None };
+    w.apply_done_for_tests(cancelled, true, objs.clone());
+    assert!(w.e.canvas.unsaved(), "cancelled: still unsaved");
+    let failed = crate::export::ExportResult { messages: vec![], error: true, done: vec![crate::export::Done::Failed("Save", "disk full".into())], upload: None };
+    w.apply_done_for_tests(failed, true, objs.clone());
+    assert!(w.e.canvas.unsaved(), "failed: still unsaved");
+    at(&mut w, Ev::Close);
+    assert_eq!(w.e.flow.dialog, Some(Dialog::Unsaved), "closing asks");
+    key(&mut w, crate::wind::key::ESCAPE, Mods::default());
+    // Written: saved as of when it started (a later edit stays unsaved).
+    let out = r.0.join("elsewhere.png");
+    std::fs::write(&out, b"png").unwrap();
+    let ok = crate::export::ExportResult { messages: vec![], error: false, done: vec![crate::export::Done::Saved(out.clone())], upload: None };
+    w.apply_done_for_tests(ok, true, objs.clone());
+    assert!(!w.e.canvas.unsaved());
+    assert_eq!(w.e.entry.meta.saved.as_deref(), Some(out.as_path()), "the entry is refreshed");
+    w.e.canvas.edit_mut_for_tests().push(rect);
+    w.apply_done_for_tests(crate::export::ExportResult { messages: vec![], error: false, done: vec![crate::export::Done::Saved(out)], upload: None }, true, objs);
+    assert!(w.e.canvas.unsaved(), "the objects added after it are not saved");
+}
+
+/// The entry was pruned or deleted while the window had it open: Save
+/// still writes the user's file, says so, and the edits are saved.
+#[test]
+fn saving_after_the_entry_is_gone() {
+    let (r, mut w) = window("gone", page(200, 100), Vec::new(), DARK, 1.0);
+    w.e.canvas.edit_mut_for_tests().push(Obj::Rect { r: FRect { x: 10.0, y: 10.0, w: 50.0, h: 40.0 }, color: red(), width: 3.0 });
+    w.e.store.delete(&w.e.entry.id, false).unwrap();
+    w.e.perform(Do::Write { choice: Choice::New, close: false, remember: false });
+    assert!(r.0.join("2026-10-05_14-32-edited.png").is_file());
+    assert!(!w.e.canvas.unsaved());
+    let (text, kind, _) = w.e.toast.clone().unwrap();
+    assert_eq!(text, "Saved 2026-10-05_14-32-edited.png (History entry gone)");
+    assert_eq!(kind, crate::editor::style::ToastKind::Info);
+}
+
+/// The daemon quitting: unsaved edits ask "Save changes?" (Cancel calls
+/// the quit off); none close at once.
+#[test]
+fn quitting_asks_about_unsaved_edits() {
+    let (_r, mut w) = window("quit", page(200, 100), Vec::new(), DARK, 1.0);
+    w.e.quit();
+    assert!(w.e.closing, "nothing unsaved: closes");
+    let (_r2, mut w) = window("quit2", page(200, 100), Vec::new(), DARK, 1.0);
+    w.e.canvas.edit_mut_for_tests().push(Obj::Rect { r: FRect { x: 10.0, y: 10.0, w: 50.0, h: 40.0 }, color: red(), width: 3.0 });
+    w.e.quit();
+    assert_eq!(w.e.flow.dialog, Some(Dialog::Unsaved));
+    let _ = OPEN.take_cancelled();
+    key(&mut w, crate::wind::key::ESCAPE, Mods::default());
+    assert!(!w.e.closing && !w.e.quitting);
+    assert!(OPEN.take_cancelled(), "Cancel calls the quit off");
+}
+
+/// Text being typed counts as unsaved, and Save writes it.
+#[test]
+fn typed_text_is_unsaved_and_saved() {
+    let (_r, mut w) = window("text", page(400, 300), Vec::new(), DARK, 1.0);
+    let c = w.e.canvas.button("text").expect("the Text tool");
+    click(&mut w, Pt::new(c.x + c.w / 2.0, c.y + c.h / 2.0));
+    let p = w.e.canvas.view.to_win(Pt::new(100.0, 100.0));
+    click(&mut w, p);
+    for ch in "hi".encode_utf16() {
+        at(&mut w, Ev::Char(ch));
+    }
+    assert!(w.e.canvas.unsaved(), "typing");
+    w.e.perform(Do::Write { choice: Choice::New, close: false, remember: false });
+    assert!(!w.e.canvas.unsaved());
+    assert!(w.e.canvas.objects().iter().any(|o| matches!(o, Obj::Text { text, .. } if text == "hi")));
+}
+
+/// A middle-button release does not end a left-button drag.
+#[test]
+fn a_middle_release_leaves_a_left_drag_alone() {
+    let (_r, mut w) = window("middle", page(400, 300), Vec::new(), DARK, 1.0);
+    let c = w.e.canvas.button("rect").expect("the Rectangle tool");
+    click(&mut w, Pt::new(c.x + c.w / 2.0, c.y + c.h / 2.0));
+    let v = w.e.canvas.view;
+    let [a, m, b] = [(50.0, 50.0), (80.0, 70.0), (150.0, 120.0)].map(|(x, y)| v.to_win(Pt::new(x, y)));
+    at(&mut w, Ev::Move { x: a.x as i32, y: a.y as i32 });
+    at(&mut w, Ev::Down { x: a.x as i32, y: a.y as i32 });
+    at(&mut w, Ev::Move { x: m.x as i32, y: m.y as i32 });
+    at(&mut w, Ev::Middle { down: false, x: m.x as i32, y: m.y as i32 });
+    assert!(w.e.canvas.objects().is_empty(), "the drag goes on");
+    at(&mut w, Ev::Move { x: b.x as i32, y: b.y as i32 });
+    at(&mut w, Ev::Up { x: b.x as i32, y: b.y as i32 });
+    assert_eq!(w.e.canvas.objects().len(), 1);
+    let Obj::Rect { r, .. } = &w.e.canvas.objects()[0] else { panic!("a rectangle") };
+    assert!((r.w - 100.0).abs() < 3.0, "drawn to the last point: {r:?}");
 }
 
 /// A mock page like the board's (a side bar, cards).

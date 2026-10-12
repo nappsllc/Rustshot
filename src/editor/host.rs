@@ -111,6 +111,8 @@ pub struct Canvas {
     mouse: Pt,
     /// Panning (Space- or middle-drag): where it started and the view then.
     pan: Option<(Pt, View)>,
+    /// The pan is the middle button's.
+    middle: bool,
     /// Space is held: a press pans.
     pub space: bool,
     request: Option<Request>,
@@ -151,6 +153,7 @@ impl Canvas {
             cache: None,
             mouse: Pt::new(-1.0, -1.0),
             pan: None,
+            middle: false,
             space: false,
             request: None,
             saved: objects,
@@ -176,14 +179,23 @@ impl Canvas {
         self.e.composed().clone()
     }
 
-    /// The objects differ from the last save.
+    /// The objects differ from the last save, or text is being typed.
     pub fn unsaved(&self) -> bool {
-        self.e.objects != self.saved
+        self.e.objects != self.saved || self.e.text.as_ref().is_some_and(|t| !t.text.trim().is_empty())
     }
 
-    /// The objects were saved as they are now.
-    pub fn mark_saved(&mut self) {
-        self.saved = self.e.objects.clone();
+    /// `objects` were saved (what [`Self::objects`] was when the save began).
+    pub fn mark_saved_as(&mut self, objects: Vec<Obj>) {
+        self.saved = objects;
+    }
+
+    /// Text being typed (a text box, a callout's text) becomes an object.
+    pub fn commit_drafts(&mut self) {
+        if self.e.text.is_some() {
+            self.e.commit_text();
+        }
+        self.e.finish_callout_edit();
+        self.after_input();
     }
 
     pub fn theme(&self) -> &Theme {
@@ -357,8 +369,18 @@ impl Canvas {
 
     /// The middle button: a pan.
     pub fn middle_press(&mut self, p: Pt) {
-        if self.on_canvas(p) {
+        if self.pan.is_none() && self.on_canvas(p) {
             self.pan = Some((p, self.view));
+            self.middle = true;
+        }
+    }
+
+    /// The middle button went up: the end of its pan only (a left drag
+    /// meanwhile goes on).
+    pub fn middle_release(&mut self, p: Pt) {
+        if std::mem::take(&mut self.middle) {
+            self.mouse = p;
+            self.pan = None;
         }
     }
 
@@ -384,7 +406,7 @@ impl Canvas {
     /// The button went up at `p`.
     pub fn release(&mut self, p: Pt) {
         self.mouse = p;
-        if self.pan.take().is_some() {
+        if !self.middle && self.pan.take().is_some() {
             return;
         }
         self.e.pointer_up();

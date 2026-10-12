@@ -47,7 +47,7 @@ pub fn input(h: &mut History, lay: &Lay, targets: &[(FRect, Target)], inp: &Inpu
     let m = Pt::new(inp.mouse.x / k, inp.mouse.y / k);
     let mods = inp.mods;
     // The wheel scrolls (three rows a notch).
-    if inp.wheel != 0 && h.clear.is_none() && h.menu.is_none() {
+    if inp.wheel != 0 && !h.asking() && h.menu.is_none() {
         h.scroll = (h.scroll - inp.wheel as f32 / 120.0 * 72.0).clamp(0.0, lay.max_scroll());
     }
     if let Some(p) = inp.pressed {
@@ -65,7 +65,7 @@ pub fn input(h: &mut History, lay: &Lay, targets: &[(FRect, Target)], inp: &Inpu
                 set_slider(h, lay, p.x);
                 Press::Slider
             }
-            Target::Space if h.clear.is_none() => {
+            Target::Space if !h.asking() => {
                 let c = Pt::new(p.x - lay.area.x, p.y - lay.area.y + h.scroll);
                 let base = if mods.ctrl || mods.shift { h.sel.clone() } else { Vec::new() };
                 h.sel = base.clone();
@@ -111,12 +111,10 @@ pub fn input(h: &mut History, lay: &Lay, targets: &[(FRect, Target)], inp: &Inpu
     let typing = h.search_focused;
     for ev in &inp.keys {
         let crate::ui::KeyIn::Key { vk, mods } = *ev else { continue };
-        if h.clear.is_some() {
+        if h.asking() {
             match vk {
-                key::ESCAPE => h.clear = None,
-                key::RETURN => {
-                    acts.push(Act::Clear(h.clear.take().unwrap_or(false)));
-                }
+                key::ESCAPE => h.dialog_cancel(),
+                key::RETURN => acts.extend(h.dialog_ok()),
                 _ => {}
             }
             continue;
@@ -125,7 +123,10 @@ pub fn input(h: &mut History, lay: &Lay, targets: &[(FRect, Target)], inp: &Inpu
             key::ESCAPE => {
                 h.escape();
             }
-            key::DELETE if !typing && !h.sel.is_empty() => acts.push(Act::Delete(h.sel.clone())),
+            key::DELETE if !typing && !h.sel.is_empty() => {
+                let ids = h.sel.clone();
+                acts.extend(h.delete(ids));
+            }
             key::RETURN if !typing => {
                 if let Some(e) = h.single() {
                     acts.push(if e.meta.kind.is_recording() { Act::Open(e.id.clone()) } else { Act::Edit(e.id.clone()) });
@@ -248,7 +249,7 @@ fn click(h: &mut History, lay: &Lay, t: Target, mods: crate::wind::Mods, moved: 
         }
         Target::PanelDelete => {
             if let Some(id) = one(h) {
-                return vec![Act::Delete(vec![id])];
+                return h.delete(vec![id]);
             }
         }
         Target::PanelLink => {
@@ -258,7 +259,10 @@ fn click(h: &mut History, lay: &Lay, t: Target, mods: crate::wind::Mods, moved: 
         }
         Target::BarCopy => return vec![Act::Copy(h.sel.clone())],
         Target::BarSave => return vec![Act::SaveToFolder(h.sel.clone())],
-        Target::BarDelete => return vec![Act::Delete(h.sel.clone())],
+        Target::BarDelete => {
+            let ids = h.sel.clone();
+            return h.delete(ids);
+        }
         Target::BarClear => h.sel.clear(),
         Target::MenuItem(a) => {
             let card = match h.menu.take() {
@@ -280,10 +284,11 @@ fn click(h: &mut History, lay: &Lay, t: Target, mods: crate::wind::Mods, moved: 
             };
         }
         Target::ClearCheck => h.clear = h.clear.map(|v| !v),
-        Target::ClearCancel => h.clear = None,
-        Target::ClearOk => return vec![Act::Clear(h.clear.take().unwrap_or(false))],
+        Target::ClearCancel => h.dialog_cancel(),
+        Target::ClearOk => return h.dialog_ok(),
         Target::Settings => return vec![Act::Settings],
         Target::TurnOn => return vec![Act::TurnOn],
+        Target::OffClear => h.clear = Some(false),
         Target::Space | Target::Search | Target::Inert | Target::Slider | Target::Filter(_) | Target::Item(_) => {}
     }
     Vec::new()
@@ -307,6 +312,8 @@ pub fn frame(canvas: &mut PixBuf, th: &crate::theme::Theme, inp: &Input, focus: 
     let m = (inp.mouse.x / k, inp.mouse.y / k);
     let targets = draw::targets(&ui, &lay, h, m);
     h.search_focused = ui.focus.is_focused("history.search");
+    // Esc in a question answers it only (it is not the window's Esc too).
+    let asked = h.asking();
     let acts = input(h, &lay, &targets, inp, k, now);
     // Input may have changed what is shown: lay out again for the paint.
     let lay = draw::layout(&ui, h, lw, lh);
@@ -323,7 +330,7 @@ pub fn frame(canvas: &mut PixBuf, th: &crate::theme::Theme, inp: &Input, focus: 
     h.hover = hover;
     let out = ui.finish();
     let mut acts = acts;
-    if out.escape && !h.escape() {
+    if out.escape && !asked && !h.escape() {
         // Esc with nothing to clear does nothing (the window stays).
     }
     let _ = &mut acts;
@@ -332,6 +339,9 @@ pub fn frame(canvas: &mut PixBuf, th: &crate::theme::Theme, inp: &Input, focus: 
 
 /// Save to folder…: the ids and the folder picked (None: cancelled).
 type Picked = (Vec<String>, Option<std::path::PathBuf>);
+
+/// A listing of the store and the generation it was made at.
+type Listing = (u64, Vec<crate::history::Entry>);
 
 /// The window driver.
 pub struct Window {
@@ -348,6 +358,9 @@ pub struct Window {
     picked: (Sender<Picked>, Receiver<Picked>),
     busy: u32,
     checked: Instant,
+    /// A listing runs on a worker; its result (the generation then).
+    scanning: bool,
+    scanned: (Sender<Listing>, Receiver<Listing>),
 }
 
 impl Window {
@@ -364,6 +377,8 @@ impl Window {
             picked: std::sync::mpsc::channel(),
             busy: 0,
             checked: Instant::now(),
+            scanning: false,
+            scanned: std::sync::mpsc::channel(),
         }
     }
 
@@ -524,13 +539,27 @@ impl Window {
                 self.spawn(move || super::save_to_folder(&store, &ids, &dir));
             }
         }
-        if crate::history::generation() != self.h.listed || self.checked.elapsed() > Duration::from_secs(5) {
+        // The store is listed again on a worker (thousands of entries on a
+        // slow disk take a while): when it changed here, and every 5 s
+        // (other processes).
+        if !self.scanning && (crate::history::generation() != self.h.listed || self.checked.elapsed() > Duration::from_secs(5)) {
             self.checked = Instant::now();
-            let before = (self.h.entries.len(), self.h.usage);
-            self.h.reload();
+            self.scanning = true;
+            let (store, tx, generation) = (self.h.store.clone(), self.scanned.0.clone(), crate::history::generation());
+            std::thread::spawn(move || {
+                let _ = tx.send((generation, store.list()));
+            });
+        }
+        while let Ok((generation, entries)) = self.scanned.1.try_recv() {
+            self.scanning = false;
+            self.h.listed = generation;
             let t = crate::export::local_ymdhms();
-            self.h.today = (t.0, t.1, t.2);
-            changed |= before != (self.h.entries.len(), self.h.usage);
+            let today = (t.0, t.1, t.2);
+            if entries != self.h.entries || today != self.h.today {
+                self.h.today = today;
+                self.h.take(entries);
+                changed = true;
+            }
         }
         let toast_live = self.h.toast.as_ref().is_some_and(|(_, _, at)| at.elapsed() < Duration::from_millis(2500));
         if self.h.toast.is_some() && !toast_live {

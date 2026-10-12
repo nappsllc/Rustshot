@@ -182,7 +182,11 @@ fn delete_and_clear() {
     let a = add(&st, (2026, 10, 1, 1, 0, 0), 8);
     let saved = r.0.join("saved.png");
     std::fs::write(&saved, b"png").unwrap();
-    st.update(&a, |m| m.saved = Some(saved.clone())).unwrap();
+    st.update(&a, |m| {
+        m.saved = Some(saved.clone());
+        m.bytes = 3;
+    })
+    .unwrap();
     let b = add(&st, (2026, 10, 2, 1, 0, 0), 8);
     let (n, bytes, dir) = saved_files(&st.list());
     assert_eq!((n, bytes, dir.as_deref()), (1, 3, Some(r.0.as_path())));
@@ -192,7 +196,11 @@ fn delete_and_clear() {
     assert!(st.list().is_empty());
     assert!(saved.exists(), "saved files stay unless asked");
     let c = add(&st, (2026, 10, 3, 1, 0, 0), 8);
-    st.update(&c, |m| m.saved = Some(saved.clone())).unwrap();
+    st.update(&c, |m| {
+        m.saved = Some(saved.clone());
+        m.bytes = 3;
+    })
+    .unwrap();
     // A half-written folder (no meta.json) goes with a clear too.
     st.reserve((2026, 10, 3, 2, 0, 0)).unwrap();
     assert_eq!(st.clear(true), 1);
@@ -232,6 +240,204 @@ fn the_writer_thread_writes_in_order() {
     // History off: nothing is kept.
     let off = crate::config::Config { history: false, ..cfg };
     assert!(record(&off, &r.0, ShotRec { original: img(4, 4, 1), objects: vec![], meta: meta_at(t) }).is_none());
+}
+
+/// The daemon prunes without new captures and with History off (the
+/// captures kept before still expire).
+#[test]
+fn pruning_runs_with_history_off() {
+    let r = TempRoot::new("off");
+    let st = Store::new(&r.0);
+    let old = add(&st, (2020, 1, 1, 10, 0, 0), 8);
+    let cfg = crate::config::Config { history: false, ..crate::config::Config::default() };
+    keep_pruned(&r.0, &cfg);
+    flush(std::time::Duration::from_secs(20));
+    assert!(st.get(&old).is_none(), "expired");
+}
+
+/// A saved screenshot's file and a recording's video survive pruning
+/// by age and by size.
+#[test]
+fn pruning_keeps_saved_files() {
+    let r = TempRoot::new("keepsaved");
+    let st = Store::new(&r.0);
+    let saved = r.0.join("shot.png");
+    let a = add(&st, (2026, 9, 1, 10, 0, 0), 8);
+    std::fs::write(&saved, b"png!").unwrap();
+    st.update(&a, |m| {
+        m.saved = Some(saved.clone());
+        m.bytes = 4;
+    })
+    .unwrap();
+    let b = add(&st, (2026, 10, 11, 10, 0, 0), 64);
+    let saved_b = r.0.join("shot-b.png");
+    std::fs::write(&saved_b, b"png?").unwrap();
+    st.update(&b, |m| {
+        m.saved = Some(saved_b.clone());
+        m.bytes = 4;
+    })
+    .unwrap();
+    let _c = add(&st, (2026, 10, 12, 10, 0, 0), 64);
+    assert_eq!(st.prune((2026, 10, 12), 30, u64::MAX, &[]), vec![a]);
+    assert_eq!(st.prune((2026, 10, 12), 30, 1, &[]).first(), Some(&b));
+    assert!(saved.is_file() && saved_b.is_file(), "saved files stay");
+}
+
+/// Folders without a valid meta.json (a crash mid-write, a corrupt or
+/// newer meta.json) and stray temporary files count toward the cap and
+/// go once they are an hour old; younger ones stay.
+#[test]
+fn pruning_sweeps_orphans_and_temporary_files() {
+    let r = TempRoot::new("orphans");
+    let st = Store::new(&r.0);
+    let good = add(&st, (2026, 10, 12, 9, 0, 0), 8);
+    let (half, hdir) = st.reserve((2026, 10, 12, 9, 1, 0)).unwrap();
+    std::fs::write(hdir.join(ORIGINAL), vec![7u8; 50_000]).unwrap();
+    let (bad, bdir) = st.reserve((2026, 10, 12, 9, 2, 0)).unwrap();
+    std::fs::write(bdir.join(META), "{\"version\":1,\"kind\":\"screen").unwrap();
+    let gdir = st.get(&good).unwrap().dir;
+    let tmp = gdir.join("meta.json.1-2.rustshot.tmp");
+    std::fs::write(&tmp, b"half").unwrap();
+    assert_eq!(st.list().len(), 1, "orphans are not entries");
+    let now = std::time::SystemTime::now();
+    // Young: kept, but their bytes count (the entry goes for the cap).
+    let gone = st.prune_at((2026, 10, 12), 30, 40_000, &[], now);
+    assert_eq!(gone, vec![good.clone()], "50 KB of orphans fill the 40 KB cap");
+    assert!(hdir.is_dir() && bdir.is_dir());
+    // An hour on: they go (and in use, one stays).
+    let later = now + GRACE + std::time::Duration::from_secs(60);
+    let gone = st.prune_at((2026, 10, 12), 30, u64::MAX, std::slice::from_ref(&bad), later);
+    assert_eq!(gone, vec![half]);
+    assert!(!hdir.exists() && bdir.is_dir());
+    let gone = st.prune_at((2026, 10, 12), 30, u64::MAX, &[], later);
+    assert_eq!(gone, vec![bad]);
+    assert!(std::fs::read_dir(&r.0).unwrap().count() == 0, "the day folder goes too");
+    // A temporary file in a live entry goes after the hour; the entry stays.
+    let good = add(&st, (2026, 10, 12, 9, 0, 0), 8);
+    let gdir = st.get(&good).unwrap().dir;
+    let tmp = gdir.join("annotations.json.1-3.rustshot.tmp");
+    std::fs::write(&tmp, b"half").unwrap();
+    assert!(st.prune_at((2026, 10, 12), 30, u64::MAX, &[], now).is_empty());
+    assert!(tmp.exists(), "young");
+    assert!(st.prune_at((2026, 10, 12), 30, u64::MAX, &[], later).is_empty());
+    assert!(!tmp.exists() && st.get(&good).is_some());
+}
+
+/// An entry open in an Edit window is never pruned (in this process
+/// through the keep list, in any through its held `.open` file).
+#[test]
+fn pruning_leaves_open_entries_alone() {
+    let r = TempRoot::new("open");
+    let st = Store::new(&r.0);
+    let id = add(&st, (2020, 1, 1, 10, 0, 0), 8);
+    let dir = st.get(&id).unwrap().dir;
+    let held = hold_open(&id, &dir);
+    assert!(keep_now().contains(&id));
+    assert!(st.prune((2026, 10, 12), 30, 1, &[]).is_empty(), "held open (the file lock)");
+    assert!(st.get(&id).is_some());
+    drop(held);
+    assert!(!keep_now().contains(&id));
+    assert_eq!(st.prune((2026, 10, 12), 30, u64::MAX, &[]), vec![id]);
+}
+
+/// "Also delete saved files" deletes only regular files of a capture's
+/// format that are as big as recorded, by absolute path.
+#[test]
+fn deleting_saved_files_checks_them_first() {
+    let r = TempRoot::new("deletable");
+    let st = Store::new(&r.0);
+    std::fs::create_dir_all(&r.0).unwrap();
+    let file = |name: &str, bytes: &[u8]| {
+        let p = r.0.join(name);
+        std::fs::write(&p, bytes).unwrap();
+        p
+    };
+    let ok = file("ok.png", b"1234");
+    let resized = file("resized.png", b"123456");
+    let text = file("notes.txt", b"1234");
+    let folder = r.0.join("folder.png");
+    std::fs::create_dir_all(&folder).unwrap();
+    let mut ids = Vec::new();
+    for (i, p) in [ok.clone(), resized.clone(), text.clone(), folder.clone(), PathBuf::from("ok.png")].into_iter().enumerate() {
+        let id = add(&st, (2026, 10, 1, 1, i as u32, 0), 8);
+        st.update(&id, |m| {
+            m.saved = Some(p);
+            m.bytes = 4;
+        })
+        .unwrap();
+        ids.push(id);
+    }
+    let (n, bytes, _) = saved_files(&st.list());
+    assert_eq!((n, bytes), (1, 4), "only the one that would be deleted");
+    for id in &ids {
+        st.delete(id, true).unwrap();
+    }
+    assert!(!ok.exists(), "deleted");
+    assert!(resized.exists() && text.exists() && folder.is_dir(), "changed since, not a capture, a folder");
+}
+
+/// A symbolic link in the history is never followed: its target is not
+/// listed, pruned or cleared.
+#[test]
+fn links_are_never_followed() {
+    let r = TempRoot::new("links");
+    let out = TempRoot::new("links-out");
+    let other = Store::new(&out.0);
+    let victim = add(&other, (2020, 1, 1, 10, 0, 0), 8);
+    let vdir = other.get(&victim).unwrap().dir;
+    std::fs::create_dir_all(r.0.join("2020-01-02")).unwrap();
+    #[cfg(windows)]
+    let made = std::os::windows::fs::symlink_dir(out.0.join("2020-01-01"), r.0.join("2020-01-01")).is_ok()
+        && std::os::windows::fs::symlink_dir(&vdir, r.0.join("2020-01-02").join("100000")).is_ok();
+    #[cfg(unix)]
+    let made = std::os::unix::fs::symlink(out.0.join("2020-01-01"), r.0.join("2020-01-01")).is_ok()
+        && std::os::unix::fs::symlink(&vdir, r.0.join("2020-01-02").join("100000")).is_ok();
+    if !made {
+        eprintln!("no symbolic links here (Windows without Developer Mode): skipped");
+        return;
+    }
+    let st = Store::new(&r.0);
+    assert!(st.list().is_empty());
+    assert!(st.prune((2026, 10, 12), 1, 0, &[]).is_empty());
+    st.clear(true);
+    assert!(other.get(&victim).is_some(), "the target is untouched");
+}
+
+/// Many threads changing one entry at once (the upload link, Edited, the
+/// objects) lose nothing, and meta.json stays valid throughout.
+#[test]
+fn concurrent_updates_all_land() {
+    let r = TempRoot::new("concurrent");
+    let st = Store::new(&r.0);
+    let id = add(&st, (2026, 10, 12, 10, 0, 0), 8);
+    let threads: Vec<_> = (0..8)
+        .map(|t| {
+            let (st, id) = (st.clone(), id.clone());
+            std::thread::spawn(move || {
+                for i in 0..15 {
+                    st.update(&id, |m| {
+                        m.objects.push(format!("t{t}-{i}"));
+                        if t % 2 == 0 {
+                            m.uploaded = Some(format!("https://u/{t}"));
+                        } else {
+                            m.edited = true;
+                        }
+                    })
+                    .unwrap();
+                    // A reader never sees half a file.
+                    assert!(st.get(&id).is_some());
+                }
+            })
+        })
+        .collect();
+    for t in threads {
+        t.join().unwrap();
+    }
+    let e = st.get(&id).unwrap();
+    assert_eq!(e.meta.objects.len(), 120, "no update lost");
+    assert!(e.meta.edited && e.meta.uploaded.is_some(), "both kinds of change survive");
+    let leftovers = std::fs::read_dir(&e.dir).unwrap().flatten().filter(|f| f.file_name().to_string_lossy().ends_with(".tmp")).count();
+    assert_eq!(leftovers, 0);
 }
 
 #[test]

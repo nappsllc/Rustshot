@@ -269,11 +269,31 @@ fn the_pointer_selects_edits_and_marquees() {
     inp.held = true;
     render_with(&mut h, &DARK, 1280, 720, k, &inp, &mut focus);
     assert_eq!(h.sel, [h.entries[4].id.clone(), h.entries[5].id.clone()]);
-    // Delete with the keyboard.
+    // Delete with the keyboard: two ask first ("Delete 2 captures?").
     let mut inp = Input::default();
     inp.feed(&Ev::Key { vk: crate::wind::key::DELETE, up: false, repeat: false, mods: Mods::default() });
     let (_, acts) = render(&mut h, &DARK, 1280, 720, k, &inp);
-    assert_eq!(acts, [Act::Delete(vec![h.entries[4].id.clone(), h.entries[5].id.clone()])]);
+    assert!(acts.is_empty());
+    let two = vec![h.entries[4].id.clone(), h.entries[5].id.clone()];
+    assert_eq!(h.ask_delete.as_ref(), Some(&two));
+    assert_eq!(h.dialog_texts().0, "Delete 2 captures?");
+    // Esc keeps them; Del again and the button deletes.
+    let mut esc = Input::default();
+    esc.feed(&Ev::Key { vk: crate::wind::key::ESCAPE, up: false, repeat: false, mods: Mods::default() });
+    render(&mut h, &DARK, 1280, 720, k, &esc);
+    assert!(h.ask_delete.is_none() && h.sel.len() == 2);
+    render(&mut h, &DARK, 1280, 720, k, &inp);
+    let (r, _, _, ok) = {
+        let ui = layout_ui();
+        let l = layout_of(&h, 1280.0, 720.0);
+        draw::dialog_lay(&ui, &l, &h)
+    };
+    assert!(r.w > 0.0);
+    let (ox, oy) = centre(ok);
+    let (_, acts) = render(&mut h, &DARK, 1280, 720, k, &click_at(ox, oy, k, Mods::default()));
+    assert_eq!(acts, [Act::Delete(two)]);
+    // One deletes at once.
+    assert_eq!(h.delete(vec!["x".into()]), [Act::Delete(vec!["x".into()])]);
     // The menu: Clear history… asks.
     let l = layout_of(&h, 1280.0, 720.0);
     let (mx, my) = centre(l.more);
@@ -368,6 +388,54 @@ fn preview_history_pngs() {
             assert_eq!(acts, [Act::TurnOn]);
         }
     }
+}
+
+/// History off with captures still kept: "10 captures still kept ·
+/// Clear history…", whose link asks the usual question.
+#[test]
+fn the_off_state_offers_to_clear_what_is_kept() {
+    let (_r, st) = fixture("offkept");
+    let mut h = History::new(st.clone(), Config { history: false, ..Config::default() }, TODAY);
+    let l = layout_of(&h, 960.0, 640.0);
+    let (pre, _, _, link) = draw::off_kept_lay(&layout_ui(), &l, &h).expect("captures are kept");
+    assert_eq!(pre, "10 captures still kept \u{b7} ");
+    let (x, y) = centre(link);
+    render(&mut h, &DARK, 960, 640, 1.0, &click_at(x, y, 1.0, Mods::default()));
+    assert_eq!(h.clear, Some(false));
+    // Nothing kept: no row.
+    let empty = TempRoot::new("offempty");
+    let h = History::new(Store::new(&empty.0), Config { history: false, ..Config::default() }, TODAY);
+    assert!(draw::off_kept_lay(&layout_ui(), &layout_of(&h, 960.0, 640.0), &h).is_none());
+}
+
+/// The decoded thumbnails stay within [`THUMBS_KEPT`] (the least recently
+/// used go) and an edited capture's is decoded again.
+#[test]
+fn thumbnails_are_bounded_and_follow_edits() {
+    let (_r, st) = fixture("thumbs");
+    let mut h = history(&st);
+    let id = h.entries[0].id.clone();
+    assert!(h.thumb_of(&id).is_some());
+    // Full of others, used before it.
+    for i in 0..THUMBS_KEPT - 1 {
+        h.thumbs.insert(format!("fake-{i}"), Thumb { pic: None, used: 0, stamp: None });
+    }
+    let _ = h.thumb_of(&id); // just used
+    let others: Vec<String> = h.entries[1..4].iter().map(|e| e.id.clone()).collect();
+    for o in &others {
+        assert!(h.thumb_of(o).is_some());
+        assert_eq!(h.thumbs.len(), THUMBS_KEPT);
+    }
+    assert!(h.thumbs.contains_key(&id), "the recently used one stays");
+    assert_eq!(h.thumbs.keys().filter(|k| k.starts_with("fake-")).count(), THUMBS_KEPT - 1 - 3, "the least recently used went");
+    // An edit writes a new thumb.png: the cached one goes on the next listing.
+    let e = st.get(&id).unwrap();
+    let before = h.thumb_of(&id).unwrap().clone();
+    let objs = vec![crate::objects::Obj::Rect { r: FRect { x: 0.0, y: 0.0, w: 400.0, h: 300.0 }, color: crate::uifb::C4::rgb(240, 68, 56), width: 40.0 }];
+    st.save_edit(&e.id, &objs, None).unwrap();
+    h.reload();
+    assert!(!h.thumbs.contains_key(&id), "dropped");
+    assert_ne!(h.thumb_of(&id).unwrap().as_raw(), before.as_raw(), "the new one");
 }
 
 /// A frame's kit for measuring (layout helpers that need fonts).

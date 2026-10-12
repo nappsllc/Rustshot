@@ -22,8 +22,9 @@ use crate::config::Config;
 use crate::editor::host::{Canvas, Request};
 use crate::history::{Entry, Store};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex};
 
 pub mod draw;
 mod window;
@@ -181,41 +182,168 @@ pub fn edited_path(p: &Path) -> PathBuf {
     crate::export::unique_path(&p.with_file_name(name))
 }
 
-/// Where `choice` writes for an entry saved at `saved` (else where Ctrl+S
-/// would save now).
+/// Where `choice` writes for an entry saved at `saved`: over that file,
+/// or next to it as `-edited`; never saved, a new file where Ctrl+S
+/// would save now.
 pub fn target(choice: Choice, saved: Option<&Path>, cfg: &Config) -> PathBuf {
-    let base = saved.map(Path::to_path_buf).unwrap_or_else(|| crate::export::auto_save_path(cfg, crate::export::local_ymdhms()));
-    match choice {
-        Choice::Overwrite => base,
-        Choice::New => edited_path(&base),
+    match (saved, choice) {
+        (Some(p), Choice::Overwrite) => p.to_path_buf(),
+        (Some(p), Choice::New) => edited_path(p),
+        (None, _) => crate::export::unique_path(&crate::export::auto_save_path(cfg, crate::export::local_ymdhms())),
     }
 }
 
-/// Save `img` (the capture with `objects`) for entry `id` to `path`; the
-/// entry gets its objects, Edited and the file. Returns the file's size.
-pub fn write(store: &Store, id: &str, img: &crate::pixbuf::PixBuf, objects: &[crate::objects::Obj], path: &Path, cfg: &Config) -> Result<u64, String> {
-    let res = crate::export::run_export(img, (0, 0), &[crate::export::Task::Save { path: Some(path.to_path_buf()), ask: false }], cfg);
-    if let Some(crate::export::Done::Failed(_, e)) = res.done.iter().find(|d| matches!(d, crate::export::Done::Failed(..))) {
-        return Err(e.clone());
+/// A save of the Edit window: the file and whether the History entry
+/// learnt of it (false: the entry was deleted meanwhile).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Saved {
+    pub path: PathBuf,
+    pub bytes: u64,
+    pub recorded: bool,
+}
+
+impl Saved {
+    /// The toast: "Saved 2026-10-05_14-32.png", and when the entry is
+    /// gone, "(History entry gone)" after it.
+    pub fn note(&self) -> String {
+        let n = self.path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        if self.recorded { format!("Saved {n}") } else { format!("Saved {n} (History entry gone)") }
     }
-    let saved = res.done.iter().find_map(|d| match d {
-        crate::export::Done::Saved(p) | crate::export::Done::SavedDesktop(p) => Some(p.clone()),
-        _ => None,
-    });
-    let saved = saved.ok_or_else(|| "not saved".to_string())?;
-    let bytes = std::fs::metadata(&saved).map_or(0, |m| m.len());
-    store.save_edit(id, objects, Some((saved, bytes))).map_err(|e| format!("{e:#}"))?;
-    crate::history::changed();
-    Ok(bytes)
+}
+
+/// Save `img` (the capture with `objects`) for entry `id` to `path`,
+/// replacing the file there (Overwrite) all at once; then the entry gets
+/// its objects, Edited and the file. A file written for an entry deleted
+/// meanwhile is still a save.
+pub fn write(store: &Store, id: &str, img: &crate::pixbuf::PixBuf, objects: &[crate::objects::Obj], path: &Path, cfg: &Config) -> Result<Saved, String> {
+    crate::export::save_image(img, path, cfg.jpeg_quality).map_err(|e| format!("{e:#}"))?;
+    let bytes = std::fs::metadata(path).map_or(0, |m| m.len());
+    let recorded = record_save(store, id, objects, path, bytes);
+    Ok(Saved { path: path.to_path_buf(), bytes, recorded })
+}
+
+/// Entry `id` was saved to `path`: its objects, Edited and the file.
+/// False when the entry is gone.
+pub fn record_save(store: &Store, id: &str, objects: &[crate::objects::Obj], path: &Path, bytes: u64) -> bool {
+    match store.save_edit(id, objects, Some((path.to_path_buf(), bytes))) {
+        Ok(_) => {
+            crate::history::changed();
+            true
+        }
+        Err(e) => {
+            eprintln!("rustshot: history: {e:#}");
+            false
+        }
+    }
 }
 
 // --- opening ------------------------------------------------------------------------
 
-/// The open Edit windows: their entry and inbox.
-static OPEN: Mutex<Vec<(String, Sender<Msg>)>> = Mutex::new(Vec::new());
+/// An open Edit window: its entry, its inbox, whether it has unsaved edits.
+struct Slot {
+    id: String,
+    tx: Sender<Msg>,
+    unsaved: Arc<AtomicBool>,
+}
+
+/// The open Edit windows (the daemon asks them before it quits).
+pub struct Windows {
+    list: Mutex<Vec<Slot>>,
+    /// A quit was cancelled in one of their questions.
+    cancelled: AtomicBool,
+}
+
+impl Default for Windows {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Windows {
+    pub const fn new() -> Windows {
+        Windows { list: Mutex::new(Vec::new()), cancelled: AtomicBool::new(false) }
+    }
+
+    /// How many are open.
+    pub fn count(&self) -> usize {
+        lock(&self.list).len()
+    }
+
+    /// How many have unsaved edits.
+    pub fn unsaved(&self) -> usize {
+        lock(&self.list).iter().filter(|s| s.unsaved.load(Ordering::SeqCst)).count()
+    }
+
+    /// Quitting: each window with unsaved edits asks "Save changes?".
+    /// Returns how many ask (none: quit now).
+    pub fn ask_quit(&self) -> usize {
+        self.cancelled.store(false, Ordering::SeqCst);
+        lock(&self.list).iter().filter(|s| s.unsaved.load(Ordering::SeqCst) && s.tx.send(Msg::Quit).is_ok()).count()
+    }
+
+    /// One of them answered a quit's question with Cancel (once).
+    pub fn take_cancelled(&self) -> bool {
+        self.cancelled.swap(false, Ordering::SeqCst)
+    }
+
+    fn cancel_quit(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+    }
+
+    /// A window for tests: its "unsaved edits" flag.
+    #[cfg(test)]
+    pub fn add_for_tests(&self, id: &str, unsaved: bool) -> Arc<AtomicBool> {
+        let flag = Arc::new(AtomicBool::new(unsaved));
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::mem::forget(rx);
+        lock(&self.list).push(Slot { id: id.into(), tx, unsaved: flag.clone() });
+        flag
+    }
+
+    #[cfg(test)]
+    pub fn remove_for_tests(&self, id: &str) {
+        lock(&self.list).retain(|s| s.id != id);
+    }
+
+    #[cfg(test)]
+    pub fn cancel_for_tests(&self) {
+        self.cancel_quit();
+    }
+}
+
+/// What the daemon does about a quit while Edit windows ask.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QuitGate {
+    /// Nothing unsaved is left: quit.
+    Now,
+    /// Some still ask.
+    Wait,
+    /// Cancel was pressed: stay.
+    Abort,
+}
+
+/// The quit's state: `unsaved` windows left, `cancelled` in one.
+pub fn quit_gate(unsaved: usize, cancelled: bool) -> QuitGate {
+    if cancelled {
+        QuitGate::Abort
+    } else if unsaved == 0 {
+        QuitGate::Now
+    } else {
+        QuitGate::Wait
+    }
+}
+
+static OPEN: Windows = Windows::new();
+
+/// This process's Edit windows.
+pub fn windows() -> &'static Windows {
+    &OPEN
+}
 
 enum Msg {
     Raise,
+    /// The daemon is quitting: ask about unsaved edits, then close.
+    Quit,
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -234,22 +362,23 @@ pub fn open(id: &str) {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let mut open = lock(&OPEN);
-        if open.iter().any(|(i, tx)| i == id && tx.send(Msg::Raise).is_ok()) {
+        let mut open = lock(&OPEN.list);
+        if open.iter().any(|s| s.id == id && s.tx.send(Msg::Raise).is_ok()) {
             return;
         }
         let (tx, rx) = std::sync::mpsc::channel();
-        open.push((id.to_string(), tx));
+        let unsaved = Arc::new(AtomicBool::new(false));
+        open.push(Slot { id: id.to_string(), tx, unsaved: unsaved.clone() });
         drop(open);
         let id = id.to_string();
-        std::thread::Builder::new().name("rustshot-edit".into()).spawn(move || run(&id, rx)).ok();
+        std::thread::Builder::new().name("rustshot-edit".into()).spawn(move || run(&id, rx, unsaved)).ok();
     }
 }
 
 /// Wait until every Edit window is closed (`rustshot history` before it
 /// exits).
 pub fn wait_all() {
-    while !lock(&OPEN).is_empty() {
+    while OPEN.count() > 0 {
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 }
@@ -264,10 +393,10 @@ fn load(store: &Store, id: &str) -> Option<Entry> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn run(id: &str, rx: std::sync::mpsc::Receiver<Msg>) {
+fn run(id: &str, rx: std::sync::mpsc::Receiver<Msg>, unsaved: Arc<AtomicBool>) {
     let store = Store::open_default();
     let cfg = crate::config::load();
-    let done = |id: &str| lock(&OPEN).retain(|(i, _)| i != id);
+    let done = |id: &str| lock(&OPEN.list).retain(|s| s.id != id);
     let Some(e) = load(&store, id) else {
         crate::tray::notify("That capture is no longer in History");
         done(id);
@@ -284,13 +413,25 @@ fn run(id: &str, rx: std::sync::mpsc::Receiver<Msg>) {
     let th = crate::theme::resolve(&cfg);
     let canvas = Canvas::new(img, objs, cfg.clone(), th);
     let title = format!("Edit \u{2014} {}", crate::history::title(&e.meta));
-    let mut w = window::Window::new(Edit::new(store, e, canvas, cfg), rx);
+    // Pruning leaves the entry alone while it is open.
+    let held = crate::history::hold_open(&e.id, &e.dir);
+    let mut ed = Edit::new(store, e, canvas, cfg);
+    ed.held = Some(held);
+    let mut w = window::Window::new(ed, rx);
+    w.unsaved = unsaved;
     let spec = crate::wind::WindowSpec { title, w: W, h: H, resizable: true, min: MIN };
     if let Err(err) = crate::wind::run_window(spec, &mut w) {
         eprintln!("rustshot: edit window: {err:#}");
     }
     w.finish();
+    // Out of the list before the window goes: an Edit pressed from now
+    // on opens a new one; one pressed just before is opened here.
     done(id);
+    let late = w.rx.try_iter().any(|m| matches!(m, Msg::Raise));
+    drop(w);
+    if late {
+        open(id);
+    }
 }
 
 // --- the window's state ---------------------------------------------------------
@@ -319,11 +460,44 @@ pub struct Edit {
     pub toast: Option<(String, crate::editor::style::ToastKind, std::time::Instant)>,
     /// The window should close (after a save or Discard).
     pub closing: bool,
+    /// The daemon is quitting: the question asked is the quit's (Cancel
+    /// stays, and the daemon too).
+    pub quitting: bool,
+    /// The entry is held open (never pruned meanwhile).
+    pub held: Option<crate::history::OpenGuard>,
 }
 
 impl Edit {
     pub fn new(store: Store, entry: Entry, canvas: Canvas, cfg: Config) -> Edit {
-        Edit { store, entry, canvas, cfg, flow: Flow::default(), collapsed: false, rail_drag: None, toast: None, closing: false }
+        Edit { store, entry, canvas, cfg, flow: Flow::default(), collapsed: false, rail_drag: None, toast: None, closing: false, quitting: false, held: None }
+    }
+
+    /// The daemon is quitting: ask about unsaved edits (else close).
+    pub fn quit(&mut self) {
+        self.quitting = true;
+        let unsaved = self.canvas.unsaved();
+        for d in self.flow.close(unsaved) {
+            self.perform(d);
+        }
+    }
+
+    /// After an answer: a quit's question closed without closing the
+    /// window (Cancel, or the save failed) cancels the quit.
+    pub fn settle_quit(&mut self) {
+        if self.quitting && self.flow.dialog.is_none() && !self.closing {
+            self.quitting = false;
+            OPEN.cancel_quit();
+        }
+    }
+
+    /// A save finished: the objects saved, the entry as it is now.
+    pub fn saved(&mut self, objects: Vec<crate::objects::Obj>, s: &Saved) {
+        self.canvas.mark_saved_as(objects);
+        if let Some(e) = self.store.get(&self.entry.id) {
+            self.entry = e;
+        } else {
+            self.entry.meta.saved = Some(s.path.clone());
+        }
     }
 
     pub fn remembered(&self) -> Option<Choice> {
@@ -367,16 +541,15 @@ impl Edit {
                     }
                 }
                 let path = target(choice, self.entry.meta.saved.as_deref(), &self.cfg);
+                // Text being typed is part of what is saved.
+                self.canvas.commit_drafts();
                 let img = self.canvas.export();
                 let objs = self.canvas.objects().to_vec();
                 match write(&self.store, &self.entry.id, &img, &objs, &path, &self.cfg) {
-                    Ok(_) => {
-                        self.canvas.mark_saved();
-                        if let Some(e) = self.store.get(&self.entry.id) {
-                            self.entry = e;
-                        }
-                        let n = path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-                        self.note(format!("Saved {n}"), crate::editor::style::ToastKind::Success);
+                    Ok(s) => {
+                        self.saved(objs, &s);
+                        let kind = if s.recorded { crate::editor::style::ToastKind::Success } else { crate::editor::style::ToastKind::Info };
+                        self.note(s.note(), kind);
                         if close {
                             self.closing = true;
                         }

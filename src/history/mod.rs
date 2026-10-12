@@ -18,10 +18,18 @@
 //! `history_days` go, then the oldest until the history fits in
 //! `history_max_mb` ([`Store::prune`]). Saved and uploaded files are never
 //! touched by that (only "Clear history…" with "Also delete saved files").
+//! The daemon prunes when it starts, hourly and when the limits change
+//! ([`keep_pruned`]), with History on or off; entries open in an Edit
+//! window stay ([`hold_open`]), and folders left without a valid
+//! `meta.json` (a crash mid-write) go after an hour ([`GRACE`]).
 //!
 //! Writing (PNG encoding a 4K capture takes a while) runs on one worker
 //! thread ([`record`], [`update`], [`flush`]) in order; the folder is
 //! reserved at once, so its id is known before the files are there.
+//! Every change of an entry's files is a read-modify-write under the
+//! entry's lock ([`lock_entry`]: a mutex here, a lock file across
+//! processes), and every file is written whole through a uniquely named,
+//! flushed temporary file.
 
 pub mod source;
 
@@ -508,19 +516,23 @@ pub fn meta_from_json(s: &str) -> Result<Meta> {
 
 // --- the store -----------------------------------------------------------------
 
-/// The default history folder.
-pub fn default_root() -> PathBuf {
+/// The history folder: always a local (never a roaming, synced) one;
+/// None when there is no such folder (then nothing is kept).
+pub fn find_root() -> Option<PathBuf> {
     let get = |k: &str| std::env::var_os(k).filter(|v| !v.is_empty()).map(PathBuf::from).filter(|p| p.is_absolute());
     #[cfg(windows)]
-    let base = get("LOCALAPPDATA");
+    let base = get("LOCALAPPDATA").or_else(|| get("USERPROFILE").map(|h| h.join("AppData").join("Local")));
     #[cfg(target_os = "macos")]
     let base = get("HOME").map(|h| h.join("Library").join("Application Support"));
     #[cfg(all(unix, not(target_os = "macos")))]
     let base = get("XDG_DATA_HOME").or_else(|| get("HOME").map(|h| h.join(".local").join("share")));
-    match base {
-        Some(b) => b.join("rustshot").join("history"),
-        None => crate::config::config_dir().join("history"),
-    }
+    base.map(|b| b.join("rustshot").join("history"))
+}
+
+/// The history folder the windows show ([`find_root`]; without one, an
+/// empty folder in the temporary directory, where nothing is recorded).
+pub fn default_root() -> PathBuf {
+    find_root().unwrap_or_else(|| std::env::temp_dir().join("rustshot").join("history"))
 }
 
 /// The history folder.
@@ -529,10 +541,156 @@ pub struct Store {
     pub root: PathBuf,
 }
 
+/// Bytes under `p` (symbolic links are not followed).
 fn dir_size(p: &Path) -> u64 {
     std::fs::read_dir(p)
-        .map(|rd| rd.flatten().map(|e| e.metadata().map_or(0, |m| if m.is_dir() { dir_size(&e.path()) } else { m.len() })).sum())
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| match e.file_type() {
+                    Ok(t) if t.is_dir() => dir_size(&e.path()),
+                    Ok(t) if t.is_file() => e.metadata().map_or(0, |m| m.len()),
+                    _ => 0,
+                })
+                .sum()
+        })
         .unwrap_or(0)
+}
+
+/// An entry folder's name ("143207", "143207-2").
+fn entry_name(name: &str) -> bool {
+    !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+}
+
+/// Folders without a valid `meta.json` and stray temporary files are
+/// left alone this long (they may be being written), then pruned.
+pub const GRACE: std::time::Duration = std::time::Duration::from_secs(3600);
+
+/// The file each entry's writers lock ([`lock_entry`]).
+const LOCK: &str = ".lock";
+/// The file an Edit window holds (shared-locked) while it has the entry
+/// open ([`hold_open`]): pruning in any process leaves the entry alone.
+const OPEN: &str = ".open";
+
+/// Entry folders being written by a thread of this process.
+static BUSY: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+static BUSY_FREE: std::sync::Condvar = std::sync::Condvar::new();
+
+/// One writer of an entry at a time: the folder is taken in this process
+/// (other threads wait) and its lock file locked (other processes wait).
+pub struct EntryLock {
+    dir: PathBuf,
+    file: Option<std::fs::File>,
+}
+
+impl Drop for EntryLock {
+    fn drop(&mut self) {
+        drop(self.file.take()); // unlocks
+        let mut b = lock(&BUSY);
+        b.retain(|d| *d != self.dir);
+        BUSY_FREE.notify_all();
+    }
+}
+
+/// Lock entry folder `dir` for a read-modify-write (it must exist).
+pub fn lock_entry(dir: &Path) -> Result<EntryLock> {
+    {
+        let mut b = lock(&BUSY);
+        while b.iter().any(|d| d == dir) {
+            b = BUSY_FREE.wait(b).unwrap_or_else(|e| e.into_inner());
+        }
+        b.push(dir.to_path_buf());
+    }
+    // From here the guard releases the folder, whatever happens.
+    let mut g = EntryLock { dir: dir.to_path_buf(), file: None };
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dir.join(LOCK))
+        .with_context(|| format!("lock {}", dir.display()))?;
+    f.lock().with_context(|| format!("lock {}", dir.display()))?;
+    g.file = Some(f);
+    Ok(g)
+}
+
+/// An entry open in an Edit window: never pruned while this lives (in
+/// this process: [`keep_now`]; in others: the shared lock on `.open`).
+pub struct OpenGuard {
+    id: String,
+    _file: Option<std::fs::File>,
+}
+
+impl Drop for OpenGuard {
+    fn drop(&mut self) {
+        let mut e = lock(&EDITING);
+        if let Some(i) = e.iter().position(|x| *x == self.id) {
+            e.remove(i);
+        }
+    }
+}
+
+/// Entries open in Edit windows of this process.
+static EDITING: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// Mark entry `id` (folder `dir`) as open for editing.
+#[cfg_attr(target_os = "macos", allow(dead_code))] // no Edit window there yet
+pub fn hold_open(id: &str, dir: &Path) -> OpenGuard {
+    lock(&EDITING).push(id.to_string());
+    let file = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(dir.join(OPEN)).ok().filter(|f| f.lock_shared().is_ok());
+    OpenGuard { id: id.to_string(), _file: file }
+}
+
+/// Another process (or window) has entry folder `dir` open for editing.
+fn held_elsewhere(dir: &Path) -> bool {
+    let p = dir.join(OPEN);
+    if !p.is_file() {
+        return false;
+    }
+    match std::fs::OpenOptions::new().write(true).open(&p) {
+        Ok(f) => matches!(f.try_lock(), Err(std::fs::TryLockError::WouldBlock)),
+        Err(_) => false,
+    }
+}
+
+/// The entries pruning leaves alone now: being written, or open in an
+/// Edit window.
+pub fn keep_now() -> Vec<String> {
+    let mut k = lock(&WRITING).clone();
+    k.extend(lock(&EDITING).iter().cloned());
+    k
+}
+
+/// `t` is at least [`GRACE`] before `now`.
+fn stale(t: Option<std::time::SystemTime>, now: std::time::SystemTime) -> bool {
+    t.is_some_and(|t| now.duration_since(t).is_ok_and(|d| d >= GRACE))
+}
+
+/// Remove the temporary files (`*.tmp`, from writes that never finished)
+/// left in entry folder `dir` for [`GRACE`].
+fn sweep_tmp(dir: &Path, now: std::time::SystemTime) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for f in rd.flatten() {
+        let is_tmp = f.file_name().to_string_lossy().ends_with(".tmp");
+        if is_tmp && f.file_type().is_ok_and(|t| t.is_file()) && stale(f.metadata().and_then(|m| m.modified()).ok(), now) {
+            let _ = std::fs::remove_file(f.path());
+        }
+    }
+}
+
+/// A saved file or recording `meta` points at that may be deleted with
+/// the entry: an absolute path to a regular file (not a link or a
+/// folder) of a capture's format, as big as when it was recorded.
+fn deletable(f: &Path, meta: &Meta) -> bool {
+    const EXTS: [&str; 6] = ["png", "jpg", "jpeg", "bmp", "mp4", "gif"];
+    let ext_ok = f.extension().is_some_and(|e| EXTS.contains(&e.to_string_lossy().to_lowercase().as_str()));
+    f.is_absolute() && ext_ok && std::fs::symlink_metadata(f).is_ok_and(|m| m.file_type().is_file() && (meta.bytes == 0 || m.len() == meta.bytes))
+}
+
+/// What [`Store::scan`] finds: the entries, and the entry-shaped folders
+/// without a valid `meta.json` (id, folder, bytes, last change).
+struct Scan {
+    entries: Vec<Entry>,
+    orphans: Vec<(String, PathBuf, u64, Option<std::time::SystemTime>)>,
 }
 
 /// A day folder's name ("2026-10-12") as a date.
@@ -544,13 +702,10 @@ fn parse_day(name: &str) -> Option<(i32, u32, u32)> {
     p.next().is_none().then_some((y, m, d))
 }
 
-/// Write `bytes` to `path` through a temporary file (a reader never sees
-/// half a file).
+/// Write `bytes` to `path` through a uniquely named temporary file,
+/// flushed before the rename (a reader never sees half a file).
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, bytes).with_context(|| format!("write {}", tmp.display()))?;
-    std::fs::rename(&tmp, path).with_context(|| format!("rename to {}", path.display()))?;
-    Ok(())
+    crate::export::write_atomic(path, bytes)
 }
 
 impl Store {
@@ -565,8 +720,7 @@ impl Store {
     fn entry_dir(&self, id: &str) -> Option<PathBuf> {
         let (day, name) = id.split_once('/')?;
         parse_day(day)?;
-        let ok = !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
-        ok.then(|| self.root.join(day).join(name))
+        entry_name(name).then(|| self.root.join(day).join(name))
     }
 
     /// A new entry's folder for a capture taken at `now`:
@@ -576,12 +730,20 @@ impl Store {
         let base = format!("{:02}{:02}{:02}", now.3, now.4, now.5);
         let dd = self.root.join(&day);
         std::fs::create_dir_all(&dd).with_context(|| format!("create {}", dd.display()))?;
-        for n in 1..1000 {
+        let mut retries = 3;
+        let mut n = 1;
+        while n < 1000 {
             let name = if n == 1 { base.clone() } else { format!("{base}-{n}") };
             let dir = dd.join(&name);
             match std::fs::create_dir(&dir) {
                 Ok(()) => return Ok((format!("{day}/{name}"), dir)),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
+                // The day folder was just removed as empty (a prune or a
+                // delete meanwhile): again.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound && retries > 0 => {
+                    retries -= 1;
+                    std::fs::create_dir_all(&dd).with_context(|| format!("create {}", dd.display()))?;
+                }
                 Err(e) => return Err(e).with_context(|| format!("create {}", dir.display())),
             }
         }
@@ -643,23 +805,41 @@ impl Store {
 
     /// Every entry, newest first.
     pub fn list(&self) -> Vec<Entry> {
-        let mut out = Vec::new();
-        let Ok(days) = std::fs::read_dir(&self.root) else { return out };
+        let mut out = self.scan(false).entries;
+        out.sort_by(|a, b| b.meta.captured.cmp(&a.meta.captured).then_with(|| b.id.cmp(&a.id)));
+        out
+    }
+
+    /// The day folders' entry folders (real folders only: a symbolic
+    /// link is never followed out of the root); with `orphans`, also
+    /// those without a valid `meta.json`.
+    fn scan(&self, orphans: bool) -> Scan {
+        let mut s = Scan { entries: Vec::new(), orphans: Vec::new() };
+        let Ok(days) = std::fs::read_dir(&self.root) else { return s };
         for d in days.flatten() {
             let name = d.file_name().to_string_lossy().into_owned();
-            if parse_day(&name).is_none() || !d.path().is_dir() {
+            if parse_day(&name).is_none() || !d.file_type().is_ok_and(|t| t.is_dir()) {
                 continue;
             }
             let Ok(items) = std::fs::read_dir(d.path()) else { continue };
             for it in items.flatten() {
-                let id = format!("{name}/{}", it.file_name().to_string_lossy());
-                if let Some(e) = self.get(&id) {
-                    out.push(e);
+                let item = it.file_name().to_string_lossy().into_owned();
+                if !entry_name(&item) || !it.file_type().is_ok_and(|t| t.is_dir()) {
+                    continue;
+                }
+                let id = format!("{name}/{item}");
+                match self.get(&id) {
+                    Some(e) => s.entries.push(e),
+                    None if orphans => {
+                        let dir = it.path();
+                        let changed = std::fs::symlink_metadata(&dir).and_then(|m| m.modified()).ok();
+                        s.orphans.push((id, dir.clone(), dir_size(&dir), changed));
+                    }
+                    None => {}
                 }
             }
         }
-        out.sort_by(|a, b| b.meta.captured.cmp(&a.meta.captured).then_with(|| b.id.cmp(&a.id)));
-        out
+        s
     }
 
     /// The bytes the history takes.
@@ -668,13 +848,33 @@ impl Store {
         dir_size(&self.root)
     }
 
-    /// Change `id`'s `meta.json` (Edited, the saved file, the link).
+    /// Change `id`'s `meta.json` (Edited, the saved file, the link): read,
+    /// changed and written under the entry's lock, so writers in other
+    /// threads and processes never lose each other's changes.
     pub fn update(&self, id: &str, f: impl FnOnce(&mut Meta)) -> Result<Meta> {
         let dir = self.entry_dir(id).ok_or_else(|| anyhow!("bad history id {id:?}"))?;
+        let _l = self.lock_existing(id, &dir)?;
+        self.update_locked(id, &dir, f)
+    }
+
+    fn update_locked(&self, id: &str, dir: &Path, f: impl FnOnce(&mut Meta)) -> Result<Meta> {
         let mut m = meta_from_json(&std::fs::read_to_string(dir.join(META)).with_context(|| format!("read {id}"))?)?;
         f(&mut m);
         write_atomic(&dir.join(META), meta_to_json(&m).as_bytes())?;
         Ok(m)
+    }
+
+    /// The lock of entry `id`, which must exist (an entry deleted
+    /// meanwhile is not written back).
+    fn lock_existing(&self, id: &str, dir: &Path) -> Result<EntryLock> {
+        if !dir.join(META).is_file() {
+            bail!("history entry {id} is gone");
+        }
+        let l = lock_entry(dir)?;
+        if !dir.join(META).is_file() {
+            bail!("history entry {id} is gone");
+        }
+        Ok(l)
     }
 
     /// The Edit window saved `id`: its objects, a new thumbnail (made
@@ -682,11 +882,13 @@ impl Store {
     /// to. `original.png` stays as it was.
     pub fn save_edit(&self, id: &str, objects: &[Obj], saved: Option<(PathBuf, u64)>) -> Result<Meta> {
         let dir = self.entry_dir(id).ok_or_else(|| anyhow!("bad history id {id:?}"))?;
+        let thumb = PixBuf::from_png(&std::fs::read(dir.join(ORIGINAL)).unwrap_or_default()).ok().map(|o| thumbnail(&o, objects));
+        let _l = self.lock_existing(id, &dir)?;
         write_atomic(&dir.join(ANNOTATIONS), crate::objects::to_json(objects).as_bytes())?;
-        if let Ok(orig) = PixBuf::from_png(&std::fs::read(dir.join(ORIGINAL)).unwrap_or_default()) {
-            write_atomic(&dir.join(THUMB), &thumbnail(&orig, objects).to_png()?)?;
+        if let Some(t) = thumb {
+            write_atomic(&dir.join(THUMB), &t.to_png()?)?;
         }
-        self.update(id, |m| {
+        self.update_locked(id, &dir, |m| {
             m.edited = true;
             m.objects = objects.iter().map(|o| kind_name(o).to_string()).collect();
             if let Some((p, bytes)) = saved {
@@ -715,8 +917,23 @@ impl Store {
     /// the recording).
     pub fn delete(&self, id: &str, files: bool) -> Result<()> {
         let dir = self.entry_dir(id).ok_or_else(|| anyhow!("bad history id {id:?}"))?;
-        if files && let Some(e) = self.get(id) {
-            for f in e.meta.saved.iter().chain(e.meta.file.iter()) {
+        if !std::fs::symlink_metadata(&dir).is_ok_and(|m| m.file_type().is_dir()) {
+            bail!("no history entry {id}");
+        }
+        // `meta.json` goes first, under the lock: a writer waiting for it
+        // finds the entry gone, and a delete that stops half way leaves a
+        // folder pruning recognises as left over.
+        let meta = {
+            let _l = lock_entry(&dir)?;
+            let meta = self.get(id).map(|e| e.meta);
+            match std::fs::remove_file(dir.join(META)) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e).with_context(|| format!("remove {}", dir.display())),
+                _ => {}
+            }
+            meta
+        };
+        if files && let Some(m) = &meta {
+            for f in m.saved.iter().chain(m.file.iter()).filter(|f| deletable(f, m)) {
                 let _ = std::fs::remove_file(f);
             }
         }
@@ -728,14 +945,18 @@ impl Store {
     }
 
     /// Remove every entry ("Clear history…"); with `files` their saved
-    /// files too. Returns how many went.
+    /// files too. Returns how many went. Entries being written stay.
     pub fn clear(&self, files: bool) -> usize {
-        let all = self.list();
-        let n = all.iter().filter(|e| self.delete(&e.id, files).is_ok()).count();
+        let writing = lock(&WRITING).clone();
+        let s = self.scan(true);
+        let n = s.entries.iter().filter(|e| !writing.contains(&e.id) && self.delete(&e.id, files).is_ok()).count();
         // Folders without meta.json (half written, from a crash) go too.
-        if let Ok(days) = std::fs::read_dir(&self.root) {
-            for d in days.flatten().filter(|d| parse_day(&d.file_name().to_string_lossy()).is_some()) {
-                let _ = std::fs::remove_dir_all(d.path());
+        for (id, dir, _, _) in &s.orphans {
+            if !writing.contains(id) {
+                let _ = std::fs::remove_dir_all(dir);
+                if let Some(day) = dir.parent() {
+                    let _ = std::fs::remove_dir(day);
+                }
             }
         }
         n
@@ -743,27 +964,51 @@ impl Store {
 
     /// Keep the history within `days` (entries from days before that go)
     /// and `max_bytes` (then the oldest go until it fits); returns the ids
-    /// removed. `keep`: an entry being written or edited now stays.
+    /// removed. `keep`: entries being written or edited now stay (so do
+    /// those open in another process's Edit window). Folders without a
+    /// valid `meta.json` and stray temporary files go once they are
+    /// [`GRACE`] old (until then their bytes count); saved files and
+    /// recordings outside the history are never touched.
     pub fn prune(&self, today: (i32, u32, u32), days: u32, max_bytes: u64, keep: &[String]) -> Vec<String> {
+        self.prune_at(today, days, max_bytes, keep, std::time::SystemTime::now())
+    }
+
+    pub(crate) fn prune_at(&self, today: (i32, u32, u32), days: u32, max_bytes: u64, keep: &[String], now: std::time::SystemTime) -> Vec<String> {
         let t = days_from_civil(today.0, today.1, today.2);
-        let mut all = self.list();
+        let Scan { entries: mut all, orphans } = self.scan(true);
+        all.sort_by(|a, b| b.meta.captured.cmp(&a.meta.captured).then_with(|| b.id.cmp(&a.id)));
+        let kept = |id: &String, dir: &Path| keep.contains(id) || held_elsewhere(dir);
         let mut gone = Vec::new();
+        let mut young: u64 = 0;
+        for (id, dir, size, changed) in orphans {
+            if !kept(&id, &dir) && stale(changed, now) && std::fs::remove_dir_all(&dir).is_ok() {
+                if let Some(day) = dir.parent() {
+                    let _ = std::fs::remove_dir(day);
+                }
+                gone.push(id);
+            } else {
+                young += size;
+            }
+        }
+        for e in &all {
+            sweep_tmp(&e.dir, now);
+        }
         all.retain(|e| {
             let (y, m, d) = e.day();
             let old = t - days_from_civil(y, m, d) >= days as i64;
-            if old && !keep.contains(&e.id) && self.delete(&e.id, false).is_ok() {
+            if old && !kept(&e.id, &e.dir) && self.delete(&e.id, false).is_ok() {
                 gone.push(e.id.clone());
                 return false;
             }
             true
         });
-        let mut total: u64 = all.iter().map(|e| e.size).sum();
+        let mut total: u64 = young + all.iter().map(|e| e.size).sum::<u64>();
         // Oldest first.
         for e in all.iter().rev() {
             if total <= max_bytes {
                 break;
             }
-            if keep.contains(&e.id) {
+            if kept(&e.id, &e.dir) {
                 continue;
             }
             if self.delete(&e.id, false).is_ok() {
@@ -792,7 +1037,11 @@ pub fn saved_files(entries: &[Entry]) -> (usize, u64, Option<PathBuf>) {
     let mut n = 0;
     let mut bytes = 0;
     let mut dirs: Vec<(PathBuf, usize)> = Vec::new();
-    for f in entries.iter().flat_map(|e| e.meta.saved.iter().chain(e.meta.file.iter())) {
+    for (f, m) in entries.iter().flat_map(|e| e.meta.saved.iter().chain(e.meta.file.iter()).map(move |f| (f, &e.meta))) {
+        // Only the files "Also delete saved files" would delete.
+        if !deletable(f, m) {
+            continue;
+        }
         let Ok(md) = std::fs::metadata(f) else { continue };
         n += 1;
         bytes += md.len();
@@ -837,8 +1086,9 @@ pub struct ShotRec {
 
 enum Job {
     Shot { root: PathBuf, id: String, dir: PathBuf, shot: Box<ShotRec>, days: u32, max: u64 },
-    Recording { root: PathBuf, dir: PathBuf, poster: Option<PixBuf>, meta: Box<Meta>, days: u32, max: u64 },
+    Recording { root: PathBuf, id: String, dir: PathBuf, poster: Option<PixBuf>, meta: Box<Meta>, days: u32, max: u64 },
     Update { root: PathBuf, id: String, f: Box<dyn FnOnce(&mut Meta) + Send> },
+    Prune { root: PathBuf, days: u32, max: u64 },
     Flush(Sender<()>),
 }
 
@@ -857,16 +1107,20 @@ fn send(job: Job) {
         std::thread::Builder::new().name("rustshot-history".into()).spawn(move || run(rx)).expect("history thread");
         tx
     });
-    if let Err(std::sync::mpsc::SendError(job)) = tx.send(job) {
-        // The thread is gone (it panicked): a new one.
-        *w = None;
-        drop(w);
-        send(job);
-    }
+    // The thread never ends while we hold its sender (a panic aborts).
+    let _ = tx.send(job);
 }
 
 fn today(t: &Tm) -> (i32, u32, u32) {
     (t.0, t.1, t.2)
+}
+
+/// Prune with the keep list as it is now (being written, open for editing).
+fn prune_now(st: &Store, today: (i32, u32, u32), days: u32, max: u64) {
+    let keep = keep_now();
+    if !st.prune(today, days, max, &keep).is_empty() {
+        changed();
+    }
 }
 
 fn run(rx: Receiver<Job>) {
@@ -879,18 +1133,17 @@ fn run(rx: Receiver<Job>) {
                     let _ = std::fs::remove_dir_all(&dir);
                 }
                 lock(&WRITING).retain(|w| *w != id);
-                let keep = lock(&WRITING).clone();
-                st.prune(today(&shot.meta.captured), days, max, &keep);
+                prune_now(&st, today(&shot.meta.captured), days, max);
                 changed();
             }
-            Job::Recording { root, dir, poster, meta, days, max } => {
+            Job::Recording { root, id, dir, poster, meta, days, max } => {
                 let st = Store::new(root);
                 if let Err(e) = st.write_recording(&dir, poster.as_ref(), &meta) {
                     eprintln!("rustshot: history: {e:#}");
                     let _ = std::fs::remove_dir_all(&dir);
                 }
-                let keep = lock(&WRITING).clone();
-                st.prune(today(&meta.captured), days, max, &keep);
+                lock(&WRITING).retain(|w| *w != id);
+                prune_now(&st, today(&meta.captured), days, max);
                 changed();
             }
             Job::Update { root, id, f } => {
@@ -898,6 +1151,10 @@ fn run(rx: Receiver<Job>) {
                     eprintln!("rustshot: history: {e:#}");
                 }
                 changed();
+            }
+            Job::Prune { root, days, max } => {
+                let t = crate::export::local_ymdhms();
+                prune_now(&Store::new(root), today(&t), days, max);
             }
             Job::Flush(tx) => {
                 let _ = tx.send(());
@@ -944,9 +1201,41 @@ pub fn record_recording(cfg: &crate::config::Config, root: &Path, poster: Option
     }
     let st = Store::new(root);
     let (id, dir) = st.reserve(meta.captured).map_err(|e| eprintln!("rustshot: history: {e:#}")).ok()?;
+    lock(&WRITING).push(id.clone());
     let (days, max) = limits(cfg);
-    send(Job::Recording { root: root.to_path_buf(), dir, poster, meta: Box::new(meta), days, max });
+    send(Job::Recording { root: root.to_path_buf(), id: id.clone(), dir, poster, meta: Box::new(meta), days, max });
     Some(id)
+}
+
+/// The limits the daemon prunes with (the history folder, days, bytes).
+static LIMITS: Mutex<Option<(PathBuf, u32, u64)>> = Mutex::new(None);
+static PRUNER: std::sync::Once = std::sync::Once::new();
+/// How often the daemon prunes (captures age out without new ones).
+pub const PRUNE_EVERY: std::time::Duration = std::time::Duration::from_secs(3600);
+
+/// The daemon keeps the history within `cfg`'s limits, whether it is on
+/// or off and whether captures come or not: a prune now when the limits
+/// are new (the daemon started, or Settings changed them), then hourly.
+pub fn keep_pruned(root: &Path, cfg: &crate::config::Config) {
+    let (days, max) = limits(cfg);
+    let new = Some((root.to_path_buf(), days, max));
+    let changed = {
+        let mut l = lock(&LIMITS);
+        let c = *l != new;
+        *l = new;
+        c
+    };
+    if changed {
+        send(Job::Prune { root: root.to_path_buf(), days, max });
+    }
+    PRUNER.call_once(|| {
+        let _ = std::thread::Builder::new().name("rustshot-history-prune".into()).spawn(|| loop {
+            std::thread::sleep(PRUNE_EVERY);
+            if let Some((root, days, max)) = lock(&LIMITS).clone() {
+                send(Job::Prune { root, days, max });
+            }
+        });
+    });
 }
 
 /// Change `id`'s meta on the history thread (after its files are written).
