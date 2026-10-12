@@ -70,6 +70,9 @@ pub fn srow_ex(ui: &mut Ui, tok: &Tok, label: &str, help: Option<&str>, help_err
     let y = ui.cursor_y();
     let cy = y + h / 2.0;
     let ctl = FRect { x: b.x, y: cy - CTL / 2.0, w: b.w, h: CTL };
+    // The label follows the row, not a control the row turned off inside
+    // (the Camera switch off greys its device list, never "Camera").
+    let on = ui.enabled;
     let free = ui.area(ctl, |ui| {
         ui.lay.gap = 12.0;
         ui.row_rtl(|ui| {
@@ -77,8 +80,9 @@ pub fn srow_ex(ui: &mut Ui, tok: &Tok, label: &str, help: Option<&str>, help_err
             ui.row_free()
         })
     });
+    ui.enabled = on;
     let lw = (free - 12.0 - 2.0).max(40.0);
-    let k = if ui.enabled { 1.0 } else { 0.4 };
+    let k = if on { 1.0 } else { 0.4 };
     let max_lines = (((h - 16.0) / 13.0).floor() as usize).max(1);
     let lines: Vec<String> = match help {
         Some(t) => {

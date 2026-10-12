@@ -267,3 +267,25 @@ fn preview_recording_section_pngs() {
         preview::save(&format!("settings-recording-nocam-{tname}.png"), &img);
     }
 }
+
+/// A GIF can have the camera bubble: only the sound rows are off. The
+/// Camera row's label reads the same with the camera on or off (the
+/// switch greys its device list, never the row), and so does every
+/// other label of the section.
+#[test]
+fn a_gif_keeps_the_camera_rows_enabled() {
+    let cams = Found { cams: vec![("{cam-1}".into(), "Integrated Camera".into())], ..find() };
+    let left = |camera: bool, format: &str| {
+        let mut s = sample(Config { rec_format: format.into(), rec_camera: camera, ..Config::default() });
+        s.rec_lists.found = Some(cams.clone());
+        s.scroll[RECORDING] = 1e6;
+        let (img, _) = render(&mut s, &DARK, 1.0);
+        // The labels' half (the controls are right-aligned).
+        let w = img.width() as usize;
+        img.as_raw().chunks_exact(w * 4).flat_map(|r| r[..w * 4 * 45 / 100].to_vec()).collect::<Vec<u8>>()
+    };
+    assert!(left(false, "gif") == left(true, "gif"), "the Camera label greys with the switch off");
+    assert!(left(false, "mp4") == left(true, "mp4"));
+    // And GIF still greys the sound rows (the left side differs from MP4).
+    assert!(left(true, "gif") != left(true, "mp4"), "GIF greys System sound and Microphone");
+}
