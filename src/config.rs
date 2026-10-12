@@ -65,6 +65,19 @@ pub struct Config {
     /// After a screenshot is copied or saved, a thumbnail card bottom-right
     /// (Copy, Save, Pin; drag it out for the file) instead of the toast.
     pub show_thumbnail: bool,
+    /// Keep a history of captures (`%LOCALAPPDATA%\rustshot\history`: the
+    /// unannotated original, its annotations, a thumbnail and what is
+    /// known about it) for the History and Edit windows.
+    pub history: bool,
+    /// History entries older than this many days are removed (1-3650).
+    pub history_days: u32,
+    /// The history is kept under this many MB, oldest entries out first.
+    pub history_max_mb: u32,
+    /// Global hotkey that opens the History window.
+    pub history_hotkey: String,
+    /// The Edit window's Save: "" asks (Overwrite the original / Save as
+    /// new file), "overwrite" or "new" once "Don't ask again" was ticked.
+    pub edit_save: String,
     /// Palette shown in the color picker.
     pub user_colors: Vec<String>,
     /// Imgur client id used for uploads.
@@ -219,6 +232,11 @@ impl Default for Config {
             copy_after_capture: false,
             shutter_sound: false,
             show_thumbnail: true,
+            history: true,
+            history_days: 30,
+            history_max_mb: 2048,
+            history_hotkey: "Shift+Meta+H".into(),
+            edit_save: String::new(),
             user_colors: [
                 "#f04438", "#ff8a1f", "#ffc532", "#2dc06f", "#19b5d6", "#3b82f6", "#8b5cf6",
                 "#ec4899", "#ffffff", "#111318",
@@ -753,6 +771,7 @@ pub fn hotkey_warnings(cfg: &Config) -> Vec<String> {
         ("capture_window_hotkey", &cfg.capture_window_hotkey),
         ("repeat_hotkey", &cfg.repeat_hotkey),
         ("capture_text_hotkey", &cfg.capture_text_hotkey),
+        ("history_hotkey", &cfg.history_hotkey),
     ]
     .into_iter()
         .filter(|(_, v)| !v.trim().is_empty() && crate::keymap::Chord::parse(v).is_none())
@@ -839,6 +858,17 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
             "copy_after_capture" => cfg.copy_after_capture = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "shutter_sound" => cfg.shutter_sound = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "show_thumbnail" => cfg.show_thumbnail = as_bool(val).map_err(|e| bad("boolean", &e))?,
+            "history" => cfg.history = as_bool(val).map_err(|e| bad("boolean", &e))?,
+            "history_days" => {
+                cfg.history_days =
+                    as_u64(val).ok().filter(|d| (1..=3650).contains(d)).ok_or_else(|| bad("number (1-3650)", val))? as u32
+            }
+            "history_max_mb" => {
+                cfg.history_max_mb =
+                    as_u64(val).ok().filter(|d| (1..=1_048_576).contains(d)).ok_or_else(|| bad("number (MB)", val))? as u32
+            }
+            "history_hotkey" => cfg.history_hotkey = as_string(val).map_err(|e| bad("string", &e))?,
+            "edit_save" => cfg.edit_save = one_of(val, &["", "overwrite", "new"]).map_err(|e| bad("value", &e))?,
             "upload_client_id" => {
                 cfg.upload_client_id = as_string(val).map_err(|e| bad("string", &e))?
             }
@@ -1066,6 +1096,14 @@ pub fn to_toml(c: &Config) -> String {
     out.push_str(&format!("rec_gif_max = {}
 ", c.rec_gif_max));
     out.push_str(&format!("show_thumbnail = {}\n", c.show_thumbnail));
+    out.push_str(&format!(
+        "history = {}\nhistory_days = {}\nhistory_max_mb = {}\nhistory_hotkey = {}\nedit_save = {}\n",
+        c.history,
+        c.history_days,
+        c.history_max_mb,
+        q(&c.history_hotkey),
+        q(&c.edit_save)
+    ));
     for id in TOOL_IDS {
         if let Some(v) = c.tool_sizes.get(id) {
             out.push_str(&format!("tool_{id}_size = {v}\n"));
@@ -1607,6 +1645,15 @@ record_hotkey = \"Ctrl+Shift+R\"
         assert_eq!(parse_config(&to_toml(&off)).unwrap(), off);
         assert!(!parse_config("show_thumbnail = false").unwrap().show_thumbnail);
         assert!(parse_config("show_thumbnail = \"no\"").is_err());
+        // History: on, 30 days, 2 GB, Win+Shift+H; the Edit window asks.
+        assert!(d.history && d.history_days == 30 && d.history_max_mb == 2048 && d.edit_save.is_empty());
+        assert_eq!(d.history_hotkey, "Shift+Meta+H");
+        let h = Config { history: false, history_days: 7, history_max_mb: 500, history_hotkey: "Ctrl+Alt+H".into(), edit_save: "new".into(), ..Config::default() };
+        assert_eq!(parse_config(&to_toml(&h)).unwrap(), h);
+        assert!(!rewrite_loses(&to_toml(&h)));
+        assert!(parse_config("history_days = 0").is_err() && parse_config("edit_save = \"maybe\"").is_err());
+        let w = hotkey_warnings(&Config { history_hotkey: "Nope+".into(), ..Config::default() });
+        assert!(w.len() == 1 && w[0].starts_with("history_hotkey"), "{w:?}");
         let w = hotkey_warnings(&Config { repeat_hotkey: "Nope+".into(), ..Config::default() });
         assert!(w.len() == 1 && w[0].starts_with("repeat_hotkey"), "{w:?}");
         let w = hotkey_warnings(&Config { capture_text_hotkey: "Nope+".into(), ..Config::default() });

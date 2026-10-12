@@ -539,6 +539,24 @@ pub struct GdiBackdrop<'a> {
     pub opaque: bool,
 }
 
+/// The plain bitmap alone (no annotation layer): the history's original.
+struct PlainBackdrop<'a>(&'a GdiScreen);
+
+impl Backdrop for PlainBackdrop<'_> {
+    fn fill(&self, r: PxRect, src: Source, out: &mut [u8], stride: usize, order: Order) {
+        if r.is_empty() {
+            return;
+        }
+        self.0.fill_bitmap(r, src, out, stride, true);
+        if order == Order::Rgba {
+            let n = r.w() as usize * 4;
+            for i in 0..r.h() as usize {
+                crate::wind::swap_rb(&mut out[i * stride * 4..][..n]);
+            }
+        }
+    }
+}
+
 impl Backdrop for GdiBackdrop<'_> {
     fn fill(&self, r: PxRect, src: Source, out: &mut [u8], stride: usize, order: Order) {
         if r.is_empty() {
@@ -688,8 +706,9 @@ impl Edit {
 
     /// The export crop (`crop_to_image` of the composed capture): the
     /// annotation layer where it overlaps the selection, `plain` elsewhere,
-    /// in one selection-sized buffer; unpremultiplied RGBA.
-    pub(super) fn export_gdi(&self, r: crate::objects::FRect) -> crate::pixbuf::PixBuf {
+    /// in one selection-sized buffer; unpremultiplied RGBA. `plain`: the
+    /// capture alone, without the objects (the history's original).
+    pub(super) fn export_gdi(&self, r: crate::objects::FRect, plain: bool) -> crate::pixbuf::PixBuf {
         let scr = self.gdi.as_ref().expect("gdi export without bitmaps");
         let (pw, ph) = (self.shot.size.0 as i32, self.shot.size.1 as i32);
         // Same geometry as `crop_to_image`: floor/ceil, at least 1x1,
@@ -701,7 +720,9 @@ impl Edit {
         let cx0 = x0.min(pw - 1);
         let cy0 = y0.min(ph - 1);
         let src = PxRect::new(cx0, cy0, (x0 + w).min(pw).max(cx0 + 1), (y0 + h).min(ph).max(cy0 + 1));
-        let bd = GdiBackdrop { scr, opaque: true };
+        let layered = GdiBackdrop { scr, opaque: true };
+        let bare = PlainBackdrop(scr);
+        let bd: &dyn Backdrop = if plain { &bare } else { &layered };
         let sw = src.w() as usize;
         let mut px = vec![0u8; sw * src.h() as usize * 4];
         let mut y = src.y0;

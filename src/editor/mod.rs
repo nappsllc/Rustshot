@@ -121,6 +121,29 @@ impl Pending {
 
 pub type UploadSlot = Arc<Mutex<Option<Receiver<Result<String, String>>>>>;
 
+/// `base` with `objs` baked in over the whole image (the spotlights dim
+/// all of it), exactly as the overlay exports a selection of that size:
+/// History's thumbnails and the Edit window's saves.
+pub fn bake_objects(base: &PixBuf, objs: &[Obj], font: Option<&AnnotFont>) -> PixBuf {
+    let mut out = base.clone();
+    if objs.is_empty() || base.width() == 0 || base.height() == 0 {
+        return out;
+    }
+    let size = base.dimensions();
+    let img = compose::PxRect::image(size);
+    let iw = base.width() as usize;
+    let bg = |r: compose::PxRect, out: &mut [u8]| {
+        let n = r.w() as usize * 4;
+        for (i, y) in (r.y0..r.y1).enumerate() {
+            out[i * n..][..n].copy_from_slice(&base.as_raw()[(y as usize * iw + r.x0 as usize) * 4..][..n]);
+        }
+    };
+    let area = compose::spot_area(None, size);
+    let bake = compose::Bake { objs, font, pass: crate::objects::SpotPass::of(objs, area), img, bg: &bg };
+    bake.window(out.as_raw_mut(), img, Order::Rgba);
+    out
+}
+
 /// A transient bottom-centre notice.
 struct Toast {
     text: String,
@@ -268,6 +291,11 @@ pub fn run(
         last_region: None,
         rec_area: None,
         wait_pins: false,
+        // Tests never write the user's history.
+        history_root: (!cfg!(test)).then(crate::history::default_root),
+        last_entry: None,
+        upload_entry: None,
+        rec_poster: None,
         #[cfg(test)]
         rec_spec: None,
         #[cfg(test)]
@@ -309,6 +337,26 @@ struct FinishJob {
     sel_global: (i32, i32),
     tasks: Vec<Task>,
     cfg: Config,
+    /// What the history keeps of it (history on).
+    hist: Option<Box<HistShot>>,
+}
+
+/// A capture for the history: the plain selection, its objects in its
+/// coordinates, and where it came from.
+struct HistShot {
+    original: PixBuf,
+    objects: Vec<Obj>,
+    title: String,
+    app: String,
+    monitor: String,
+    scale: f32,
+}
+
+/// Whether an export with `tasks` is a capture the history keeps: a
+/// picture that was copied, saved, uploaded or pinned (not Copy text or
+/// the CLI's raw output alone).
+fn history_keeps(tasks: &[Task]) -> bool {
+    tasks.iter().any(|t| matches!(t, Task::Copy | Task::Save { .. } | Task::SaveDesktop | Task::Upload | Task::Pin))
 }
 
 struct App {
@@ -350,6 +398,13 @@ struct App {
     rec_area: Option<capture::IRect>,
     /// A one-shot run that pinned: it closes once its pins are gone.
     wait_pins: bool,
+    /// The history folder (`None`: not kept; tests).
+    history_root: Option<std::path::PathBuf>,
+    /// The last capture's history entry, and the one whose upload runs.
+    last_entry: Option<String>,
+    upload_entry: Option<String>,
+    /// The running recording's poster and source, for its entry.
+    rec_poster: Option<Box<HistShot>>,
     /// Tests: the spec the last recording started with.
     #[cfg(test)]
     rec_spec: Option<crate::rec::RecSpec>,
@@ -680,9 +735,28 @@ impl App {
             crate::tray::set_recording(false);
             self.rec_hotkeys(false);
         }
+        let poster = self.rec_poster.take();
         let code = match end {
             rec_ui::End::Saved { path, warnings } => {
                 println!("saved: {}", path.display());
+                if let (Some(root), Some(p)) = (self.history_root.clone(), poster) {
+                    let gif = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("gif"));
+                    let a = self.rec_area.unwrap_or((0, 0, 0, 0));
+                    let meta = crate::history::Meta {
+                        captured: export::local_ymdhms(),
+                        kind: if gif { crate::history::Kind::Gif } else { crate::history::Kind::Mp4 },
+                        w: a.2,
+                        h: a.3,
+                        title: p.title,
+                        app: p.app,
+                        monitor: p.monitor,
+                        scale: p.scale,
+                        duration_ms: length.as_millis() as u64,
+                        file: Some(path.clone()),
+                        ..Default::default()
+                    };
+                    crate::history::record_recording(&self.cfg, &root, Some(p.original), meta);
+                }
                 for w in &warnings {
                     eprintln!("warning: {w}");
                 }
@@ -933,62 +1007,17 @@ impl App {
         };
         let sel = initial_sel.filter(|r| !r.is_trivial());
         let accept_now = accept_on_select && sel.is_some();
-        let mut edit = Edit {
-            mo: Motion::new(Instant::now()),
-            shot,
-            base,
-            composed: None,
-            frame: PixBuf::default(),
-            scene: None,
-            painted: None,
-            gdi,
-            draft_buf: Default::default(),
-            caret_drawn: None,
-            toast_drawn: None,
-            anim_drawn: false,
-            area_drawn: None,
-            objects: Vec::new(),
-            hist: vec![Vec::new()],
-            hi: 0,
-            sel,
-            tool: None,
-            draft: None,
-            stroke_pts: Vec::new(),
-            interact: Interact::None,
-            mem: tools::ToolMem::from_cfg(&cfg),
-            last_tool: Tool::Path,
-            pending: tools::Pending::default(),
-            // Tests never write the user's config.
-            cfg_path: (!cfg!(test)).then(config::config_path),
-            pick: None,
-            loupe: None,
-            text: None,
-            tasks,
-            accept_on_select,
-            keys: Keymap::from_config(&cfg.shortcuts).0,
-            cfg,
-            toolbar: None,
-            palette_open: false,
-            save_menu: false,
-            rec,
-            done: false,
-            cancelled: false,
-            dirty: false,
-            notice: None,
-            last_wheel: Instant::now(),
-            font: self.font.clone(),
-            th,
-            ui_font: self.ui_font,
-            hover: None,
-            hover_at: Instant::now(),
-            pressed: None,
-            hot_handle: None,
-            snap: None,
-            hover_win: Default::default(),
-            obj: Default::default(),
-            baked: Vec::new(),
-            baked_area: (0, 0, 0, 0),
-        };
+        let mut edit = Edit::new(shot, base, cfg, th, self.font.clone(), self.ui_font, rec);
+        edit.gdi = gdi;
+        edit.sel = sel;
+        edit.tasks = tasks;
+        edit.accept_on_select = accept_on_select;
+        // Tests never write the user's config.
+        edit.cfg_path = (!cfg!(test)).then(config::config_path);
+        // The window in front before the overlay is: the history's source.
+        if !cfg!(test) && self.history_root.is_some() {
+            edit.source = crate::history::source::foreground();
+        }
         #[cfg(target_os = "macos")]
         if let Some(r) = self.update_pending.take() {
             let mut t = Toast::new(format!("Rustshot {} is available — run `rustshot update`", r.version), ToastKind::Info);
@@ -1050,6 +1079,21 @@ impl App {
             #[cfg(test)]
             let mons = Vec::new();
             let geom = edit.rec_geom(&mons);
+            // The history's poster: the area as it looks now.
+            self.rec_poster = (self.history_root.is_some() && edit.cfg.history).then(|| {
+                let full = FRect { x: 0.0, y: 0.0, w: edit.shot.size.0 as f32, h: edit.shot.size.1 as f32 };
+                let poster = crate::scale::fit(&edit.export_plain(edit.sel.unwrap_or(full)), 400, 280);
+                let a = geom.area;
+                let name = if cfg!(test) { String::new() } else { crate::history::source::monitor_name(a.0 + a.2 as i32 / 2, a.1 + a.3 as i32 / 2) };
+                Box::new(HistShot {
+                    original: poster,
+                    objects: Vec::new(),
+                    title: edit.source.0.clone(),
+                    app: edit.source.1.clone(),
+                    monitor: crate::history::source::monitor_text(&name, edit.shot.scale),
+                    scale: edit.shot.scale,
+                })
+            });
             wind::hide(self.hwnd);
             self.st = State::Hidden;
             let (cfg, opts, th) = (edit.cfg.clone(), edit.rec.opts.clone(), edit.th);
@@ -1110,12 +1154,47 @@ impl App {
         if edit.cfg.shutter_sound && !tasks.is_empty() && tasks != [Task::Text] {
             crate::actions::shutter();
         }
+        // History: the capture as it was, its objects, where it came from.
+        let hist = (self.history_root.is_some() && edit.cfg.history && history_keeps(&tasks)).then(|| {
+            let (original, objects) = edit.history_shot(sel);
+            let c = (g.0 + img.width() as i32 / 2, g.1 + img.height() as i32 / 2);
+            let name = if cfg!(test) { String::new() } else { crate::history::source::monitor_name(c.0, c.1) };
+            Box::new(HistShot {
+                original,
+                objects,
+                title: edit.source.0.clone(),
+                app: edit.source.1.clone(),
+                monitor: crate::history::source::monitor_text(&name, edit.shot.scale),
+                scale: edit.shot.scale,
+            })
+        });
         self.st = State::Finish(Box::new(FinishJob {
             img,
             sel_global: g,
             tasks,
             cfg: edit.cfg.clone(),
+            hist,
         }));
+    }
+
+    /// Keep the exported capture in the history (its id), saying where it
+    /// was saved.
+    fn keep_history(&mut self, h: HistShot, res: &export::ExportResult, cfg: &Config) -> Option<String> {
+        let root = self.history_root.clone()?;
+        let saved = res.done.iter().rev().find_map(|d| match d {
+            export::Done::Saved(p) | export::Done::SavedDesktop(p) => Some(p.clone()),
+            _ => None,
+        });
+        let meta = crate::history::Meta {
+            captured: export::local_ymdhms(),
+            title: h.title,
+            app: h.app,
+            monitor: h.monitor,
+            scale: h.scale,
+            saved,
+            ..Default::default()
+        };
+        crate::history::record(cfg, &root, crate::history::ShotRec { original: h.original, objects: h.objects, meta })
     }
 
     fn run_finish(&mut self, job: FinishJob) {
@@ -1128,6 +1207,10 @@ impl App {
         }
         let at = (job.sel_global.0 + job.img.width() as i32 / 2, job.sel_global.1 + job.img.height() as i32 / 2);
         let th = theme::resolve(&job.cfg);
+        let entry = job.hist.and_then(|h| self.keep_history(*h, &res, &job.cfg));
+        // Its link goes to the entry once the upload is done.
+        self.upload_entry = entry.clone().filter(|_| res.upload.is_some());
+        self.last_entry = entry;
         let img = Arc::new(job.img);
         // Pin to screen: the image where it was captured.
         if job.tasks.contains(&Task::Pin) && !crate::pin::open(img.clone(), job.sel_global, th) {
@@ -1227,6 +1310,10 @@ impl App {
         let (text, kind, copied) = match &res {
             Ok(url) => {
                 println!("uploaded: {url}");
+                if let (Some(root), Some(id)) = (self.history_root.as_ref(), self.upload_entry.take()) {
+                    let u = url.clone();
+                    crate::history::update(root, &id, move |m| m.uploaded = Some(u));
+                }
                 let copied = self.cfg.copy_url_after_upload
                     && export::copy_text_to_clipboard(url)
                         .map_err(|e| eprintln!("warning: could not copy URL: {e:#}"))
@@ -2903,6 +2990,8 @@ struct Edit {
     baked: Vec<Obj>,
     /// The spotlight area `composed` was baked with.
     baked_area: crate::objects::Px,
+    /// The window in front when the capture started: (title, app).
+    source: (String, String),
 }
 
 /// More merged dirty rects than this invalidate the whole window.
@@ -2915,14 +3004,103 @@ const CLICK_PX: f32 = 2.5; // movement below this counts as a click
 const SNAP_CLICK_PX: f32 = 4.0;
 
 impl Edit {
+    /// A fresh editor over `base` (the capture; `shot` its geometry, its
+    /// image already moved out): nothing selected, drawn or open.
+    #[allow(clippy::too_many_arguments)]
+    fn new(shot: Shot, base: PixBuf, cfg: Config, th: Theme, font: Option<AnnotFont>, ui_font: Option<&'static UiFont>, rec: RecPop) -> Edit {
+        Edit {
+            mo: Motion::new(Instant::now()),
+            shot,
+            base,
+            composed: None,
+            frame: PixBuf::default(),
+            scene: None,
+            painted: None,
+            gdi: None,
+            draft_buf: Default::default(),
+            caret_drawn: None,
+            toast_drawn: None,
+            anim_drawn: false,
+            area_drawn: None,
+            objects: Vec::new(),
+            hist: vec![Vec::new()],
+            hi: 0,
+            sel: None,
+            tool: None,
+            draft: None,
+            stroke_pts: Vec::new(),
+            interact: Interact::None,
+            mem: tools::ToolMem::from_cfg(&cfg),
+            last_tool: Tool::Path,
+            pending: tools::Pending::default(),
+            cfg_path: None,
+            pick: None,
+            loupe: None,
+            text: None,
+            tasks: Vec::new(),
+            accept_on_select: false,
+            keys: Keymap::from_config(&cfg.shortcuts).0,
+            cfg,
+            toolbar: None,
+            palette_open: false,
+            save_menu: false,
+            rec,
+            done: false,
+            cancelled: false,
+            dirty: false,
+            notice: None,
+            last_wheel: Instant::now(),
+            font,
+            th,
+            ui_font,
+            hover: None,
+            hover_at: Instant::now(),
+            pressed: None,
+            hot_handle: None,
+            snap: None,
+            hover_win: Default::default(),
+            obj: Default::default(),
+            baked: Vec::new(),
+            baked_area: (0, 0, 0, 0),
+            source: Default::default(),
+        }
+    }
+
     /// The selection crop (`sel` in image coords) to export, objects
     /// baked in.
     fn export(&self, sel: FRect) -> PixBuf {
         #[cfg(windows)]
         if self.gdi.is_some() {
-            return self.export_gdi(sel);
+            return self.export_gdi(sel, false);
         }
         crop_to_image(self.composed(), sel)
+    }
+
+    /// [`Edit::export`] without the objects: the capture as it was (the
+    /// history's `original.png`).
+    fn export_plain(&self, sel: FRect) -> PixBuf {
+        #[cfg(windows)]
+        if self.gdi.is_some() {
+            return self.export_gdi(sel, true);
+        }
+        crop_to_image(&self.base, sel)
+    }
+
+    /// What the history keeps of export `sel`: the plain crop and the
+    /// objects moved into its coordinates (the crop's top-left is the
+    /// selection's, floored, as `crop_to_image` takes it).
+    fn history_shot(&self, sel: FRect) -> (PixBuf, Vec<Obj>) {
+        let (x0, y0) = (sel.x.floor().max(0.0), sel.y.floor().max(0.0));
+        let objs = self
+            .objects
+            .iter()
+            .cloned()
+            .map(|mut o| {
+                crate::objects::edit::translate(&mut o, -x0, -y0);
+                o
+            })
+            .collect();
+        (self.export_plain(sel), objs)
     }
 
     /// The area the spotlights dim: the selection, on whole pixels.
@@ -3817,6 +3995,8 @@ mod objects_tests;
 mod ocr_tests;
 #[cfg(test)]
 mod pin_tests;
+#[cfg(test)]
+mod history_tests;
 
 #[cfg(test)]
 mod tests {
@@ -3993,61 +4173,8 @@ mod tests {
         let ui_font = Some(fonts::ui_font());
         let mut shot = shot;
         let base = std::mem::take(&mut shot.image);
-        let edit = Edit {
-            mo: Motion::new(Instant::now()),
-            shot,
-            composed: None,
-            base,
-            frame: PixBuf::default(),
-            scene: None,
-            painted: None,
-            gdi: None,
-            draft_buf: Default::default(),
-            caret_drawn: None,
-            toast_drawn: None,
-            anim_drawn: false,
-            area_drawn: None,
-            objects: Vec::new(),
-            hist: vec![Vec::new()],
-            hi: 0,
-            sel,
-            tool: None,
-            draft: None,
-            stroke_pts: Vec::new(),
-            interact: Interact::None,
-            mem: tools::ToolMem::from_cfg(&cfg),
-            last_tool: Tool::Path,
-            pending: tools::Pending::default(),
-            cfg_path: None,
-            pick: None,
-            loupe: None,
-            text: None,
-            tasks: Vec::new(),
-            accept_on_select: false,
-            keys: Keymap::defaults(),
-            cfg: cfg.clone(),
-            toolbar: None,
-            palette_open: false,
-            save_menu: false,
-            rec: RecPop::new(RecOpts::from_config(&cfg), false),
-            done: false,
-            cancelled: false,
-            dirty: false,
-            notice: None,
-            last_wheel: Instant::now(),
-            font: font.clone(),
-            th,
-            ui_font,
-            hover: None,
-            hover_at: Instant::now(),
-            pressed: None,
-            hot_handle: None,
-            snap: None,
-            hover_win: Default::default(),
-            obj: Default::default(),
-            baked: Vec::new(),
-            baked_area: (0, 0, 0, 0),
-        };
+        let mut edit = Edit::new(shot, base, cfg.clone(), th, font.clone(), ui_font, RecPop::new(RecOpts::from_config(&cfg), false));
+        edit.sel = sel;
         App {
             cfg,
             kind: RunKind::OneShot,
@@ -4073,6 +4200,10 @@ mod tests {
             last_region: None,
             rec_area: None,
             wait_pins: false,
+            history_root: None,
+            last_entry: None,
+            upload_entry: None,
+            rec_poster: None,
             rec_spec: None,
             rec_cam: None,
             rec_bubble: None,

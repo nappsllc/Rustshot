@@ -13,6 +13,7 @@ mod dbus;
 mod editor;
 mod export;
 mod fonts;
+mod history;
 mod hotkey;
 mod icon_path;
 mod imgur;
@@ -40,6 +41,7 @@ mod rec_ui;
 // URI parsing is tested everywhere.
 mod screenclip_win;
 mod settings_ui;
+mod scale;
 mod sha256;
 mod snap;
 #[cfg(any(target_os = "linux", test))]
@@ -502,6 +504,8 @@ fn editor_main(cfg: Config, kind: RunKind, pending: Pending) -> i32 {
     let exit_code = Arc::new(AtomicI32::new(0));
     let slot: UploadSlot = Arc::new(Mutex::new(None));
     let mut code = editor::run(cfg.clone(), kind, Some(pending), exit_code, slot.clone(), None);
+    // The history thread finishes writing before the process goes.
+    history::flush(Duration::from_secs(30));
     if let Some(rx) = slot.lock().unwrap().take()
         && export::wait_upload(rx, cfg.copy_url_after_upload).is_none() {
             code = 1;
@@ -705,6 +709,7 @@ fn run() -> Result<()> {
             let exit_code = Arc::new(AtomicI32::new(0));
             let slot: UploadSlot = Arc::new(Mutex::new(None));
             let mut code = editor::run(cfg.clone(), RunKind::Daemon, None, exit_code, slot.clone(), guard);
+            history::flush(Duration::from_secs(30));
             if let Some(rx) = slot.lock().unwrap().take()
                 && export::wait_upload(rx, cfg.copy_url_after_upload).is_none() {
                     code = 1;
