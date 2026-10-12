@@ -63,7 +63,7 @@ cat > "$app/Contents/Info.plist" <<EOF
   <key>LSHighResolutionCapable</key><true/>
   <key>LSUIElement</key><true/>
   <key>NSPrincipalClass</key><string>NSApplication</string>
-  <key>NSHumanReadableCopyright</key><string>GPL-3.0-only</string>
+  <key>NSHumanReadableCopyright</key><string>© 2026 PowerNapps (GPL-3.0-only)</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
   <key>ITSAppUsesNonExemptEncryption</key><false/>
   <key>NSMicrophoneUsageDescription</key><string>Rustshot records your microphone into a screen recording when you turn Microphone on.</string>

@@ -846,7 +846,7 @@ mod tests {
     fn new_global_actions_are_slots() {
         let cfg = Config { repeat_hotkey: "Ctrl+Alt+P".into(), ..Config::default() };
         let w = wanted(&cfg);
-        assert_eq!(w, ["Shift+Meta+X", "Ctrl+Alt+Shift+Q", "Shift+Meta+R", "Shift+Meta+F", "Shift+Meta+E", "Ctrl+Alt+P", "Shift+Meta+T", "Shift+Meta+H"]);
+        assert_eq!(w, ["Shift+Meta+X", "Ctrl+Alt+Shift+Q", "Shift+Meta+G", "Shift+Meta+F", "Shift+Meta+E", "Ctrl+Alt+P", "Shift+Meta+Z", "Shift+Meta+H"]);
         let specs = specs_for(&w);
         for (i, (id, _, ev)) in specs.iter().enumerate() {
             assert!(*id == i as i32 + 1 && matches!(ev, HotEvent::Pressed(j) if *j == i));

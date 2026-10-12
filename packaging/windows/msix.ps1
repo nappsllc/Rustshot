@@ -18,7 +18,7 @@ if (-not (Test-Path $exe)) { throw "$exe missing (cargo build --release first)" 
 function Or($a, $b) { if ($a) { $a } else { $b } }
 $name = Or $env:MSIX_IDENTITY_NAME 'nappsllc.rustshot.dev'
 $pub = Or $env:MSIX_PUBLISHER 'CN=nappsllc-dev'
-$disp = Or $env:MSIX_PUBLISHER_DISPLAY 'nappsllc'
+$disp = Or $env:MSIX_PUBLISHER_DISPLAY 'PowerNapps'
 $esc = { param($s) [System.Security.SecurityElement]::Escape($s) }
 
 $stage = 'dist\stage-msix'

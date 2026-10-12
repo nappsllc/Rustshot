@@ -248,7 +248,10 @@ fn the_writer_thread_writes_in_order() {
 fn pruning_runs_with_history_off() {
     let r = TempRoot::new("off");
     let st = Store::new(&r.0);
-    let old = add(&st, (2020, 1, 1, 10, 0, 0), 8);
+    // Its own id: what is being written or edited is kept by id in this
+    // process, and pruning_leaves_open_entries_alone holds
+    // 2020-01-01/100000 open at the same time (in another folder).
+    let old = add(&st, (2020, 1, 3, 10, 0, 0), 8);
     let cfg = crate::config::Config { history: false, ..crate::config::Config::default() };
     keep_pruned(&r.0, &cfg);
     flush(std::time::Duration::from_secs(20));
@@ -534,3 +537,40 @@ fn civil_dates_round_trip() {
     assert_eq!(short_date(2026, 10, 12, 2026), "Mon 12 Oct");
 }
 
+
+#[test]
+fn the_root_is_outside_the_program_folder() {
+    let base = Path::new(if cfg!(windows) { r"C:\Users\u\AppData\Local" } else { "/home/u/.local/share" });
+    let root = root_in(base);
+    assert!(root.ends_with("history"));
+    if cfg!(windows) {
+        // %LOCALAPPDATA%\rustshot is where the installer puts rustshot.exe.
+        assert_eq!(root, base.join("rustshot-data").join("history"));
+        assert!(!root.starts_with(base.join("rustshot")));
+    } else {
+        assert_eq!(root, base.join("rustshot").join("history"));
+    }
+}
+
+#[test]
+fn list_lines_name_the_capture_and_its_file() {
+    let shot = Entry {
+        id: "2026-10-12/091407".into(),
+        dir: PathBuf::from("h").join("2026-10-12").join("091407"),
+        meta: Meta {
+            captured: (2026, 10, 12, 9, 14, 7),
+            w: 400,
+            h: 300,
+            bytes: 12_345,
+            saved: Some(PathBuf::from("shot.png")),
+            ..Meta::default()
+        },
+        size: 0,
+    };
+    assert_eq!(list_line(&shot), "2026-10-12 09:14:07\tscreenshot\t400x300\t12345\tshot.png");
+    // Never saved: its original.png; a recording: its file.
+    let plain = Entry { meta: Meta { saved: None, ..shot.meta.clone() }, ..shot.clone() };
+    assert!(list_line(&plain).ends_with(&format!("\t{}", shot.dir.join("original.png").display())));
+    let rec = Entry { meta: Meta { kind: Kind::Mp4, saved: None, file: Some(PathBuf::from("rec.mp4")), ..shot.meta.clone() }, ..shot.clone() };
+    assert!(list_line(&rec).contains("\tmp4\t") && list_line(&rec).ends_with("\trec.mp4"));
+}
