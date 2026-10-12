@@ -27,6 +27,8 @@ const WM_TRAY_BALLOON: u32 = WM_APP + 3;
 const WM_TRAY_STATE: u32 = WM_APP + 4;
 /// Posted by [`refresh_visible`]: add or remove the icon (`show_tray`).
 const WM_TRAY_VISIBLE: u32 = WM_APP + 5;
+/// Posted by [`refresh_tip`]: the recorded time changed (the tip only).
+const WM_TRAY_TIP: u32 = WM_APP + 6;
 /// Classic-callback balloon click (`NIN_BALLOONUSERCLICK`).
 const BALLOON_CLICK: u32 = WM_USER + 5;
 const ICON_ID: u32 = 1;
@@ -91,8 +93,15 @@ pub fn refresh_visible() {
 }
 
 /// The recording state changed: swap the icon (red dot) and the tip.
+#[cfg_attr(test, allow(dead_code))]
 pub fn refresh_state() {
     post_tray(WM_TRAY_STATE);
+}
+
+/// The recorded time changed: the tip says it.
+#[cfg_attr(test, allow(dead_code))]
+pub fn refresh_tip() {
+    post_tray(WM_TRAY_TIP);
 }
 
 /// Drop the event sender (called when the instance guard goes away).
@@ -233,8 +242,17 @@ fn refresh_icon(hwnd: HWND) {
     }
 }
 
-fn tip() -> &'static str {
-    if tray::is_recording() { "Rustshot — recording" } else { "Rustshot" }
+fn tip() -> String {
+    tray::tip_text()
+}
+
+fn set_tip(hwnd: HWND) {
+    unsafe {
+        let mut nid = base_data(hwnd);
+        nid.uFlags = NIF_TIP;
+        copy_wide(&mut nid.szTip, &tip());
+        let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
+    }
 }
 
 fn add_icon(hwnd: HWND) {
@@ -243,7 +261,7 @@ fn add_icon(hwnd: HWND) {
         nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
         nid.uCallbackMessage = WM_TRAYICON;
         nid.hIcon = icon(hwnd);
-        copy_wide(&mut nid.szTip, tip());
+        copy_wide(&mut nid.szTip, &tip());
         if !Shell_NotifyIconW(NIM_ADD, &nid).as_bool() {
             eprintln!("Rustshot: could not add the notification-area icon");
         }
@@ -333,13 +351,10 @@ pub fn handle(hwnd: HWND, m: u32, _w: WPARAM, l: LPARAM) -> Option<LRESULT> {
         }
         WM_TRAY_STATE => {
             refresh_icon(hwnd);
-            unsafe {
-                let mut nid = base_data(hwnd);
-                nid.uFlags = NIF_TIP;
-                copy_wide(&mut nid.szTip, tip());
-                let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
-            }
+            set_tip(hwnd);
         }
+        WM_TRAY_TIP if tray::is_visible() => set_tip(hwnd),
+        WM_TRAY_TIP => {}
         WM_DPICHANGED => refresh_icon(hwnd),
         WM_SETTINGCHANGE => {
             // lParam is a wide string naming the changed setting; theme switches send this one.

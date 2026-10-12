@@ -62,8 +62,44 @@ pub fn is_recording() -> bool {
 /// recording" and the tray icon its red dot.
 pub fn set_recording(on: bool) {
     RECORDING.store(on, std::sync::atomic::Ordering::SeqCst);
-    #[cfg(windows)]
+    ELAPSED.store(if on { 0 } else { NO_TIME }, std::sync::atomic::Ordering::SeqCst);
+    // Tests never post to a tray window (it could be the user's daemon's).
+    #[cfg(all(windows, not(test)))]
     crate::tray_win::refresh_state();
+}
+
+const NO_TIME: u64 = u64::MAX;
+/// The whole seconds recorded, for the tip; [`NO_TIME`] when not recording.
+static ELAPSED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(NO_TIME);
+
+/// The time recorded so far (paused time excluded): the tray's tip
+/// follows it, redrawn when the whole seconds change. Returns whether
+/// they did.
+pub fn set_elapsed(d: std::time::Duration) -> bool {
+    if !is_recording() {
+        return false;
+    }
+    let s = d.as_secs();
+    let changed = ELAPSED.swap(s, std::sync::atomic::Ordering::SeqCst) != s;
+    #[cfg(all(windows, not(test)))]
+    if changed {
+        crate::tray_win::refresh_tip();
+    }
+    changed
+}
+
+/// The tray icon's tooltip: "Rustshot", or "Rustshot — recording 1:23"
+/// while a recording runs.
+pub fn tip_text() -> String {
+    tip_for(is_recording(), ELAPSED.load(std::sync::atomic::Ordering::SeqCst))
+}
+
+fn tip_for(recording: bool, secs: u64) -> String {
+    match (recording, secs) {
+        (false, _) => "Rustshot".into(),
+        (true, NO_TIME) => "Rustshot — recording".into(),
+        (true, s) => format!("Rustshot — recording {}", crate::rec_ui::fmt_time(std::time::Duration::from_secs(s))),
+    }
 }
 
 /// "Saved <path>" (with what was left out, e.g. "microphone not
@@ -222,6 +258,16 @@ fn draw_brackets(fb: &mut crate::uifb::Fb, x: f32, y: f32, size: f32, c: crate::
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The tip says the time recorded while a recording runs.
+    #[test]
+    fn tip_says_the_recorded_time() {
+        assert_eq!(tip_for(false, 42), "Rustshot");
+        assert_eq!(tip_for(true, NO_TIME), "Rustshot — recording");
+        assert_eq!(tip_for(true, 0), "Rustshot — recording 0:00");
+        assert_eq!(tip_for(true, 83), "Rustshot — recording 1:23");
+        assert_eq!(tip_for(true, 3723), "Rustshot — recording 1:02:03");
+    }
 
     #[test]
     fn saved_text_says_what_was_left_out() {
