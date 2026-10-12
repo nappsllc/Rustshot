@@ -63,7 +63,10 @@ dbus session, PipeWire + WirePlumber + pipewire-pulse with a null sink
    `Ctrl+Alt+Shift+J`; not `Ctrl+Alt+F<n>`, which X turns into VT switches)
    and `record = "Ctrl+R"` in `[shortcuts]`, saving into `x11/saved`. Steps:
    the Settings window (`rustshot settings`); the capture hotkey (else a
-   second launch) and Ctrl+A, Ctrl+S; the one-shot `rustshot gui` and
+   second launch) and Ctrl+A, Ctrl+S, then the notice (`notice-window`: the
+   mapped override-redirect "Rustshot notice" window, typed NOTIFICATION,
+   bottom-centre; `notice-fades`: unmapped again; screenshot
+   `04c-notice.png`); the one-shot `rustshot gui` and
    Escape; a recording: the record hotkey (else the overlay, Ctrl+A,
    Ctrl+R), Enter, a tone into the null sink and a changing desktop, then the
    hotkey (else a click on the bar's Stop), checked with `ffprobe` and a full

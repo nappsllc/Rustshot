@@ -136,6 +136,8 @@ pub fn warm_mp4() {
         if let Some(exe) = crate::rec::linux::ffmpeg::find() {
             crate::rec::linux::ffmpeg::warm(&exe);
         }
+        // An OpenH264 download cut short (killed, crashed) is not reused.
+        crate::rec::linux::openh264::sweep();
         // Wayland: ask whether the ScreenCast portal answers (in the
         // background), so it is known when the overlay opens.
         if crate::rec::linux::portal::needs_portal_now() {

@@ -7,7 +7,7 @@
 
 use super::chrome::{self, BarState, ToastKind, Ui};
 use super::toolbar::{self, Act, Toolbar};
-use super::{caret_on, palette_colors, pick_area, text_box_rect, tools, Dimmer, Edit, Interact, Toast, Tool};
+use super::{animating, caret_on, palette_colors, pick_area, text_box_rect, tools, Dimmer, Edit, Interact, Toast, Tool};
 use crate::anim;
 use crate::objects::{CellGrid, FRect, Obj, Pt};
 use crate::pixbuf::PixBuf;
@@ -729,6 +729,7 @@ impl Edit {
         }
         self.caret_drawn = self.text.as_ref().map(caret_on);
         self.toast_drawn = self.notice.as_ref().or(app_notice).map(|t| t.at);
+        self.anim_drawn = animating(self, app_notice, now);
         self.scene = Some(sc);
     }
 
@@ -855,8 +856,7 @@ impl Edit {
                 // Drawn exactly as the committed text object renders.
                 font.render(&mut f.surf(), &t.text, t.px, t.pos, t.color);
                 if let Some(caret) = t.caret {
-                    let before = t.text.get(..caret).unwrap_or("");
-                    let cx = t.pos.x + font.line_width(before, t.px);
+                    let cx = t.pos.x + font.caret_x(&t.text, caret, t.px);
                     f.fill_rect(
                         cx.round() as i32,
                         t.pos.y.round() as i32,

@@ -111,6 +111,43 @@ pub fn download_name(pin: &Pin, pid: u32, attempt: u64) -> String {
     format!("{}.{pid}-{attempt}.download", pin.file)
 }
 
+/// Whether `name` is a download left behind ([`download_name`], or its
+/// `.part` while unpacking) by a process that is gone: not `me`, and
+/// `alive(pid)` says no.
+pub fn stale_download(name: &str, me: u32, alive: impl Fn(u32) -> bool) -> bool {
+    let Some(stem) = name.strip_suffix(".download").or_else(|| name.strip_suffix(".download.part")) else { return false };
+    let Some((_, tag)) = stem.rsplit_once('.') else { return false };
+    let Some(pid) = tag.split_once('-').and_then(|(p, a)| (!a.is_empty() && a.bytes().all(|b| b.is_ascii_digit())).then_some(p)).and_then(|p| p.parse::<u32>().ok()) else {
+        return false;
+    };
+    pid != me && !alive(pid)
+}
+
+/// Delete the downloads in `dir` that [`stale_download`] says were left
+/// behind (an attempt killed mid-way, a crash); the files removed.
+pub fn sweep_in(dir: &Path, me: u32, alive: impl Fn(u32) -> bool) -> Vec<PathBuf> {
+    let Ok(rd) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut out = Vec::new();
+    for e in rd.flatten() {
+        let name = e.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if e.file_type().is_ok_and(|t| t.is_file()) && stale_download(name, me, &alive) && std::fs::remove_file(e.path()).is_ok() {
+            out.push(e.path());
+        }
+    }
+    out
+}
+
+/// [`sweep_in`] for this user (the daemon, at start): a process is alive
+/// while `/proc/<pid>` exists.
+pub fn sweep() {
+    if let Some(d) = dir() {
+        for p in sweep_in(&d, std::process::id(), |pid| Path::new(&format!("/proc/{pid}")).exists()) {
+            eprintln!("rustshot: removed an unfinished OpenH264 download: {}", p.display());
+        }
+    }
+}
+
 fn hex_digest(p: &Path) -> Result<String, String> {
     crate::sha256::file_digest(p).map(|d| crate::sha256::hex(&d)).map_err(|e| format!("read {}: {e}", p.display()))
 }
@@ -947,6 +984,32 @@ mod tests {
         .unwrap();
         assert_eq!(std::fs::read(&dest).unwrap(), b"the library");
         assert_eq!(std::fs::read(&other).unwrap(), b"attempt 8's", "another attempt's file is left alone");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Downloads of a process that is gone are swept at start; this
+    /// process's, a live one's and other files stay.
+    #[test]
+    fn stale_downloads_are_swept() {
+        let alive = |pid: u32| pid == 77;
+        assert!(stale_download("libopenh264-2.6.0-linux64.8.so.bz2.42-1.download", 9, alive));
+        assert!(stale_download("libopenh264-2.6.0-linux64.8.so.bz2.42-3.download.part", 9, alive));
+        assert!(!stale_download("libopenh264-2.6.0-linux64.8.so.bz2.9-1.download", 9, alive), "ours");
+        assert!(!stale_download("libopenh264-2.6.0-linux64.8.so.bz2.77-1.download", 9, alive), "a live process's");
+        for keep in ["libopenh264-2.6.0-linux64.8.so", "x.download", "a.b.download", "a.x-1.download", "a.1-.download", "notes.txt"] {
+            assert!(!stale_download(keep, 9, alive), "{keep}");
+        }
+        let d = std::env::temp_dir().join(format!("rustshot-oh264-sweep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let names = ["lib.so.bz2.42-1.download", "lib.so.bz2.42-2.download.part", "lib.so.bz2.77-1.download", "lib.so"];
+        for n in names {
+            std::fs::write(d.join(n), b"x").unwrap();
+        }
+        let mut gone: Vec<String> = sweep_in(&d, 9, alive).iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
+        gone.sort();
+        assert_eq!(gone, ["lib.so.bz2.42-1.download", "lib.so.bz2.42-2.download.part"]);
+        assert!(d.join("lib.so").exists() && d.join("lib.so.bz2.77-1.download").exists());
         let _ = std::fs::remove_dir_all(&d);
     }
 

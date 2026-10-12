@@ -66,6 +66,12 @@ impl FontDc {
     }
 }
 
+/// A strong right-to-left character (Hebrew, Arabic and their
+/// presentation forms, Syriac, Thaana, N'Ko...).
+fn is_rtl(c: char) -> bool {
+    matches!(c as u32, 0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF | 0x10800..=0x10FFF | 0x1E800..=0x1EFFF)
+}
+
 impl Drop for FontDc {
     fn drop(&mut self) {
         unsafe {
@@ -88,6 +94,45 @@ impl Face {
             return (px * 0.8, px * 0.2, 0.0);
         }
         (tm.tmAscent as f32, tm.tmDescent as f32, tm.tmExternalLeading as f32)
+    }
+
+    /// The caret before byte `idx` (from the line's left) as Uniscribe
+    /// lays the line out (the leading edge of the character there, or the
+    /// trailing edge of the last one at the end); None when it cannot.
+    pub fn caret_x(&self, line: &str, idx: usize, px: f32) -> Option<f32> {
+        use windows::Win32::Globalization::{ScriptStringAnalyse, ScriptStringCPtoX, ScriptStringFree};
+        const SSA_FALLBACK: u32 = 0x20;
+        const SSA_GLYPHS: u32 = 0x80;
+        const SSA_LINK: u32 = 0x1000;
+        if line.is_empty() || idx == 0 && !line.chars().any(is_rtl) {
+            return Some(0.0);
+        }
+        let wide: Vec<u16> = line.encode_utf16().collect();
+        let cp = line.get(..idx)?.encode_utf16().count();
+        let n = wide.len() as i32;
+        let fd = FontDc::new(px)?;
+        unsafe {
+            let mut ssa: *mut core::ffi::c_void = std::ptr::null_mut();
+            ScriptStringAnalyse(
+                fd.dc,
+                wide.as_ptr() as *const _,
+                n,
+                n * 3 / 2 + 16,
+                -1, // Unicode
+                SSA_GLYPHS | SSA_FALLBACK | SSA_LINK,
+                0,
+                None,
+                None,
+                None,
+                None,
+                std::ptr::null(),
+                &mut ssa,
+            )
+            .ok()?;
+            let x = if cp < wide.len() { ScriptStringCPtoX(ssa, cp as i32, false) } else { ScriptStringCPtoX(ssa, n - 1, true) };
+            let _ = ScriptStringFree(&mut ssa);
+            x.ok().map(|x| x as f32)
+        }
     }
 
     pub fn width(&self, line: &str, px: f32) -> f32 {

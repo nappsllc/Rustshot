@@ -968,6 +968,9 @@ fn timer_repaints_only_while_something_changes() {
     for t in [&mut e.mo.dim, &mut e.mo.bar, &mut e.mo.pop, &mut e.mo.hint, &mut e.mo.hover] {
         t.snap(t.target());
     }
+    // The last frame was drawn mid-fade: one at the end values is owed.
+    assert!(a.on_event(Ev::Timer), "the settled frame");
+    ed(&mut a).prepare(None, (0, 0), Instant::now());
     assert!(!a.on_event(Ev::Timer), "settled: no frame");
     // Hidden: only a state change asks for a frame.
     a.st = State::Hidden;
@@ -1391,6 +1394,40 @@ fn source_keys_pick_screen_window_region() {
     assert_eq!(ed(&mut a).tool, before, "video mode: no tool change");
     key(&mut a, 'F' as u32);
     assert_eq!(ed(&mut a).rec.source, rec_ui::RecSource::Screen, "F is the source again");
+}
+
+/// A custom area is a region: after Window (or Screen) a drag of a new
+/// area, or moving or resizing the picked one, switches the Record
+/// panel's source to Region; a click that picks a window keeps Window.
+#[cfg(any(windows, target_os = "linux"))]
+#[test]
+fn a_dragged_area_makes_the_source_region() {
+    let mut a = app(Some(r(300.0, 200.0, 400.0, 300.0)));
+    key(&mut a, '2' as u32);
+    let win = crate::snap::Node::new(crate::snap::R::new(120, 90, 1320, 810), vec![]);
+    FAKE_SNAP.with(|s| *s.borrow_mut() = Some(crate::snap::Snapshot::build(&[win], (0, 0), (1440, 900))));
+    mv(&mut a, 400, 300);
+    key(&mut a, 'W' as u32);
+    click(&mut a, 400, 300);
+    assert_eq!(ed(&mut a).sel, Some(r(120.0, 90.0, 1200.0, 720.0)), "the window");
+    assert_eq!(ed(&mut a).rec.source, rec_ui::RecSource::Window, "a click keeps Window");
+    // Resize the window's area by its bottom-right handle: a region.
+    drag(&mut a, (1320, 810), (1000, 600));
+    assert_eq!(ed(&mut a).sel, Some(r(120.0, 90.0, 880.0, 510.0)));
+    assert_eq!(ed(&mut a).rec.source, rec_ui::RecSource::Region);
+    // Window again, then a new area dragged outside it.
+    mv(&mut a, 400, 300);
+    key(&mut a, 'W' as u32);
+    assert_eq!(ed(&mut a).rec.source, rec_ui::RecSource::Window);
+    drag(&mut a, (20, 20), (100, 80));
+    assert_eq!(ed(&mut a).sel, Some(r(20.0, 20.0, 80.0, 60.0)));
+    assert_eq!(ed(&mut a).rec.source, rec_ui::RecSource::Region, "a drag is a region");
+    // Screen, then the monitor's area moved... it is the whole monitor
+    // (nothing to move), so a press and release in it keeps Screen.
+    key(&mut a, 'F' as u32);
+    assert_eq!(ed(&mut a).rec.source, rec_ui::RecSource::Screen);
+    drag(&mut a, (700, 450), (700, 450));
+    assert_eq!(ed(&mut a).rec.source, rec_ui::RecSource::Screen, "nothing changed");
 }
 
 /// A GIF: the sound rows say "Not recorded in GIF" and are disabled; the

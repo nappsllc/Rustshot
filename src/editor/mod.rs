@@ -814,6 +814,13 @@ impl App {
         if let Some(r) = &self.rec {
             wind::set_fast_timer(self.hwnd, r.counting());
         }
+        // macOS: the notice fades on these ticks (fast while it is up).
+        if let Some(fast) = crate::notice::tick()
+            && self.rec.is_none()
+            && !matches!(self.st, State::Edit(_))
+        {
+            wind::set_fast_timer(self.hwnd, fast);
+        }
         let State::Edit(edit) = &self.st else { return changed };
         let repaint = changed || stale(edit, self.notice.as_ref(), Instant::now());
         // The microphone's level is looked at 20 times a second.
@@ -905,6 +912,7 @@ impl App {
             draft_buf: Default::default(),
             caret_drawn: None,
             toast_drawn: None,
+            anim_drawn: false,
             area_drawn: None,
             objects: Vec::new(),
             hist: vec![Vec::new()],
@@ -2472,6 +2480,10 @@ struct Edit {
     caret_drawn: Option<bool>,
     /// `at` of the toast drawn in the last frame (None: no toast).
     toast_drawn: Option<Instant>,
+    /// The last frame was drawn mid-animation: one more frame, at the
+    /// animation's end values, is owed (else the fade-in's last frame, a
+    /// pixel or two short of its place, could stay on screen).
+    anim_drawn: bool,
     /// Monitor area chrome was placed in by the last frame.
     area_drawn: Option<FRect>,
     objects: Vec<Obj>,
@@ -2970,13 +2982,23 @@ fn end_interaction(edit: &mut Edit) {
                 // (window snapping), else everything (Flameshot-ish).
                 let all = FRect { x: 0.0, y: 0.0, w: edit.shot.size.0 as f32, h: edit.shot.size.1 as f32 };
                 edit.sel = Some(edit.snap_rect().unwrap_or(all));
+            } else {
+                // A dragged area is a region, whatever the Record panel's
+                // source was (Window, Screen).
+                edit.rec.source = rec_ui::RecSource::Region;
             }
             if edit.accept_on_select {
                 edit.done = true;
                 edit.cancelled = false;
             }
         }
-        Interact::MoveSel { .. } | Interact::Resize { .. } | Interact::Pick(_) | Interact::None => {}
+        // A window's or a monitor's area moved or resized: a region now.
+        Interact::MoveSel { orig, .. } | Interact::Resize { orig, .. } => {
+            if edit.sel != Some(orig) {
+                edit.rec.source = rec_ui::RecSource::Region;
+            }
+        }
+        Interact::Pick(_) | Interact::None => {}
     }
 }
 
@@ -3144,12 +3166,14 @@ fn animating(edit: &Edit, app_notice: Option<&Toast>, now: Instant) -> bool {
     edit.mo.active(now) || tip_pending || toast_moving || edit.rec.cams_looking()
 }
 
-/// The last frame no longer matches: something animates, the caret
-/// blink phase flipped, or the toast that would be drawn now differs
-/// from the one drawn (set, cleared or replaced between frames).
+/// The last frame no longer matches: something animates (or did when it
+/// was drawn: its end state is not on screen yet), the caret blink phase
+/// flipped, or the toast that would be drawn now differs from the one
+/// drawn (set, cleared or replaced between frames).
 fn stale(edit: &Edit, app_notice: Option<&Toast>, now: Instant) -> bool {
     let toast_now = edit.notice.as_ref().or(app_notice).map(|t| t.at);
-    animating(edit, app_notice, now)
+    edit.anim_drawn
+        || animating(edit, app_notice, now)
         || edit.text.as_ref().map(caret_on) != edit.caret_drawn
         || toast_now != edit.toast_drawn
 }
@@ -3518,6 +3542,7 @@ mod tests {
             draft_buf: Default::default(),
             caret_drawn: None,
             toast_drawn: None,
+            anim_drawn: false,
             area_drawn: None,
             objects: Vec::new(),
             hist: vec![Vec::new()],
@@ -3602,6 +3627,26 @@ mod tests {
 
     const CTRL: Mods = Mods { ctrl: true, shift: false, alt: false };
     const CTRL_SHIFT: Mods = Mods { ctrl: true, shift: true, alt: false };
+
+    /// A frame drawn mid-animation owes one more at the end values: the
+    /// fade-in's last frame (the toolbar a pixel short of its place) never
+    /// stays on screen once the animation is over and the ticks go idle.
+    #[test]
+    fn the_last_animation_frame_is_drawn() {
+        let sel = FRect { x: 10.0, y: 10.0, w: 50.0, h: 40.0 };
+        let mut app = preview_app(theme::DARK, Some(sel));
+        let t0 = Instant::now();
+        let e = edit_of(&mut app);
+        e.mo = Motion::new(t0);
+        e.hover = None;
+        let ms = |n| t0 + Duration::from_millis(n);
+        e.prepare(None, (0, 0), ms(60));
+        assert!(animating(e, None, ms(60)), "the dim fades in over 120 ms");
+        assert!(!animating(e, None, ms(500)));
+        assert!(stale(e, None, ms(500)), "the frame at 60 ms is not the end state");
+        e.prepare(None, (0, 0), ms(500));
+        assert!(!stale(e, None, ms(600)), "the end state is on screen: idle");
+    }
 
     #[test]
     fn keymap_drives_handle_key() {

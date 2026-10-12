@@ -362,6 +362,41 @@ pub fn do_upload(png: &[u8], client_id: &str) -> Result<String, String> {
     extract_json_string(&text, "link").ok_or_else(|| format!("no link in response: {text}"))
 }
 
+/// HTTPS POST of `body` (on curl's stdin) with `headers`; returns (status,
+/// body). Up to 10 minutes: a recording can be tens of MB.
+#[cfg_attr(test, allow(dead_code))] // tests never upload
+pub fn http_post(host: &str, path: &str, headers: &[(&str, &str)], body: &[u8]) -> Result<(u32, String), String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let mut cmd = Command::new("curl");
+    cmd.args(["-sS", "--max-time", "600", "-X", "POST", "-w", "\n%{http_code}"]);
+    for (k, v) in headers {
+        cmd.arg("-H").arg(format!("{k}: {v}"));
+    }
+    cmd.args(["--data-binary", "@-"]).arg(format!("https://{host}{path}"));
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("spawn curl: {e}"))?;
+    let mut stdin = child.stdin.take().ok_or_else(|| "curl stdin".to_string())?;
+    let body = body.to_vec();
+    // Fed on a thread: curl may answer (an error) before it read it all.
+    let feed = std::thread::spawn(move || {
+        let _ = stdin.write_all(&body);
+    });
+    let out = child.wait_with_output().map_err(|e| format!("curl: {e}"))?;
+    let _ = feed.join();
+    if !out.status.success() {
+        return Err(format!("curl: {}", String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let (body, code) = text.rsplit_once('\n').unwrap_or(("", &text));
+    Ok((code.trim().parse().unwrap_or(0), body.to_string()))
+}
+
 /// HTTPS GET via `curl`; a non-2xx status fails (`-f`).
 pub fn http_get(host: &str, path: &str, headers: &[(&str, &str)]) -> Result<String, String> {
     use std::process::Command;

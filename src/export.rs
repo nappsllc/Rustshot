@@ -167,7 +167,9 @@ fn bmp_bytes(img: &PixBuf) -> Result<Vec<u8>> {
 
 /// Make one path component safe on every OS: `<>:"/\|?*` and control
 /// characters become `-`, `.`/`..` components are dropped, trailing dots
-/// and spaces are trimmed. May return an empty string.
+/// and spaces are trimmed, and a name Windows reserves for a device
+/// (`CON`, `NUL`, `COM1`, `LPT1.png`, ...) gets a `_` after its stem. May
+/// return an empty string.
 pub fn sanitize_component(s: &str) -> String {
     let parts: Vec<String> = s
         .split(['/', '\\'])
@@ -176,11 +178,36 @@ pub fn sanitize_component(s: &str) -> String {
                 .chars()
                 .map(|c| if c.is_control() || "<>:\"|?*".contains(c) { '-' } else { c })
                 .collect();
-            p.trim_end_matches(['.', ' ']).to_string()
+            unreserve(p.trim_end_matches(['.', ' ']))
         })
         .filter(|p| !p.is_empty())
         .collect();
     parts.join("-")
+}
+
+/// Windows' device names (any case, with any extension: `nul.png` too;
+/// `COM¹`-`COM³` and `LPT¹`-`LPT³` included).
+fn is_reserved(stem: &str) -> bool {
+    let s = stem.trim_end_matches(' ').to_ascii_uppercase();
+    if matches!(s.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$") {
+        return true;
+    }
+    let mut c = s.chars();
+    let head: String = c.by_ref().take(3).collect();
+    let tail: Vec<char> = c.collect();
+    (head == "COM" || head == "LPT") && tail.len() == 1 && matches!(tail[0], '1'..='9' | '\u{b9}' | '\u{b2}' | '\u{b3}')
+}
+
+/// `p` with a `_` after its stem when that is a reserved device name.
+fn unreserve(p: &str) -> String {
+    let (stem, rest) = p.split_once('.').map_or((p, None), |(a, b)| (a, Some(b)));
+    if !is_reserved(stem) {
+        return p.to_string();
+    }
+    match rest {
+        Some(r) => format!("{stem}_.{r}"),
+        None => format!("{stem}_"),
+    }
 }
 
 /// Expanded, sanitised file stem (never empty).
@@ -308,27 +335,40 @@ pub fn local_ymdhms() -> Tm {
     }
 }
 
-/// `save_path`, or `<Pictures>/rustshot` when it is empty (falling back to
-/// `<home>/rustshot`, then the current directory). Not created here.
+/// `save_path`, or `<Pictures>/rustshot` when it is empty (the Pictures
+/// folder as `desktop::pictures` finds it: Windows' known folder, which
+/// follows OneDrive; `XDG_PICTURES_DIR`; `~/Pictures`), falling back to
+/// `<home>/rustshot`, then the current directory. Not created here.
 pub fn default_save_dir(cfg: &Config) -> PathBuf {
-    if !cfg.save_path.trim().is_empty() {
-        return PathBuf::from(&cfg.save_path);
-    }
     #[cfg(windows)]
     let home = std::env::var_os("USERPROFILE");
     #[cfg(unix)]
     let home = std::env::var_os("HOME");
-    if let Some(home) = home.filter(|h| !h.is_empty()) {
-        let home = PathBuf::from(home);
-        let pics = home.join("Pictures");
-        if pics.is_dir() {
-            return pics.join("rustshot");
-        }
-        if home.is_dir() {
-            return home.join("rustshot");
-        }
+    let home = home.filter(|h| !h.is_empty()).map(PathBuf::from);
+    let cwd = || std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    save_dir_with(cfg, crate::desktop::pictures, home, &|p: &Path| p.is_dir(), &cwd)
+}
+
+/// [`default_save_dir`] from what it looks up: the Pictures folder (only
+/// asked when `save_path` is empty), the home, whether a folder exists,
+/// the current directory.
+pub fn save_dir_with(
+    cfg: &Config,
+    pictures: impl FnOnce() -> Option<PathBuf>,
+    home: Option<PathBuf>,
+    is_dir: &dyn Fn(&Path) -> bool,
+    cwd: &dyn Fn() -> PathBuf,
+) -> PathBuf {
+    if !cfg.save_path.trim().is_empty() {
+        return PathBuf::from(&cfg.save_path);
     }
-    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    if let Some(pics) = pictures().filter(|p| !p.as_os_str().is_empty() && is_dir(p)) {
+        return pics.join("rustshot");
+    }
+    if let Some(home) = home.filter(|h| is_dir(h)) {
+        return home.join("rustshot");
+    }
+    cwd()
 }
 
 /// Append `_1`, `_2`, ... before the extension until the path is free.
@@ -717,13 +757,32 @@ mod tests {
     fn default_dir_is_pictures_rustshot() {
         let d = default_save_dir(&Config::default());
         assert_eq!(d.file_name().unwrap(), "rustshot", "{}", d.display());
-        let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).unwrap();
-        let pics = PathBuf::from(home).join("Pictures");
-        if pics.is_dir() {
+        if let Some(pics) = crate::desktop::pictures().filter(|p| p.is_dir()) {
             assert_eq!(d, pics.join("rustshot"));
         }
         let set = Config { save_path: "X:/shots".into(), ..Config::default() };
         assert_eq!(default_save_dir(&set), PathBuf::from("X:/shots"));
+    }
+
+    /// The Pictures folder as found (a OneDrive one, a localised XDG
+    /// one), else the home, else the current directory; a set folder wins
+    /// without a lookup.
+    #[test]
+    fn the_save_dir_takes_the_pictures_folder_found() {
+        let dirs = ["/home/me", "/home/me/Изображения", r"C:\Users\me\OneDrive\Pictures"];
+        let is_dir = |p: &Path| dirs.iter().any(|d| Path::new(d) == p);
+        let cwd = || PathBuf::from("/cwd");
+        let home = || Some(PathBuf::from("/home/me"));
+        let d = Config::default();
+        let od = PathBuf::from(r"C:\Users\me\OneDrive\Pictures");
+        assert_eq!(save_dir_with(&d, || Some(od.clone()), home(), &is_dir, &cwd), od.join("rustshot"));
+        let xdg = PathBuf::from("/home/me/Изображения");
+        assert_eq!(save_dir_with(&d, || Some(xdg.clone()), home(), &is_dir, &cwd), xdg.join("rustshot"));
+        let gone = || Some(PathBuf::from("/home/me/Pictures")); // not made yet
+        assert_eq!(save_dir_with(&d, gone, home(), &is_dir, &cwd), PathBuf::from("/home/me/rustshot"));
+        assert_eq!(save_dir_with(&d, || None, None, &is_dir, &cwd), PathBuf::from("/cwd"));
+        let set = Config { save_path: "D:/shots".into(), ..Config::default() };
+        assert_eq!(save_dir_with(&set, || panic!("not looked up"), home(), &is_dir, &cwd), PathBuf::from("D:/shots"));
     }
 
     #[test]
@@ -736,6 +795,29 @@ mod tests {
         assert_eq!(sanitize_component("."), "");
         assert_eq!(sanitize_component("name. . "), "name");
         assert_eq!(sanitize_component("v1.2 final"), "v1.2 final");
+    }
+
+    /// Windows cannot make a file or folder named after a device.
+    #[test]
+    fn windows_device_names_get_an_underscore() {
+        for (from, to) in [
+            ("CON", "CON_"),
+            ("nul", "nul_"),
+            ("Aux.png", "Aux_.png"),
+            ("com1", "com1_"),
+            ("LPT9.tar.gz", "LPT9_.tar.gz"),
+            ("COM\u{b9}", "COM\u{b9}_"),
+            ("conout$", "conout$_"),
+            ("prn.", "prn_"),
+            ("a/con/b", "a-con_-b"),
+        ] {
+            assert_eq!(sanitize_component(from), to, "{from}");
+        }
+        for keep in ["CONSOLE", "com10", "COM0", "lpt", "nul-2026", "my con", "com1x"] {
+            assert_eq!(sanitize_component(keep), keep);
+        }
+        let cfg = Config { save_path: "/s".into(), filename_pattern: "nul".into(), save_subfolder: false, ..Config::default() };
+        assert_eq!(auto_save_path(&cfg, NOW).file_name().unwrap(), "nul_.png");
     }
 
     #[test]

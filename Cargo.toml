@@ -39,6 +39,8 @@ windows = { version = "0.62", features = [
     "Win32_UI_Controls_Dialogs",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_Graphics_Gdi",
+    # Uniscribe (ScriptStringCPtoX): the text caret in right-to-left text.
+    "Win32_Globalization",
     # Window snapping: cloaked windows, the drawn frame (no invisible borders).
     "Win32_Graphics_Dwm",
     "Win32_System_DataExchange",

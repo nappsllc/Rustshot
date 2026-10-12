@@ -318,6 +318,13 @@ impl Disp {
     }
 }
 
+impl Disp {
+    /// The default screen's root window.
+    pub(crate) fn root(&self) -> c_ulong {
+        self.root
+    }
+}
+
 impl Drop for Disp {
     fn drop(&mut self) {
         unsafe {
@@ -385,6 +392,7 @@ pub(crate) const EV_BUTTON_RELEASE: c_int = BUTTON_RELEASE;
 pub(crate) const EV_MOTION: c_int = MOTION_NOTIFY;
 pub(crate) const EV_EXPOSE: c_int = EXPOSE;
 pub(crate) const EV_CONFIGURE: c_int = CONFIGURE_NOTIFY;
+pub(crate) const EV_LEAVE: c_int = LEAVE_NOTIFY;
 
 /// Rows of `bgra` (`w`×`h`) cut into runs of pixels at least half opaque,
 /// as (x, y, w, h) rectangles one pixel high (a window's shape).
@@ -511,6 +519,18 @@ impl Win {
             };
             XSendEvent(self.dpy, d.root, 0, SUBSTRUCTURE_REDIRECT_MASK | SUBSTRUCTURE_NOTIFY_MASK, &mut ev);
             XFlush(self.dpy);
+        }
+    }
+
+    /// Name an override-redirect window `title` and type it `ty`
+    /// (`_NET_WM_WINDOW_TYPE_<ty>`): what `xwininfo`/`xprop` and a
+    /// compositor's rules see.
+    pub(crate) fn set_name(&mut self, title: &str, ty: &str) {
+        let t = std::ffi::CString::new(title).expect("no NUL");
+        unsafe {
+            XStoreName(self.dpy, self.win, t.as_ptr());
+            let v: [c_long; 1] = [atom(self.dpy, &format!("_NET_WM_WINDOW_TYPE_{ty}")) as c_long];
+            XChangeProperty(self.dpy, self.win, atom(self.dpy, "_NET_WM_WINDOW_TYPE"), XA_ATOM, 32, PROP_MODE_REPLACE, v.as_ptr() as *const u8, 1);
         }
     }
 
