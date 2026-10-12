@@ -641,6 +641,16 @@ mod window {
         fn XSetWMHints(dpy: *mut c_void, w: c_ulong, hints: *mut XWMHints) -> c_int;
         fn XResourceManagerString(dpy: *mut c_void) -> *mut c_char;
         fn XResizeWindow(dpy: *mut c_void, w: c_ulong, width: c_uint, height: c_uint) -> c_int;
+        fn XTranslateCoordinates(
+            dpy: *mut c_void,
+            src: c_ulong,
+            dst: c_ulong,
+            sx: c_int,
+            sy: c_int,
+            dx: *mut c_int,
+            dy: *mut c_int,
+            child: *mut c_ulong,
+        ) -> c_int;
     }
 
     const FOCUS_IN: c_int = 9;
@@ -659,7 +669,8 @@ mod window {
 
     /// Give a `run_window` window the client size `w`×`h` (logical px) at
     /// its current [`scale`] (the UI size changed); `Ev::Resize` follows
-    /// from the event loop. The window manager keeps its top-left.
+    /// from the event loop. The window keeps its top-left, moved only as far
+    /// as it takes to stay inside its monitor.
     pub fn resize(hwnd: Hwnd, w: u32, h: u32) {
         let mut fixed = None;
         with_slot(hwnd, |s| fixed = Some(s.fixed));
@@ -677,6 +688,22 @@ mod window {
                     (hints.min_width, hints.min_height) = (pw as c_int, ph as c_int);
                     (hints.max_width, hints.max_height) = (pw as c_int, ph as c_int);
                     XSetWMNormalHints(dpy, hwnd.0, &mut hints);
+                }
+                // Where the client area is on the screen.
+                let (mut x, mut y, mut child) = (0, 0, 0);
+                let root = XRootWindow(dpy, XDefaultScreen(dpy));
+                if XTranslateCoordinates(dpy, hwnd.0, root, 0, 0, &mut x, &mut y, &mut child) != 0 {
+                    let mons = crate::capture::monitors().unwrap_or_default();
+                    let (cx, cy) = (x + pw as i32 / 2, y + ph as i32 / 2);
+                    let mon = mons.iter().find(|m| m.contains(x, y)).or_else(|| mons.iter().find(|m| m.contains(cx, cy)));
+                    if let Some(m) = mon {
+                        let (nx, ny) = crate::wind::keep_inside((m.x, m.y, m.w as i32, m.h as i32), x, y, pw as i32, ph as i32);
+                        if (nx, ny) != (x, y) {
+                            XMoveResizeWindow(dpy, hwnd.0, nx, ny, pw, ph);
+                            XFlush(dpy);
+                            return;
+                        }
+                    }
                 }
                 XResizeWindow(dpy, hwnd.0, pw, ph);
                 XFlush(dpy);

@@ -219,6 +219,165 @@ fn recording_geometry_scales_per_monitor() {
     assert_eq!(w.scale, g.area_scale());
 }
 
+/// The toolbar, its popover and every item as laid out now.
+fn layout_of(a: &mut App) -> (FRect, Option<FRect>, Vec<FRect>) {
+    let t = bar(a);
+    (t.bar, t.pop, t.items.iter().map(|i| i.r).collect())
+}
+
+fn same_rect(a: FRect, b: FRect) -> bool {
+    (a.x - b.x).abs() < 0.01 && (a.y - b.y).abs() < 0.01 && (a.w - b.w).abs() < 0.01 && (a.h - b.h).abs() < 0.01
+}
+
+/// A popover open while the size changes is anchored again at the new
+/// scale, exactly where a fresh layout at that scale puts it, and what it
+/// holds (the picker's colour, focus and hex text) stays.
+#[test]
+fn an_open_popover_is_anchored_again_at_the_new_size() {
+    type Setup = fn(&mut App);
+    let cases: [(&str, Setup); 2] = [
+        ("palette", |a| ed(a).palette_open = true),
+        ("picker", |a| {
+            ed(a).tool = Some(Tool::Line);
+            ed(a).open_picker(pick::Target::Tool);
+            let p = ed(a).pick.as_mut().unwrap();
+            p.set_hue(200.0);
+            p.set_sv(0.3, 0.8);
+            p.focus = Some(pick::Part::Hue);
+        }),
+    ];
+    for (name, setup) in cases {
+        for (start, to) in [(UiSize::Auto, UiSize::Pct(125)), (UiSize::Pct(150), UiSize::Pct(75)), (UiSize::Auto, UiSize::Pct(200))] {
+            let mut live = annotated(theme::DARK, BIG);
+            ed(&mut live).cfg.ui_scale = start;
+            setup(&mut live);
+            let before = layout_of(&mut live);
+            assert!(before.1.is_some(), "{name}: popover open");
+            let picked = ed(&mut live).pick.clone();
+            ed(&mut live).set_ui_size(to, Instant::now());
+            let after = layout_of(&mut live);
+            assert_eq!(ed(&mut live).pick, picked, "{name}: the picker keeps its state");
+            assert_eq!(ed(&mut live).palette_open, name == "palette", "{name}: still open");
+            // A fresh capture at the new size.
+            let mut fresh = annotated(theme::DARK, BIG);
+            ed(&mut fresh).cfg.ui_scale = to;
+            setup(&mut fresh);
+            let want = layout_of(&mut fresh);
+            let what = format!("{name} {start:?} -> {to:?}");
+            assert!(same_rect(after.0, want.0), "{what}: bar {:?} vs {:?}", after.0, want.0);
+            assert!(same_rect(after.1.unwrap(), want.1.unwrap()), "{what}: popover {:?} vs {:?}", after.1, want.1);
+            assert_eq!(after.2.len(), want.2.len());
+            for (x, y) in after.2.iter().zip(&want.2) {
+                assert!(same_rect(*x, *y), "{what}: item {x:?} vs {y:?}");
+            }
+            assert_ne!(after.0, before.0, "{what}: it did move");
+        }
+    }
+}
+
+/// The toast at 75 % and 200 %: the panel is 36 logical px tall and its
+/// width follows the scale with the text.
+#[test]
+fn the_toast_scales() {
+    let th = theme::DARK;
+    let size = |s: f32, msg: &str| chrome::toast_size(&chrome::Ui { th: &th, s, font: Some(fonts::ui_font()) }, msg);
+    let msg = "UI size 125 %";
+    let (w1, h1) = size(1.0, msg);
+    assert_eq!(h1, 36.0);
+    for s in [0.75f32, 2.0] {
+        let (w, h) = size(s, msg);
+        assert_eq!(h, 36.0 * s, "{s}");
+        assert!((w - w1 * s).abs() <= 2.0, "{s}: {w} vs {}", w1 * s);
+    }
+    // Through the overlay: the scene's toast is drawn at the UI scale.
+    for (to, k) in [(UiSize::Pct(75), 0.75), (UiSize::Pct(200), 2.0)] {
+        let mut a = annotated(theme::DARK, BIG);
+        ed(&mut a).set_ui_size(to, Instant::now());
+        let m = a.mouse;
+        ed(&mut a).prepare(None, m, Instant::now());
+        assert_eq!(ed(&mut a).ui_scale(), k);
+        let text = ed(&mut a).scene.as_ref().and_then(|sc| sc.toast.as_ref()).map(|t| t.text.clone());
+        assert_eq!(text, Some(to.describe()));
+    }
+}
+
+/// The size toast says a change once: not when nothing changed, and
+/// never over an error that is still showing.
+#[test]
+fn the_size_toast_is_for_changes_and_spares_errors() {
+    let mut a = annotated(theme::DARK, BIG);
+    let t = Instant::now();
+    ed(&mut a).set_ui_size(UiSize::Auto, t);
+    assert!(ed(&mut a).notice.is_none(), "unchanged: no toast");
+    ed(&mut a).set_ui_size(UiSize::Pct(200), t);
+    assert_eq!(toast(&mut a), "UI size 200 %");
+    ed(&mut a).notice = None;
+    bigger(&mut a);
+    assert!(ed(&mut a).notice.is_none(), "already the largest: nothing to say");
+    ed(&mut a).notice = Some(Toast::new("Could not save", ToastKind::Error));
+    smaller(&mut a);
+    assert_eq!(ed(&mut a).cfg.ui_scale, UiSize::Pct(150), "the size still changed");
+    assert_eq!(toast(&mut a), "Could not save", "the error stays");
+    assert_eq!(ed(&mut a).notice.as_ref().map(|t| t.kind), Some(ToastKind::Error));
+    // An older info toast is replaced.
+    ed(&mut a).notice = Some(Toast::new("Saved", ToastKind::Success));
+    smaller(&mut a);
+    assert_eq!(toast(&mut a), "UI size 125 %");
+}
+
+/// Two monitors of different OS scale at 125 %: each gets its own scale
+/// times 1.25 (clamped like the overlay's), a monitor the system does not
+/// know falls back to the shot's, and the camera follows the area's.
+#[test]
+fn mixed_dpi_monitors_at_125_percent() {
+    let mut a = annotated(theme::DARK, BIG);
+    let mons = [
+        capture::MonInfo { x: 0, y: 0, w: 720, h: 900, scale: 1.0, primary: true },
+        capture::MonInfo { x: 720, y: 0, w: 720, h: 900, scale: 1.75, primary: false },
+    ];
+    ed(&mut a).shot.monitors = vec![(0, 0, 720, 900), (720, 0, 720, 900)];
+    ed(&mut a).set_ui_size(UiSize::Pct(125), Instant::now());
+    let g = ed(&mut a).rec_geom(&mons);
+    assert_eq!(g.monitors.iter().map(|m| m.1).collect::<Vec<_>>(), [1.25, 2.1875]);
+    assert_eq!(g.mult, 1.25);
+    assert_eq!(g.scale, 1.25, "the shot's scale (100 %) times it");
+    // The border keeps the OS scale: 2 px, and 1.75 * 2 = 3.5 rounds to 4.
+    assert_eq!(g.border_monitors().iter().map(|m| m.1).collect::<Vec<_>>(), [2, 4]);
+    // An OS scale past the clamp counts as 4 (as the overlay always did).
+    let wild = [
+        capture::MonInfo { x: 0, y: 0, w: 720, h: 900, scale: 1.0, primary: true },
+        capture::MonInfo { x: 720, y: 0, w: 720, h: 900, scale: 6.0, primary: false },
+    ];
+    let g = ed(&mut a).rec_geom(&wild);
+    assert_eq!(g.monitors[1].1, 5.0);
+    // No match: the shot's scale.
+    let g = ed(&mut a).rec_geom(&[]);
+    assert!(g.monitors.iter().all(|m| m.1 == 1.25));
+    // The area on the second monitor: the bubble at that monitor's scale.
+    ed(&mut a).sel = Some(r(800.0, 100.0, 400.0, 300.0));
+    let g = ed(&mut a).rec_geom(&mons);
+    assert_eq!(ed(&mut a).cam_want(&g).scale, 2.1875);
+}
+
+/// The border does not follow the UI size: 75 % and 200 % give the same
+/// thickness as Auto on each monitor.
+#[test]
+fn the_recording_border_ignores_the_ui_size() {
+    let mons = [
+        capture::MonInfo { x: 0, y: 0, w: 720, h: 900, scale: 1.0, primary: true },
+        capture::MonInfo { x: 720, y: 0, w: 720, h: 900, scale: 2.0, primary: false },
+    ];
+    let thick = |size: UiSize| {
+        let mut a = annotated(theme::DARK, BIG);
+        ed(&mut a).shot.monitors = vec![(0, 0, 720, 900), (720, 0, 720, 900)];
+        ed(&mut a).cfg.ui_scale = size;
+        ed(&mut a).rec_geom(&mons).border_monitors().iter().map(|m| m.1).collect::<Vec<_>>()
+    };
+    assert_eq!(thick(UiSize::Auto), [2, 4]);
+    assert_eq!(thick(UiSize::Pct(75)), [2, 4]);
+    assert_eq!(thick(UiSize::Pct(200)), [2, 4]);
+}
+
 // ---- previews ----------------------------------------------------------------
 
 /// Toolbar, palette, picker and Record popover at 75, 100, 150 and 200 %,

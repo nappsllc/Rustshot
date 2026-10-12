@@ -181,7 +181,7 @@ fn bar_on_multi_monitor_setups() {
 
 /// A 100 % monitor and a 200 % one to its right.
 fn mixed() -> Geom {
-    Geom { area: MON, monitors: vec![(MON, 1.0), ((1920, 0, 2560, 1440), 2.0)], scale: 1.0 }
+    Geom { area: MON, monitors: vec![(MON, 1.0), ((1920, 0, 2560, 1440), 2.0)], scale: 1.0, mult: 1.0 }
 }
 
 /// The bar's panel at scale `s` (`wide`: the timer past an hour).
@@ -223,7 +223,7 @@ fn bar_is_placed_again_when_its_width_changes() {
     let wide = spot_bar(&g, Some(first), panel(true));
     assert_eq!(wide, BarSpot { scale: 2.0, size: (440, 88), pos: (3000 - 220, 416) });
     // Near a monitor's edge the wider bar is placed again, on screen.
-    let g = Geom { area: (1700, 100, 200, 200), monitors: vec![(MON, 1.0)], scale: 1.0 };
+    let g = Geom { area: (1700, 100, 200, 200), monitors: vec![(MON, 1.0)], scale: 1.0, mult: 1.0 };
     let narrow = spot_bar(&g, None, panel(false));
     let wide = spot_bar(&g, Some(narrow), panel(true));
     assert!(wide.pos.0 + wide.size.0 <= 1920 - 8, "{wide:?}");
@@ -491,10 +491,68 @@ fn macos_geometry_converts_to_points() {
         area: (200, 100, 1281, 721),
         monitors: vec![((0, 0, 2880, 1800), 2.0), ((2880, 0, 3840, 2160), 2.0)],
         scale: 2.0,
+        mult: 1.0,
     };
     let p = g.in_points(2.0);
     assert_eq!(p.area, (100, 50, 641, 361), "edges rounded");
     assert_eq!(p.monitors, vec![((0, 0, 1440, 900), 1.0), ((1440, 0, 1920, 1080), 1.0)]);
     assert_eq!(p.scale, 1.0);
     assert_eq!(g.in_points(1.0).area, g.area);
+}
+
+/// The bar, its pill and the countdown at the smallest and the largest
+/// UI scale: sizes follow the scale, and the bar is placed with a gap
+/// that follows it too.
+#[test]
+fn bar_pill_and_countdown_geometry_at_a_scale() {
+    use crate::editor::style::Ui;
+    let th = crate::theme::DARK;
+    let view = bar::BarView { elapsed: secs(65.0), paused: false, mic: Some(false), stopping: false, compact: false, asking: false };
+    let pill = bar::BarView { compact: true, ..view.clone() };
+    let at = |s: f32, v: &bar::BarView| bar::layout(&Ui { th: &th, s, font: None }, v);
+    let (full1, pill1) = (at(1.0, &view), at(1.0, &pill));
+    assert!(pill1.size.0 < full1.size.0);
+    for s in [0.75f32, 2.0] {
+        for (v, one) in [(&view, &full1), (&pill, &pill1)] {
+            let l = at(s, v);
+            let near = |a: f32, b: f32| (a - b * s).abs() <= 1.0;
+            assert!(near(l.panel.w, one.panel.w) && near(l.panel.h, one.panel.h), "{s}: {:?} vs {:?}", l.panel, one.panel);
+            assert!(near(l.size.0 as f32, one.size.0 as f32) && near(l.size.1 as f32, one.size.1 as f32), "{s}: {:?}", l.size);
+            assert_eq!(l.buttons.len(), one.buttons.len());
+            assert!((l.panel.x - bar::MARGIN * s).abs() < 0.01, "the panel sits MARGIN (scaled) inside");
+        }
+        assert_eq!(countdown::size(s), ((160.0 * s).ceil() as u32, (160.0 * s).ceil() as u32), "{s}");
+        // Drawn: the round panel is inside the window, nothing at the corner.
+        let ui = Ui { th: &th, s, font: Some(crate::fonts::ui_font()) };
+        let (w, h) = countdown::size(s);
+        let px = render_layer(w as usize, h as usize, |f| countdown::draw(f, &ui, 3));
+        assert_eq!(px[3], 0, "corner transparent at {s}");
+        assert!(px.chunks(4).any(|p| p[3] > 200), "panel drawn at {s}");
+        // Placed below the area, the gap (8 logical px) scaled.
+        let g = Geom { area: (100, 100, 1700, 500), monitors: vec![(MON, s)], scale: s, mult: s };
+        let l = at(s, &view);
+        let spot = spot_bar(&g, None, |k| {
+            let l = bar::layout(&Ui { th: &th, s: k, font: None }, &view);
+            (l.size.0 as i32, l.size.1 as i32)
+        });
+        assert_eq!(spot.scale, s);
+        assert_eq!(spot.pos.1, 600 + (8.0 * s).round() as i32, "below the area by the scaled gap");
+        assert_eq!(spot.size, (l.size.0 as i32, l.size.1 as i32));
+    }
+}
+
+/// The border's thickness follows the monitor's OS scale only, never the
+/// UI size (as on macOS, where it is in points).
+#[test]
+fn border_ignores_the_ui_size() {
+    for mult in [0.75f32, 1.0, 1.25, 2.0] {
+        let g = Geom {
+            area: MON,
+            monitors: vec![(MON, 1.0 * mult), ((1920, 0, 2560, 1440), 1.25 * mult), ((4480, 0, 1920, 1080), 2.0 * mult)],
+            scale: mult,
+            mult,
+        };
+        let t: Vec<i32> = g.border_monitors().iter().map(|m| m.1).collect();
+        assert_eq!(t, [2, 3, 4], "UI size {mult}");
+    }
 }

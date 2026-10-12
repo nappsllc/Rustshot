@@ -631,3 +631,21 @@ fn live_cam_opens_and_reads() {
 
 #[cfg(windows)]
 mod window;
+
+/// The bubble at the smallest UI scale (75 % of a 100 % monitor): the
+/// sides, the shadow room and the ring follow it, and the template agrees.
+#[test]
+fn bubble_sizes_and_ring_at_three_quarters() {
+    for (size, want) in [(CamSize::S, 120), (CamSize::M, 180), (CamSize::L, 240)] {
+        assert_eq!(side(size, 0.75), want, "{size:?}");
+        let look = Look { ring_w: 4, ..Look::new(Shape::Circle, size) };
+        let t = template(look, 0.75, &DARK);
+        assert_eq!((t.d, t.pad, t.w), (want, 12, want + 24));
+    }
+    assert_eq!(pad(0.75), 12);
+    assert_eq!(ring_width(4, 0.75), 3.0);
+    assert_eq!(ring_width(2, 0.75), 2.0, "1.5 rounds up");
+    assert_eq!(ring_width(4, 2.0), 8.0);
+    // Below the smallest scale it holds at 0.75.
+    assert_eq!(side(CamSize::M, 0.3), 180);
+}

@@ -993,13 +993,15 @@ mod tests {
     }
 
     /// Records the client sizes a `run_window` window gets while the UI
-    /// size changes under it: 150 % at open, then back to Auto with a
-    /// `resize` (as Settings does on Apply).
+    /// size changes under it: 150 % at open, then back to Auto set "from
+    /// elsewhere" (the overlay's Ctrl+=): the next timer tick sees the
+    /// scale differ and resizes, as Settings and the update dialog do.
     struct Sizer {
         hwnd: HWND,
         fb: PixBuf,
         dpi: u32,
         sizes: Vec<(u32, u32)>,
+        sized_for: f32,
     }
 
     impl Driver for Sizer {
@@ -1013,11 +1015,14 @@ mod tests {
                 self.fb = PixBuf::new(w.max(1), h.max(1));
                 match self.sizes.len() {
                     1 => {
+                        follow_scale(self.hwnd, &mut self.sized_for, 400, 300);
                         crate::uisize::set(crate::uisize::UiSize::Auto);
-                        resize(self.hwnd, 400, 300);
                     }
                     _ => close(self.hwnd),
                 }
+            }
+            if matches!(ev, Ev::Timer) {
+                follow_scale(self.hwnd, &mut self.sized_for, 400, 300);
             }
             false
         }
@@ -1034,16 +1039,10 @@ mod tests {
     #[test]
     fn run_window_follows_the_ui_size() {
         let _guard = windows_lock();
-        struct Restore;
-        impl Drop for Restore {
-            fn drop(&mut self) {
-                crate::uisize::set(crate::uisize::UiSize::Auto);
-            }
-        }
-        let _restore = Restore;
-        crate::uisize::set(crate::uisize::UiSize::Pct(150));
         let d = std::thread::spawn(|| {
-            let mut d = Sizer { hwnd: HWND::default(), fb: PixBuf::new(1, 1), dpi: 96, sizes: Vec::new() };
+            // The UI size is per thread under test: this window's alone.
+            crate::uisize::set(crate::uisize::UiSize::Pct(150));
+            let mut d = Sizer { hwnd: HWND::default(), fb: PixBuf::new(1, 1), dpi: 96, sizes: Vec::new(), sized_for: 0.0 };
             let spec = WindowSpec { title: "rustshot ui size test".into(), w: 400, h: 300, resizable: false, min: (400, 300) };
             run_window(spec, &mut d).expect("window loop");
             (d.dpi, d.sizes)

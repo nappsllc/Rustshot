@@ -120,6 +120,30 @@ pub(crate) fn centre_in(area: (i32, i32, i32, i32), w: i32, h: i32) -> (i32, i32
     (ax + ((aw - w) / 2).max(0), ay + ((ah - h) / 2).max(0))
 }
 
+/// Top-left that keeps a `w`×`h` outer rect at `(x, y)` inside `area`
+/// (x, y, w, h): moved only as far as needed; the top-left wins when it
+/// does not fit.
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+pub(crate) fn keep_inside(area: (i32, i32, i32, i32), x: i32, y: i32, w: i32, h: i32) -> (i32, i32) {
+    let (ax, ay, aw, ah) = area;
+    (x.min(ax + aw - w).max(ax), y.min(ay + ah - h).max(ay))
+}
+
+/// For a `run_window` driver: the scale to draw at, and a resize to the
+/// logical `w`×`h` when it differs from the one the window was sized for
+/// (`sized_for`, 0 = not yet known): the UI size changed elsewhere (the
+/// overlay's Ctrl+=) or the monitor's DPI did.
+pub fn follow_scale(hwnd: Hwnd, sized_for: &mut f32, w: u32, h: u32) -> f32 {
+    let k = scale(hwnd);
+    if *sized_for == 0.0 {
+        *sized_for = k;
+    } else if (k - *sized_for).abs() > 1e-3 {
+        *sized_for = k;
+        resize(hwnd, w, h);
+    }
+    k
+}
+
 /// Window icon as `_NET_WM_ICON` data: `[w, h, ARGB pixels...]` decoded from
 /// an embedded PNG (any 8-bit colour type).
 #[cfg(any(target_os = "linux", test))]
@@ -431,6 +455,18 @@ pub(crate) fn has_display() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A window that grows stays inside its monitor, moving only as far as
+    /// it takes.
+    #[test]
+    fn keep_inside_moves_only_as_needed() {
+        let mon = (1920, 0, 1920, 1080);
+        assert_eq!(keep_inside(mon, 2000, 100, 400, 300), (2000, 100), "fits: kept");
+        assert_eq!(keep_inside(mon, 3600, 100, 400, 300), (3440, 100), "right edge");
+        assert_eq!(keep_inside(mon, 2000, 900, 400, 300), (2000, 780), "bottom edge");
+        assert_eq!(keep_inside(mon, 1900, -20, 400, 300), (1920, 0), "left and top");
+        assert_eq!(keep_inside(mon, 2000, 100, 3000, 2000), (1920, 0), "too big: top-left wins");
+    }
 
     struct QuitSoon {
         created: bool,
