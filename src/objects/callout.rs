@@ -301,6 +301,12 @@ pub fn caret_near(font: &AnnotFont, lay: &Layout, text: &str, p: Pt, px: f32) ->
     best.1
 }
 
+/// The tail leaves through the bottom: the tip is below the bubble.
+/// The bubble then grows upward, keeping the tail as drawn.
+pub fn tail_below(r: FRect, tip: Pt) -> bool {
+    tip.y > r.y1()
+}
+
 /// The tail: which way it leaves the bubble and its triangle (the base
 /// pushed `deep` inside the body so body and tail join without a seam).
 /// `None` when the tip is inside the bubble.

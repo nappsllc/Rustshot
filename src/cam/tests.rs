@@ -195,7 +195,7 @@ fn ring_colour_and_width_follow_the_look() {
         let mut out = Vec::new();
         compose(&t, Some(&halves(t.d)), false, &mut out);
         let px = (rw as f32 * s) as usize;
-        assert_eq!(at(&t, &out, 1), [0, 200, 80, 255], "{s}x: the ring's colour");
+        assert_eq!(at(&t, &out, 1), [0, 200, 80, 255], "{s}x: the ring's color");
         assert_eq!(at(&t, &out, px - 2), [0, 200, 80, 255], "{s}x: still the ring");
         assert_eq!(at(&t, &out, px + 2), [255, 0, 0, 255], "{s}x: the picture inside it");
         assert!(t.ring.contains(&255));

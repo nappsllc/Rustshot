@@ -404,7 +404,7 @@ pub fn section(ui: &mut Ui, s: &mut super::Settings, tok: &Tok) {
     srow(ui, tok, "Mirror", Some("Like a mirror, as most video calls show you"), |ui| {
         ui.switch("rec_camera_mirror", &mut f.mirror, tok);
     });
-    srow(ui, tok, "Ring", Some("Colour and width of the outline"), |ui| {
+    srow(ui, tok, "Ring", Some("Color and width of the outline"), |ui| {
         ui.width(120.0).slider("rec_camera_ring_width", &mut f.ring_w, 0, config::RING_WIDTH_MAX as u8);
         let (items, sel) = f.ring_items();
         let refs: Vec<&str> = items.iter().map(String::as_str).collect();

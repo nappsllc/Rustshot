@@ -153,6 +153,9 @@ pub struct Config {
     /// Filled or outlined, for the shapes that can be either
     /// (`tool_<id>_fill`, ids in [`FILL_IDS`]).
     pub tool_fills: BTreeMap<String, bool>,
+    /// The callout shape new bubbles get (`tool_callout_style`: rounded,
+    /// cloud or ellipse; empty: rounded).
+    pub callout_style: String,
     /// Editor shortcut overrides from the `[shortcuts]` table
     /// (`action id -> "Ctrl+Shift+S"`; see `keymap`).
     pub shortcuts: BTreeMap<String, String>,
@@ -170,6 +173,7 @@ pub const FILL_IDS: [&str; 3] = ["rect", "ellipse", "callout"];
 pub fn tool_key_names() -> Vec<String> {
     let mut v: Vec<String> = TOOL_IDS.iter().flat_map(|id| [format!("tool_{id}_size"), format!("tool_{id}_color")]).collect();
     v.extend(FILL_IDS.iter().map(|id| format!("tool_{id}_fill")));
+    v.push("tool_callout_style".into());
     v
 }
 
@@ -274,6 +278,7 @@ impl Default for Config {
             tool_sizes: BTreeMap::new(),
             tool_colors: BTreeMap::new(),
             tool_fills: BTreeMap::new(),
+            callout_style: String::new(),
             shortcuts: BTreeMap::new(),
         }
     }
@@ -567,6 +572,7 @@ pub fn copy_key(from: &Config, to: &mut Config, key: &str) {
         "rec_camera_ring_width" => to.rec_camera_ring_width = from.rec_camera_ring_width,
         "ui_scale" => to.ui_scale = from.ui_scale,
         "snap_tab_hint" => to.snap_tab_hint = from.snap_tab_hint,
+        "tool_callout_style" => to.callout_style = from.callout_style.clone(),
         k => match tool_key(k) {
             Some((id, ToolKey::Fill)) => match from.tool_fills.get(id) {
                 Some(v) => {
@@ -961,6 +967,9 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
             // Recorder redesign.
             "rec_gif_max" => cfg.rec_gif_max = fps_of(val, &[15, 30, 60]).map_err(|e| bad("number (15, 30 or 60)", &e))?,
             "recent_colors" => cfg.recent_colors = as_array(val).map_err(|e| bad("array", &e))?,
+            "tool_callout_style" => {
+                cfg.callout_style = one_of(val, &["rounded", "cloud", "ellipse"]).map_err(|e| bad("value", &e))?
+            }
             k => match tool_key(k) {
                 Some((id, ToolKey::Fill)) => {
                     cfg.tool_fills.insert(id.to_string(), as_bool(val).map_err(|e| bad("boolean", &e))?);
@@ -1114,6 +1123,9 @@ pub fn to_toml(c: &Config) -> String {
         if let Some(v) = c.tool_fills.get(id) {
             out.push_str(&format!("tool_{id}_fill = {v}\n"));
         }
+    }
+    if !c.callout_style.is_empty() {
+        out.push_str(&format!("tool_callout_style = {}\n", q(&c.callout_style)));
     }
     if !c.shortcuts.is_empty() {
         out.push_str("
@@ -1821,7 +1833,7 @@ record_hotkey = \"Ctrl+Shift+R\"
         assert!(to.tool_fills.is_empty(), "a removed key goes");
         let names = tool_key_names();
         assert!(names.contains(&"tool_rect_fill".to_string()) && names.contains(&"tool_counter_size".to_string()));
-        assert!(names.iter().all(|k| tool_key(k).is_some()), "{names:?}");
+        assert!(names.iter().all(|k| tool_key(k).is_some() || k == "tool_callout_style"), "{names:?}");
     }
 
     #[test]

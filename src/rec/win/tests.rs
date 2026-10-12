@@ -270,7 +270,7 @@ fn live_rec_mp4_of_a_changing_window() {
     assert!((1.8..=2.2).contains(&p.duration.as_secs_f64()), "duration {:?}", p.duration);
     assert!((54..=66).contains(&p.frames), "{} frames", p.frames);
     assert!(!p.has_audio);
-    assert!(distinct(&p.center_luma) >= 4, "the colour changes show: {:?}", p.center_luma);
+    assert!(distinct(&p.center_luma) >= 4, "the color changes show: {:?}", p.center_luma);
 }
 
 /// Image descriptors in a GIF (walks the block structure).

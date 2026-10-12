@@ -2356,6 +2356,7 @@ impl Edit {
     /// image already moved out): nothing selected, drawn or open.
     #[allow(clippy::too_many_arguments)]
     fn new(shot: Shot, base: PixBuf, cfg: Config, th: Theme, font: Option<AnnotFont>, ui_font: Option<&'static UiFont>, rec: RecPop) -> Edit {
+        let style = crate::objects::CalloutStyle::from_id(&cfg.callout_style).unwrap_or_default();
         Edit {
             mo: Motion::new(Instant::now()),
             shot,
@@ -2407,7 +2408,7 @@ impl Edit {
             hot_handle: None,
             snap: None,
             hover_win: Default::default(),
-            obj: Default::default(),
+            obj: select::ObjState { style, ..Default::default() },
             baked: Vec::new(),
             baked_area: (0, 0, 0, 0),
             source: Default::default(),

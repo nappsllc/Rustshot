@@ -740,7 +740,7 @@ fn palette_opens_only_with_a_selection_and_picks_a_colour() {
     let (c, dr) = *dots.last().unwrap();
     click(&mut a, (dr.x + dr.w / 2.0) as i32, (dr.y + dr.h / 2.0) as i32);
     assert_eq!(ed(&mut a).color(), c);
-    assert!(!ed(&mut a).palette_open, "picking a colour closes it");
+    assert!(!ed(&mut a).palette_open, "picking a color closes it");
 }
 
 /// Centre of the toolbar button for `act` (lays the toolbar out first).

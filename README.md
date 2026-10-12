@@ -131,12 +131,12 @@ section:
   display's scaling; 75-200 % on top of it), *Snap to windows*, *Use
   Win+Shift+S and Print Screen* (Windows: see
   [Win+Shift+S and Print Screen](#winshifts-and-print-screen-windows)), the
-  renderer (Windows) and *Reset tool sizes & colours*.
+  renderer (Windows) and *Reset tool sizes & colors*.
 - **Recording:** what video mode's panel starts with: format (MP4 or
   GIF), frame rate (MP4 30 or 60, GIF 10, 15 or 24 fps), MP4 quality, a
   GIF's max length (15, 30 or 60 s), the 3-2-1 countdown, system sound,
   microphone and its device, the camera bubble (camera, shape, size 120,
-  160, 200 or 240 px, mirror, ring colour and width); on Linux also the MP4 encoder (Auto,
+  160, 200 or 240 px, mirror, ring color and width); on Linux also the MP4 encoder (Auto,
   ffmpeg or OpenH264) with what is installed ("ffmpeg found at
   /usr/bin/ffmpeg", "OpenH264 downloaded", or not available).
 - **Key bindings:** the global hotkeys, every editor shortcut (see
@@ -370,8 +370,8 @@ select tool and drag it (it snaps to other objects' edges and the
 selection's centre within 6 px; a 40 % ghost stays where it was), resize
 it by its square handles, re-aim a line's or arrow's ends, a callout's tail
 or the magnifier's source and loupe by their round handles. The
-mini-toolbar above the selection sets its colour, fill, size and (for a
-callout) shape, restacks, duplicates and deletes; the toolbar's colour and
+mini-toolbar above the selection sets its color, fill, size and (for a
+callout) shape, restacks, duplicates and deletes; the toolbar's color and
 size apply to the selection too. Every edit is one undo step. A callout
 (drag or click) starts typing at once: <kbd>Enter</kbd> for a new line, the
 bubble keeps its width and grows down, <kbd>Esc</kbd> or a click outside
@@ -410,7 +410,7 @@ The UI size keys (`ui_bigger`, `ui_smaller`, `ui_reset`) can be remapped like
 any other. On layouts where `=`, `-` or `0` need a modifier or sit elsewhere
 (AZERTY, German), use the keypad keys (Ctrl+NumpadAdd, Ctrl+NumpadSubtract,
 Ctrl+Numpad0) or bind your own chords. Ctrl and Alt chords work while typing
-a text and with the colour picker open; a remapped plain key (no Ctrl or Alt)
+a text and with the color picker open; a remapped plain key (no Ctrl or Alt)
 does not, because those modes take every plain key as input.
 
 `record` (unbound by default) switches the overlay to video mode
@@ -442,7 +442,7 @@ under the selection, offers:
   fit) or **GIF** (10, 15 or 24 fps, full size, no sound; it stops by
   itself at its max length, 15, 30 or 60 s).
 - The countdown (0 or 3 s) and the camera's shape and ring (width and
-  colour, in the Camera row's palette).
+  color, in the Camera row's palette).
 
 The camera bubble is a real window on the screen, so it is in the
 recording: drag it anywhere (it is see-through while dragged and drops

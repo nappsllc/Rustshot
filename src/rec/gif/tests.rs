@@ -85,7 +85,7 @@ pub(crate) fn decode(b: &[u8]) -> Decoded {
     assert_eq!(&b[..6], b"GIF89a");
     let (w, h) = (u16_at(b, 6), u16_at(b, 8));
     let mut i = 13;
-    assert_eq!(b[10] & 0x80, 0, "no global colour table");
+    assert_eq!(b[10] & 0x80, 0, "no global color table");
     let mut canvas = vec![[0u8; 3]; w * h];
     let mut frames = Vec::new();
     let mut loops = None;
@@ -127,7 +127,7 @@ pub(crate) fn decode(b: &[u8]) -> Decoded {
                 let (x, y, fw, fh) = (u16_at(b, i + 1), u16_at(b, i + 3), u16_at(b, i + 5), u16_at(b, i + 7));
                 let packed = b[i + 9];
                 i += 10;
-                assert!(packed & 0x80 != 0, "local colour table");
+                assert!(packed & 0x80 != 0, "local color table");
                 assert_eq!(packed & 0x40, 0, "not interlaced");
                 let size = 2usize << (packed & 7);
                 let palette: Vec<[u8; 3]> = b[i..i + size * 3].as_chunks::<3>().0.to_vec();
@@ -236,7 +236,7 @@ fn many_colours_fit_one_palette() {
     let mut used: Vec<u8> = fr.indices.clone();
     used.sort_unstable();
     used.dedup();
-    assert!(used.len() <= 255 && used.len() > 128, "{} colours used", used.len());
+    assert!(used.len() <= 255 && used.len() > 128, "{} colors used", used.len());
     assert_eq!(fr.transparent, None, "nothing to show through on the first frame");
     let worst = rgb_of(&f)
         .iter()
@@ -259,7 +259,7 @@ fn unchanged_pixels_are_transparent_in_the_changed_box() {
     let (_, d) = round_trip(16, 10, 10, &[a.clone(), b.clone()]);
     assert_eq!(d.frames.len(), 2);
     assert_eq!(d.frames[0].rect, (0, 0, 16, 10));
-    assert_eq!(d.frames[0].canvas, rgb_of(&a), "few colours are exact");
+    assert_eq!(d.frames[0].canvas, rgb_of(&a), "few colors are exact");
     let f = &d.frames[1];
     assert_eq!(f.rect, (2, 2, 7, 4), "only the changed box");
     assert_eq!(f.disposal, 1, "kept for the next frame to show through");
