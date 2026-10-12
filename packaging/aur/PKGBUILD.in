@@ -1,4 +1,4 @@
-# Maintainer: nappsllc <noreply@github.com>
+# Maintainer: PowerNapps <noreply@github.com>
 pkgname=rustshot-bin
 pkgver=@VERSION@
 pkgrel=1

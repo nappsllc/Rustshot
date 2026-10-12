@@ -1,5 +1,5 @@
 //! Capture history: every capture is kept (unless `history = false`) in
-//! `%LOCALAPPDATA%\rustshot\history\<yyyy-mm-dd>\<hhmmss>\` (Linux:
+//! `%LOCALAPPDATA%\rustshot-data\history\<yyyy-mm-dd>\<hhmmss>\` (Linux:
 //! `$XDG_DATA_HOME/rustshot/history`, macOS: `~/Library/Application
 //! Support/rustshot/history`) as
 //!
@@ -526,7 +526,15 @@ pub fn find_root() -> Option<PathBuf> {
     let base = get("HOME").map(|h| h.join("Library").join("Application Support"));
     #[cfg(all(unix, not(target_os = "macos")))]
     let base = get("XDG_DATA_HOME").or_else(|| get("HOME").map(|h| h.join(".local").join("share")));
-    base.map(|b| b.join("rustshot").join("history"))
+    base.map(|b| root_in(&b))
+}
+
+/// The history folder under the local data folder `base`. On Windows it
+/// is in `rustshot-data`, not `rustshot`: `%LOCALAPPDATA%\rustshot` is the
+/// installer's program folder.
+pub fn root_in(base: &Path) -> PathBuf {
+    let app = if cfg!(windows) { "rustshot-data" } else { "rustshot" };
+    base.join(app).join("history")
 }
 
 /// The history folder the windows show ([`find_root`]; without one, an
@@ -1057,6 +1065,30 @@ pub fn saved_files(entries: &[Entry]) -> (usize, u64, Option<PathBuf>) {
     }
     dirs.sort_by_key(|d| std::cmp::Reverse(d.1));
     (n, bytes, dirs.into_iter().next().map(|d| d.0))
+}
+
+/// One line of `rustshot history --list`, tab-separated: when it was
+/// captured, the kind (screenshot, mp4, gif), the size in px, the bytes
+/// and its file (where it was saved, a recording's file, else its
+/// `original.png`).
+pub fn list_line(e: &Entry) -> String {
+    let m = &e.meta;
+    let t = m.captured;
+    let file = m.saved.clone().or_else(|| m.file.clone()).unwrap_or_else(|| e.original());
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}\t{}\t{}x{}\t{}\t{}",
+        t.0,
+        t.1,
+        t.2,
+        t.3,
+        t.4,
+        t.5,
+        m.kind.id(),
+        m.w,
+        m.h,
+        m.bytes,
+        file.display()
+    )
 }
 
 /// `p` with the home folder as `~` ("~/Pictures/rustshot").

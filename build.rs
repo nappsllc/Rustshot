@@ -39,7 +39,8 @@ fn embed() -> Result<(), String> {
         num("CARGO_PKG_VERSION_PATCH"),
     );
     let rc_src = format!(
-        r#"1 ICON "{ico}"
+        r#"#pragma code_page(65001)
+1 ICON "{ico}"
 
 1 VERSIONINFO
 FILEVERSION {maj},{min},{pat},0
@@ -51,11 +52,11 @@ BEGIN
   BEGIN
     BLOCK "040904B0"
     BEGIN
-      VALUE "CompanyName", "nappsllc"
+      VALUE "CompanyName", "PowerNapps"
       VALUE "FileDescription", "Rustshot"
       VALUE "FileVersion", "{ver}"
       VALUE "InternalName", "rustshot"
-      VALUE "LegalCopyright", "GPL-3.0-only"
+      VALUE "LegalCopyright", "© 2026 PowerNapps"
       VALUE "OriginalFilename", "rustshot.exe"
       VALUE "ProductName", "Rustshot"
       VALUE "ProductVersion", "{ver}"

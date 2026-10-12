@@ -628,8 +628,8 @@ fn wait_pid_window(pid: u32, ms: u64) -> Option<HWND> {
     }
 }
 
-/// The daemon's other global hotkeys off (their defaults, Win+Shift+R /
-/// F / E / T, would take keys from the desktop while a test runs).
+/// The daemon's other global hotkeys off (their defaults, Win+Shift+G /
+/// F / E / Z, would take keys from the desktop while a test runs).
 const NO_OTHER_HOTKEYS: &str =
     "record_hotkey = \"\"\ncapture_full_hotkey = \"\"\ncapture_window_hotkey = \"\"\nrepeat_hotkey = \"\"\ncapture_text_hotkey = \"\"\n";
 

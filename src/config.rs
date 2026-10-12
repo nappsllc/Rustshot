@@ -65,7 +65,7 @@ pub struct Config {
     /// After a screenshot is copied or saved, a thumbnail card bottom-right
     /// (Copy, Save, Pin; drag it out for the file) instead of the toast.
     pub show_thumbnail: bool,
-    /// Keep a history of captures (`%LOCALAPPDATA%\rustshot\history`: the
+    /// Keep a history of captures (`%LOCALAPPDATA%\rustshot-data\history`: the
     /// unannotated original, its annotations, a thumbnail and what is
     /// known about it) for the History and Edit windows.
     pub history: bool,
@@ -241,7 +241,7 @@ impl Default for Config {
             capture_full_hotkey: "Shift+Meta+F".into(),
             capture_window_hotkey: "Shift+Meta+E".into(),
             repeat_hotkey: String::new(),
-            capture_text_hotkey: "Shift+Meta+T".into(),
+            capture_text_hotkey: "Shift+Meta+Z".into(),
             show_tray: true,
             copy_after_capture: false,
             shutter_sound: false,
@@ -283,7 +283,7 @@ impl Default for Config {
             rec_camera_size: "m".into(),
             rec_camera_mirror: true,
             rec_countdown: true,
-            record_hotkey: "Shift+Meta+R".into(),
+            record_hotkey: "Shift+Meta+G".into(),
             rec_linux_encoder: "auto".into(),
             rec_camera_ring_color: String::new(),
             rec_camera_ring_width: RING_WIDTH_DEFAULT,
@@ -1642,13 +1642,13 @@ bogus = 1
     fn redesign_keys_defaults_and_roundtrip() {
         let d = Config::default();
         let hk = [d.capture_hotkey.as_str(), d.capture_full_hotkey.as_str(), d.capture_window_hotkey.as_str(), d.record_hotkey.as_str()];
-        assert_eq!(hk, ["Shift+Meta+X", "Shift+Meta+F", "Shift+Meta+E", "Shift+Meta+R"]);
+        assert_eq!(hk, ["Shift+Meta+X", "Shift+Meta+F", "Shift+Meta+E", "Shift+Meta+G"]);
         for h in hk {
             let c = crate::keymap::Chord::parse(h).unwrap();
             assert!(c.meta && c.shift && !c.ctrl && !c.alt, "{h}: Win+Shift");
         }
         assert_eq!(d.repeat_hotkey, "");
-        assert_eq!(d.capture_text_hotkey, "Shift+Meta+T", "Copy text: Win+Shift+T");
+        assert_eq!(d.capture_text_hotkey, "Shift+Meta+Z", "Copy text: Win+Shift+Z");
         assert!(d.show_tray && !d.copy_after_capture && !d.shutter_sound);
         let c = Config {
             capture_full_hotkey: "Ctrl+Alt+F".into(),
@@ -1674,6 +1674,13 @@ record_hotkey = \"Ctrl+Shift+R\"
         // Windows); a file with 0.1.2's default keeps it.
         let w = parse_config("capture_window_hotkey = \"Shift+Meta+W\"\n").unwrap();
         assert_eq!(w.capture_window_hotkey, "Shift+Meta+W", "a written key is kept");
+        // 0.2.0 moved Record to Win+Shift+G and Copy text to Win+Shift+Z
+        // (Win+Shift+R and T are taken on a clean Windows): a file with the
+        // old keys keeps them, a file without them gets the new ones.
+        let rt = parse_config("record_hotkey = \"Shift+Meta+R\"\ncapture_text_hotkey = \"Shift+Meta+T\"\n").unwrap();
+        assert_eq!((rt.record_hotkey.as_str(), rt.capture_text_hotkey.as_str()), ("Shift+Meta+R", "Shift+Meta+T"), "written keys are kept");
+        let none = parse_config("theme = \"dark\"\n").unwrap();
+        assert_eq!((none.record_hotkey.as_str(), none.capture_text_hotkey.as_str()), ("Shift+Meta+G", "Shift+Meta+Z"));
         assert!(parse_config("show_tray = 1").is_err());
         // The thumbnail after a capture: on by default, round-trips off.
         assert!(d.show_thumbnail);
@@ -1694,7 +1701,7 @@ record_hotkey = \"Ctrl+Shift+R\"
         assert!(w.len() == 1 && w[0].starts_with("repeat_hotkey"), "{w:?}");
         let w = hotkey_warnings(&Config { capture_text_hotkey: "Nope+".into(), ..Config::default() });
         assert!(w.len() == 1 && w[0].starts_with("capture_text_hotkey"), "{w:?}");
-        assert_eq!(old.capture_text_hotkey, "Shift+Meta+T", "an older file gets the default");
+        assert_eq!(old.capture_text_hotkey, "Shift+Meta+Z", "an older file gets the default");
     }
 
     #[test]
@@ -1732,7 +1739,7 @@ record_hotkey = \"Ctrl+Shift+R\"
         assert!(!d.rec_camera && d.rec_camera_device.is_empty());
         assert_eq!((d.rec_camera_shape.as_str(), d.rec_camera_size.as_str()), ("circle", "m"));
         assert!(d.rec_camera_mirror && d.rec_countdown);
-        assert_eq!(d.record_hotkey, "Shift+Meta+R");
+        assert_eq!(d.record_hotkey, "Shift+Meta+G");
         assert!(crate::keymap::Chord::parse(&d.record_hotkey).is_some());
         assert_eq!(d.rec_linux_encoder, "auto");
         assert_eq!(parse_config(&to_toml(&d)).unwrap(), d);
@@ -2071,56 +2078,94 @@ record_hotkey = \"Ctrl+Shift+R\"
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The background writer (as the app runs it, here with its own path
-    /// and thread): batches apply in the order sent, `wait` returns once
-    /// written or after its timeout, and a writer that is gone falls back
-    /// to writing on the caller's thread.
+    /// The background writer (as the app runs it, here with its own thread
+    /// and an in-memory "file"): batches apply in the order sent, `wait`
+    /// returns once written or after its timeout, and a writer that is gone
+    /// falls back to writing on the caller's thread. Nothing here touches
+    /// the disk, takes the config lock or sleeps (the slow write is held on
+    /// a gate the test opens), so the outcome does not depend on the
+    /// machine or on other tests. The old version wrote config.toml 31
+    /// times through `edit_top_keys_at`, each under `with_config_lock`'s
+    /// process-wide mutex and with an fsync; the concurrent-writers and
+    /// locked-sidecar tests hold that mutex for 170 fsynced writes and a
+    /// blocked lock, so on a slow CI runner the queue missed its 10 s wait.
     #[test]
     fn key_writer_thread_order_wait_and_fallback() {
-        static SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
-        fn record(p: &std::path::Path, e: &[(String, Option<String>)]) {
+        use std::sync::Mutex;
+        // (thread, value) per edit as applied, and the "file".
+        static SEEN: Mutex<Vec<(std::thread::ThreadId, String)>> = Mutex::new(Vec::new());
+        static FILE: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+        // Held by the test while the slow batch must not finish.
+        static GATE: Mutex<()> = Mutex::new(());
+        fn record(_: &std::path::Path, e: &[(String, Option<String>)]) {
             if e.iter().any(|(k, _)| k == "tool_counter_size") {
-                std::thread::sleep(std::time::Duration::from_millis(400));
+                drop(GATE.lock().unwrap_or_else(|p| p.into_inner()));
             }
-            write_key_edits(p, e);
-            SEEN.lock().unwrap().extend(e.iter().filter(|(k, _)| k != "tool_counter_size").filter_map(|(_, v)| v.clone()));
+            let me = std::thread::current().id();
+            for (k, v) in e {
+                let v = v.clone().unwrap_or_default();
+                SEEN.lock().unwrap().push((me, v.clone()));
+                let mut f = FILE.lock().unwrap();
+                f.retain(|(fk, _)| fk != k);
+                f.push((k.clone(), v));
+            }
         }
-        let dir = scratch("writer");
-        let p = dir.join("config.toml");
-        std::fs::write(&p, "# keep\ntheme = \"dark\"\n").unwrap();
+        let get = |k: &str| FILE.lock().unwrap().iter().find(|(fk, _)| fk == k).map(|(_, v)| v.clone());
+        let p = std::path::Path::new("config.toml");
+        let long = std::time::Duration::from_secs(60); // only ever reached if the writer is broken
         let mut w = KeyWriter::new(record);
         for i in 1..=30 {
-            assert!(w.send(&p, vec![("tool_line_size".into(), Some(i.to_string()))], false).is_none());
+            assert!(w.send(p, vec![("tool_line_size".into(), Some(i.to_string()))], false).is_none());
         }
-        let done = w.send(&p, vec![("tool_rect_size".into(), Some("31".into()))], true);
-        assert!(KeyWriter::wait(done, std::time::Duration::from_secs(10)), "written");
+        let done = w.send(p, vec![("tool_rect_size".into(), Some("31".into()))], true);
+        assert!(KeyWriter::wait(done, long), "written");
+        let seen = std::mem::take(&mut *SEEN.lock().unwrap());
         let want: Vec<String> = (1..=31).map(|i| i.to_string()).collect();
-        assert_eq!(*SEEN.lock().unwrap(), want, "in the order sent");
-        let c = parse_config(&std::fs::read_to_string(&p).unwrap()).unwrap();
-        assert_eq!((c.tool_sizes.get("line"), c.tool_sizes.get("rect")), (Some(&30.0), Some(&31.0)));
-        assert!(std::fs::read_to_string(&p).unwrap().starts_with("# keep\n"));
-        // A slow write: `wait` gives up after its timeout; the write still
-        // happens.
-        let t0 = std::time::Instant::now();
+        assert_eq!(seen.iter().map(|(_, v)| v.clone()).collect::<Vec<_>>(), want, "in the order sent");
+        let main = std::thread::current().id();
+        let writer = seen[0].0;
+        assert!(writer != main && seen.iter().all(|(t, _)| *t == writer), "all on one writer thread");
+        assert_eq!((get("tool_line_size"), get("tool_rect_size")), (Some("30".into()), Some("31".into())));
+        // A slow write: `wait` gives up after its timeout (the write is
+        // held until after it returns), and the write still happens.
+        let gate = GATE.lock().unwrap();
         let slow = vec![("tool_counter_size".into(), Some("1".into())), ("tool_text_size".into(), Some("40".into()))];
-        let done = w.send(&p, slow, true);
+        let done = w.send(p, slow, true);
         assert!(!KeyWriter::wait(done, std::time::Duration::from_millis(50)), "timed out");
-        assert!(t0.elapsed() < std::time::Duration::from_millis(350), "did not wait for the write");
-        let done = w.send(&p, vec![("tool_pencil_size".into(), Some("2".into()))], true);
-        assert!(KeyWriter::wait(done, std::time::Duration::from_secs(10)));
-        let c = parse_config(&std::fs::read_to_string(&p).unwrap()).unwrap();
-        assert_eq!((c.tool_sizes.get("text"), c.tool_sizes.get("pencil")), (Some(&40.0), Some(&2.0)));
+        assert_eq!(get("tool_text_size"), None, "not written yet");
+        drop(gate);
+        let done = w.send(p, vec![("tool_pencil_size".into(), Some("2".into()))], true);
+        assert!(KeyWriter::wait(done, long));
+        assert_eq!((get("tool_text_size"), get("tool_pencil_size")), (Some("40".into()), Some("2".into())), "in order");
         // The writer is gone (its receiver dropped): written here, at once.
         let (tx, rx) = std::sync::mpsc::channel::<KeyJob>();
         drop(rx);
         w.tx = Some(tx);
-        assert!(w.send(&p, vec![("tool_arrow_size".into(), Some("7".into()))], true).is_none());
+        SEEN.lock().unwrap().clear();
+        assert!(w.send(p, vec![("tool_arrow_size".into(), Some("7".into()))], true).is_none());
         assert!(w.tx.is_none(), "dropped; the next batch starts a new thread");
-        let c = parse_config(&std::fs::read_to_string(&p).unwrap()).unwrap();
-        assert_eq!(c.tool_sizes.get("arrow"), Some(&7.0));
-        let done = w.send(&p, vec![("tool_arrow_size".into(), Some("8".into()))], true);
-        assert!(KeyWriter::wait(done, std::time::Duration::from_secs(10)) && w.tx.is_some());
-        assert_eq!(parse_config(&std::fs::read_to_string(&p).unwrap()).unwrap().tool_sizes.get("arrow"), Some(&8.0));
+        assert_eq!(get("tool_arrow_size"), Some("7".into()));
+        assert_eq!(SEEN.lock().unwrap()[0].0, main, "on the caller's thread");
+        let done = w.send(p, vec![("tool_arrow_size".into(), Some("8".into()))], true);
+        assert!(KeyWriter::wait(done, long) && w.tx.is_some());
+        assert_eq!(get("tool_arrow_size"), Some("8".into()));
+    }
+
+    /// The writer as the app runs it, with the real file writer: a waited
+    /// batch lands in config.toml and keeps the rest of the file.
+    #[test]
+    fn key_writer_writes_the_config_file() {
+        let dir = scratch("writer");
+        let p = dir.join("config.toml");
+        std::fs::write(&p, "# keep\ntheme = \"dark\"\n").unwrap();
+        let mut w = KeyWriter::new(write_key_edits);
+        let edits = vec![("tool_line_size".into(), Some("30".into())), ("tool_rect_size".into(), Some("31".into()))];
+        let done = w.send(&p, edits, true);
+        assert!(KeyWriter::wait(done, std::time::Duration::from_secs(60)), "written");
+        let text = std::fs::read_to_string(&p).unwrap();
+        let c = parse_config(&text).unwrap();
+        assert_eq!((c.tool_sizes.get("line"), c.tool_sizes.get("rect")), (Some(&30.0), Some(&31.0)));
+        assert!(text.starts_with("# keep\n") && c.theme == "dark", "{text}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
