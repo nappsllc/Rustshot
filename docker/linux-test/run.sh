@@ -234,7 +234,7 @@ start_watcher() { # start_watcher LOGNAME
         result "$1" fail "no watcher on the bus; see logs/$1.log"
     fi
 }
-sni_layout() { gdbus call --session -d "$1" -o /MenuBar -m com.canonical.dbusmenu.GetLayout 0 -1 '[]' 2>&1; }
+sni_layout() { gdbus call --session -d "$1" -o /MenuBar -m com.canonical.dbusmenu.GetLayout -- 0 -1 '[]' 2>&1; }
 sni_has() { sni_layout "$1" | grep -qF "'$2'"; } # sni_has SERVICE LABEL
 sni_tip() { gdbus call --session -d "$1" -o /StatusNotifierItem -m org.freedesktop.DBus.Properties.Get org.kde.StatusNotifierItem ToolTip 2>&1; }
 sni_labels() { grep -o "'label': <'[^']*'>" | sed "s/'label': <'\(.*\)'>/\1/" | paste -sd, -; }
@@ -282,7 +282,7 @@ sni_steps_recording() {
     else result sni-menu-recording fail "missing:$miss; see logs/sni-layout-recording.txt"; fi
     if sni_tip "$svc" | grep -q "recording"; then result sni-tooltip-recording pass "$(sni_tip "$svc" | grep -o "Rustshot[^']*")"
     else result sni-tooltip-recording fail "$(sni_tip "$svc" | cut -c1-160)"; fi
-    gdbus call --session -d "$svc" -o /MenuBar -m com.canonical.dbusmenu.Event 2 clicked '<0>' 0 >>"$LOGS/sni-event.log" 2>&1
+    gdbus call --session -d "$svc" -o /MenuBar -m com.canonical.dbusmenu.Event -- 2 clicked '<0>' 0 >>"$LOGS/sni-event.log" 2>&1
     if wait_for 3 sni_has "$svc" "Resume recording"; then result sni-event-pause pass "Event(2, clicked): paused"
     else result sni-event-pause fail "the menu does not say Resume after Event; see logs/sni-event.log"; fi
     xdotool key ctrl+alt+shift+i
