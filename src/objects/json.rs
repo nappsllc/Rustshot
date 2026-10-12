@@ -19,13 +19,18 @@
 //! (`r`), `magnify` (`src`, `dst`, `radius`, `zoom`, `color`, `width`).
 //! A reader skips types it does not know; a newer `version` is an error.
 //!
-//! Version 2 adds `blur` (`r`, `sigma`) and the text style of `text` and
-//! `callout`: `font` (`sans`, `serif`, `mono`), `bold`, `italic`,
-//! `underline`, `strike` and (text) `align` (`left`, `center`, `right`),
-//! each written only when not the default (sans, off, left). A document
-//! is written as version 1 when it uses none of that, so older builds
-//! still read it; one with a blur says 2, so an older build refuses it
-//! instead of dropping the blur (and showing what it hid).
+//! This build adds, still as version 1 (an older reader looks fields up
+//! by name and skips types it does not know, so it reads all of it):
+//! `blur` (`r`, `sigma`) and the text style of `text` and `callout`:
+//! `font` (`sans`, `serif`, `mono`), `bold`, `italic`, `underline`,
+//! `strike` and (text) `align` (`left`, `center`, `right`), each written
+//! only when not the default (sans, off, left). An older build draws the
+//! text plain. A blur is written after a stand-in pixelate over the same
+//! rect (`"stands_for":"blur"`): an older build skips the blur and draws
+//! the pixelate, so what the blur hides stays hidden there too; this
+//! reader drops the stand-in. (Checked against v0.2.0's own reader,
+//! `v020/json.rs`.) Version 2 documents are read as well (none are
+//! written).
 
 use super::{CalloutStyle, FRect, Obj, Pt, TextFmt};
 use crate::text::{Align, Family};
@@ -33,18 +38,15 @@ use crate::uifb::C4;
 use anyhow::{anyhow, bail, Result};
 use std::fmt::Write;
 
-/// The newest format version this build writes and reads.
+/// The newest format version this build reads.
 pub const VERSION: u32 = 2;
+/// The version it writes (what v0.2.0 reads).
+pub const WRITTEN: u32 = 1;
 
-/// The version a document of `objs` needs: 2 with a blur or a styled
-/// text, else 1.
-pub fn version_of(objs: &[Obj]) -> u32 {
-    let v2 = objs.iter().any(|o| match o {
-        Obj::Blur { .. } => true,
-        Obj::Text { fmt, .. } | Obj::Callout { fmt, .. } => !fmt.is_plain(),
-        _ => false,
-    });
-    if v2 { 2 } else { 1 }
+/// The cell of a blur's stand-in pixelate: coarse, so an older build's
+/// mosaic hides at least what the blur does.
+pub fn stand_in_cell(sigma: f32) -> f32 {
+    (sigma * 2.0).clamp(12.0, 100.0).round()
 }
 /// What a document may hold: objects, points of a stroke, characters of a
 /// text (more is an error).
@@ -162,9 +164,18 @@ impl W<'_> {
 /// The objects as an `annotations.json` document (one object per line).
 pub fn to_json(objs: &[Obj]) -> String {
     let mut out = String::new();
-    let _ = write!(out, "{{\"version\":{},\"objects\":[", version_of(objs));
+    let _ = write!(out, "{{\"version\":{WRITTEN},\"objects\":[");
     for (i, o) in objs.iter().enumerate() {
         out.push_str(if i == 0 { "\n " } else { ",\n " });
+        if let Obj::Blur { r, sigma } = o {
+            // The stand-in an older build draws (this one drops it).
+            out.push_str("{\"type\":\"pixelate\"");
+            let mut w = W(&mut out);
+            w.rect("r", *r);
+            w.num("cell", stand_in_cell(*sigma));
+            w.str("stands_for", "blur");
+            out.push_str("},\n ");
+        }
         let ty = match o {
             Obj::Path { .. } => "pencil",
             Obj::Line { .. } => "line",
@@ -596,6 +607,8 @@ pub fn from_json(s: &str) -> Result<Vec<Obj>> {
                 size: f.num("size")?,
                 fmt: f.fmt(true)?,
             },
+            // A blur's stand-in for older builds: the blur follows it.
+            "pixelate" if matches!(f.get("stands_for"), Some(V::Str(s)) if s == "blur") => continue,
             "pixelate" => Obj::Pixelate { r: f.rect("r")?, cell: f.num("cell")? },
             "blur" => Obj::Blur { r: f.rect("r")?, sigma: f.num("sigma")? },
             "invert" => Obj::Invert { r: f.rect("r")? },
@@ -716,17 +729,52 @@ mod tests {
         for o in every_v2_kind() {
             let one = vec![o];
             let s = to_json(&one);
-            assert!(s.starts_with("{\"version\":2,"), "{s}");
+            assert!(s.starts_with("{\"version\":1,"), "still version 1: {s}");
             assert_eq!(from_json(&s).expect("parses"), one, "{s}");
         }
         let mut all = every_kind();
         all.extend(every_v2_kind());
         let s = to_json(&all);
-        assert_eq!(from_json(&s).unwrap(), all);
+        assert_eq!(from_json(&s).unwrap(), all, "the stand-in is dropped");
         assert_eq!(to_json(&from_json(&s).unwrap()), s, "stable");
         assert!(s.contains("\"font\":\"serif\",\"bold\":true,\"italic\":true,\"underline\":true,\"strike\":true,\"align\":\"center\""), "{s}");
-        assert!(s.contains("{\"type\":\"blur\",\"r\":[10.5,20,300,120],\"sigma\":12}"), "{s}");
+        assert!(
+            s.contains("{\"type\":\"pixelate\",\"r\":[10.5,20,300,120],\"cell\":24,\"stands_for\":\"blur\"},\n {\"type\":\"blur\",\"r\":[10.5,20,300,120],\"sigma\":12}"),
+            "{s}"
+        );
         assert!(!to_json(&every_kind()).contains("\"bold\""), "defaults are not written");
+    }
+
+    /// What v0.2.0's own reader (`v020/json.rs`, its code byte for byte)
+    /// makes of this build's documents: it reads them (version 1), draws
+    /// the texts plain, and covers every blur with a pixelate of its rect
+    /// at the blur's place in the stack; nothing else changes.
+    #[test]
+    fn v0_2_0_reads_the_documents_and_still_redacts() {
+        use crate::objects::v020;
+        let mut all = every_kind();
+        all.extend(every_v2_kind());
+        // A blur on top of a pixelate, and a styled text over a blur.
+        all.push(Obj::Pixelate { r: FRect { x: 5.0, y: 5.0, w: 50.0, h: 50.0 }, cell: 8.0 });
+        all.push(Obj::Blur { r: FRect { x: 0.0, y: 0.0, w: 80.0, h: 60.0 }, sigma: 30.0 });
+        all.push(Obj::Text { pos: Pt::new(4.0, 5.0), text: "x".into(), color: C4::rgb(0, 0, 0), size: 12.0, fmt: TextFmt { bold: true, ..Default::default() } });
+        let s = to_json(&all);
+        let old = v020::json::from_json(&s).expect("v0.2.0 reads it");
+        assert_eq!(old.len(), all.len(), "one object each (a blur's stand-in for the blur)");
+        for (new, old) in all.iter().zip(&old) {
+            match (new, old) {
+                (Obj::Blur { r, sigma }, v020::Obj::Pixelate { r: q, cell }) => {
+                    assert_eq!((r, *cell), (q, stand_in_cell(*sigma)), "the blur's rect is pixelated");
+                    assert!(*cell >= 12.0);
+                }
+                (Obj::Blur { .. }, o) => panic!("a blur became {o:?}"),
+                (Obj::Text { pos, text, color, size, .. }, v020::Obj::Text { pos: p, text: t, color: c, size: z }) => {
+                    assert_eq!((pos, text, color, size), (p, t, c, z));
+                }
+                (Obj::Pixelate { r, cell }, v020::Obj::Pixelate { r: q, cell: c }) => assert_eq!((r, cell), (q, c)),
+                (n, o) => assert_eq!(format!("{n:?}").split(' ').next(), format!("{o:?}").split(' ').next(), "same kind"),
+            }
+        }
     }
 
     /// What v0.2.0 wrote (version 1, texts without style fields) reads

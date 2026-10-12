@@ -103,6 +103,7 @@ pub struct TextFmt {
 impl TextFmt {
     /// Plain: what every text was before formatting (and what a file
     /// without the fields reads as).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn is_plain(&self) -> bool {
         *self == TextFmt::default()
     }

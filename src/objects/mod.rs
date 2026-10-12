@@ -6,6 +6,8 @@
 pub mod blur;
 pub mod callout;
 pub mod edit;
+#[cfg(test)]
+mod v020;
 // The History / Edit window reads and writes annotations.json next.
 #[allow(dead_code)]
 pub mod json;
