@@ -54,7 +54,7 @@ fn radius(r: FRect, px: f32) -> f32 {
 
 /// The cloud's bump radius.
 fn bump(r: FRect) -> f32 {
-    (r.w.min(r.h) * 0.12).clamp(5.0, 18.0)
+    (r.w.min(r.h) * 0.2).clamp(7.0, 24.0)
 }
 
 /// Where the text goes inside bubble `r`.
@@ -62,13 +62,10 @@ pub fn text_area(r: FRect, style: Style, px: f32) -> FRect {
     let (px_, py) = pad(px);
     let a = match style {
         Style::Rounded => FRect { x: r.x + px_, y: r.y + py, w: r.w - 2.0 * px_, h: r.h - 2.0 * py },
-        Style::Cloud => {
-            let b = bump(r);
-            FRect { x: r.x + px_ + b * 0.5, y: r.y + py + b * 0.5, w: r.w - 2.0 * px_ - b, h: r.h - 2.0 * py - b }
-        }
-        // The inscribed rectangle, padded a little.
-        Style::Ellipse => {
-            let (w, h) = (r.w / std::f32::consts::SQRT_2, r.h / std::f32::consts::SQRT_2);
+        // The rectangle inscribed in the (core) ellipse, padded a little.
+        Style::Cloud | Style::Ellipse => {
+            let core = if style == Style::Cloud { inset(r, bump(r) * 0.6) } else { r };
+            let (w, h) = (core.w / std::f32::consts::SQRT_2, core.h / std::f32::consts::SQRT_2);
             let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
             FRect { x: cx - w / 2.0 + px_ * 0.3, y: cy - h / 2.0 + py * 0.3, w: w - px_ * 0.6, h: h - py * 0.6 }
         }
@@ -147,7 +144,15 @@ pub struct Layout {
 pub fn layout(font: &AnnotFont, r: FRect, text: &str, px: f32, style: Style) -> Layout {
     let a = text_area(r, style, px);
     let m = font.metrics(px);
-    Layout { lines: wrap(font, text, px, a.w), top: Pt::new(a.x.round(), a.y.round()), line_h: m.line_height }
+    let lines = wrap(font, text, px, a.w);
+    // The cloud and the ellipse centre their text; the box keeps it at
+    // the top (the boards' bubble).
+    let th = lines.len().max(1) as f32 * m.line_height;
+    let y = match style {
+        Style::Rounded => a.y,
+        _ => a.y + ((a.h - th) / 2.0).max(0.0),
+    };
+    Layout { lines, top: Pt::new(a.x.round(), y.round()), line_h: m.line_height }
 }
 
 /// The bubble height that holds `text` at width `r.w`.
@@ -158,7 +163,12 @@ pub fn needed_h(font: Option<&AnnotFont>, r: FRect, text: &str, px: f32, style: 
     let (_, py) = pad(px);
     let h = match style {
         Style::Rounded => th + 2.0 * py,
-        Style::Cloud => th + 2.0 * py + bump(FRect { h: th + 2.0 * py, ..r }),
+        Style::Cloud => {
+            // The bump depends on the height: settle it in two steps.
+            let base = (th + py * 0.6) * std::f32::consts::SQRT_2;
+            let h0 = base + 1.2 * bump(FRect { h: base, ..r });
+            base + 1.2 * bump(FRect { h: h0, ..r })
+        }
         Style::Ellipse => (th + py * 0.6) * std::f32::consts::SQRT_2,
     };
     h.ceil().max(px * 2.0)
@@ -234,14 +244,18 @@ fn tail_triangle(r: FRect, tip: Pt, style: Style, px: f32, deep: f32) -> Option<
             let rad = radius(r, px);
             let vertical = dy.abs() >= dx.abs();
             let len = if vertical { r.w } else { r.h };
-            let bw = (r.w.min(r.h) * 0.3).clamp(10.0, 40.0).min((len - 2.0 * rad).max(4.0));
+            let bw = (r.w.min(r.h) * 0.4).clamp(14.0, 44.0).min((len - 2.0 * rad).max(4.0));
+            // The base starts beside the tip and leans toward the middle
+            // (the boards' tail), clamped clear of the corners.
             if vertical {
                 let y = if dy > 0.0 { r.y1() - deep } else { r.y + deep };
-                let c = tip.x.clamp(r.x + rad + bw / 2.0, (r.x1() - rad - bw / 2.0).max(r.x + rad + bw / 2.0));
+                let lean = if tip.x < cx { bw / 2.0 } else { -bw / 2.0 };
+                let c = (tip.x + lean).clamp(r.x + rad + bw / 2.0, (r.x1() - rad - bw / 2.0).max(r.x + rad + bw / 2.0));
                 Some([Pt::new(c - bw / 2.0, y), tip, Pt::new(c + bw / 2.0, y)])
             } else {
                 let x = if dx > 0.0 { r.x1() - deep } else { r.x + deep };
-                let c = tip.y.clamp(r.y + rad + bw / 2.0, (r.y1() - rad - bw / 2.0).max(r.y + rad + bw / 2.0));
+                let lean = if tip.y < cy { bw / 2.0 } else { -bw / 2.0 };
+                let c = (tip.y + lean).clamp(r.y + rad + bw / 2.0, (r.y1() - rad - bw / 2.0).max(r.y + rad + bw / 2.0));
                 Some([Pt::new(x, c - bw / 2.0), tip, Pt::new(x, c + bw / 2.0)])
             }
         }
@@ -277,21 +291,18 @@ fn shrink(t: [Pt; 3], d: f32) -> Option<[Pt; 3]> {
 /// bumps reach `r`'s edge), plus `grow` px all round (negative: inset).
 fn cloud(m: &mut Mask, r: FRect, grow: f32) {
     let b = bump(r);
+    // An elliptic core and bumps round its edge, about 1.4 radii apart:
+    // the bumps reach `r`'s edge.
     let core = inset(r, b);
-    m.round_box(inset(core, -grow), b);
-    // Bump centres along the core's edge, about 1.5 radii apart.
-    let per = |len: f32| ((len / (b * 1.5)).round() as i32).max(1);
-    let (nx, ny) = (per(core.w), per(core.h));
+    m.ellipse(inset(core, -grow - b * 0.35));
+    let (rx, ry) = (core.w / 2.0, core.h / 2.0);
+    let (cx, cy) = (core.x + rx, core.y + ry);
+    let per = std::f32::consts::PI * (3.0 * (rx + ry) - ((3.0 * rx + ry) * (rx + 3.0 * ry)).max(0.0).sqrt());
+    let n = ((per / (b * 1.4)).round() as i32).max(6);
     let rad = (b + grow).max(0.5);
-    for i in 0..=nx {
-        let x = core.x + core.w * i as f32 / nx as f32;
-        m.disc(Pt::new(x, core.y), rad);
-        m.disc(Pt::new(x, core.y1()), rad);
-    }
-    for j in 1..ny {
-        let y = core.y + core.h * j as f32 / ny as f32;
-        m.disc(Pt::new(core.x, y), rad);
-        m.disc(Pt::new(core.x1(), y), rad);
+    for k in 0..n {
+        let a = std::f32::consts::TAU * k as f32 / n as f32;
+        m.disc(Pt::new(cx + rx * a.cos(), cy + ry * a.sin()), rad);
     }
 }
 
@@ -301,7 +312,7 @@ fn cloud_puffs(r: FRect, tip: Pt) -> Option<[(Pt, f32); 3]> {
     let base = Pt::new((t[0].x + t[2].x) / 2.0, (t[0].y + t[2].y) / 2.0);
     let b = bump(r);
     let at = |k: f32| Pt::new(base.x + (tip.x - base.x) * k, base.y + (tip.y - base.y) * k);
-    Some([(at(0.3), b * 0.62), (at(0.65), b * 0.45), (at(1.0), b * 0.3)])
+    Some([(at(0.3), b * 0.55), (at(0.65), b * 0.4), (at(1.0), b * 0.28)])
 }
 
 /// The bubble's silhouette grown by `grow` (negative: inset), tail

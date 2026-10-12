@@ -31,6 +31,8 @@ pub(super) const GHOST: f32 = 0.4;
 const HIT_PX: f32 = 6.0;
 /// What a duplicate is offset by, logical px.
 const DUP_PX: f32 = 12.0;
+/// The dashed frame's distance outside an object's stroke, logical px.
+const FRAME_PX: f32 = 4.0;
 
 /// The object selection and the callout being typed in.
 #[derive(Default)]
@@ -148,6 +150,23 @@ impl Edit {
         oe::union(self.obj.sel.iter().filter_map(|&i| self.objects.get(i)).filter_map(|o| oe::sel_box(o, font)))
     }
 
+    /// The dashed frame drawn round `o`: its box out by half its stroke
+    /// and 4 px, so it clears the stroke (the handles sit on it).
+    fn frame_of(&self, o: &Obj) -> Option<FRect> {
+        let b = oe::sel_box(o, self.font.as_ref())?;
+        let stroke = match o {
+            Obj::Text { .. } | Obj::Counter { .. } | Obj::Callout { .. } | Obj::Pixelate { .. } | Obj::Magnify { .. } => 0.0,
+            o => oe::size(o).unwrap_or(0.0),
+        };
+        let m = stroke / 2.0 + FRAME_PX * self.ui_scale();
+        Some(FRect { x: b.x - m, y: b.y - m, w: b.w + 2.0 * m, h: b.h + 2.0 * m })
+    }
+
+    /// The selection's frame: the union of the selected objects' frames.
+    pub(super) fn osel_frame(&self) -> Option<FRect> {
+        oe::union(self.obj.sel.iter().filter_map(|&i| self.objects.get(i)).filter_map(|o| self.frame_of(o)))
+    }
+
     /// Push an undo step when the objects differ from the last one.
     pub(super) fn commit_edits(&mut self) {
         if self.hist.get(self.hi) != Some(&self.objects) {
@@ -164,7 +183,8 @@ impl Edit {
         let font = self.font.as_ref();
         if let [i] = self.obj.sel[..] {
             let Some(o) = self.objects.get(i) else { return (Vec::new(), Vec::new()) };
-            let Some(b) = oe::sel_box(o, font) else { return (Vec::new(), Vec::new()) };
+            let Some(b) = self.frame_of(o) else { return (Vec::new(), Vec::new()) };
+            let _ = font;
             let sq = match oe::boxes(o) {
                 oe::Boxes::None => Vec::new(),
                 oe::Boxes::Corners => corners(b),
@@ -173,7 +193,7 @@ impl Edit {
             let round = oe::points(o).into_iter().map(|(w, p)| (OHandle::Point(i, w), p)).collect();
             return (sq, round);
         }
-        (self.osel_box().map(corners).unwrap_or_default(), Vec::new())
+        (self.osel_frame().map(corners).unwrap_or_default(), Vec::new())
     }
 
     /// The handle under `p` (round ones first: a tail by a corner).
@@ -200,8 +220,8 @@ impl Edit {
         self.interact = match h {
             OHandle::Box(handle) => {
                 let orig = self.obj.sel.iter().map(|&i| self.objects[i].clone()).collect();
-                let Some(bx) = self.osel_box() else { return };
-                Interact::ObjResize { handle, orig, bx }
+                let (Some(bx), Some(fr)) = (self.osel_box(), self.osel_frame()) else { return };
+                Interact::ObjResize { handle, orig, bx, fr }
             }
             OHandle::Point(idx, which) => Interact::ObjPoint { idx, which, orig: self.objects[idx].clone() },
         };
@@ -329,9 +349,13 @@ impl Edit {
                 }
                 self.dirty = true;
             }
-            Interact::ObjResize { handle, orig, bx } => {
+            Interact::ObjResize { handle, orig, bx, fr } => {
                 let keep = self.obj.sel.len() > 1 || orig.first().is_some_and(|o| oe::boxes(o) == oe::Boxes::Corners) || mods.shift;
-                let nb = resize_box(*handle, *bx, p, keep);
+                // The frame follows the pointer; the box keeps its margins in it.
+                let nf = resize_box(*handle, *fr, p, keep);
+                let (l, t) = (bx.x - fr.x, bx.y - fr.y);
+                let (r, b) = (fr.x1() - bx.x1(), fr.y1() - bx.y1());
+                let nb = FRect { x: nf.x + l, y: nf.y + t, w: (nf.w - l - r).max(1.0), h: (nf.h - t - b).max(1.0) };
                 for (k, &i) in self.obj.sel.clone().iter().enumerate() {
                     let mut o = orig[k].clone();
                     oe::map_box(&mut o, *bx, nb);
@@ -650,9 +674,9 @@ impl Edit {
             match self.obj.sel[..] {
                 [i] => match &self.objects[i] {
                     Obj::Line { a, b, .. } | Obj::Arrow { a, b, .. } | Obj::Marker { a, b, .. } => u.line = Some((*a, *b)),
-                    o => u.boxes.extend(oe::sel_box(o, font)),
+                    o => u.boxes.extend(self.frame_of(o)),
                 },
-                _ => u.boxes.extend(self.osel_box()),
+                _ => u.boxes.extend(self.osel_frame()),
             }
             u
         });
@@ -665,7 +689,7 @@ impl Edit {
             Some(CaretUi { r: FRect { x: at.x, y: at.y, w: (2.0 * s).round().max(1.0), h: lay.line_h.round() }, color: ink.with_alpha(255) })
         });
         let idle = matches!(self.interact, Interact::None);
-        let mini = (idle && !self.obj.sel.is_empty()).then(|| self.osel_box()).flatten().map(|b| {
+        let mini = (idle && !self.obj.sel.is_empty()).then(|| self.osel_frame()).flatten().map(|b| {
             let sel = &self.obj.sel;
             let one = (sel.len() == 1).then(|| &self.objects[sel[0]]);
             let inp = MiniIn {

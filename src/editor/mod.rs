@@ -2243,11 +2243,13 @@ enum Interact {
         hit: usize,
         was_sel: bool,
     },
-    /// Resizing the selected objects by a box handle.
+    /// Resizing the selected objects by a handle on their frame `fr`
+    /// (`bx`: their box inside it).
     ObjResize {
         handle: Handle,
         orig: Vec<Obj>,
         bx: FRect,
+        fr: FRect,
     },
     /// Dragging a round handle (an end, a tail, the loupe or its source).
     ObjPoint {
@@ -3634,6 +3636,8 @@ mod tools2_tests;
 mod uisize_tests;
 #[cfg(test)]
 mod snap_tests;
+#[cfg(test)]
+mod objects_tests;
 
 #[cfg(test)]
 mod tests {
