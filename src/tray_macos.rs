@@ -190,22 +190,39 @@ unsafe fn rebuild(st: &mut State) {
         let menu = st.menu.ptr();
         let _: () = msg0(menu, objc_sel(c"removeAllItems"));
         st.items = tray::current_menu();
-        for (i, it) in st.items.iter().enumerate() {
-            if *it == MenuItem::Separator {
+        // Tags are the flat list's indexes (submenu items included).
+        let add = |menu: *mut c_void, i: usize, it: MenuItem| -> Option<Id> {
+            if it == MenuItem::Separator {
                 let sep: *mut c_void = msg0(objc_cls(c"NSMenuItem"), objc_sel(c"separatorItem"));
                 let _: () = msg1(menu, objc_sel(c"addItem:"), sep);
-                continue;
+                return None;
             }
             let mi: *mut c_void = msg0(objc_cls(c"NSMenuItem"), objc_sel(c"alloc"));
             let mi: *mut c_void =
                 msg3(mi, objc_sel(c"initWithTitle:action:keyEquivalent:"), ns_string(&it.label()), objc_sel(c"act:"), ns_string(""));
-            let Some(mi) = Id::owned(mi) else { continue };
+            let mi = Id::owned(mi)?;
             let _: () = msg1(mi.ptr(), objc_sel(c"setTarget:"), st.target.ptr());
             let _: () = msg1(mi.ptr(), objc_sel(c"setTag:"), i as isize);
             if it.checked() == Some(true) {
                 let _: () = msg1(mi.ptr(), objc_sel(c"setState:"), 1isize); // NSControlStateValueOn
             }
             let _: () = msg1(menu, objc_sel(c"addItem:"), mi.ptr());
+            Some(mi)
+        };
+        let items = st.items.clone();
+        for (i, kids) in tray::nest(&items) {
+            let Some(mi) = add(menu, i, items[i]) else { continue };
+            if kids.is_empty() {
+                continue;
+            }
+            // "Recent uploads": its submenu (the item keeps it).
+            let sub: *mut c_void = msg0(objc_cls(c"NSMenu"), objc_sel(c"alloc"));
+            let sub: *mut c_void = msg1(sub, objc_sel(c"initWithTitle:"), ns_string(&items[i].label()));
+            let Some(sub) = Id::owned(sub) else { continue };
+            for k in kids {
+                add(sub.ptr(), k, items[k]);
+            }
+            let _: () = msg1(mi.ptr(), objc_sel(c"setSubmenu:"), sub.ptr());
         }
     }
 }

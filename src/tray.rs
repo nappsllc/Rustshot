@@ -36,6 +36,18 @@ pub enum MenuItem {
     Quit,
     /// A line between groups.
     Separator,
+    /// The capture launcher ("Capture…": source, delay, what follows).
+    Launcher,
+    /// A region capture after this many seconds ("Capture in 3 s").
+    CaptureIn(u8),
+    /// A delayed capture is counting down: call it off.
+    CancelDelay,
+    /// The "Recent uploads" submenu; its items ([`MenuItem::Upload`])
+    /// follow it in the list.
+    RecentUploads,
+    /// Upload `i` of the recent ones (a click copies its link); `tag`
+    /// changes with the link, so a changed list is a changed menu.
+    Upload { i: u8, tag: u32 },
 }
 
 impl MenuItem {
@@ -44,6 +56,12 @@ impl MenuItem {
         match self {
             MenuItem::History(0) => "History\u{2026}".into(),
             MenuItem::History(n) => format!("History\u{2026} \u{b7} {n} today").into(),
+            MenuItem::CaptureIn(n) => format!("Capture in {n} s").into(),
+            MenuItem::CancelDelay => match DELAY_LEFT.load(Ordering::SeqCst) {
+                0 => "Cancel delayed capture".into(),
+                n => format!("Cancel capture ({n} s)").into(),
+            },
+            MenuItem::Upload { i, .. } => upload_label(i as usize).into(),
             m => m.fixed_label().into(),
         }
     }
@@ -68,6 +86,11 @@ impl MenuItem {
             MenuItem::Autostart(_) => "Start at login",
             MenuItem::Quit => "Quit Rustshot",
             MenuItem::Separator => "",
+            MenuItem::Launcher => "Capture\u{2026}",
+            MenuItem::CaptureIn(_) => "Capture in\u{2026}",
+            MenuItem::CancelDelay => "Cancel delayed capture",
+            MenuItem::RecentUploads => "Recent uploads",
+            MenuItem::Upload { .. } => "",
         }
     }
 
@@ -101,6 +124,13 @@ impl MenuItem {
             MenuItem::CaptureWindow => 17,
             MenuItem::Record => 18,
             MenuItem::History(_) => 19,
+            MenuItem::Launcher => 20,
+            MenuItem::CaptureIn(3) => 21,
+            MenuItem::CaptureIn(10) => 22,
+            MenuItem::CaptureIn(_) => 23,
+            MenuItem::CancelDelay => 24,
+            MenuItem::RecentUploads => 25,
+            MenuItem::Upload { i, .. } => 30 + i as i32,
             MenuItem::Separator => SEPARATOR_IDS,
         }
     }
@@ -194,6 +224,52 @@ fn menu_old(autostart: Option<bool>, rec: Option<RecMenu>, pins: bool) -> Vec<Me
     v
 }
 
+/// What [`menu_more`] adds to [`menu_full`]: the launcher items, a
+/// countdown's Cancel, the recent uploads (their tags).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Extras {
+    /// "Capture…", "Capture in 3 s", "Capture in 10 s" (not while recording).
+    pub launcher: bool,
+    /// A delayed capture is counting down.
+    pub delay: bool,
+    /// One tag per recent upload (newest first).
+    pub uploads: Vec<u32>,
+}
+
+/// [`menu_full`] with `x`: a countdown's Cancel first, the launcher items
+/// after the capture actions, "Recent uploads" (its items following it)
+/// before Settings.
+pub fn menu_more(autostart: Option<bool>, rec: Option<RecMenu>, pins: bool, history: Option<usize>, record: bool, x: &Extras) -> Vec<MenuItem> {
+    let mut v = menu_full(autostart, rec, pins, history, record);
+    if x.launcher && rec.is_none() {
+        let last = [MenuItem::Record, MenuItem::CaptureWindow].iter().find_map(|l| v.iter().position(|m| m == l)).map_or(0, |i| i + 1);
+        v.splice(last..last, [MenuItem::Launcher, MenuItem::CaptureIn(3), MenuItem::CaptureIn(10)]);
+    }
+    if !x.uploads.is_empty() {
+        let at = v.iter().position(|m| *m == MenuItem::Settings).unwrap_or(v.len());
+        let ups = x.uploads.iter().take(u8::MAX as usize).enumerate().map(|(i, t)| MenuItem::Upload { i: i as u8, tag: *t });
+        let items: Vec<MenuItem> = std::iter::once(MenuItem::RecentUploads).chain(ups).collect();
+        v.splice(at..at, items);
+    }
+    if x.delay {
+        v.splice(0..0, [MenuItem::CancelDelay, MenuItem::Separator]);
+    }
+    v
+}
+
+/// The menu's items grouped for backends with submenus: each top item's
+/// index with its submenu's ("Recent uploads": the uploads after it).
+pub fn nest(menu: &[MenuItem]) -> Vec<(usize, Vec<usize>)> {
+    let mut out: Vec<(usize, Vec<usize>)> = Vec::new();
+    for (i, m) in menu.iter().enumerate() {
+        match out.last_mut() {
+            Some((p, kids)) if matches!(m, MenuItem::Upload { .. }) && menu[*p] == MenuItem::RecentUploads => kids.push(i),
+            _ => out.push((i, Vec::new())),
+        }
+    }
+    out
+}
+
 /// Current menu for this install.
 pub fn current_menu() -> Vec<MenuItem> {
     let auto = crate::update::managed_install().is_none().then(crate::autostart::is_enabled);
@@ -203,7 +279,58 @@ pub fn current_menu() -> Vec<MenuItem> {
         (t.0, t.1, t.2)
     };
     let history = cfg.history.then(|| crate::history::today_count(&crate::history::default_root(), today));
-    menu_full(auto, rec_menu(), crate::pin::count() > 0, history, crate::rec_ui::supported())
+    let recent = crate::uploads::recent();
+    let x = Extras { launcher: true, delay: DELAYING.load(Ordering::SeqCst), uploads: recent.iter().map(|r| tag_of(&r.link)).collect() };
+    *RECENT.lock().unwrap_or_else(|e| e.into_inner()) = recent.into_iter().map(|r| r.link).collect();
+    menu_more(auto, rec_menu(), crate::pin::count() > 0, history, crate::rec_ui::supported(), &x)
+}
+
+/// The links "Recent uploads" lists (as the menu was last built).
+static RECENT: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// A short hash of `link` (a [`MenuItem::Upload`]'s tag).
+pub fn tag_of(link: &str) -> u32 {
+    link.bytes().fold(0x811c_9dc5u32, |h, b| (h ^ b as u32).wrapping_mul(0x0100_0193))
+}
+
+/// The link of upload `i` in the menu.
+fn recent_link(i: usize) -> Option<String> {
+    RECENT.lock().unwrap_or_else(|e| e.into_inner()).get(i).cloned()
+}
+
+/// Upload `i`'s menu text: "i.imgur.com/aB3x.png".
+fn upload_label(i: usize) -> String {
+    recent_link(i).map_or_else(|| "(gone)".into(), |l| crate::uploads::short_link(&l))
+}
+
+/// An upload record was filed or forgotten: "Recent uploads" follows.
+pub fn uploads_changed() {
+    bump();
+    #[cfg(all(target_os = "macos", not(test)))]
+    crate::tray_macos::refresh();
+}
+
+/// Seconds left of a delayed capture (0: none counting).
+static DELAY_LEFT: AtomicU64 = AtomicU64::new(0);
+/// A delayed capture is set up (Cancel is offered, even in its last second).
+static DELAYING: AtomicBool = AtomicBool::new(false);
+
+/// A delayed capture's countdown: `Some(seconds left)`, or `None` once it
+/// ended. The menu gains "Cancel capture", the tip says the seconds.
+pub fn set_delay(left: Option<u64>) {
+    let was = DELAYING.swap(left.is_some(), Ordering::SeqCst);
+    let n = left.unwrap_or(0);
+    if DELAY_LEFT.swap(n, Ordering::SeqCst) == n && was == left.is_some() {
+        return;
+    }
+    bump();
+    #[cfg(all(windows, not(test)))]
+    crate::tray_win::refresh_tip();
+    #[cfg(all(target_os = "macos", not(test)))]
+    {
+        crate::tray_macos::refresh_tip();
+        crate::tray_macos::refresh();
+    }
 }
 
 /// The daemon event of a menu item (None: the item does its work here,
@@ -223,7 +350,15 @@ pub fn item_event(item: MenuItem) -> Option<HotEvent> {
         MenuItem::History(_) => HotEvent::History,
         MenuItem::ClosePins => HotEvent::ClosePins,
         MenuItem::Quit => HotEvent::Quit,
-        MenuItem::Settings | MenuItem::CheckUpdates | MenuItem::Autostart(_) | MenuItem::Separator => return None,
+        MenuItem::CaptureIn(n) => HotEvent::Launch(crate::launcher::Plan::region_in(n as u32)),
+        MenuItem::CancelDelay => HotEvent::CancelDelay,
+        MenuItem::Settings
+        | MenuItem::CheckUpdates
+        | MenuItem::Autostart(_)
+        | MenuItem::Separator
+        | MenuItem::Launcher
+        | MenuItem::RecentUploads
+        | MenuItem::Upload { .. } => return None,
     })
 }
 
@@ -236,6 +371,12 @@ pub fn activate(item: MenuItem, tx: &Sender<HotEvent>) -> Result<(), String> {
     }
     match item {
         MenuItem::Settings => crate::settings_ui::show(),
+        MenuItem::Launcher => crate::launcher::show(),
+        MenuItem::Upload { i, .. } => {
+            let link = recent_link(i as usize).ok_or("That upload is no longer listed")?;
+            crate::export::copy_text_to_clipboard(&link).map_err(|e| format!("Could not copy the link: {e:#}"))?;
+            notify(&format!("Link copied \u{b7} {}", crate::uploads::short_link(&link)));
+        }
         MenuItem::CheckUpdates => crate::actions::check_updates(),
         MenuItem::Autostart(_) => {
             crate::actions::toggle_autostart().map_err(|e| format!("Could not change Start at login: {e}"))?;
@@ -345,7 +486,15 @@ pub fn set_elapsed(d: std::time::Duration) -> bool {
 /// The tray icon's tooltip: "Rustshot", or "Rustshot — recording 1:23"
 /// while a recording runs.
 pub fn tip_text() -> String {
-    tip_for(is_recording(), ELAPSED.load(Ordering::SeqCst))
+    match DELAY_LEFT.load(Ordering::SeqCst) {
+        0 => tip_for(is_recording(), ELAPSED.load(Ordering::SeqCst)),
+        n => delay_tip(n),
+    }
+}
+
+/// The tip while a delayed capture counts down.
+fn delay_tip(n: u64) -> String {
+    format!("Rustshot \u{2014} capturing in {n} s")
 }
 
 fn tip_for(recording: bool, secs: u64) -> String {
@@ -644,6 +793,78 @@ mod tests {
         assert_eq!(seen.len(), ids.len());
         let seps: Vec<i32> = ids.iter().filter(|(_, m)| *m == MenuItem::Separator).map(|(i, _)| *i).collect();
         assert_eq!(seps, [SEPARATOR_IDS, SEPARATOR_IDS + 1]);
+    }
+
+    /// The launcher's items follow the capture actions; "Recent uploads"
+    /// (its uploads after it) comes before Settings; a countdown puts
+    /// Cancel first. Ids stay unique; submenus nest.
+    #[test]
+    fn menu_with_launcher_uploads_and_a_countdown() {
+        let x = Extras { launcher: true, delay: false, uploads: vec![tag_of("a"), tag_of("b")] };
+        let m = menu_more(Some(true), None, false, Some(2), true, &x);
+        assert_eq!(
+            m[..11],
+            [
+                MenuItem::Capture,
+                MenuItem::CaptureFull,
+                MenuItem::CaptureWindow,
+                MenuItem::Record,
+                MenuItem::Launcher,
+                MenuItem::CaptureIn(3),
+                MenuItem::CaptureIn(10),
+                MenuItem::History(2),
+                MenuItem::RecentUploads,
+                MenuItem::Upload { i: 0, tag: tag_of("a") },
+                MenuItem::Upload { i: 1, tag: tag_of("b") },
+            ]
+        );
+        assert_eq!(m[11], MenuItem::Settings);
+        // Without Record (not supported here), after Capture window.
+        let m2 = menu_more(None, None, false, None, false, &x);
+        assert_eq!(m2[3], MenuItem::Launcher);
+        // Nothing new without extras: the old menu.
+        assert_eq!(menu_more(None, None, true, Some(0), true, &Extras::default()), menu_full(None, None, true, Some(0), true));
+        // Not while recording; Cancel first while counting down.
+        let r = menu_more(None, Some(RecMenu::default()), false, None, true, &x);
+        assert!(!r.contains(&MenuItem::Launcher));
+        let d = menu_more(None, None, false, None, true, &Extras { delay: true, ..x.clone() });
+        assert_eq!(d[..2], [MenuItem::CancelDelay, MenuItem::Separator]);
+        // Ids unique; the submenu nests its uploads.
+        let ids = with_ids(&d);
+        let mut seen: Vec<i32> = ids.iter().map(|(i, _)| *i).collect();
+        seen.sort();
+        seen.dedup();
+        assert_eq!(seen.len(), ids.len());
+        let tree = nest(&d);
+        let ru = d.iter().position(|i| *i == MenuItem::RecentUploads).unwrap();
+        let (_, kids) = tree.iter().find(|(p, _)| *p == ru).unwrap();
+        assert_eq!(kids, &vec![ru + 1, ru + 2]);
+        assert_eq!(tree.len(), d.len() - 2, "the uploads are not top items");
+        // A changed list is a changed menu (the Linux tray re-sends it).
+        let other = menu_more(None, None, false, None, true, &Extras { uploads: vec![tag_of("c"), tag_of("b")], ..x.clone() });
+        assert_ne!(other, menu_more(None, None, false, None, true, &x));
+    }
+
+    #[test]
+    fn launcher_items_and_their_events() {
+        assert_eq!(MenuItem::Launcher.label(), "Capture\u{2026}");
+        assert_eq!(MenuItem::CaptureIn(3).label(), "Capture in 3 s");
+        assert_eq!(MenuItem::CaptureIn(10).label(), "Capture in 10 s");
+        assert_eq!(MenuItem::RecentUploads.label(), "Recent uploads");
+        assert_ne!(MenuItem::CaptureIn(3).id(), MenuItem::CaptureIn(10).id());
+        assert_eq!(MenuItem::Upload { i: 2, tag: 1 }.id(), MenuItem::Upload { i: 2, tag: 9 }.id());
+        let ev = |i| format!("{:?}", item_event(i));
+        assert_eq!(ev(MenuItem::CaptureIn(3)), format!("Some(Launch({:?}))", crate::launcher::Plan::region_in(3)));
+        assert_eq!(ev(MenuItem::CancelDelay), "Some(CancelDelay)");
+        // Done here, not by the daemon: the window, copying a link.
+        for i in [MenuItem::Launcher, MenuItem::RecentUploads, MenuItem::Upload { i: 0, tag: 0 }] {
+            assert_eq!(ev(i), "None");
+        }
+        assert_eq!(delay_tip(3), "Rustshot \u{2014} capturing in 3 s");
+        // An upload's text is its link, as the menu was built.
+        *RECENT.lock().unwrap() = vec!["https://i.imgur.com/aB3x.png".into()];
+        assert_eq!(MenuItem::Upload { i: 0, tag: 0 }.label(), "i.imgur.com/aB3x.png");
+        assert_eq!(MenuItem::Upload { i: 4, tag: 0 }.label(), "(gone)");
     }
 
     #[test]
