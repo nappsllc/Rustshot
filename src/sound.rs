@@ -6,11 +6,13 @@
 //! it). macOS: the system "Tink" sound through `NSSound`.
 
 /// Sample rate of the click.
+#[cfg_attr(target_os = "macos", allow(dead_code))] // macOS plays a system sound
 pub const RATE: u32 = 22_050;
 
 /// The click's samples: two decaying noise bursts (the shutter opening
 /// and closing), 70 ms in all. Deterministic (a fixed LCG), so the WAV is
 /// the same every run.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn click_samples() -> Vec<i16> {
     let n = (RATE as usize * 70) / 1000;
     let mut seed: u32 = 0x1234_5678;
@@ -28,6 +30,7 @@ pub fn click_samples() -> Vec<i16> {
 }
 
 /// `samples` as a RIFF/WAVE file (PCM, mono, 16-bit, [`RATE`]).
+#[cfg_attr(not(windows), allow(dead_code))] // Linux streams the samples
 pub fn wav(samples: &[i16]) -> Vec<u8> {
     let data = samples.len() as u32 * 2;
     let mut v = Vec::with_capacity(44 + data as usize);

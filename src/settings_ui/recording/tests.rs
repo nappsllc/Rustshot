@@ -1,5 +1,6 @@
 use super::*;
-use crate::settings_ui::{paint, Act, Click, Form, Settings, BODY_Y, H, PAD, W};
+use crate::settings_ui::draw::{paint, viewport};
+use crate::settings_ui::{Act, Click, Form, Settings, RECORDING, W, H};
 use crate::theme::{Theme, DARK, LIGHT};
 use crate::ui::{preview, FocusState, Input};
 use std::path::Path;
@@ -151,21 +152,6 @@ fn encoder_status_lines() {
     }
 }
 
-#[test]
-fn record_hotkey_notes() {
-    let mut f = RecForm::new(&Config::default());
-    assert_eq!(f.hotkey_note(Chord::parse("Ctrl+Shift+A"), None), None);
-    f.hotkey = Chord::parse("Ctrl+Alt+K");
-    assert!(f.hotkey_note(Chord::parse("Ctrl+Alt+K"), None).unwrap().contains("Capture"));
-    assert!(f.hotkey_note(None, Chord::parse("Ctrl+Alt+K")).unwrap().contains("Quit"));
-    f.hotkey = Chord::parse("K");
-    assert_eq!(f.hotkey_note(None, None), Some(BARE_NOTE));
-    f.hotkey = Chord::parse("F9");
-    assert_eq!(f.hotkey_note(None, None), None);
-    f.hotkey = None;
-    assert_eq!(f.hotkey_note(None, None), None);
-}
-
 /// A change on the tab is saved by Apply and read back.
 #[test]
 fn apply_saves_the_recording_tab() {
@@ -173,7 +159,7 @@ fn apply_saves_the_recording_tab() {
     let p = dir.join("config.toml");
     config::save_at(&p, &Config::default()).unwrap();
     let mut s = Settings::open(p.clone(), None);
-    s.tab = 3;
+    s.section = RECORDING;
     assert!(!s.dirty());
     s.form.rec.format = 1;
     s.form.rec.countdown = false;
@@ -191,12 +177,12 @@ fn apply_saves_the_recording_tab() {
 
 fn sample(cfg: Config) -> Settings {
     let mut s = Settings::new(cfg, Some(true), PathBuf::from("config.toml"));
-    s.tab = 3;
+    s.section = RECORDING;
     s
 }
 
 /// Two frames (focus order, then the picture); returns the image and
-/// where the tab's last row ends.
+/// the section's content height (logical px).
 fn render(s: &mut Settings, th: &Theme, k: f32) -> (crate::pixbuf::PixBuf, f32) {
     let mut focus = FocusState::default();
     preview::render(W, H, k, th, &Input::default(), &mut focus, |ui| {
@@ -205,40 +191,37 @@ fn render(s: &mut Settings, th: &Theme, k: f32) -> (crate::pixbuf::PixBuf, f32) 
     let img = preview::render(W, H, k, th, &Input::default(), &mut focus, |ui| {
         paint(ui, s);
     });
-    let mut bottom = 0.0;
-    preview::render(W, H, k, th, &Input::default(), &mut focus, |ui| {
-        let body = FRect { x: PAD, y: BODY_Y, w: W as f32 - 2.0 * PAD, h: 0.0 };
-        bottom = tab(ui, s, body);
-    });
-    (img, bottom)
+    (img, s.content_h[RECORDING])
 }
 
-/// The tab's rows end above the button bar in every state, the tallest
-/// (Linux encoder row, a GIF's sound note and two hotkey notes) included.
+/// The section scrolls to its end in every state, the tallest (Linux
+/// encoder row, a GIF's notes, no camera) included, and its rows keep
+/// their controls apart from the labels.
 #[test]
-fn recording_tab_fits() {
-    let limit = H as f32 - PAD - ROW - 16.0;
-    let mut s = sample(Config { rec_format: "gif".into(), record_hotkey: "Ctrl+Alt+K".into(), capture_hotkey: "Ctrl+Alt+K".into(), ..Config::default() });
+fn recording_section_scrolls_to_its_end() {
+    let mut s = sample(Config { rec_format: "gif".into(), ..Config::default() });
     s.rec_lists.linux = true;
-    s.hotkey_failures = vec![crate::hotkey::Failure {
-        slot: 2,
-        wanted: "Ctrl+Alt+K".into(),
-        cause: crate::hotkey::Cause::InUse,
-        kept: None,
-    }];
-    let (_, bottom) = render(&mut s, &DARK, 1.0);
-    assert!(bottom <= limit, "{bottom} > {limit}");
+    s.rec_lists.found = Some(Found { cams: Vec::new(), ..find() });
+    let (_, h1) = render(&mut s, &DARK, 1.0);
+    assert!(h1 > viewport().h, "{h1}");
+    s.scroll[RECORDING] = 1e6;
+    render(&mut s, &DARK, 1.0);
+    assert!((s.scroll[RECORDING] - (h1 - viewport().h)).abs() < 0.5);
 }
 
 #[test]
-fn preview_recording_tab_pngs() {
+fn preview_recording_section_pngs() {
     let ffmpeg = Found { ffmpeg: Some("/usr/bin/ffmpeg".into()), ..find() };
     for (tname, th) in [("dark", &DARK), ("light", &LIGHT)] {
-        let mut s = sample(Config { rec_mic: true, rec_camera: true, ..Config::default() });
-        let (img, _) = render(&mut s, th, 1.0);
-        preview::save(&format!("settings-recording-{tname}.png"), &img);
-        let (img, _) = render(&mut s, th, 1.5);
-        preview::save(&format!("settings-recording-{tname}-150.png"), &img);
+        for k in [1.0f32, 1.5] {
+            let sfx = if k == 1.0 { String::new() } else { "-150".into() };
+            let mut s = sample(Config { rec_mic: true, rec_camera: true, ..Config::default() });
+            let (img, _) = render(&mut s, th, k);
+            preview::save(&format!("settings-recording-top-{tname}{sfx}.png"), &img);
+            s.scroll[RECORDING] = 1e6;
+            let (img, _) = render(&mut s, th, k);
+            preview::save(&format!("settings-recording-bottom-{tname}{sfx}.png"), &img);
+        }
 
         // GIF: no quality, no sound.
         let mut s = sample(Config { rec_format: "gif".into(), rec_camera_ring_color: "#2dc06f".into(), rec_camera_ring_width: 6, ..Config::default() });
@@ -259,15 +242,10 @@ fn preview_recording_tab_pngs() {
             preview::save(&format!("settings-recording-linux-{name}-{tname}.png"), &img);
         }
 
-        // No camera, a saved microphone that is gone, a hotkey clash.
-        let mut s = sample(Config {
-            rec_mic: true,
-            rec_mic_device: "{unplugged}".into(),
-            record_hotkey: "Ctrl+Shift+A".into(),
-            capture_hotkey: "Ctrl+Shift+A".into(),
-            ..Config::default()
-        });
+        // No camera, a saved microphone that is gone.
+        let mut s = sample(Config { rec_mic: true, rec_mic_device: "{unplugged}".into(), ..Config::default() });
         s.rec_lists.found = Some(Found { cams: Vec::new(), ..find() });
+        s.scroll[RECORDING] = 1e6;
         let (img, _) = render(&mut s, th, 1.0);
         preview::save(&format!("settings-recording-nocam-{tname}.png"), &img);
     }

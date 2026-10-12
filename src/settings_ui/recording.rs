@@ -1,19 +1,18 @@
 //! Settings → **Recording**: the defaults the Record popover starts from
 //! (format, frame rate, MP4 quality, system sound and microphone with its
 //! device, the camera bubble's device, shape, size, mirror and ring), the
-//! 3-2-1 countdown, the record hotkey and, on Linux, the MP4 encoder with
-//! a line saying what is installed.
+//! 3-2-1 countdown and, on Linux, the MP4 encoder with a line saying what
+//! is installed (the record hotkey is in Key bindings).
 //!
 //! [`RecForm`] is the part of the settings form this tab edits (every
 //! `rec_*` key and `record_hotkey`); [`Lists`] holds the microphones and
 //! cameras, listed on a worker thread when the tab is first shown (Media
 //! Foundation and PulseAudio can take a moment), and the encoder status.
 
-use super::{field, BARE_NOTE, LABEL_W};
+use super::draw::srow;
 use crate::config::{self, Config};
 use crate::keymap::Chord;
-use crate::objects::FRect;
-use crate::ui::layout::{GAP, H as ROW};
+use crate::ui::compact::Tok;
 use crate::ui::Ui;
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
@@ -23,7 +22,7 @@ const FORMATS: [(&str, &str); 2] = [("MP4", "mp4"), ("GIF", "gif")];
 const MP4_FPS: [(&str, u32); 2] = [("30 fps", 30), ("60 fps", 60)];
 const GIF_FPS: [(&str, u32); 2] = [("10 fps", 10), ("15 fps", 15)];
 const QUALITIES: [(&str, &str); 3] = [("Low", "low"), ("Medium", "medium"), ("High", "high")];
-const SHAPES: [(&str, &str); 3] = [("Circle", "circle"), ("Rounded square", "rounded"), ("Square", "square")];
+const SHAPES: [(&str, &str); 3] = [("Circle", "circle"), ("Rounded", "rounded"), ("Square", "square")];
 const SIZES: [(&str, &str); 3] = [("Small", "s"), ("Medium", "m"), ("Large", "l")];
 pub const ENCODERS: [(&str, &str); 3] = [("Auto", "auto"), ("ffmpeg", "ffmpeg"), ("OpenH264", "openh264")];
 /// The ring colours on offer after "Accent" (the default drawing palette).
@@ -187,20 +186,6 @@ impl RecForm {
             _ => {} // the custom colour: kept
         }
     }
-
-    /// A problem with the record hotkey next to the General tab's ones.
-    pub fn hotkey_note(&self, capture: Option<Chord>, quit: Option<Chord>) -> Option<&'static str> {
-        let k = self.hotkey?;
-        if Some(k) == capture {
-            Some("Record and Capture use the same keys.")
-        } else if Some(k) == quit {
-            Some("Record and Quit Rustshot use the same keys.")
-        } else {
-            let modded = k.ctrl || k.alt || k.shift || k.meta;
-            let special = (0x70..=0x7B).contains(&k.vk) || k.vk == crate::wind::key::PRINTSCREEN;
-            (!(modded || special)).then_some(BARE_NOTE)
-        }
-    }
 }
 
 /// Device dropdown items: the default first, then the devices, then the
@@ -316,22 +301,11 @@ fn find() -> Found {
     Found { mics: crate::rec_ui::mics(), cams, ffmpeg, openh264 }
 }
 
-/// `s` cut with an ellipsis to fit `w` logical px.
-fn fit(ui: &Ui, s: &str, w: f32) -> String {
-    if ui.text_width(s) <= w {
-        return s.to_string();
-    }
-    let mut out: String = s.to_string();
-    while !out.is_empty() && ui.text_width(&format!("{out}…")) > w {
-        out.pop();
-    }
-    format!("{}…", out.trim_end())
-}
-
-/// A dropdown over `(names, ids)` setting `cur` to the picked id.
+/// A dropdown over `(names, ids)` setting `cur` to the picked id; names
+/// are cut to fit `w`.
 fn device_dropdown(ui: &mut Ui, id: &str, w: f32, (names, ids, sel): (Vec<String>, Vec<String>, usize), cur: &mut String) {
-    let text_w = w - 50.0; // the box's padding and chevron
-    let shown: Vec<String> = names.iter().map(|n| fit(ui, n, text_w)).collect();
+    let text_w = w - 46.0; // the box's padding and chevron
+    let shown: Vec<String> = names.iter().map(|n| ui.fit_text(12.0, n, text_w)).collect();
     let refs: Vec<&str> = shown.iter().map(String::as_str).collect();
     let mut i = sel;
     if ui.width(w).dropdown(id, &refs, &mut i) {
@@ -343,130 +317,95 @@ fn labels<T: Copy, const N: usize>(list: &[(&'static str, T); N]) -> [&'static s
     list.map(|(l, _)| l)
 }
 
-/// The tab; returns where its last row ends (logical px).
-pub fn tab(ui: &mut Ui, s: &mut super::Settings, body: FRect) -> f32 {
+/// Device dropdowns' width (logical px).
+const DEVICE_W: f32 = 210.0;
+
+/// The Recording section (the board's rows).
+pub fn section(ui: &mut Ui, s: &mut super::Settings, tok: &Tok) {
     s.rec_lists.start();
-    let slot_note = s.hotkey_slot_note(2);
     let lists = &s.rec_lists;
     let found = lists.found.as_ref();
     let show_encoder = lists.linux;
     let status = found.map(|f| encoder_status(s.form.rec.encoder, f.ffmpeg.as_deref(), f.openh264));
-    let (capture, quit) = (s.form.capture, s.form.quit);
     let f = &mut s.form.rec;
-    let note = f.hotkey_note(capture, quit);
-    // One note row at most: a clash says more than "not registered".
-    let note: Option<String> = note.map(str::to_string).or(slot_note);
     let mics = device_items(DEFAULT_MIC, found.map(|f| f.mics.as_slice()), &f.mic_dev);
     let cams = device_items(DEFAULT_CAM, found.map(|f| f.cams.as_slice()), &f.cam_dev);
     let no_cams = found.is_some_and(|f| f.cams.is_empty());
-    let rest = body.w - (LABEL_W + GAP);
-    ui.area(body, |ui| {
-        ui.lay.gap = 6.0;
-        let on = ui.enabled;
-        ui.heading("Video");
-        field(ui, "Format", |ui| {
-            ui.width(96.0).dropdown("rec_format", &labels(&FORMATS), &mut f.format);
-            if f.gif() {
-                ui.width(100.0).dropdown("rec_gif_fps", &labels(&GIF_FPS), &mut f.gif_fps);
-            } else {
-                ui.width(100.0).dropdown("rec_fps", &labels(&MP4_FPS), &mut f.fps);
-            }
-            ui.space(4.0);
-            ui.enabled = on && !f.gif();
-            ui.label("Quality");
-            ui.width(110.0).dropdown("rec_quality", &labels(&QUALITIES), &mut f.quality);
-            ui.enabled = on;
-        });
-        field(ui, "Countdown", |ui| {
-            ui.toggle("rec_countdown", &mut f.countdown);
-            ui.space(20.0);
-            ui.label("Record hotkey");
-            ui.allow_meta = true;
-            ui.key_capture("record_hotkey", &mut f.hotkey);
-            ui.allow_meta = false;
-        });
-        if let Some(n) = &note {
-            ui.row(|ui| {
-                ui.space(LABEL_W + GAP);
-                ui.height(18.0).error_note(n);
-            });
+    let on = ui.enabled;
+    let gif = f.gif();
+    ui.sec("Video", tok);
+    srow(ui, tok, "Format", None, |ui| {
+        ui.seg("rec_format", &labels(&FORMATS), &mut f.format, tok);
+    });
+    srow(ui, tok, "Frame rate", None, |ui| {
+        if f.gif() {
+            ui.seg("rec_gif_fps", &labels(&GIF_FPS), &mut f.gif_fps, tok);
+        } else {
+            ui.seg("rec_fps", &labels(&MP4_FPS), &mut f.fps, tok);
         }
-        if show_encoder {
-            field(ui, "MP4 encoder", |ui| {
-                ui.width(120.0).dropdown("rec_linux_encoder", &labels(&ENCODERS), &mut f.encoder);
-                let t = status.as_deref().unwrap_or("Looking…");
-                let t = fit(ui, t, rest - 120.0 - GAP);
-                ui.note(&t);
-            });
+    });
+    ui.enabled = on && !gif;
+    srow(ui, tok, "Quality", gif.then_some("MP4 only"), |ui| {
+        ui.seg("rec_quality", &labels(&QUALITIES), &mut f.quality, tok);
+    });
+    ui.enabled = on;
+    srow(ui, tok, "Countdown", Some("3, 2, 1 before the first frame"), |ui| {
+        ui.switch("rec_countdown", &mut f.countdown, tok);
+    });
+    if show_encoder {
+        let t = status.as_deref().unwrap_or("Looking\u{2026}");
+        srow(ui, tok, "MP4 encoder", Some(t), |ui| {
+            ui.width(120.0).dropdown("rec_linux_encoder", &labels(&ENCODERS), &mut f.encoder);
+        });
+    }
+
+    ui.sec("Sound", tok);
+    ui.enabled = on && !gif;
+    srow(ui, tok, "System sound", gif.then_some("GIFs have no sound"), |ui| {
+        ui.switch("rec_system_audio", &mut f.system, tok);
+    });
+    srow(ui, tok, "Microphone", None, |ui| {
+        ui.switch("rec_mic", &mut f.mic, tok);
+        ui.enabled = on && !gif && f.mic;
+        device_dropdown(ui, "rec_mic_device", DEVICE_W, mics, &mut f.mic_dev);
+    });
+    ui.enabled = on;
+
+    ui.sec("Camera bubble", tok);
+    ui.enabled = on && !no_cams;
+    srow(ui, tok, "Camera", no_cams.then_some("No camera found"), |ui| {
+        ui.switch("rec_camera", &mut f.camera, tok);
+        if !no_cams {
+            ui.enabled = on && f.camera;
+            device_dropdown(ui, "rec_camera_device", DEVICE_W, cams, &mut f.cam_dev);
         }
-
-        ui.heading("Sound");
-        field(ui, "System sound", |ui| {
-            let gap = ui.lay.gap;
-            ui.enabled = on && !f.gif();
-            ui.toggle("rec_system_audio", &mut f.system);
-            ui.space(20.0);
-            ui.label("Microphone");
-            ui.toggle("rec_mic", &mut f.mic);
-            if f.gif() {
-                ui.enabled = on;
-                ui.note("GIFs have no sound");
-            } else {
-                ui.enabled = on && f.mic;
-                let used = 36.0 + gap + 20.0 + ui.text_width("Microphone").ceil() + gap + 36.0 + gap;
-                device_dropdown(ui, "rec_mic_device", (rest - used).floor(), mics, &mut f.mic_dev);
-            }
-            ui.enabled = on;
-        });
-
-        ui.heading("Camera bubble");
-        field(ui, "Camera", |ui| {
-            ui.enabled = on && !no_cams;
-            ui.toggle("rec_camera", &mut f.camera);
-            ui.enabled = on && !no_cams && f.camera;
-            if no_cams {
-                ui.note("No camera found");
-            } else {
-                let w = (rest - 36.0 - ui.lay.gap).floor();
-                device_dropdown(ui, "rec_camera_device", w, cams, &mut f.cam_dev);
-            }
-            ui.enabled = on;
-        });
-        ui.enabled = on && !no_cams;
-        field(ui, "Shape", |ui| {
-            ui.width(150.0).dropdown("rec_camera_shape", &labels(&SHAPES), &mut f.shape);
-            ui.space(4.0);
-            ui.label("Size");
-            ui.width(110.0).dropdown("rec_camera_size", &labels(&SIZES), &mut f.size);
-            ui.space(4.0);
-            ui.label("Mirror");
-            ui.toggle("rec_camera_mirror", &mut f.mirror);
-        });
-        field(ui, "Ring", |ui| {
-            let (items, sel) = f.ring_items();
-            let refs: Vec<&str> = items.iter().map(String::as_str).collect();
-            let mut i = sel;
-            // A swatch of the colour left of the list.
-            let sw = ui.alloc(Some(20.0), ROW);
-            let c = match config::parse_color(&f.ring) {
-                Some((r, g, b, _)) => crate::uifb::C4::rgb(r, g, b),
-                None => ui.theme.accent,
-            };
-            let d = ui.px(16.0);
-            let (cx, cy) = (sw.x + sw.w / 2.0, sw.y + sw.h / 2.0);
-            let fade = if ui.enabled && f.ring_w > 0 { 1.0 } else { 0.4 };
-            ui.fb.fill_circle(cx, cy, d / 2.0 + ui.px(1.0), ui.theme.border.fade(fade));
-            ui.fb.fill_circle(cx, cy, d / 2.0, c.fade(fade));
-            if ui.width(150.0).dropdown("rec_camera_ring_color", &refs, &mut i) {
-                f.set_ring(i);
-            }
-            ui.space(4.0);
-            ui.label("Width");
-            ui.slider("rec_camera_ring_width", &mut f.ring_w, 0, config::RING_WIDTH_MAX as u8);
-        });
-        ui.enabled = on;
-        ui.cursor_y() - ui.lay.gap
-    })
+    });
+    ui.enabled = on && !no_cams;
+    srow(ui, tok, "Shape", None, |ui| {
+        ui.seg("rec_camera_shape", &labels(&SHAPES), &mut f.shape, tok);
+    });
+    srow(ui, tok, "Size", None, |ui| {
+        ui.seg("rec_camera_size", &labels(&SIZES), &mut f.size, tok);
+    });
+    srow(ui, tok, "Mirror", Some("Like a mirror, as most video calls show you"), |ui| {
+        ui.switch("rec_camera_mirror", &mut f.mirror, tok);
+    });
+    srow(ui, tok, "Ring", Some("Colour and width of the outline"), |ui| {
+        ui.width(120.0).slider("rec_camera_ring_width", &mut f.ring_w, 0, config::RING_WIDTH_MAX as u8);
+        let (items, sel) = f.ring_items();
+        let refs: Vec<&str> = items.iter().map(String::as_str).collect();
+        let mut i = sel;
+        if ui.width(130.0).dropdown("rec_camera_ring_color", &refs, &mut i) {
+            f.set_ring(i);
+        }
+        let c = match config::parse_color(&f.ring) {
+            Some((r, g, b, _)) => crate::uifb::C4::rgb(r, g, b),
+            None => ui.theme.accent,
+        };
+        let shown = ui.enabled && f.ring_w > 0;
+        ui.swatch("rec_ring_swatch", Some(if shown { c } else { c.fade(0.4) }), false, tok);
+    });
+    ui.enabled = on;
 }
 
 #[cfg(test)]

@@ -1,12 +1,14 @@
-//! The Settings window: **General** (theme, UI size, snapping to windows,
-//! renderer, start at login, update check, global hotkeys), **Saving**
-//! (folder, daily subfolders,
-//! format and JPEG quality, the Save As toggle and a file-name pattern
-//! editor with a live preview; "Reset tool sizes & colours" for the
-//! drawing tools' remembered settings), **Shortcuts** (the editor keymap) and
-//! **Recording** (the Record popover's defaults: [`recording`]), with
-//! **OK** / **Cancel** / **Apply**. Opened from the tray ("Settings…") and
-//! by `rustshot settings` ([`show`], [`run_here`]).
+//! The Settings window (the Settings board, 680 × 520): a rail with
+//! **General** (theme, accent, start at login, tray icon, copy after
+//! capture, shutter sound, where and how captures are saved),
+//! **Capture** (daily subfolders, the file-name pattern editor, Save As,
+//! format and JPEG quality, the overlay's UI size, snapping and renderer,
+//! "Reset tool sizes & colours"), **Recording** (the Record popover's
+//! defaults: [`recording`]), **Key bindings** (the global hotkeys and the
+//! overlay keymap), **Upload** (Imgur) and **About**, with a footer of
+//! **OK** / **Cancel** / **Apply** (the board leaves it out; the window
+//! keeps its explicit save). Drawn in [`draw`]. Opened from the tray
+//! ("Settings…") and by `rustshot settings` ([`show`], [`run_here`]).
 //!
 //! The form ([`Form`]) is a plain copy of the settings it edits; saving
 //! writes only the values the user changed onto the file as it is on disk
@@ -18,12 +20,12 @@
 //! open the file or, after a second question ([`RESET`]), to reset it
 //! (the old file is kept as `config.toml.bak`, `.bak.1`, ...).
 //! After a save the daemon reloads the config (re-registers its hotkeys,
-//! applies `check_updates`); every later capture uses it.
+//! applies `check_updates` and `show_tray`); every later capture uses it.
 //!
 //! Drawn with the `ui` kit in a `wind::run_window` window on its own
 //! thread, one window at a time: another request brings it to the front.
 //! A hotkey the daemon could not register after a save is reported in the
-//! open window ([`notify`]) and noted next to its box while it stays
+//! open window ([`notify`]) and noted under its row while it stays
 //! unregistered; Apply then asks the daemon to try again. macOS opens windows only on the main thread,
 //! so there the config file opens in the default editor instead.
 #![cfg_attr(target_os = "macos", allow(dead_code))]
@@ -35,8 +37,7 @@ use crate::keymap::{Action, Chord, Keymap};
 use crate::objects::FRect;
 use crate::pixbuf::PixBuf;
 use crate::theme::Theme;
-use crate::ui::layout::{GAP, H as ROW};
-use crate::ui::{Col, FocusState, Input, Row, TableState, TextState, Ui};
+use crate::ui::{FocusState, Input, TextState, Ui};
 use crate::uisize::{self, UiSize};
 use crate::wind::{self, Cursor, Driver, Ev, Hwnd, WindowSpec};
 use std::path::{Path, PathBuf};
@@ -44,26 +45,52 @@ use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, Sender};
 
 /// Window size, logical px.
-pub const W: u32 = 640;
-pub const H: u32 = 540;
-const PAD: f32 = 20.0;
-/// Width of the label column of a form row.
-const LABEL_W: f32 = 168.0;
-/// Top of the tab bar and of the tab body.
-const TABS_Y: f32 = 16.0;
-const BODY_Y: f32 = 72.0;
+pub const W: u32 = 680;
+pub const H: u32 = 520;
 
+pub(crate) mod draw;
 mod recording;
 
-pub const TABS: [&str; 4] = ["General", "Saving", "Shortcuts", "Recording"];
+/// The rail's sections (icon, name); About sits at the bottom.
+pub const SECTIONS: [(&str, &str); 6] = [
+    ("set-sliders", "General"),
+    ("set-camera", "Capture"),
+    ("video", "Recording"),
+    ("set-keyboard", "Key bindings"),
+    ("cloud", "Upload"),
+    ("info", "About"),
+];
+/// Section indices.
+pub const GENERAL: usize = 0;
+pub const CAPTURE: usize = 1;
+pub const RECORDING: usize = 2;
+pub const KEYS: usize = 3;
+pub const UPLOAD: usize = 4;
+pub const ABOUT: usize = 5;
+
 /// (label, config value)
-const THEMES: [(&str, &str); 3] = [("Auto", "auto"), ("Dark", "dark"), ("Light", "light")];
+const THEMES: [(&str, &str); 3] = [("System", "auto"), ("Dark", "dark"), ("Light", "light")];
 const RENDERERS: [(&str, &str); 2] = [("GDI", "gdi"), ("Software", "software")];
-const FORMATS: [(&str, &str); 3] = [("PNG", "png"), ("JPEG", "jpg"), ("BMP", "bmp")];
+const FORMATS: [(&str, &str); 3] = [("PNG", "png"), ("JPG", "jpg"), ("BMP", "bmp")];
 const DEFAULT_FILENAME: &str = "%F_%H-%M";
 
+/// The accent swatches: Periwinkle (the theme's, `ui_color` empty), then
+/// [`crate::theme::ACCENTS`], then the custom colour.
+pub const ACCENT_CUSTOM: usize = 3;
+
+/// The global hotkeys of Key bindings, in board order: (label, hotkey
+/// slot: 0 capture, 1 quit, 2 record, 3 full screen, 4 window, 5 repeat).
+pub const GLOBALS: [(&str, usize); 6] = [
+    ("Capture region", 0),
+    ("Capture full screen", 3),
+    ("Capture window", 4),
+    ("Record video", 2),
+    ("Repeat last capture", 5),
+    ("Quit Rustshot", 1),
+];
+
 /// The file-name editor's token buttons: (label, inserted text), shown in
-/// two columns (top to bottom, then the next column).
+/// columns (top to bottom, then the next column).
 pub const TOKENS: [(&str, &str); 15] = [
     ("Century (00-99)", "%C"),
     ("Day (001-366)", "%j"),
@@ -81,11 +108,6 @@ pub const TOKENS: [(&str, &str); 15] = [
     ("Year (00-99)", "%y"),
     ("Year (2000)", "%Y"),
 ];
-/// Token buttons per column (3 columns of 5).
-const TOKEN_ROWS: usize = 5;
-/// Token button height and the gap between them (logical px).
-const TOKEN_H: f32 = 28.0;
-const TOKEN_GAP: f32 = 6.0;
 
 /// Asked once before the first save over a file rustshot would not write
 /// that way (comments, unknown keys).
@@ -120,10 +142,6 @@ pub fn backup_path(path: &Path) -> PathBuf {
         .expect("a free name")
 }
 
-fn labels<const N: usize>(list: &[(&'static str, &'static str); N]) -> [&'static str; N] {
-    list.map(|(l, _)| l)
-}
-
 fn theme_index(v: &str) -> usize {
     THEMES.iter().position(|(_, t)| v.trim().eq_ignore_ascii_case(t)).unwrap_or(0)
 }
@@ -149,10 +167,30 @@ fn chord_text(c: Option<Chord>) -> String {
     c.map(|c| c.display()).unwrap_or_default()
 }
 
+/// `ui_color` → the swatch it is (0 Periwinkle, 1 Teal, 2 Amber,
+/// [`ACCENT_CUSTOM`]).
+fn accent_index(v: &str) -> usize {
+    let Some((r, g, b, _)) = config::parse_color(v) else { return 0 };
+    let c = crate::uifb::C4::rgb(r, g, b);
+    crate::theme::ACCENTS.iter().position(|a| a.1 == c).map_or(ACCENT_CUSTOM, |i| i + 1)
+}
+
+/// A swatch's `ui_color` (lowercase `#rrggbb`); None for the custom one.
+fn accent_value(i: usize) -> Option<String> {
+    match i {
+        0 => Some(String::new()),
+        ACCENT_CUSTOM => None,
+        i => crate::theme::ACCENTS.get(i - 1).map(|a| format!("#{:02x}{:02x}{:02x}", a.1.r, a.1.g, a.1.b)),
+    }
+}
+
 /// The values the window edits.
 #[derive(Clone, Debug)]
 pub struct Form {
     pub theme: usize,
+    /// Accent swatch (`ui_color`), and the custom colour's text.
+    pub accent: usize,
+    pub accent_hex: TextState,
     /// The UI size ([`uisize::LABELS`] index).
     pub ui_size: usize,
     pub renderer: usize,
@@ -161,8 +199,14 @@ pub struct Form {
     /// Start at login; `None` hides it (store installs).
     pub autostart: Option<bool>,
     pub check_updates: bool,
+    pub show_tray: bool,
+    pub copy_after: bool,
+    pub shutter: bool,
     pub capture: Option<Chord>,
     pub quit: Option<Chord>,
+    pub full: Option<Chord>,
+    pub window: Option<Chord>,
+    pub repeat: Option<Chord>,
     pub folder: TextState,
     pub subfolder: bool,
     pub subfolder_pattern: TextState,
@@ -170,22 +214,33 @@ pub struct Form {
     pub quality: u8,
     pub ask: bool,
     pub filename: TextState,
+    pub upload_id: TextState,
+    pub copy_url: bool,
     pub keys: Keymap,
-    /// The Recording tab's values (every `rec_*` key, `record_hotkey`).
+    /// The Recording section's values (every `rec_*` key, `record_hotkey`).
     pub rec: recording::RecForm,
 }
 
 impl Form {
     pub fn new(cfg: &Config, autostart: Option<bool>) -> Form {
+        let accent = accent_index(&cfg.ui_color);
         Form {
             theme: theme_index(&cfg.theme),
+            accent,
+            accent_hex: TextState::new(if accent == ACCENT_CUSTOM { cfg.ui_color.trim() } else { "" }),
             ui_size: cfg.ui_scale.index(),
             renderer: !cfg.use_gdi() as usize,
             snap: cfg.snap_windows,
             autostart,
             check_updates: cfg.check_updates,
+            show_tray: cfg.show_tray,
+            copy_after: cfg.copy_after_capture,
+            shutter: cfg.shutter_sound,
             capture: Chord::parse(&cfg.capture_hotkey),
             quit: Chord::parse(&cfg.quit_hotkey),
+            full: Chord::parse(&cfg.capture_full_hotkey),
+            window: Chord::parse(&cfg.capture_window_hotkey),
+            repeat: Chord::parse(&cfg.repeat_hotkey),
             folder: TextState::new(&folder_text(cfg)),
             subfolder: cfg.save_subfolder,
             subfolder_pattern: TextState::new(&cfg.subfolder_pattern),
@@ -193,8 +248,33 @@ impl Form {
             quality: cfg.jpeg_quality.clamp(1, 100),
             ask: cfg.save_dialog,
             filename: TextState::new(&cfg.filename_pattern),
+            upload_id: TextState::new(&cfg.upload_client_id),
+            copy_url: cfg.copy_url_after_upload,
             keys: Keymap::from_config(&cfg.shortcuts).0,
             rec: recording::RecForm::new(cfg),
+        }
+    }
+
+    /// The global hotkey of `slot` (see [`GLOBALS`]).
+    pub fn global(&self, slot: usize) -> Option<Chord> {
+        match slot {
+            0 => self.capture,
+            1 => self.quit,
+            2 => self.rec.hotkey,
+            3 => self.full,
+            4 => self.window,
+            _ => self.repeat,
+        }
+    }
+
+    pub fn global_mut(&mut self, slot: usize) -> &mut Option<Chord> {
+        match slot {
+            0 => &mut self.capture,
+            1 => &mut self.quit,
+            2 => &mut self.rec.hotkey,
+            3 => &mut self.full,
+            4 => &mut self.window,
+            _ => &mut self.repeat,
         }
     }
 
@@ -208,6 +288,14 @@ impl Form {
         if self.theme != was.theme {
             c.theme = THEMES[self.theme].1.into();
         }
+        if self.accent != was.accent || (self.accent == ACCENT_CUSTOM && self.accent_hex.text.trim() != was.accent_hex.text.trim()) {
+            match accent_value(self.accent) {
+                Some(v) => c.ui_color = v,
+                // A custom colour that does not parse is not written.
+                None if config::parse_color(self.accent_hex.text.trim()).is_some() => c.ui_color = self.accent_hex.text.trim().to_string(),
+                None => {}
+            }
+        }
         if self.ui_size != was.ui_size {
             c.ui_scale = UiSize::from_index(self.ui_size);
         }
@@ -220,11 +308,29 @@ impl Form {
         if self.check_updates != was.check_updates {
             c.check_updates = self.check_updates;
         }
+        if self.show_tray != was.show_tray {
+            c.show_tray = self.show_tray;
+        }
+        if self.copy_after != was.copy_after {
+            c.copy_after_capture = self.copy_after;
+        }
+        if self.shutter != was.shutter {
+            c.shutter_sound = self.shutter;
+        }
         if self.capture != was.capture {
             c.capture_hotkey = chord_text(self.capture);
         }
         if self.quit != was.quit {
             c.quit_hotkey = chord_text(self.quit);
+        }
+        if self.full != was.full {
+            c.capture_full_hotkey = chord_text(self.full);
+        }
+        if self.window != was.window {
+            c.capture_window_hotkey = chord_text(self.window);
+        }
+        if self.repeat != was.repeat {
+            c.repeat_hotkey = chord_text(self.repeat);
         }
         if self.folder.text.trim() != was.folder.text.trim() {
             c.save_path = self.folder.text.trim().to_string();
@@ -246,6 +352,12 @@ impl Form {
         }
         if self.filename.text != was.filename.text {
             c.filename_pattern = self.filename.text.clone();
+        }
+        if self.upload_id.text.trim() != was.upload_id.text.trim() {
+            c.upload_client_id = self.upload_id.text.trim().to_string();
+        }
+        if self.copy_url != was.copy_url {
+            c.copy_url_after_upload = self.copy_url;
         }
         self.rec.apply(&was.rec, &mut c);
         let changed: Vec<Action> = Action::ALL.into_iter().filter(|a| self.keys.chords(*a) != was.keys.chords(*a)).collect();
@@ -279,61 +391,51 @@ impl Form {
         export::auto_save_path(&self.apply(base, base), now)
     }
 
-    /// The shortcut table: (description, keys, in a conflict).
-    pub fn shortcut_rows(&self) -> Vec<(&'static str, String, bool)> {
-        let bad: Vec<Action> = self.keys.conflicts().into_iter().flat_map(|(_, v)| v).collect();
-        (Action::ALL.into_iter())
-            .map(|a| {
-                let keys: Vec<String> = self.keys.chords(a).iter().map(Chord::display).collect();
-                let keys = if keys.is_empty() { "None".to_string() } else { keys.join(", ") };
-                (a.label(), keys, bad.contains(&a))
-            })
-            .collect()
+    /// Every global hotkey and overlay key back to the defaults (the
+    /// Key bindings header's "Reset to defaults").
+    pub fn reset_keys(&mut self) {
+        let d = Config::default();
+        self.keys = Keymap::defaults();
+        for slot in 0..hotkey::SLOTS {
+            *self.global_mut(slot) = Chord::parse(&hotkey::wanted(&d)[slot]);
+        }
     }
 
-    /// The first conflict as a sentence, plus how many more there are.
-    pub fn conflict_note(&self) -> Option<String> {
+    /// The overlay actions bound to more than one action's chord.
+    pub fn conflicting(&self) -> Vec<Action> {
+        self.keys.conflicts().into_iter().flat_map(|(_, v)| v).collect()
+    }
+
+    /// The message under an overlay action in a conflict: "Already used
+    /// by Pencil. Choose another." (the other action's name); None
+    /// otherwise.
+    pub fn conflict_note(&self, a: Action) -> Option<String> {
         let all = self.keys.conflicts();
-        let (c, acts) = all.first()?;
-        let names: Vec<&str> = acts.iter().map(|a| a.label()).collect();
-        let list = match names.split_last() {
-            Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
-            _ => names.join(""),
-        };
-        let mut s = format!("{} is bound to {list}; {} wins.", c.display(), names[0]);
-        match all.len() - 1 {
-            0 => {}
-            1 => s.push_str(" 1 more conflict."),
-            n => s.push_str(&format!(" {n} more conflicts.")),
-        }
-        Some(s)
+        let (_, acts) = all.iter().find(|(c, acts)| acts.contains(&a) && self.keys.chords(a).first() == Some(c))?;
+        let other = acts.iter().find(|x| **x != a)?;
+        Some(format!("Already used by {}. Choose another.", other.label()))
     }
 
-    /// A problem with the global hotkeys, if any.
-    pub fn hotkey_note(&self) -> Option<&'static str> {
-        let bare = |c: &Option<Chord>| {
-            c.is_some_and(|c| {
-                let modded = c.ctrl || c.alt || c.shift || c.meta;
-                let special = (0x70..=0x7B).contains(&c.vk) || c.vk == wind::key::PRINTSCREEN; // F1-F12
-                !(modded || special)
-            })
-        };
-        if self.capture.is_some() && self.capture == self.quit {
-            Some("Capture and Quit use the same keys.")
-        } else if bare(&self.capture) || bare(&self.quit) {
-            Some(BARE_NOTE)
-        } else {
-            None
+    /// The problem with global hotkey `slot`, if any: the same chord as
+    /// another global (the one listed first keeps it in the message), or a
+    /// bare key that every app would lose.
+    pub fn global_note(&self, slot: usize) -> Option<String> {
+        let c = self.global(slot)?;
+        if let Some((label, _)) = GLOBALS.iter().find(|(_, s)| *s != slot && self.global(*s) == Some(c)) {
+            return Some(format!("Already used by {label}. Choose another."));
         }
+        let modded = c.ctrl || c.alt || c.shift || c.meta;
+        let special = (0x70..=0x7B).contains(&c.vk) || c.vk == wind::key::PRINTSCREEN; // F1-F12
+        (!(modded || special)).then(|| BARE_NOTE.to_string())
     }
 }
 
 #[cfg(windows)]
-const BARE_NOTE: &str = "A hotkey without Ctrl, Alt, Shift or Win takes that key from every app.";
+const BARE_NOTE: &str = "Without Ctrl, Alt, Shift or Win it takes that key from every app.";
 #[cfg(target_os = "macos")]
-const BARE_NOTE: &str = "A hotkey without Ctrl, Alt, Shift or Cmd takes that key from every app.";
+const BARE_NOTE: &str = "Without Ctrl, Alt, Shift or Cmd it takes that key from every app.";
 #[cfg(not(any(windows, target_os = "macos")))]
-const BARE_NOTE: &str = "A hotkey without Ctrl, Alt, Shift or Super takes that key from every app.";
+const BARE_NOTE: &str = "Without Ctrl, Alt, Shift or Super it takes that key from every app.";
 
 /// The folder text, looked at without touching the disk.
 #[derive(Clone, Debug, PartialEq)]
@@ -413,16 +515,6 @@ fn folder_note(t: &str) -> Option<String> {
     }
 }
 
-/// The shortcut row to scroll into view for a conflict: the selected
-/// (being edited) row when it is one of the conflicting rows, else the
-/// first conflicting row.
-fn conflict_target(bad: &[bool], selected: Option<usize>) -> Option<usize> {
-    match selected {
-        Some(i) if bad.get(i) == Some(&true) => Some(i),
-        _ => bad.iter().position(|b| *b),
-    }
-}
-
 /// The pattern field token buttons insert into.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Pattern {
@@ -459,6 +551,7 @@ pub enum Click {
     OpenConfig,
     Restore,
     Clear,
+    /// Key bindings: "Reset to defaults" (every key and global hotkey).
     ResetAll,
     /// "Reset tool sizes & colours": the tools' remembered settings go
     /// (from the file, at once).
@@ -469,6 +562,10 @@ pub enum Click {
     Replace,
     /// The broken file's Close.
     Close,
+    /// About: "Check for updates".
+    CheckUpdates,
+    /// About: one of [`crate::actions::LINKS`].
+    Link(&'static str),
     /// Esc not taken by a control.
     Escape,
     /// Enter not taken by a control.
@@ -487,18 +584,25 @@ pub enum Act {
     /// Nothing to save, but a hotkey is not registered: the daemon tries
     /// again (it reloads the config).
     Reload,
+    /// The update dialog, checking now.
+    CheckUpdates,
+    /// Open this About link in the browser.
+    Link(&'static str),
 }
 
-/// The window's state: the form, what it was loaded from, the tab and the
-/// open question.
+/// The window's state: the form, what it was loaded from, the section and
+/// the open question.
 pub struct Settings {
     /// The config as last loaded or saved.
     loaded: Config,
     /// Start at login as it is now (`None`: hidden).
     autostart: Option<bool>,
     pub form: Form,
-    pub tab: usize,
-    table: TableState,
+    /// The rail's section ([`SECTIONS`] index).
+    pub section: usize,
+    /// Each section's scroll offset and content height (logical px).
+    scroll: [f32; SECTIONS.len()],
+    content_h: [f32; SECTIONS.len()],
     modal: Option<Modal>,
     /// The rewrite question was answered (or the file is ours now).
     confirmed: bool,
@@ -508,13 +612,13 @@ pub struct Settings {
     path: PathBuf,
     /// Show the renderer choice (Windows).
     renderer: bool,
+    /// Show "Show icon in tray" (Windows: the only tray so far).
+    tray_row: bool,
     /// The form was not made from the file (it did not parse at open):
     /// rebuilt from it once it does.
     stale: bool,
     /// Messages waiting for the open question to close.
     pending: Vec<String>,
-    /// The conflicting shortcut row last revealed ([`conflict_target`]).
-    conflict_row: Option<usize>,
     /// The drive (top-level folder) last probed and its note: probed
     /// again only when the root changes, never while typing in it.
     folder_probe: Option<(PathBuf, Option<String>)>,
@@ -523,7 +627,7 @@ pub struct Settings {
     pub hotkey_failures: Vec<hotkey::Failure>,
     /// The tools' sizes and colours were reset (a note says so).
     tools_reset: bool,
-    /// The Recording tab's device lists and encoder status.
+    /// The Recording section's device lists and encoder status.
     rec_lists: recording::Lists,
     set_autostart: fn(bool) -> Result<(), String>,
 }
@@ -534,16 +638,17 @@ impl Settings {
             form: Form::new(&cfg, autostart),
             loaded: cfg,
             autostart,
-            tab: 0,
-            table: TableState::default(),
+            section: GENERAL,
+            scroll: [0.0; SECTIONS.len()],
+            content_h: [0.0; SECTIONS.len()],
             modal: None,
             confirmed: false,
             pattern: Pattern::File,
             path,
             renderer: cfg!(windows),
+            tray_row: cfg!(windows),
             stale: false,
             pending: Vec::new(),
-            conflict_row: None,
             folder_probe: None,
             hotkey_failures: Vec::new(),
             tools_reset: false,
@@ -564,6 +669,12 @@ impl Settings {
                 s
             }
         }
+    }
+
+    /// The theme the window shows: the form's theme and accent (so they
+    /// preview before Apply).
+    pub fn preview_theme(&self) -> Theme {
+        crate::theme::resolve(&self.form.apply(&self.loaded, &self.loaded))
     }
 
     /// Showing the broken-file error (or its reset question).
@@ -649,15 +760,32 @@ impl Settings {
         !self.hotkey_failures.is_empty()
     }
 
-    /// The note next to hotkey `slot`'s box while it is not registered:
+    /// The note under hotkey `slot`'s row while it is not registered:
     /// "Not registered — using Ctrl+Alt+Shift+Q" (the chord kept in its
     /// place), or "Not registered".
     pub fn hotkey_slot_note(&self, slot: usize) -> Option<String> {
         let f = self.hotkey_failures.iter().find(|f| f.slot == slot)?;
         Some(match &f.kept {
-            Some(k) => format!("Not registered — using {}", hotkey::chord_label(k)),
+            Some(k) => format!("Not registered \u{2014} using {}", hotkey::chord_label(k)),
+            None if f.cause == hotkey::Cause::InUse => "Already used by another app. Choose another.".into(),
             None => "Not registered".into(),
         })
+    }
+
+    /// The message under global hotkey `slot`: a clash with another
+    /// global first, then a failed registration, then a bare key.
+    pub fn global_message(&self, slot: usize) -> Option<String> {
+        let note = self.form.global_note(slot);
+        match note {
+            Some(n) if n.starts_with("Already") => Some(n),
+            n => self.hotkey_slot_note(slot).or(n),
+        }
+    }
+
+    /// "Show icon in tray" is off and nothing can start a capture but a
+    /// second launch: no capture hotkey, or one that did not register.
+    pub fn tray_warning(&self) -> bool {
+        !self.form.show_tray && (self.form.capture.is_none() || self.hotkey_failures.iter().any(|f| f.slot == 0 && f.kept.is_none()))
     }
 
     /// Something differs from what is saved.
@@ -720,6 +848,8 @@ impl Settings {
             Click::Close => vec![Act::Close],
             Click::Browse => vec![Act::Browse],
             Click::OpenConfig => vec![Act::OpenConfig],
+            Click::CheckUpdates => vec![Act::CheckUpdates],
+            Click::Link(u) => vec![Act::Link(u)],
             Click::Restore => {
                 self.form.filename.set(DEFAULT_FILENAME);
                 vec![]
@@ -729,7 +859,7 @@ impl Settings {
                 vec![]
             }
             Click::ResetAll => {
-                self.form.keys = Keymap::defaults();
+                self.form.reset_keys();
                 vec![]
             }
             Click::ResetTools => self.reset_tools(),
@@ -773,7 +903,7 @@ impl Settings {
             match (self.set_autostart)(on) {
                 Ok(()) => self.autostart = Some(on),
                 Err(e) => {
-                    self.modal = Some(Modal::Error(format!("Could not change Start at login: {e}")));
+                    self.modal = Some(Modal::Error(format!("Could not change Launch at login: {e}")));
                     return acts;
                 }
             }
@@ -849,400 +979,6 @@ impl Settings {
         self.loaded = cfg.clone();
         self.show_pending();
         vec![Act::Saved(Box::new(cfg))]
-    }
-}
-
-// --- Drawing ----------------------------------------------------------------
-
-/// A form row: label column, then the controls `f` draws, which start at
-/// `LABEL_W + GAP` whatever the tab's row gap.
-fn field(ui: &mut Ui, label: &str, f: impl FnOnce(&mut Ui)) {
-    ui.row(|ui| {
-        let w = LABEL_W + GAP - ui.lay.gap;
-        ui.width(w).label(label);
-        f(ui);
-    });
-}
-
-/// One frame of the window; returns what was clicked.
-fn paint(ui: &mut Ui, s: &mut Settings) -> Option<Click> {
-    let b = ui.bounds();
-    let mut click = None;
-    let modal = s.modal.clone();
-    ui.enabled = modal.is_none();
-    let inner = b.w - 2.0 * PAD;
-
-    let tw = ui.tabs_width(&TABS);
-    ui.area(FRect { x: PAD, y: TABS_Y, w: inner, h: 40.0 }, |ui| {
-        ui.row(|ui| {
-            ui.space(((inner - tw) / 2.0).floor());
-            ui.tabs("tabs", &TABS, &mut s.tab);
-        })
-    });
-    let btn_y = b.h - PAD - ROW;
-    // A form that never saw the file (it did not parse) is not shown.
-    if !s.stale {
-        let body = FRect { x: PAD, y: BODY_Y, w: inner, h: btn_y - 16.0 - BODY_Y };
-        match s.tab {
-            0 => general(ui, s, body),
-            1 => saving(ui, s, body, &mut click),
-            2 => shortcuts(ui, s, body, &mut click),
-            _ => {
-                recording::tab(ui, s, body);
-            }
-        }
-
-        // Bottom bar: the config-file link (General), then OK / Cancel / Apply.
-        let bar = FRect { x: PAD, y: btn_y, w: inner, h: ROW };
-        if s.tab == 0 {
-            ui.area(bar, |ui| {
-                ui.row(|ui| {
-                    if ui.link("open_config", "Open config file") {
-                        click = Some(Click::OpenConfig);
-                    }
-                })
-            });
-        }
-        // Saving: the drawing tools' remembered sizes and colours.
-        if s.tab == 1 {
-            let done = s.tools_reset;
-            ui.area(bar, |ui| {
-                ui.row(|ui| {
-                    if ui.button("reset_tools", "Reset tool sizes & colours", false) {
-                        click = Some(Click::ResetTools);
-                    }
-                    if done {
-                        ui.note("Done");
-                    }
-                })
-            });
-        }
-        let btns = [("ok", "OK", Click::Ok), ("cancel", "Cancel", Click::Cancel), ("apply", "Apply", Click::Apply)];
-        let total: f32 = btns.iter().map(|b| ui.button_width(b.1)).sum::<f32>() + GAP * (btns.len() as f32 - 1.0);
-        let dirty = s.dirty() || s.retry_hotkeys();
-        ui.area(bar, |ui| {
-            ui.row(|ui| {
-                ui.space(inner - total);
-                let on = ui.enabled;
-                for (id, label, c) in btns {
-                    ui.enabled = on && (c != Click::Apply || dirty);
-                    if ui.button(id, label, c == Click::Ok) {
-                        click = Some(c);
-                    }
-                }
-                ui.enabled = on;
-            })
-        });
-    }
-
-    if let Some(m) = modal {
-        ui.enabled = true;
-        if let Some(c) = question(ui, &m) {
-            click = Some(c);
-        }
-    }
-    click
-}
-
-/// The question, error or broken-file state, centred over the dimmed form.
-fn question(ui: &mut Ui, m: &Modal) -> Option<Click> {
-    let b = ui.bounds();
-    type Btns = &'static [(&'static str, &'static str, Click)];
-    let (icon, text, btns): (&str, String, Btns) = match m {
-        Modal::Rewrite { .. } => {
-            ("info", REWRITE.into(), &[("q_save", "Save", Click::Save), ("q_cancel", "Cancel", Click::Back)])
-        }
-        Modal::Error(e) => ("alert", e.clone(), &[("q_ok", "OK", Click::Back)]),
-        Modal::Broken(e) => (
-            "alert",
-            broken_text(e),
-            &[
-                ("q_open", "Open config file", Click::OpenConfig),
-                ("q_reset", "Reset to defaults…", Click::ResetDefaults),
-                ("q_close", "Close", Click::Close),
-            ],
-        ),
-        Modal::Reset(_) => ("alert", RESET.into(), &[("q_replace", "Replace", Click::Replace), ("q_cancel", "Cancel", Click::Back)]),
-    };
-    let (cp, icon_w) = (24.0f32, 24.0 + 12.0);
-    let total: f32 = btns.iter().map(|b| ui.button_width(b.1)).sum::<f32>() + GAP * (btns.len() as f32 - 1.0);
-    let cw = (total + 2.0 * cp).max(420.0);
-    let text_w = cw - 2.0 * cp - icon_w;
-    let th = ui.paragraph_height(&text, text_w).clamp(24.0, 160.0);
-    let ch = cp + th + 24.0 + ROW + cp;
-    let card = FRect { x: ((b.w - cw) / 2.0).round(), y: ((b.h - ch) / 2.0).round(), w: cw, h: ch };
-    ui.modal_card(card);
-    let col = if matches!(m, Modal::Rewrite { .. }) { ui.theme.accent_fg } else { ui.theme.error };
-    ui.area(FRect { x: card.x + cp, y: card.y + cp, w: 24.0, h: 24.0 }, |ui| ui.icon(icon, 24.0, col));
-    let tr = FRect { x: card.x + cp + icon_w, y: card.y + cp + if th <= 24.0 { 2.0 } else { 0.0 }, w: text_w, h: th };
-    ui.area(tr, |ui| ui.height(th).paragraph(&text, false));
-    let bar = FRect { x: card.x + cp, y: card.y1() - cp - ROW, w: cw - 2.0 * cp, h: ROW };
-    let mut click = None;
-    ui.area(bar, |ui| {
-        ui.row(|ui| {
-            ui.space(bar.w - total);
-            for (i, &(id, label, c)) in btns.iter().enumerate() {
-                if ui.button(id, label, i == 0) {
-                    click = Some(c);
-                }
-            }
-        })
-    });
-    click
-}
-
-fn general(ui: &mut Ui, s: &mut Settings, body: FRect) {
-    let show_renderer = s.renderer;
-    // Wayland lists no window positions: nothing to snap to.
-    #[cfg(target_os = "linux")]
-    let wayland = crate::rec::linux::portal::wayland_now();
-    #[cfg(not(target_os = "linux"))]
-    let wayland = false;
-    let slot_notes = [s.hotkey_slot_note(0), s.hotkey_slot_note(1)];
-    let f = &mut s.form;
-    let note = f.hotkey_note();
-    // A hotkey that is not registered: a note right of its box, or under
-    // it when it does not fit there.
-    let side = body.w - (LABEL_W + GAP) - 200.0 - GAP;
-    let beside = slot_notes.clone().map(|n| n.is_none_or(|n| ui.text_width(&n) <= side));
-    let rows = beside.iter().filter(|b| !**b).count() + note.is_some() as usize;
-    ui.area(body, |ui| {
-        // Spread out over the tab; less so when hotkey notes need room,
-        // and tighter still (with short note rows) for two or more rows.
-        let roomy = note.is_none() && slot_notes.iter().all(Option::is_none);
-        let tight = rows >= 2;
-        ui.lay.gap = if roomy { 12.0 } else if tight { 6.0 } else { 8.0 };
-        let note_h = if tight { 18.0 } else { ROW };
-        ui.heading("Appearance");
-        // Theme and UI size share a row (the tab has no room for another).
-        field(ui, "Theme", |ui| {
-            ui.dropdown("theme", &labels(&THEMES), &mut f.theme);
-            ui.space(GAP);
-            ui.label("UI size");
-            ui.dropdown("ui_size", &uisize::LABELS, &mut f.ui_size);
-        });
-        // The overlay's behaviour and (Windows) its renderer share a row:
-        // the tab has no room for another one in the worst case.
-        field(ui, "Overlay", |ui| {
-            ui.toggle("snap_windows", &mut f.snap);
-            ui.label("Snap to windows");
-            if show_renderer {
-                ui.space(2.0 * GAP);
-                ui.label("Renderer");
-                ui.dropdown("renderer", &labels(&RENDERERS), &mut f.renderer);
-            } else if wayland {
-                ui.note("Not on Wayland");
-            }
-        });
-        if roomy {
-            ui.space(6.0);
-        }
-        ui.heading("Startup and updates");
-        if let Some(on) = f.autostart.as_mut() {
-            field(ui, "Start at login", |ui| {
-                ui.toggle("autostart", on);
-            });
-        }
-        field(ui, "Check for updates", |ui| {
-            ui.toggle("check_updates", &mut f.check_updates);
-            ui.note("Once a day, from GitHub");
-        });
-        if roomy {
-            ui.space(6.0);
-        }
-        ui.heading("Global hotkeys");
-        ui.allow_meta = true;
-        let boxes: [(&str, &str, &mut Option<Chord>); 2] =
-            [("Capture", "capture_hotkey", &mut f.capture), ("Quit Rustshot", "quit_hotkey", &mut f.quit)];
-        for (((label, id, chord), n), fits) in boxes.into_iter().zip(&slot_notes).zip(beside) {
-            field(ui, label, |ui| {
-                ui.key_capture(id, chord);
-                if let (Some(n), true) = (n, fits) {
-                    ui.error_note(n);
-                }
-            });
-            if let (Some(n), false) = (n, fits) {
-                ui.row(|ui| {
-                    ui.space(LABEL_W + GAP);
-                    ui.height(note_h).error_note(n);
-                });
-            }
-        }
-        if let Some(n) = note {
-            ui.row(|ui| {
-                ui.space(LABEL_W + GAP);
-                ui.height(note_h).error_note(n);
-            });
-        }
-        ui.allow_meta = false;
-        #[cfg(test)]
-        GENERAL_END.with(|c| c.set(ui.cursor_y() - ui.lay.gap));
-    });
-}
-
-#[cfg(test)]
-thread_local! {
-    /// Tests: where the General tab's last row ended (logical px).
-    static GENERAL_END: std::cell::Cell<f32> = const { std::cell::Cell::new(0.0) };
-}
-
-fn saving(ui: &mut Ui, s: &mut Settings, body: FRect, click: &mut Option<Click>) {
-    let base = s.loaded.clone();
-    let folder_note = s.folder_note();
-    let f = &mut s.form;
-    let mut target = s.pattern;
-    let mut token = None;
-    ui.area(body, |ui| {
-        ui.lay.gap = 6.0;
-        field(ui, "Folder", |ui| {
-            let bw = ui.button_width("Browse…");
-            let fw = body.w - (LABEL_W + GAP) - bw - ui.lay.gap;
-            ui.width(fw).text_field("folder", &mut f.folder);
-            if ui.button("browse", "Browse…", false) {
-                *click = Some(Click::Browse);
-            }
-        });
-        if let Some(n) = &folder_note {
-            ui.row(|ui| {
-                ui.space(LABEL_W + GAP);
-                ui.height(18.0).note(n);
-            });
-        }
-        field(ui, "Daily subfolders", |ui| {
-            ui.toggle("subfolder", &mut f.subfolder);
-            ui.space(4.0);
-            let on = ui.enabled;
-            ui.enabled = on && f.subfolder;
-            ui.width(180.0).text_field("subfolder_pattern", &mut f.subfolder_pattern);
-            ui.enabled = on;
-        });
-        field(ui, "Format", |ui| {
-            ui.dropdown("format", &labels(&FORMATS), &mut f.format);
-            ui.space(12.0);
-            let on = ui.enabled;
-            ui.enabled = on && f.format == 1;
-            ui.label("Quality");
-            ui.slider("quality", &mut f.quality, 1, 100);
-            ui.enabled = on;
-        });
-        field(ui, "Ask where to save", |ui| {
-            ui.toggle("ask", &mut f.ask);
-            ui.note("Ctrl+S always shows the Save As dialog");
-        });
-        ui.heading("File name");
-        let gy = ui.cursor_y();
-        // Three balanced columns of compact buttons (top to bottom).
-        let col_w = token_col_w(ui);
-        for (i, (label, _)) in TOKENS.iter().enumerate() {
-            let (c, r) = ((i / TOKEN_ROWS) as f32, (i % TOKEN_ROWS) as f32);
-            let rect = FRect { x: body.x + c * (col_w + TOKEN_GAP), y: gy + r * (TOKEN_H + TOKEN_GAP), w: col_w, h: TOKEN_H };
-            if ui.place(rect).button(&format!("token{i}"), label, false) {
-                token = Some(i);
-            }
-        }
-        let cols = TOKENS.len().div_ceil(TOKEN_ROWS) as f32;
-        let rx = body.x + cols * col_w + (cols - 1.0) * TOKEN_GAP + 16.0;
-        let right = FRect { x: rx, y: gy, w: body.x1() - rx, h: body.y1() - gy };
-        ui.area(right, |ui| {
-            ui.lay.gap = 6.0;
-            ui.text_field("filename", &mut f.filename);
-            ui.note("Saves as");
-            let path = f.preview(&base, export::local_ymdhms()).display().to_string();
-            let w = ui.bounds().w;
-            let lines = path_lines(ui, &path, w);
-            ui.paragraph(&lines, true);
-            ui.row(|ui| {
-                let bw = ((right.w - GAP) / 2.0).floor();
-                if ui.width(bw).button("restore", "Restore", false) {
-                    *click = Some(Click::Restore);
-                }
-                if ui.width(bw).button("clear", "Clear", false) {
-                    *click = Some(Click::Clear);
-                }
-            });
-        });
-        if ui.focus.is_focused("subfolder_pattern") {
-            target = Pattern::Sub;
-        } else if ui.focus.is_focused("filename") {
-            target = Pattern::File;
-        }
-    });
-    if let Some(i) = token {
-        if target == Pattern::Sub && !f.subfolder {
-            target = Pattern::File;
-        }
-        f.insert(target, TOKENS[i].1);
-        ui.focus.focus(if target == Pattern::Sub { "subfolder_pattern" } else { "filename" });
-    }
-    s.pattern = target;
-}
-
-/// Width of a token button column: the widest label plus a little room.
-fn token_col_w(ui: &Ui) -> f32 {
-    TOKENS.iter().map(|(l, _)| ui.text_width(l)).fold(0.0, f32::max).ceil() + 16.0
-}
-
-/// `path` broken into lines of at most `w` (logical px) after its
-/// separators (a component wider than a line is left to `paragraph`).
-fn path_lines(ui: &Ui, path: &str, w: f32) -> String {
-    let mut lines = vec![String::new()];
-    for piece in path.split_inclusive(['\\', '/']) {
-        let cur = lines.last_mut().expect("one line");
-        if !cur.is_empty() && ui.text_width(&format!("{cur}{piece}")) > w {
-            lines.push(piece.to_string());
-        } else {
-            cur.push_str(piece);
-        }
-    }
-    lines.join("\n")
-}
-
-fn shortcuts(ui: &mut Ui, s: &mut Settings, body: FRect, click: &mut Option<Click>) {
-    let rows = s.form.shortcut_rows();
-    let note = s.form.conflict_note();
-    let cells: Vec<[&str; 2]> = rows.iter().map(|(l, k, _)| [*l, k.as_str()]).collect();
-    let trows: Vec<Row> = rows.iter().zip(&cells).map(|((_, _, bad), c)| Row { cells: c, error: *bad }).collect();
-    let cols = [Col { title: "Description", frac: 0.62 }, Col { title: "Key", frac: 0.38 }];
-    let note_h = if note.is_some() { 20.0 + GAP } else { 0.0 };
-    let table_h = body.h - ROW - GAP - note_h;
-    // A new conflict: scroll the edited row (when it is one of them) or
-    // the first conflicting row into view.
-    let bad: Vec<bool> = rows.iter().map(|r| r.2).collect();
-    let target = conflict_target(&bad, s.table.selected);
-    if target != s.conflict_row {
-        if let Some(i) = target {
-            s.table.reveal(i, table_h);
-        }
-        s.conflict_row = target;
-    }
-    let mut record = false;
-    ui.area(body, |ui| {
-        ui.height(table_h).table("shortcuts", &cols, &trows, &mut s.table);
-        // A press on a row: record that action's new keys right away.
-        let row = s.table.selected.and_then(|i| s.table.row_rect(i));
-        record = ui.enabled && (ui.input.pressed.zip(row)).is_some_and(|(p, r)| crate::ui::contains(r, p));
-        let ry = ui.cursor_y();
-        ui.row(|ui| match s.table.selected {
-            Some(i) => {
-                let a = Action::ALL[i];
-                ui.width(LABEL_W + GAP - ui.lay.gap).label(a.label());
-                let mut c = s.form.keys.chords(a).first().copied();
-                if ui.key_capture("rebind", &mut c) {
-                    s.form.keys.set(a, c.into_iter().collect());
-                }
-            }
-            None => ui.note("Select an action, then press its new keys (Backspace clears)."),
-        });
-        let bw = ui.button_width("Reset all");
-        if ui.place(FRect { x: body.x1() - bw, y: ry, w: bw, h: ROW }).button("reset_all", "Reset all", false) {
-            *click = Some(Click::ResetAll);
-        }
-        if let Some(n) = &note {
-            ui.error_note(n);
-        }
-    });
-    if record {
-        ui.focus.record("rebind");
     }
 }
 
@@ -1420,6 +1156,12 @@ impl Window {
             Act::OpenConfig => {
                 std::thread::spawn(crate::actions::open_config);
             }
+            Act::CheckUpdates => {
+                std::thread::spawn(crate::actions::check_updates);
+            }
+            Act::Link(u) => {
+                std::thread::spawn(move || crate::actions::open_link(u));
+            }
         }
     }
 
@@ -1431,6 +1173,8 @@ impl Window {
                 return;
             }
             let k = wind::follow_scale(self.hwnd, &mut self.sized_for, W, H);
+            // The form's theme and accent show before Apply.
+            self.th = self.s.preview_theme();
             let click = frame(&mut self.canvas, &self.th, &self.input, &mut self.focus, &mut self.s, k);
             self.input.end_frame();
             let (click, redraw) = click;
@@ -1465,7 +1209,7 @@ fn frame(canvas: &mut PixBuf, th: &Theme, input: &Input, focus: &mut FocusState,
     let mut clip = crate::ui::SystemClipboard;
     let fb = crate::uifb::Fb::new(canvas.as_raw_mut(), w as usize);
     let mut ui = Ui::new(fb, th, input, focus, &mut clip, k, area);
-    let click = paint(&mut ui, s);
+    let click = draw::paint(&mut ui, s);
     let out = ui.finish();
     let click = click.or(if out.escape {
         Some(Click::Escape)
@@ -1546,7 +1290,7 @@ impl Driver for Window {
                     self.s.hotkey_failures = failures;
                     changed = true;
                 }
-                // The Recording tab's devices were listed.
+                // The Recording section's devices were listed.
                 changed |= self.s.rec_lists.poll();
                 while let Ok(p) = self.picked.1.try_recv() {
                     self.picking = false;

@@ -173,10 +173,23 @@ pub fn resolve_with(cfg: &Config, probe: impl FnOnce() -> Option<bool>) -> Theme
     };
     let base = if dark { DARK } else { LIGHT };
     match config::parse_color(&cfg.ui_color) {
-        Some((r, g, b, _)) => base.with_accent(C4::rgb(r, g, b)),
+        Some((r, g, b, _)) => {
+            let c = C4::rgb(r, g, b);
+            // The Settings swatches have their own light-theme shade.
+            let c = match ACCENTS.iter().find(|a| a.1 == c) {
+                Some(a) if !dark => a.2,
+                _ => c,
+            };
+            base.with_accent(c)
+        }
         None => base,
     }
 }
+
+/// The accent swatches of Settings → General: (name, `ui_color` / dark
+/// shade, light-theme shade). Periwinkle is the theme's own (`ui_color`
+/// empty).
+pub const ACCENTS: [(&str, C4, C4); 2] = [("Teal", rgb(0x5CC8C2), rgb(0x16897F)), ("Amber", rgb(0xF2A65A), rgb(0xB8661A))];
 
 #[cfg(windows)]
 fn os_prefers_dark() -> Option<bool> {
@@ -291,6 +304,16 @@ mod tests {
     fn default_accent_is_periwinkle() {
         assert_eq!(resolve_with(&cfg("dark", ""), || None).accent, C4::rgb(0x8B, 0x93, 0xFF));
         assert_eq!(resolve_with(&cfg("light", ""), || None).accent, C4::rgb(0x5B, 0x63, 0xF5));
+    }
+
+    #[test]
+    fn accent_swatches_have_a_light_shade() {
+        let teal = Config { ui_color: "#5cc8c2".into(), theme: "dark".into(), ..Config::default() };
+        assert_eq!(resolve(&teal).accent, C4::rgb(0x5C, 0xC8, 0xC2));
+        let light = Config { theme: "light".into(), ..teal.clone() };
+        assert_eq!(resolve(&light).accent, C4::rgb(0x16, 0x89, 0x7F));
+        let other = Config { ui_color: "#123456".into(), theme: "light".into(), ..Config::default() };
+        assert_eq!(resolve(&other).accent, C4::rgb(0x12, 0x34, 0x56), "a custom colour is used as is");
     }
 
     #[test]

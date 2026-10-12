@@ -78,12 +78,31 @@ impl Ui<'_> {
     pub fn alloc(&mut self, w: Option<f32>, h: f32) -> FRect {
         let r = self.lay.alloc(w, h);
         let k = self.k;
-        FRect { x: (r.x * k).round(), y: (r.y * k).round(), w: (r.w * k).round(), h: (r.h * k).round() }
+        let r = FRect { x: (r.x * k).round(), y: (r.y * k).round(), w: (r.w * k).round(), h: (r.h * k).round() };
+        self.last_alloc = r;
+        r
     }
 
     /// Lay out the controls drawn by `f` left to right on one line.
     pub fn row<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
         self.row_dir(false, f)
+    }
+
+    /// [`Ui::row`] flowing right to left: the first control drawn is
+    /// the rightmost.
+    pub fn row_rtl<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        self.row_dir(true, f)
+    }
+
+    /// The row's free span left (logical px): what a control asking for
+    /// the rest would get.
+    pub fn row_free(&self) -> f32 {
+        let a = self.lay.area;
+        match self.lay.row {
+            Some(r) if r.rtl => r.x - a.x,
+            Some(r) => a.x1() - r.x,
+            None => a.w,
+        }
     }
 
     fn row_dir<R>(&mut self, rtl: bool, f: impl FnOnce(&mut Self) -> R) -> R {

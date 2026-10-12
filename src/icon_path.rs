@@ -110,6 +110,32 @@ pub const ICONS: &[(&str, &[Shape])] = &[
     ]),
 ];
 
+/// The Settings window's rail and row icons (Lucide, as on the Settings
+/// board).
+pub const SETTINGS_ICONS: &[(&str, &[Shape])] = &[
+    ("set-sliders", &[ // sliders-vertical
+        Path("M4 21v-7"), Path("M4 10V3"), Path("M12 21v-9"), Path("M12 8V3"), Path("M20 21v-5"), Path("M20 12V3"),
+        Path("M2 14h4"), Path("M10 8h4"), Path("M18 16h4"),
+    ]),
+    ("set-camera", &[ // camera
+        Path("M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"),
+        Circle(12.0, 13.0, 3.0),
+    ]),
+    ("set-keyboard", &[ // keyboard
+        Rect { x: 2.0, y: 4.0, w: 20.0, h: 16.0, r: 2.0 },
+        Path("M6 8h.01"), Path("M10 8h.01"), Path("M14 8h.01"), Path("M18 8h.01"),
+        Path("M8 12h.01"), Path("M12 12h.01"), Path("M16 12h.01"), Path("M7 16h10"),
+    ]),
+    ("set-external", &[Path("M15 3h6v6"), Path("M10 14 21 3"), Path("M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6")]),
+    ("set-folder", &[ // folder
+        Path("M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"),
+    ]),
+    ("set-rotate", &[Path("M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"), Path("M3 3v5h5")]), // rotate-ccw
+    ("set-plus", &[Path("M5 12h14"), Path("M12 5v14")]),
+    // The app mark's corner brackets (the board's `s-mark`).
+    ("set-mark", &[Path("M5 10V7a2 2 0 0 1 2-2h3M14 5h3a2 2 0 0 1 2 2v3M19 14v3a2 2 0 0 1-2 2h-3M10 19H7a2 2 0 0 1-2-2v-3")]),
+];
+
 /// SVG path-data tokenizer (numbers, single-char flags, command letters).
 struct Tok<'a> {
     s: &'a [u8],
@@ -325,7 +351,7 @@ fn rect_pts(x: f32, y: f32, w: f32, h: f32, r: f32) -> Vec<Pt> {
 
 /// Polylines (24-unit grid) for a bundled icon.
 pub fn polylines(name: &str) -> Option<Vec<Vec<Pt>>> {
-    let (_, shapes) = ICONS.iter().find(|(n, _)| *n == name)?;
+    let (_, shapes) = ICONS.iter().chain(SETTINGS_ICONS).find(|(n, _)| *n == name)?;
     let mut out = Vec::new();
     for sh in shapes.iter() {
         match *sh {

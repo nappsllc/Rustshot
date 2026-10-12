@@ -106,7 +106,7 @@ impl Action {
             // X as on the design boards; B (blur) as before.
             Action::ToolPixelate => ("tool_pixelate", "Pixelate", &["X", "B"]),
             Action::ToolInvert => ("tool_invert", "Invert", &["I"]),
-            Action::SizeDown => ("size_down", "Stroke size −", &["["]),
+            Action::SizeDown => ("size_down", "Stroke size -", &["["]),
             Action::SizeUp => ("size_up", "Stroke size +", &["]"]),
             Action::Copy => ("copy", "Copy", &["Ctrl+C"]),
             Action::Save => ("save", "Save", &["Ctrl+S"]),

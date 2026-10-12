@@ -1,3 +1,4 @@
+use super::draw::{viewport, FOOT_H, KEY_ROWS};
 use super::*;
 use crate::theme::{DARK, LIGHT};
 use crate::ui::preview;
@@ -21,10 +22,19 @@ fn custom() -> Config {
         jpeg_quality: 75,
         save_dialog: true,
         theme: "light".into(),
+        ui_color: "#f2a65a".into(),
         renderer: "software".into(),
         check_updates: false,
         capture_hotkey: "Ctrl+Alt+F7".into(),
         quit_hotkey: "Ctrl+Alt+Shift+F8".into(),
+        capture_full_hotkey: "Ctrl+Alt+F".into(),
+        capture_window_hotkey: "".into(),
+        repeat_hotkey: "Ctrl+Alt+P".into(),
+        show_tray: false,
+        copy_after_capture: true,
+        shutter_sound: true,
+        upload_client_id: "abc123".into(),
+        copy_url_after_upload: false,
         skip_version: "0.1.9".into(),
         shortcuts: [("save".to_string(), "Ctrl+Alt+S".to_string()), ("bogus".to_string(), "Q".to_string())]
             .into_iter()
@@ -35,7 +45,7 @@ fn custom() -> Config {
 
 #[test]
 fn form_round_trip_keeps_every_value() {
-    for cfg in [Config::default(), custom()] {
+    for cfg in [Config::default(), custom(), Config { ui_color: "#123456".into(), ..Config::default() }] {
         let f = Form::new(&cfg, Some(true));
         assert_eq!(config::to_toml(&f.apply(&cfg, &cfg)), config::to_toml(&cfg));
     }
@@ -45,10 +55,11 @@ fn form_round_trip_keeps_every_value() {
         renderer: "vulkan".into(),
         capture_hotkey: "Hyper+X".into(),
         save_format: "JPEG".into(),
+        ui_color: "not a colour".into(),
         ..Config::default()
     };
     let f = Form::new(&odd, None);
-    assert_eq!((f.theme, f.format, f.capture), (0, 1, None));
+    assert_eq!((f.theme, f.format, f.capture, f.accent), (0, 1, None, 0));
     assert_eq!(config::to_toml(&f.apply(&odd, &odd)), config::to_toml(&odd));
 }
 
@@ -61,6 +72,12 @@ fn form_writes_what_changed() {
     f.check_updates = false;
     f.capture = Chord::parse("Ctrl+Alt+F9");
     f.quit = None;
+    f.full = Chord::parse("Ctrl+Alt+F1");
+    f.window = None;
+    f.repeat = Chord::parse("Ctrl+Alt+F2");
+    f.show_tray = false;
+    f.copy_after = true;
+    f.shutter = true;
     f.folder.set(r"E:\caps");
     f.subfolder = false;
     f.subfolder_pattern.set("%Y");
@@ -68,6 +85,8 @@ fn form_writes_what_changed() {
     f.quality = 50;
     f.ask = true;
     f.filename.set("x_%S");
+    f.upload_id.set(" mine ");
+    f.copy_url = false;
     f.keys.set(Action::ToolPencil, vec![Chord::parse("Shift+K").unwrap()]);
     f.keys.set(Action::Copy, vec![]);
     let c = f.apply(&cfg, &cfg);
@@ -76,15 +95,44 @@ fn form_writes_what_changed() {
     let renderer = if cfg!(windows) { "software" } else { "gdi" };
     assert_eq!((c.theme.as_str(), c.renderer.as_str(), c.check_updates), ("light", renderer, false));
     assert_eq!((c.capture_hotkey.as_str(), c.quit_hotkey.as_str()), ("Ctrl+Alt+F9", ""));
+    assert_eq!((c.capture_full_hotkey.as_str(), c.capture_window_hotkey.as_str(), c.repeat_hotkey.as_str()), ("Ctrl+Alt+F1", "", "Ctrl+Alt+F2"));
+    assert_eq!((c.show_tray, c.copy_after_capture, c.shutter_sound), (false, true, true));
     assert_eq!((c.save_path.as_str(), c.save_subfolder, c.subfolder_pattern.as_str()), (r"E:\caps", false, "%Y"));
     assert_eq!((c.save_format.as_str(), c.jpeg_quality, c.save_dialog), ("bmp", 50, true));
     assert_eq!(c.filename_pattern, "x_%S");
+    assert_eq!((c.upload_client_id.as_str(), c.copy_url_after_upload), ("mine", false));
     assert_eq!(c.shortcuts.len(), 2);
     assert_eq!((c.shortcuts["tool_pencil"].as_str(), c.shortcuts["copy"].as_str()), ("Shift+K", ""));
     // And it reads back as the same form.
     let back = Form::new(&c, None);
     assert_eq!((back.theme, back.renderer, back.format, back.quality), (2, 1, 2, 50));
     assert_eq!(back.keys, f.keys);
+}
+
+/// Accent: the swatches write their `ui_color` (Periwinkle: none), a
+/// custom colour is written only when it parses.
+#[test]
+fn accent_swatches_and_custom_colour() {
+    let cfg = Config::default();
+    assert_eq!(Form::new(&cfg, None).accent, 0);
+    assert_eq!(Form::new(&Config { ui_color: "#5CC8C2".into(), ..cfg.clone() }, None).accent, 1);
+    assert_eq!(Form::new(&Config { ui_color: "#f2a65a".into(), ..cfg.clone() }, None).accent, 2);
+    let c = Form::new(&Config { ui_color: "#123456".into(), ..cfg.clone() }, None);
+    assert_eq!((c.accent, c.accent_hex.text.as_str()), (ACCENT_CUSTOM, "#123456"));
+    let mut f = Form::new(&cfg, None);
+    f.accent = 1;
+    assert_eq!(f.apply(&cfg, &cfg).ui_color, "#5cc8c2");
+    f.accent = 2;
+    assert_eq!(f.apply(&cfg, &cfg).ui_color, "#f2a65a");
+    f.accent = ACCENT_CUSTOM;
+    f.accent_hex.set("#00ff88");
+    assert_eq!(f.apply(&cfg, &cfg).ui_color, "#00ff88");
+    f.accent_hex.set("#zz");
+    assert_eq!(f.apply(&cfg, &cfg).ui_color, "", "not a colour: not written");
+    let teal = Config { ui_color: "#5cc8c2".into(), ..cfg.clone() };
+    let mut f = Form::new(&teal, None);
+    f.accent = 0;
+    assert_eq!(f.apply(&teal, &teal).ui_color, "", "back to the theme's");
 }
 
 #[test]
@@ -152,30 +200,43 @@ fn preview_is_the_auto_save_path() {
     assert_eq!(f.preview(&cfg, NOW), PathBuf::from(r"D:\Shots").join("2026").join("10").join("2026-10-10 14.png"));
 }
 
+/// Overlay keys in a conflict are marked and get a message; globals that
+/// share a chord, or a bare global key, get theirs.
 #[test]
-fn conflicts_are_marked() {
+fn conflicts_and_global_notes() {
     let mut f = Form::new(&Config::default(), None);
-    assert!(f.shortcut_rows().iter().all(|r| !r.2));
-    assert_eq!(f.conflict_note(), None);
+    assert!(f.conflicting().is_empty());
+    assert_eq!(f.conflict_note(Action::ToolPencil), None);
     f.keys.set(Action::Cancel, vec![Chord::parse("P").unwrap()]);
-    let rows = f.shortcut_rows();
-    let bad: Vec<&str> = rows.iter().filter(|r| r.2).map(|r| r.0).collect();
-    assert_eq!(bad, ["Pencil", "Cancel"]);
-    assert_eq!(rows[0].1, "P");
-    assert_eq!(f.conflict_note().unwrap(), "P is bound to Pencil and Cancel; Pencil wins.");
-    f.keys.set(Action::Undo, vec![Chord::parse("Ctrl+Y").unwrap()]);
-    assert!(f.conflict_note().unwrap().ends_with(" 1 more conflict."));
-    f.keys.set(Action::Copy, vec![]);
-    let rows = f.shortcut_rows();
-    assert_eq!(rows.iter().find(|r| r.0 == "Copy").unwrap().1, "None");
-    assert_eq!(rows.iter().find(|r| r.0 == "Redo").unwrap().1, "Ctrl+Shift+Z, Ctrl+Y");
-    // Hotkey problems.
-    f.capture = Chord::parse("Ctrl+Alt+Shift+Q");
-    assert_eq!(f.hotkey_note(), Some("Capture and Quit use the same keys."));
-    f.capture = Chord::parse("X");
-    assert!(f.hotkey_note().unwrap().contains("every app"));
-    f.capture = Chord::parse("PrintScreen");
-    assert_eq!(f.hotkey_note(), None);
+    assert_eq!(f.conflicting(), [Action::ToolPencil, Action::Cancel]);
+    assert_eq!(f.conflict_note(Action::Cancel).unwrap(), "Already used by Pencil. Choose another.");
+    assert_eq!(f.conflict_note(Action::ToolPencil).unwrap(), "Already used by Cancel. Choose another.");
+    // Defaults: no global problem.
+    for slot in 0..hotkey::SLOTS {
+        assert_eq!(f.global_note(slot), None, "slot {slot}");
+    }
+    f.repeat = f.capture;
+    assert_eq!(f.global_note(5).unwrap(), "Already used by Capture region. Choose another.");
+    assert_eq!(f.global_note(0).unwrap(), "Already used by Repeat last capture. Choose another.");
+    f.repeat = Chord::parse("X");
+    assert!(f.global_note(5).unwrap().contains("every app"));
+    f.repeat = Chord::parse("PrintScreen");
+    assert_eq!(f.global_note(5), None);
+    f.rec.hotkey = f.quit;
+    assert!(f.global_note(2).unwrap().contains("Quit Rustshot"));
+}
+
+/// Reset to defaults puts every overlay key and global hotkey back.
+#[test]
+fn reset_to_defaults_covers_globals_too() {
+    let mut f = Form::new(&custom(), None);
+    f.keys.set(Action::Save, vec![]);
+    f.reset_keys();
+    assert_eq!(f.keys, Keymap::defaults());
+    let d = Form::new(&Config::default(), None);
+    for slot in 0..hotkey::SLOTS {
+        assert_eq!(f.global(slot), d.global(slot), "slot {slot}");
+    }
 }
 
 fn settings_at(path: &Path) -> Settings {
@@ -206,9 +267,9 @@ fn apply_rebuilds_the_form() {
 const BROKEN: &str = "theme = \"dark\"\noops\n";
 
 /// The UI size dropdown: Auto by default, written on Apply, kept as it
-/// was when left alone; the General tab has room for it.
+/// was when left alone.
 #[test]
-fn ui_size_is_a_general_setting() {
+fn ui_size_is_a_capture_setting() {
     let cfg = Config::default();
     let f = Form::new(&cfg, None);
     assert_eq!(uisize::LABELS[f.ui_size], "Auto");
@@ -265,22 +326,6 @@ fn reset_tools_removes_only_their_keys() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The button sits at the left of the Saving tab's bottom bar and clicks
-/// where it is drawn, at 100 % and 150 %.
-#[test]
-fn reset_tools_button_clicks() {
-    for k in [1.0f32, 1.5] {
-        let mut s = sample();
-        s.tab = 1;
-        let y = H as f32 - PAD - 16.0;
-        let (_, c) = render(&mut s, &DARK, k, &click_at(PAD + 30.0, y, k), &mut FocusState::default());
-        assert_eq!(c, Some(Click::ResetTools), "k={k}");
-        s.tab = 0;
-        let (_, c) = render(&mut s, &DARK, k, &click_at(PAD + 30.0, y, k), &mut FocusState::default());
-        assert_eq!(c, Some(Click::OpenConfig), "General keeps the link there");
-    }
-}
-
 /// A file that does not parse opens in the error state: nothing can be
 /// written over it, only opened, reset or closed.
 #[test]
@@ -292,7 +337,7 @@ fn broken_file_is_never_written() {
     assert_eq!(s.modal, Some(Modal::Broken("line 2: expected key = value".into())));
     assert_eq!(broken_text("line 2: expected key = value"), "config.toml has an error (line 2: expected key = value). Fix it or reset it.");
     s.form.theme = 2; // as if edited anyway
-    for c in [Click::Ok, Click::Apply, Click::Enter, Click::Save, Click::Back, Click::Restore, Click::ResetAll, Click::Replace] {
+    for c in [Click::Ok, Click::Apply, Click::Enter, Click::Save, Click::Back, Click::Restore, Click::ResetAll, Click::Replace, Click::CheckUpdates] {
         assert_eq!(s.on(c), vec![], "{c:?}");
         assert!(s.broken(), "{c:?}");
     }
@@ -467,17 +512,7 @@ fn folder_probe_is_cached_by_root() {
     assert_eq!(s.folder_probe.as_ref().map(|p| &p.0), Some(&root));
 }
 
-#[test]
-fn conflict_target_prefers_the_edited_row() {
-    let bad = [false, true, false, true];
-    assert_eq!(conflict_target(&bad, None), Some(1));
-    assert_eq!(conflict_target(&bad, Some(3)), Some(3), "the edited row is in the conflict");
-    assert_eq!(conflict_target(&bad, Some(2)), Some(1), "it is not: the first conflict");
-    assert_eq!(conflict_target(&[false; 4], Some(1)), None);
-    assert_eq!(conflict_target(&bad, Some(9)), Some(1));
-}
-
-/// A hotkey the daemon could not register: a note next to its box, and
+/// A hotkey the daemon could not register: a note under its row, and
 /// Apply / OK ask the daemon to try again though nothing changed.
 #[test]
 fn unregistered_hotkey_can_be_retried() {
@@ -492,10 +527,12 @@ fn unregistered_hotkey_can_be_retried() {
     s.hotkey_failures = vec![
         Failure { slot: 0, wanted: "Ctrl+Alt+F9".into(), cause: Cause::InUse, kept: Some("Ctrl+Alt+Shift+Q".into()) },
         Failure { slot: 1, wanted: "Ctrl+Alt+F10".into(), cause: Cause::Unknown, kept: None },
+        Failure { slot: 5, wanted: "Ctrl+Shift+P".into(), cause: Cause::InUse, kept: None },
     ];
     assert!(s.retry_hotkeys() && !s.dirty());
-    assert_eq!(s.hotkey_slot_note(0).as_deref(), Some("Not registered — using Ctrl+Alt+Shift+Q"));
+    assert_eq!(s.hotkey_slot_note(0).as_deref(), Some("Not registered \u{2014} using Ctrl+Alt+Shift+Q"));
     assert_eq!(s.hotkey_slot_note(1).as_deref(), Some("Not registered"));
+    assert_eq!(s.global_message(5).as_deref(), Some("Already used by another app. Choose another."));
     assert_eq!(s.on(Click::Apply), vec![Act::Reload]);
     assert_eq!(s.on(Click::Ok), vec![Act::Reload, Act::Close]);
     assert_eq!(s.on(Click::Enter), vec![Act::Reload, Act::Close]);
@@ -506,34 +543,9 @@ fn unregistered_hotkey_can_be_retried() {
     // Apply is enabled for the retry: a click on it lands.
     let mut s = sample();
     s.hotkey_failures = vec![Failure { slot: 0, wanted: "Ctrl+Alt+F9".into(), cause: Cause::InUse, kept: None }];
-    let (_, c) = render(&mut s, &DARK, 1.0, &click_at(W as f32 - PAD - 20.0, H as f32 - PAD - 16.0, 1.0), &mut FocusState::default());
-    assert_eq!(c, Some(Click::Apply));
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// A conflict scrolls its first row into view.
-#[test]
-fn conflict_scrolls_into_view() {
-    let mut s = sample();
-    s.tab = 2;
     let mut focus = FocusState::default();
-    render(&mut s, &DARK, 1.0, &Input::default(), &mut focus);
-    assert_eq!(s.table.scroll, 0.0);
-    s.form.keys.set(Action::Accept, vec![Chord::parse("Esc").unwrap()]);
-    render(&mut s, &DARK, 1.0, &Input::default(), &mut focus);
-    let r = s.table.row_rect(17).unwrap_or_else(|| panic!("Accept is visible: {:?} {:?}", s.table, s.conflict_row));
-    assert!(r.h > 0.0 && s.table.scroll > 0.0);
-    // Editing a conflicting row far down (the other one is near the top):
-    // the edited row is the one revealed.
-    let mut s = sample();
-    s.tab = 2;
-    render(&mut s, &DARK, 1.0, &Input::default(), &mut focus);
-    let last = Action::ALL.len() - 1;
-    s.table.selected = Some(last);
-    s.form.keys.set(Action::ALL[last], vec![Chord::parse("P").unwrap()]); // Pencil's
-    render(&mut s, &DARK, 1.0, &Input::default(), &mut focus);
-    assert_eq!(s.conflict_row, Some(last));
-    assert!(s.table.row_rect(last).is_some_and(|r| r.h > 0.0), "{:?}", s.table);
+    assert_eq!(click(&mut s, &mut focus, "apply", 1.0), Some(Click::Apply));
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -614,7 +626,7 @@ fn save_errors_show_in_the_window() {
     assert!(s.dirty(), "nothing was saved");
     assert_eq!(s.on(Click::Enter), vec![], "Enter dismisses the error");
     assert_eq!(s.modal, None);
-    // Start at login failing after the file was saved: the error shows,
+    // Launch at login failing after the file was saved: the error shows,
     // the window stays.
     let p = dir.join("config.toml");
     let mut s = settings_at(&p);
@@ -622,22 +634,41 @@ fn save_errors_show_in_the_window() {
     s.form.autostart = Some(true);
     let acts = s.on(Click::Ok);
     assert!(matches!(&acts[..], [Act::Saved(_)]), "{acts:?}");
-    assert!(matches!(&s.modal, Some(Modal::Error(e)) if e.contains("Start at login")));
+    assert!(matches!(&s.modal, Some(Modal::Error(e)) if e.contains("Launch at login")));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
-fn restore_clear_and_reset() {
+fn restore_clear_reset_and_links() {
     let mut s = settings_at(&scratch("rc").join("config.toml"));
     s.on(Click::Clear);
     assert_eq!(s.form.filename.text, "");
     s.on(Click::Restore);
     assert_eq!(s.form.filename.text, "%F_%H-%M");
     s.form.keys.set(Action::Save, vec![]);
+    s.form.capture = None;
     s.on(Click::ResetAll);
     assert_eq!(s.form.keys, Keymap::defaults());
+    assert_eq!(s.form.capture, Chord::parse("Ctrl+Shift+S"));
     assert_eq!(s.on(Click::Browse), vec![Act::Browse]);
     assert_eq!(s.on(Click::OpenConfig), vec![Act::OpenConfig]);
+    assert_eq!(s.on(Click::CheckUpdates), vec![Act::CheckUpdates]);
+    assert_eq!(s.on(Click::Link("https://powernapps.net")), vec![Act::Link("https://powernapps.net")]);
+}
+
+/// "Show icon in tray" off with no capture hotkey (or one that did not
+/// register): the row warns.
+#[test]
+fn hidden_tray_without_a_hotkey_warns() {
+    let mut s = sample();
+    assert!(!s.tray_warning());
+    s.form.show_tray = false;
+    assert!(!s.tray_warning(), "the capture hotkey still works");
+    s.form.capture = None;
+    assert!(s.tray_warning());
+    s.form.capture = Chord::parse("Ctrl+Shift+S");
+    s.hotkey_failures = vec![crate::hotkey::Failure { slot: 0, wanted: "Ctrl+Shift+S".into(), cause: crate::hotkey::Cause::InUse, kept: None }];
+    assert!(s.tray_warning());
 }
 
 // --- Rendering ---
@@ -646,288 +677,333 @@ fn restore_clear_and_reset() {
 /// click of the second.
 fn render(s: &mut Settings, th: &Theme, k: f32, input: &Input, focus: &mut FocusState) -> (PixBuf, Option<Click>) {
     preview::render(W, H, k, th, &Input::default(), focus, |ui| {
-        paint(ui, s);
+        draw::paint(ui, s);
     });
     let mut click = None;
-    let img = preview::render(W, H, k, th, input, focus, |ui| click = paint(ui, s));
+    let img = preview::render(W, H, k, th, input, focus, |ui| click = draw::paint(ui, s));
     (img, click)
+}
+
+/// A click at the centre of control `id` as last drawn.
+fn click(s: &mut Settings, focus: &mut FocusState, id: &str, k: f32) -> Option<Click> {
+    render(s, &DARK, k, &Input::default(), focus);
+    let r = focus.rect_of(id).unwrap_or_else(|| panic!("{id} drawn"));
+    let (x, y) = ((r.x + r.w / 2.0) as i32, (r.y + r.h / 2.0) as i32);
+    let mut input = Input::default();
+    for e in [Ev::Move { x, y }, Ev::Down { x, y }, Ev::Up { x, y }] {
+        input.feed(&e);
+    }
+    render(s, &DARK, k, &input, focus).1
+}
+
+fn press(vk: u32, mods: wind::Mods) -> Input {
+    let mut input = Input::default();
+    input.feed(&Ev::Key { vk, up: false, repeat: false, mods });
+    input
 }
 
 fn preview_cfg() -> Config {
     // An absolute path on every platform, so no folder note shifts the layout.
     let save_path = if cfg!(windows) { r"C:\Users\denis\Pictures\rustshot" } else { "/home/denis/Pictures/rustshot" };
-    Config { save_path: save_path.into(), ..Config::default() }
+    Config { save_path: save_path.into(), copy_after_capture: true, ..Config::default() }
 }
 
 fn sample() -> Settings {
     let mut s = Settings::new(preview_cfg(), Some(true), PathBuf::from("config.toml"));
     s.renderer = true;
+    s.tray_row = true;
+    s.rec_lists.linux = false;
     s
+}
+
+/// The name of a preview PNG: `settings-<what>-<theme>[-150].png`.
+fn png(what: &str, tname: &str, k: f32) -> String {
+    if k == 1.0 { format!("settings-{what}-{tname}.png") } else { format!("settings-{what}-{tname}-{}.png", (k * 100.0) as u32) }
 }
 
 #[test]
 fn preview_settings_pngs() {
-    for (tname, th) in [("dark", &DARK), ("light", &LIGHT)] {
-        for (tab, name) in TABS.iter().enumerate() {
-            let mut s = sample();
-            s.tab = tab;
-            let (img, _) = render(&mut s, th, 1.0, &Input::default(), &mut FocusState::default());
-            preview::save(&format!("settings-{}-{tname}.png", name.to_lowercase()), &img);
-        }
-        // Rebinding a shortcut (Text selected, recording).
-        let mut s = sample();
-        s.tab = 2;
-        s.table.selected = Some(6);
-        let mut focus = FocusState::default();
-        render(&mut s, th, 1.0, &Input::default(), &mut focus);
-        focus.record("rebind");
-        let (img, _) = render(&mut s, th, 1.0, &Input::default(), &mut focus);
-        preview::save(&format!("settings-rebind-{tname}.png"), &img);
-        // A conflict (Accept → Esc, also Cancel's): scrolled into view.
-        let mut s = sample();
-        s.tab = 2;
-        s.form.keys.set(Action::Accept, vec![Chord::parse("Esc").unwrap()]);
-        s.table.selected = Action::ALL.iter().position(|a| *a == Action::Accept);
-        let (img, _) = render(&mut s, th, 1.0, &Input::default(), &mut FocusState::default());
-        preview::save(&format!("settings-conflict-{tname}.png"), &img);
-        // The tools were reset.
-        let mut s = sample();
-        s.tab = 1;
-        s.tools_reset = true;
-        let (img, _) = render(&mut s, th, 1.0, &Input::default(), &mut FocusState::default());
-        preview::save(&format!("settings-tools-reset-{tname}.png"), &img);
-        // The rewrite question.
-        let mut s = sample();
-        s.tab = 1;
-        s.modal = Some(Modal::Rewrite { close: true });
-        let (img, _) = render(&mut s, th, 1.0, &Input::default(), &mut FocusState::default());
-        preview::save(&format!("settings-rewrite-{tname}.png"), &img);
-        let mut s = sample();
-        s.modal = Some(Modal::Error(
-            r"Could not save C:\Users\denis\AppData\Roaming\rustshot\config.toml: Access is denied. (os error 5)".into(),
-        ));
-        let (img, _) = render(&mut s, th, 1.0, &Input::default(), &mut FocusState::default());
-        preview::save(&format!("settings-error-{tname}.png"), &img);
-        // config.toml does not parse, and the reset question.
-        let mut s = sample();
-        s.stale = true;
-        s.modal = Some(Modal::Broken("line 7: invalid integer for 'jpeg_quality': high".into()));
-        let (img, _) = render(&mut s, th, 1.0, &Input::default(), &mut FocusState::default());
-        preview::save(&format!("settings-invalid-{tname}.png"), &img);
-        s.modal = Some(Modal::Reset(String::new()));
-        let (img, _) = render(&mut s, th, 1.0, &Input::default(), &mut FocusState::default());
-        preview::save(&format!("settings-reset-{tname}.png"), &img);
-        // A hotkey the daemon could not register.
-        let mut s = sample();
-        s.notify("Couldn't register Ctrl+Alt+F9 — it's in use by another app; kept Shift+Win+X.".into());
-        let (img, _) = render(&mut s, th, 1.0, &Input::default(), &mut FocusState::default());
-        preview::save(&format!("settings-hotkey-failed-{tname}.png"), &img);
-        // Hotkeys the daemon could not register: notes by their boxes.
-        let mut s = sample();
-        s.hotkey_failures = vec![
-            crate::hotkey::Failure {
-                slot: 0,
-                wanted: "Ctrl+Alt+F9".into(),
-                cause: crate::hotkey::Cause::InUse,
-                kept: Some("Ctrl+Alt+Shift+F11".into()),
-            },
-            crate::hotkey::Failure { slot: 1, wanted: "Ctrl+Alt+F10".into(), cause: crate::hotkey::Cause::Unknown, kept: None },
-        ];
-        let (img, _) = render(&mut s, th, 1.0, &Input::default(), &mut FocusState::default());
-        preview::save(&format!("settings-hotkey-unregistered-{tname}.png"), &img);
-        // A folder note (a drive that is not there).
-        let mut s = sample();
-        s.tab = 1;
-        s.folder_probe = Some((PathBuf::from(r"C:\"), Some("Drive Q: is not on this computer.".into())));
-        let (img, _) = render(&mut s, th, 1.0, &Input::default(), &mut FocusState::default());
-        preview::save(&format!("settings-folder-note-{tname}.png"), &img);
-    }
-    // The General tab (with the UI size row) at every UI size.
-    for (pct, k) in [(75, 0.75f32), (150, 1.5), (200, 2.0)] {
+    for k in [1.0f32, 1.5] {
         for (tname, th) in [("dark", &DARK), ("light", &LIGHT)] {
+            for (i, (_, name)) in SECTIONS.iter().enumerate() {
+                let mut s = sample();
+                s.section = i;
+                let (img, _) = render(&mut s, th, k, &Input::default(), &mut FocusState::default());
+                preview::save(&png(&name.to_lowercase().replace(' ', "-"), tname, k), &img);
+                // The long sections scrolled to the end.
+                if s.content_h[i] > viewport().h {
+                    s.scroll[i] = 9999.0;
+                    let (img, _) = render(&mut s, th, k, &Input::default(), &mut FocusState::default());
+                    preview::save(&png(&format!("{}-end", name.to_lowercase().replace(' ', "-")), tname, k), &img);
+                }
+            }
+            // Key bindings as on the board: full screen recording, repeat
+            // last capture in use by another app.
             let mut s = sample();
-            s.form.ui_size = UiSize::Pct(pct).index();
+            s.section = KEYS;
+            s.form.repeat = Chord::parse("Ctrl+Shift+P");
+            s.hotkey_failures = vec![crate::hotkey::Failure { slot: 5, wanted: "Ctrl+Shift+P".into(), cause: crate::hotkey::Cause::InUse, kept: None }];
+            let mut focus = FocusState::default();
+            render(&mut s, th, k, &Input::default(), &mut focus);
+            focus.record("global3");
+            let (img, _) = render(&mut s, th, k, &Input::default(), &mut focus);
+            preview::save(&png("keys-board", tname, k), &img);
+            // An overlay conflict (Cancel on P), and recording a tool key.
+            let mut s = sample();
+            s.section = KEYS;
+            s.form.keys.set(Action::Cancel, vec![Chord::parse("P").unwrap()]);
+            s.scroll[KEYS] = 9999.0;
+            let mut focus = FocusState::default();
+            render(&mut s, th, k, &Input::default(), &mut focus);
+            focus.record("key_tool_text");
+            let (img, _) = render(&mut s, th, k, &Input::default(), &mut focus);
+            preview::save(&png("keys-conflict", tname, k), &img);
+            // General: a custom accent, the tray hidden without a hotkey,
+            // a folder note.
+            let mut s = sample();
+            s.form.accent = ACCENT_CUSTOM;
+            s.form.accent_hex.set("#e07a4f");
+            s.form.show_tray = false;
+            s.form.capture = None;
+            s.folder_probe = Some((PathBuf::from(r"C:\"), Some("Drive Q: is not on this computer.".into())));
             let (img, _) = render(&mut s, th, k, &Input::default(), &mut FocusState::default());
-            preview::save(&format!("settings-general-uisize-{pct}-{tname}.png"), &img);
+            preview::save(&png("general-states", tname, k), &img);
+            // Teal accent (previewed before Apply), JPEG chosen.
+            let mut s = sample();
+            s.form.accent = 1;
+            s.form.format = 1;
+            s.section = CAPTURE;
+            s.tools_reset = true;
+            s.form.theme = if th.dark { 1 } else { 2 };
+            let th2 = s.preview_theme();
+            let (img, _) = render(&mut s, &th2, k, &Input::default(), &mut FocusState::default());
+            preview::save(&png("capture-teal-jpeg", tname, k), &img);
+            // The questions.
+            for (name, m) in [
+                ("rewrite", Modal::Rewrite { close: true }),
+                ("error", Modal::Error(r"Could not save C:\Users\denis\AppData\Roaming\rustshot\config.toml: Access is denied. (os error 5)".into())),
+                ("hotkey-failed", Modal::Error("Couldn't register Ctrl+Shift+S \u{2014} it's in use by another app; kept Shift+Win+X.".into())),
+            ] {
+                let mut s = sample();
+                s.modal = Some(m);
+                let (img, _) = render(&mut s, th, k, &Input::default(), &mut FocusState::default());
+                preview::save(&png(name, tname, k), &img);
+            }
+            let mut s = sample();
+            s.stale = true;
+            s.modal = Some(Modal::Broken("line 7: invalid integer for 'jpeg_quality': high".into()));
+            let (img, _) = render(&mut s, th, k, &Input::default(), &mut FocusState::default());
+            preview::save(&png("invalid", tname, k), &img);
+            s.modal = Some(Modal::Reset(String::new()));
+            let (img, _) = render(&mut s, th, k, &Input::default(), &mut FocusState::default());
+            preview::save(&png("reset", tname, k), &img);
         }
     }
-    // JPEG chosen (quality enabled), a hotkey warning, at 150 %.
+}
+
+/// Every section fits the window's width and keeps its rows under the
+/// header: General shows whole without scrolling at the defaults, the
+/// long ones scroll, and the end of every one can be reached.
+#[test]
+fn sections_fit_or_scroll() {
+    let vp = viewport();
+    for k in [1.0f32, 1.5, 2.0] {
+        for i in 0..SECTIONS.len() {
+            let mut s = sample();
+            s.section = i;
+            render(&mut s, &DARK, k, &Input::default(), &mut FocusState::default());
+            assert!(s.content_h[i] > 100.0, "section {i}: {}", s.content_h[i]);
+            if i == GENERAL || i == UPLOAD || i == ABOUT {
+                assert!(s.content_h[i] <= vp.h, "section {i} needs no scroll: {} > {}", s.content_h[i], vp.h);
+            }
+            s.scroll[i] = 1e6;
+            render(&mut s, &DARK, k, &Input::default(), &mut FocusState::default());
+            assert!((s.scroll[i] - (s.content_h[i] - vp.h).max(0.0)).abs() < 0.5, "section {i}: scrolled to the end");
+        }
+    }
+}
+
+/// The wheel scrolls a long section; Tab to a control below the fold
+/// scrolls it into view.
+#[test]
+fn wheel_and_focus_scroll() {
     let mut s = sample();
-    s.tab = 1;
-    s.form.format = 1;
-    let (img, _) = render(&mut s, &DARK, 1.5, &Input::default(), &mut FocusState::default());
-    preview::save("settings-saving-jpeg-dark-150.png", &img);
-    let mut s = sample();
-    s.form.capture = Chord::parse("X");
-    let (img, _) = render(&mut s, &DARK, 1.5, &Input::default(), &mut FocusState::default());
-    preview::save("settings-general-warning-dark-150.png", &img);
-    let mut s = sample();
-    s.tab = 2;
-    s.form.keys.set(Action::Accept, vec![Chord::parse("Esc").unwrap()]);
-    s.table.selected = Action::ALL.iter().position(|a| *a == Action::Accept);
+    s.section = KEYS;
     let mut focus = FocusState::default();
-    render(&mut s, &LIGHT, 1.5, &Input::default(), &mut focus);
-    focus.record("rebind");
-    let (img, _) = render(&mut s, &LIGHT, 1.5, &Input::default(), &mut focus);
-    preview::save("settings-conflict-rebind-light-150.png", &img);
-    let mut s = sample();
-    s.stale = true;
-    s.modal = Some(Modal::Broken("line 2: expected key = value".into()));
-    let (img, _) = render(&mut s, &DARK, 1.5, &Input::default(), &mut FocusState::default());
-    preview::save("settings-invalid-dark-150.png", &img);
-    let mut s = sample();
-    s.form.capture = Chord::parse("X");
-    s.hotkey_failures =
-        vec![crate::hotkey::Failure { slot: 1, wanted: "Ctrl+Alt+F10".into(), cause: crate::hotkey::Cause::InUse, kept: Some("Ctrl+Alt+Shift+Q".into()) }];
-    let (img, _) = render(&mut s, &DARK, 1.5, &Input::default(), &mut FocusState::default());
-    preview::save("settings-hotkey-unregistered-dark-150.png", &img);
-    // The most it can need: both notes under their boxes and the warning.
-    let long = |slot, kept: &str| crate::hotkey::Failure {
-        slot,
-        wanted: "Ctrl+Alt+F10".into(),
-        cause: crate::hotkey::Cause::InUse,
-        kept: Some(kept.into()),
-    };
-    let mut s = sample();
-    s.form.capture = Chord::parse("X");
-    s.hotkey_failures = vec![long(0, "Ctrl+Alt+Shift+Meta+F11"), long(1, "Ctrl+Alt+Shift+Meta+F12")];
-    let (img, _) = render(&mut s, &LIGHT, 1.0, &Input::default(), &mut FocusState::default());
-    preview::save("settings-hotkey-unregistered-worst-light.png", &img);
+    render(&mut s, &DARK, 1.0, &Input::default(), &mut focus);
+    let mut input = Input::default();
+    input.feed(&Ev::Wheel { delta: -120, x: 400, y: 200 });
+    render(&mut s, &DARK, 1.0, &input, &mut focus);
+    assert!(s.scroll[KEYS] > 0.0, "scrolled down");
+    s.scroll[KEYS] = 0.0;
+    focus.focus("key_ui_reset");
+    render(&mut s, &DARK, 1.0, &Input::default(), &mut focus);
+    render(&mut s, &DARK, 1.0, &Input::default(), &mut focus);
+    let r = focus.rect_of("key_ui_reset").unwrap();
+    assert!(s.scroll[KEYS] > 0.0 && r.y1() <= viewport().y1(), "{r:?} scroll {}", s.scroll[KEYS]);
 }
 
-/// The General tab never runs into the button bar: the most it can show
-/// (the renderer, start at login, both hotkey notes under their boxes and
-/// the warning) still ends above it.
+/// The rail: a click picks a section, Up/Down move while it has focus.
 #[test]
-fn general_fits_above_the_buttons_in_the_worst_case() {
-    let long = |slot, kept: &str| crate::hotkey::Failure {
-        slot,
-        wanted: "Ctrl+Alt+F10".into(),
-        cause: crate::hotkey::Cause::InUse,
-        kept: Some(kept.into()),
-    };
-    let body_end = H as f32 - PAD - ROW - 16.0;
-    for worst in [false, true] {
+fn rail_switches_sections() {
+    for k in [1.0f32, 1.5] {
         let mut s = sample();
-        if worst {
-            s.form.capture = Chord::parse("X");
-            s.hotkey_failures = vec![long(0, "Ctrl+Alt+Shift+Meta+F11"), long(1, "Ctrl+Alt+Shift+Meta+F12")];
+        let mut focus = FocusState::default();
+        render(&mut s, &DARK, k, &Input::default(), &mut focus);
+        // About sits at the bottom of the rail.
+        let (x, y) = ((60.0 * k) as i32, ((H as f32 - 14.0 - 16.0) * k) as i32);
+        let mut input = Input::default();
+        for e in [Ev::Move { x, y }, Ev::Down { x, y }, Ev::Up { x, y }] {
+            input.feed(&e);
         }
-        render(&mut s, &LIGHT, 1.0, &Input::default(), &mut FocusState::default());
-        let end = GENERAL_END.with(|c| c.get());
-        assert!(end > BODY_Y + 200.0 && end <= body_end, "worst={worst}: the last row ends at {end}, the body at {body_end}");
+        render(&mut s, &DARK, k, &input, &mut focus);
+        assert_eq!(s.section, ABOUT, "k={k}");
+        render(&mut s, &DARK, k, &press(wind::key::UP, Default::default()), &mut focus);
+        assert_eq!(s.section, UPLOAD);
+        render(&mut s, &DARK, k, &press(wind::key::HOME, Default::default()), &mut focus);
+        assert_eq!(s.section, GENERAL);
     }
 }
 
-/// Snap to windows is on the Overlay row and saved as `snap_windows`.
+/// The footer buttons click where drawn, at 100 % and 150 %: Apply
+/// (disabled until something changes), Cancel, OK; the config link.
 #[test]
-fn snap_to_windows_toggles_and_saves() {
-    let cfg = Config::default();
-    let mut f = Form::new(&cfg, None);
-    assert!(f.snap, "on by default");
-    f.snap = false;
-    let c = f.apply(&cfg, &cfg);
-    assert!(!c.snap_windows);
-    assert!(!Form::new(&c, None).snap);
-    // Its toggle clicks where drawn: the first control of the second row.
-    let mut s = sample();
-    let y = BODY_Y + 24.0 + 12.0 + 32.0 + 12.0 + 16.0;
-    let x = PAD + LABEL_W + GAP + 18.0;
-    render(&mut s, &DARK, 1.0, &click_at(x, y, 1.0), &mut FocusState::default());
-    assert!(!s.form.snap, "toggled off");
-    assert!(s.dirty());
+fn footer_clicks_where_drawn() {
+    for k in [1.0f32, 1.5] {
+        let mut s = sample();
+        let mut focus = FocusState::default();
+        assert_eq!(click(&mut s, &mut focus, "apply", k), None, "Apply is disabled while nothing changed");
+        s.form.ask = true;
+        assert_eq!(click(&mut s, &mut focus, "apply", k), Some(Click::Apply), "k={k}");
+        assert_eq!(click(&mut s, &mut focus, "cancel", k), Some(Click::Cancel));
+        assert_eq!(click(&mut s, &mut focus, "ok", k), Some(Click::Ok));
+        assert_eq!(click(&mut s, &mut focus, "open_config", k), Some(Click::OpenConfig));
+        let r = focus.rect_of("apply").unwrap();
+        assert!(r.x1() <= (W as f32 - 21.0) * k && r.y >= (H as f32 - FOOT_H) * k, "{r:?}");
+    }
 }
 
-fn click_at(x: f32, y: f32, k: f32) -> Input {
-    let (x, y) = ((x * k) as i32, (y * k) as i32);
+/// General's switches and swatches act where drawn.
+#[test]
+fn general_controls_click() {
+    let mut s = sample();
+    let mut focus = FocusState::default();
+    click(&mut s, &mut focus, "shutter_sound", 1.0);
+    assert!(s.form.shutter);
+    click(&mut s, &mut focus, "copy_after_capture", 1.0);
+    assert!(!s.form.copy_after);
+    click(&mut s, &mut focus, "show_tray", 1.0);
+    assert!(!s.form.show_tray);
+    click(&mut s, &mut focus, "accent_teal", 1.5);
+    assert_eq!(s.form.accent, 1);
+    s.form.theme = 1; // Dark
+    assert_eq!(s.preview_theme().accent, crate::uifb::C4::rgb(0x5C, 0xC8, 0xC2), "previewed before Apply");
+    s.form.theme = 0;
+    click(&mut s, &mut focus, "accent_custom", 1.0);
+    assert_eq!(s.form.accent, ACCENT_CUSTOM);
+    assert!(focus.is_focused("accent_hex"));
+    // Theme: Light.
+    render(&mut s, &DARK, 1.0, &Input::default(), &mut focus);
+    let r = focus.rect_of("theme").unwrap();
+    let (x, y) = ((r.x1() - 12.0) as i32, (r.y + r.h / 2.0) as i32);
     let mut input = Input::default();
     for e in [Ev::Move { x, y }, Ev::Down { x, y }, Ev::Up { x, y }] {
         input.feed(&e);
     }
-    input
-}
-
-/// The buttons click where they are drawn, at 100 % and 150 %; the
-/// rightmost is Apply (disabled until something changes), then Cancel.
-#[test]
-fn buttons_click_where_drawn() {
-    for k in [1.0f32, 1.5] {
-        let y = H as f32 - PAD - 16.0;
-        let mut s = sample();
-        let (_, c) = render(&mut s, &DARK, k, &click_at(W as f32 - PAD - 20.0, y, k), &mut FocusState::default());
-        assert_eq!(c, None, "Apply is disabled while nothing changed");
-        s.form.ask = true;
-        let (_, c) = render(&mut s, &DARK, k, &click_at(W as f32 - PAD - 20.0, y, k), &mut FocusState::default());
-        assert_eq!(c, Some(Click::Apply), "k={k}");
-        let cancel_x = W as f32 - PAD - button_w("Apply") - GAP - 20.0;
-        let (_, c) = render(&mut s, &DARK, k, &click_at(cancel_x, y, k), &mut FocusState::default());
-        assert_eq!(c, Some(Click::Cancel), "k={k}");
+    render(&mut s, &DARK, 1.0, &input, &mut focus);
+    assert_eq!(s.form.theme, 2, "Light");
+    assert!(s.dirty());
+    // The PNG / JPG choice in General.
+    let r = focus.rect_of("format").unwrap();
+    let (x, y) = ((r.x1() - 12.0) as i32, (r.y + r.h / 2.0) as i32);
+    let mut input = Input::default();
+    for e in [Ev::Move { x, y }, Ev::Down { x, y }, Ev::Up { x, y }] {
+        input.feed(&e);
     }
+    render(&mut s, &DARK, 1.0, &input, &mut focus);
+    assert_eq!(s.form.format, 1, "JPG");
 }
 
-fn button_w(label: &str) -> f32 {
-    let mut w = 0.0;
-    preview::render(W, H, 1.0, &DARK, &Input::default(), &mut FocusState::default(), |ui| w = ui.button_width(label));
-    w
-}
-
-/// Clicking a token button inserts it into the pattern field at its caret
-/// and gives the field the focus back.
+/// Capture's controls: Reset tool sizes, snapping, a token click into the
+/// pattern at its caret.
 #[test]
-fn token_button_click_inserts() {
+fn capture_controls_click() {
     let mut s = sample();
-    s.tab = 1;
+    s.section = CAPTURE;
+    let mut focus = FocusState::default();
+    // Below the fold: a click there lands nowhere until scrolled to.
+    render(&mut s, &DARK, 1.0, &Input::default(), &mut focus);
+    assert_eq!(click(&mut s, &mut focus, "reset_tools", 1.0), None, "outside the viewport");
+    s.scroll[CAPTURE] = 1e6;
+    assert_eq!(click(&mut s, &mut focus, "reset_tools", 1.0), Some(Click::ResetTools));
+    click(&mut s, &mut focus, "snap_windows", 1.0);
+    assert!(!s.form.snap);
+    let mut s = sample();
+    s.section = CAPTURE;
     s.form.filename.set("ab");
     s.form.filename.select(1..1);
     let mut focus = FocusState::default();
-    // Hour (00-23) is the 2nd button of the second column.
-    let (gy, col_w) = token_grid_y();
-    let x = PAD + col_w + TOKEN_GAP + 40.0;
-    render(&mut s, &DARK, 1.0, &click_at(x, gy + TOKEN_H + TOKEN_GAP + TOKEN_H / 2.0, 1.0), &mut focus);
+    click(&mut s, &mut focus, "token6", 1.0); // Hour (00-23)
     assert_eq!(s.form.filename.text, "a%Hb");
-    assert!(focus.is_focused("filename"));
+    assert!(focus.is_focused("filename_pattern"));
 }
 
-/// The token grid's top and column width (logical px), laid out as
-/// `saving` does it.
-fn token_grid_y() -> (f32, f32) {
-    let (mut y, mut w) = (0.0, 0.0);
-    preview::render(W, H, 1.0, &DARK, &Input::default(), &mut FocusState::default(), |ui| {
-        let body = FRect { x: PAD, y: BODY_Y, w: W as f32 - 2.0 * PAD, h: 300.0 };
-        ui.area(body, |ui| {
-            ui.lay.gap = 6.0;
-            for _ in 0..4 {
-                ui.row(|ui| ui.width(LABEL_W).label("x"));
-            }
-            ui.heading("File name");
-            y = ui.cursor_y();
-            w = token_col_w(ui);
-        });
-    });
-    (y, w)
-}
-
-/// A click on a shortcut row starts recording its new keys; the next
-/// chord rebinds it.
+/// A global row: a click records ("Press shortcut…"), the next chord
+/// binds it, Esc cancels, Backspace unbinds.
 #[test]
-fn row_click_records_then_rebinds() {
+fn key_rows_record_then_rebind() {
     let mut s = sample();
-    s.tab = 2;
+    s.section = KEYS;
     let mut focus = FocusState::default();
-    render(&mut s, &DARK, 1.0, &Input::default(), &mut focus);
-    // Header row is 28 px; the first body row (Pencil) under it.
-    render(&mut s, &DARK, 1.0, &click_at(PAD + 40.0, BODY_Y + 28.0 + 14.0, 1.0), &mut focus);
-    assert_eq!(s.table.selected, Some(0));
-    let mut input = Input::default();
-    input.feed(&Ev::Key { vk: 'K' as u32, up: false, repeat: false, mods: crate::wind::Mods { shift: true, ctrl: false, alt: false } });
-    render(&mut s, &DARK, 1.0, &input, &mut focus);
-    assert_eq!(s.form.keys.chords(Action::ToolPencil), [Chord::parse("Shift+K").unwrap()]);
-    // Backspace (while recording) unbinds.
-    focus.record("rebind");
-    let mut input = Input::default();
-    input.feed(&Ev::Key { vk: wind::key::BACK, up: false, repeat: false, mods: Default::default() });
-    render(&mut s, &DARK, 1.0, &input, &mut focus);
-    assert!(s.form.keys.chords(Action::ToolPencil).is_empty());
+    click(&mut s, &mut focus, "global3", 1.0);
+    assert!(focus.is_recording("global3"));
+    let ctrl_alt = wind::Mods { ctrl: true, alt: true, shift: false };
+    render(&mut s, &DARK, 1.0, &press('F' as u32, ctrl_alt), &mut focus);
+    assert_eq!(s.form.full, Chord::parse("Ctrl+Alt+F"));
+    assert!(!focus.is_recording("global3"));
+    // Esc cancels.
+    focus.record("global3");
+    render(&mut s, &DARK, 1.0, &press(wind::key::ESCAPE, Default::default()), &mut focus);
+    assert_eq!(s.form.full, Chord::parse("Ctrl+Alt+F"));
+    assert!(!focus.is_recording("global3"));
+    // Backspace unbinds.
+    focus.record("global3");
+    render(&mut s, &DARK, 1.0, &press(wind::key::BACK, Default::default()), &mut focus);
+    assert_eq!(s.form.full, None);
+    // An overlay cap: Text's.
+    click(&mut s, &mut focus, "key_tool_text", 1.0);
+    assert!(focus.is_recording("key_tool_text"));
+    render(&mut s, &DARK, 1.0, &press('Y' as u32, Default::default()), &mut focus);
+    assert_eq!(s.form.keys.chords(Action::ToolText), [Chord::parse("Y").unwrap()]);
+    // Reset to defaults in the header.
+    assert_eq!(click(&mut s, &mut focus, "reset_all", 1.0), Some(Click::ResetAll));
+}
+
+/// The overlay rows list every keymap action once.
+#[test]
+fn key_rows_cover_every_action() {
+    let mut all: Vec<Action> = KEY_ROWS.iter().flat_map(|(_, a)| a.iter().copied()).collect();
+    assert_eq!(all.len(), Action::ALL.len());
+    all.dedup();
+    for a in Action::ALL {
+        assert!(all.contains(&a), "{a:?}");
+    }
+}
+
+/// About: the links open only their fixed URLs, Check for updates the
+/// update dialog.
+#[test]
+fn about_links() {
+    let mut s = sample();
+    s.section = ABOUT;
+    let mut focus = FocusState::default();
+    assert_eq!(click(&mut s, &mut focus, "check_updates_now", 1.0), Some(Click::CheckUpdates));
+    for (label, url) in crate::actions::LINKS.iter().take(5) {
+        assert_eq!(click(&mut s, &mut focus, &format!("link_{label}"), 1.0), Some(Click::Link(url)), "{label}");
+    }
+    assert_eq!(click(&mut s, &mut focus, "link_powernapps", 1.0), Some(Click::Link("https://powernapps.net")));
+    click(&mut s, &mut focus, "check_updates", 1.0);
+    assert!(!s.form.check_updates);
 }
 
 /// Smoke (needs a display; CI runs it under `xvfb-run` on Linux): the real

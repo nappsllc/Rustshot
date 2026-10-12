@@ -1,8 +1,7 @@
 //! Single-line text field: caret, selection, clipboard, horizontal scroll.
 //! No IME (out of scope) and no caret blink (frames are input-driven).
 
-use super::controls::{field_frame, text_size};
-use super::layout::H;
+use super::controls::field_frame;
 use super::{id_of, Clipboard, KeyIn, Ui};
 use crate::objects::FRect;
 use crate::uifb::text_width;
@@ -199,12 +198,14 @@ impl Ui<'_> {
     /// An editable single-line field (fills the row unless `width` is set).
     /// Returns whether the text changed this frame.
     pub fn text_field(&mut self, id: &str, st: &mut TextState) -> bool {
-        let r = self.alloc(None, H);
+        let r = self.alloc(None, self.ctl_h);
         let id = id_of(id);
         self.focusable(id);
-        let px = self.px(text_size());
+        let px = self.px(self.text_px);
         let pad = self.px(10.0);
-        let inner = FRect { x: r.x + pad, y: r.y, w: (r.w - 2.0 * pad).max(1.0), h: r.h };
+        let icon = self.field_icon.take();
+        let pad_l = if icon.is_some() { self.px(32.0) } else { pad };
+        let inner = FRect { x: r.x + pad_l, y: r.y, w: (r.w - pad_l - pad).max(1.0), h: r.h };
         let font = &crate::fonts::UI;
         let mut changed = false;
 
@@ -257,6 +258,11 @@ impl Ui<'_> {
 
         let focused = self.focus.focused == Some(id) && self.enabled;
         field_frame(self, r, focused, self.hovered(r));
+        if let Some(name) = icon {
+            let sz = self.px(16.0);
+            let c = th_icon(self);
+            crate::icon_path::draw_icon(&mut self.fb, name, r.x + pad, (r.y + (r.h - sz) / 2.0).round(), sz, c);
+        }
         let th = self.theme;
         let fade = if self.enabled { 1.0 } else { 0.4 };
         let (sel, caret, scroll) = (st.selection(), st.caret, st.scroll);
@@ -293,4 +299,9 @@ impl Ui<'_> {
         });
         changed
     }
+}
+
+/// The field icon's colour (dimmed when disabled).
+fn th_icon(ui: &Ui) -> crate::uifb::C4 {
+    ui.theme.icon.fade(if ui.enabled { 1.0 } else { 0.4 })
 }

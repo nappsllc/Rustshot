@@ -64,6 +64,35 @@ pub fn toggle_autostart() -> Result<bool, String> {
     Ok(on)
 }
 
+/// The links of Settings → About: the only URLs [`open_link`] opens.
+pub const LINKS: [(&str, &str); 6] = [
+    ("Website", "https://powernapps.net"),
+    ("Source on GitHub", "https://github.com/nappsllc/rustshot"),
+    ("Report an issue", "https://github.com/nappsllc/rustshot/issues"),
+    ("What's new", "https://github.com/nappsllc/rustshot/releases"),
+    ("Licenses", "https://github.com/nappsllc/rustshot/blob/main/THIRD_PARTY_NOTICES.md"),
+    ("powernapps.net", "https://powernapps.net"),
+];
+
+/// Open one of [`LINKS`] in the default browser; any other URL is refused.
+pub fn open_link(url: &str) {
+    if !LINKS.iter().any(|(_, u)| *u == url) {
+        eprintln!("refusing to open an unexpected URL");
+        return;
+    }
+    #[cfg(windows)]
+    {
+        use std::ffi::OsStr;
+        if let Some(exe) = crate::proc_win::system_exe("rundll32.exe") {
+            let _ = crate::proc_win::spawn_detached(&exe, &[OsStr::new("url.dll,FileProtocolHandler"), OsStr::new(url)], &[]);
+        }
+    }
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").arg(url).spawn();
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+}
+
 /// The tasks of a capture with `copy_after_capture` applied: one that
 /// saves or uploads also copies the image (once).
 pub fn after_capture(mut tasks: Vec<crate::export::Task>, cfg: &crate::config::Config) -> Vec<crate::export::Task> {

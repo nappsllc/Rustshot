@@ -26,7 +26,8 @@ pub enum HotEvent {
     CaptureWindow,
     /// The last capture's region again, saved like it.
     RepeatLast,
-    /// A global hotkey was pressed: slot `i` ([`SLOT_KEYS`]). The daemon
+    /// A global hotkey was pressed: slot `i` (0 capture, 1 quit, 2 record,
+    /// 3 full screen, 4 window, 5 repeat). The daemon
     /// runs [`slot_event`]`(i)`, or, with the overlay open, hands the chord
     /// to the overlay as a key (Ctrl+Shift+S is Save As in there).
     Pressed(usize),
@@ -37,10 +38,6 @@ pub enum HotEvent {
 
 /// Global hotkey slots: capture, quit, record, full screen, window, repeat.
 pub const SLOTS: usize = 6;
-
-/// The config key of each slot (`Failure::slot` indexes it).
-pub const SLOT_KEYS: [&str; SLOTS] =
-    ["capture_hotkey", "quit_hotkey", "record_hotkey", "capture_full_hotkey", "capture_window_hotkey", "repeat_hotkey"];
 
 /// Global hotkeys backed by Win32 `RegisterHotKey` (replaces the
 /// `global-hotkey` crate). Registration and the message loop run on a
@@ -133,7 +130,7 @@ pub fn wanted(cfg: &Config) -> [String; SLOTS] {
 /// A hotkey `reload` could not register.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Failure {
-    /// Index into [`SLOT_KEYS`]: 0 = capture, 1 = quit, 2 = record, 3 =
+    /// The slot: 0 = capture, 1 = quit, 2 = record, 3 =
     /// full screen, 4 = window, 5 = repeat.
     pub slot: usize,
     pub wanted: String,
@@ -701,7 +698,6 @@ mod tests {
         assert!(matches!(slot_event(3), HotEvent::CaptureFull));
         assert!(matches!(slot_event(4), HotEvent::CaptureWindow));
         assert!(matches!(slot_event(5), HotEvent::RepeatLast));
-        assert_eq!(SLOT_KEYS[5], "repeat_hotkey");
         let mut calls = Vec::new();
         let (now, f) = plan_reload(&s2("", ""), &w, registrar(&["Ctrl+Shift+W"], &mut calls));
         assert_eq!(now[4], "");

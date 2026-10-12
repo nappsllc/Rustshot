@@ -4,6 +4,10 @@
 //! states, the accent tint of an active tool, popover surfaces with the
 //! shadow stack, and an accent focus ring for keyboard focus.
 
+// The kit keeps controls no window uses right now (the table, tabs,
+// labels, the old key box): tested in ui/tests.rs, there for the next one.
+#![cfg_attr(not(test), allow(dead_code))]
+
 use super::layout::H;
 use super::{contains, id_of, Popup, Ui};
 use crate::editor::style::{self as chrome, chord_caps, ALL_LAYERS};
@@ -14,55 +18,50 @@ use crate::objects::FRect;
 use crate::uifb::{text_height, text_width, C4};
 use crate::wind::key;
 
-/// Body text size of every control (logical px; the hint line's size).
-pub(super) fn text_size() -> f32 {
-    13.0
-}
-
 const RADIUS: f32 = 8.0;
 const DISABLED: f32 = 0.4;
 const ITEM_H: f32 = 28.0;
 
 /// Text width at `size` logical px, in logical px.
-fn tw(ui: &Ui, size: f32, s: &str) -> f32 {
+pub(super) fn tw(ui: &Ui, size: f32, s: &str) -> f32 {
     text_width(&crate::fonts::UI, ui.px(size), s) / ui.k
 }
 
 /// Draw `s` at `size` vertically centred on `cy` (physical px).
-fn text(ui: &mut Ui, size: f32, s: &str, x: f32, cy: f32, c: C4) -> f32 {
+pub(super) fn text(ui: &mut Ui, size: f32, s: &str, x: f32, cy: f32, c: C4) -> f32 {
     let font = &crate::fonts::UI;
     let px = ui.px(size);
     ui.fb.draw_text(font, px, s, x.round(), (cy - text_height(font, px) / 2.0).round(), c)
 }
 
-fn fill(ui: &mut Ui, r: FRect, radius: f32, c: C4) {
+pub(super) fn fill(ui: &mut Ui, r: FRect, radius: f32, c: C4) {
     let rad = ui.px(radius);
     chrome::fill(&mut ui.fb, chrome::round(r), rad, c);
 }
 
-fn ring(ui: &mut Ui, r: FRect, radius: f32, c: C4) {
+pub(super) fn ring(ui: &mut Ui, r: FRect, radius: f32, c: C4) {
     let cu = ui.chrome();
     let rad = ui.px(radius);
     chrome::ring(&mut ui.fb, &cu, chrome::round(r), rad, c);
 }
 
-fn grow(r: FRect, d: f32) -> FRect {
+pub(super) fn grow(r: FRect, d: f32) -> FRect {
     FRect { x: r.x - d, y: r.y - d, w: r.w + 2.0 * d, h: r.h + 2.0 * d }
 }
 
 /// 2 px accent ring 2 px outside `r` (keyboard focus).
-fn focus_ring(ui: &mut Ui, r: FRect, radius: f32) {
+pub(super) fn focus_ring(ui: &mut Ui, r: FRect, radius: f32) {
     let (d, lw) = (ui.px(2.0), ui.px(2.0).round());
     let o = grow(r, d + lw / 2.0);
     let c = ui.theme.accent.fade(0.7);
     ui.fb.stroke_rounded(o, ui.px(radius) + d + lw / 2.0, lw, c);
 }
 
-fn show_focus(ui: &Ui, id: u64) -> bool {
+pub(super) fn show_focus(ui: &Ui, id: u64) -> bool {
     ui.enabled && ui.focus.focused == Some(id) && ui.focus.visible
 }
 
-fn fade(ui: &Ui) -> f32 {
+pub(super) fn fade(ui: &Ui) -> f32 {
     if ui.enabled { 1.0 } else { DISABLED }
 }
 
@@ -73,22 +72,22 @@ pub(super) fn field_frame(ui: &mut Ui, r: FRect, focused: bool, hovered: bool) {
     let k = fade(ui);
     // Recessed field fill (unlike the raised bg_hover of secondary buttons);
     // hover only strengthens the border.
-    fill(ui, r, RADIUS, th.field_bg.fade(k));
+    fill(ui, r, ui.radius, ui.field_fill.unwrap_or(th.field_bg).fade(k));
     if hovered && !focused && ui.enabled {
-        ring(ui, r, RADIUS, th.text_muted.fade(0.45));
+        ring(ui, r, ui.radius, th.text_muted.fade(0.45));
     } else if focused {
-        ring(ui, r, RADIUS, th.accent.fade(k));
+        ring(ui, r, ui.radius, th.accent.fade(k));
         let o = grow(r, ui.px(1.0));
         let lw = ui.px(2.0).round();
-        ui.fb.stroke_rounded(grow(o, lw / 2.0), ui.px(RADIUS) + ui.px(1.0) + lw / 2.0, lw, th.accent_ring);
+        ui.fb.stroke_rounded(grow(o, lw / 2.0), ui.px(ui.radius) + ui.px(1.0) + lw / 2.0, lw, th.accent_ring);
     } else {
-        ring(ui, r, RADIUS, th.border.fade(k));
+        ring(ui, r, ui.radius, th.border.fade(k));
     }
 }
 
 /// Mouse half of a push control: press captures, release over it clicks.
 /// Returns (hovered, pressed-look, clicked).
-fn press_logic(ui: &mut Ui, id: u64, r: FRect) -> (bool, bool, bool) {
+pub(super) fn press_logic(ui: &mut Ui, id: u64, r: FRect) -> (bool, bool, bool) {
     let hov = ui.hovered(r);
     if ui.pressed_in(r) {
         ui.focus.active = Some(id);
@@ -130,18 +129,6 @@ impl TableState {
         (y + rh > b.y && y < b.y1()).then_some(FRect { x: b.x, y, w: b.w, h: rh })
     }
 
-    /// Scroll so row `i` is in view in a table `h` logical px tall
-    /// (header included), as [`Ui::table`] will draw it.
-    pub fn reveal(&mut self, i: usize, h: f32) {
-        let (top, bot) = (i as f32 * ITEM_H, (i + 1) as f32 * ITEM_H);
-        let vh = h - ITEM_H;
-        if top < self.scroll || vh <= 0.0 {
-            self.scroll = top;
-        } else if bot > self.scroll + vh {
-            self.scroll = bot - vh;
-        }
-    }
-
     fn scroll_px(&self, rh: f32) -> f32 {
         self.scroll * rh / ITEM_H
     }
@@ -151,18 +138,12 @@ impl Ui<'_> {
     /// One line of body text.
     pub fn label(&mut self, s: &str) {
         let c = self.theme.text;
-        self.text_line(s, text_size(), c);
+        self.text_line(s, self.text_px, c);
     }
 
     /// Secondary text: muted and slightly smaller.
     pub fn note(&mut self, s: &str) {
         let c = self.theme.text_muted;
-        self.text_line(s, 12.0, c);
-    }
-
-    /// A [`Ui::note`] in the error colour (conflicts, invalid input).
-    pub fn error_note(&mut self, s: &str) {
-        let c = self.theme.error;
         self.text_line(s, 12.0, c);
     }
 
@@ -177,34 +158,10 @@ impl Ui<'_> {
 
     fn text_line(&mut self, s: &str, size: f32, c: C4) {
         let w = tw(self, size, s).ceil();
-        let h = if self.lay.in_row() { H } else { (size * 1.6).round() };
+        let h = if self.lay.in_row() { self.ctl_h } else { (size * 1.6).round() };
         let r = self.alloc(Some(w), h);
         let c = c.fade(fade(self));
         text(self, size, s, r.x, r.y + r.h / 2.0, c);
-    }
-
-    /// Text button styled as a link: accent text, underlined on hover.
-    /// Clicked like a button (release over it, Enter/Space while focused).
-    pub fn link(&mut self, id: &str, label: &str) -> bool {
-        let w = tw(self, text_size(), label).ceil();
-        let r = self.alloc(Some(w), H);
-        let id = id_of(id);
-        let focused = self.focusable(id);
-        let (hov, _, mut clicked) = press_logic(self, id, r);
-        clicked |= self.take_key(focused, &[key::RETURN, key::SPACE]);
-        let c = self.theme.accent_fg.fade(fade(self));
-        let cy = r.y + r.h / 2.0;
-        text(self, text_size(), label, r.x, cy, c);
-        if hov {
-            let lw = self.k.round().max(1.0);
-            let y = (cy + self.px(8.0)).round();
-            self.fb.fill_rect(r.x as i32, y as i32, r.w as i32, lw as i32, c);
-        }
-        if show_focus(self, id) {
-            let fr = FRect { x: r.x - self.px(4.0), y: cy - self.px(11.0), w: r.w + self.px(8.0), h: self.px(22.0) };
-            focus_ring(self, fr, 4.0);
-        }
-        clicked && self.enabled
     }
 
     /// Dim everything drawn so far (a modal question is up) and draw a
@@ -220,16 +177,11 @@ impl Ui<'_> {
         chrome::surface(&mut self.fb, &cu, pr, 12.0, layers, 1.0);
     }
 
-    /// Width `tabs` takes for `labels` (logical px), for centring it.
-    pub fn tabs_width(&self, labels: &[&str]) -> f32 {
-        labels.iter().map(|s| (tw(self, text_size(), s) + 2.0 * 14.0).ceil()).sum::<f32>() + 2.0 * 4.0
-    }
-
     /// Push button; `primary` is the accent-filled default action.
     /// Clicked by mouse release over it or Enter/Space while focused.
     pub fn button(&mut self, id: &str, label: &str, primary: bool) -> bool {
         let w = self.button_width(label);
-        let r = self.alloc(Some(w), H);
+        let r = self.alloc(Some(w), self.ctl_h);
         let id = id_of(id);
         let focused = self.focusable(id);
         let (hov, pressed, mut clicked) = press_logic(self, id, r);
@@ -249,24 +201,24 @@ impl Ui<'_> {
             let bg = if pressed { th.bg_pressed } else { th.bg_hover };
             (bg, th.text)
         };
-        fill(self, r, RADIUS, bg.fade(k));
+        fill(self, r, self.radius, bg.fade(k));
         if !primary {
             if hov && !pressed {
-                fill(self, r, RADIUS, th.bg_hover.fade(k));
+                fill(self, r, self.radius, th.bg_hover.fade(k));
             }
-            ring(self, r, RADIUS, th.border.fade(k));
+            ring(self, r, self.radius, th.border.fade(k));
         }
         if show_focus(self, id) {
-            focus_ring(self, r, RADIUS);
+            focus_ring(self, r, self.radius);
         }
-        let x = r.x + (r.w - self.px(tw(self, text_size(), label))) / 2.0;
-        text(self, text_size(), label, x, r.y + r.h / 2.0, fg.fade(k));
+        let x = r.x + (r.w - self.px(tw(self, self.text_px, label))) / 2.0;
+        text(self, self.text_px, label, x, r.y + r.h / 2.0, fg.fade(k));
         clicked && self.enabled
     }
 
     /// On/off switch. Returns whether it flipped.
     pub fn toggle(&mut self, id: &str, on: &mut bool) -> bool {
-        let r = self.alloc(Some(36.0), H);
+        let r = self.alloc(Some(36.0), self.ctl_h);
         let id = id_of(id);
         let focused = self.focusable(id);
         let (hov, _, mut clicked) = press_logic(self, id, r);
@@ -300,8 +252,8 @@ impl Ui<'_> {
     /// Choice from `items`; the list opens below the box (above when it
     /// would leave the window). Returns whether `sel` changed.
     pub fn dropdown(&mut self, id: &str, items: &[&str], sel: &mut usize) -> bool {
-        let wmax = items.iter().map(|s| tw(self, text_size(), s)).fold(0.0, f32::max);
-        let r = self.alloc(Some((wmax + 12.0 + 16.0 + 10.0 + 12.0).max(120.0).ceil()), H);
+        let wmax = items.iter().map(|s| tw(self, self.text_px, s)).fold(0.0, f32::max);
+        let r = self.alloc(Some((wmax + 12.0 + 16.0 + 10.0 + 12.0).max(120.0).ceil()), self.ctl_h);
         let id = id_of(id);
         let focused = self.focusable(id);
         let n = items.len();
@@ -394,13 +346,13 @@ impl Ui<'_> {
         let open = self.focus.open.is_some_and(|o| o.0 == id);
         field_frame(self, r, open, hov);
         if show_focus(self, id) && !open {
-            focus_ring(self, r, RADIUS);
+            focus_ring(self, r, self.radius);
         }
         let k = fade(self);
         let (tc, ic) = (self.theme.text.fade(k), self.theme.icon.fade(k));
         let cy = r.y + r.h / 2.0;
         if let Some(s) = items.get(*sel) {
-            text(self, text_size(), s, r.x + self.px(12.0), cy, tc);
+            text(self, self.text_px, s, r.x + self.px(12.0), cy, tc);
         }
         let isz = self.px(16.0);
         let ix = r.x1() - self.px(10.0) - isz;
@@ -411,13 +363,13 @@ impl Ui<'_> {
     /// Integer slider over `min..=max` with the value printed at its right.
     /// Drag, click, arrows (±1), PageUp/PageDown (±10), Home/End.
     pub fn slider(&mut self, id: &str, v: &mut u8, min: u8, max: u8) -> bool {
-        let r = self.alloc(None, H);
+        let r = self.alloc(None, self.ctl_h);
         let id = id_of(id);
         let focused = self.focusable(id);
         let old = *v;
         let (lo, hi) = (min.min(max), max.max(min));
         *v = (*v).clamp(lo, hi);
-        let vw = self.px(tw(self, text_size(), &hi.to_string()) + 12.0).round();
+        let vw = self.px(tw(self, self.text_px, &hi.to_string()) + 12.0).round();
         let kr = self.px(8.0);
         let (x0, x1) = (r.x + kr, r.x1() - vw - kr);
         let at = |x: f32| {
@@ -481,8 +433,8 @@ impl Ui<'_> {
             self.fb.stroke_circle(kx, cy, kr2 + self.px(2.0) + lw / 2.0, lw, th.accent.fade(0.7));
         }
         let s = v.to_string();
-        let sx = r.x1() - self.px(tw(self, text_size(), &s));
-        text(self, text_size(), &s, sx, cy, th.text.fade(k));
+        let sx = r.x1() - self.px(tw(self, self.text_px, &s));
+        text(self, self.text_px, &s, sx, cy, th.text.fade(k));
         *v != old
     }
 
@@ -490,7 +442,7 @@ impl Ui<'_> {
     /// Left/Right switch while focused. Returns whether `sel` changed.
     pub fn tabs(&mut self, id: &str, labels: &[&str], sel: &mut usize) -> bool {
         let pad = 4.0;
-        let ws: Vec<f32> = labels.iter().map(|s| (tw(self, text_size(), s) + 2.0 * 14.0).ceil()).collect();
+        let ws: Vec<f32> = labels.iter().map(|s| (tw(self, self.text_px, s) + 2.0 * 14.0).ceil()).collect();
         let total = ws.iter().sum::<f32>() + 2.0 * pad;
         let r = self.alloc(Some(total), H + 2.0 * pad);
         let id = id_of(id);
@@ -540,8 +492,8 @@ impl Ui<'_> {
                 fill(self, *s, RADIUS, th.bg_hover.fade(k));
             }
             let c = if active { th.accent_fg } else if hov { th.text } else { th.text_muted };
-            let x = s.x + (s.w - self.px(tw(self, text_size(), labels[i]))) / 2.0;
-            text(self, text_size(), labels[i], x, s.y + s.h / 2.0, c.fade(k));
+            let x = s.x + (s.w - self.px(tw(self, self.text_px, labels[i]))) / 2.0;
+            text(self, self.text_px, labels[i], x, s.y + s.h / 2.0, c.fade(k));
         }
         if show_focus(self, id) {
             focus_ring(self, r, RADIUS + pad);
@@ -639,7 +591,7 @@ impl Ui<'_> {
         let sel = st.selected;
         let hover_row = (self.hovered(body)).then(|| ((self.input.mouse.y - body.y + scroll) / rh) as usize);
         let font = &crate::fonts::UI;
-        let px = self.px(text_size());
+        let px = self.px(self.text_px);
         let first = (scroll / rh) as usize;
         let ui_k = self.k;
         // Rows in a conflict: red text and an alert icon after the first cell.
@@ -703,7 +655,7 @@ impl Ui<'_> {
     /// modifier keys alone wait for the key. Esc is recorded like any key.
     /// Returns whether `chord` changed.
     pub fn key_capture(&mut self, id: &str, chord: &mut Option<Chord>) -> bool {
-        let r = self.alloc(Some(200.0), H);
+        let r = self.alloc(Some(200.0), self.ctl_h);
         let id = id_of(id);
         let focused = self.focusable(id);
         let old = *chord;
@@ -750,10 +702,10 @@ impl Ui<'_> {
         let x0 = r.x + self.px(10.0);
         match (recording, chord.as_ref()) {
             (true, _) => {
-                text(self, text_size(), "Press a shortcut…", x0, cy, th.accent_fg.fade(k));
+                text(self, self.text_px, "Press a shortcut…", x0, cy, th.accent_fg.fade(k));
             }
             (false, None) => {
-                text(self, text_size(), "None", x0, cy, th.text_muted.fade(k));
+                text(self, self.text_px, "None", x0, cy, th.text_muted.fade(k));
             }
             (false, Some(c)) => {
                 let mut x = x0;
@@ -773,12 +725,12 @@ impl Ui<'_> {
     }
 }
 
-fn is_modifier(vk: u32) -> bool {
+pub(super) fn is_modifier(vk: u32) -> bool {
     matches!(vk, 0x10..=0x12 | 0x5B | 0x5C | 0xA0..=0xA5 | 0x14)
 }
 
 /// Linear mix of two opaque colours (`t` of `b`).
-fn mix(a: C4, b: C4, t: f32) -> C4 {
+pub(super) fn mix(a: C4, b: C4, t: f32) -> C4 {
     let l = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
     C4::new(l(a.r, b.r), l(a.g, b.g), l(a.b, b.b), a.a)
 }
@@ -801,7 +753,7 @@ pub(super) fn draw_popup(ui: &mut Ui, items: &[String], r: FRect, sel: usize, ho
         }
         let cy = ir.y + ih / 2.0;
         let c = if i == sel { th.accent_fg } else { th.text };
-        text(ui, text_size(), s, ir.x + ui.px(8.0), cy, c);
+        text(ui, ui.text_px, s, ir.x + ui.px(8.0), cy, c);
         if i == sel {
             let isz = ui.px(16.0);
             let ix = ir.x1() - ui.px(8.0) - isz;
@@ -860,25 +812,20 @@ impl Ui<'_> {
     /// not drawn.
     pub fn paragraph(&mut self, s: &str, muted: bool) {
         let w = self.bounds().w;
-        let lines = wrap(s, w, |t| tw(self, text_size(), t));
+        let lines = wrap(s, w, |t| tw(self, self.text_px, t));
         let r = self.alloc(None, lines.len() as f32 * LINE_H);
         let c = if muted { self.theme.text_muted } else { self.theme.text };
         let c = c.fade(fade(self));
         let lh = self.px(LINE_H);
         let n = ((r.h + 0.5) / lh).floor().max(0.0) as usize;
         for (i, l) in lines.iter().take(n).enumerate() {
-            text(self, text_size(), l, r.x, r.y + (i as f32 + 0.5) * lh, c);
+            text(self, self.text_px, l, r.x, r.y + (i as f32 + 0.5) * lh, c);
         }
-    }
-
-    /// Width of `s` as body text (logical px).
-    pub fn text_width(&self, s: &str) -> f32 {
-        tw(self, text_size(), s)
     }
 
     /// Height `paragraph` takes for `s` at width `w` (logical px).
     pub fn paragraph_height(&self, s: &str, w: f32) -> f32 {
-        wrap(s, w, |t| tw(self, text_size(), t)).len() as f32 * LINE_H
+        wrap(s, w, |t| tw(self, self.text_px, t)).len() as f32 * LINE_H
     }
 
     /// Bordered, read-only box of wrapped text (release notes) that
@@ -901,7 +848,7 @@ impl Ui<'_> {
         let inner_w = r.w / self.k - 2.0 * pad;
         let wrap_all = |ui: &Self, w: f32| -> Vec<(String, bool)> {
             (src.iter())
-                .flat_map(|&(l, m)| wrap(l, w, |t| tw(ui, text_size(), t)).into_iter().map(move |l| (l, m)))
+                .flat_map(|&(l, m)| wrap(l, w, |t| tw(ui, ui.text_px, t)).into_iter().map(move |l| (l, m)))
                 .collect()
         };
         let mut lines = wrap_all(self, inner_w);
@@ -942,7 +889,7 @@ impl Ui<'_> {
         fill(self, r, RADIUS, th.bg_hover.fade(0.6 * k));
         let body = FRect { x: r.x, y: r.y + self.px(VIEW_PAD_Y), w: r.w, h: r.h - self.px(2.0 * VIEW_PAD_Y) };
         let font = &crate::fonts::UI;
-        let px = self.px(text_size());
+        let px = self.px(self.text_px);
         let lh = self.px(LINE_H);
         let off = self.px(*scroll);
         let x = (r.x + self.px(pad)).round();
@@ -972,7 +919,7 @@ impl Ui<'_> {
     /// A Lucide icon (`icon_path` name) in a `size` box, vertically centred
     /// in a row.
     pub fn icon(&mut self, name: &str, size: f32, c: C4) {
-        let h = if self.lay.in_row() { H } else { size };
+        let h = if self.lay.in_row() { self.ctl_h } else { size };
         let r = self.alloc(Some(size), h);
         let s = self.px(size);
         let c = c.fade(fade(self));
@@ -982,6 +929,6 @@ impl Ui<'_> {
     /// Width `button` takes for `label` (logical px), for laying out a
     /// right-aligned button row.
     pub fn button_width(&self, label: &str) -> f32 {
-        (tw(self, text_size(), label) + 2.0 * 16.0).max(84.0).ceil()
+        (tw(self, self.text_px, label) + 2.0 * 16.0).max(84.0).ceil()
     }
 }

@@ -14,11 +14,13 @@
 //! Coordinates: layout values are logical px; the frame buffer and mouse
 //! positions are physical px; `Ui::k` is physical px per logical px.
 
+pub mod compact;
 pub mod controls;
 pub mod folder_dialog;
 pub mod layout;
 mod text_field;
 
+#[cfg(test)]
 pub use controls::{Col, Row, TableState};
 pub use text_field::TextState;
 
@@ -170,6 +172,9 @@ pub struct FocusState {
     prev: Vec<u64>,
     /// Tab (false) / Shift+Tab (true) seen before any focus order was known.
     pending_tab: Option<bool>,
+    /// Tests: where each focusable control was last drawn (physical px).
+    #[cfg(test)]
+    rects: std::collections::HashMap<u64, FRect>,
 }
 
 impl FocusState {
@@ -185,9 +190,22 @@ impl FocusState {
     /// Focus key_capture `id` and start recording, as a click on it does
     /// (call after the frame's controls are drawn: a press this frame
     /// would otherwise stop the recording again).
+    #[cfg(test)]
     pub fn record(&mut self, id: &str) {
         self.set(Some(id_of(id)), false);
         self.recording = Some(id_of(id));
+    }
+
+    /// Tests: where control `id` was last drawn (physical px).
+    #[cfg(test)]
+    pub fn rect_of(&self, id: &str) -> Option<FRect> {
+        self.rects.get(&id_of(id)).copied()
+    }
+
+    /// Whether `id` is recording a shortcut.
+    #[cfg(test)]
+    pub fn is_recording(&self, id: &str) -> bool {
+        self.recording == Some(id_of(id))
     }
 
     /// Whether any dropdown list is open or a shortcut is being recorded
@@ -340,6 +358,27 @@ pub struct Ui<'a> {
     /// key_capture records a held Win/Super key (global hotkeys; editor
     /// shortcuts cannot use it).
     pub allow_meta: bool,
+    /// Body text size of the controls (logical px): 13, or 12 in the
+    /// Settings window's compact style.
+    pub text_px: f32,
+    /// Corner radius of fields and buttons (logical px).
+    pub radius: f32,
+    /// An icon drawn at the left inside the next text field (taken by it).
+    pub field_icon: Option<&'static str>,
+    /// Height of single-line controls (logical px): the toolbar's 32, or
+    /// 28 in the compact style.
+    pub ctl_h: f32,
+    /// Fill of text fields, dropdowns and shortcut boxes instead of the
+    /// theme's recessed `field_bg`.
+    pub field_fill: Option<crate::uifb::C4>,
+    /// Pointer input only lands inside this rect (physical px): a
+    /// scrolled area's controls outside its viewport are inert.
+    pub input_clip: Option<FRect>,
+    /// The keyboard-focused control's rect this frame (physical px), for
+    /// scrolling it into view.
+    pub focus_rect: Option<FRect>,
+    /// The last rect `alloc` handed out (physical px).
+    pub(crate) last_alloc: FRect,
     pub(crate) lay: Layout,
     /// `used[i]`: `input.keys[i]` was consumed.
     used: Vec<bool>,
@@ -375,6 +414,14 @@ impl<'a> Ui<'a> {
             clip,
             enabled: true,
             allow_meta: false,
+            text_px: 13.0,
+            radius: 8.0,
+            ctl_h: layout::H,
+            field_icon: None,
+            field_fill: None,
+            input_clip: None,
+            focus_rect: None,
+            last_alloc: FRect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 },
             lay: Layout::new(area),
             used: vec![false; input.keys.len()],
             seen: Default::default(),
@@ -443,6 +490,11 @@ impl<'a> Ui<'a> {
         out
     }
 
+    /// Ask for another frame (something changed after drawing).
+    pub fn request_redraw(&mut self) {
+        self.redraw = true;
+    }
+
     /// Logical → physical px.
     pub fn px(&self, v: f32) -> f32 {
         v * self.k
@@ -460,6 +512,11 @@ impl<'a> Ui<'a> {
         if self.enabled {
             self.focus.order.push(id);
         }
+        if self.focus.focused == Some(id) && self.focus.visible {
+            self.focus_rect = Some(self.last_alloc);
+        }
+        #[cfg(test)]
+        self.focus.rects.insert(id, self.last_alloc);
         self.focus.focused == Some(id)
     }
 
@@ -473,10 +530,12 @@ impl<'a> Ui<'a> {
         self.enabled && self.input.pressed.is_some_and(|p| contains(r, p) && !self.blocked(p))
     }
 
-    /// Inside the open dropdown list (which belongs to its dropdown only).
+    /// Inside the open dropdown list (which belongs to its dropdown only),
+    /// or outside the clip.
     fn blocked(&self, p: Pt) -> bool {
-        self.block.is_some_and(|r| contains(r, p))
+        self.block.is_some_and(|r| contains(r, p)) || self.input_clip.is_some_and(|c| !contains(c, p))
     }
+
 
     /// Unconsumed key presses of this frame: (index, vk, mods).
     fn keys(&self) -> Vec<(usize, u32, Mods)> {
