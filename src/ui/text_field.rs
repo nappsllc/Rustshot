@@ -303,7 +303,7 @@ impl Ui<'_> {
     }
 }
 
-/// The field icon's colour (dimmed when disabled).
+/// The field icon's color (dimmed when disabled).
 fn th_icon(ui: &Ui) -> crate::uifb::C4 {
     ui.theme.icon.fade(if ui.enabled { 1.0 } else { 0.4 })
 }

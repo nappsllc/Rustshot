@@ -161,7 +161,7 @@ pub struct BarState<'a> {
     pub hover_k: f32,
     pub pressed: Option<usize>,
     pub tool: Option<Tool>,
-    /// The current tool's colour (the swatch, the size preview).
+    /// The current tool's color (the swatch, the size preview).
     pub color: C4,
     /// The current tool's size: the number, and the tool and size the
     /// preview next to it draws.
@@ -172,7 +172,7 @@ pub struct BarState<'a> {
     pub fill: bool,
     /// 0..1 opacity of the palette popover.
     pub pop_k: f32,
-    /// The colour picker's state while it is open.
+    /// The color picker's state while it is open.
     pub pick: Option<&'a Picker>,
 }
 
@@ -332,7 +332,7 @@ fn focus_ring(f: &mut Fb, ui: &Ui, r: FRect, radius: f32, k: f32) {
     f.stroke_rounded(FRect { x: r.x + g / 2.0, y: r.y + g / 2.0, w: r.w - g, h: r.h - g }, ui.px(radius) + g / 2.0, g, ui.th.accent.fade(k));
 }
 
-/// A grey checkerboard (what shows through a translucent colour) in `r`
+/// A grey checkerboard (what shows through a translucent color) in `r`
 /// with corner radius `rad` (anti-aliased edges; a circle when `rad` is
 /// half the side).
 fn checker(f: &mut Fb, ui: &Ui, r: FRect, rad: f32, k: f32) {
@@ -357,7 +357,7 @@ fn checker(f: &mut Fb, ui: &Ui, r: FRect, rad: f32, k: f32) {
 }
 
 /// A round swatch of radius `rad`: a checkerboard under a translucent
-/// colour, then the colour and its rim.
+/// color, then the color and its rim.
 pub(super) fn swatch_r(f: &mut Fb, ui: &Ui, cx: f32, cy: f32, rad: f32, c: C4, k: f32) {
     if c.a < 255 {
         checker(f, ui, FRect { x: cx - rad, y: cy - rad, w: 2.0 * rad, h: 2.0 * rad }, rad, k);
@@ -367,7 +367,7 @@ pub(super) fn swatch_r(f: &mut Fb, ui: &Ui, cx: f32, cy: f32, rad: f32, c: C4, k
     f.stroke_circle(cx, cy, rad - lw / 2.0, lw, ui.th.rim.fade(k));
 }
 
-/// A rainbow swatch (every hue around it): the colour picker.
+/// A rainbow swatch (every hue around it): the color picker.
 fn rainbow(f: &mut Fb, ui: &Ui, cx: f32, cy: f32, rad: f32, k: f32) {
     let (x0, x1) = ((cx - rad - 1.0).floor() as i32, (cx + rad + 1.0).ceil() as i32);
     let (y0, y1) = ((cy - rad - 1.0).floor() as i32, (cy + rad + 1.0).ceil() as i32);
@@ -380,7 +380,7 @@ fn rainbow(f: &mut Fb, ui: &Ui, cx: f32, cy: f32, rad: f32, k: f32) {
                 continue;
             }
             let h = dx.atan2(-dy).to_degrees();
-            // Paler towards the centre, like a colour wheel.
+            // Paler towards the centre, like a color wheel.
             let (r, g, b) = pick::hsv_to_rgb(h, (d / rad).clamp(0.0, 1.0) * 0.85 + 0.15, 1.0);
             f.blend_px(x, y, C4::rgb(r, g, b).fade(cov * k));
         }
@@ -389,7 +389,7 @@ fn rainbow(f: &mut Fb, ui: &Ui, cx: f32, cy: f32, rad: f32, k: f32) {
     f.stroke_circle(cx, cy, rad - lw / 2.0, lw, ui.th.rim.fade(k));
 }
 
-/// A picker thumb: the colour inside a white ring with a dark edge.
+/// A picker thumb: the color inside a white ring with a dark edge.
 fn thumb(f: &mut Fb, ui: &Ui, cx: f32, cy: f32, rad: f32, c: C4, k: f32) {
     f.fill_circle(cx, cy + ui.px(0.5), rad + ui.px(1.5), C4::new(0, 0, 0, 70).fade(k));
     f.fill_circle(cx, cy, rad + ui.px(1.0), C4::rgb(255, 255, 255).fade(k));
@@ -445,8 +445,8 @@ fn sv_square(f: &mut Fb, ui: &Ui, r: FRect, p: &Picker, focused: bool, k: f32) {
     thumb(f, ui, tx, ty, ui.px(5.0), p.color(), k);
 }
 
-/// The hex field: recessed, the text (in the error colour while it does
-/// not read as a colour), a caret while focused.
+/// The hex field: recessed, the text (in the error color while it does
+/// not read as a color), a caret while focused.
 fn hex_field(f: &mut Fb, ui: &Ui, r: FRect, p: &Picker, focused: bool, hovered: bool, k: f32) {
     let th = ui.th;
     let r = round(r);
@@ -468,7 +468,7 @@ fn hex_field(f: &mut Fb, ui: &Ui, r: FRect, p: &Picker, focused: bool, hovered: 
     }
 }
 
-/// The opacity slider: a checkered track fading in the colour, the thumb,
+/// The opacity slider: a checkered track fading in the color, the thumb,
 /// the percentage right of it.
 fn alpha_slider(f: &mut Fb, ui: &Ui, r: FRect, p: &Picker, focused: bool, k: f32) {
     let th = ui.th;
@@ -503,7 +503,7 @@ fn alpha_slider(f: &mut Fb, ui: &Ui, r: FRect, p: &Picker, focused: bool, k: f32
     text(f, ui, 12.0, &pct, r.x1() + ui.px(40.0) - w, cy, th.text.fade(k));
 }
 
-/// The camera ring's width and a stroke of it in its colour ("Off" at 0).
+/// The camera ring's width and a stroke of it in its color ("Off" at 0).
 fn ring_value(f: &mut Fb, ui: &Ui, r: FRect, w: u32, c: C4, k: f32) {
     let cy = r.y + r.h / 2.0;
     let n = w.to_string();
@@ -1293,7 +1293,7 @@ fn hint_panel(ui: &Ui, x: f32, cy: f32, total: f32) -> FRect {
 }
 
 /// The eyedropper's loupe: [`LOUPE_N`]² pixels around the pointer, each
-/// [`LOUPE_CELL`] logical px, and the colour under it.
+/// [`LOUPE_CELL`] logical px, and the color under it.
 pub const LOUPE_N: usize = 9;
 const LOUPE_CELL: f32 = 8.0;
 const LOUPE_PAD: f32 = 6.0;
@@ -1329,7 +1329,7 @@ pub fn loupe_rect(ui: &Ui, p: Pt, area: FRect, avoid: &[FRect]) -> FRect {
 }
 
 /// The loupe at `r`: the magnified pixels `px` (row by row), the centre
-/// one outlined, its colour as hex below.
+/// one outlined, its color as hex below.
 pub fn loupe(f: &mut Fb, ui: &Ui, r: FRect, px: &[C4]) {
     surface(f, ui, r, 10.0, &SMALL_LAYERS, 1.0);
     let cell = ui.px(LOUPE_CELL);

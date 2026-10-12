@@ -3,7 +3,7 @@
 //! capture, shutter sound, where and how captures are saved),
 //! **Capture** (daily subfolders, the file-name pattern editor, Save As,
 //! format and JPEG quality, the overlay's UI size, snapping and renderer,
-//! "Reset tool sizes & colours"), **Recording** (the Record popover's
+//! "Reset tool sizes & colors"), **Recording** (the Record popover's
 //! defaults: [`recording`]), **Key bindings** (the global hotkeys and the
 //! overlay keymap), **Upload** (Imgur) and **About**, with a footer of
 //! **OK** / **Cancel** / **Apply** (the board leaves it out; the window
@@ -78,7 +78,7 @@ pub const HISTORY_DAYS: [(u32, &str); 4] = [(7, "7 days"), (30, "30 days"), (90,
 pub const HISTORY_MB: [(u32, &str); 4] = [(1024, "1 GB"), (2048, "2 GB"), (5120, "5 GB"), (10240, "10 GB")];
 
 /// The accent swatches: Periwinkle (the theme's, `ui_color` empty), then
-/// [`crate::theme::ACCENTS`], then the custom colour.
+/// [`crate::theme::ACCENTS`], then the custom color.
 pub const ACCENT_CUSTOM: usize = 3;
 
 /// The global hotkeys of Key bindings, in board order: (label, hotkey
@@ -194,7 +194,7 @@ fn accent_value(i: usize) -> Option<String> {
 #[derive(Clone, Debug)]
 pub struct Form {
     pub theme: usize,
-    /// Accent swatch (`ui_color`), and the custom colour's text.
+    /// Accent swatch (`ui_color`), and the custom color's text.
     pub accent: usize,
     pub accent_hex: TextState,
     /// The UI size ([`uisize::LABELS`] index).
@@ -322,7 +322,7 @@ impl Form {
         if self.accent != was.accent || (self.accent == ACCENT_CUSTOM && self.accent_hex.text.trim() != was.accent_hex.text.trim()) {
             match accent_value(self.accent) {
                 Some(v) => c.ui_color = v,
-                // A custom colour that does not parse is not written.
+                // A custom color that does not parse is not written.
                 None if config::parse_color(self.accent_hex.text.trim()).is_some() => c.ui_color = self.accent_hex.text.trim().to_string(),
                 None => {}
             }
@@ -618,7 +618,7 @@ pub enum Click {
     Clear,
     /// Key bindings: "Reset to defaults" (every key and global hotkey).
     ResetAll,
-    /// "Reset tool sizes & colours": the tools' remembered settings go
+    /// "Reset tool sizes & colors": the tools' remembered settings go
     /// (from the file, at once).
     ResetTools,
     /// Capture › History: "Clear history…".
@@ -699,7 +699,7 @@ pub struct Settings {
     /// The hotkeys the daemon could not register as saved
     /// ([`hotkey::outstanding`]).
     pub hotkey_failures: Vec<hotkey::Failure>,
-    /// The tools' sizes and colours were reset (a note says so).
+    /// The tools' sizes and colors were reset (a note says so).
     tools_reset: bool,
     /// The Recording section's device lists and encoder status.
     rec_lists: recording::Lists,

@@ -110,7 +110,7 @@ fn form_writes_what_changed() {
 }
 
 /// Accent: the swatches write their `ui_color` (Periwinkle: none), a
-/// custom colour is written only when it parses.
+/// custom color is written only when it parses.
 #[test]
 fn accent_swatches_and_custom_colour() {
     let cfg = Config::default();
@@ -334,7 +334,7 @@ fn ui_size_is_a_capture_setting() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// "Reset tool sizes & colours" removes just those lines (comments and
+/// "Reset tool sizes & colors" removes just those lines (comments and
 /// everything else stay) and makes the daemon reload; a broken file is
 /// never touched.
 #[test]

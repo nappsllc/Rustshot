@@ -8,7 +8,7 @@
 //! ]}
 //! ```
 //!
-//! Points are `[x, y]`, rects `[x, y, w, h]` (image pixels), colours
+//! Points are `[x, y]`, rects `[x, y, w, h]` (image pixels), colors
 //! `#rrggbb` or `#rrggbbaa`. List order is z-order (first is bottom-most).
 //! Types: `pencil` (`pts`, `color`, `width`), `line` / `arrow` (`a`, `b`,
 //! `color`, `width`), `rect` / `ellipse` (`r`, `color`, `width`, `fill`),

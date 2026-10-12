@@ -133,11 +133,11 @@ pub struct GdiScreen {
     plain: MemBmp,
     /// `plain` dimmed by `dim` once; `None` when the dim alpha is 0.
     dimmed: Option<MemBmp>,
-    /// Theme dim colour with the full (settled) dim alpha.
+    /// Theme dim color with the full (settled) dim alpha.
     dim: C4,
     /// Image width x `BAND` rows: read-back and band staging.
     scratch: RefCell<Dib>,
-    /// 1x1 dim colour, the AlphaBlend source during the dim fade.
+    /// 1x1 dim color, the AlphaBlend source during the dim fade.
     swatch: Dib,
     /// Compose buffer reused across paints (one band of a rect).
     buf: RefCell<Vec<u8>>,
@@ -192,7 +192,7 @@ fn copy_opaque(d: &mut [u8], s: &[u8]) {
 
 impl GdiScreen {
     /// Capture the virtual-screen rect at `origin`/`size` (`BitBlt` from
-    /// the screen DC) and build the dimmed copy for `dim` (theme dim colour
+    /// the screen DC) and build the dimmed copy for `dim` (theme dim color
     /// with the settled alpha).
     pub fn capture(origin: (i32, i32), size: (u32, u32), dim: C4) -> Result<Self> {
         let s = Self::empty(size, dim)?;
@@ -322,7 +322,7 @@ impl GdiScreen {
         }
     }
 
-    /// Blend rows of `out` (BGRA) toward the dim colour, `times` over.
+    /// Blend rows of `out` (BGRA) toward the dim color, `times` over.
     fn dim_rows(&self, out: &mut [u8], r: PxRect, stride: usize, alpha: u8, times: u8) {
         let dm = Dimmer::new(bgra(self.dim.with_alpha(alpha)));
         let n = r.w() as usize * 4;
@@ -478,7 +478,7 @@ impl GdiScreen {
                     let _ = BitBlt(hdc, x, y, w, h, Some(dc), x, y, SRCCOPY);
                     true
                 }
-                // Dim fade-in: the plain capture, then the dim colour at
+                // Dim fade-in: the plain capture, then the dim color at
                 // this frame's alpha (a 1x1 source stretched).
                 Some((alpha, 1)) if dc == self.plain.dc => {
                     let _ = BitBlt(hdc, x, y, w, h, Some(dc), x, y, SRCCOPY);

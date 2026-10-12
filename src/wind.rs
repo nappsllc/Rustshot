@@ -157,7 +157,7 @@ pub fn follow_scale(hwnd: Hwnd, sized_for: &mut f32, w: u32, h: u32) -> f32 {
 }
 
 /// Window icon as `_NET_WM_ICON` data: `[w, h, ARGB pixels...]` decoded from
-/// an embedded PNG (any 8-bit colour type).
+/// an embedded PNG (any 8-bit color type).
 #[cfg(any(target_os = "linux", test))]
 pub(crate) fn icon_argb(png_bytes: &[u8]) -> Option<Vec<u32>> {
     let mut dec = png::Decoder::new(png_bytes);

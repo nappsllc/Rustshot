@@ -451,7 +451,7 @@ pub fn draw_glyph(fb: &mut crate::uifb::Fb, x: f32, y: f32, size: f32, c: crate:
     fb.fill_circle(x + 8.0 * k, y + 8.0 * k, GLYPH_DOT_R * k, c);
 }
 
-/// Monochrome tray glyph as straight-alpha RGBA, `size`x`size`, in colour `rgb`.
+/// Monochrome tray glyph as straight-alpha RGBA, `size`x`size`, in color `rgb`.
 /// Coverage is rasterised white-on-black into an opaque scratch buffer (the
 /// rasterizer assumes an opaque destination) and its red channel becomes alpha.
 #[cfg_attr(not(test), allow(dead_code))] // tests
@@ -459,7 +459,7 @@ pub fn tray_glyph_rgba(size: u32, rgb: (u8, u8, u8)) -> Vec<u8> {
     tray_glyph_rgba_rec(size, rgb, false)
 }
 
-/// The recording dot's colour.
+/// The recording dot's color.
 pub const REC_RED: (u8, u8, u8) = (0xF0, 0x3E, 0x3E);
 const REC_DOT_R: f32 = 3.6;
 
@@ -655,7 +655,7 @@ mod tests {
             let i = ((c * size + c) * 4) as usize;
             assert_eq!(&plain[i..i + 4], &[255, 255, 255, 255]);
             assert_eq!(&rec[i..i + 4], &[REC_RED.0, REC_RED.1, REC_RED.2, 255]);
-            // The brackets keep the theme colour.
+            // The brackets keep the theme color.
             let u = size as f32 / 16.0;
             let j = ((((2.1 * u) as u32) * size + (2.1 * u) as u32) * 4) as usize;
             assert!(rec[j + 3] > 100 && rec[j] == 255 && rec[j + 1] == 255, "{:?}", &rec[j..j + 4]);

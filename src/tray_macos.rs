@@ -1,7 +1,7 @@
 //! The macOS menu-bar icon: an `NSStatusItem` with the tray glyph as a
 //! template image (the menu bar tints it) and an `NSMenu` of the shared
 //! model (`tray::menu`), rebuilt each time it opens. While recording the
-//! glyph is drawn in the menu bar's colour with the red dot (a template
+//! glyph is drawn in the menu bar's color with the red dot (a template
 //! image would tint the dot too). Everything runs on the main thread:
 //! the calls here queue their work on the main queue, which the overlay's
 //! pump serves.

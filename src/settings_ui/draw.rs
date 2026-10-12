@@ -66,7 +66,7 @@ fn mark(ui: &mut Ui, x: f32, y: f32, size: f32) {
 }
 
 /// A board row (`.r`): `label` (and `help`, wrapped into the lines `h`
-/// has room for; `help_err` in the error colour) on the left, the
+/// has room for; `help_err` in the error color) on the left, the
 /// controls `f` draws laid out right to left on the right.
 pub fn srow_ex(ui: &mut Ui, tok: &Tok, label: &str, help: Option<&str>, help_err: bool, h: f32, f: impl FnOnce(&mut Ui)) {
     let b = ui.bounds();

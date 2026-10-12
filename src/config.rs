@@ -134,7 +134,7 @@ pub struct Config {
     pub record_hotkey: String,
     /// Linux MP4 encoder: "auto", "ffmpeg" or "openh264".
     pub rec_linux_encoder: String,
-    /// Recording: the camera bubble's ring colour (`#rrggbb`); empty = the
+    /// Recording: the camera bubble's ring color (`#rrggbb`); empty = the
     /// theme's accent.
     pub rec_camera_ring_color: String,
     /// Recording: the ring's width in logical px (0 = no ring).
@@ -142,13 +142,13 @@ pub struct Config {
     /// Recording: a GIF stops by itself after this many seconds (15, 30
     /// or 60; video mode's panel and Settings › Recording "Max length").
     pub rec_gif_max: u32,
-    /// The colour picker's recent custom colours, newest first (at most
+    /// The color picker's recent custom colors, newest first (at most
     /// [`RECENT_MAX`]).
     pub recent_colors: Vec<String>,
     /// Each drawing tool's last size (`tool_<id>_size`, ids in
     /// [`TOOL_IDS`]); a tool without one starts from the `draw_*` default.
     pub tool_sizes: BTreeMap<String, f32>,
-    /// Each drawing tool's last colour (`tool_<id>_color`).
+    /// Each drawing tool's last color (`tool_<id>_color`).
     pub tool_colors: BTreeMap<String, String>,
     /// Filled or outlined, for the shapes that can be either
     /// (`tool_<id>_fill`, ids in [`FILL_IDS`]).
@@ -161,7 +161,7 @@ pub struct Config {
     pub shortcuts: BTreeMap<String, String>,
 }
 
-/// The drawing tools whose size and colour are remembered
+/// The drawing tools whose size and color are remembered
 /// (`tool_<id>_size`, `tool_<id>_color`).
 pub const TOOL_IDS: [&str; 11] = ["pencil", "line", "arrow", "rect", "ellipse", "marker", "text", "counter", "pixelate", "callout", "magnify"];
 
@@ -169,7 +169,7 @@ pub const TOOL_IDS: [&str; 11] = ["pencil", "line", "arrow", "rect", "ellipse", 
 pub const FILL_IDS: [&str; 3] = ["rect", "ellipse", "callout"];
 
 /// Every remembered tool key (`tool_<id>_size`, `_color`, `_fill`): what
-/// Settings' "Reset tool sizes & colours" removes.
+/// Settings' "Reset tool sizes & colors" removes.
 pub fn tool_key_names() -> Vec<String> {
     let mut v: Vec<String> = TOOL_IDS.iter().flat_map(|id| [format!("tool_{id}_size"), format!("tool_{id}_color")]).collect();
     v.extend(FILL_IDS.iter().map(|id| format!("tool_{id}_fill")));
@@ -177,7 +177,7 @@ pub fn tool_key_names() -> Vec<String> {
     v
 }
 
-/// How many recent custom colours are kept.
+/// How many recent custom colors are kept.
 pub const RECENT_MAX: usize = 8;
 
 /// The camera ring's default width (logical px) and the widest it gets.

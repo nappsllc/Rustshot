@@ -63,7 +63,7 @@ fn item_properties() {
 }
 
 /// The icon: the glyph at 22/32/48 px, ARGB32 big-endian, in the
-/// panel's colour; the red dot while recording.
+/// panel's color; the red dot while recording.
 #[test]
 fn icon_pixmaps_are_argb_in_network_order() {
     let mut s = Sni::new(view(None));
