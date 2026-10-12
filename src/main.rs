@@ -23,6 +23,8 @@ mod icon_path;
 mod imgur;
 mod instance;
 mod keymap;
+// The capture launcher (tray "Capture…", `rustshot launcher`) and its delay.
+mod launcher;
 // Blocks, delegate classes and dispatch for the macOS recorder; the block
 // layout is tested everywhere.
 #[cfg(any(target_os = "macos", test))]
@@ -30,6 +32,8 @@ mod macos_objc;
 mod notice;
 mod objects;
 mod ocr;
+// "Open with…": the system's app chooser for a capture.
+mod open_with;
 mod perf;
 // Pin to screen: the selection as an always-on-top window.
 mod pin;
@@ -66,6 +70,8 @@ mod uisize;
 mod update;
 mod update_install;
 mod update_ui;
+// Imgur upload records (links, deletehashes) and deleting uploads.
+mod uploads;
 mod wind;
 
 use anyhow::{anyhow, Result};
@@ -96,6 +102,8 @@ enum Cmd {
     Update,
     /// Open the History window (in this process).
     History,
+    /// Open the capture launcher (in the running daemon, if any).
+    Launcher,
     /// Open the Settings window (in the running daemon, if any).
     Settings,
     /// Handle an `ms-screenclip:` URI (Win+Shift+S, Print Screen): the
@@ -154,6 +162,7 @@ Commands:
   update    Check for a newer release and open its download page
   settings  Open the Settings window
   history   Open the History window (captures kept, Edit)
+  launcher  Open the capture launcher (source, delay, what follows)
   config    Show or validate the config file (--check)
   register-screenclip on|off
             (Windows) Offer Rustshot for Win+Shift+S and Print Screen, or undo it
@@ -251,6 +260,12 @@ fn parse_from(args: &[String]) -> Result<Parsed, String> {
                 return Err(format!("unexpected argument '{a}'"));
             }
             Some(Cmd::Settings)
+        }
+        Some("launcher") => {
+            if let Some(a) = rest.first() {
+                return Err(format!("unexpected argument '{a}'"));
+            }
+            Some(Cmd::Launcher)
         }
         Some("screenclip") => match rest {
             [uri] => Some(Cmd::Screenclip(uri.clone())),
@@ -514,9 +529,8 @@ fn run_direct(cfg: &Config, args: &CaptureArgs, shot: Shot, region: Option<(i32,
     if let Some(rx) = res.upload {
         match export::wait_upload(rx, cfg.copy_url_after_upload) {
             Some(url) => {
-                if let Some(id) = entry.flatten() {
-                    history::update(&root, &id, move |m| m.uploaded = Some(url));
-                }
+                let id = entry.flatten();
+                uploads::finished(&url, id.as_deref().map(|id| (root.as_path(), id)));
             }
             None => code = 1,
         }
@@ -532,15 +546,24 @@ fn delayed(ms: u32) {
 }
 
 fn editor_main(cfg: Config, kind: RunKind, pending: Pending) -> i32 {
+    editor_run(cfg, kind, Some(pending))
+}
+
+/// [`editor_main`]; `None`: no capture yet (the launcher's countdown
+/// starts it).
+fn editor_run(cfg: Config, kind: RunKind, pending: Option<Pending>) -> i32 {
     let exit_code = Arc::new(AtomicI32::new(0));
     let slot: UploadSlot = Arc::new(Mutex::new(None));
-    let mut code = editor::run(cfg.clone(), kind, Some(pending), exit_code, slot.clone(), None);
+    let mut code = editor::run(cfg.clone(), kind, pending, exit_code, slot.clone(), None);
     // The history thread finishes writing before the process goes.
     history::flush(Duration::from_secs(30));
-    if let Some(rx) = slot.lock().unwrap().take()
-        && export::wait_upload(rx, cfg.copy_url_after_upload).is_none() {
-            code = 1;
+    if let Some(rx) = slot.lock().unwrap().take() {
+        match export::wait_upload(rx, cfg.copy_url_after_upload) {
+            Some(url) => uploads::finished(&url, None),
+            None => code = 1,
         }
+    }
+    history::flush(Duration::from_secs(30));
     code
 }
 
@@ -693,6 +716,16 @@ fn run() -> Result<()> {
             }
             Ok(())
         }
+        Cmd::Launcher => {
+            // A running daemon opens it and captures; otherwise the window
+            // runs here and the capture (after its countdown) follows.
+            if instance::signal_launcher() {
+                return Ok(());
+            }
+            let Some(plan) = launcher::run_here() else { return Ok(()) };
+            let pending = (plan.delay == 0).then(|| plan.pending());
+            exit(editor_run(config::load(), RunKind::OneShot, pending))
+        }
         Cmd::Update => {
             if let Some(channel) = update::update_channel() {
                 println!("Rustshot is managed by {channel}; update it there.");
@@ -738,6 +771,8 @@ fn run() -> Result<()> {
                 }
             };
             update_install::cleanup_previous();
+            // "Open with…" files of earlier days.
+            open_with::cleanup();
             screenclip_win::repoint_on_start();
             rec_ui::warm_mp4();
             let cfg = config::load();
@@ -745,10 +780,12 @@ fn run() -> Result<()> {
             let slot: UploadSlot = Arc::new(Mutex::new(None));
             let mut code = editor::run(cfg.clone(), RunKind::Daemon, None, exit_code, slot.clone(), guard);
             history::flush(Duration::from_secs(30));
-            if let Some(rx) = slot.lock().unwrap().take()
-                && export::wait_upload(rx, cfg.copy_url_after_upload).is_none() {
-                    code = 1;
+            if let Some(rx) = slot.lock().unwrap().take() {
+                match export::wait_upload(rx, cfg.copy_url_after_upload) {
+                    Some(url) => uploads::finished(&url, None),
+                    None => code = 1,
                 }
+            }
             exit(code);
         }
         Cmd::Gui(ref args) | Cmd::Full(ref args) | Cmd::Screen { ref args, .. } => {
