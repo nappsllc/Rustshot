@@ -19,6 +19,9 @@ pub enum Task {
     /// Print raw PNG bytes to stdout.
     Raw,
     Upload,
+    /// Recognize the text in the selection and copy it (OCR, [`crate::ocr`]):
+    /// the editor runs it on a worker thread after the export.
+    Text,
 }
 
 /// Day of year (1-366) for a civil date.
@@ -543,6 +546,7 @@ pub fn run_export(
                 };
                 upload = Some(spawn_upload(bytes, cfg.upload_client_id.clone()));
             }
+            Task::Text => {} // the caller's (it runs off the UI thread)
         }
     }
     ExportResult {

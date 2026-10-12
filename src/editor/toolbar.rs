@@ -20,8 +20,9 @@ const GROUP_GAP: f32 = 6.0;
 const SEP_LEN: f32 = 16.0;
 /// The size readout: the number, then a preview drawn at the size.
 const VALUE_W: f32 = 76.0;
-/// The busy-mode OK button spans the four output buttons it replaces.
-const ACCEPT_W: f32 = 5.0 * BTN + 4.0 * IN_GAP;
+/// The busy-mode OK button spans the output buttons it replaces (Copy,
+/// Copy text, Save, Save As, Save to Desktop, Upload).
+const ACCEPT_W: f32 = 6.0 * BTN + 5.0 * IN_GAP;
 const ROW_GAP: f32 = 4.0;
 const SEL_GAP: f32 = 8.0;
 const NARROW: f32 = 260.0;
@@ -58,6 +59,8 @@ pub enum Act {
     /// The rectangle / ellipse: filled or outlined.
     Fill,
     Copy,
+    /// Copy the selection's text (OCR).
+    CopyText,
     Save,
     /// The Save As dialog (always asks where).
     SaveAs,
@@ -320,6 +323,7 @@ fn groups(inp: &Input) -> [Group; 4] {
         }
         v.extend([
             (Kind::Btn(Act::Copy), false, BTN),
+            (Kind::Btn(Act::CopyText), false, BTN),
             (Kind::Btn(Act::Save), false, BTN),
             (Kind::Btn(Act::SaveAs), false, BTN),
             (Kind::Btn(Act::SaveDesktop), false, BTN),
@@ -692,9 +696,9 @@ mod tests {
 
     #[test]
     fn single_row_metrics() {
-        let tb = layout(&inp(r(100.0, 100.0, 840.0, 300.0)));
+        let tb = layout(&inp(r(100.0, 100.0, 860.0, 300.0)));
         assert!(!tb.wrapped);
-        assert_eq!((tb.bar.w, tb.bar.h), (869.0, 44.0));
+        assert_eq!((tb.bar.w, tb.bar.h), (903.0, 44.0));
         // 800 wide (+ the slack) is too narrow for the one row now.
         assert!(layout(&inp(r(100.0, 100.0, 800.0, 300.0))).wrapped);
     }
@@ -703,7 +707,7 @@ mod tests {
     /// are there but disabled (they consume the press).
     #[test]
     fn size_and_colour_controls_follow_the_tool() {
-        let mut i = inp(r(100.0, 100.0, 840.0, 300.0));
+        let mut i = inp(r(100.0, 100.0, 860.0, 300.0));
         i.sizes = false;
         i.colors = false;
         let tb = layout(&i);
@@ -713,15 +717,15 @@ mod tests {
             assert!(tb.contains(Pt::new(b.x + 5.0, b.y + 5.0)));
         }
         assert!(tb.items.iter().any(|it| it.kind == Kind::Value && it.disabled));
-        assert_eq!(tb.bar.w, 869.0, "same width");
+        assert_eq!(tb.bar.w, 903.0, "same width");
     }
 
     #[test]
     fn busy_swaps_outputs_for_ok_and_keeps_width() {
-        let mut i = inp(r(100.0, 100.0, 840.0, 300.0));
+        let mut i = inp(r(100.0, 100.0, 860.0, 300.0));
         i.busy = true;
         let tb = layout(&i);
-        assert_eq!(tb.bar.w, 869.0);
+        assert_eq!(tb.bar.w, 903.0);
         assert!(tb.items.iter().any(|it| it.kind == Kind::Btn(Act::Accept)));
         assert!(!tb.items.iter().any(|it| it.kind == Kind::Btn(Act::Copy)));
     }
@@ -730,7 +734,7 @@ mod tests {
     fn wraps_on_narrow_selection() {
         let tb = layout(&inp(r(100.0, 100.0, 440.0, 170.0)));
         assert!(tb.wrapped);
-        assert_eq!((tb.bar.w, tb.bar.h), (439.0, 85.0));
+        assert_eq!((tb.bar.w, tb.bar.h), (473.0, 85.0));
         assert!(tb.items.iter().any(|i| i.kind == Kind::SepH));
         assert!(btn(&tb, Act::Exit).y > btn(&tb, Act::Undo).y, "actions on row 2");
         assert!((btn(&tb, Act::Exit).x1() - (tb.bar.x1() - PAD)).abs() < 1e-3, "row 2 right-aligned");
@@ -784,7 +788,7 @@ mod tests {
 
     #[test]
     fn flips_above_near_bottom() {
-        let tb = layout(&inp(r(100.0, 700.0, 840.0, 340.0)));
+        let tb = layout(&inp(r(100.0, 700.0, 860.0, 340.0)));
         assert_eq!(tb.bar.y, 648.0);
         assert!(tb.above);
     }
@@ -812,12 +816,22 @@ mod tests {
 
     #[test]
     fn scales_with_dpi() {
-        let mut i = inp(r(100.0, 100.0, 1700.0, 300.0));
+        let mut i = inp(r(100.0, 100.0, 1760.0, 300.0));
         i.s = 2.0;
         let tb = layout(&i);
         assert!(!tb.wrapped);
-        assert_eq!(tb.bar.w, 1738.0);
+        assert_eq!(tb.bar.w, 1806.0);
         assert_eq!(btn(&tb, Act::Undo).w, 64.0);
+    }
+
+    /// Copy text sits right after Copy and acts like the other outputs.
+    #[test]
+    fn copy_text_follows_copy() {
+        let tb = layout(&inp(r(100.0, 100.0, 860.0, 300.0)));
+        let (c, t) = (btn(&tb, Act::Copy), btn(&tb, Act::CopyText));
+        assert_eq!(c.x1() + IN_GAP, t.x);
+        assert_eq!(t.x1() + IN_GAP, btn(&tb, Act::Save).x);
+        assert_eq!(tb.act_at(centre(t)), Some(Act::CopyText));
     }
 
     #[test]
@@ -880,7 +894,7 @@ mod tests {
     #[test]
     fn palette_above_bar_when_no_room_below_it() {
         let colors = [C4::rgb(1, 2, 3); 10];
-        let mut i = inp(r(100.0, 100.0, 840.0, 300.0));
+        let mut i = inp(r(100.0, 100.0, 860.0, 300.0));
         i.area = r(0.0, 0.0, 1920.0, 464.0); // bar fits (ends at 452) but the popover does not
         i.palette = Some(&colors);
         let tb = layout(&i);
@@ -957,7 +971,7 @@ mod tests {
         let mut i = inp(r(100.0, 100.0, 900.0, 300.0));
         i.record = true;
         let tb = layout(&i);
-        assert_eq!(tb.bar.w, 869.0 + BTN + IN_GAP);
+        assert_eq!(tb.bar.w, 903.0 + BTN + IN_GAP);
         let rec = btn(&tb, Act::Record);
         assert_eq!(rec.x1() + IN_GAP, btn(&tb, Act::Copy).x, "first of the output group");
         assert_eq!(tb.act_at(centre(rec)), Some(Act::Record));

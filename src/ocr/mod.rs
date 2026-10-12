@@ -29,8 +29,10 @@ mod win_tests;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OcrError {
     /// Linux: no `tesseract` on `PATH`.
+    #[cfg_attr(any(windows, target_os = "macos"), allow(dead_code))]
     NoTesseract,
     /// Windows: no OCR language among the user's languages.
+    #[cfg_attr(not(windows), allow(dead_code))]
     NoLanguage,
     /// Anything else, with the engine's reason.
     Failed(String),
@@ -81,6 +83,7 @@ pub fn join_lines(mut lines: Vec<Line>) -> String {
 /// Plain engine text (tesseract's stdout) tidied: words on a line joined
 /// with single spaces, blank lines and trailing spaces dropped, a form
 /// feed (page end) ignored.
+#[cfg_attr(any(windows, target_os = "macos"), allow(dead_code))]
 pub fn tidy_text(raw: &str) -> String {
     raw.lines()
         .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
@@ -152,19 +155,56 @@ pub fn recognize(img: &PixBuf) -> Result<String, OcrError> {
     return linux::recognize(img);
 }
 
+/// Tests: what recognition returns (no engine runs in the app's tests).
+#[cfg(test)]
+pub type Fake = fn(&PixBuf) -> Result<String, OcrError>;
+
+#[cfg(test)]
+thread_local! {
+    pub static FAKE: std::cell::Cell<Option<Fake>> = const { std::cell::Cell::new(None) };
+    /// Tests: what [`copy`] put on the "clipboard".
+    pub static COPIED: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 /// Recognize on a worker thread; the result arrives on the receiver.
 pub fn spawn(img: PixBuf) -> Receiver<Result<String, OcrError>> {
     let (tx, rx) = mpsc::channel();
+    #[cfg(test)]
+    let fake = FAKE.with(|f| f.get());
     let spawned = std::thread::Builder::new().name("rustshot-ocr".into()).spawn({
         let tx = tx.clone();
         move || {
-            let _ = tx.send(recognize(&img));
+            #[cfg(test)]
+            let r = fake.map_or_else(|| Err(OcrError::Failed("no recognizer in tests".into())), |f| f(&img));
+            #[cfg(not(test))]
+            let r = recognize(&img);
+            let _ = tx.send(r);
         }
     });
     if let Err(e) = spawned {
         let _ = tx.send(Err(OcrError::Failed(format!("cannot start a thread: {e}"))));
     }
     rx
+}
+
+/// Put recognized text on the clipboard (tests: in [`COPIED`]).
+pub fn copy(text: &str) -> Result<(), String> {
+    #[cfg(test)]
+    {
+        COPIED.with(|c| c.borrow_mut().push(text.to_string()));
+        Ok(())
+    }
+    #[cfg(not(test))]
+    crate::export::copy_text_to_clipboard(text).map_err(|e| format!("{e:#}"))
+}
+
+/// Copy what `res` found (if anything) and say so: the note for it.
+pub fn finish(res: &Result<String, OcrError>) -> Note {
+    let copied = match res {
+        Ok(t) if !t.trim().is_empty() => copy(t),
+        _ => Ok(()),
+    };
+    note(res, copied)
 }
 
 /// The number of lines of `text`.
