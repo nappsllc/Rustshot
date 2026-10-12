@@ -242,7 +242,47 @@ fn reset_to_defaults_covers_globals_too() {
 fn settings_at(path: &Path) -> Settings {
     let mut s = Settings::open(path.to_path_buf(), None);
     s.set_autostart = |_| Err("not in tests".into());
+    s.set_screenclip = |_| Err("not in tests".into());
     s
+}
+
+/// The Win+Shift+S toggle: applied on Apply through its setter (never
+/// the real registry here), kept across the form rebuild, a failure said
+/// in the window; hidden where it is not offered.
+#[test]
+fn screenclip_toggle_applies_on_save() {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    static LAST: AtomicU8 = AtomicU8::new(9);
+    let dir = scratch("screenclip");
+    let p = dir.join("config.toml");
+    config::save_at(&p, &Config::default()).unwrap();
+    let mut s = settings_at(&p).with_screenclip(Some(false), false);
+    s.set_screenclip = |on| {
+        LAST.store(on as u8, Ordering::SeqCst);
+        Ok(())
+    };
+    assert!(!s.dirty());
+    s.form.screenclip = Some(true);
+    assert!(s.dirty());
+    assert!(matches!(&s.on(Click::Apply)[..], [Act::Saved(_)]));
+    assert_eq!(LAST.load(Ordering::SeqCst), 1);
+    assert_eq!(s.form.screenclip, Some(true), "kept across the rebuild");
+    assert!(s.screenclip_wait && !s.dirty());
+    s.form.screenclip = Some(false);
+    s.on(Click::Apply);
+    assert_eq!(LAST.load(Ordering::SeqCst), 0);
+    assert!(!s.screenclip_wait && !s.dirty());
+    // A failure: the error shows, the toggle stays as asked (still dirty).
+    s.set_screenclip = |_| Err("Access is denied.".into());
+    s.form.screenclip = Some(true);
+    s.on(Click::Apply);
+    assert!(matches!(&s.modal, Some(Modal::Error(e)) if e.contains("Win+Shift+S") && e.contains("denied")));
+    assert!(s.dirty());
+    // Not offered: no row, never dirty.
+    let s = settings_at(&p);
+    assert_eq!(s.form.screenclip, None);
+    assert!(!s.dirty());
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// After a save the form is rebuilt from what was written: nothing stale
@@ -709,7 +749,7 @@ fn preview_cfg() -> Config {
 }
 
 fn sample() -> Settings {
-    let mut s = Settings::new(preview_cfg(), Some(true), PathBuf::from("config.toml"));
+    let mut s = Settings::new(preview_cfg(), Some(true), PathBuf::from("config.toml")).with_screenclip(Some(true), false);
     s.renderer = true;
     s.tray_row = true;
     s.rec_lists.linux = false;
@@ -768,6 +808,14 @@ fn preview_settings_pngs() {
             s.folder_probe = Some((PathBuf::from(r"C:\"), Some("Drive Q: is not on this computer.".into())));
             let (img, _) = render(&mut s, th, k, &Input::default(), &mut FocusState::default());
             preview::save(&png("general-states", tname, k), &img);
+            // Win+Shift+S just turned on: Windows has not been told yet.
+            let mut s = sample();
+            s.form.screenclip = Some(true);
+            s.screenclip_wait = true;
+            s.section = CAPTURE;
+            s.scroll[CAPTURE] = 1e6;
+            let (img, _) = render(&mut s, th, k, &Input::default(), &mut FocusState::default());
+            preview::save(&png("capture-screenclip", tname, k), &img);
             // Teal accent (previewed before Apply), JPEG chosen.
             let mut s = sample();
             s.form.accent = 1;
@@ -938,6 +986,15 @@ fn capture_controls_click() {
     assert_eq!(click(&mut s, &mut focus, "reset_tools", 1.0), Some(Click::ResetTools));
     click(&mut s, &mut focus, "snap_windows", 1.0);
     assert!(!s.form.snap);
+    // The Win+Shift+S switch lives here (sample() offers it), not in General.
+    assert_eq!(s.form.screenclip, Some(true));
+    click(&mut s, &mut focus, "screenclip", 1.0);
+    assert_eq!(s.form.screenclip, Some(false));
+    let mut g = sample();
+    let mut gfocus = FocusState::default();
+    render(&mut g, &DARK, 1.0, &Input::default(), &mut gfocus);
+    assert!(gfocus.rect_of("screenclip").is_none(), "not in General");
+    assert!(gfocus.rect_of("autostart").is_some());
     let mut s = sample();
     s.section = CAPTURE;
     s.form.filename.set("ab");

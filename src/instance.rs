@@ -63,6 +63,15 @@ pub fn signal_settings() -> bool {
     imp::signal_settings()
 }
 
+/// Ask a running daemon to start the capture of hotkey slot `slot` (0
+/// region, 2 record, 3 full screen, 4 window); false when no daemon is
+/// reachable. A daemon older than this takes any of them as a region
+/// capture.
+#[cfg(windows)]
+pub fn signal_capture(slot: usize) -> bool {
+    imp::signal_capture(slot)
+}
+
 /// Held for the daemon's lifetime.
 pub struct Guard(imp::Inner);
 
@@ -95,6 +104,13 @@ mod imp {
         unsafe {
             FindWindowW(super::tray_class(), PCWSTR::null())
                 .is_ok_and(|hwnd| PostMessageW(Some(hwnd), WM_SETTINGS, WPARAM(0), LPARAM(0)).is_ok())
+        }
+    }
+
+    pub fn signal_capture(slot: usize) -> bool {
+        unsafe {
+            FindWindowW(super::tray_class(), PCWSTR::null())
+                .is_ok_and(|hwnd| PostMessageW(Some(hwnd), WM_CAPTURE, WPARAM(slot), LPARAM(0)).is_ok())
         }
     }
 
@@ -171,7 +187,12 @@ mod imp {
                 if let Some(slot) = slot.as_ref()
                     && let Some(tx) = slot.lock().unwrap_or_else(|e| e.into_inner()).as_ref()
                 {
-                    let _ = tx.send(HotEvent::Capture);
+                    // `wparam`: the hotkey slot asked for (`signal_capture`).
+                    let ev = match w.0 {
+                        2..=4 => crate::hotkey::slot_event(w.0),
+                        _ => HotEvent::Capture,
+                    };
+                    let _ = tx.send(ev);
                 }
                 return LRESULT(0);
             }
