@@ -323,6 +323,8 @@ impl Window {
                     self.e.canvas.press(p);
                 }
             }
+            // The overlay's color ring only; the Edit window has none.
+            Ev::Right { .. } => return false,
             Ev::Middle { down, x, y } => {
                 let p = Pt::new(x as f32, y as f32);
                 if down {

@@ -254,6 +254,17 @@ unsafe fn common(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM, drv: &mut dyn Dri
                 request(hwnd, drv);
                 LRESULT(0)
             }
+            WM_RBUTTONDOWN | WM_RBUTTONUP => {
+                let down = msg == WM_RBUTTONDOWN;
+                if down {
+                    let _ = SetCapture(hwnd);
+                } else {
+                    let _ = ReleaseCapture();
+                }
+                drv.on_event(Ev::Right { down, x: x_of(lp), y: y_of(lp) });
+                request(hwnd, drv);
+                LRESULT(0)
+            }
             WM_MOUSEWHEEL => {
                 let delta = ((wp.0 >> 16) & 0xffff) as u16 as i16 as i32;
                 let mut pt = POINT {

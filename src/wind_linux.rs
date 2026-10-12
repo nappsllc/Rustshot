@@ -1002,8 +1002,12 @@ fn dispatch(
                         driver.on_event(Ev::Middle { down: true, x, y });
                         true
                     }
-                    1 | 3 => {
-                        if button == 1 {
+                    3 => {
+                        driver.on_event(Ev::Right { down: true, x, y });
+                        true
+                    }
+                    1 => {
+                        {
                             // Capture like SetCapture: Up/Motion still arrive
                             // when the pointer leaves the overlay mid-drag.
                             XGrabPointer(
@@ -1035,10 +1039,12 @@ fn dispatch(
                         driver.on_event(Ev::Middle { down: false, x, y });
                         true
                     }
-                    1 | 3 => {
-                        if button == 1 {
-                            XUngrabPointer(dpy, CURRENT_TIME);
-                        }
+                    3 => {
+                        driver.on_event(Ev::Right { down: false, x, y });
+                        true
+                    }
+                    1 => {
+                        XUngrabPointer(dpy, CURRENT_TIME);
                         driver.on_event(Ev::Up { x, y });
                         true
                     }

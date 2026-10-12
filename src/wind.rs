@@ -80,6 +80,8 @@ pub enum Ev {
     /// The middle button went down (or up): the Edit window pans with it.
     #[cfg_attr(target_os = "macos", allow(dead_code))]
     Middle { down: bool, x: i32, y: i32 },
+    /// The right button went down (or up): the overlay's color ring.
+    Right { down: bool, x: i32, y: i32 },
     Key { vk: u32, up: bool, repeat: bool, mods: Mods },
     /// Text input, one UTF-16 code unit per event (WM_CHAR parity on every
     /// backend). Characters outside the BMP arrive as two events, a high
