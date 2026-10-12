@@ -178,7 +178,9 @@ pub struct BarState<'a> {
 
 pub fn toolbar(f: &mut Fb, ui: &Ui, tb: &Toolbar, st: &BarState, k: f32) {
     // Video mode: the bar is the setup panel (14 px corners).
-    surface(f, ui, tb.bar, if tb.video { 14.0 } else { 12.0 }, &ALL_LAYERS, k);
+    if !tb.docked {
+        surface(f, ui, tb.bar, if tb.video { 14.0 } else { 12.0 }, &ALL_LAYERS, k);
+    }
     if let Some(pop) = tb.pop {
         // Opaque: the annotations under a popover never show through it.
         let bg = C4 { a: 255, ..ui.th.surface };

@@ -327,7 +327,7 @@ pub fn layout(inp: &Input, rv: &RecView) -> Toolbar {
     // The camera ring's colour picker, by the panel.
     let pop = inp.pick.map(|pv| super::toolbar::place_picker(pv, bar, above, &mut items, inp));
     debug_assert!(texts.len() >= LIST_TEXT);
-    Toolbar { bar, pop, items, wrapped: false, above, texts, extra, mode, video: true }
+    Toolbar { bar, pop, items, wrapped: false, above, texts, extra, mode, video: true, docked: false }
 }
 
 /// The panel's items (not the top row or grip) lie inside it (tests).

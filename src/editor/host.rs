@@ -1,0 +1,951 @@
+//! The editor hosted in a normal window: the Edit window's canvas
+//! (board 11). The same [`Edit`] as the overlay, over a whole capture
+//! (its selection is the image, nothing dims), drives every tool, the
+//! selection chrome, mini-toolbars, callout typing, multi-select and
+//! snapping; the window shows it zoomed and panned ([`View`]).
+//!
+//! Coordinates: the editor works in image px, as in the overlay; its
+//! chrome sizes there are the window's scale over the zoom
+//! ([`Host::s`]), so handles, hit slack and the mini-toolbar come out at
+//! their board sizes on screen at any zoom. The docked toolbar lives in
+//! the window's physical px ([`Canvas::layout_bar`]): its presses go to
+//! [`Edit::bar_press`] with window points, the canvas's to
+//! [`Edit::canvas_press`] with image points.
+//!
+//! Painting ([`Canvas::paint`]): the capture with its objects baked in
+//! (`composed`) comes from a box-filtered copy at the zoom below 100 %
+//! (rebuilt only where a bake changed it), straight from `composed` at
+//! 100 %, nearest-neighbour above; the draft and the drag's ghost are
+//! drawn as objects in window px over it (cheap at any zoom: the bake
+//! follows on release); the object chrome is drawn in window px from the
+//! editor's image-space chrome, mapped through the view.
+
+use super::compose::{CaretUi, ObjSelUi, PxRect};
+use super::mini::MiniUi;
+use super::*;
+use super::chrome::Ui;
+use crate::anim;
+#[cfg(test)]
+use crate::raster::Surf;
+use crate::uifb::Fb;
+
+/// The editor's hosting: chrome px per image px.
+pub(super) struct Host {
+    pub s: f32,
+}
+
+/// Where the capture sits: zoom (window px per image px) and the
+/// picture's top-left in the window (physical px).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct View {
+    pub z: f32,
+    pub ox: f32,
+    pub oy: f32,
+}
+
+impl View {
+    pub fn to_img(&self, p: Pt) -> Pt {
+        Pt::new((p.x - self.ox) / self.z, (p.y - self.oy) / self.z)
+    }
+
+    pub fn to_win(&self, p: Pt) -> Pt {
+        Pt::new(self.ox + p.x * self.z, self.oy + p.y * self.z)
+    }
+
+    pub fn rect(&self, r: FRect) -> FRect {
+        FRect { x: self.ox + r.x * self.z, y: self.oy + r.y * self.z, w: r.w * self.z, h: r.h * self.z }
+    }
+
+    /// The image rect on screen for a `w`×`h` capture.
+    pub fn image(&self, size: (u32, u32)) -> FRect {
+        let (w, h) = disp(size, self.z);
+        FRect { x: self.ox, y: self.oy, w: w as f32, h: h as f32 }
+    }
+}
+
+/// The picture's displayed size at zoom `z` (whole px).
+fn disp(size: (u32, u32), z: f32) -> (u32, u32) {
+    (((size.0 as f32 * z).round() as u32).max(1), ((size.1 as f32 * z).round() as u32).max(1))
+}
+
+/// What the Edit window should do, asked by a key or the toolbar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Request {
+    Save,
+    SaveAs,
+    SaveDesktop,
+    Copy,
+    Upload,
+    Pin,
+    CopyText,
+    Close,
+}
+
+/// The zoom steps (Ctrl+= / Ctrl+-, the zoom control's − and +).
+pub const ZOOMS: [f32; 15] = [0.1, 0.125, 0.25, 1.0 / 3.0, 0.5, 2.0 / 3.0, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0];
+/// The margin round the picture at Fit (logical px): 1180 × 760 fits
+/// the board's canvas at 72 %.
+pub const FIT_MARGIN: f32 = 72.0;
+
+/// The capture scaled below 100 %, box-filtered from `composed`.
+struct Cache {
+    z: f32,
+    w: u32,
+    h: u32,
+    px: Vec<u8>,
+}
+
+/// The Edit window's canvas: the hosted editor and its view.
+pub struct Canvas {
+    e: Edit,
+    pub view: View,
+    /// The canvas, the toolbar strip and the window (physical px).
+    area: FRect,
+    bar: FRect,
+    win: FRect,
+    /// The window's scale (physical px per logical px).
+    k: f32,
+    /// Following the window: the zoom stays at Fit.
+    fit: bool,
+    cache: Option<Cache>,
+    /// The pointer (window px).
+    mouse: Pt,
+    /// Panning (Space- or middle-drag): where it started and the view then.
+    pan: Option<(Pt, View)>,
+    /// Space is held: a press pans.
+    pub space: bool,
+    request: Option<Request>,
+    /// The objects as last saved (unsaved changes: they differ).
+    saved: Vec<Obj>,
+}
+
+impl Canvas {
+    /// The editor over `img` with `objects`, Select chosen, at Fit once a
+    /// rect is set.
+    pub fn new(img: PixBuf, objects: Vec<Obj>, cfg: Config, th: Theme) -> Canvas {
+        let size = img.dimensions();
+        let shot = Shot { origin: (0, 0), size, scale: 1.0, image: PixBuf::default(), monitors: vec![(0, 0, size.0, size.1)] };
+        let rec = RecPop::new(RecOpts::from_config(&cfg), false);
+        let font = AnnotFont::load();
+        let mut e = Edit::new(shot, img, cfg, th, font, Some(fonts::ui_font()), rec);
+        e.sel = Some(FRect { x: 0.0, y: 0.0, w: size.0 as f32, h: size.1 as f32 });
+        e.hist = vec![objects.clone()];
+        e.dirty = !objects.is_empty();
+        e.objects = objects.clone();
+        e.tool = Some(Tool::Select);
+        e.host = Some(Host { s: 1.0 });
+        // The tools' sizes and colours are the overlay's (remembered alike).
+        e.cfg_path = (!cfg!(test)).then(config::config_path);
+        Canvas {
+            e,
+            view: View { z: 1.0, ox: 0.0, oy: 0.0 },
+            area: FRect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 },
+            bar: FRect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 },
+            win: FRect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 },
+            k: 1.0,
+            fit: true,
+            cache: None,
+            mouse: Pt::new(-1.0, -1.0),
+            pan: None,
+            space: false,
+            request: None,
+            saved: objects,
+        }
+    }
+
+    pub fn size(&self) -> (u32, u32) {
+        self.e.shot.size
+    }
+
+    pub fn objects(&self) -> &[Obj] {
+        &self.e.objects
+    }
+
+    /// The capture as it was (no objects).
+    pub fn image(&self) -> &PixBuf {
+        &self.e.base
+    }
+
+    /// The capture with its objects (what Save writes).
+    pub fn export(&mut self) -> PixBuf {
+        if self.e.dirty || self.e.spots_stale() {
+            let d = self.e.rebuild();
+            self.cache_damage(d);
+        }
+        self.e.composed().clone()
+    }
+
+    /// The objects differ from the last save.
+    pub fn unsaved(&self) -> bool {
+        self.e.objects != self.saved
+    }
+
+    /// The objects were saved as they are now.
+    pub fn mark_saved(&mut self) {
+        self.saved = self.e.objects.clone();
+    }
+
+    pub fn theme(&self) -> &Theme {
+        &self.e.th
+    }
+
+    pub fn set_theme(&mut self, th: Theme) {
+        self.e.th = th;
+    }
+
+    pub fn keymap(&self) -> &Keymap {
+        &self.e.keys
+    }
+
+    pub fn take_request(&mut self) -> Option<Request> {
+        self.request.take()
+    }
+
+    // --- the view ---------------------------------------------------------------
+
+    /// The canvas at `area` and the toolbar strip at `bar` in a window
+    /// `win` (physical px) at scale `k`.
+    pub fn set_rects(&mut self, area: FRect, bar: FRect, win: FRect, k: f32) {
+        let changed = area != self.area || k != self.k;
+        self.area = area;
+        self.bar = bar;
+        self.win = win;
+        self.k = k;
+        if changed {
+            if self.fit {
+                self.zoom_fit();
+            } else {
+                self.clamp_view();
+            }
+        }
+        self.sync_scale();
+    }
+
+    pub fn is_fit(&self) -> bool {
+        self.fit
+    }
+
+    pub fn zoom(&self) -> f32 {
+        self.view.z
+    }
+
+    /// The zoom at which the capture fits the canvas (never above 100 %).
+    pub fn fit_zoom(&self) -> f32 {
+        let (iw, ih) = (self.size().0.max(1) as f32, self.size().1.max(1) as f32);
+        let m = FIT_MARGIN * self.k;
+        let z = ((self.area.w - 2.0 * m) / iw).min((self.area.h - 2.0 * m) / ih);
+        z.clamp(0.02, 1.0)
+    }
+
+    /// Zoom to Fit (and follow the window).
+    pub fn zoom_fit(&mut self) {
+        let z = self.fit_zoom();
+        self.fit = true;
+        self.set_zoom_centred(z);
+    }
+
+    /// 100 %, centred on the canvas's centre point of the capture.
+    pub fn zoom_actual(&mut self) {
+        let c = Pt::new(self.area.x + self.area.w / 2.0, self.area.y + self.area.h / 2.0);
+        self.zoom_at(1.0, c);
+    }
+
+    /// One step in or out (`dir` > 0: in) about the canvas's centre.
+    pub fn zoom_step(&mut self, dir: i32) {
+        let z = self.view.z;
+        let next = if dir > 0 {
+            ZOOMS.iter().copied().find(|s| *s > z * 1.001).unwrap_or(*ZOOMS.last().unwrap())
+        } else {
+            ZOOMS.iter().rev().copied().find(|s| *s < z * 0.999).unwrap_or(ZOOMS[0])
+        };
+        let c = Pt::new(self.area.x + self.area.w / 2.0, self.area.y + self.area.h / 2.0);
+        self.zoom_at(next, c);
+    }
+
+    /// Zoom by `factor` keeping the capture's point under window point
+    /// `at` there (Ctrl+wheel).
+    pub fn zoom_by(&mut self, factor: f32, at: Pt) {
+        let z = (self.view.z * factor).clamp(ZOOMS[0], *ZOOMS.last().unwrap());
+        self.zoom_at(z, at);
+    }
+
+    fn zoom_at(&mut self, z: f32, at: Pt) {
+        let ip = self.view.to_img(at);
+        self.fit = false;
+        self.view.z = z;
+        self.view.ox = (at.x - ip.x * z).round();
+        self.view.oy = (at.y - ip.y * z).round();
+        self.clamp_view();
+        self.sync_scale();
+    }
+
+    fn set_zoom_centred(&mut self, z: f32) {
+        let (w, h) = disp(self.size(), z);
+        self.view = View { z, ox: (self.area.x + (self.area.w - w as f32) / 2.0).round(), oy: (self.area.y + (self.area.h - h as f32) / 2.0).round() };
+        self.sync_scale();
+    }
+
+    /// Keep the picture on the canvas: centred along an axis it fits in,
+    /// else never leaving a gap past its edges.
+    fn clamp_view(&mut self) {
+        let (w, h) = disp(self.size(), self.view.z);
+        let (w, h) = (w as f32, h as f32);
+        let a = self.area;
+        self.view.ox = if w <= a.w { (a.x + (a.w - w) / 2.0).round() } else { self.view.ox.clamp(a.x1() - w, a.x).round() };
+        self.view.oy = if h <= a.h { (a.y + (a.h - h) / 2.0).round() } else { self.view.oy.clamp(a.y1() - h, a.y).round() };
+    }
+
+    /// Pan by (`dx`, `dy`) window px (the wheel, a drag).
+    pub fn pan_by(&mut self, dx: f32, dy: f32) {
+        self.fit = false;
+        self.view.ox += dx;
+        self.view.oy += dy;
+        self.clamp_view();
+    }
+
+    /// The editor's chrome scale follows the zoom.
+    fn sync_scale(&mut self) {
+        if let Some(h) = self.e.host.as_mut() {
+            h.s = self.k / self.view.z.max(1e-3);
+        }
+    }
+
+    /// The visible part of the capture (image px), where the
+    /// mini-toolbar and the loupe stay.
+    fn visible_img(&self) -> FRect {
+        let a = self.view.to_img(Pt::new(self.area.x, self.area.y));
+        let b = self.view.to_img(Pt::new(self.area.x1(), self.area.y1()));
+        FRect::from_pts(a, b)
+    }
+
+    // --- input ------------------------------------------------------------------------
+
+    /// Whether `p` (window px) is on the canvas.
+    pub fn on_canvas(&self, p: Pt) -> bool {
+        hit(self.area, p)
+    }
+
+    /// Whether `p` is on the toolbar or its open popover.
+    pub fn on_bar(&self, p: Pt) -> bool {
+        self.e.toolbar.as_ref().is_some_and(|t| t.contains(p))
+    }
+
+    /// A press at window point `p`: the toolbar's, the canvas's (Space
+    /// held: a pan). Returns whether it was taken.
+    pub fn press(&mut self, p: Pt) -> bool {
+        self.mouse = p;
+        if self.e.bar_press(p) {
+            self.after_input();
+            return true;
+        }
+        // An open popover or picker closes on a press outside it.
+        if !self.on_canvas(p) {
+            if self.e.palette_open || self.e.save_menu || self.e.pick.is_some() {
+                self.e.palette_open = false;
+                self.e.save_menu = false;
+                self.e.close_picker(true);
+                return true;
+            }
+            return false;
+        }
+        if self.space {
+            self.pan = Some((p, self.view));
+            return true;
+        }
+        self.e.save_menu = false;
+        self.e.canvas_press(self.view.to_img(p));
+        self.after_input();
+        true
+    }
+
+    /// The middle button: a pan.
+    pub fn middle_press(&mut self, p: Pt) {
+        if self.on_canvas(p) {
+            self.pan = Some((p, self.view));
+        }
+    }
+
+    pub fn panning(&self) -> bool {
+        self.pan.is_some()
+    }
+
+    /// The pointer moved to window point `p` (a button held or not).
+    /// Returns whether something changed (a repaint is due).
+    pub fn moved(&mut self, p: Pt, held: bool) -> bool {
+        self.mouse = p;
+        if let Some((start, v)) = self.pan {
+            self.fit = false;
+            self.view = View { ox: v.ox + p.x - start.x, oy: v.oy + p.y - start.y, ..v };
+            self.clamp_view();
+            return true;
+        }
+        let ip = self.view.to_img(p);
+        if held && !matches!(self.e.interact, Interact::None) {
+            self.e.pointer_move(ip, p);
+            return true;
+        }
+        self.e.track_hover_at(ip, p) | self.e.track_loupe(ip)
+    }
+
+    /// The button went up at `p`.
+    pub fn release(&mut self, p: Pt) {
+        self.mouse = p;
+        if self.pan.take().is_some() {
+            return;
+        }
+        self.e.pointer_up();
+        self.after_input();
+    }
+
+    /// A key (`up`: released). Returns whether the editor took it (the
+    /// window's own keys go first).
+    pub fn key(&mut self, vk: u32, up: bool, repeat: bool, mods: Mods) {
+        if vk == wind::key::SPACE && self.e.text.is_none() && self.e.obj.cedit.is_none() && self.e.pick.is_none() {
+            // Space pans while held (no palette toggle in the Edit window).
+            self.space = !up;
+            return;
+        }
+        let ip = self.view.to_img(self.mouse);
+        if (vk == 0x10 || vk == 0x11)
+            && let Interact::Drawing { start } = self.e.interact
+        {
+            let mut m = mods;
+            if vk == 0x10 {
+                m.shift = !up;
+            } else {
+                m.ctrl = !up;
+            }
+            self.e.drag_draft(start, ip, m);
+        }
+        if up {
+            return;
+        }
+        self.e.handle_key(vk, repeat, mods, ip);
+        self.after_input();
+    }
+
+    pub fn char_input(&mut self, c: u16) {
+        self.e.char_input(c);
+        self.after_input();
+    }
+
+    /// The wheel (no Ctrl): the size of the tool or the selected objects.
+    pub fn wheel_size(&mut self, delta: i32) {
+        self.e.wheel(delta);
+    }
+
+    /// What a finished capture step asks the window to do.
+    fn after_input(&mut self) {
+        if !self.e.done {
+            return;
+        }
+        self.e.done = false;
+        let tasks = std::mem::take(&mut self.e.tasks);
+        self.request = if std::mem::take(&mut self.e.cancelled) {
+            Some(Request::Close)
+        } else {
+            tasks.first().map(|t| match t {
+                Task::Save { ask: true, .. } => Request::SaveAs,
+                Task::Save { .. } => Request::Save,
+                Task::SaveDesktop => Request::SaveDesktop,
+                Task::Upload => Request::Upload,
+                Task::Pin => Request::Pin,
+                Task::Text => Request::CopyText,
+                _ => Request::Copy,
+            })
+        };
+    }
+
+    /// The cursor at window point `p`.
+    pub fn cursor(&self, p: Pt) -> Cursor {
+        if self.pan.is_some() || self.space {
+            return Cursor::Move;
+        }
+        if !self.on_canvas(p) || self.on_bar(p) {
+            return Cursor::Arrow;
+        }
+        let e = &self.e;
+        let ip = self.view.to_img(p);
+        if e.pick.as_ref().is_some_and(|k| k.eyedrop) {
+            return Cursor::Cross;
+        }
+        if e.text.is_some() || e.in_cedit(ip) {
+            return Cursor::IBeam;
+        }
+        if !e.obj.sel.is_empty()
+            && let Some(h) = e.obj_handle_at(ip)
+        {
+            return match h {
+                select::OHandle::Box(h) => handle_cursor(h),
+                select::OHandle::Point(..) => Cursor::Move,
+            };
+        }
+        if e.tool == Some(Tool::Select) {
+            return if e.obj_at(ip).is_some() { Cursor::Move } else { Cursor::Arrow };
+        }
+        Cursor::Cross
+    }
+
+    /// The pointer in image px (the status bar).
+    pub fn mouse_img(&self) -> Option<Pt> {
+        let p = self.view.to_img(self.mouse);
+        let (w, h) = self.size();
+        (self.on_canvas(self.mouse) && p.x >= 0.0 && p.y >= 0.0 && p.x < w as f32 && p.y < h as f32).then_some(p)
+    }
+
+    // --- the objects list ----------------------------------------------------------
+
+    pub fn selected(&self) -> &[usize] {
+        &self.e.obj.sel
+    }
+
+    /// Select object `i` (`add`: Ctrl, toggled), as a click with Select.
+    pub fn select(&mut self, i: usize, add: bool) {
+        if i >= self.e.objects.len() {
+            return;
+        }
+        self.e.finish_callout_edit();
+        if self.e.tool != Some(Tool::Select) {
+            self.e.tool = Some(Tool::Select);
+        }
+        if add {
+            if let Some(p) = self.e.obj.sel.iter().position(|s| *s == i) {
+                self.e.obj.sel.remove(p);
+            } else {
+                self.e.obj.sel.push(i);
+                self.e.obj.sel.sort_unstable();
+            }
+        } else {
+            self.e.obj.sel = vec![i];
+        }
+    }
+
+    /// Move object `from` to z-index `to` (one undo step).
+    pub fn reorder(&mut self, from: usize, to: usize) {
+        let n = self.e.objects.len();
+        if from >= n || to >= n || from == to {
+            return;
+        }
+        self.e.finish_callout_edit();
+        let o = self.e.objects.remove(from);
+        self.e.objects.insert(to, o);
+        self.e.obj.sel = vec![to];
+        self.e.push_history();
+        self.e.dirty = true;
+    }
+
+    /// The selection's box (image px), and the first selected object.
+    pub fn selection_box(&self) -> Option<(FRect, &Obj)> {
+        let i = *self.e.obj.sel.first()?;
+        Some((self.e.osel_box()?, self.e.objects.get(i)?))
+    }
+
+    /// Something animates (the caret blinks, guides fade, a tooltip is
+    /// due, a popover fades): the window keeps its fast timer.
+    pub fn animating(&self, now: Instant) -> bool {
+        super::animating(&self.e, None, now) || self.e.text.is_some() || self.e.obj.cedit.is_some()
+    }
+
+    /// Write the tools' remembered sizes and colours (`wait`: now).
+    pub fn flush(&mut self, wait: bool) {
+        if wait || self.e.pending.is_due(Instant::now()) {
+            self.e.close_picker(true);
+            self.e.flush_pending(wait);
+        }
+    }
+
+    // --- painting -------------------------------------------------------------------
+
+    /// Lay out the docked toolbar (and its popovers) for this frame.
+    fn layout_bar(&mut self, now: Instant) {
+        let e = &mut self.e;
+        let colors = palette_colors(&e.cfg);
+        let cur = e.cur_tool();
+        let recents = e.recents();
+        let pv = e.pick.as_ref().map(|p| toolbar::PickView { ring: false, alpha: p.has_alpha(), recents: &recents });
+        let save_keys = [Act::SaveAs, Act::SaveDesktop].map(|a| chrome::act_tip(a, &e.keys).1.join("+"));
+        let inp = toolbar::Input {
+            sel: e.sel.unwrap_or(FRect { x: 0.0, y: 0.0, w: 1.0, h: 1.0 }),
+            area: self.win,
+            s: self.k,
+            busy: false,
+            can_undo: e.hi > 0,
+            can_redo: e.hi + 1 < e.hist.len(),
+            palette: e.palette_open.then_some(colors.as_slice()),
+            record: false,
+            rec: None,
+            grip: None,
+            top: false,
+            sizes: tools::has_size(cur),
+            colors: tools::has_color(cur) || e.sel_color().is_some(),
+            fills: tools::has_fill(cur),
+            pick: pv.as_ref(),
+            save_menu: e.save_menu.then_some(&save_keys),
+        };
+        e.toolbar = Some(toolbar::layout_docked(&inp, self.bar));
+        e.mo.bar.snap(1.0);
+        if e.palette_open || e.pick.is_some() || e.save_menu {
+            e.mo.pop.set(1.0, 100, now);
+        } else {
+            e.mo.pop.snap(0.0);
+        }
+    }
+
+    /// The docked toolbar's buttons' width (logical px) — where the
+    /// window's zoom control can go.
+    pub fn bar_width(&self) -> f32 {
+        let cur = self.e.cur_tool();
+        let inp = toolbar::Input {
+            sel: FRect { x: 0.0, y: 0.0, w: 1.0, h: 1.0 },
+            area: self.win,
+            s: self.k,
+            busy: false,
+            can_undo: true,
+            can_redo: true,
+            palette: None,
+            record: false,
+            rec: None,
+            grip: None,
+            top: false,
+            sizes: tools::has_size(cur),
+            colors: true,
+            fills: true,
+            pick: None,
+            save_menu: None,
+        };
+        toolbar::docked_width(&inp)
+    }
+
+    /// Bring the scaled copy in line with `composed` where a bake changed it.
+    fn cache_damage(&mut self, d: Option<Vec<PxRect>>) {
+        let Some(c) = self.cache.as_mut() else { return };
+        let src = self.e.composed.as_ref().unwrap_or(&self.e.base);
+        let (iw, ih) = (src.width() as usize, src.height() as usize);
+        let rects = match d {
+            Some(r) => r,
+            None => vec![PxRect::image((iw as u32, ih as u32))],
+        };
+        let (cw, ch) = (c.w as usize, c.h as usize);
+        for r in rects {
+            let r = r.intersect(&PxRect::image((iw as u32, ih as u32)));
+            if r.is_empty() {
+                continue;
+            }
+            // The destination pixels whose spans meet `r` (one more each side).
+            let x0 = (r.x0 as usize * cw / iw).saturating_sub(1);
+            let y0 = (r.y0 as usize * ch / ih).saturating_sub(1);
+            let x1 = ((r.x1 as usize * cw).div_ceil(iw) + 1).min(cw);
+            let y1 = ((r.y1 as usize * ch).div_ceil(ih) + 1).min(ch);
+            crate::scale::box_rect(src.as_raw(), iw, ih, &mut c.px, cw, ch, (x0, y0, x1, y1));
+        }
+    }
+
+    /// The scaled copy for the current zoom (below 100 %), made when the
+    /// zoom changed.
+    fn ensure_cache(&mut self) {
+        let z = self.view.z;
+        if z >= 0.999 {
+            self.cache = None;
+            return;
+        }
+        if self.cache.as_ref().is_some_and(|c| c.z == z) {
+            return;
+        }
+        let _p = crate::perf::span(crate::perf::K::Bake);
+        let src = self.e.composed.as_ref().unwrap_or(&self.e.base);
+        let (w, h) = disp(src.dimensions(), z);
+        let mut px = vec![0u8; w as usize * h as usize * 4];
+        crate::scale::box_rect(src.as_raw(), src.width() as usize, src.height() as usize, &mut px, w as usize, h as usize, (0, 0, w as usize, h as usize));
+        self.cache = Some(Cache { z, w, h, px });
+    }
+
+    /// Paint the canvas into `f` (the window's frame, physical px): the
+    /// canvas colour `cv`, the picture, the drafts and the object chrome;
+    /// then the docked toolbar (its strip is the window's).
+    pub fn paint(&mut self, f: &mut Fb, cv: C4, edge: C4, now: Instant) {
+        self.layout_bar(now);
+        // Bake what changed, then the scaled copy follows.
+        if self.e.dirty || self.e.spots_stale() {
+            let _p = crate::perf::span(crate::perf::K::Bake);
+            let d = self.e.rebuild();
+            if self.cache.as_ref().is_some_and(|c| c.z == self.view.z) {
+                self.cache_damage(d);
+            } else {
+                self.cache = None;
+            }
+        }
+        self.ensure_cache();
+        let a = self.area;
+        f.fill_rect(a.x as i32, a.y as i32, a.w as i32, a.h as i32, cv);
+        let img = self.view.image(self.size());
+        // The picture's edge (dark: 1 px border; light: a soft shadow).
+        let k = self.k;
+        if edge.a > 0 {
+            let e = FRect { x: img.x - k.round(), y: img.y - k.round(), w: img.w + 2.0 * k.round(), h: img.h + 2.0 * k.round() };
+            f.fill_rect(e.x as i32, e.y as i32, e.w as i32, e.h as i32, edge);
+        }
+        self.blit_picture(f);
+        self.paint_drafts(f);
+        self.paint_chrome(f, now);
+    }
+
+    /// The picture (with its objects) into the canvas.
+    fn blit_picture(&self, f: &mut Fb) {
+        let _p = crate::perf::span(crate::perf::K::Bg);
+        let a = self.area;
+        let v = self.view;
+        let img = v.image(self.size());
+        let x0 = img.x.max(a.x).max(0.0) as i32;
+        let y0 = img.y.max(a.y).max(0.0) as i32;
+        let x1 = (img.x1().min(a.x1()) as i32).min(f.stride as i32);
+        let y1 = (img.y1().min(a.y1()) as i32).min(f.height());
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
+        let stride = f.stride * 4;
+        let n = (x1 - x0) as usize;
+        let (ox, oy) = (v.ox as i32, v.oy as i32);
+        if let Some(c) = &self.cache {
+            for y in y0..y1 {
+                let sy = (y - oy) as usize;
+                let s = (sy * c.w as usize + (x0 - ox) as usize) * 4;
+                let d = y as usize * stride + x0 as usize * 4;
+                f.d[d..d + n * 4].copy_from_slice(&c.px[s..s + n * 4]);
+            }
+            return;
+        }
+        let src = self.e.composed();
+        let (iw, ih) = (src.width() as usize, src.height() as usize);
+        let raw = src.as_raw();
+        if (v.z - 1.0).abs() < 1e-4 {
+            for y in y0..y1 {
+                let sy = ((y - oy) as usize).min(ih - 1);
+                let s = (sy * iw + ((x0 - ox) as usize).min(iw - 1)) * 4;
+                let len = (n * 4).min(raw.len() - s);
+                let d = y as usize * stride + x0 as usize * 4;
+                f.d[d..d + len].copy_from_slice(&raw[s..s + len]);
+            }
+            return;
+        }
+        // Above 100 %: nearest neighbour, a row reused while it repeats.
+        let xs: Vec<usize> = (x0..x1).map(|x| (((x as f32 + 0.5 - v.ox) / v.z) as usize).min(iw - 1)).collect();
+        let mut last: Option<(usize, usize)> = None;
+        for y in y0..y1 {
+            let sy = (((y as f32 + 0.5 - v.oy) / v.z) as usize).min(ih - 1);
+            let d = y as usize * stride + x0 as usize * 4;
+            if let Some((ly, ld)) = last
+                && ly == sy
+            {
+                f.d.copy_within(ld..ld + n * 4, d);
+                continue;
+            }
+            let row = &raw[sy * iw * 4..(sy + 1) * iw * 4];
+            let out = &mut f.d[d..d + n * 4];
+            for (o, &sx) in out.as_chunks_mut::<4>().0.iter_mut().zip(&xs) {
+                o.copy_from_slice(&row[sx * 4..sx * 4 + 4]);
+            }
+            last = Some((sy, d));
+        }
+    }
+
+    /// The draft and the drag's ghost, as objects in window px (they may
+    /// reach past the canvas: the window paints its rail, toolbar strip
+    /// and status bar after).
+    fn paint_drafts(&self, f: &mut Fb) {
+        let e = &self.e;
+        let font = e.font.as_ref();
+        let v = self.view;
+        let ghosts: Vec<Obj> = match &e.interact {
+            Interact::ObjMove { moved: true, orig, .. } => orig.iter().filter_map(|o| crate::objects::edit::faded(o, select::GHOST)).collect(),
+            _ => Vec::new(),
+        };
+        if ghosts.is_empty() && e.draft.is_none() {
+            return;
+        }
+        let _p = crate::perf::span(crate::perf::K::Compose);
+        let mut sf = f.surf();
+        for g in &ghosts {
+            view_obj(g, &v).render_into(&mut sf, font);
+        }
+        match &e.draft {
+            Some(Obj::Spotlight { .. }) | None => {}
+            Some(d) => view_obj(d, &v).render_into(&mut sf, font),
+        }
+    }
+
+    /// The object chrome (selection, handles, guides, marquee, caret,
+    /// mini-toolbar and its tips, the text draft, the loupe) mapped to the
+    /// window.
+    fn paint_chrome(&mut self, f: &mut Fb, now: Instant) {
+        let _p = crate::perf::span(crate::perf::K::Sel);
+        let s_img = self.e.ui_scale();
+        let area_img = self.visible_img();
+        let (_ghost, osel, marquee, caret, mini) = self.e.obj_scene(area_img, s_img);
+        let (guides, gk) = self.e.guides_now(now);
+        let v = self.view;
+        let a = self.area;
+        let k = self.k;
+        let e = &self.e;
+        let ui = Ui { th: &e.th, s: k, font: e.ui_font };
+        if let Some(Obj::Spotlight { r }) = &e.draft {
+            super::mini::marquee(f, &ui, v.rect(*r));
+        }
+        if let Some(u) = &osel {
+            super::mini::osel(f, &ui, &map_osel(u, &v));
+        }
+        if !guides.is_empty() {
+            let g: Vec<(Pt, Pt)> = guides.iter().map(|(p, q)| (v.to_win(*p), v.to_win(*q))).collect();
+            super::mini::guides(f, &ui, &g, gk);
+        }
+        if let Some(m) = marquee {
+            super::mini::marquee(f, &ui, v.rect(m));
+        }
+        if let Some(c) = &caret {
+            super::mini::caret(f, &CaretUi { r: v.rect(c.r), color: c.color });
+        }
+        // The text tool's draft: its dashed box and the text as it will be.
+        if let Some(td) = &e.text {
+            let boxr = text_box_rect(e.shot.size.0 as f32, td, e.mem.size(Tool::Text), e.font.as_ref(), s_img);
+            let (px, color) = (e.mem.size(Tool::Text) * v.z, e.mem.color(Tool::Text));
+            f.stroke_dashed_rect(v.rect(boxr), 4.0 * k, 3.0 * k, k.round().max(1.0), e.th.accent);
+            if let Some(font) = e.font.as_ref() {
+                let pos = v.to_win(td.pos);
+                font.render(&mut f.surf(), &td.text, px, pos, color);
+                if caret_on(td) {
+                    let cx = pos.x + font.caret_x(&td.text, td.caret, px);
+                    f.fill_rect(cx.round() as i32, pos.y.round() as i32, (2.0 * k).round() as i32, (px * 1.15).round() as i32, color);
+                }
+            }
+        }
+        let mini = mini.map(|m| map_mini(&m, &v));
+        if let Some(m) = &mini {
+            super::mini::draw(f, &ui, m);
+        }
+        // The eyedropper's loupe.
+        if e.pick.as_ref().is_some_and(|p| p.eyedrop)
+            && let Some(p) = e.loupe
+        {
+            let r = chrome::loupe_rect(&ui, v.to_win(p), a, &[]);
+            chrome::loupe(f, &ui, r, &e.loupe_pixels(p));
+        }
+        // A tip for the mini-toolbar's buttons.
+        let interacting = !matches!(e.interact, Interact::None);
+        let shown_ms = now.saturating_duration_since(e.hover_at).as_secs_f32() * 1000.0 - 400.0;
+        if !interacting
+            && shown_ms >= 0.0
+            && let Some(m) = &mini
+            && let Some(it) = m.hover.and_then(|i| m.items.get(i))
+            && let toolbar::Kind::Btn(act) = it.kind
+        {
+            let (label, keys) = chrome::act_tip(act, &e.keys);
+            let at = chrome::TipAt { anchor: it.r, area: a, below: false };
+            chrome::tooltip(f, &ui, at, label, &keys, anim::ease_out(shown_ms / 80.0));
+        }
+    }
+
+    /// The docked toolbar with its popover and tooltip (after the window
+    /// drew its strip).
+    pub fn paint_bar(&self, f: &mut Fb, now: Instant) {
+        let e = &self.e;
+        let Some(tb) = &e.toolbar else { return };
+        let ui = Ui { th: &e.th, s: self.k, font: e.ui_font };
+        let value = e.size_label();
+        let cur = e.cur_tool();
+        let st = chrome::BarState {
+            hover: e.hover,
+            hover_k: e.mo.hover.value(now),
+            pressed: e.pressed,
+            tool: e.tool,
+            color: e.sel_color().unwrap_or_else(|| e.color()),
+            value: &value,
+            ptool: cur,
+            size: e.mem.size(cur),
+            fill: e.mem.fill(cur),
+            pop_k: e.mo.pop.value(now),
+            pick: e.pick.as_ref(),
+        };
+        chrome::toolbar(f, &ui, tb, &st, 1.0);
+        let interacting = !matches!(e.interact, Interact::None);
+        let shown_ms = now.saturating_duration_since(e.hover_at).as_secs_f32() * 1000.0 - 400.0;
+        if !interacting
+            && shown_ms >= 0.0
+            && let Some(it) = e.hover.and_then(|i| tb.items.get(i))
+            && let toolbar::Kind::Btn(act) | toolbar::Kind::Rainbow(act) = it.kind
+        {
+            let (label, keys) = chrome::act_tip(act, &e.keys);
+            let in_pop = tb.pop.is_some_and(|p| toolbar::hit(p, Pt::new(it.r.x + 1.0, it.r.y + 1.0)));
+            let at = chrome::TipAt { anchor: it.r, area: self.win, below: !in_pop };
+            chrome::tooltip(f, &ui, at, label, &keys, anim::ease_out(shown_ms / 80.0));
+        }
+    }
+}
+
+/// `o` in window px through `v`: points and rects mapped, strokes and
+/// sizes scaled.
+pub fn view_obj(o: &Obj, v: &View) -> Obj {
+    let p = |q: &Pt| v.to_win(*q);
+    let r = |q: &FRect| v.rect(*q);
+    let z = v.z;
+    match o {
+        Obj::Line { a, b, color, width } => Obj::Line { a: p(a), b: p(b), color: *color, width: width * z },
+        Obj::Arrow { a, b, color, width } => Obj::Arrow { a: p(a), b: p(b), color: *color, width: width * z },
+        Obj::Marker { a, b, color, width } => Obj::Marker { a: p(a), b: p(b), color: *color, width: width * z },
+        Obj::Rect { r: q, color, width } => Obj::Rect { r: r(q), color: *color, width: width * z },
+        Obj::RectFill { r: q, color, width } => Obj::RectFill { r: r(q), color: *color, width: width * z },
+        Obj::Ellipse { r: q, color, width } => Obj::Ellipse { r: r(q), color: *color, width: width * z },
+        Obj::EllipseFill { r: q, color, width } => Obj::EllipseFill { r: r(q), color: *color, width: width * z },
+        Obj::Path { pts, color, width } => Obj::Path { pts: pts.iter().map(p).collect(), color: *color, width: width * z },
+        Obj::MarkerPath { pts, color, width } => Obj::MarkerPath { pts: pts.iter().map(p).collect(), color: *color, width: width * z },
+        Obj::Text { pos, text, color, size } => Obj::Text { pos: p(pos), text: text.clone(), color: *color, size: size * z },
+        Obj::Pixelate { r: q, cell } => Obj::Pixelate { r: r(q), cell: (cell * z).max(1.0) },
+        Obj::Invert { r: q } => Obj::Invert { r: r(q) },
+        Obj::Spotlight { r: q } => Obj::Spotlight { r: r(q) },
+        Obj::Counter { c, n, color, d, tail } => Obj::Counter { c: p(c), n: *n, color: *color, d: d * z, tail: tail.as_ref().map(p) },
+        Obj::Callout { r: q, tail, text, color, size, style, fill } => {
+            Obj::Callout { r: r(q), tail: p(tail), text: text.clone(), color: *color, size: size * z, style: *style, fill: *fill }
+        }
+        Obj::Magnify { src, dst, radius, zoom, color, width } => {
+            Obj::Magnify { src: p(src), dst: p(dst), radius: radius * z, zoom: *zoom, color: *color, width: width * z }
+        }
+    }
+}
+
+fn map_osel(u: &ObjSelUi, v: &View) -> ObjSelUi {
+    ObjSelUi {
+        boxes: u.boxes.iter().map(|b| v.rect(*b)).collect(),
+        line: u.line.map(|(a, b)| (v.to_win(a), v.to_win(b))),
+        square: u.square.iter().map(|p| v.to_win(*p)).collect(),
+        round: u.round.iter().map(|p| v.to_win(*p)).collect(),
+        hot: u.hot,
+    }
+}
+
+fn map_mini(m: &MiniUi, v: &View) -> MiniUi {
+    let r = |q: FRect| {
+        let w = v.rect(q);
+        FRect { x: w.x.round(), y: w.y.round(), w: w.w.round(), h: w.h.round() }
+    };
+    MiniUi { r: r(m.r), items: m.items.iter().map(|it| toolbar::Item { r: r(it.r), ..*it }).collect(), inp: m.inp.clone(), hover: m.hover }
+}
+
+/// Window and surface helpers for the Edit window's tests.
+#[cfg(test)]
+impl Canvas {
+    pub fn edit_mut(&mut self) -> &mut Edit {
+        &mut self.e
+    }
+
+    pub fn tool(&self) -> Option<Tool> {
+        self.e.tool
+    }
+
+    pub fn toolbar_items(&self) -> Vec<(FRect, Option<Act>)> {
+        self.e.toolbar.as_ref().map_or(Vec::new(), |t| t.items.iter().map(|i| (i.r, t.act_at(Pt::new(i.r.x + i.r.w / 2.0, i.r.y + i.r.h / 2.0)))).collect())
+    }
+}
+
+/// A surface over a frame (tests).
+#[cfg(test)]
+pub fn surf_of(px: &mut PixBuf) -> Surf<'_> {
+    Surf::from_buf(px)
+}

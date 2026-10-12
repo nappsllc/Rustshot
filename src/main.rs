@@ -16,6 +16,8 @@ mod fonts;
 mod history;
 // The History window (board 10).
 mod history_ui;
+// The Edit window (board 11).
+mod edit_ui;
 mod hotkey;
 mod icon_path;
 mod imgur;

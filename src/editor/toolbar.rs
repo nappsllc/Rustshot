@@ -328,6 +328,9 @@ pub struct Toolbar {
     pub mode: Option<FRect>,
     /// Video mode: `bar` is the setup panel.
     pub video: bool,
+    /// Docked in the Edit window: no surface of its own (the window draws
+    /// the strip).
+    pub docked: bool,
 }
 
 type Group = Vec<(Kind, bool, f32)>;
@@ -456,7 +459,50 @@ pub fn layout(inp: &Input) -> Toolbar {
         let up = above.then(|| pop.map_or(bar, |p| union(bar, p))).filter(|b| b.y1() <= sel.y + 0.5);
         super::panel::place_top(sel, area, s, false, up, &mut items, &mut extra)
     });
-    Toolbar { bar, pop, items, wrapped, above, texts, extra, mode, video: false }
+    Toolbar { bar, pop, items, wrapped, above, texts, extra, mode, video: false, docked: false }
+}
+
+/// The Edit window's groups: the overlay's tools, history and size groups,
+/// then Save, Save As, Save to Desktop, Copy, Upload (no Record, Copy
+/// text, Pin or Close: the window has its own).
+fn docked_groups(inp: &Input) -> [Group; 4] {
+    let [tools, history, size, _] = groups(inp);
+    let out = [Act::Save, Act::SaveAs, Act::SaveDesktop, Act::Copy, Act::Upload].into_iter().map(|a| (Kind::Btn(a), false, BTN)).collect();
+    [tools, history, size, out]
+}
+
+/// The width the docked toolbar's buttons take (logical px).
+pub fn docked_width(inp: &Input) -> f32 {
+    row_w(&docked_groups(inp)) + 2.0 * DOCK_PAD
+}
+
+/// The docked toolbar's side padding (logical px).
+const DOCK_PAD: f32 = 8.0;
+
+/// The toolbar docked in the Edit window's top strip `bar` (the window's
+/// physical px, `inp.s` its scale): one row from the left, centred
+/// vertically; the palette, colour picker and save menu open below it,
+/// kept inside `inp.area` (the window).
+pub fn layout_docked(inp: &Input, bar: FRect) -> Toolbar {
+    let s = inp.s;
+    let gs = docked_groups(inp);
+    let mut items = Vec::new();
+    place_row(&gs, 0.0, 0.0, &mut items);
+    let (x, y) = (bar.x + DOCK_PAD * s, bar.y + ((bar.h - BTN * s) / 2.0).round());
+    for it in &mut items {
+        it.r = FRect { x: (x + it.r.x * s).round(), y: y + it.r.y * s, w: (it.r.w * s).round(), h: (it.r.h * s).round() };
+    }
+    let mut texts = Vec::new();
+    let pop = match (inp.pick, inp.palette, inp.save_menu) {
+        (Some(pv), _, _) => Some(place_picker(pv, bar, false, &mut items, inp)),
+        (None, Some(colors), _) => Some(place_palette(colors, bar, false, &mut items, inp)),
+        (None, None, Some(keys)) => {
+            texts.extend(keys.iter().cloned());
+            Some(place_save_menu(bar, false, &mut items, inp))
+        }
+        (None, None, None) => None,
+    };
+    Toolbar { bar, pop, items, wrapped: false, above: false, texts, extra: Vec::new(), mode: None, video: false, docked: true }
 }
 
 /// The save menu under (or over) the Save button: Save As, Save to
@@ -671,6 +717,7 @@ impl Toolbar {
             extra: self.extra.iter().map(|r| f(*r)).collect(),
             mode: self.mode.map(f),
             video: self.video,
+            docked: self.docked,
         }
     }
 }

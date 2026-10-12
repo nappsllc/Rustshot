@@ -32,6 +32,9 @@ mod tools;
 mod draw;
 mod mini;
 mod select;
+mod input;
+// The editor in a normal window: the Edit window's canvas.
+pub mod host;
 
 /// Chrome styling shared with the window control kit (`crate::ui`).
 pub(crate) mod style {
@@ -1339,708 +1342,43 @@ impl App {
         self.edit_tx(|this, edit| this.handle_key(edit, vk, repeat, mods));
     }
 
+    /// The pointer as a point.
+    fn mouse_pt(&self) -> Pt {
+        Pt::new(self.mouse.0 as f32, self.mouse.1 as f32)
+    }
+
     fn handle_key(&mut self, edit: &mut Edit, vk: u32, repeat: bool, mods: Mods) {
-        let left = vk == wind::key::LEFT;
-        let right = vk == wind::key::RIGHT;
-        let up = vk == wind::key::UP;
-        let down = vk == wind::key::DOWN;
-        let arrows = [left, right, up, down];
-        let is_arrow = arrows.iter().any(|a| *a);
-        let escape = vk == wind::key::ESCAPE;
-        let enter = vk == wind::key::RETURN;
-        let editing = vk == wind::key::BACK || vk == wind::key::DELETE;
-        // Auto-repeat: selection nudges and text editing keys repeat,
-        // everything else is edge-triggered.
-        if repeat && !is_arrow && !editing {
-            return;
-        }
-
-        // The UI size keys (Ctrl/Alt chords) work in every mode, the text
-        // draft and the colour picker included.
-        if (mods.ctrl || mods.alt)
-            && (edit.text.is_some() || edit.pick.is_some() || edit.obj.cedit.is_some())
-            && let Some(a @ (Action::UiBigger | Action::UiSmaller | Action::UiReset)) = edit.keys.resolve(vk, mods)
-        {
-            let now = Instant::now();
-            match a {
-                Action::UiBigger => edit.set_ui_size(edit.cfg.ui_scale.bigger(), now),
-                Action::UiSmaller => edit.set_ui_size(edit.cfg.ui_scale.smaller(), now),
-                _ => edit.set_ui_size(UiSize::Auto, now),
-            }
-            return;
-        }
-
-        // An object drag: Esc puts everything back and ends it; any other
-        // key waits for the release (no edit under the drag's feet).
-        if edit.obj_dragging() {
-            if escape {
-                edit.cancel_obj_drag();
-            }
-            return;
-        }
-
-        // Text editing mode consumes keys.
-        if edit.text.is_some() {
-            if escape {
-                edit.text = None;
-                return;
-            }
-            if enter && !mods.shift {
-                self.commit_text(edit);
-                return;
-            }
-            let td = edit.text.as_mut().expect("text draft");
-            if left {
-                td.caret = prev_boundary(&td.text, td.caret);
-            } else if right {
-                td.caret = next_boundary(&td.text, td.caret);
-            } else if vk == wind::key::HOME {
-                td.caret = 0;
-            } else if vk == wind::key::END {
-                td.caret = td.text.len();
-            } else if vk == wind::key::BACK && td.caret > 0 {
-                let p = prev_boundary(&td.text, td.caret);
-                td.text.replace_range(p..td.caret, "");
-                td.caret = p;
-            } else if vk == wind::key::DELETE {
-                let n = next_boundary(&td.text, td.caret);
-                td.text.replace_range(td.caret..n, "");
-            }
-            td.at = Instant::now();
-            return;
-        }
-
-        // Typing in a callout consumes keys.
-        if edit.obj.cedit.is_some() {
-            edit.callout_key(vk);
-            return;
-        }
-
-        // The colour picker takes every key while it is open.
-        if edit.pick.is_some() {
-            edit.pick_key(vk, mods);
-            return;
-        }
-
-        // Selected objects: their actions first (Del, Ctrl+D...), and
-        // the arrows nudge them (Shift: 10 px).
-        if !edit.obj.sel.is_empty() {
-            if let Some(a) = edit.keys.resolve_objects(vk, mods)
-                && let Some(act) = act_of(a)
-            {
-                self.apply_act(edit, act);
-                return;
-            }
-            if is_arrow && !mods.ctrl && !mods.alt {
-                let k = if mods.shift { 10.0 } else { 1.0 };
-                let (dx, dy) = if left {
-                    (-k, 0.0)
-                } else if right {
-                    (k, 0.0)
-                } else if up {
-                    (0.0, -k)
-                } else {
-                    (0.0, k)
-                };
-                edit.nudge(dx, dy);
-                return;
-            }
-        }
-
-        // Tab / Shift+Tab: into the part of the window under the pointer
-        // and back out while snapping to windows (built in, like the arrows).
-        if vk == wind::key::TAB && !mods.ctrl && !mods.alt && edit.snap_rect().is_some() {
-            if mods.shift {
-                edit.hover_win.outer();
-            } else {
-                edit.hover_win.deeper();
-            }
-            if edit.cfg.snap_tab_hint {
-                // The hint has done its job: not shown again.
-                edit.cfg.snap_tab_hint = false;
-                edit.pending.set("snap_tab_hint".into(), Some("false".into()), Instant::now());
-            }
-            return;
-        }
-
-        // Arrow keys nudge / resize the selection (built in, not remappable).
-        if is_arrow && edit.sel.is_some() && !mods.ctrl && !mods.alt {
-            let step = edit.shot.scale.round().max(1.0);
-            let dir = if left {
-                (-1.0, 0.0)
-            } else if right {
-                (1.0, 0.0)
-            } else if up {
-                (0.0, -1.0)
-            } else {
-                (0.0, 1.0)
-            };
-            let mut r = edit.sel.unwrap();
-            if mods.shift {
-                if dir.0 < 0.0 {
-                    r.x -= step;
-                    r.w += step;
-                } else if dir.0 > 0.0 {
-                    r.w += step;
-                }
-                if dir.1 < 0.0 {
-                    r.y -= step;
-                    r.h += step;
-                } else if dir.1 > 0.0 {
-                    r.h += step;
-                }
-                r.clamp_to(edit.shot.size.0 as f32, edit.shot.size.1 as f32);
-            } else {
-                r.x += dir.0 * step;
-                r.y += dir.1 * step;
-                r.clamp_to(edit.shot.size.0 as f32, edit.shot.size.1 as f32);
-            }
-            edit.sel = Some(r);
-            return;
-        }
-
-        // Built in (not remappable): 1 / 2 switch Screenshot / Video; in
-        // video mode F / W / R pick Screen / Window / Region.
-        if let Some(act) = video_key(edit, vk, mods) {
-            self.apply_act(edit, act);
-            return;
-        }
-        let Some(action) = edit.keys.resolve(vk, mods) else { return };
-        match action {
-            Action::UiBigger => edit.set_ui_size(edit.cfg.ui_scale.bigger(), Instant::now()),
-            Action::UiSmaller => edit.set_ui_size(edit.cfg.ui_scale.smaller(), Instant::now()),
-            Action::UiReset => edit.set_ui_size(UiSize::Auto, Instant::now()),
-            Action::Cancel => cancel_key(edit),
-            // In record mode (or with the Record popover open) Enter
-            // records; never in a run with tasks (`gui --copy`: no Record).
-            Action::Accept if (edit.rec.mode || edit.rec.open) && edit.tasks.is_empty() => {
-                self.apply_act(edit, Act::RecStart)
-            }
-            Action::Accept => accept_key(edit),
-            Action::SelectAll => {
-                edit.sel = Some(FRect { x: 0.0, y: 0.0, w: edit.shot.size.0 as f32, h: edit.shot.size.1 as f32 });
-                edit.interact = Interact::None;
-            }
-            // The palette popover hangs off the toolbar, which needs a selection.
-            Action::TogglePalette if edit.sel.is_none() => {}
-            Action::Record if edit.sel.is_none() || !rec_ui::supported() || !edit.tasks.is_empty() => {}
-            a => {
-                if let Some(act) = act_of(a) {
-                    self.apply_act(edit, act);
-                }
-            }
-        }
+        let m = self.mouse_pt();
+        edit.handle_key(vk, repeat, mods, m);
     }
 
     fn char_input(&mut self, c: u16) {
-        self.edit_tx(|_this, edit| {
-            // UTF-16 in, one unit at a time: a pair's high half waits for
-            // its low one (emoji and every other character past U+FFFF).
-            let c = match c {
-                0xD800..=0xDBFF => {
-                    edit.obj.high = Some(c);
-                    return;
-                }
-                0xDC00..=0xDFFF => match edit.obj.high.take() {
-                    Some(h) => 0x10000 + (((h as u32) - 0xD800) << 10) + (c as u32 - 0xDC00),
-                    None => return,
-                },
-                c => {
-                    edit.obj.high = None;
-                    c as u32
-                }
-            };
-            if edit.pick.is_some() {
-                if let Some(ch) = char::from_u32(c) {
-                    edit.pick_char(ch);
-                }
-                return;
-            }
-            if edit.obj.cedit.is_some() {
-                if let Some(ch) = char::from_u32(c).filter(|ch| !ch.is_control()) {
-                    edit.callout_char(ch);
-                }
-                return;
-            }
-            let Some(td) = edit.text.as_mut() else { return };
-            let Some(ch) = char::from_u32(c) else { return };
-            if ch.is_control() {
-                return;
-            }
-            let mut idx = td.caret.min(td.text.len());
-            while idx > 0 && !td.text.is_char_boundary(idx) {
-                idx -= 1;
-            }
-            td.text.insert(idx, ch);
-            td.caret = idx + ch.len_utf8();
-            td.at = Instant::now();
-        });
+        self.edit_tx(|_this, edit| edit.char_input(c));
     }
 
     fn wheel(&mut self, delta: i32) {
-        self.edit_tx(|_this, edit| {
-            if edit.text.is_some() || edit.obj_dragging() {
-                return;
-            }
-            if delta != 0 && edit.last_wheel.elapsed() > Duration::from_millis(160) {
-                edit.last_wheel = Instant::now();
-                let dir = if delta > 0 { 1 } else { -1 };
-                if !edit.obj_act(Act::ObjSize(dir)) {
-                    edit.adjust_size(dir);
-                }
-            }
-        });
+        self.edit_tx(|_this, edit| edit.wheel(delta));
     }
 
     fn pointer_down(&mut self, x: i32, y: i32) {
-        self.edit_tx(|this, edit| {
-            let p = Pt::new(x as f32, y as f32);
-            // The toolbar (and open palette) sits on top: it consumes the press.
-            let on_bar = edit
-                .toolbar
-                .as_ref()
-                .filter(|tb| tb.contains(p))
-                .map(|tb| (tb.act_at(p), tb.index_at(p)));
-            if let Some((act, idx)) = on_bar {
-                edit.pressed = idx;
-                if edit.text.is_some() {
-                    this.commit_text(edit);
-                }
-                // A colour or size for the bubble being typed in keeps it
-                // open; anything else on the bar finishes it.
-                if !matches!(act, Some(Act::Color(_) | Act::Palette | Act::Size(_) | Act::Fill | Act::Wheel)) {
-                    edit.finish_callout_edit();
-                }
-                if let Some(pk) = &edit.pick {
-                    let ring = pk.target == pick::Target::Ring;
-                    let in_pop = edit.toolbar.as_ref().and_then(|t| t.pop).is_some_and(|r| hit(r, p));
-                    if !in_pop {
-                        // The bar: the picker closes (keeping its colour)
-                        // and the button acts; its own button only closes it.
-                        edit.close_picker(true);
-                        if act == Some(Act::Palette) || (ring && act == Some(Act::Record)) {
-                            return;
-                        }
-                    } else if let Some(Act::Pick(part)) = act {
-                        edit.pick_press(part, p);
-                        return;
-                    } else if act != Some(Act::Eyedrop)
-                        && let Some(pk) = edit.pick.as_mut()
-                    {
-                        pk.eyedrop = false;
-                    }
-                }
-                if let Some(act) = act {
-                    this.apply_act(edit, act);
-                }
-                return;
-            }
-            // The colour picker: the eyedropper picks the pixel; any other
-            // press outside closes it (keeping the colour), nothing else.
-            if let Some(pk) = &edit.pick {
-                if pk.eyedrop {
-                    let c = edit.sample(p);
-                    if let Some(pk) = edit.pick.as_mut() {
-                        pk.set_color(c.with_alpha(pk.a));
-                        pk.eyedrop = false;
-                    }
-                    edit.loupe = None;
-                    edit.pick_changed();
-                } else {
-                    edit.close_picker(true);
-                }
-                return;
-            }
-            // Text draft: a click outside commits it.
-            if edit.text.is_some() {
-                let td = edit.text.as_ref().expect("text draft");
-                let r = text_box_rect(
-                    edit.shot.size.0 as f32,
-                    td,
-                    edit.mem.size(Tool::Text),
-                    edit.font.as_ref(),
-                    edit.ui_scale(),
-                );
-                if !hit(r, p) {
-                    let (pos, text) = (td.pos, td.text.clone());
-                    edit.text = None;
-                    this.commit_text_str(edit, pos, text);
-                }
-                return;
-            }
-            if !matches!(edit.interact, Interact::None) {
-                return; // already dragging
-            }
-            edit.save_menu = false;
-            // The mini-toolbar over the selected objects.
-            if let Some(act) = edit.obj.mini.as_ref().filter(|m| m.contains(p)).map(|m| m.act_at(p)) {
-                if let Some(act) = act {
-                    this.apply_act(edit, act);
-                }
-                return;
-            }
-            // Typing in a callout: a click in it moves the caret, outside
-            // finishes (and does nothing else).
-            if edit.obj.cedit.is_some() {
-                if edit.in_cedit(p) {
-                    edit.cedit_click(p);
-                } else {
-                    edit.finish_callout_edit();
-                }
-                return;
-            }
-            let mods = drag_mods();
-            // The selection's handles answer with any tool.
-            if !edit.obj.sel.is_empty()
-                && let Some(h) = edit.obj_handle_at(p)
-            {
-                edit.handle_press(h);
-                return;
-            }
-            // The select tool picks (or starts a marquee); Ctrl+click picks
-            // with the others (the number tool keeps Ctrl for its tail).
-            // With a drawing tool, Ctrl+press on an object not selected
-            // still draws when it drags (Ctrl snaps lines): a click picks.
-            edit.obj.click_pick = None;
-            if edit.tool == Some(Tool::Select) {
-                if edit.select_press(p, mods, true) {
-                    return;
-                }
-            } else if mods.ctrl
-                && edit.tool != Some(Tool::Counter)
-                && let Some(i) = edit.obj_at(p)
-            {
-                let draws = matches!(edit.tool, Some(t) if t != Tool::Text && t != Tool::Callout);
-                if !draws || edit.obj.sel.contains(&i) {
-                    edit.select_press(p, mods, false);
-                    return;
-                }
-                edit.obj.click_pick = Some((i, p));
-            }
-            edit.obj.sel.clear();
-            // The callout tool on a bubble types in it.
-            if edit.tool == Some(Tool::Callout)
-                && let Some(i) = edit.obj_at(p).filter(|i| matches!(edit.objects[*i], Obj::Callout { .. }))
-            {
-                edit.begin_callout_edit(i, Some(p), false);
-                return;
-            }
-            if let Some(tool) = edit.tool {
-                if tool == Tool::Text {
-                    edit.text = Some(TextDraft {
-                        pos: p,
-                        text: String::new(),
-                        caret: 0,
-                        at: Instant::now(),
-                    });
-                    return;
-                }
-                edit.stroke_pts = vec![p];
-                edit.draft = edit.make_draft(tool, p, p);
-                edit.interact = Interact::Drawing { start: p };
-                return;
-            }
-            if let Some(sr) = edit.sel {
-                for (h, hp) in handle_points(sr) {
-                    if (hp.x - p.x).hypot(hp.y - p.y) <= HANDLE_HIT * edit.ui_scale() {
-                        let aspect = if sr.h > 0.0 { sr.w / sr.h } else { 1.0 };
-                        edit.interact = Interact::Resize {
-                            handle: h,
-                            orig: sr,
-                            aspect,
-                        };
-                        return;
-                    }
-                }
-                if hit(sr, p) {
-                    edit.interact = Interact::MoveSel {
-                        start: p,
-                        orig: sr,
-                    };
-                    return;
-                }
-            }
-            edit.interact = Interact::NewSel {
-                anchor: p,
-                moved: false,
-            };
-        });
+        let p = Pt::new(x as f32, y as f32);
+        self.edit_tx(|_this, edit| edit.pointer_down(p));
     }
 
     fn pointer_move(&mut self, x: i32, y: i32) {
         let _p = crate::perf::span(crate::perf::K::Ptr);
-        self.edit_tx(|_this, edit| {
-            if matches!(edit.interact, Interact::None) {
-                return;
-            }
-            let p = Pt::new(x as f32, y as f32);
-            let mods = drag_mods();
-            let img = (edit.shot.size.0 as f32, edit.shot.size.1 as f32);
-            // A click on a window selects it: a press that moved less than
-            // SNAP_CLICK_PX is still a click.
-            let click_px = if edit.snapping() { SNAP_CLICK_PX } else { CLICK_PX };
-            match &mut edit.interact {
-                Interact::None => {}
-                Interact::NewSel { anchor, moved } => {
-                    let anchor = *anchor;
-                    let dist = (p.x - anchor.x).hypot(p.y - anchor.y);
-                    if dist >= click_px {
-                        *moved = true;
-                    }
-                    if *moved {
-                        // A pointer past the shot edge (captured drag) stops
-                        // at the edge instead of pushing the rect back in.
-                        let p = Pt::new(p.x.clamp(0.0, img.0), p.y.clamp(0.0, img.1));
-                        let cur = if mods.shift {
-                            square_within(anchor, constrain_square(anchor, p), img)
-                        } else {
-                            p
-                        };
-                        let mut r = FRect::from_pts(anchor, cur);
-                        r.clamp_to(img.0, img.1);
-                        edit.sel = Some(r);
-                    }
-                }
-                Interact::MoveSel { start, orig } => {
-                    let (start, orig) = (*start, *orig);
-                    let mut r = FRect {
-                        x: orig.x + p.x - start.x,
-                        y: orig.y + p.y - start.y,
-                        w: orig.w,
-                        h: orig.h,
-                    };
-                    r.clamp_to(img.0, img.1);
-                    edit.sel = Some(r);
-                }
-                Interact::Resize {
-                    handle,
-                    orig,
-                    aspect,
-                } => {
-                    let (h, o, a) = (*handle, *orig, *aspect);
-                    edit.sel = Some(resize_rect(h, o, p, a, &mods, img));
-                }
-                Interact::Pick(part) => {
-                    let part = *part;
-                    edit.pick_drag(part, p);
-                }
-                Interact::Drawing { start } => {
-                    let start = *start;
-                    if edit.obj.click_pick.is_some_and(|(_, q)| (p.x - q.x).hypot(p.y - q.y) >= CLICK_PX) {
-                        edit.obj.click_pick = None;
-                    }
-                    edit.drag_draft(start, p, mods);
-                }
-                Interact::ObjMove { .. } | Interact::ObjResize { .. } | Interact::ObjPoint { .. } | Interact::Marquee { .. } => {
-                    edit.obj_drag(p, mods);
-                }
-            }
-        });
+        let p = Pt::new(x as f32, y as f32);
+        self.edit_tx(|_this, edit| edit.pointer_move(p, p));
     }
 
     fn pointer_up(&mut self) {
-        self.edit_tx(|_this, edit| {
-            edit.pressed = None;
-            end_interaction(edit);
-        });
+        self.edit_tx(|_this, edit| edit.pointer_up());
     }
 
-    fn commit_text(&mut self, edit: &mut Edit) {
-        let td = edit.text.take().expect("text draft");
-        self.commit_text_str(edit, td.pos, td.text);
-    }
-
-    fn commit_text_str(&mut self, edit: &mut Edit, pos: Pt, text: String) {
-        let text = text.trim_end_matches('\n').to_string();
-        if text.trim().is_empty() {
-            return;
-        }
-        edit.commit_object(Obj::Text {
-            pos,
-            text,
-            color: edit.mem.color(Tool::Text),
-            size: edit.mem.size(Tool::Text),
-        });
-    }
-
+    #[cfg(test)]
     fn apply_act(&mut self, edit: &mut Edit, act: Act) {
-        if act != Act::SaveMenu {
-            edit.save_menu = false;
-        }
-        match act {
-            // Video mode draws nothing (the recording is live).
-            Act::Tool(_) if edit.rec.open => {}
-            Act::Tool(t) => {
-                edit.finish_callout_edit();
-                edit.tool = if edit.tool == Some(t) { None } else { Some(t) };
-                // The selection stays for the select tool only.
-                if edit.tool != Some(Tool::Select) {
-                    edit.obj.sel.clear();
-                }
-                if t != Tool::Select {
-                    edit.last_tool = t;
-                }
-                edit.draft = None;
-                edit.stroke_pts.clear();
-            }
-            Act::SaveMenu => {
-                edit.save_menu = !edit.save_menu;
-                edit.palette_open = false;
-            }
-            Act::Undo | Act::Redo => {
-                edit.finish_callout_edit();
-                if act == Act::Undo {
-                    edit.undo();
-                } else {
-                    edit.redo();
-                }
-                // Indices may name other objects now.
-                edit.obj.sel.clear();
-            }
-            // With objects selected, size, fill and colour are theirs.
-            Act::Size(d) if !edit.obj.sel.is_empty() => {
-                edit.obj_act(Act::ObjSize(d));
-            }
-            Act::Size(d) => edit.adjust_size(d),
-            Act::Fill if !edit.obj.sel.is_empty() => {
-                edit.obj_act(Act::ObjFill);
-            }
-            Act::Fill => edit.toggle_fill(Instant::now()),
-            Act::Color(c) if !edit.obj.sel.is_empty() => {
-                edit.color_selection(c);
-                edit.palette_open = false;
-            }
-            Act::Color(c) => {
-                edit.set_tool_color(c, Instant::now());
-                edit.palette_open = false;
-            }
-            Act::ObjColor | Act::ObjFill | Act::ObjSize(_) | Act::ObjStyle(_) | Act::ObjFront | Act::ObjBack | Act::ObjDup | Act::ObjDelete => {
-                edit.obj_act(act);
-            }
-            // Pixelate and Invert have no colour: no palette (Space included).
-            Act::Palette if !edit.palette_open && !tools::has_color(edit.cur_tool()) && edit.sel_color().is_none() => {}
-            // Video mode has no palette (the panel replaces the toolbar).
-            Act::Palette if edit.rec.open => {}
-            Act::Palette => edit.palette_open = !edit.palette_open,
-            Act::Wheel if !tools::has_color(edit.cur_tool()) && edit.sel_color().is_none() => {}
-            Act::Wheel => edit.open_picker(pick::Target::Tool),
-            Act::RingSize(d) => {
-                let w = (edit.rec.opts.cam_ring_w as i32 + d).clamp(0, config::RING_WIDTH_MAX as i32) as u32;
-                edit.rec.opts.cam_ring_w = w;
-                edit.remember_ring(Instant::now());
-            }
-            Act::RingPalette => {
-                edit.rec.ring_pal = !edit.rec.ring_pal;
-                edit.rec.dev_open = None;
-            }
-            Act::RingColor(c) => {
-                edit.rec.opts.cam_ring = c;
-                edit.rec.ring_pal = false;
-                edit.remember_ring(Instant::now());
-            }
-            Act::RingWheel => {
-                edit.rec.ring_pal = false;
-                edit.open_picker(pick::Target::Ring);
-            }
-            // A press on the picker (the point matters): `pointer_down`.
-            Act::Pick(_) => {}
-            Act::PickColor(c) => {
-                if let Some(pk) = edit.pick.as_mut() {
-                    pk.set_color(c);
-                }
-                edit.pick_changed();
-            }
-            Act::Eyedrop => {
-                if let Some(pk) = edit.pick.as_mut() {
-                    pk.eyedrop = !pk.eyedrop;
-                }
-                edit.loupe = None;
-            }
-            // A run with tasks has no Record button.
-            Act::Record | Act::RecStart | Act::Mode(_) if !edit.tasks.is_empty() => {}
-            Act::Record => {
-                let on = !edit.rec.open;
-                edit.set_video(on);
-            }
-            Act::Mode(on) => edit.set_video(on),
-            Act::RecSource(src) => edit.set_source(src, Pt::new(self.mouse.0 as f32, self.mouse.1 as f32)),
-            Act::RecCountdown(on) => edit.rec.opts.countdown = on,
-            Act::RecGifMax(n) => edit.rec.opts.gif_max = n,
-            Act::RecFormat(crate::rec::RecFormat::Mp4) if edit.rec.mp4 != rec_ui::Mp4::Yes => {}
-            Act::RecFormat(f) => {
-                edit.rec.opts.format = f;
-                edit.rec.wanted = f;
-                edit.rec.dev_open = None;
-            }
-            Act::RecFps(n) => edit.rec.opts.set_fps(n),
-            Act::RecSystem => edit.rec.opts.system = !edit.rec.opts.system,
-            Act::RecMic => {
-                edit.rec.opts.mic = !edit.rec.opts.mic;
-                edit.rec.dev_open = None;
-                if edit.rec.opts.mic {
-                    edit.rec.load_devs();
-                }
-            }
-            // The bubble follows (`sync_bubble`).
-            Act::RecCamera => {
-                edit.rec.load_cams();
-                edit.rec.opts.camera = !edit.rec.opts.camera && edit.rec.has_cams();
-                edit.rec.dev_open = None;
-            }
-            Act::RecShape(sh) => edit.rec.opts.cam_shape = sh,
-            Act::RecDevMenu(dev) => {
-                edit.rec.ring_pal = false;
-                match dev {
-                    Dev::Mic => edit.rec.load_devs(),
-                    Dev::Cam => edit.rec.load_cams(),
-                }
-                edit.rec.dev_open = if edit.rec.dev_open == Some(dev) { None } else { Some(dev) };
-            }
-            Act::RecDev(dev, i) => edit.rec.pick(dev, i),
-            Act::RecStart => {
-                // Nothing selected: the monitor under the pointer.
-                if edit.sel.is_none() {
-                    let p = Pt::new(self.mouse.0 as f32, self.mouse.1 as f32);
-                    edit.sel = Some(pick_area(&edit.shot.monitors, None, p));
-                }
-                edit.rec.start = true;
-                edit.done = true;
-            }
-            Act::Copy => {
-                edit.tasks = vec![Task::Copy];
-                edit.done = true;
-            }
-            Act::CopyText => {
-                edit.tasks = vec![Task::Text];
-                edit.done = true;
-            }
-            Act::Save => {
-                edit.tasks = vec![Task::Save { path: None, ask: edit.cfg.save_dialog }];
-                edit.done = true;
-            }
-            Act::SaveAs => {
-                // Always ask, seeded with the auto-save path.
-                edit.tasks = vec![Task::Save { path: None, ask: true }];
-                edit.done = true;
-            }
-            Act::SaveDesktop => {
-                edit.tasks = vec![Task::SaveDesktop];
-                edit.done = true;
-            }
-            Act::Upload => {
-                edit.tasks = vec![Task::Upload];
-                edit.done = true;
-            }
-            Act::Pin => {
-                edit.tasks = vec![Task::Pin];
-                edit.done = true;
-            }
-            Act::Exit => {
-                edit.cancelled = true;
-                edit.done = true;
-            }
-            Act::Accept => edit.done = true,
-        }
+        let m = self.mouse_pt();
+        edit.apply_act(act, m);
     }
 }
 
@@ -2104,6 +1442,8 @@ impl Driver for App {
             Ev::Timer => return self.tick(),
             // Decorated-window events (`run_window`); the overlay never gets them.
             Ev::Close | Ev::Resize(..) | Ev::Focus(_) => return false,
+            // The middle button does nothing in the overlay.
+            Ev::Middle { .. } => return false,
         }
         self.pump();
         // Only `Ev::Timer` consults this value (returned from `tick`);
@@ -2339,13 +1679,18 @@ fn cancel_key(edit: &mut Edit) {
         edit.draft = None;
         edit.stroke_pts.clear();
         edit.palette_open = false;
-        edit.tool = None;
+        // The Edit window never closes on Esc: back to Select.
+        edit.tool = edit.host.as_ref().map(|_| Tool::Select);
     }
 }
 
 /// Enter: select everything if nothing is selected, then run the given
-/// tasks (or save).
+/// tasks (or save). The Edit window saves with its own Save.
 fn accept_key(edit: &mut Edit) {
+    if edit.host.is_some() {
+        edit.finish_callout_edit();
+        return;
+    }
     if edit.sel.is_none() {
         edit.sel = Some(FRect { x: 0.0, y: 0.0, w: edit.shot.size.0 as f32, h: edit.shot.size.1 as f32 });
         if edit.accept_on_select {
@@ -2399,6 +1744,7 @@ fn act_of(a: Action) -> Option<Act> {
         Action::SelectAll | Action::Accept | Action::Cancel => return None,
         Action::UiBigger | Action::UiSmaller | Action::UiReset => return None,
         Action::RecPause | Action::RecMute | Action::RecHidePill => return None,
+        Action::ZoomIn | Action::ZoomOut | Action::ZoomFit | Action::ZoomActual => return None,
     })
 }
 
@@ -2992,6 +2338,8 @@ struct Edit {
     baked_area: crate::objects::Px,
     /// The window in front when the capture started: (title, app).
     source: (String, String),
+    /// Hosted in the Edit window ([`host::Canvas`]); `None`: the overlay.
+    host: Option<host::Host>,
 }
 
 /// More merged dirty rects than this invalidate the whole window.
@@ -3063,6 +2411,7 @@ impl Edit {
             baked: Vec::new(),
             baked_area: (0, 0, 0, 0),
             source: Default::default(),
+            host: None,
         }
     }
 
@@ -3119,7 +2468,9 @@ impl Edit {
         self.composed.as_ref().unwrap_or(&self.base)
     }
 
-    fn rebuild(&mut self) {
+    /// Bake the objects into `composed` where they changed; returns the
+    /// rects re-baked (`None`: maybe everywhere).
+    fn rebuild(&mut self) -> Option<Vec<compose::PxRect>> {
         let area = self.spot_area();
         #[cfg(windows)]
         if let Some(scr) = self.gdi.as_mut() {
@@ -3128,8 +2479,9 @@ impl Edit {
             scr.set_objects(&self.objects, area, self.font.as_ref());
             self.baked_area = area;
             self.dirty = false;
-            return;
+            return None;
         }
+        let mut out = None;
         if self.objects.is_empty() {
             // Nothing to bake (e.g. undid the last object): drop the copy.
             self.composed = None;
@@ -3149,12 +2501,17 @@ impl Edit {
                 && !self.baked.iter().any(Obj::is_spot);
             match (self.composed.as_mut(), damage) {
                 (Some(composed), Some(_)) if first_spot => {
+                    // The pass dims the whole area.
+                    out = None;
                     if let Some(p) = crate::objects::SpotPass::of(&self.objects, area) {
                         p.apply(&mut crate::raster::Surf::from_buf(composed));
                     }
                 }
                 // Re-bake only where the objects (or the spotlights' area) changed.
-                (Some(composed), Some(rects)) => compose::rebake(composed, base, &self.objects, area, font, &rects),
+                (Some(composed), Some(rects)) => {
+                    compose::rebake(composed, base, &self.objects, area, font, &rects);
+                    out = Some(rects);
+                }
                 _ => {
                     // Re-bake in place; allocate only when it was `None`.
                     let composed = self.composed.get_or_insert_with(|| base.clone());
@@ -3175,6 +2532,7 @@ impl Edit {
         }
         self.baked_area = area;
         self.dirty = false;
+        out
     }
 
     fn push_history(&mut self) {
@@ -3363,8 +2721,13 @@ impl Edit {
         if tools::has_size(t) { (self.mem.size(t) as i32).to_string() } else { String::new() }
     }
 
-    /// The overlay's UI scale: the shot's OS scale times the UI size.
+    /// The overlay's UI scale: the shot's OS scale times the UI size. In
+    /// the Edit window: the window's scale over the zoom (chrome sizes in
+    /// image px that come out at the window's size on screen).
     fn ui_scale(&self) -> f32 {
+        if let Some(h) = &self.host {
+            return h.s;
+        }
         self.cfg.ui_scale.apply(self.shot.scale)
     }
 
@@ -3546,7 +2909,13 @@ impl Edit {
 
     /// Track the hovered toolbar item / handle; true when either changed.
     fn track_hover(&mut self, p: Pt) -> bool {
-        let hover = self.toolbar.as_ref().and_then(|tb| tb.index_at(p));
+        self.track_hover_at(p, p)
+    }
+
+    /// [`Edit::track_hover`] with the pointer at `p` on the capture and
+    /// at `pb` in the toolbar's coordinates.
+    fn track_hover_at(&mut self, p: Pt, pb: Pt) -> bool {
+        let hover = self.toolbar.as_ref().and_then(|tb| tb.index_at(pb));
         let reach = HANDLE_HIT * self.ui_scale();
         let hot = self.sel.and_then(|sr| {
             handle_points(sr).iter().position(|(_, q)| (q.x - p.x).hypot(q.y - p.y) <= reach)
