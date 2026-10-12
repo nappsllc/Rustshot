@@ -347,14 +347,34 @@ impl GdiScreen {
             .filter_map(|o| o.bounds(font))
             .map(|b| PxRect::outer(b).intersect(&img))
             .fold(PxRect::default(), |u, b| u.union(&b));
-        if let Some(p) = &pass {
-            rect = rect.union(&PxRect::new(p.area.0, p.area.1, p.area.2, p.area.3)).intersect(&img);
+        // With spotlights the layer is the whole image: their dim follows
+        // the selection, which would grow it on every move.
+        if pass.is_some() {
+            rect = img;
         }
         if rect.is_empty() {
             self.layer = None;
             return;
         }
         let ext = |r: &PxRect| r.w() as i64 * r.h() as i64;
+        // The first spotlight, on top: its dim over what is there.
+        if let (Some(l), Some(p)) = (self.layer.as_ref(), pass.as_ref())
+            && objects.len() == l.baked.len() + 1
+            && objects.starts_with(&l.baked)
+            && p.at == l.baked.len()
+            && !l.baked.iter().any(Obj::is_spot)
+        {
+            if l.rect != img {
+                self.grow_layer(img);
+            }
+            let mut l = self.layer.take().expect("layer");
+            let (w, h) = (l.rect.w() as u32, l.rect.h() as u32);
+            p.apply(&mut Surf::with_origin(&mut l.px, w, h, l.rect.x0, l.rect.y0, Order::Bgra));
+            l.baked = objects.to_vec();
+            l.area = area;
+            self.layer = Some(l);
+            return;
+        }
         if let Some(l) = self.layer.as_ref() {
             let same_pass = crate::objects::SpotPass::of(&l.baked, l.area) == pass;
             if objects.starts_with(&l.baked) && same_pass && l.rect.contains(&rect) {

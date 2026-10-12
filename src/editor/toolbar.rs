@@ -22,7 +22,12 @@ const SEP_LEN: f32 = 16.0;
 const VALUE_W: f32 = 76.0;
 /// The busy-mode OK button spans the output buttons it replaces (Copy,
 /// Copy text, Save, Save As, Save to Desktop, Upload, Pin).
-const ACCEPT_W: f32 = 7.0 * BTN + 6.0 * IN_GAP;
+const ACCEPT_W: f32 = 5.0 * BTN + SAVE_MENU_W + 5.0 * IN_GAP;
+/// The Save split button's chevron (its menu: Save As, Save to Desktop).
+const SAVE_MENU_W: f32 = 16.0;
+/// The save menu: its width and row height (logical px).
+const MENU_W: f32 = 220.0;
+const MENU_ROW: f32 = 30.0;
 const ROW_GAP: f32 = 4.0;
 const SEL_GAP: f32 = 8.0;
 const NARROW: f32 = 260.0;
@@ -125,6 +130,9 @@ pub enum Act {
     PickColor(C4),
     /// The picker's eyedropper on/off.
     Eyedrop,
+    /// The Save split button's chevron: the menu with Save As and Save
+    /// to Desktop.
+    SaveMenu,
 }
 
 /// Which device dropdown of the Record popover.
@@ -205,6 +213,9 @@ pub enum Kind {
     PickAlpha,
     /// Recent colour `i`.
     Recent { i: usize, c: C4 },
+    /// A row of the save menu: its act, label, and its keys
+    /// (`Toolbar::texts[key]`).
+    MenuItem { act: Act, label: &'static str, key: usize },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -242,6 +253,9 @@ pub struct Input<'a> {
     pub fills: bool,
     /// The colour picker while it is open (over the others).
     pub pick: Option<&'a PickView<'a>>,
+    /// The save menu while it is open: the keys of Save As and Save to
+    /// Desktop.
+    pub save_menu: Option<&'a [String; 2]>,
 }
 
 /// What shapes the colour picker popover.
@@ -342,8 +356,7 @@ fn groups(inp: &Input) -> [Group; 4] {
             (Kind::Btn(Act::Copy), false, BTN),
             (Kind::Btn(Act::CopyText), false, BTN),
             (Kind::Btn(Act::Save), false, BTN),
-            (Kind::Btn(Act::SaveAs), false, BTN),
-            (Kind::Btn(Act::SaveDesktop), false, BTN),
+            (Kind::Btn(Act::SaveMenu), false, SAVE_MENU_W),
             (Kind::Btn(Act::Upload), false, BTN),
             (Kind::Btn(Act::Pin), false, BTN),
         ]);
@@ -427,10 +440,15 @@ pub fn layout(inp: &Input) -> Toolbar {
         it.r = FRect { x: x + it.r.x * s, y: y + it.r.y * s, w: it.r.w * s, h: it.r.h * s };
     }
     let bar = FRect { x, y, w: bw, h: bh };
-    let pop = match (inp.pick, inp.palette) {
-        (Some(pv), _) => Some(place_picker(pv, bar, above, &mut items, inp)),
-        (None, Some(colors)) => Some(place_palette(colors, bar, above, &mut items, inp)),
-        (None, None) => None,
+    let mut texts = Vec::new();
+    let pop = match (inp.pick, inp.palette, inp.save_menu) {
+        (Some(pv), _, _) => Some(place_picker(pv, bar, above, &mut items, inp)),
+        (None, Some(colors), _) => Some(place_palette(colors, bar, above, &mut items, inp)),
+        (None, None, Some(keys)) => {
+            texts.extend(keys.iter().cloned());
+            Some(place_save_menu(bar, above, &mut items, inp))
+        }
+        (None, None, None) => None,
     };
     // The mode switch above the selection (recording works here).
     let mut extra = Vec::new();
@@ -438,7 +456,21 @@ pub fn layout(inp: &Input) -> Toolbar {
         let up = above.then(|| pop.map_or(bar, |p| union(bar, p))).filter(|b| b.y1() <= sel.y + 0.5);
         super::panel::place_top(sel, area, s, false, up, &mut items, &mut extra)
     });
-    Toolbar { bar, pop, items, wrapped, above, texts: Vec::new(), extra, mode, video: false }
+    Toolbar { bar, pop, items, wrapped, above, texts, extra, mode, video: false }
+}
+
+/// The save menu under (or over) the Save button: Save As, Save to
+/// Desktop.
+fn place_save_menu(bar: FRect, above: bool, items: &mut Vec<Item>, inp: &Input) -> FRect {
+    let s = inp.s;
+    let (pw, ph) = (MENU_W * s, (2.0 * MENU_ROW + 2.0 * PAD) * s);
+    let anchor = items.iter().find(|it| it.kind == Kind::Btn(Act::Save)).map_or(bar, |it| it.r);
+    let (px, py) = place_pop(pw, ph, anchor, bar, above, inp);
+    for (i, (act, label)) in [(Act::SaveAs, "Save as\u{2026}"), (Act::SaveDesktop, "Save to Desktop")].into_iter().enumerate() {
+        let r = FRect { x: px + PAD * s, y: py + (PAD + i as f32 * MENU_ROW) * s, w: pw - 2.0 * PAD * s, h: MENU_ROW * s };
+        items.push(Item { kind: Kind::MenuItem { act, label, key: i }, r, disabled: false });
+    }
+    FRect { x: px, y: py, w: pw, h: ph }
 }
 
 /// Top-left of a `pw`x`ph` popover 6 px from the bar on the side away from
@@ -603,6 +635,7 @@ impl Toolbar {
             Kind::PickHex => Some(Act::Pick(Part::Hex)),
             Kind::PickAlpha => Some(Act::Pick(Part::Alpha)),
             Kind::Recent { c, .. } => Some(Act::PickColor(c)),
+            Kind::MenuItem { act, .. } => Some(act),
             Kind::Value
             | Kind::SepV
             | Kind::SepH
@@ -700,6 +733,7 @@ mod tests {
             colors: true,
             fills: true,
             pick: None,
+            save_menu: None,
         }
     }
 
@@ -716,9 +750,9 @@ mod tests {
     fn single_row_metrics() {
         let tb = layout(&inp(r(100.0, 100.0, 1040.0, 300.0)));
         assert!(!tb.wrapped);
-        assert_eq!((tb.bar.w, tb.bar.h), (1073.0, 44.0));
-        // 990 wide (+ the slack) is too narrow for the one row now.
-        assert!(layout(&inp(r(100.0, 100.0, 990.0, 300.0))).wrapped);
+        assert_eq!((tb.bar.w, tb.bar.h), (1023.0, 44.0));
+        // 960 wide (+ the slack) is too narrow for the one row now.
+        assert!(layout(&inp(r(100.0, 100.0, 960.0, 300.0))).wrapped);
     }
 
     /// Invert has no size, Pixelate and Invert no colour: those controls
@@ -735,7 +769,7 @@ mod tests {
             assert!(tb.contains(Pt::new(b.x + 5.0, b.y + 5.0)));
         }
         assert!(tb.items.iter().any(|it| it.kind == Kind::Value && it.disabled));
-        assert_eq!(tb.bar.w, 1073.0, "same width");
+        assert_eq!(tb.bar.w, 1023.0, "same width");
     }
 
     #[test]
@@ -743,7 +777,7 @@ mod tests {
         let mut i = inp(r(100.0, 100.0, 1040.0, 300.0));
         i.busy = true;
         let tb = layout(&i);
-        assert_eq!(tb.bar.w, 1073.0);
+        assert_eq!(tb.bar.w, 1023.0);
         assert!(tb.items.iter().any(|it| it.kind == Kind::Btn(Act::Accept)));
         assert!(!tb.items.iter().any(|it| it.kind == Kind::Btn(Act::Copy)));
     }
@@ -839,7 +873,7 @@ mod tests {
         i.s = 2.0;
         let tb = layout(&i);
         assert!(!tb.wrapped);
-        assert_eq!(tb.bar.w, 2146.0);
+        assert_eq!(tb.bar.w, 2046.0);
         assert_eq!(btn(&tb, Act::Undo).w, 64.0);
     }
 
@@ -990,7 +1024,7 @@ mod tests {
         let mut i = inp(r(100.0, 100.0, 1090.0, 300.0));
         i.record = true;
         let tb = layout(&i);
-        assert_eq!(tb.bar.w, 1073.0 + BTN + IN_GAP);
+        assert_eq!(tb.bar.w, 1023.0 + BTN + IN_GAP);
         let rec = btn(&tb, Act::Record);
         assert_eq!(rec.x1() + IN_GAP, btn(&tb, Act::Copy).x, "first of the output group");
         assert_eq!(tb.act_at(centre(rec)), Some(Act::Record));

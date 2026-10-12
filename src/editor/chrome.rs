@@ -101,6 +101,7 @@ pub fn act_icon(a: Act) -> &'static str {
             Tool::Spotlight => "spotlight",
             Tool::Magnify => "magnify",
         },
+        Act::SaveMenu => "chevron",
         Act::ObjFront => "front",
         Act::ObjBack => "back",
         Act::ObjDup => "dup",
@@ -205,6 +206,18 @@ pub fn toolbar(f: &mut Fb, ui: &Ui, tb: &Toolbar, st: &BarState, k: f32) {
                 f.fill_rect(r.x as i32, r.y as i32, r.w.max(1.0) as i32, r.h.max(1.0) as i32, ui.th.separator.fade(k));
             }
             Kind::Dot(c) => dot(f, ui, it.r, c, (c == st.color, hovered), kp),
+            Kind::MenuItem { label, key, .. } => {
+                let r = round(it.r);
+                if hovered {
+                    fill(f, r, ui.px(6.0), ui.th.accent_bg.fade(kp));
+                }
+                let cy = r.y + r.h / 2.0;
+                let fg = if hovered { ui.th.accent_fg } else { ui.th.text };
+                text(f, ui, 12.5, label, r.x + ui.px(10.0), cy, fg.fade(kp));
+                let keys = tb.texts.get(key).map_or("", String::as_str);
+                let kw = tw(ui, 11.0, keys);
+                text(f, ui, 11.0, keys, r.x1() - ui.px(10.0) - kw, cy, if hovered { ui.th.accent_fg } else { ui.th.text_muted }.fade(kp));
+            }
             Kind::SegTrack => {
                 let r = round(it.r);
                 let rad = ui.px(if r.h < ui.px(30.0) { 7.0 } else { 9.0 });
@@ -756,6 +769,11 @@ fn button(f: &mut Fb, ui: &Ui, it: &Item, act: Act, (hovered, pressed): (bool, b
     match act {
         Act::Palette => swatch(f, ui, cx, cy, st.color, k),
         Act::Fill => fill_icon(f, ui, cx, cy, st.ptool == Tool::Ellipse, st.fill && !it.disabled, fg),
+        // The split button's chevron: a small one.
+        Act::SaveMenu => {
+            let icon = ui.px(14.0);
+            draw_icon(f, "chevron", cx - icon / 2.0, cy - icon / 2.0, icon, fg);
+        }
         Act::Accept => {
             let (icon, gap) = (ui.px(20.0), ui.px(6.0));
             let x0 = cx - (icon + gap + tw(ui, 12.0, "OK")) / 2.0;
@@ -1094,6 +1112,7 @@ pub fn act_tip(a: Act, km: &Keymap) -> (&'static str, Vec<String>) {
         Act::ObjStyle(crate::objects::CalloutStyle::Rounded) => "Rounded",
         Act::ObjStyle(crate::objects::CalloutStyle::Cloud) => "Cloud",
         Act::ObjStyle(crate::objects::CalloutStyle::Ellipse) => "Ellipse",
+        Act::SaveMenu => "More ways to save",
         Act::ObjFront => "Bring to front",
         Act::ObjBack => "Send to back",
         Act::ObjDup => "Duplicate",
@@ -1478,6 +1497,7 @@ mod tests {
             colors: true,
             fills: true,
             pick: None,
+            save_menu: None,
         });
         let mut d = buf(800, 200, 0);
         let st = BarState {

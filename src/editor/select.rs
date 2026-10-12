@@ -63,6 +63,8 @@ pub(super) struct ObjState {
     pub pick_backup: Option<Vec<Obj>>,
     /// Snap guides fading out after a drag, and since when.
     pub fading: Option<(Vec<(Pt, Pt)>, Instant)>,
+    /// A typed character's UTF-16 high half, waiting for its low one.
+    pub high: Option<u16>,
 }
 
 /// Typing in a callout.

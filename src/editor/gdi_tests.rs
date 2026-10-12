@@ -703,13 +703,18 @@ fn perf_gdi_object_drag() {
         ("arrow end", 1, Pt::new(1120.0, 450.0)),
         ("callout side", n - 3, Pt::new(1500.0 + 420.0 + 4.0, 1760.0)),
         ("move spotlight", n - 1, Pt::new(1000.0, 250.0)),
+        // The capture's selection moved with a spotlight on it: the dim
+        // follows (its edges re-baked).
+        ("capture selection (spotlight)", usize::MAX, Pt::new(3500.0, 1900.0)),
     ] {
         let mut app = preview_app_with(theme::DARK, Some(sel), tiled_shot(w, h));
         for o in &objs {
             edit_of(&mut app).commit_object(o.clone());
         }
-        edit_of(&mut app).tool = Some(Tool::Select);
-        edit_of(&mut app).obj.sel = vec![idx];
+        if idx != usize::MAX {
+            edit_of(&mut app).tool = Some(Tool::Select);
+            edit_of(&mut app).obj.sel = vec![idx];
+        }
         settled(&mut app);
         attach(&mut app);
         let t = Target::new(w, h);
@@ -752,4 +757,30 @@ fn perf_gdi_object_drag() {
             .collect();
         println!("  per move: {}", per.join(", "));
     }
+    // The first spotlight comes and goes (undo): the selection dims at
+    // once, re-baked into the layer and painted from it.
+    let mut app = preview_app_with(theme::DARK, Some(sel), tiled_shot(w, h));
+    for o in objs.iter().filter(|o| !o.is_spot()) {
+        edit_of(&mut app).commit_object(o.clone());
+    }
+    settled(&mut app);
+    attach(&mut app);
+    let t = Target::new(w, h);
+    let _ = app.damage();
+    edit_of(&mut app).paint_gdi(t.dc, &[PxRect::image((w, h))]);
+    let mut times = Vec::new();
+    for k in 0..10 {
+        if k % 2 == 0 {
+            edit_of(&mut app).commit_object(objs[n - 1].clone());
+        } else {
+            edit_of(&mut app).undo();
+        }
+        let t0 = Instant::now();
+        let rects = app.damage().unwrap_or_else(|| vec![[0, 0, w as i32, h as i32]]);
+        let rects: Vec<PxRect> = rects.iter().map(|r| PxRect::new(r[0], r[1], r[2], r[3])).collect();
+        edit_of(&mut app).paint_gdi(t.dc, &rects);
+        let _ = t.pixels();
+        times.push(t0.elapsed().as_secs_f64() * 1000.0);
+    }
+    println!("GDI BENCH 4K first spotlight add/undo: median {:.2} max {:.2} ms", pct(&mut times.clone(), 0.5), pct(&mut times, 1.0));
 }

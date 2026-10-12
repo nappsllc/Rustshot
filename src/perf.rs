@@ -8,7 +8,8 @@
 //! (moves handled since the last paint), `dmg <n>/<px>` (rects and pixels
 //! of the last damage), `upd <n>/<px>` (the update region painted), then
 //! each probe's total ms and call count since the last paint (probes
-//! nest: `move` includes `ptr`, `damage` and `inval`; `bar` its `text`;
+//! nest: `move` includes `ptr`, `damage` and `inval`; `damage` includes
+//! `bake` (re-baking edited objects); `bar` its `text`;
 //! `snap` is a hover's window hit test). Only the Windows overlay (GDI
 //! renderer) writes paint lines; a capture's window snapshot adds one
 //! `snap <ms> list <ms> windows <n> parts <n>` line on every OS.
@@ -48,10 +49,12 @@ pub enum K {
     Inval,
     /// Window snapping: the hit test of a hover.
     Snap,
+    /// Re-baking the objects (in `damage`).
+    Bake,
 }
 
-const N: usize = K::Snap as usize + 1;
-pub const NAMES: [&str; N] = ["move", "damage", "compose", "bg", "sel", "label", "bar", "text", "blit", "put", "ptr", "inval", "snap"];
+const N: usize = K::Bake as usize + 1;
+pub const NAMES: [&str; N] = ["move", "damage", "compose", "bg", "sel", "label", "bar", "text", "blit", "put", "ptr", "inval", "snap", "bake"];
 
 /// 0 = not looked up yet, 1 = off, 2 = on.
 static STATE: AtomicU8 = AtomicU8::new(0);

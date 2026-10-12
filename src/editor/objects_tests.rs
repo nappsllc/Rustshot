@@ -666,3 +666,371 @@ fn render_object_previews() {
         save(&mut a, &format!("{tn}-magnify-selected.png"));
     }
 }
+
+// ---- review fixes ------------------------------------------------------
+
+/// Keys during an object drag: undo, redo, Del, Ctrl+D, restack and the
+/// arrows wait for the release (nothing changes under the drag, no panic
+/// on the next move); Esc puts the drag back and ends it.
+#[test]
+fn keys_during_a_drag_wait_or_cancel_it() {
+    let arrow = || Obj::Arrow { a: Pt::new(600.0, 600.0), b: Pt::new(800.0, 500.0), color: RED, width: 4.0 };
+    let keys: [(&str, u32, Mods); 8] = [
+        ("undo", 'Z' as u32, CTRL),
+        ("redo", 'Y' as u32, CTRL),
+        ("delete", key::DELETE, NONE),
+        ("backspace", key::BACK, NONE),
+        ("duplicate", 'D' as u32, CTRL),
+        ("front", key::RBRACKET, CTRL),
+        ("back", key::LBRACKET, CTRL),
+        ("nudge", key::LEFT, NONE),
+    ];
+    for (name, vk, mods) in keys {
+        for point in [true, false] {
+            let mut a = with(vec![rect(300.0, 300.0, 200.0, 100.0), arrow()]);
+            key(&mut a, 'V' as u32);
+            click(&mut a, 700, 550);
+            assert_eq!(ed(&mut a).obj.sel, vec![1]);
+            // On the end handle (a point drag) or the shaft (a move).
+            let from = if point { (800, 500) } else { (700, 550) };
+            down(&mut a, from.0, from.1);
+            mv(&mut a, from.0 + 20, from.1 + 10);
+            let (n, hi) = (ed(&mut a).objects.len(), ed(&mut a).hi);
+            key_m(&mut a, vk, mods);
+            assert_eq!((ed(&mut a).objects.len(), ed(&mut a).hi), (n, hi), "{name}: nothing happened");
+            mv(&mut a, from.0 + 40, from.1 + 20);
+            up(&mut a, from.0 + 40, from.1 + 20);
+            let e = ed(&mut a);
+            assert_eq!(e.objects.len(), 2, "{name}");
+            assert_eq!(e.hi, 3, "{name}: the drag is the one step");
+            assert!(matches!(e.objects[1], Obj::Arrow { .. }), "{name}: the arrow is still the arrow");
+            // After the release the key works again.
+            key_m(&mut a, 'Z' as u32, CTRL);
+            assert_eq!(ed(&mut a).objects[1], arrow(), "{name}: undo after the drag");
+        }
+    }
+    // Esc: the drag is undone on the spot and ends; nothing is committed.
+    let mut a = with(vec![arrow()]);
+    key(&mut a, 'V' as u32);
+    click(&mut a, 700, 550);
+    down(&mut a, 700, 550);
+    mv(&mut a, 760, 590);
+    key(&mut a, key::ESCAPE);
+    let e = ed(&mut a);
+    assert!(matches!(e.interact, Interact::None) && e.objects[0] == arrow() && e.hi == 1 && !e.done);
+    mv(&mut a, 800, 600);
+    up(&mut a, 800, 600);
+    assert_eq!(ed(&mut a).objects[0], arrow(), "later moves do nothing");
+    // The wheel waits too.
+    click(&mut a, 700, 550);
+    down(&mut a, 800, 500);
+    mv(&mut a, 820, 510);
+    ed(&mut a).last_wheel = Instant::now() - Duration::from_secs(1);
+    a.on_event(Ev::Wheel { delta: 120, x: 820, y: 510 });
+    up(&mut a, 820, 510);
+    assert_eq!(oe::size(&ed(&mut a).objects[0]), Some(4.0));
+}
+
+/// A drag whose list changes under it (it cannot from the keys now, but
+/// whatever else might) ends instead of writing a stale index.
+#[test]
+fn a_drag_over_a_changed_list_ends() {
+    let mut a = with(vec![rect(300.0, 300.0, 200.0, 100.0), Obj::Arrow { a: Pt::new(600.0, 600.0), b: Pt::new(800.0, 500.0), color: RED, width: 4.0 }]);
+    key(&mut a, 'V' as u32);
+    click(&mut a, 700, 550);
+    down(&mut a, 800, 500);
+    mv(&mut a, 810, 505);
+    ed(&mut a).objects.truncate(1);
+    mv(&mut a, 820, 510);
+    up(&mut a, 820, 510);
+    assert!(matches!(ed(&mut a).interact, Interact::None));
+    assert_eq!(ed(&mut a).objects.len(), 1);
+}
+
+/// A bubble just placed takes shape, size, fill and colour from the
+/// mini-toolbar and the toolbar and stays (typing stays open); the shape
+/// is remembered; one undo step when typing ends.
+#[test]
+fn a_new_callout_survives_restyling() {
+    let mut a = app();
+    key(&mut a, 'K' as u32);
+    click(&mut a, 400, 300);
+    assert!(ed(&mut a).obj.cedit.is_some());
+    let State::Edit(e) = std::mem::replace(&mut a.st, State::Hidden) else { unreachable!() };
+    let mut e = *e;
+    for act in [Act::ObjStyle(CalloutStyle::Ellipse), Act::ObjSize(1), Act::ObjFill, Act::Size(1), Act::Fill, Act::Color(C4::rgb(1, 2, 3))] {
+        a.apply_act(&mut e, act);
+        assert_eq!(e.objects.len(), 1, "{act:?}: the bubble stays");
+        assert!(e.obj.cedit.is_some(), "{act:?}: still typing");
+    }
+    assert_eq!(e.obj.style, CalloutStyle::Ellipse);
+    let Obj::Callout { style, size, fill, color, .. } = e.objects[0].clone() else { panic!() };
+    assert_eq!((style, size, fill, color), (CalloutStyle::Ellipse, 19.0, true, C4::rgb(1, 2, 3)));
+    assert_eq!(e.hi, 0, "no step while typing");
+    a.st = State::Edit(Box::new(e));
+    type_str(&mut a, "Hi");
+    key(&mut a, key::ESCAPE);
+    assert_eq!(ed(&mut a).hi, 1);
+    // The next bubble gets the shape.
+    click(&mut a, 600, 600);
+    assert!(matches!(ed(&mut a).objects[1], Obj::Callout { style: CalloutStyle::Ellipse, .. }));
+    // An empty new bubble given only a colour goes when typing ends, and
+    // leaves no phantom step behind.
+    ed(&mut a).color_selection(C4::rgb(9, 9, 9));
+    key(&mut a, key::ESCAPE);
+    assert_eq!(ed(&mut a).objects.len(), 1);
+    assert_eq!(ed(&mut a).hi, 1);
+}
+
+/// The colour picker and its eyedropper over a selection: the objects
+/// show the colour as it changes, keeping it is one undo step, Esc puts
+/// them back; the tool's own colour is left alone.
+#[test]
+fn the_picker_colours_the_selection() {
+    let mut a = with(vec![rect(300.0, 300.0, 200.0, 100.0)]);
+    let tool = ed(&mut a).mem.color(Tool::Rect);
+    key(&mut a, 'V' as u32);
+    click(&mut a, 350, 301);
+    let e = ed(&mut a);
+    e.open_picker(pick::Target::Tool);
+    assert_eq!(e.pick.as_ref().unwrap().color(), RED, "starts at the selection's colour");
+    e.pick.as_mut().unwrap().set_color(C4::rgb(10, 200, 30));
+    e.pick_changed();
+    assert_eq!(oe::color(&e.objects[0]), Some(C4::rgb(10, 200, 30)), "live on the object");
+    assert_eq!(e.hi, 1, "no step yet");
+    e.close_picker(true);
+    assert_eq!(oe::color(&e.objects[0]), Some(C4::rgb(10, 200, 30)));
+    assert_eq!(e.hi, 2, "one step");
+    assert_eq!(e.mem.color(Tool::Rect), tool);
+    // Esc puts it back.
+    e.open_picker(pick::Target::Tool);
+    e.pick.as_mut().unwrap().set_color(C4::rgb(1, 1, 1));
+    e.pick_changed();
+    e.close_picker(false);
+    assert_eq!(oe::color(&e.objects[0]), Some(C4::rgb(10, 200, 30)));
+    assert_eq!(e.hi, 2);
+    // The eyedropper: a pixel of the capture.
+    e.open_picker(pick::Target::Tool);
+    let c = e.sample(Pt::new(150.0, 400.0));
+    e.pick.as_mut().unwrap().set_color(c);
+    e.pick_changed();
+    e.close_picker(true);
+    assert_eq!(oe::color(&e.objects[0]).map(|c| c.with_alpha(255)), Some(c.with_alpha(255)));
+}
+
+/// A spotlight dims what is below it in z-order; objects drawn after it
+/// stay bright. The dim follows the selection (moving it repaints and
+/// re-bakes the edges), and the export carries it.
+#[test]
+fn spotlights_dim_only_what_is_below() {
+    let below = rect(700.0, 250.0, 100.0, 100.0);
+    let above = Obj::RectFill { r: FRect { x: 900.0, y: 250.0, w: 100.0, h: 100.0 }, color: RED, width: 2.0 };
+    let mut a = with(vec![below.clone(), Obj::Spotlight { r: FRect { x: 300.0, y: 300.0, w: 200.0, h: 200.0 } }, above.clone()]);
+    let f = settled(&mut a);
+    let base = ed(&mut a).base.clone();
+    let red_dim = crate::objects::spot_dim(240);
+    assert_eq!(f.get_pixel(700, 300)[0], red_dim, "the outline below: dimmed");
+    assert_eq!(f.get_pixel(950, 300), [240, 68, 56, 255], "the fill above: bright");
+    assert_eq!(f.get_pixel(400, 400), base.get_pixel(400, 400), "inside: bright");
+    // Restacked under the spotlight: dimmed too.
+    ed(&mut a).obj.sel = vec![2];
+    let State::Edit(e) = std::mem::replace(&mut a.st, State::Hidden) else { unreachable!() };
+    let mut e = *e;
+    a.apply_act(&mut e, Act::ObjBack);
+    a.st = State::Edit(Box::new(e));
+    let f = settled(&mut a);
+    assert_eq!(f.get_pixel(950, 300)[0], red_dim);
+    // The selection shrinks: the dim follows it (the strip now outside is
+    // the overlay dim only), with repaints that cover it.
+    let k = assert_dirty_covers(&mut a, "selection with a spotlight", |a| ed(a).sel = Some(FRect { x: 150.0, y: 120.0, w: 1100.0, h: 700.0 }));
+    assert!(k < 0.5, "only the edges: {k}");
+    let e = ed(&mut a);
+    let out = e.export(e.sel.unwrap());
+    let p = out.get_pixel(1200 - 150, 300 - 120);
+    assert_eq!(p[0], crate::objects::spot_dim(base.get_pixel(1200, 300)[0]), "export dimmed outside the spot");
+}
+
+/// Hostile documents: non-finite numbers are refused, huge and negative
+/// sizes clamped, rects normalised, counts and lengths bounded; what is
+/// read renders quickly.
+#[test]
+fn hostile_annotations_are_refused_or_tamed() {
+    use crate::objects::from_json;
+    let doc = |o: &str| format!("{{\"version\":1,\"objects\":[{o}]}}");
+    for bad in [
+        "{\"type\":\"line\",\"a\":[1e400,0],\"b\":[1,2],\"color\":\"#000\",\"width\":1}",
+        "{\"type\":\"magnify\",\"src\":[0,0],\"dst\":[1,1],\"radius\":1e39,\"zoom\":2,\"color\":\"#fff\",\"width\":3}",
+        "{\"type\":\"number\",\"c\":[0,0],\"n\":1e400,\"color\":\"#000\",\"d\":20}",
+        "{\"type\":\"text\",\"pos\":[0,-1e300],\"text\":\"x\",\"color\":\"#000\",\"size\":10}",
+    ] {
+        assert!(from_json(&doc(bad)).is_err(), "{bad}");
+    }
+    let tame = from_json(&doc(
+        "{\"type\":\"magnify\",\"src\":[1e9,-1e9],\"dst\":[10,10],\"radius\":1e6,\"zoom\":1000,\"color\":\"#fff\",\"width\":-5},\
+         {\"type\":\"callout\",\"r\":[0,0,1e9,100],\"tail\":[5,500],\"text\":\"hi\",\"color\":\"#f00\",\"size\":-3,\"style\":\"cloud\",\"fill\":true},\
+         {\"type\":\"rect\",\"r\":[100,100,-50,-20],\"color\":\"#000\",\"width\":1e9},\
+         {\"type\":\"number\",\"c\":[1,1],\"n\":-5,\"color\":\"#000\",\"d\":0}",
+    ))
+    .unwrap();
+    let Obj::Magnify { src, radius, zoom, width, .. } = tame[0] else { panic!() };
+    assert_eq!((src, radius, zoom, width), (Pt::new(1e6, -1e6), 300.0, 8.0, 1.0));
+    let Obj::Callout { r, size, .. } = tame[1] else { panic!() };
+    assert_eq!((r.w, size), (1e6, 8.0));
+    let Obj::Rect { r, width, .. } = tame[2] else { panic!() };
+    assert_eq!((r, width), (FRect { x: 50.0, y: 80.0, w: 50.0, h: 20.0 }, 50.0));
+    assert!(matches!(tame[3], Obj::Counter { n: 0, d: 12.0, .. }));
+    // They render (and fast) into a small surface.
+    let t0 = Instant::now();
+    let mut img = PixBuf::new(200, 200);
+    let font = AnnotFont::load();
+    for o in &tame {
+        o.render(&mut img, font.as_ref());
+        let _ = oe::hit(o, Pt::new(10.0, 10.0), 4.0, font.as_ref());
+    }
+    assert!(t0.elapsed() < Duration::from_secs(2), "{:?}", t0.elapsed());
+    // Too many objects or points, too long a text; deep nesting; cut short.
+    let many = vec!["{\"type\":\"invert\",\"r\":[0,0,1,1]}"; 10_001].join(",");
+    assert!(from_json(&doc(&many)).is_err());
+    let pts = vec!["[1,1]"; 100_001].join(",");
+    assert!(from_json(&doc(&format!("{{\"type\":\"pencil\",\"pts\":[{pts}],\"color\":\"#000\",\"width\":1}}"))).is_err());
+    let long = "x".repeat(100_001);
+    assert!(from_json(&doc(&format!("{{\"type\":\"text\",\"pos\":[0,0],\"text\":\"{long}\",\"color\":\"#000\",\"size\":10}}"))).is_err());
+    assert!(from_json(&format!("{}{}", "[".repeat(10_000), "]".repeat(10_000))).is_err());
+    let full = doc("{\"type\":\"invert\",\"r\":[0,0,1,1]}");
+    for cut in 1..full.len() {
+        assert!(from_json(&full[..cut]).is_err(), "cut at {cut}");
+    }
+    assert!(from_json("{\"version\":\"1\",\"objects\":[]}").unwrap_err().to_string().contains("not a number"));
+    // A high surrogate without its low half: U+FFFD, then what follows.
+    let v = from_json(&doc("{\"type\":\"text\",\"pos\":[0,0],\"text\":\"\\ud83dA\\ud83d\\u0041\",\"color\":\"#000\",\"size\":10}")).unwrap();
+    assert!(matches!(&v[0], Obj::Text { text, .. } if text == "\u{FFFD}A\u{FFFD}A"), "{v:?}");
+}
+
+/// Emoji typed into a callout arrive as UTF-16 pairs and are kept.
+#[test]
+fn emoji_reach_the_callout() {
+    let mut a = app();
+    key(&mut a, 'K' as u32);
+    click(&mut a, 400, 300);
+    type_str(&mut a, "ok \u{1F600}!");
+    let Obj::Callout { text, .. } = &ed(&mut a).objects[0] else { panic!() };
+    assert_eq!(text, "ok \u{1F600}!");
+}
+
+/// Nudges in a quick run, and wheel ticks, are one undo step.
+#[test]
+fn nudges_and_wheel_ticks_coalesce() {
+    let mut a = with(vec![rect(300.0, 300.0, 200.0, 100.0)]);
+    key(&mut a, 'V' as u32);
+    click(&mut a, 350, 301);
+    for _ in 0..5 {
+        key(&mut a, key::RIGHT);
+    }
+    assert_eq!(r_of(&ed(&mut a).objects[0]).x, 305.0);
+    assert_eq!(ed(&mut a).hi, 2, "one step for the run");
+    for _ in 0..3 {
+        ed(&mut a).last_wheel = Instant::now() - Duration::from_secs(1);
+        a.on_event(Ev::Wheel { delta: 120, x: 350, y: 301 });
+    }
+    assert_eq!(oe::size(&ed(&mut a).objects[0]), Some(7.0));
+    assert_eq!(ed(&mut a).hi, 3);
+    key_m(&mut a, 'Z' as u32, CTRL);
+    assert_eq!(oe::size(&ed(&mut a).objects[0]), Some(4.0), "the ticks undo together");
+    assert_eq!(r_of(&ed(&mut a).objects[0]).x, 305.0);
+}
+
+/// A small object (a 12 px tag, a 16 px line) still moves by its middle;
+/// its ends stay reachable.
+#[test]
+fn small_objects_move_by_their_middle() {
+    let mut a = with(vec![
+        Obj::Counter { c: Pt::new(400.0, 400.0), n: 1, color: RED, d: 12.0, tail: None },
+        Obj::Line { a: Pt::new(600.0, 600.0), b: Pt::new(616.0, 600.0), color: RED, width: 3.0 },
+    ]);
+    key(&mut a, 'V' as u32);
+    click(&mut a, 400, 400);
+    {
+        let _m = hold(ALT);
+        drag(&mut a, (400, 400), (430, 410));
+    }
+    assert!(matches!(ed(&mut a).objects[0], Obj::Counter { c, .. } if c == Pt::new(430.0, 410.0)), "moved");
+    click(&mut a, 608, 600);
+    {
+        let _m = hold(ALT);
+        drag(&mut a, (608, 600), (618, 620));
+    }
+    assert!(matches!(ed(&mut a).objects[1], Obj::Line { a: p, .. } if p == Pt::new(610.0, 620.0)), "moved");
+    drag(&mut a, (626, 620), (700, 640));
+    assert!(matches!(ed(&mut a).objects[1], Obj::Line { b, .. } if b == Pt::new(700.0, 640.0)), "the end re-aims");
+}
+
+/// Undo and redo through every kind of object edit, interleaved.
+#[test]
+fn every_edit_undoes_and_redoes() {
+    let start = vec![
+        rect(300.0, 300.0, 200.0, 100.0),
+        Obj::Arrow { a: Pt::new(600.0, 600.0), b: Pt::new(800.0, 500.0), color: RED, width: 4.0 },
+        Obj::Callout { r: FRect { x: 900.0, y: 200.0, w: 200.0, h: 80.0 }, tail: Pt::new(920.0, 330.0), text: "x".into(), color: RED, size: 17.0, style: CalloutStyle::Rounded, fill: true },
+    ];
+    let mut a = with(start.clone());
+    key(&mut a, 'V' as u32);
+    let mut states = vec![ed(&mut a).objects.clone()];
+    let mut step = |a: &mut App, f: &dyn Fn(&mut App)| {
+        f(a);
+        states.push(ed(a).objects.clone());
+    };
+    let act = |x: Act| move |a: &mut App| {
+        let State::Edit(e) = std::mem::replace(&mut a.st, State::Hidden) else { unreachable!() };
+        let mut e = *e;
+        a.apply_act(&mut e, x);
+        a.st = State::Edit(Box::new(e));
+    };
+    step(&mut a, &|a| {
+        click(a, 350, 301);
+        drag(a, (506, 406), (566, 456));
+    });
+    step(&mut a, &|a| {
+        click(a, 700, 550);
+        drag(a, (800, 500), (850, 450));
+    });
+    step(&mut a, &|a| {
+        click(a, 350, 301);
+        act(Act::ObjFront)(a)
+    });
+    step(&mut a, &act(Act::ObjDup));
+    step(&mut a, &act(Act::ObjFill));
+    step(&mut a, &|a| {
+        click(a, 1000, 220);
+        act(Act::ObjStyle(CalloutStyle::Cloud))(a)
+    });
+    let n = states.len();
+    let hist = ed(&mut a).hi;
+    for i in (0..n - 1).rev() {
+        key_m(&mut a, 'Z' as u32, CTRL);
+        assert_eq!(ed(&mut a).objects, states[i], "undo to {i}");
+    }
+    for (i, s) in states.iter().enumerate().skip(1) {
+        key_m(&mut a, 'Y' as u32, CTRL);
+        assert_eq!(&ed(&mut a).objects, s, "redo to {i}");
+    }
+    assert_eq!(ed(&mut a).hi, hist);
+}
+
+/// The snap guides fade out over 100 ms after the drag (frames are due
+/// meanwhile), then go.
+#[test]
+fn guides_fade_out() {
+    let mut a = with(vec![rect(300.0, 300.0, 200.0, 100.0), rect(700.0, 520.0, 100.0, 100.0)]);
+    key(&mut a, 'V' as u32);
+    click(&mut a, 720, 521);
+    down(&mut a, 720, 521);
+    mv(&mut a, 730, 400);
+    mv(&mut a, 740, 305);
+    up(&mut a, 740, 305);
+    let now = Instant::now();
+    let e = ed(&mut a);
+    let (g, k) = e.guides_now(now);
+    assert!(!g.is_empty() && k > 0.5 && super::animating(e, None, now));
+    let (g, _) = e.guides_now(now + Duration::from_millis(150));
+    assert!(g.is_empty() && !e.guides_fading(now + Duration::from_millis(150)));
+}

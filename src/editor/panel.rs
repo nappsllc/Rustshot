@@ -400,6 +400,7 @@ mod tests {
             colors: true,
             fills: true,
             pick: None,
+            save_menu: None,
         }
     }
 

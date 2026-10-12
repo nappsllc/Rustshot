@@ -569,6 +569,7 @@ impl Edit {
     /// `stale()` and rebuilds `composed` when objects changed.
     pub(super) fn prepare(&mut self, app_notice: Option<&Toast>, mouse: (i32, i32), now: Instant) {
         if self.dirty || self.spots_stale() {
+            let _p = crate::perf::span(crate::perf::K::Bake);
             self.rebuild();
         }
         let (ww, _) = (self.shot.size.0 as f32, self.shot.size.1 as f32);
@@ -613,6 +614,7 @@ impl Edit {
             recents: &recents,
         });
         let busy = !self.tasks.is_empty();
+        let save_keys = [Act::SaveAs, Act::SaveDesktop].map(|a| chrome::act_tip(a, &self.keys).1.join("+"));
         self.toolbar = self.sel.map(|sel| {
             toolbar::layout(&toolbar::Input {
                 sel,
@@ -631,6 +633,7 @@ impl Edit {
                 colors: tools::has_color(cur),
                 fills: tools::has_fill(cur),
                 pick: pv.as_ref(),
+                save_menu: self.save_menu.then_some(&save_keys),
             })
         });
 
@@ -640,7 +643,7 @@ impl Edit {
         } else {
             self.mo.bar.snap(0.0);
         }
-        if self.palette_open || self.pick.is_some() {
+        if self.palette_open || self.pick.is_some() || self.save_menu {
             self.mo.pop.set(1.0, 100, now);
         } else {
             self.mo.pop.snap(0.0);
@@ -765,6 +768,10 @@ impl Edit {
 
         let (ghost, osel, marquee, caret, mini) = self.obj_scene(area, s);
         let (guides, guides_k) = self.guides_now(now);
+        // The save menu open: no tip over it from its own chevron.
+        if self.save_menu {
+            tip = tip.filter(|t| t.act != Act::SaveMenu);
+        }
         // A tip for the mini-toolbar's buttons too.
         if tip.is_none()
             && !interacting

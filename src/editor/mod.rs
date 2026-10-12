@@ -969,6 +969,7 @@ impl App {
             cfg,
             toolbar: None,
             palette_open: false,
+            save_menu: false,
             rec,
             done: false,
             cancelled: false,
@@ -1446,20 +1447,36 @@ impl App {
 
     fn char_input(&mut self, c: u16) {
         self.edit_tx(|_this, edit| {
+            // UTF-16 in, one unit at a time: a pair's high half waits for
+            // its low one (emoji and every other character past U+FFFF).
+            let c = match c {
+                0xD800..=0xDBFF => {
+                    edit.obj.high = Some(c);
+                    return;
+                }
+                0xDC00..=0xDFFF => match edit.obj.high.take() {
+                    Some(h) => 0x10000 + (((h as u32) - 0xD800) << 10) + (c as u32 - 0xDC00),
+                    None => return,
+                },
+                c => {
+                    edit.obj.high = None;
+                    c as u32
+                }
+            };
             if edit.pick.is_some() {
-                if let Some(ch) = char::from_u32(c as u32) {
+                if let Some(ch) = char::from_u32(c) {
                     edit.pick_char(ch);
                 }
                 return;
             }
             if edit.obj.cedit.is_some() {
-                if let Some(ch) = char::from_u32(c as u32).filter(|ch| !ch.is_control()) {
+                if let Some(ch) = char::from_u32(c).filter(|ch| !ch.is_control()) {
                     edit.callout_char(ch);
                 }
                 return;
             }
             let Some(td) = edit.text.as_mut() else { return };
-            let Some(ch) = char::from_u32(c as u32) else { return };
+            let Some(ch) = char::from_u32(c) else { return };
             if ch.is_control() {
                 return;
             }
@@ -1567,6 +1584,7 @@ impl App {
             if !matches!(edit.interact, Interact::None) {
                 return; // already dragging
             }
+            edit.save_menu = false;
             // The mini-toolbar over the selected objects.
             if let Some(act) = edit.obj.mini.as_ref().filter(|m| m.contains(p)).map(|m| m.act_at(p)) {
                 if let Some(act) = act {
@@ -1759,6 +1777,9 @@ impl App {
     }
 
     fn apply_act(&mut self, edit: &mut Edit, act: Act) {
+        if act != Act::SaveMenu {
+            edit.save_menu = false;
+        }
         match act {
             // Video mode draws nothing (the recording is live).
             Act::Tool(_) if edit.rec.open => {}
@@ -1774,6 +1795,10 @@ impl App {
                 }
                 edit.draft = None;
                 edit.stroke_pts.clear();
+            }
+            Act::SaveMenu => {
+                edit.save_menu = !edit.save_menu;
+                edit.palette_open = false;
             }
             Act::Undo | Act::Redo => {
                 edit.finish_callout_edit();
@@ -2195,6 +2220,10 @@ fn video_key(edit: &Edit, vk: u32, mods: Mods) -> Option<Act> {
 /// Esc: close a device list or the ring's palette, drop the current
 /// tool / draft / palette, or cancel the capture (video mode's Close).
 fn cancel_key(edit: &mut Edit) {
+    if edit.save_menu {
+        edit.save_menu = false;
+        return;
+    }
     if edit.obj.cedit.is_some() {
         edit.finish_callout_edit();
         return;
@@ -2845,6 +2874,8 @@ struct Edit {
     keys: Keymap,
     toolbar: Option<Toolbar>,
     palette_open: bool,
+    /// The Save split button's menu is open.
+    save_menu: bool,
     rec: RecPop,
     done: bool,
     cancelled: bool,
@@ -2933,7 +2964,17 @@ impl Edit {
                 .as_ref()
                 .and_then(|_| compose::object_damage(&self.baked, &self.objects, self.baked_area, area, font, size));
             let base = &self.base;
+            // The first spotlight, on top: its dim over what is there.
+            let first_spot = self.objects.len() == self.baked.len() + 1
+                && self.objects.starts_with(&self.baked)
+                && self.objects.last().is_some_and(Obj::is_spot)
+                && !self.baked.iter().any(Obj::is_spot);
             match (self.composed.as_mut(), damage) {
+                (Some(composed), Some(_)) if first_spot => {
+                    if let Some(p) = crate::objects::SpotPass::of(&self.objects, area) {
+                        p.apply(&mut crate::raster::Surf::from_buf(composed));
+                    }
+                }
                 // Re-bake only where the objects (or the spotlights' area) changed.
                 (Some(composed), Some(rects)) => compose::rebake(composed, base, &self.objects, area, font, &rects),
                 _ => {
@@ -3987,6 +4028,7 @@ mod tests {
             cfg: cfg.clone(),
             toolbar: None,
             palette_open: false,
+            save_menu: false,
             rec: RecPop::new(RecOpts::from_config(&cfg), false),
             done: false,
             cancelled: false,

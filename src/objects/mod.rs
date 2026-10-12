@@ -601,6 +601,7 @@ impl Obj {
     }
 
     /// Bake this object into the image.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn render(&self, buf: &mut PixBuf, font: Option<&AnnotFont>) {
         self.render_into(&mut Surf::from_buf(buf), font);
     }
