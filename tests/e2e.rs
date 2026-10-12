@@ -605,9 +605,10 @@ const NO_OTHER_HOTKEYS: &str = "record_hotkey = \"\"\ncapture_full_hotkey = \"\"
 /// src/settings_ui/draw.rs): Tools (10 caps), Stroke size (2), Copy ·
 /// Save · Upload (3), then Accept.
 const ACCEPT_TABS: usize = 6 + 10 + 2 + 3 + 1;
-/// From Accept's cap to the footer's OK: the 11 caps after it, the
-/// header's Reset to defaults, then Open config file, Apply, Cancel, OK.
-const ACCEPT_TO_OK: usize = 11 + 1 + 4;
+/// From Accept's cap to the footer's OK: the 11 overlay caps after it,
+/// the 3 While recording rows, the header's Reset to defaults, then Open
+/// config file, Apply, Cancel, OK.
+const ACCEPT_TO_OK: usize = 11 + 3 + 1 + 4;
 /// Tab presses from the rail to General's Save to field: Theme, the
 /// four accent swatches, Launch at login, Show icon in tray, Copy after
 /// capture, Play shutter sound, Change…, then the field.
