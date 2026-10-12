@@ -529,7 +529,22 @@ mod imp {
     mod tests {
         use super::*;
         use std::sync::mpsc;
-        use std::time::Duration;
+        use std::time::{Duration, Instant};
+
+        /// The primary at `path` once the last holder let go: polled, since
+        /// a process another test is spawning shares the lock file from
+        /// fork to exec and holds the flock that long (see the tests'
+        /// `primary_after_release` below).
+        fn primary_after_release(path: &Path) -> Instance {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                match try_acquire_at(path) {
+                    Some(i @ Instance::Primary(_)) => return i,
+                    None if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
+                    _ => panic!("{}: the lock was never released", path.display()),
+                }
+            }
+        }
 
         #[test]
         fn path_logic() {
@@ -561,7 +576,7 @@ mod imp {
             assert!(!path.exists());
             // A stale socket file is replaced.
             drop(UnixListener::bind(&path).unwrap());
-            assert!(matches!(acquire_at(&path), Some(Instance::Primary(_))));
+            assert!(matches!(primary_after_release(&path), Instance::Primary(_)));
             let _ = std::fs::remove_dir_all(&dir);
         }
 
@@ -577,7 +592,7 @@ mod imp {
             assert!(try_acquire_at(&path).is_none(), "held: must not become primary or signal");
             assert!(rx.recv_timeout(Duration::from_millis(300)).is_err(), "the holder was signalled");
             drop(g);
-            assert!(matches!(try_acquire_at(&path), Some(Instance::Primary(_))));
+            assert!(matches!(primary_after_release(&path), Instance::Primary(_)));
             let _ = std::fs::remove_dir_all(&dir);
         }
 
@@ -606,7 +621,7 @@ mod imp {
             assert!(matches!(rx.recv_timeout(Duration::from_secs(2)), Ok(HotEvent::Capture)));
             drop(g);
             // Released with the guard: a new primary can start.
-            assert!(matches!(acquire_at(&path), Some(Instance::Primary(_))));
+            assert!(matches!(primary_after_release(&path), Instance::Primary(_)));
             let _ = std::fs::remove_dir_all(&dir);
         }
 
@@ -671,6 +686,24 @@ mod tests {
 
     const WAIT: Duration = Duration::from_secs(10);
 
+    /// The primary of `name` once its last holder let go. Not at once: on
+    /// Unix a process another test is spawning at that moment shares the
+    /// lock file's description from fork to exec (the flock is held until
+    /// its exec closes it), so a release is seen within a moment, not
+    /// instantly. A bounded poll on the condition (never `signal`: the
+    /// released name has no one to answer).
+    fn primary_after_release(name: &str) -> super::Guard {
+        let deadline = Instant::now() + WAIT;
+        loop {
+            match imp::acquire_named(name, false) {
+                Some(Instance::Primary(g)) => return g,
+                None if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
+                Some(Instance::Solo(_)) => panic!("{name}: solo"),
+                _ => panic!("{name}: the lock was never released"),
+            }
+        }
+    }
+
     #[test]
     fn second_launch_signals_the_primary() {
         let name = unique("sig");
@@ -684,7 +717,7 @@ mod tests {
         assert!(rx.try_recv().is_err(), "one capture per launch");
         drop(g);
         // Released: the next launch is the primary again.
-        let _g = primary(&name);
+        let _g = primary_after_release(&name);
     }
 
     #[test]
@@ -700,7 +733,7 @@ mod tests {
         assert!(matches!(rx.recv_timeout(WAIT), Ok(HotEvent::Capture)));
         assert!(rx.try_recv().is_err(), "the try sent nothing");
         drop(g);
-        assert!(matches!(imp::acquire_named(&name, false), Some(Instance::Primary(_))));
+        let _g = primary_after_release(&name);
     }
 
     #[test]
@@ -731,7 +764,7 @@ mod tests {
         assert!(t.elapsed() < WAIT, "bounded retry");
         assert!(imp::acquire_named(&name, false).is_none());
         drop(lock);
-        let _g = primary(&name);
+        let _g = primary_after_release(&name);
     }
 
     /// Run by `stale_lock_after_the_holder_dies` as a child process: hold
@@ -784,16 +817,8 @@ mod tests {
         }
         #[cfg(unix)]
         assert!(imp::path_for(Some(&name)).exists(), "the killed holder left its socket file");
-        // The kernel drops a dead process' handles as it exits: a bounded
-        // poll on the condition, not a fixed sleep.
-        let deadline = Instant::now() + WAIT;
-        let g = loop {
-            match imp::acquire_named(&name, false) {
-                Some(Instance::Primary(g)) => break g,
-                None if Instant::now() < deadline => std::thread::yield_now(),
-                _ => panic!("the dead holder's lock was never released"),
-            }
-        };
+        // The kernel drops a dead process' handles as it exits.
+        let g = primary_after_release(&name);
         let (tx, rx) = mpsc::channel();
         g.listen(tx);
         assert!(matches!(imp::acquire_named(&name, true), Some(Instance::Signalled)));
