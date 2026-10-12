@@ -76,7 +76,7 @@ impl<'a> Fb<'a> {
     }
 
     /// The window in image coordinates: (x0, y0, x1, y1), end-exclusive.
-    fn bounds(&self) -> (i32, i32, i32, i32) {
+    pub fn bounds(&self) -> (i32, i32, i32, i32) {
         (
             self.ox,
             self.oy,

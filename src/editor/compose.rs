@@ -5,6 +5,7 @@
 //! plus the draft object and the chrome drawn through offset surfaces.
 //! `dirty_rects` diffs two scenes into the rects whose pixels may differ.
 
+use super::assist::{self, CrossUi, HintUi, MagUi, RingUi};
 use super::chrome::{self, BarState, ToastKind, Ui};
 use super::toolbar::{self, Act, Toolbar};
 use super::{animating, caret_on, palette_colors, pick_area, text_box_rect, tools, Dimmer, Edit, Interact, Toast, Tool};
@@ -267,6 +268,8 @@ pub struct CaretUi {
 pub(super) enum El {
     Draft,
     Ghost,
+    /// The magnifier's crosshair (under the selection chrome and the bar).
+    Cross,
     Sel,
     ObjSel,
     Guides,
@@ -280,13 +283,16 @@ pub(super) enum El {
     Mini,
     Tip,
     Hint,
+    Mag,
     Loupe,
+    Ring,
 }
 
-const N_EL: usize = 16;
+const N_EL: usize = 19;
 const ELS: [El; N_EL] = [
     El::Draft,
     El::Ghost,
+    El::Cross,
     El::Sel,
     El::ObjSel,
     El::Guides,
@@ -300,7 +306,9 @@ const ELS: [El; N_EL] = [
     El::Mini,
     El::Tip,
     El::Hint,
+    El::Mag,
     El::Loupe,
+    El::Ring,
 ];
 
 /// Everything one frame paints, resolved at one instant. Two scenes
@@ -325,9 +333,14 @@ pub struct Scene {
     pub toast: Option<ToastUi>,
     pub bar: Option<BarUi>,
     pub tip: Option<TipUi>,
-    /// The empty-state hint: area, opacity, the snapping wording.
-    pub hint: Option<(FRect, f32, bool)>,
+    /// The first-open hint card.
+    pub hint: Option<HintUi>,
     pub loupe: Option<LoupeUi>,
+    /// The magnifier and its crosshair while a region is picked.
+    pub cross: Option<CrossUi>,
+    pub mag: Option<MagUi>,
+    /// The right-click color ring.
+    pub ring: Option<RingUi>,
     /// The drag's origin at 40 % (the objects as they were).
     pub ghost: Vec<Obj>,
     pub osel: Option<ObjSelUi>,
@@ -365,6 +378,9 @@ impl Scene {
             El::Tip => self.tip == o.tip,
             El::Hint => self.hint == o.hint,
             El::Loupe => self.loupe == o.loupe,
+            El::Cross => self.cross == o.cross,
+            El::Mag => self.mag == o.mag,
+            El::Ring => self.ring == o.ring,
         }
     }
 
@@ -648,8 +664,8 @@ impl Edit {
         } else {
             self.mo.pop.snap(0.0);
         }
-        let hint_on = self.sel.is_none() && !interacting;
-        self.mo.hint.set(if hint_on { 1.0 } else { 0.0 }, if hint_on { 120 } else { 100 }, now);
+        let hint_on = self.sel.is_none() && !interacting && self.assist.hint_live(now);
+        self.mo.hint.set(if hint_on { 1.0 } else { 0.0 }, if hint_on { 120 } else { assist::HINT_FADE_MS }, now);
 
         let dim_a = self.th.dim_alpha(self.cfg.contrast_opacity) as f32 * self.mo.dim.value(now);
         let objects = match &self.scene {
@@ -751,7 +767,8 @@ impl Edit {
             }
         });
         let kh = self.mo.hint.value(now);
-        let hint = (kh > 0.01).then_some((area, kh, self.snap.is_some() && self.tool.is_none()));
+        let hint = (kh > 0.01).then(|| HintUi { area, k: kh, parts: assist::hint_parts(&self.keys, self.snap.is_some() && self.tool.is_none()) });
+        let (cross, mag, ring) = self.assist_scene(Pt::new(mouse.0 as f32, mouse.1 as f32), s);
         // The eyedropper's loupe follows the pointer, off the toolbar.
         let on_chrome = |p: Pt| self.toolbar.as_ref().is_some_and(|t| t.contains(p));
         let loupe = match (self.pick.as_ref().filter(|p| p.eyedrop), self.loupe) {
@@ -809,6 +826,9 @@ impl Edit {
             tip,
             hint,
             loupe,
+            cross,
+            mag,
+            ring,
             bounds: Default::default(),
         };
         sc.bounds = ELS.map(|e| self.el_bounds(&sc, e));
@@ -864,8 +884,11 @@ impl Edit {
             El::Tip => sc.tip.as_ref().map_or(Vec::new(), |t| {
                 one(chrome::tooltip_bounds(&ui, t.at(), t.label, &t.keys))
             }),
-            El::Hint => sc.hint.map_or(Vec::new(), |(area, _, snap)| one(chrome::hint_bounds(&ui, area, snap))),
+            El::Hint => sc.hint.as_ref().map_or(Vec::new(), |h| one(chrome::hint_bounds(&ui, h.area, &h.parts))),
             El::Loupe => sc.loupe.as_ref().map_or(Vec::new(), |l| one(chrome::loupe_bounds(&ui, l.r))),
+            El::Cross => sc.cross.as_ref().map_or(Vec::new(), |c| assist::cross_bounds(c, sc.size)),
+            El::Mag => sc.mag.as_ref().map_or(Vec::new(), |m| assist::mag_bounds(&ui, m).into_iter().map(px_bounds).collect()),
+            El::Ring => sc.ring.as_ref().map_or(Vec::new(), |r| one(assist::ring_bounds(&ui, r))),
         }
     }
 
@@ -932,6 +955,11 @@ impl Edit {
         }
         let mut f = Fb::with_origin(out, w, r.x0, r.y0, order);
         let ui = self.ui(sc);
+        if let Some(c) = &sc.cross
+            && hits(El::Cross)
+        {
+            assist::cross(&mut f, &ui, c, sc.size);
+        }
         // A spotlight being drawn: its rect (the dim comes on release).
         if let Some(Obj::Spotlight { r: sr }) = &sc.draft
             && hits(El::Draft)
@@ -1029,15 +1057,25 @@ impl Edit {
         {
             chrome::tooltip(&mut f, &ui, t.at(), t.label, &t.keys, t.k);
         }
-        if let Some((area, kh, snap)) = sc.hint
+        if let Some(h) = &sc.hint
             && hits(El::Hint)
         {
-            chrome::hint(&mut f, &ui, area, kh, snap);
+            chrome::hint(&mut f, &ui, h.area, h.k, &h.parts);
+        }
+        if let Some(m) = &sc.mag
+            && hits(El::Mag)
+        {
+            assist::mag(&mut f, &ui, m);
         }
         if let Some(l) = &sc.loupe
             && hits(El::Loupe)
         {
             chrome::loupe(&mut f, &ui, l.r, &l.px);
+        }
+        if let Some(rg) = &sc.ring
+            && hits(El::Ring)
+        {
+            assist::ring(&mut f, &ui, rg);
         }
     }
 

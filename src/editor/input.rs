@@ -23,6 +23,14 @@ impl Edit {
         if repeat && !is_arrow && !editing {
             return;
         }
+        self.assist_input();
+        // The color ring takes the keys while it is open: Esc closes it.
+        if self.assist.ring.is_some() {
+            if escape {
+                self.assist.ring = None;
+            }
+            return;
+        }
 
         // The UI size keys (Ctrl/Alt chords) work in every mode, the text
         // draft and the color picker included.
@@ -185,6 +193,7 @@ impl Edit {
             Action::UiSmaller => self.set_ui_size(self.cfg.ui_scale.smaller(), Instant::now()),
             Action::UiReset => self.set_ui_size(UiSize::Auto, Instant::now()),
             Action::Cancel => cancel_key(self),
+            Action::CopyColor => self.copy_color(mouse),
             // In record mode (or with the Record popover open) Enter
             // records; never in a run with tasks (`gui --copy`: no Record).
             Action::Accept if (self.rec.mode || self.rec.open) && self.tasks.is_empty() => {
@@ -277,6 +286,11 @@ impl Edit {
     /// A press at `p`: on the toolbar (and its popover) first, else on
     /// the capture.
     pub(super) fn pointer_down(&mut self, p: Pt) {
+        self.assist_input();
+        if self.assist.ring.is_some() {
+            self.ring_click(p);
+            return;
+        }
         if !self.bar_press(p) {
             self.canvas_press(p);
         }

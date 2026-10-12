@@ -293,6 +293,9 @@ fn hover_repaints_cover_every_changed_pixel() {
     for th in [theme::DARK, theme::LIGHT] {
         let mut a = app();
         ed(&mut a).th = th;
+        // Snapping alone (the magnifier and the hint have their own tests).
+        ed(&mut a).cfg.magnifier = false;
+        ed(&mut a).assist.dismiss_hint(Instant::now());
         mv(&mut a, 700, 300);
         settled(&mut a);
         // The window's dimming flips: most of the frame, inherently.

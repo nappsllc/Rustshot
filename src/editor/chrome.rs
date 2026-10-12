@@ -368,7 +368,7 @@ pub(super) fn swatch_r(f: &mut Fb, ui: &Ui, cx: f32, cy: f32, rad: f32, c: C4, k
 }
 
 /// A rainbow swatch (every hue around it): the color picker.
-fn rainbow(f: &mut Fb, ui: &Ui, cx: f32, cy: f32, rad: f32, k: f32) {
+pub(super) fn rainbow(f: &mut Fb, ui: &Ui, cx: f32, cy: f32, rad: f32, k: f32) {
     let (x0, x1) = ((cx - rad - 1.0).floor() as i32, (cx + rad + 1.0).ceil() as i32);
     let (y0, y1) = ((cy - rad - 1.0).floor() as i32, (cy + rad + 1.0).ceil() as i32);
     for y in y0..y1 {
@@ -1214,30 +1214,12 @@ fn tooltip_rect(ui: &Ui, at: TipAt, label: &str, keys: &[String]) -> FRect {
     FRect { x, y, w, h }
 }
 
-enum HintPart {
-    T(&'static str),
-    K(&'static str),
+/// One piece of the overlay's hint line: words, or a key cap.
+#[derive(Clone, PartialEq, Debug)]
+pub enum HintPart {
+    T(String),
+    K(String),
 }
-
-const HINT_SNAP: [HintPart; 7] = [
-    HintPart::T("Click a window or drag to select"),
-    HintPart::T("·"),
-    HintPart::K("Enter"),
-    HintPart::T("to save"),
-    HintPart::T("·"),
-    HintPart::K("Esc"),
-    HintPart::T("to cancel"),
-];
-
-const HINT: [HintPart; 7] = [
-    HintPart::T("Drag to select"),
-    HintPart::T("·"),
-    HintPart::K("Enter"),
-    HintPart::T("to save"),
-    HintPart::T("·"),
-    HintPart::K("Esc"),
-    HintPart::T("to cancel"),
-];
 
 fn hint_part_w(ui: &Ui, p: &HintPart) -> f32 {
     match p {
@@ -1246,47 +1228,46 @@ fn hint_part_w(ui: &Ui, p: &HintPart) -> f32 {
     }
 }
 
-fn hint_parts(snap: bool) -> &'static [HintPart] {
-    if snap { &HINT_SNAP } else { &HINT }
-}
-
 /// Total width of the hint line (texts, key caps and 6 px gaps).
-fn hint_width(ui: &Ui, snap: bool) -> f32 {
-    let parts = hint_parts(snap);
-    parts.iter().map(|p| hint_part_w(ui, p)).sum::<f32>() + ui.px(6.0) * (parts.len() - 1) as f32
+fn hint_width(ui: &Ui, parts: &[HintPart]) -> f32 {
+    parts.iter().map(|p| hint_part_w(ui, p)).sum::<f32>() + ui.px(6.0) * parts.len().saturating_sub(1) as f32
 }
 
-/// "Drag to select · Enter to save · Esc to cancel" ("Click a window or
-/// drag to select" while snapping to windows), centred in the active monitor.
-/// While snapping it sits on a panel: the window outlined under it is
-/// shown plain (not dimmed), where white text would not read.
-pub fn hint(f: &mut Fb, ui: &Ui, area: FRect, k: f32, snap: bool) {
+/// The first-open hint card ("Drag to select · Ctrl+C copy · …", the
+/// keys as the keymap has them), centred in the active monitor on a
+/// faint panel: over a window outlined while snapping (shown plain, not
+/// dimmed) the words still read.
+pub fn hint(f: &mut Fb, ui: &Ui, area: FRect, k: f32, parts: &[HintPart]) {
     let sp = ui.px(6.0);
-    let total = hint_width(ui, snap);
+    let total = hint_width(ui, parts);
     let (mut x, cy) = (area.x + (area.w - total) / 2.0, area.y + area.h / 2.0);
-    let c = if snap { ui.th.text.fade(k) } else { C4::rgb(255, 255, 255).fade(0.7 * k) };
-    if snap {
-        surface(f, ui, hint_panel(ui, x, cy, total), 16.0, &SMALL_LAYERS, k);
-    }
-    for p in hint_parts(snap) {
+    let k = k * HINT_ALPHA;
+    surface(f, ui, hint_panel(ui, x, cy, total), 16.0, &SMALL_LAYERS, k);
+    for p in parts {
         let w = hint_part_w(ui, p);
         match p {
             HintPart::T(s) => {
-                text(f, ui, 13.0, s, x, cy, c);
+                let c = if s == HINT_DOT { ui.th.text_muted } else { ui.th.text };
+                text(f, ui, 13.0, s, x, cy, c.fade(k));
             }
-            HintPart::K(s) if snap => {
+            HintPart::K(s) => {
                 let h = ui.px(18.0);
                 let r = round(FRect { x, y: cy - h / 2.0, w, h });
                 fill(f, r, ui.px(4.0), ui.th.bg_pressed.fade(k));
-                text(f, ui, 11.0, s, x + (w - tw(ui, 11.0, s)) / 2.0, cy, c);
+                text(f, ui, 11.0, s, x + (w - tw(ui, 11.0, s)) / 2.0, cy, ui.th.text.fade(k));
             }
-            HintPart::K(s) => key_cap(f, ui, x, cy, w, s, k),
         }
         x += w + sp;
     }
 }
 
-/// The snapping hint's panel around a line `total` wide at `x`, `cy`.
+/// The separator between the hint's phrases.
+pub const HINT_DOT: &str = "\u{b7}";
+
+/// The hint card's opacity at its fullest ("faint").
+const HINT_ALPHA: f32 = 0.92;
+
+/// The hint's panel around a line `total` wide at `x`, `cy`.
 fn hint_panel(ui: &Ui, x: f32, cy: f32, total: f32) -> FRect {
     let (m, h) = (ui.px(12.0), ui.px(32.0));
     FRect { x: x - m, y: cy - h / 2.0, w: total + 2.0 * m, h }
@@ -1441,12 +1422,12 @@ pub fn tooltip_bounds(ui: &Ui, at: TipAt, label: &str, keys: &[String]) -> FRect
     surface_bounds(ui, tooltip_rect(ui, at, label, keys))
 }
 
-pub fn hint_bounds(ui: &Ui, area: FRect, snap: bool) -> FRect {
-    let total = hint_width(ui, snap);
+pub fn hint_bounds(ui: &Ui, area: FRect, parts: &[HintPart]) -> FRect {
+    let total = hint_width(ui, parts);
     let (x, cy) = (area.x + (area.w - total) / 2.0, area.y + area.h / 2.0);
     let m = ui.px(13.0);
     let line = FRect { x: x - m - AA, y: cy - ui.px(14.0) - AA, w: total + 2.0 * (m + AA), h: ui.px(28.0) + 2.0 * AA };
-    if snap { union(line, surface_bounds(ui, hint_panel(ui, x, cy, total))) } else { line }
+    union(line, surface_bounds(ui, hint_panel(ui, x, cy, total)))
 }
 
 #[cfg(test)]
