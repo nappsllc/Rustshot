@@ -102,6 +102,43 @@ pub(crate) fn fixture(tag: &str) -> (TempRoot, Store) {
     (root, st)
 }
 
+/// Fail closed: a capture whose annotations.json is there but cannot be
+/// read (broken, or from a newer build) is never copied, saved, pinned,
+/// opened or put in a folder as its bare original; with readable
+/// annotations and its saved file gone, Open uses the annotated picture.
+#[test]
+fn unreadable_annotations_never_fall_back_to_the_original() {
+    use crate::export::Task;
+    let (root, st) = fixture("hist-failclosed");
+    let e = st.list().into_iter().find(|e| e.meta.edited && !e.meta.kind.is_recording()).expect("an edited shot");
+    // Readable annotations, saved file gone: Open bakes them.
+    let f = file_of(&st, &e).expect("a file");
+    assert_eq!(f.file_name().unwrap(), "picture.png");
+    let want = picture(&st, &e).unwrap();
+    assert!(PixBuf::from_png(&std::fs::read(&f).unwrap()).unwrap() == want);
+    assert!(want != st.original(&e).unwrap(), "the arrow is in it");
+    let cfg = Config { save_path: root.0.join("out").display().to_string(), ..Config::default() };
+    for bad in ["{\"version\":3,\"objects\":[]}", "{\"version\":1,\"objects\":[{\"type\":\"pixelate\"", ""] {
+        std::fs::write(e.annotations(), bad).unwrap();
+        assert!(picture(&st, &e).is_err(), "{bad:?}");
+        assert!(file_of(&st, &e).is_err(), "{bad:?}: no file to open");
+        for task in [Task::Copy, Task::Save { path: None, ask: false }, Task::Pin] {
+            let d = run_export(&st, &e.id, task.clone(), &cfg);
+            assert_eq!(d.kind, crate::editor::style::ToastKind::Error, "{bad:?} {task:?}: {}", d.text);
+            assert!(d.text.contains("annotations"), "{}", d.text);
+        }
+        let dir = root.0.join("folder");
+        std::fs::create_dir_all(&dir).unwrap();
+        let d = save_to_folder(&st, std::slice::from_ref(&e.id), &dir);
+        assert_eq!(d.kind, crate::editor::style::ToastKind::Error, "{}", d.text);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "nothing written");
+    }
+    // No annotations file at all: the original is the picture.
+    let plain = st.list().into_iter().find(|e| !e.meta.edited && !e.meta.kind.is_recording()).unwrap();
+    let _ = std::fs::remove_file(plain.annotations());
+    assert!(picture(&st, &plain).unwrap() == st.original(&plain).unwrap());
+}
+
 fn history(st: &Store) -> History {
     let cfg = Config::default();
     History::new(st.clone(), cfg, TODAY)

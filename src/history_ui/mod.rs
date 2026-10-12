@@ -422,9 +422,12 @@ pub fn open_edit(id: &str) {
 }
 
 /// The picture of `e` as it looks now: its original with its objects.
+/// Fails closed: when `annotations.json` is there but cannot be read (a
+/// broken file, or one from a newer build), it is an error, never the
+/// original without the annotations (they may hide something).
 pub fn picture(store: &Store, e: &Entry) -> anyhow::Result<PixBuf> {
+    let objs = store.objects(e).map_err(|err| anyhow::anyhow!("its annotations cannot be read, so it is not shown without them ({err:#})"))?;
     let orig = store.original(e)?;
-    let objs = store.objects(e).unwrap_or_default();
     if objs.is_empty() {
         return Ok(orig);
     }
@@ -433,9 +436,20 @@ pub fn picture(store: &Store, e: &Entry) -> anyhow::Result<PixBuf> {
 }
 
 /// The file a capture opens as: the saved one (or the recording) when it
-/// is still there, else the original.
-pub fn file_of(e: &Entry) -> PathBuf {
-    e.meta.saved.iter().chain(e.meta.file.iter()).find(|p| p.is_file()).cloned().unwrap_or_else(|| e.original())
+/// is still there; else the original when it has no annotations, or the
+/// picture with them written next to it (`picture.png`, again each time).
+/// An error (not the original) when its annotations cannot be read.
+pub fn file_of(store: &Store, e: &Entry) -> anyhow::Result<PathBuf> {
+    if let Some(p) = e.meta.saved.iter().chain(e.meta.file.iter()).find(|p| p.is_file()) {
+        return Ok(p.clone());
+    }
+    if !e.annotations().exists() {
+        return Ok(e.original());
+    }
+    let img = picture(store, e)?;
+    let to = e.annotations().with_file_name("picture.png");
+    crate::export::write_atomic(&to, &img.to_png()?)?;
+    Ok(to)
 }
 
 /// What a worker reports back: a message, and whether the list changed.
@@ -451,6 +465,14 @@ fn ok(text: impl Into<String>) -> Done {
 
 fn fail(text: impl Into<String>) -> Done {
     Done { text: text.into(), kind: crate::editor::style::ToastKind::Error, changed: false }
+}
+
+pub(super) fn ok_done() -> Done {
+    ok("")
+}
+
+pub(super) fn fail_done(text: impl Into<String>) -> Done {
+    fail(text)
 }
 
 /// Copy, Save, Save As, Upload, Pin of entry `id` (on a worker thread:
@@ -518,6 +540,7 @@ pub fn run_export(store: &Store, id: &str, task: crate::export::Task, cfg: &Conf
 /// were taken).
 pub fn save_to_folder(store: &Store, ids: &[String], dir: &std::path::Path) -> Done {
     let mut n = 0;
+    let mut why = None;
     for id in ids {
         let Some(e) = store.get(id) else { continue };
         let t = e.meta.captured;
@@ -532,14 +555,25 @@ pub fn save_to_folder(store: &Store, ids: &[String], dir: &std::path::Path) -> D
         }
         let name = format!("{:04}-{:02}-{:02}_{:02}-{:02}-{:02}.png", t.0, t.1, t.2, t.3, t.4, t.5);
         let to = crate::export::unique_path(&dir.join(name));
-        if let Ok(img) = picture(store, &e)
-            && let Ok(png) = img.to_png()
+        let img = match picture(store, &e) {
+            Ok(img) => img,
+            Err(err) => {
+                // Not the original without its annotations.
+                why.get_or_insert(format!("{err:#}"));
+                continue;
+            }
+        };
+        if let Ok(png) = img.to_png()
             && std::fs::write(&to, png).is_ok()
         {
             n += 1;
         }
     }
-    if n == ids.len() { ok(format!("Saved {n} to {}", dir.display())) } else { fail(format!("Saved {n} of {}", ids.len())) }
+    match (n == ids.len(), why) {
+        (true, _) => ok(format!("Saved {n} to {}", dir.display())),
+        (false, Some(w)) => fail(format!("Saved {n} of {}: a capture could not be read: {w}", ids.len())),
+        (false, None) => fail(format!("Saved {n} of {}", ids.len())),
+    }
 }
 
 // --- the window -----------------------------------------------------------------
