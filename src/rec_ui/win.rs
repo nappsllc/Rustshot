@@ -343,6 +343,11 @@ impl BarWin {
     /// Draw `v` (when it changed), at the DPI of the monitor it is on;
     /// placed by `geom` the first time and again when its size changes.
     pub(crate) fn show(&mut self, geom: &Geom, th: &Theme, v: &BarView) {
+        if v.hidden {
+            self.layer.hide();
+            self.drawn = None; // drawn again when shown
+            return;
+        }
         let font = Some(crate::fonts::ui_font());
         let spot = super::spot_bar(geom, self.spot, |s| {
             let p = bar::layout(&Ui { th, s, font }, v).panel;

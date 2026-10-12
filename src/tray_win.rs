@@ -291,11 +291,12 @@ fn show_menu(hwnd: HWND) {
         let items = tray::current_menu();
         let Ok(menu) = CreatePopupMenu() else { return };
         for (i, item) in items.iter().enumerate() {
-            if *item == MenuItem::Quit {
+            if *item == MenuItem::Separator {
                 let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+                continue;
             }
             let mut flags = MF_STRING;
-            if matches!(item, MenuItem::Autostart(true)) {
+            if item.checked() == Some(true) {
                 flags |= MF_CHECKED;
             }
             let label: Vec<u16> = item.label().encode_utf16().chain(Some(0)).collect();
@@ -317,20 +318,12 @@ fn show_menu(hwnd: HWND) {
 }
 
 fn run(hwnd: HWND, item: MenuItem) {
-    match item {
-        MenuItem::StopRecording => send(HotEvent::StopRecording),
-        MenuItem::Capture => send(HotEvent::Capture),
-        MenuItem::Quit => send(HotEvent::Quit),
-        MenuItem::Settings => crate::settings_ui::show(),
-        MenuItem::Autostart(_) => {
-            if let Err(e) = crate::actions::toggle_autostart() {
-                *BALLOON.lock().unwrap() = Some(format!("Could not change Start at login: {e}"));
-                unsafe {
-                    let _ = PostMessageW(Some(hwnd), WM_TRAY_BALLOON, WPARAM(0), LPARAM(0));
-                }
-            }
+    let Some(tx) = TX.lock().unwrap().clone() else { return };
+    if let Err(e) = tray::activate(item, &tx) {
+        *BALLOON.lock().unwrap() = Some(e);
+        unsafe {
+            let _ = PostMessageW(Some(hwnd), WM_TRAY_BALLOON, WPARAM(0), LPARAM(0));
         }
-        MenuItem::CheckUpdates => crate::actions::check_updates(),
     }
 }
 
@@ -371,8 +364,7 @@ pub fn handle(hwnd: HWND, m: u32, _w: WPARAM, l: LPARAM) -> Option<LRESULT> {
         }
         WM_TRAYICON => match l.0 as u32 {
             // While recording, a click stops it (the menu has the same).
-            WM_LBUTTONUP if tray::is_recording() => send(HotEvent::StopRecording),
-            WM_LBUTTONUP => send(HotEvent::Capture),
+            WM_LBUTTONUP => send(tray::click_event()),
             BALLOON_CLICK => {
                 if let Some(dir) = SAVED.lock().unwrap().take() {
                     crate::actions::open_path(&dir);

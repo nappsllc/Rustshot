@@ -1032,6 +1032,8 @@ pub struct Run {
     narrow: bool,
     /// The user toggled the compact pill (the timer, H).
     compact_user: bool,
+    /// The user hid the pill (the tray, the while-recording chord).
+    pill_hidden: bool,
     /// Discard pressed: the file is deleted once it is finished.
     discard: bool,
     /// The microphone has been silent since (while recording).
@@ -1065,6 +1067,7 @@ impl Run {
             cam: cam.then_some(false),
             narrow,
             compact_user: false,
+            pill_hidden: false,
             discard: false,
             silent_since: None,
             mic_noted: false,
@@ -1290,6 +1293,19 @@ impl Run {
         self.compact_user = !self.compact_user;
     }
 
+    /// Hide the control pill or show it again (the tray, the while-recording
+    /// chord): the recording goes on; the tray and the hotkeys still stop it.
+    pub fn toggle_pill(&mut self, now: Instant) {
+        self.pill_hidden = !self.pill_hidden;
+        self.show(now);
+    }
+
+    /// What the tray menu shows of this recording.
+    pub fn menu_state(&self) -> crate::tray::RecMenu {
+        let v = self.view(Instant::now());
+        crate::tray::RecMenu { paused: v.paused, mic: v.mic, cam: v.cam, pill_hidden: self.pill_hidden }
+    }
+
     /// The microphone is being recorded (its source opened).
     fn has_mic(&self) -> bool {
         self.mic.open.load(Ordering::SeqCst)
@@ -1328,6 +1344,7 @@ impl Run {
             stopping: self.m.phase() == Phase::Stopping,
             compact: self.narrow || self.compact_user,
             asking: self.m.phase() == Phase::Asking,
+            hidden: self.pill_hidden,
         }
     }
 

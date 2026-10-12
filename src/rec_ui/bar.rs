@@ -69,6 +69,9 @@ pub struct BarView {
     /// The screen is being chosen (Wayland: the portal's dialog is open):
     /// [`ASKING`] instead of the timer, and only Stop (which calls it off).
     pub asking: bool,
+    /// The user hid the pill (the tray, the while-recording chord): no
+    /// window until it is shown again.
+    pub hidden: bool,
 }
 
 /// What the bar says while the screen is being chosen.
@@ -294,6 +297,7 @@ mod tests {
             stopping: false,
             compact: false,
             asking: false,
+            hidden: false,
         }
     }
 

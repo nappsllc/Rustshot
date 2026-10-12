@@ -15,6 +15,10 @@ finish-args:
   # Pulse server). The screen (ScreenCast) and the camera bubble (Camera)
   # come through xdg-desktop-portal, which asks the user: no --device=all.
   - --socket=pulseaudio
+  # The tray icon (StatusNotifierItem): registered with the desktop's
+  # watcher. The sandbox cannot own org.kde.StatusNotifierItem-<pid>-1, so
+  # the item goes by its unique bus name, which the watchers accept.
+  - --talk-name=org.kde.StatusNotifierWatcher
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin
   env:

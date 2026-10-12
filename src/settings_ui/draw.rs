@@ -607,6 +607,13 @@ pub const KEY_ROWS: [(&str, &[Action]); 9] = [
     ("UI size + \u{b7} - \u{b7} Auto", &[Action::UiBigger, Action::UiSmaller, Action::UiReset]),
 ];
 
+/// The while-recording rows of Key bindings: (label, action).
+pub const REC_ROWS: [(&str, Action); 3] = [
+    ("Pause / resume recording", Action::RecPause),
+    ("Mute microphone", Action::RecMute),
+    ("Hide / show recording controls", Action::RecHidePill),
+];
+
 fn keys(ui: &mut Ui, s: &mut Settings, tok: &Tok) {
     sec_at(ui, tok, "Global \u{b7} work anywhere", 8.0);
     let msgs: Vec<Option<String>> = GLOBALS.iter().map(|(_, slot)| s.global_message(*slot)).collect();
@@ -641,6 +648,26 @@ fn keys(ui: &mut Ui, s: &mut Settings, tok: &Tok) {
             note_line(ui, tok, &n, true, Some(8.0));
         }
     }
+    ui.allow_meta = true;
+    // Global too, but only while a recording runs (the pill never takes
+    // the keyboard); stopping is the record hotkey.
+    sec_at(ui, tok, "While recording \u{b7} work anywhere", 8.0);
+    for (label, a) in REC_ROWS {
+        let note = s.form.rec_note(a);
+        let mut chord = s.form.keys.chords(a).first().copied();
+        let changed = {
+            let err = note.as_deref().is_some_and(|m| m.starts_with("Already"));
+            let mut slots = [Slot { id: format!("key_{}", a.id()), chord: &mut chord, err }];
+            ui.key_row(label, &[], &mut slots, true, 34.0, tok)
+        };
+        if changed.is_some() {
+            s.form.keys.set(a, chord.into_iter().collect());
+        }
+        if let Some(m) = note {
+            note_line(ui, tok, &m, true, Some(8.0));
+        }
+    }
+    ui.allow_meta = false;
 }
 
 fn upload(ui: &mut Ui, s: &mut Settings, tok: &Tok) {

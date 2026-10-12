@@ -1,76 +1,245 @@
-//! Tray menu model shared by the per-OS backends.
-#![cfg_attr(not(windows), allow(dead_code))] // used by the macOS/Linux trays (later tasks)
+//! Tray menu model shared by the per-OS backends (Windows notification
+//! area, the Linux StatusNotifierItem, the macOS status item).
 
 use crate::hotkey::HotEvent;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuItem {
     /// Shown (first) only while a recording runs.
     StopRecording,
+    /// Pause / resume the recording; payload = paused now.
+    Pause(bool),
+    /// Mute the microphone (when one is recorded); payload = muted now.
+    MuteMic(bool),
+    /// Hide the camera bubble (when there is one); payload = hidden now.
+    HideCamera(bool),
+    /// Hide the recording's control pill; payload = hidden now.
+    HidePill(bool),
+    /// Stop and throw the recording away.
+    Discard,
     Capture,
     Settings,
     CheckUpdates,
     /// Start at login; payload = currently enabled.
     Autostart(bool),
     Quit,
+    /// A line between groups.
+    Separator,
 }
 
 impl MenuItem {
     pub fn label(self) -> &'static str {
         match self {
             MenuItem::StopRecording => "Stop recording",
+            MenuItem::Pause(false) => "Pause recording",
+            MenuItem::Pause(true) => "Resume recording",
+            MenuItem::MuteMic(_) => "Mute microphone",
+            MenuItem::HideCamera(_) => "Hide camera",
+            MenuItem::HidePill(_) => "Hide recording controls",
+            MenuItem::Discard => "Discard recording",
             MenuItem::Capture => "Capture",
             MenuItem::Settings => "Settings…",
             MenuItem::CheckUpdates => "Check for updates",
             MenuItem::Autostart(_) => "Start at login",
             MenuItem::Quit => "Quit Rustshot",
+            MenuItem::Separator => "",
+        }
+    }
+
+    /// A check item's state (None: not a check item).
+    pub fn checked(self) -> Option<bool> {
+        match self {
+            MenuItem::MuteMic(on) | MenuItem::HideCamera(on) | MenuItem::HidePill(on) | MenuItem::Autostart(on) => Some(on),
+            _ => None,
+        }
+    }
+
+    /// A stable id per kind (the payload does not change it): dbusmenu
+    /// item ids, NSMenuItem tags. Separators are numbered by position
+    /// from [`SEPARATOR_IDS`].
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub fn id(self) -> i32 {
+        match self {
+            MenuItem::StopRecording => 1,
+            MenuItem::Pause(_) => 2,
+            MenuItem::MuteMic(_) => 3,
+            MenuItem::HideCamera(_) => 4,
+            MenuItem::HidePill(_) => 5,
+            MenuItem::Discard => 6,
+            MenuItem::Capture => 10,
+            MenuItem::Settings => 11,
+            MenuItem::CheckUpdates => 12,
+            MenuItem::Autostart(_) => 13,
+            MenuItem::Quit => 14,
+            MenuItem::Separator => SEPARATOR_IDS,
         }
     }
 }
 
+/// The first separator's id (the next ones count up from it).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub const SEPARATOR_IDS: i32 = 100;
+
+/// The items of `menu` with their ids (separators numbered in order).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn with_ids(menu: &[MenuItem]) -> Vec<(i32, MenuItem)> {
+    let mut sep = SEPARATOR_IDS;
+    menu.iter()
+        .map(|m| {
+            if *m == MenuItem::Separator {
+                sep += 1;
+                (sep - 1, *m)
+            } else {
+                (m.id(), *m)
+            }
+        })
+        .collect()
+}
+
+/// What the tray menu shows of a running recording (the pill's state).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RecMenu {
+    pub paused: bool,
+    /// The microphone's mute state when one is recorded.
+    pub mic: Option<bool>,
+    /// Whether the camera bubble is hidden, when there is one.
+    pub cam: Option<bool>,
+    /// Whether the control pill is hidden.
+    pub pill_hidden: bool,
+}
+
 /// Menu contents; `autostart` = None hides "Start at login" (managed
-/// installs); `recording` puts "Stop recording" first.
-pub fn menu(autostart: Option<bool>, recording: bool) -> Vec<MenuItem> {
+/// installs). While a recording runs (`rec`) its items come first: Stop,
+/// Pause/Resume, Mute microphone (when recorded), Hide camera (with a
+/// bubble), Hide recording controls, Discard.
+pub fn menu(autostart: Option<bool>, rec: Option<RecMenu>) -> Vec<MenuItem> {
     let mut v = Vec::new();
-    if recording {
-        v.push(MenuItem::StopRecording);
+    if let Some(r) = rec {
+        v.extend([MenuItem::StopRecording, MenuItem::Pause(r.paused)]);
+        if let Some(m) = r.mic {
+            v.push(MenuItem::MuteMic(m));
+        }
+        if let Some(c) = r.cam {
+            v.push(MenuItem::HideCamera(c));
+        }
+        v.extend([MenuItem::HidePill(r.pill_hidden), MenuItem::Discard, MenuItem::Separator]);
     }
     v.extend([MenuItem::Capture, MenuItem::Settings, MenuItem::CheckUpdates]);
     if let Some(on) = autostart {
         v.push(MenuItem::Autostart(on));
     }
-    v.push(MenuItem::Quit);
+    v.extend([MenuItem::Separator, MenuItem::Quit]);
     v
 }
 
 /// Current menu for this install.
-#[cfg_attr(not(windows), allow(dead_code))]
 pub fn current_menu() -> Vec<MenuItem> {
     let auto = crate::update::managed_install().is_none().then(crate::autostart::is_enabled);
-    menu(auto, is_recording())
+    menu(auto, rec_menu())
 }
 
-static RECORDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// The daemon event of a menu item (None: the item does its work here,
+/// see [`activate`]).
+pub fn item_event(item: MenuItem) -> Option<HotEvent> {
+    Some(match item {
+        MenuItem::StopRecording => HotEvent::StopRecording,
+        MenuItem::Pause(_) => HotEvent::RecPause,
+        MenuItem::MuteMic(_) => HotEvent::RecMute,
+        MenuItem::HideCamera(_) => HotEvent::RecCamera,
+        MenuItem::HidePill(_) => HotEvent::RecPill,
+        MenuItem::Discard => HotEvent::RecDiscard,
+        MenuItem::Capture => HotEvent::Capture,
+        MenuItem::Quit => HotEvent::Quit,
+        MenuItem::Settings | MenuItem::CheckUpdates | MenuItem::Autostart(_) | MenuItem::Separator => return None,
+    })
+}
+
+/// Carry out `item`: its event goes to `tx`; Settings, updates and Start
+/// at login run here. `Err`: what to tell the user.
+pub fn activate(item: MenuItem, tx: &Sender<HotEvent>) -> Result<(), String> {
+    if let Some(ev) = item_event(item) {
+        let _ = tx.send(ev);
+        return Ok(());
+    }
+    match item {
+        MenuItem::Settings => crate::settings_ui::show(),
+        MenuItem::CheckUpdates => crate::actions::check_updates(),
+        MenuItem::Autostart(_) => {
+            crate::actions::toggle_autostart().map_err(|e| format!("Could not change Start at login: {e}"))?;
+            bump();
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// What a click on the icon itself does: stop a recording, else capture
+/// (macOS: a click opens the menu).
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub fn click_event() -> HotEvent {
+    if is_recording() { HotEvent::StopRecording } else { HotEvent::Capture }
+}
+
+static RECORDING: AtomicBool = AtomicBool::new(false);
+static REC_MENU: Mutex<RecMenu> = Mutex::new(RecMenu { paused: false, mic: None, cam: None, pill_hidden: false });
 
 /// Whether a recording runs (the tray menu and icon follow it).
 pub fn is_recording() -> bool {
-    RECORDING.load(std::sync::atomic::Ordering::SeqCst)
+    RECORDING.load(Ordering::SeqCst)
 }
 
-/// A recording started or ended: the menu gets (or loses) "Stop
-/// recording" and the tray icon its red dot.
+/// The recording's menu state, while one runs.
+pub fn rec_menu() -> Option<RecMenu> {
+    is_recording().then(|| *REC_MENU.lock().unwrap_or_else(|e| e.into_inner()))
+}
+
+/// A recording started or ended: the menu gets (or loses) its recording
+/// items and the tray icon its red dot.
 pub fn set_recording(on: bool) {
-    RECORDING.store(on, std::sync::atomic::Ordering::SeqCst);
-    ELAPSED.store(if on { 0 } else { NO_TIME }, std::sync::atomic::Ordering::SeqCst);
+    RECORDING.store(on, Ordering::SeqCst);
+    ELAPSED.store(if on { 0 } else { NO_TIME }, Ordering::SeqCst);
+    *REC_MENU.lock().unwrap_or_else(|e| e.into_inner()) = RecMenu::default();
+    bump();
     // Tests never post to a tray window (it could be the user's daemon's).
     #[cfg(all(windows, not(test)))]
     crate::tray_win::refresh_state();
+    #[cfg(all(target_os = "macos", not(test)))]
+    crate::tray_macos::refresh();
+}
+
+/// The recording's pill state changed (paused, muted, camera, pill
+/// hidden): the menu follows. Returns whether it changed.
+pub fn set_rec_menu(m: RecMenu) -> bool {
+    let mut cur = REC_MENU.lock().unwrap_or_else(|e| e.into_inner());
+    if *cur == m {
+        return false;
+    }
+    *cur = m;
+    drop(cur);
+    bump();
+    true
+}
+
+/// Bumped whenever what the tray shows changes (the Linux tray polls it).
+static GENERATION: AtomicU64 = AtomicU64::new(0);
+
+fn bump() {
+    GENERATION.fetch_add(1, Ordering::SeqCst);
+}
+
+/// The tray state's generation: a change means the menu, icon or tip may
+/// have changed.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub fn generation() -> u64 {
+    GENERATION.load(Ordering::SeqCst)
 }
 
 const NO_TIME: u64 = u64::MAX;
 /// The whole seconds recorded, for the tip; [`NO_TIME`] when not recording.
-static ELAPSED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(NO_TIME);
+static ELAPSED: AtomicU64 = AtomicU64::new(NO_TIME);
 
 /// The time recorded so far (paused time excluded): the tray's tip
 /// follows it, redrawn when the whole seconds change. Returns whether
@@ -80,10 +249,17 @@ pub fn set_elapsed(d: std::time::Duration) -> bool {
         return false;
     }
     let s = d.as_secs();
-    let changed = ELAPSED.swap(s, std::sync::atomic::Ordering::SeqCst) != s;
+    let changed = ELAPSED.swap(s, Ordering::SeqCst) != s;
+    if changed {
+        bump();
+    }
     #[cfg(all(windows, not(test)))]
     if changed {
         crate::tray_win::refresh_tip();
+    }
+    #[cfg(all(target_os = "macos", not(test)))]
+    if changed {
+        crate::tray_macos::refresh_tip();
     }
     changed
 }
@@ -91,7 +267,7 @@ pub fn set_elapsed(d: std::time::Duration) -> bool {
 /// The tray icon's tooltip: "Rustshot", or "Rustshot — recording 1:23"
 /// while a recording runs.
 pub fn tip_text() -> String {
-    tip_for(is_recording(), ELAPSED.load(std::sync::atomic::Ordering::SeqCst))
+    tip_for(is_recording(), ELAPSED.load(Ordering::SeqCst))
 }
 
 fn tip_for(recording: bool, secs: u64) -> String {
@@ -125,26 +301,33 @@ pub fn saved_text(path: &std::path::Path, warnings: &[String]) -> String {
 /// Start the tray for the running daemon. `tx` receives Capture/Quit;
 /// `visible` (`show_tray`) false: no icon until [`set_visible`].
 pub fn spawn(tx: Sender<HotEvent>, visible: bool) {
-    VISIBLE.store(visible, std::sync::atomic::Ordering::SeqCst);
+    VISIBLE.store(visible, Ordering::SeqCst);
     #[cfg(windows)]
     crate::tray_win::spawn(tx);
-    #[cfg(not(windows))]
-    let _ = tx; // macOS / Linux backends arrive in later tasks.
+    #[cfg(all(target_os = "linux", not(test)))]
+    crate::tray_linux::spawn(tx);
+    #[cfg(all(target_os = "macos", not(test)))]
+    crate::tray_macos::spawn(tx);
+    #[cfg(all(not(windows), any(test, not(any(target_os = "linux", target_os = "macos")))))]
+    let _ = tx;
 }
 
-static VISIBLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+static VISIBLE: AtomicBool = AtomicBool::new(true);
 
 /// Whether the icon is wanted (`show_tray`).
 pub fn is_visible() -> bool {
-    VISIBLE.load(std::sync::atomic::Ordering::SeqCst)
+    VISIBLE.load(Ordering::SeqCst)
 }
 
 /// Show or hide the icon (Settings changed `show_tray`); the daemon,
 /// its hotkeys and a second launch work either way.
 pub fn set_visible(on: bool) {
-    VISIBLE.store(on, std::sync::atomic::Ordering::SeqCst);
+    VISIBLE.store(on, Ordering::SeqCst);
+    bump();
     #[cfg(all(windows, not(test)))]
     crate::tray_win::refresh_visible();
+    #[cfg(all(target_os = "macos", not(test)))]
+    crate::tray_macos::refresh();
 }
 
 /// Tell the user `text` outside any window: a tray balloon on Windows,
@@ -283,23 +466,79 @@ mod tests {
     #[test]
     fn menu_composition() {
         assert_eq!(
-            menu(Some(true), false),
+            menu(Some(true), None),
             vec![
                 MenuItem::Capture,
                 MenuItem::Settings,
                 MenuItem::CheckUpdates,
                 MenuItem::Autostart(true),
+                MenuItem::Separator,
                 MenuItem::Quit
             ]
         );
-        assert_eq!(menu(None, false).len(), 4);
-        assert!(!menu(None, false).iter().any(|m| matches!(m, MenuItem::Autostart(_))));
-        assert_eq!(*menu(None, false).last().unwrap(), MenuItem::Quit);
-        // While recording, "Stop recording" comes first.
-        let m = menu(None, true);
-        assert_eq!(m[0], MenuItem::StopRecording);
-        assert_eq!(&m[1..], &menu(None, false)[..]);
-        assert!(!menu(Some(false), false).contains(&MenuItem::StopRecording));
+        assert_eq!(menu(None, None).len(), 5);
+        assert!(!menu(None, None).iter().any(|m| matches!(m, MenuItem::Autostart(_))));
+        assert_eq!(*menu(None, None).last().unwrap(), MenuItem::Quit);
+        assert!(!menu(Some(false), None).contains(&MenuItem::StopRecording));
+    }
+
+    /// While recording, the recording's items come first: what the pill
+    /// can do, with the pill's state.
+    #[test]
+    fn menu_while_recording() {
+        let r = RecMenu::default();
+        let m = menu(None, Some(r));
+        assert_eq!(
+            m[..5],
+            [MenuItem::StopRecording, MenuItem::Pause(false), MenuItem::HidePill(false), MenuItem::Discard, MenuItem::Separator]
+        );
+        assert_eq!(&m[5..], &menu(None, None)[..]);
+        // A microphone and a camera bubble add their items; the labels and
+        // checks follow the state.
+        let r = RecMenu { paused: true, mic: Some(true), cam: Some(false), pill_hidden: true };
+        let m = menu(Some(false), Some(r));
+        assert_eq!(
+            m[..7],
+            [
+                MenuItem::StopRecording,
+                MenuItem::Pause(true),
+                MenuItem::MuteMic(true),
+                MenuItem::HideCamera(false),
+                MenuItem::HidePill(true),
+                MenuItem::Discard,
+                MenuItem::Separator
+            ]
+        );
+        assert_eq!(MenuItem::Pause(true).label(), "Resume recording");
+        assert_eq!(MenuItem::Pause(false).label(), "Pause recording");
+        assert_eq!(MenuItem::MuteMic(true).checked(), Some(true));
+        assert_eq!(MenuItem::HideCamera(false).checked(), Some(false));
+        assert_eq!(MenuItem::HidePill(true).checked(), Some(true));
+        assert_eq!(MenuItem::StopRecording.checked(), None);
+        // Each recording item sends its event to the daemon.
+        let ev = |i| format!("{:?}", item_event(i));
+        assert_eq!(ev(MenuItem::StopRecording), "Some(StopRecording)");
+        assert_eq!(ev(MenuItem::Pause(true)), "Some(RecPause)");
+        assert_eq!(ev(MenuItem::MuteMic(false)), "Some(RecMute)");
+        assert_eq!(ev(MenuItem::HideCamera(false)), "Some(RecCamera)");
+        assert_eq!(ev(MenuItem::HidePill(false)), "Some(RecPill)");
+        assert_eq!(ev(MenuItem::Discard), "Some(RecDiscard)");
+        assert_eq!(ev(MenuItem::Settings), "None");
+    }
+
+    /// Ids are stable per kind (the payload does not change them) and
+    /// unique within a menu; separators count up from SEPARATOR_IDS.
+    #[test]
+    fn menu_ids() {
+        assert_eq!(MenuItem::Pause(true).id(), MenuItem::Pause(false).id());
+        let r = RecMenu { paused: false, mic: Some(false), cam: Some(false), pill_hidden: false };
+        let ids = with_ids(&menu(Some(true), Some(r)));
+        let mut seen: Vec<i32> = ids.iter().map(|(i, _)| *i).collect();
+        seen.sort();
+        seen.dedup();
+        assert_eq!(seen.len(), ids.len());
+        let seps: Vec<i32> = ids.iter().filter(|(_, m)| *m == MenuItem::Separator).map(|(i, _)| *i).collect();
+        assert_eq!(seps, [SEPARATOR_IDS, SEPARATOR_IDS + 1]);
     }
 
     #[test]

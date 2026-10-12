@@ -1,4 +1,4 @@
-use super::draw::{viewport, FOOT_H, KEY_ROWS};
+use super::draw::{viewport, FOOT_H, KEY_ROWS, REC_ROWS};
 use super::*;
 use crate::theme::{DARK, LIGHT};
 use crate::ui::preview;
@@ -979,10 +979,42 @@ fn key_rows_record_then_rebind() {
     assert_eq!(click(&mut s, &mut focus, "reset_all", 1.0), Some(Click::ResetAll));
 }
 
-/// The overlay rows list every keymap action once.
+/// The while-recording rows: their defaults have no note; a chord a
+/// global hotkey has, another recording chord's, or a bare key, has one.
+#[test]
+fn while_recording_rows_notes() {
+    let mut s = sample();
+    for (_, a) in REC_ROWS {
+        assert_eq!(s.form.rec_note(a), None, "{a:?}");
+    }
+    s.form.keys.set(Action::RecPause, vec![Chord::parse("Shift+Meta+R").unwrap()]);
+    assert_eq!(s.form.rec_note(Action::RecPause).as_deref(), Some("Already used by Record video. Choose another."));
+    s.form.keys.set(Action::RecPause, vec![Chord::parse("Shift+Meta+M").unwrap()]);
+    assert_eq!(s.form.rec_note(Action::RecPause).as_deref(), Some("Already used by Mute microphone. Choose another."));
+    s.form.keys.set(Action::RecPause, vec![Chord::parse("P").unwrap()]);
+    assert_eq!(s.form.rec_note(Action::RecPause).as_deref(), Some(BARE_NOTE));
+    // The same chord as an overlay key is fine (the overlay is closed while recording).
+    s.form.keys.set(Action::RecPause, vec![Chord::parse("Ctrl+S").unwrap()]);
+    assert_eq!(s.form.rec_note(Action::RecPause), None);
+    // Saved like the overlay keys, in [shortcuts].
+    s.section = KEYS;
+    s.scroll[KEYS] = 1.0e4; // the rows are last: scrolled to the end
+    let mut focus = FocusState::default();
+    click(&mut s, &mut focus, "key_rec_mute", 1.0);
+    assert!(focus.is_recording("key_rec_mute"));
+    let ctrl_alt = wind::Mods { ctrl: true, alt: true, shift: false };
+    render(&mut s, &DARK, 1.0, &press('K' as u32, ctrl_alt), &mut focus);
+    assert_eq!(s.form.keys.chords(Action::RecMute), [Chord::parse("Ctrl+Alt+K").unwrap()]);
+}
+
+/// The overlay rows and the while-recording rows list every keymap
+/// action once (each in its own group).
 #[test]
 fn key_rows_cover_every_action() {
     let mut all: Vec<Action> = KEY_ROWS.iter().flat_map(|(_, a)| a.iter().copied()).collect();
+    assert!(all.iter().all(|a| !a.while_recording()));
+    assert!(REC_ROWS.iter().all(|(_, a)| a.while_recording()));
+    all.extend(REC_ROWS.iter().map(|(_, a)| *a));
     assert_eq!(all.len(), Action::ALL.len());
     all.dedup();
     for a in Action::ALL {

@@ -8,7 +8,7 @@
 //! `SCM_RIGHTS` (type `h`).
 //!
 //! Used by the xdg-desktop-portal ScreenCast and Camera clients
-//! (`rec::linux::portal`) and meant for the StatusNotifierItem tray too.
+//! (`rec::linux::portal`) and the StatusNotifierItem tray (`sni`).
 //! The marshalling ([`Value`], [`Message`]) is pure and tested everywhere;
 //! the transport ([`Conn`]) is Linux-only. Everything that waits for
 //! the bus goes through the [`Bus`] trait, so request/response logic can be
@@ -1388,6 +1388,21 @@ mod conn {
                     return Ok(Some(m));
                 }
                 self.keep(m);
+            }
+            Ok(None)
+        }
+
+        /// The next method call to us or signal (kept or arriving), in
+        /// order, waiting up to `timeout` (the StatusNotifierItem tray's loop).
+        pub fn wait_any(&mut self, timeout: Duration) -> Result<Option<Message>> {
+            if let Some(m) = self.kept.pop_front() {
+                return Ok(Some(m));
+            }
+            let until = Instant::now() + timeout;
+            while let Some(m) = self.next_msg(until)? {
+                if matches!(m.kind, Kind::Call | Kind::Signal) {
+                    return Ok(Some(m));
+                }
             }
             Ok(None)
         }

@@ -88,7 +88,7 @@ Windows, <kbd>Super</kbd> on Linux, <kbd>⌘</kbd> on macOS) to capture. Quit th
 Or capture directly from a terminal:
 
 ```bash
-rustshot                          # start the background daemon (tray icon on Windows; default)
+rustshot                          # start the background daemon (tray icon; default)
 rustshot gui                      # interactive capture
 rustshot gui --clip               # select, annotate, Enter copies to clipboard
 rustshot full --path ~/Pictures   # whole desktop, no editor
@@ -102,16 +102,16 @@ rustshot --help
 
 ### Settings
 
-Open **Settings…** from the tray menu (Windows), or run `rustshot settings`
+Open **Settings…** from the tray menu, or run `rustshot settings`
 (a running daemon opens its window; otherwise the window opens on its own;
-on Linux and macOS, where there is no tray icon, this is the way in). On
+where there is no tray icon, this is the way in). On
 Linux the Settings window is *(experimental)*. A rail on the left picks the
 section:
 
 - **General:** theme (System follows the OS, Dark, Light) and accent
   (Periwinkle, Teal, Amber or any `#rrggbb`: the custom swatch; the window
   previews it before **Apply**), *Launch at login* (hidden for store
-  installs), *Show icon in tray* (Windows; off, the daemon runs without an
+  installs), *Show icon in tray* (off, the daemon runs without an
   icon: the hotkeys and a second `rustshot` launch still capture, and the
   row warns when no capture hotkey is set), *Copy to clipboard after
   capture* (a save or upload also copies the image), *Play shutter
@@ -129,8 +129,8 @@ section:
   160, 200 or 240 px, mirror, ring colour and width); on Linux also the MP4 encoder (Auto,
   ffmpeg or OpenH264) with what is installed ("ffmpeg found at
   /usr/bin/ffmpeg", "OpenH264 downloaded", or not available).
-- **Key bindings:** the global hotkeys and every editor shortcut (see
-  below). Click a row (or a key cap) and press the new keys; <kbd>Esc</kbd>
+- **Key bindings:** the global hotkeys, every editor shortcut (see
+  below) and the *While recording* chords (see [Recording](#recording)). Click a row (or a key cap) and press the new keys; <kbd>Esc</kbd>
   cancels, <kbd>Backspace</kbd> unbinds. **Reset to defaults** (top right)
   puts every key back.
 - **Upload:** the Imgur client id and *Copy link after upload*.
@@ -330,13 +330,37 @@ size (120, 160, 200 or 240 px). After the countdown a red border marks
 the area and a pill beside it shows the time, **Pause**, **Stop**, the
 microphone, camera and system audio switches and **Discard**; neither is
 in the video (on Windows and macOS; see the notes below). Stop with the
-pill, the record hotkey again, or the tray's **Stop recording** (on
-Windows the tray icon's tooltip shows the time recorded). The file goes
+pill, the record hotkey again, or the tray's **Stop recording** (the
+tray icon's tooltip shows the time recorded, and the icon gets a red dot). The file goes
 where a screenshot would (save folder, daily subfolder, file-name
 pattern) as `.mp4` or `.gif`; it is written as `<name>.part` and renamed
 when it is complete, and a notice says where it is, with **Copy**,
 **Open** and **Show in folder**. Defaults for every choice are in
 Settings › Recording.
+
+The pill never takes the keyboard (it would steal it from the app being
+recorded), so its buttons are also in the tray menu while a recording
+runs (**Stop recording**, **Pause** / **Resume recording**, **Mute
+microphone**, **Hide camera**, **Hide recording controls**, **Discard
+recording**) and on global chords that are registered only while it runs:
+
+| While recording | Default |
+|---|---|
+| Stop | the record hotkey (<kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd>) |
+| Pause / resume | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> |
+| Mute the microphone | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> |
+| Hide / show the pill | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd> |
+
+Remap them in Settings › Key bindings › *While recording* (or
+`rec_pause`, `rec_mute`, `rec_hide_pill` in `[shortcuts]`); one that
+cannot be registered is reported like any other hotkey (on Windows
+<kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> is the shell's "restore
+minimized windows"). On macOS they are not registered yet; use the menu.
+
+The tray icon on Linux is a StatusNotifierItem: it shows on KDE Plasma,
+Xfce, LXQt, Cinnamon, Budgie, waybar and the like, and on GNOME with the
+AppIndicator extension; with no tray on the desktop the daemon runs
+without one (said once on stderr).
 
 Per platform:
 

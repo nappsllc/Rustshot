@@ -35,10 +35,16 @@ mod rec_ui;
 mod settings_ui;
 mod sha256;
 mod snap;
+#[cfg(any(target_os = "linux", test))]
+mod sni;
 mod sound;
 mod text;
 mod theme;
 mod tray;
+#[cfg(target_os = "linux")]
+mod tray_linux;
+#[cfg(target_os = "macos")]
+mod tray_macos;
 #[cfg(windows)]
 mod tray_win;
 mod ui;
