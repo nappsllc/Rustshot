@@ -16,7 +16,37 @@ foreach ($s in 16, 24, 32, 48, 256) {
 & $mk -Size 150 -CanvasW 310 -Out (Join-Path $m 'Wide310x150Logo.png')
 & $mk -Size 50 -Out (Join-Path $m 'StoreLogo.png')
 
-# rustshot.ico: PNG-compressed ICO (ICONDIR + ICONDIRENTRYs + PNG data).
+# A PNG file as an ICO image entry: BITMAPINFOHEADER (double height), BGRA
+# rows bottom-up, then an all-zero 1-bpp AND mask (the alpha channel rules).
+function ConvertTo-IconDib([string]$path) {
+    Add-Type -AssemblyName System.Drawing
+    $bmp = New-Object System.Drawing.Bitmap($path)
+    try {
+        $w = $bmp.Width; $h = $bmp.Height
+        $rect = New-Object System.Drawing.Rectangle(0, 0, $w, $h)
+        $data = $bmp.LockBits($rect, [System.Drawing.Imaging.ImageLockMode]::ReadOnly,
+            [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+        $stride = $data.Stride
+        $px = New-Object byte[] ($stride * $h)
+        [System.Runtime.InteropServices.Marshal]::Copy($data.Scan0, $px, 0, $px.Length)
+        $bmp.UnlockBits($data)
+        $maskRow = [int]([math]::Ceiling($w / 32.0) * 4)
+        $ms = New-Object IO.MemoryStream
+        $bw = New-Object IO.BinaryWriter($ms)
+        $bw.Write([uint32]40); $bw.Write([int32]$w); $bw.Write([int32]($h * 2))
+        $bw.Write([uint16]1); $bw.Write([uint16]32); $bw.Write([uint32]0)
+        $bw.Write([uint32]($w * 4 * $h + $maskRow * $h))
+        $bw.Write([int32]0); $bw.Write([int32]0); $bw.Write([uint32]0); $bw.Write([uint32]0)
+        for ($y = $h - 1; $y -ge 0; $y--) { $bw.Write($px, $y * $stride, $w * 4) }
+        $bw.Write((New-Object byte[] ($maskRow * $h)))
+        $bw.Flush()
+        return , $ms.ToArray()
+    } finally {
+        $bmp.Dispose()
+    }
+}
+
+# rustshot.ico: classic DIB entries below 256 px, a PNG entry at 256 px.
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ("rustshot-ico-" + [guid]::NewGuid())
 New-Item -ItemType Directory -Force $tmp | Out-Null
 try {
@@ -25,7 +55,13 @@ try {
     foreach ($s in $sizes) {
         $p = Join-Path $tmp "$s.png"
         & $mk -Size $s -Out $p
-        $pngs += , [IO.File]::ReadAllBytes($p)
+        if ($s -ge 256) {
+            $pngs += , [IO.File]::ReadAllBytes($p)
+        } else {
+            # Sizes below 256 as classic 32-bit DIBs: some Windows surfaces
+            # (Task Manager, ExtractIcon users) don't decode PNG entries.
+            $pngs += , (ConvertTo-IconDib $p)
+        }
     }
     $ms = New-Object IO.MemoryStream
     $bw = New-Object IO.BinaryWriter($ms)
