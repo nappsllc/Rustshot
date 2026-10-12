@@ -486,7 +486,11 @@ Limitations:
 
 - **Linux** needs an **X11** session (or XWayland) for screenshots and
   hotkeys; native Wayland capture and hotkeys are not supported yet
-  (recording is: see [Recording](#recording)). Runtime dependencies:
+  (recording is: see [Recording](#recording)). The notice after a capture
+  or a recording is a small window at the bottom of the screen on X11 (it
+  cannot be kept out of screenshots there, so it is taken down before the
+  next capture); on Wayland, where a window cannot place itself or stay
+  unfocused, it is printed on stdout instead. Runtime dependencies:
   `libx11`, `libxrandr`, `libxext`, `libxfixes`; optional for recording:
   `ffmpeg`, `libpulse` (or `pulseaudio-utils`), `libpipewire-0.3`
   (Wayland, camera portal), `libopus`, `bzip2` and `curl` (OpenH264).

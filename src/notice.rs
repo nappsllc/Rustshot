@@ -1,13 +1,20 @@
-#![cfg_attr(not(windows), allow(dead_code))] // only Windows has the notice window yet
+#![cfg_attr(not(any(windows, target_os = "linux", target_os = "macos")), allow(dead_code))] // no notice window elsewhere
 //! The confirmation toast after a capture: the overlay closes at once, so
 //! a small notice ("Copied to clipboard", "Saved · shot.png",
 //! "Uploading…" then "Link copied · i.imgur.com/…") says what happened,
-//! bottom-centre on the monitor where the capture was. It never takes
-//! focus or clicks and is excluded from screen capture.
+//! bottom-centre on the work area of the monitor where the capture was.
+//! It never takes focus; a plain note lets clicks through, one with
+//! buttons (after a recording) takes them.
 //!
-//! Windows draws it in a layered window ([`win`]); elsewhere there is no
-//! window yet (`show` returns false and the caller falls back to stdout
-//! and, for an upload, `tray::notify`).
+//! - Windows: a layered window, excluded from capture (`notice_win.rs`).
+//! - Linux X11: an override-redirect ARGB window on its own thread and
+//!   Display (`notice_x11.rs`); X11 cannot exclude it from capture, so
+//!   [`hide`] waits until it is unmapped before a capture starts.
+//! - macOS: a transparent non-activating panel on the main thread
+//!   (`notice_macos.rs`), ticked by the daemon's driver ([`tick`]).
+//! - Wayland: no window (`show` returns false; the caller falls back to
+//!   stdout and `tray::notify`): an XWayland toplevel cannot place itself,
+//!   let clicks through or stay unfocused.
 
 use crate::editor::style::{toast, toast_size, ToastKind, Ui};
 use crate::export::Done;
@@ -248,6 +255,7 @@ pub fn act_at(l: &ActLayout, p: crate::objects::Pt) -> Option<NoteAct> {
 }
 
 /// The window size for `note` (with its buttons, if any).
+#[cfg_attr(target_os = "macos", allow(dead_code))] // macOS sizes from the pixels
 pub fn note_size(note: &Note, s: f32) -> (u32, u32) {
     if note.actions.is_empty() { size(&note.text, s) } else { act_layout(note, s).size }
 }
@@ -453,6 +461,26 @@ pub fn place(work: crate::capture::IRect, (w, h): (u32, u32)) -> (i32, i32) {
     (x, y)
 }
 
+/// The rect to [`place`] a note in: the work area of the monitor with
+/// `at` (else the nearest one), i.e. the monitor clipped to the desktop's
+/// work area `net` (X11 `_NET_WORKAREA` spans every monitor; macOS: the
+/// screen's visible frame) when they overlap, else the whole monitor.
+#[cfg_attr(windows, allow(dead_code))] // Windows asks the monitor (rcWork)
+pub fn work_area(mons: &[crate::capture::IRect], net: Option<crate::capture::IRect>, at: (i32, i32)) -> crate::capture::IRect {
+    let dist = |m: &crate::capture::IRect| {
+        let dx = (m.0 - at.0).max(at.0 - (m.0 + m.2 as i32 - 1)).max(0) as i64;
+        let dy = (m.1 - at.1).max(at.1 - (m.1 + m.3 as i32 - 1)).max(0) as i64;
+        dx * dx + dy * dy
+    };
+    let Some(mon) = mons.iter().filter(|m| m.2 > 0 && m.3 > 0).min_by_key(|m| dist(m)).copied() else {
+        return net.unwrap_or((at.0, at.1, 0, 0));
+    };
+    let Some(n) = net else { return mon };
+    let (x0, y0) = (mon.0.max(n.0), mon.1.max(n.1));
+    let (x1, y1) = ((mon.0 + mon.2 as i32).min(n.0 + n.2 as i32), (mon.1 + mon.3 as i32).min(n.1 + n.3 as i32));
+    if x1 > x0 && y1 > y0 { (x0, y0, (x1 - x0) as u32, (y1 - y0) as u32) } else { mon }
+}
+
 /// Opacity `age` into a note shown for `ttl`; None once it is gone.
 pub fn opacity(age: Duration, ttl: Duration) -> Option<f32> {
     if age >= ttl + FADE_OUT {
@@ -475,6 +503,12 @@ pub fn render(note: &Note, th: &Theme, s: f32, k: f32) -> (u32, u32, Vec<u8>) {
 #[cfg(windows)]
 #[path = "notice_win.rs"]
 mod win;
+#[cfg(target_os = "linux")]
+#[path = "notice_x11.rs"]
+mod x11;
+#[cfg(target_os = "macos")]
+#[path = "notice_macos.rs"]
+mod macos;
 
 /// Show `note` near global point `at` (the capture's centre), replacing
 /// the one up; false when there is no notice window here.
@@ -489,7 +523,15 @@ pub fn show(note: Note, at: (i32, i32), th: Theme) -> bool {
     {
         win::show(note, at, th)
     }
-    #[cfg(all(not(windows), not(test)))]
+    #[cfg(all(target_os = "linux", not(test)))]
+    {
+        x11::show(note, at, th)
+    }
+    #[cfg(all(target_os = "macos", not(test)))]
+    {
+        macos::show(note, at, th)
+    }
+    #[cfg(all(not(any(windows, target_os = "linux", target_os = "macos")), not(test)))]
     {
         let _ = (note, at, th);
         false
@@ -512,7 +554,15 @@ pub fn replace(note: Note) -> bool {
     {
         win::replace(note)
     }
-    #[cfg(all(not(windows), not(test)))]
+    #[cfg(all(target_os = "linux", not(test)))]
+    {
+        x11::replace(note)
+    }
+    #[cfg(all(target_os = "macos", not(test)))]
+    {
+        macos::replace(note)
+    }
+    #[cfg(all(not(any(windows, target_os = "linux", target_os = "macos")), not(test)))]
     {
         let _ = note;
         false
@@ -525,6 +575,28 @@ pub fn hide() {
     TEST.with(|t| t.borrow_mut().clear());
     #[cfg(all(windows, not(test)))]
     win::hide();
+    #[cfg(all(target_os = "linux", not(test)))]
+    x11::hide();
+    #[cfg(all(target_os = "macos", not(test)))]
+    macos::hide();
+}
+
+/// Advance the note where the driver runs it (macOS: AppKit's main
+/// thread; Windows and X11 have their own timers). Some(fast) when the
+/// driver's timer should switch: fast while a note is up, idle after.
+pub fn tick() -> Option<bool> {
+    #[cfg(all(target_os = "macos", not(test)))]
+    {
+        thread_local! {
+            static FAST: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        }
+        let up = macos::tick();
+        (FAST.with(|f| f.replace(up)) != up).then_some(up)
+    }
+    #[cfg(not(all(target_os = "macos", not(test))))]
+    {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -594,6 +666,24 @@ mod tests {
         assert_eq!(place(work, (300, 80)), (1920 + 810, 1032 - 80));
         // Monitors above/left of the primary have negative origins.
         assert_eq!(place((-1280, -1024, 1280, 984), (200, 80)), (-1280 + 540, -1024 + 984 - 80));
+    }
+
+    /// X11's `_NET_WORKAREA` spans the desktop: each monitor gets its part
+    /// (a panel on one monitor only shortens that one); a point off every
+    /// monitor goes to the nearest.
+    #[test]
+    fn the_work_area_is_the_monitor_less_panels() {
+        let mons = [(0, 0, 1920, 1080), (1920, 0, 1920, 1080)];
+        // A 40 px bottom panel across both monitors.
+        let net = Some((0, 0, 3840, 1040));
+        assert_eq!(work_area(&mons, net, (100, 100)), (0, 0, 1920, 1040));
+        assert_eq!(work_area(&mons, net, (2000, 900)), (1920, 0, 1920, 1040));
+        assert_eq!(work_area(&mons, None, (2000, 900)), (1920, 0, 1920, 1080), "no window manager: the whole monitor");
+        assert_eq!(work_area(&mons, net, (5000, 500)), (1920, 0, 1920, 1040), "nearest monitor");
+        assert_eq!(work_area(&mons, Some((0, 0, 1920, 1040)), (2000, 10)), (1920, 0, 1920, 1080), "no overlap: the monitor");
+        assert_eq!(work_area(&[], net, (5, 5)), (0, 0, 3840, 1040));
+        let (x, y) = place(work_area(&mons, net, (2000, 900)), (300, 80));
+        assert_eq!((x, y), (1920 + 810, 1040 - 80), "bottom-centre, above the panel");
     }
 
     #[test]

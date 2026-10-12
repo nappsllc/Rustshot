@@ -212,6 +212,15 @@ make_bg() {
 # The recording bar's Stop button: the bar is the mapped window between
 # 60x30 and 600x160 px; Stop is its last button (bar.rs: MARGIN 22, PAD 6,
 # 32 px buttons at scale 1).
+# The post-capture notice: the mapped "Rustshot notice" window (its id).
+notice_id() {
+    local id
+    for id in $(xwininfo -root -tree 2>/dev/null | awk '/"Rustshot notice"/ {print $1}'); do
+        xwininfo -id "$id" 2>/dev/null | grep -q 'IsViewable' && { echo "$id"; return 0; }
+    done
+    return 1
+}
+notice_gone() { ! xwininfo -id "$1" 2>/dev/null | grep -q IsViewable; }
 bar_stop_xy() {
     xwininfo -root -tree 2>/dev/null \
         | sed -n 's/.* \([0-9][0-9]*\)x\([0-9][0-9]*\)+[-0-9]*+[-0-9]*  *+\([-0-9]*\)+\([-0-9]*\)$/\1 \2 \3 \4/p' \
@@ -289,6 +298,35 @@ EOF
     sleep 1
     shot_x 04-selection
     xdotool key ctrl+s
+    # The notice ("Saved · <file>"): override-redirect, typed NOTIFICATION,
+    # bottom-centre of the screen (Xvfb has no panels), up ~2 s.
+    if wait_for 3 notice_id; then
+        local nid; nid="$(notice_id)"
+        shot_x 04c-notice
+        local ninfo; ninfo="$(xwininfo -id "$nid")"
+        echo "$ninfo" > "$LOGS/notice-xwininfo.txt"
+        xprop -id "$nid" >> "$LOGS/notice-xwininfo.txt" 2>&1
+        local nx ny nw nh
+        nx="$(echo "$ninfo" | awk '/Absolute upper-left X/ {print $4}')"
+        ny="$(echo "$ninfo" | awk '/Absolute upper-left Y/ {print $4}')"
+        nw="$(echo "$ninfo" | awk '/Width:/ {print $2}')"
+        nh="$(echo "$ninfo" | awk '/Height:/ {print $2}')"
+        local cx=$((nx + nw / 2)) by=$((ny + nh))
+        if echo "$ninfo" | grep -q 'Override Redirect State: yes'             && xprop -id "$nid" _NET_WM_WINDOW_TYPE | grep -q NOTIFICATION             && [ $((cx - 960)) -le 2 ] && [ $((960 - cx)) -le 2 ] && [ "$by" -eq 1080 ]; then
+            result notice-window pass "${nw}x${nh}+${nx}+${ny}"
+        else
+            result notice-window fail "${nw}x${nh}+${nx}+${ny}; see logs/notice-xwininfo.txt"
+        fi
+        if wait_for 5 notice_gone "$nid"; then
+            result notice-fades pass "unmapped after its time"
+        else
+            result notice-fades fail "still up after 5 s"
+        fi
+    else
+        shot_x 04c-notice-missing
+        xwininfo -root -tree > "$LOGS/xwininfo-notice.txt" 2>&1
+        result notice-window fail "no notice window within 3 s of Ctrl+S; see logs/xwininfo-notice.txt"
+    fi
     if wait_for 10 sh -c "ls '$save'/*.png"; then
         local png; png="$(ls "$save"/*.png | head -1)"
         result capture-save pass "$(basename "$png") $(identify "$png" | awk '{print $3}')"

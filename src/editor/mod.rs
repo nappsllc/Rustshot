@@ -767,6 +767,13 @@ impl App {
         if let Some(r) = &self.rec {
             wind::set_fast_timer(self.hwnd, r.counting());
         }
+        // macOS: the notice fades on these ticks (fast while it is up).
+        if let Some(fast) = crate::notice::tick()
+            && self.rec.is_none()
+            && !matches!(self.st, State::Edit(_))
+        {
+            wind::set_fast_timer(self.hwnd, fast);
+        }
         let State::Edit(edit) = &self.st else { return changed };
         let repaint = changed || stale(edit, self.notice.as_ref(), Instant::now());
         // The microphone's level is looked at 20 times a second.
