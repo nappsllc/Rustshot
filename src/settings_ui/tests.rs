@@ -687,7 +687,7 @@ fn preview_settings_pngs() {
         let mut s = sample();
         s.tab = 2;
         s.form.keys.set(Action::Accept, vec![Chord::parse("Esc").unwrap()]);
-        s.table.selected = Some(17);
+        s.table.selected = Action::ALL.iter().position(|a| *a == Action::Accept);
         let (img, _) = render(&mut s, th, 1.0, &Input::default(), &mut FocusState::default());
         preview::save(&format!("settings-conflict-{tname}.png"), &img);
         // The tools were reset.
@@ -764,7 +764,7 @@ fn preview_settings_pngs() {
     let mut s = sample();
     s.tab = 2;
     s.form.keys.set(Action::Accept, vec![Chord::parse("Esc").unwrap()]);
-    s.table.selected = Some(17);
+    s.table.selected = Action::ALL.iter().position(|a| *a == Action::Accept);
     let mut focus = FocusState::default();
     render(&mut s, &LIGHT, 1.5, &Input::default(), &mut focus);
     focus.record("rebind");

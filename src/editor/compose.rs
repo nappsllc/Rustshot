@@ -208,6 +208,8 @@ pub struct BarUi {
     /// The tool and size the readout previews.
     pub ptool: Tool,
     pub size: f32,
+    /// The fill toggle is on (the current tool draws filled).
+    pub fill: bool,
     pub pop_k: f32,
     pub pick: Option<super::pick::Picker>,
 }
@@ -559,6 +561,7 @@ impl Edit {
                 rec: (rp.open && crate::rec_ui::supported() && !busy).then_some(&rv),
                 sizes: tools::has_size(cur),
                 colors: tools::has_color(cur),
+                fills: tools::has_fill(cur),
                 pick: pv.as_ref(),
             })
         });
@@ -654,6 +657,7 @@ impl Edit {
                 value,
                 ptool: cur,
                 size: self.mem.size(cur),
+                fill: self.mem.fill(cur),
                 pop_k: self.mo.pop.value(now),
                 pick: self.pick.clone(),
             }
@@ -856,6 +860,7 @@ impl Edit {
                 value: &b.value,
                 ptool: b.ptool,
                 size: b.size,
+                fill: b.fill,
                 pop_k: b.pop_k,
                 pick: b.pick.as_ref(),
             };

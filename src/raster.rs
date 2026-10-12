@@ -345,6 +345,93 @@ impl Mask {
         }
     }
 
+    /// A rounded rectangle's fill (exact rounded-box SDF, AA edge).
+    pub fn round_box(&mut self, r: FRect, radius: f32) {
+        let rad = radius.min(r.w / 2.0).min(r.h / 2.0).max(0.0);
+        let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+        let (hx, hy) = ((r.w / 2.0 - rad).max(0.0), (r.h / 2.0 - rad).max(0.0));
+        let (x0, y0, x1, y1) = clamp_bbox(
+            (r.x - 1.0).floor() as i32,
+            (r.y - 1.0).floor() as i32,
+            (r.x1() + 1.0).ceil() as i32,
+            (r.y1() + 1.0).ceil() as i32,
+            (self.x0, self.y0, self.x1, self.y1),
+        );
+        for y in y0..y1 {
+            let qy = (y as f32 + 0.5 - cy).abs() - hy;
+            for x in x0..x1 {
+                let qx = (x as f32 + 0.5 - cx).abs() - hx;
+                let d = qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - rad;
+                self.put(x, y, (0.5 - d).clamp(0.0, 1.0));
+            }
+        }
+    }
+
+    /// An ellipse's fill inscribed in `r` (first-order SDF, AA edge).
+    pub fn ellipse(&mut self, r: FRect) {
+        let (rx, ry) = ((r.w / 2.0).max(0.5), (r.h / 2.0).max(0.5));
+        let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+        let (x0, y0, x1, y1) = clamp_bbox(
+            (cx - rx - 1.0).floor() as i32,
+            (cy - ry - 1.0).floor() as i32,
+            (cx + rx + 1.0).ceil() as i32,
+            (cy + ry + 1.0).ceil() as i32,
+            (self.x0, self.y0, self.x1, self.y1),
+        );
+        for y in y0..y1 {
+            let py = y as f32 + 0.5 - cy;
+            for x in x0..x1 {
+                let px = x as f32 + 0.5 - cx;
+                let (gx, gy) = (px / (rx * rx), py / (ry * ry));
+                let gnorm = 2.0 * (gx * gx + gy * gy).sqrt();
+                let k = (px / rx) * (px / rx) + (py / ry) * (py / ry);
+                let d = if gnorm < 1e-9 { -rx.min(ry) } else { (k - 1.0) / gnorm };
+                self.put(x, y, (0.5 - d).clamp(0.0, 1.0));
+            }
+        }
+    }
+
+    /// An ellipse's outline of `width` (the coverage `stroke_ellipse` draws).
+    pub fn ellipse_ring(&mut self, r: FRect, width: f32) {
+        let (rx, ry) = ((r.w / 2.0).max(0.5), (r.h / 2.0).max(0.5));
+        let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+        let band = width.max(0.5) / 2.0 + 0.5;
+        let (x0, y0, x1, y1) = clamp_bbox(
+            (cx - rx - band).floor() as i32,
+            (cy - ry - band).floor() as i32,
+            (cx + rx + band).ceil() as i32,
+            (cy + ry + band).ceil() as i32,
+            (self.x0, self.y0, self.x1, self.y1),
+        );
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let (px, py) = (x as f32 + 0.5 - cx, y as f32 + 0.5 - cy);
+                let (gx, gy) = (px / (rx * rx), py / (ry * ry));
+                let gnorm = 2.0 * (gx * gx + gy * gy).sqrt();
+                let k = (px / rx) * (px / rx) + (py / ry) * (py / ry);
+                let d = if gnorm < 1e-9 { f32::MAX } else { (k - 1.0) / gnorm };
+                self.put(x, y, (band - d.abs()).clamp(0.0, 1.0));
+            }
+        }
+    }
+
+    /// A disc's fill (exact distance, AA edge).
+    pub fn disc(&mut self, c: Pt, radius: f32) {
+        let (x0, y0, x1, y1) = clamp_bbox(
+            (c.x - radius - 1.0).floor() as i32,
+            (c.y - radius - 1.0).floor() as i32,
+            (c.x + radius + 1.0).ceil() as i32,
+            (c.y + radius + 1.0).ceil() as i32,
+            (self.x0, self.y0, self.x1, self.y1),
+        );
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let d = (x as f32 + 0.5 - c.x).hypot(y as f32 + 0.5 - c.y) - radius;
+                self.put(x, y, (0.5 - d).clamp(0.0, 1.0));
+            }
+        }
+    }
+
     /// Blend `c` through the mask, once per pixel.
     pub fn blend(&self, sf: &mut Surf, c: C4, blend: Blend) {
         let w = (self.x1 - self.x0) as usize;

@@ -88,6 +88,7 @@ pub fn act_icon(a: Act) -> &'static str {
             Tool::Ellipse => "circle",
             Tool::Marker => "marker",
             Tool::Text => "text",
+            Tool::Counter => "counter",
             Tool::Pixelate => "pixel",
             Tool::Invert => "invert",
         },
@@ -97,6 +98,7 @@ pub fn act_icon(a: Act) -> &'static str {
         Act::Size(_) => "plus",
         Act::Copy => "copy",
         Act::Save | Act::SaveAs => "save",
+        Act::SaveDesktop => "save-desktop",
         Act::Upload => "cloud",
         Act::Exit => "x",
         Act::Accept => "check",
@@ -105,6 +107,7 @@ pub fn act_icon(a: Act) -> &'static str {
         Act::RingSize(d) if d < 0 => "minus",
         Act::RingSize(_) => "plus",
         Act::Palette
+        | Act::Fill
         | Act::Color(_)
         | Act::RecFormat(_)
         | Act::RecFps(_)
@@ -138,6 +141,8 @@ pub struct BarState<'a> {
     pub value: &'a str,
     pub ptool: Tool,
     pub size: f32,
+    /// The shape tool draws filled (the fill toggle is on).
+    pub fill: bool,
     /// 0..1 opacity of the palette popover.
     pub pop_k: f32,
     /// The colour picker's state while it is open.
@@ -563,7 +568,9 @@ fn primary(f: &mut Fb, ui: &Ui, r: FRect, label: &str, (hovered, pressed): (bool
 fn button(f: &mut Fb, ui: &Ui, it: &Item, act: Act, (hovered, pressed): (bool, bool), st: &BarState, k: f32) {
     let th = ui.th;
     let r = round(it.r);
-    let active = matches!(act, Act::Tool(t) if st.tool == Some(t)) || (act == Act::Eyedrop && st.pick.is_some_and(|p| p.eyedrop));
+    let active = matches!(act, Act::Tool(t) if st.tool == Some(t))
+        || (act == Act::Eyedrop && st.pick.is_some_and(|p| p.eyedrop))
+        || (act == Act::Fill && st.fill && !it.disabled);
     let danger = act == Act::Exit;
     let k = if it.disabled { k * 0.34 } else { k };
     let rad = ui.px(8.0);
@@ -595,6 +602,7 @@ fn button(f: &mut Fb, ui: &Ui, it: &Item, act: Act, (hovered, pressed): (bool, b
     let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
     match act {
         Act::Palette => swatch(f, ui, cx, cy, st.color, k),
+        Act::Fill => fill_icon(f, ui, cx, cy, st.ptool == Tool::Ellipse, st.fill && !it.disabled, fg),
         Act::Accept => {
             let (icon, gap) = (ui.px(20.0), ui.px(6.0));
             let x0 = cx - (icon + gap + tw(ui, 12.0, "OK")) / 2.0;
@@ -605,6 +613,26 @@ fn button(f: &mut Fb, ui: &Ui, it: &Item, act: Act, (hovered, pressed): (bool, b
             let icon = ui.px(if pressed { 19.2 } else { 20.0 });
             draw_icon(f, act_icon(act), cx - icon / 2.0, cy - icon / 2.0, icon, fg);
         }
+    }
+}
+
+/// The fill toggle's glyph: the shape (a square, or a circle for the
+/// ellipse), solid when filling, outlined otherwise.
+fn fill_icon(f: &mut Fb, ui: &Ui, cx: f32, cy: f32, round: bool, on: bool, c: C4) {
+    let side = ui.px(15.0).round();
+    let lw = ui.px(2.0);
+    let r = FRect { x: (cx - side / 2.0).round(), y: (cy - side / 2.0).round(), w: side, h: side };
+    if round {
+        let (ccx, ccy, rad) = (r.x + side / 2.0, r.y + side / 2.0, side / 2.0);
+        if on {
+            f.fill_circle(ccx, ccy, rad, c);
+        } else {
+            f.stroke_circle(ccx, ccy, rad - lw / 2.0, lw, c);
+        }
+    } else if on {
+        fill(f, r, ui.px(3.0), c);
+    } else {
+        f.stroke_rounded(FRect { x: r.x + lw / 2.0, y: r.y + lw / 2.0, w: r.w - lw, h: r.h - lw }, ui.px(3.0) - lw / 2.0, lw, c);
     }
 }
 
@@ -670,6 +698,13 @@ pub fn size_preview(f: &mut Fb, ui: &Ui, b: FRect, tool: Tool, size: f32, c: C4,
             }
             let w = text_width(font, px, "Aa");
             f.draw_text(font, px, "Aa", b.x + (b.w - w) / 2.0, cy - text_height(font, px) / 2.0, c.fade(k));
+        }
+        Tool::Counter => {
+            // A mini tag: the diameter as drawn (capped to the box), "1".
+            let d = size.clamp(4.0, cap).round();
+            let c0 = Pt::new((b.x + b.w / 2.0).round(), cy.round());
+            let tag = crate::objects::Obj::Counter { c: c0, n: 1, color: c.fade(k), d, tail: None };
+            tag.render_into(&mut f.surf(), None);
         }
         Tool::Invert => {}
     }
@@ -871,6 +906,7 @@ pub fn act_tip(a: Act, km: &Keymap) -> (&'static str, Vec<String>) {
         Act::Tool(Tool::Ellipse) => "Ellipse",
         Act::Tool(Tool::Marker) => "Marker",
         Act::Tool(Tool::Text) => "Text",
+        Act::Tool(Tool::Counter) => "Number (Ctrl+drag: pointer)",
         Act::Tool(Tool::Pixelate) => "Pixelate",
         Act::Tool(Tool::Invert) => "Invert",
         Act::Undo => "Undo",
@@ -878,10 +914,12 @@ pub fn act_tip(a: Act, km: &Keymap) -> (&'static str, Vec<String>) {
         Act::Size(d) if d < 0 => "Smaller",
         Act::Size(_) => "Larger",
         Act::Palette => "Color",
+        Act::Fill => "Fill shape",
         Act::Color(_) => "Use color",
         Act::Copy => "Copy",
         Act::Save => "Save",
         Act::SaveAs => "Save as",
+        Act::SaveDesktop => "Save to Desktop",
         Act::Upload => "Upload",
         Act::Exit => "Close",
         Act::Accept => "Accept",
@@ -1231,6 +1269,7 @@ mod tests {
             rec: None,
             sizes: true,
             colors: true,
+            fills: true,
             pick: None,
         });
         let mut d = buf(800, 200, 0);
@@ -1243,6 +1282,7 @@ mod tests {
             value: "3",
             ptool: Tool::Line,
             size: 3.0,
+            fill: false,
             pop_k: 1.0,
             pick: None,
         };

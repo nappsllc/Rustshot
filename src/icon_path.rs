@@ -37,6 +37,14 @@ pub const ICONS: &[(&str, &[Shape])] = &[
         Path("M15 3v18"),
     ]),
     ("invert", &[Circle(12.0, 12.0, 10.0), Path("M12 18a6 6 0 0 0 0-12v12z")]), // contrast
+    ("counter", &[Circle(12.0, 12.0, 10.0), Path("M10 9.5 12.5 7.5v9")]), // circle with a "1"
+    ("save-desktop", &[ // monitor-down
+        Path("M12 13V7"),
+        Path("m15 10-3 3-3-3"),
+        Rect { x: 2.0, y: 3.0, w: 20.0, h: 14.0, r: 2.0 },
+        Path("M12 17v4"),
+        Path("M8 21h8"),
+    ]),
     ("undo", &[ // undo-2
         Path("M9 14 4 9l5-5"),
         Path("M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"),

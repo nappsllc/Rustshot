@@ -28,6 +28,7 @@ mod chrome;
 mod compose;
 mod pick;
 mod tools;
+mod draw;
 
 /// Chrome styling shared with the window control kit (`crate::ui`).
 pub(crate) mod style {
@@ -1285,52 +1286,7 @@ impl App {
                 }
                 Interact::Drawing { start } => {
                     let start = *start;
-                    let tool = edit.tool.unwrap_or(Tool::Line);
-                    // Photoshop-style constraints while Shift is held:
-                    // lines/arrows snap to 45-degree steps, rectangles and
-                    // ellipses become squares and circles.
-                    let cur = match tool {
-                        Tool::Line | Tool::Arrow => {
-                            if mods.shift || mods.ctrl {
-                                edit.snap_point(start, p, true)
-                            } else {
-                                p
-                            }
-                        }
-                        Tool::Rect
-                        | Tool::Ellipse
-                        | Tool::Pixelate
-                        | Tool::Invert
-                            if mods.shift =>
-                        {
-                            constrain_square(start, p)
-                        }
-                        _ => p,
-                    };
-                    if matches!(tool, Tool::Path | Tool::Marker) {
-                        let last = edit.stroke_pts.last().copied();
-                        let need = last
-                            .map(|l| (cur.x - l.x).hypot(cur.y - l.y) >= 2.0)
-                            .unwrap_or(true);
-                        if need {
-                            edit.stroke_pts.push(cur);
-                        }
-                        let pts = edit.stroke_pts.clone();
-                        let color = edit.mem.color(tool);
-                        let width = edit.mem.size(tool);
-                        edit.draft = Some(if tool == Tool::Marker {
-                            Obj::Marker {
-                                a: pts.first().copied().unwrap_or(cur),
-                                b: cur,
-                                color: marker_color(color),
-                                width,
-                            }
-                        } else {
-                            Obj::Path { pts, color, width }
-                        });
-                    } else {
-                        edit.draft = edit.make_draft(tool, start, cur);
-                    }
+                    edit.drag_draft(start, p, mods);
                 }
             }
         });
@@ -1372,6 +1328,7 @@ impl App {
             Act::Undo => edit.undo(),
             Act::Redo => edit.redo(),
             Act::Size(d) => edit.adjust_size(d),
+            Act::Fill => edit.toggle_fill(Instant::now()),
             Act::Color(c) => {
                 edit.set_tool_color(c, Instant::now());
                 edit.palette_open = false;
@@ -1483,6 +1440,10 @@ impl App {
                 edit.tasks = vec![Task::Save { path: None, ask: true }];
                 edit.done = true;
             }
+            Act::SaveDesktop => {
+                edit.tasks = vec![Task::SaveDesktop];
+                edit.done = true;
+            }
             Act::Upload => {
                 edit.tasks = vec![Task::Upload];
                 edit.done = true;
@@ -1544,6 +1505,10 @@ impl Driver for App {
                 self.wheel(delta);
             }
             Ev::Key { vk, up, repeat, mods } => {
+                // Shift / Ctrl pressed or let go mid-stroke redraw the draft.
+                if self.modifier_key(vk, up, mods) {
+                    self.repaint();
+                }
                 if !up {
                     self.key(vk, repeat, mods);
                 }
@@ -1775,11 +1740,13 @@ fn act_of(a: Action) -> Option<Act> {
         Action::ToolCircle => Act::Tool(Tool::Ellipse),
         Action::ToolMarker => Act::Tool(Tool::Marker),
         Action::ToolText => Act::Tool(Tool::Text),
+        Action::ToolCounter => Act::Tool(Tool::Counter),
         Action::ToolPixelate => Act::Tool(Tool::Pixelate),
         Action::ToolInvert => Act::Tool(Tool::Invert),
         Action::Copy => Act::Copy,
         Action::Save => Act::Save,
         Action::SaveAs => Act::SaveAs,
+        Action::SaveDesktop => Act::SaveDesktop,
         Action::Upload => Act::Upload,
         Action::Undo => Act::Undo,
         Action::Redo => Act::Redo,
@@ -1808,6 +1775,8 @@ enum Tool {
     Ellipse,
     Marker,
     Text,
+    /// Numbered tags.
+    Counter,
     Pixelate,
     Invert,
 }
@@ -2429,16 +2398,19 @@ impl Edit {
             },
             Tool::Line => Obj::Line { a, b, color: c, width: w },
             Tool::Arrow => Obj::Arrow { a, b, color: c, width: w },
+            Tool::Rect if self.mem.fill(tool) => Obj::RectFill { r: FRect::from_pts(a, b), color: c, width: w },
             Tool::Rect => Obj::Rect {
                 r: FRect::from_pts(a, b),
                 color: c,
                 width: w,
             },
+            Tool::Ellipse if self.mem.fill(tool) => Obj::EllipseFill { r: FRect::from_pts(a, b), color: c, width: w },
             Tool::Ellipse => Obj::Ellipse {
                 r: FRect::from_pts(a, b),
                 color: c,
                 width: w,
             },
+            Tool::Counter => Obj::Counter { c: b, n: self.next_counter(), color: c, d: w, tail: None },
             Tool::Marker => Obj::Marker {
                 a,
                 b,
@@ -2464,10 +2436,14 @@ impl Edit {
             | Some(Obj::Marker { a, b, .. }) => (a.x - b.x).hypot(a.y - b.y) >= 2.0,
             Some(Obj::Rect { r, .. })
             | Some(Obj::Ellipse { r, .. })
+            | Some(Obj::RectFill { r, .. })
+            | Some(Obj::EllipseFill { r, .. })
             | Some(Obj::Pixelate { r, .. })
             | Some(Obj::Invert { r }) => !r.is_trivial(),
             Some(Obj::Path { pts, .. }) => pts.len() >= 2,
-            Some(Obj::Text { .. }) => true,
+            // A highlighter stroke reaches 2 px from where it began.
+            Some(Obj::MarkerPath { pts, .. }) => pts.iter().any(|p| (p.x - pts[0].x).hypot(p.y - pts[0].y) >= 2.0),
+            Some(Obj::Text { .. }) | Some(Obj::Counter { .. }) => true,
         }
     }
 
@@ -3030,6 +3006,8 @@ fn monitor_at(monitors: &[capture::IRect], p: Pt) -> Option<FRect> {
 mod state_tests;
 #[cfg(test)]
 mod tools_tests;
+#[cfg(test)]
+mod tools2_tests;
 #[cfg(test)]
 mod uisize_tests;
 #[cfg(test)]
@@ -4013,6 +3991,10 @@ mod tests {
             ("draft arrow", Obj::Arrow { a: Pt::new(150.0, 120.0), b: Pt::new(700.0, 420.0), color: C4::rgb(20, 200, 90), width: 9.0 }),
             ("draft arrow translucent", Obj::Arrow { a: Pt::new(150.0, 620.0), b: Pt::new(700.0, 420.0), color: C4::new(20, 200, 90, 128), width: 12.0 }),
             ("draft marker", Obj::Marker { a: Pt::new(200.0, 600.0), b: Pt::new(900.0, 640.0), color: C4::rgb(250, 220, 0).with_alpha(90), width: 20.0 }),
+            ("draft marker path", Obj::MarkerPath { pts: vec![Pt::new(200.0, 600.0), Pt::new(420.0, 660.0), Pt::new(600.0, 590.0), Pt::new(900.0, 640.0)], color: C4::rgb(250, 220, 0).with_alpha(90), width: 20.0 }),
+            ("draft rect fill translucent", Obj::RectFill { r: FRect { x: 180.0, y: 300.0, w: 420.5, h: 160.0 }, color: C4::new(59, 130, 246, 110), width: 4.0 }),
+            ("draft ellipse fill", Obj::EllipseFill { r: FRect { x: 1000.0, y: 500.0, w: 300.0, h: 180.0 }, color: C4::rgb(240, 68, 56), width: 3.0 }),
+            ("draft counter tail", Obj::Counter { c: Pt::new(260.5, 160.0), n: 7, color: C4::new(240, 68, 56, 200), d: 40.0, tail: Some(Pt::new(120.0, 90.0)) }),
         ] {
             let mut app = annotated(theme::DARK, big);
             let e = edit_of(&mut app);
@@ -4050,6 +4032,22 @@ mod tests {
         e.rec.opts.camera = true;
         e.rec.ring_pal = true;
         v.push(("ring palette", app));
+        // Numbered tags (one across the selection edge), a filled shape,
+        // the number tool's bar and the fill toggle on.
+        let mut app = annotated(theme::DARK, big);
+        let e = edit_of(&mut app);
+        for (i, (x, y)) in [(300.0, 200.0), (245.0, 500.0), (900.0, 650.0)].into_iter().enumerate() {
+            e.objects.push(Obj::Counter { c: Pt::new(x, y), n: i as u32 + 1, color: C4::rgb(59, 130, 246), d: 36.0, tail: None });
+        }
+        e.objects.push(Obj::Counter { c: Pt::new(700.0, 300.0), n: 12, color: C4::rgb(250, 220, 0), d: 30.0, tail: Some(Pt::new(780.0, 380.0)) });
+        e.objects.push(Obj::RectFill { r: FRect { x: 500.0, y: 450.0, w: 300.0, h: 80.0 }, color: C4::new(250, 220, 0, 120), width: 3.0 });
+        e.tool = Some(Tool::Counter);
+        v.push(("counters", app));
+        let mut app = annotated(theme::LIGHT, big);
+        let e = edit_of(&mut app);
+        e.tool = Some(Tool::Ellipse);
+        e.mem.toggle_fill(Tool::Ellipse);
+        v.push(("fill on", app));
         v
     }
 

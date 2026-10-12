@@ -110,6 +110,9 @@ pub struct Config {
     pub tool_sizes: BTreeMap<String, f32>,
     /// Each drawing tool's last colour (`tool_<id>_color`).
     pub tool_colors: BTreeMap<String, String>,
+    /// Filled or outlined, for the shapes that can be either
+    /// (`tool_<id>_fill`, ids in [`FILL_IDS`]).
+    pub tool_fills: BTreeMap<String, bool>,
     /// Editor shortcut overrides from the `[shortcuts]` table
     /// (`action id -> "Ctrl+Shift+S"`; see `keymap`).
     pub shortcuts: BTreeMap<String, String>,
@@ -119,6 +122,17 @@ pub struct Config {
 /// (`tool_<id>_size`, `tool_<id>_color`).
 pub const TOOL_IDS: [&str; 9] = ["pencil", "line", "arrow", "rect", "ellipse", "marker", "text", "counter", "pixelate"];
 
+/// The tools that draw filled or outlined (`tool_<id>_fill`).
+pub const FILL_IDS: [&str; 2] = ["rect", "ellipse"];
+
+/// Every remembered tool key (`tool_<id>_size`, `_color`, `_fill`): what
+/// Settings' "Reset tool sizes & colours" removes.
+pub fn tool_key_names() -> Vec<String> {
+    let mut v: Vec<String> = TOOL_IDS.iter().flat_map(|id| [format!("tool_{id}_size"), format!("tool_{id}_color")]).collect();
+    v.extend(FILL_IDS.iter().map(|id| format!("tool_{id}_fill")));
+    v
+}
+
 /// How many recent custom colours are kept.
 pub const RECENT_MAX: usize = 8;
 
@@ -126,15 +140,26 @@ pub const RECENT_MAX: usize = 8;
 pub const RING_WIDTH_DEFAULT: u32 = 3;
 pub const RING_WIDTH_MAX: u32 = 16;
 
-/// `tool_<id>_size` / `tool_<id>_color` split into (id, is_size), for a
-/// known tool id.
-fn tool_key(key: &str) -> Option<(&str, bool)> {
+/// What a remembered tool key holds.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ToolKey {
+    Size,
+    Color,
+    Fill,
+}
+
+/// `tool_<id>_size` / `tool_<id>_color` / `tool_<id>_fill` split into
+/// (id, what), for a known tool id.
+fn tool_key(key: &str) -> Option<(&str, ToolKey)> {
     let rest = key.strip_prefix("tool_")?;
-    let (id, size) = match rest.strip_suffix("_size") {
-        Some(id) => (id, true),
-        None => (rest.strip_suffix("_color")?, false),
+    if let Some(id) = rest.strip_suffix("_fill") {
+        return FILL_IDS.contains(&id).then_some((id, ToolKey::Fill));
+    }
+    let (id, what) = match rest.strip_suffix("_size") {
+        Some(id) => (id, ToolKey::Size),
+        None => (rest.strip_suffix("_color")?, ToolKey::Color),
     };
-    TOOL_IDS.contains(&id).then_some((id, size))
+    TOOL_IDS.contains(&id).then_some((id, what))
 }
 
 impl Default for Config {
@@ -194,6 +219,7 @@ impl Default for Config {
             recent_colors: Vec::new(),
             tool_sizes: BTreeMap::new(),
             tool_colors: BTreeMap::new(),
+            tool_fills: BTreeMap::new(),
             shortcuts: BTreeMap::new(),
         }
     }
@@ -488,7 +514,15 @@ pub fn copy_key(from: &Config, to: &mut Config, key: &str) {
         "ui_scale" => to.ui_scale = from.ui_scale,
         "snap_tab_hint" => to.snap_tab_hint = from.snap_tab_hint,
         k => match tool_key(k) {
-            Some((id, true)) => match from.tool_sizes.get(id) {
+            Some((id, ToolKey::Fill)) => match from.tool_fills.get(id) {
+                Some(v) => {
+                    to.tool_fills.insert(id.into(), *v);
+                }
+                None => {
+                    to.tool_fills.remove(id);
+                }
+            },
+            Some((id, ToolKey::Size)) => match from.tool_sizes.get(id) {
                 Some(v) => {
                     to.tool_sizes.insert(id.into(), *v);
                 }
@@ -496,7 +530,7 @@ pub fn copy_key(from: &Config, to: &mut Config, key: &str) {
                     to.tool_sizes.remove(id);
                 }
             },
-            Some((id, false)) => match from.tool_colors.get(id) {
+            Some((id, ToolKey::Color)) => match from.tool_colors.get(id) {
                 Some(v) => {
                     to.tool_colors.insert(id.into(), v.clone());
                 }
@@ -844,11 +878,14 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
             }
             "recent_colors" => cfg.recent_colors = as_array(val).map_err(|e| bad("array", &e))?,
             k => match tool_key(k) {
-                Some((id, true)) => {
+                Some((id, ToolKey::Fill)) => {
+                    cfg.tool_fills.insert(id.to_string(), as_bool(val).map_err(|e| bad("boolean", &e))?);
+                }
+                Some((id, ToolKey::Size)) => {
                     let v = as_f64(val).ok().filter(|v| v.is_finite() && *v > 0.0).ok_or_else(|| bad("number", val))?;
                     cfg.tool_sizes.insert(id.to_string(), v as f32);
                 }
-                Some((id, false)) => {
+                Some((id, ToolKey::Color)) => {
                     cfg.tool_colors.insert(id.to_string(), as_string(val).map_err(|e| bad("string", &e))?);
                 }
                 None => {} // unknown keys are ignored, as with serde's default
@@ -964,6 +1001,9 @@ pub fn to_toml(c: &Config) -> String {
         }
         if let Some(v) = c.tool_colors.get(id) {
             out.push_str(&format!("tool_{id}_color = {}\n", q(v)));
+        }
+        if let Some(v) = c.tool_fills.get(id) {
+            out.push_str(&format!("tool_{id}_fill = {v}\n"));
         }
     }
     if !c.shortcuts.is_empty() {
@@ -1589,6 +1629,27 @@ bogus = 1
             let key = bad.split(' ').next().unwrap();
             assert!(e.contains(&format!("'{key}'")), "{bad}: {e}");
         }
+    }
+
+    #[test]
+    fn fill_keys_parse_roundtrip_and_copy() {
+        let c = parse_config("tool_rect_fill = true\ntool_ellipse_fill = false\ntool_line_fill = true\ntool_counter_color = \"#123456\"\n").unwrap();
+        assert_eq!(c.tool_fills.get("rect"), Some(&true));
+        assert_eq!(c.tool_fills.get("ellipse"), Some(&false));
+        assert!(!c.tool_fills.contains_key("line"), "only the shapes have a fill");
+        assert_eq!(c.tool_colors.get("counter").map(String::as_str), Some("#123456"));
+        let out = to_toml(&c);
+        assert!(out.contains("tool_rect_fill = true\n") && out.contains("tool_ellipse_fill = false\n"), "{out}");
+        assert_eq!(parse_config(&out).unwrap(), c);
+        assert!(parse_config("tool_rect_fill = 1").expect_err("not a bool").contains("'tool_rect_fill'"));
+        let mut to = Config::default();
+        copy_key(&c, &mut to, "tool_rect_fill");
+        assert_eq!(to.tool_fills.get("rect"), Some(&true));
+        copy_key(&Config::default(), &mut to, "tool_rect_fill");
+        assert!(to.tool_fills.is_empty(), "a removed key goes");
+        let names = tool_key_names();
+        assert!(names.contains(&"tool_rect_fill".to_string()) && names.contains(&"tool_counter_size".to_string()));
+        assert!(names.iter().all(|k| tool_key(k).is_some()), "{names:?}");
     }
 
     #[test]

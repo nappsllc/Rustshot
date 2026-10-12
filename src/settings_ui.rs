@@ -793,14 +793,12 @@ impl Settings {
             self.tools_reset = true;
             return vec![];
         }
-        let edits: Vec<(String, Option<String>)> = config::TOOL_IDS
-            .iter()
-            .flat_map(|id| [(format!("tool_{id}_size"), None), (format!("tool_{id}_color"), None)])
-            .collect();
+        let edits: Vec<(String, Option<String>)> = config::tool_key_names().into_iter().map(|k| (k, None)).collect();
         match config::edit_top_keys_at(&self.path, &edits) {
             Ok(()) => {
                 self.loaded.tool_sizes.clear();
                 self.loaded.tool_colors.clear();
+                self.loaded.tool_fills.clear();
                 self.tools_reset = true;
                 vec![Act::Reload]
             }

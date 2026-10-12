@@ -154,6 +154,113 @@ pub enum Obj {
     Invert {
         r: FRect,
     },
+    /// A freehand highlighter stroke (the straight one is `Marker`).
+    MarkerPath {
+        pts: Vec<Pt>,
+        color: C4,
+        width: f32,
+    },
+    /// A filled rectangle: the outline's silhouette (`r` grown by half
+    /// the width, the same rounded corners), in the colour with its alpha.
+    RectFill {
+        r: FRect,
+        color: C4,
+        width: f32,
+    },
+    /// A filled ellipse: the outline's silhouette (the inside of `r` and
+    /// the ring of the width).
+    EllipseFill {
+        r: FRect,
+        color: C4,
+        width: f32,
+    },
+    /// A numbered tag: a disc of diameter `d` centred on `c` with `n`
+    /// inside (black or white, whichever reads), optionally a pointer tail
+    /// to `tail`.
+    Counter {
+        c: Pt,
+        n: u32,
+        color: C4,
+        d: f32,
+        tail: Option<Pt>,
+    },
+}
+
+/// `r` grown by `m` on every side.
+fn grown(r: FRect, m: f32) -> FRect {
+    FRect { x: r.x - m, y: r.y - m, w: r.w + 2.0 * m, h: r.h + 2.0 * m }
+}
+
+/// A numbered tag's tail: a triangle from the disc's edge (32 degrees
+/// either side of the tip's direction) to the tip; `None` when the tip is
+/// inside the disc.
+fn counter_tail(c: Pt, d: f32, tail: Option<Pt>) -> Option<[Pt; 3]> {
+    let t = tail?;
+    let r = d / 2.0;
+    let (dx, dy) = (t.x - c.x, t.y - c.y);
+    if dx.hypot(dy) <= r + 1.0 {
+        return None;
+    }
+    let th = dy.atan2(dx);
+    let a = 32f32.to_radians();
+    let at = |ang: f32| Pt::new(c.x + r * ang.cos(), c.y + r * ang.sin());
+    Some([at(th - a), t, at(th + a)])
+}
+
+/// The tag's number colour: white, or black on a light colour (white
+/// would read below 3:1 there, WCAG's large-text minimum).
+pub fn counter_ink(c: C4) -> C4 {
+    let lin = |v: u8| {
+        let s = v as f32 / 255.0;
+        if s <= 0.04045 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }
+    };
+    let l = 0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b);
+    let ink = if 1.05 / (l + 0.05) >= 3.0 { C4::rgb(255, 255, 255) } else { C4::rgb(0, 0, 0) };
+    ink.with_alpha(c.a)
+}
+
+/// The tag's number in the UI font (Inter, the same everywhere) into
+/// `m`, its ink box centred on `c` to the pixel; sized to the disc (a
+/// longer number gets smaller to fit).
+fn counter_number(m: &mut Mask, c: Pt, n: u32, d: f32) {
+    let font = crate::fonts::ui_font();
+    let s = n.to_string();
+    let mut px = d * 0.8;
+    let w = font.width(&s, px);
+    if w > d * 0.68 {
+        px *= d * 0.68 / w;
+    }
+    // Where the ink falls drawn at the origin; an integer shift keeps
+    // the same coverage, so the box centres exactly.
+    let (mut x0, mut y0, mut x1, mut y1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+    font.draw(&s, px, 0.0, 0.0, |x, y, v| {
+        if v > 0.0 {
+            (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x + 1), y1.max(y + 1));
+        }
+    });
+    if x0 > x1 {
+        return;
+    }
+    let dx = (c.x - (x0 + x1) as f32 / 2.0).round();
+    let dy = (c.y - (y0 + y1) as f32 / 2.0).round();
+    font.draw(&s, px, dx, dy, |x, y, v| m.put(x, y, v));
+}
+
+fn counter(sf: &mut Surf, c: Pt, n: u32, color: C4, d: f32, tail: Option<Pt>) {
+    let r = d / 2.0;
+    let tri = counter_tail(c, d, tail);
+    let mut pts = vec![Pt::new(c.x - r, c.y - r), Pt::new(c.x + r, c.y + r)];
+    pts.extend(tri.iter().flatten());
+    // Disc and tail: one mask, one alpha.
+    let mut m = Mask::around(sf, &pts, 1.0);
+    m.disc(c, r);
+    if let Some(t) = tri {
+        m.convex(&t);
+    }
+    m.blend(sf, color, Blend::Normal);
+    let mut m = Mask::around(sf, &pts[..2], 1.0);
+    counter_number(&mut m, c, n, d);
+    m.blend(sf, counter_ink(color), Blend::Normal);
 }
 
 /// Arrow geometry: shaft endpoints plus the filled head triangle.
@@ -311,6 +418,14 @@ impl Obj {
             Obj::Path { pts, width, .. } => (pts.len() >= 2).then(|| bbox(pts, m(*width))).flatten(),
             Obj::Rect { r, width, .. } | Obj::Ellipse { r, width, .. } => Some(grow(r, m(*width))),
             Obj::Pixelate { r, .. } | Obj::Invert { r } => Some(grow(r, 1.0)),
+            Obj::MarkerPath { pts, width, .. } => (pts.len() >= 2).then(|| bbox(pts, m(*width))).flatten(),
+            Obj::RectFill { r, width, .. } | Obj::EllipseFill { r, width, .. } => Some(grow(r, m(*width))),
+            Obj::Counter { c, d, tail, .. } => {
+                let r = d / 2.0;
+                let mut pts = vec![Pt::new(c.x - r, c.y - r), Pt::new(c.x + r, c.y + r)];
+                pts.extend(tail.filter(|_| counter_tail(*c, *d, *tail).is_some()));
+                bbox(&pts, 2.0)
+            }
             Obj::Text { pos, text, size, .. } => {
                 let (w, h, _) = font?.measure(text, *size);
                 // Overhang, rounding to whole pixels and AA bleed.
@@ -389,6 +504,27 @@ impl Obj {
             }
             Obj::Pixelate { r, cell } => pixelate(sf, *r, *cell),
             Obj::Invert { r } => invert(sf, *r),
+            Obj::MarkerPath { pts, color, width } => {
+                if pts.len() >= 2 {
+                    sf.stroke_polyline(pts, *width, *color, Blend::Multiply);
+                }
+            }
+            Obj::RectFill { r, color, width } => {
+                let w = width.max(0.5);
+                let mut m = Mask::new(sf, (r.x - w).floor() as i32, (r.y - w).floor() as i32, (r.x1() + w).ceil() as i32, (r.y1() + w).ceil() as i32);
+                m.round_box(grown(*r, w / 2.0), 1.5 * w);
+                m.blend(sf, *color, Blend::Normal);
+            }
+            Obj::EllipseFill { r, color, width } => {
+                let w = width.max(0.5);
+                let mut m = Mask::new(sf, (r.x - w).floor() as i32, (r.y - w).floor() as i32, (r.x1() + w).ceil() as i32, (r.y1() + w).ceil() as i32);
+                // The inside plus the outline's own ring: exactly the
+                // outlined ellipse's silhouette.
+                m.ellipse(*r);
+                m.ellipse_ring(*r, w);
+                m.blend(sf, *color, Blend::Normal);
+            }
+            Obj::Counter { c, n, color, d, tail } => counter(sf, *c, *n, *color, *d, *tail),
         }
     }
 }
@@ -488,6 +624,11 @@ mod tests {
             Obj::Invert { r: rect },
             Obj::Pixelate { r: FRect { x: 33.0, y: 23.0, w: 30.0, h: 22.0 }, cell: 6.0 },
             Obj::Pixelate { r: FRect { x: 31.0, y: 21.0, w: 38.0, h: 28.0 }, cell: 8.0 },
+            Obj::MarkerPath { pts: vec![a, Pt::new(40.0, 20.0), Pt::new(60.0, 60.0), b], color: C4::new(255, 230, 0, 160), width: 12.0 },
+            Obj::RectFill { r: rect, color: c, width: 3.0 },
+            Obj::EllipseFill { r: rect, color: c, width: 3.0 },
+            Obj::Counter { c: Pt::new(50.5, 40.25), n: 8, color: c, d: 34.0, tail: Some(Pt::new(90.0, 70.0)) },
+            Obj::Counter { c: Pt::new(30.0, 30.0), n: 120, color: C4::rgb(250, 220, 0), d: 26.0, tail: None },
         ];
         for (n, o) in objs.iter().enumerate() {
             check(&format!("obj {n}"), |s| o.render_into(s, None));
@@ -578,6 +719,134 @@ mod tests {
         let darkest = img.as_raw().as_chunks::<4>().0.iter().map(|p| p[0]).min().unwrap();
         assert!(darkest >= 126, "a pixel blended twice: {darkest}");
         assert!(darkest <= 128, "the text was drawn: {darkest}");
+    }
+
+    fn white(w: u32, h: u32) -> PixBuf {
+        let mut img = PixBuf::new(w, h);
+        for p in img.as_raw_mut().as_chunks_mut::<4>().0 {
+            *p = [255, 255, 255, 255];
+        }
+        img
+    }
+
+    /// The tag: a disc of the diameter in the colour, the number in the
+    /// ink that reads on it, centred; the bounds hold every pixel.
+    #[test]
+    fn counter_draws_a_numbered_disc() {
+        assert_eq!(counter_ink(C4::rgb(240, 68, 56)), C4::rgb(255, 255, 255), "white on the default red");
+        assert_eq!(counter_ink(C4::rgb(59, 130, 246)), C4::rgb(255, 255, 255));
+        assert_eq!(counter_ink(C4::rgb(250, 220, 0)), C4::rgb(0, 0, 0), "black on yellow");
+        assert_eq!(counter_ink(C4::rgb(255, 255, 255)), C4::rgb(0, 0, 0));
+        assert_eq!(counter_ink(C4::new(0, 0, 0, 77)).a, 77, "the colour's opacity");
+        for (d, n) in [(20.0f32, 1u32), (32.0, 7), (48.0, 12), (96.0, 100)] {
+            let mut img = white(140, 140);
+            let o = Obj::Counter { c: Pt::new(70.0, 70.0), n, color: C4::rgb(20, 40, 160), d, tail: None };
+            o.render(&mut img, None);
+            let r = d / 2.0;
+            let b = o.bounds(None).unwrap();
+            let (mut ink, mut sx, mut sy) = (0usize, 0.0f32, 0.0f32);
+            for y in 0..140u32 {
+                for x in 0..140u32 {
+                    let p = img.get_pixel(x, y);
+                    let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
+                    let dist = (fx - 70.0).hypot(fy - 70.0);
+                    if p != [255, 255, 255, 255] {
+                        assert!(fx >= b.x && fx <= b.x1() && fy >= b.y && fy <= b.y1(), "d {d}: ({x}, {y}) outside the bounds");
+                        assert!(dist <= r + 1.0, "d {d}: ({x}, {y}) off the disc");
+                    }
+                    if dist > r + 1.0 {
+                        continue;
+                    }
+                    if p[0] > 200 && p[2] > 200 && dist < r - 1.0 {
+                        // The white number inside the blue disc.
+                        ink += 1;
+                        sx += fx;
+                        sy += fy;
+                    }
+                }
+            }
+            assert!(ink > (d * d / 40.0) as usize, "d {d} n {n}: the number shows ({ink} px)");
+            let (cx, cy) = (sx / ink as f32, sy / ink as f32);
+            // The ink's centroid sits near the centre (digit shapes are not
+            // symmetric: a few px for "7").
+            assert!((cx - 70.0).abs() < d * 0.12 + 1.0 && (cy - 70.0).abs() < d * 0.12 + 1.0, "d {d} n {n}: centred? ({cx}, {cy})");
+            assert_eq!(img.get_pixel(70, (70.0 - r + 2.0) as u32), [20, 40, 160, 255], "d {d}: the disc's top");
+        }
+    }
+
+    /// A translucent tag with its tail is one alpha: no darker join where
+    /// the tail meets the disc.
+    #[test]
+    fn counter_tail_blends_once() {
+        let mut img = white(160, 120);
+        let o = Obj::Counter { c: Pt::new(40.0, 60.0), n: 1, color: C4::new(0, 0, 0, 128), d: 40.0, tail: Some(Pt::new(150.0, 60.0)) };
+        o.render(&mut img, None);
+        let mut vals = std::collections::BTreeSet::new();
+        // Along the axis from inside the disc's edge into the tail.
+        for x in 52..75 {
+            for y in 58..62 {
+                vals.insert(img.get_pixel(x, y)[0]);
+            }
+        }
+        assert_eq!(vals.len(), 1, "{vals:?}");
+        assert!((126..=128).contains(vals.first().unwrap()));
+        assert!(img.get_pixel(140, 60)[0] < 200, "the tail reaches the tip");
+        assert!(o.bounds(None).unwrap().x1() >= 150.0);
+        // A tip inside the disc draws no tail.
+        let inside = Obj::Counter { c: Pt::new(40.0, 60.0), n: 1, color: C4::rgb(0, 0, 0), d: 40.0, tail: Some(Pt::new(50.0, 60.0)) };
+        let plain = Obj::Counter { c: Pt::new(40.0, 60.0), n: 1, color: C4::rgb(0, 0, 0), d: 40.0, tail: None };
+        let (mut a, mut b) = (white(160, 120), white(160, 120));
+        inside.render(&mut a, None);
+        plain.render(&mut b, None);
+        assert!(a == b);
+    }
+
+    /// Filled shapes cover the outline's silhouette; a translucent fill
+    /// is one even tint.
+    #[test]
+    fn filled_shapes_cover_the_outline_silhouette() {
+        let rect = FRect { x: 20.0, y: 20.0, w: 80.0, h: 50.0 };
+        let red = C4::rgb(200, 0, 0);
+        for (outline, fill) in [
+            (Obj::Rect { r: rect, color: red, width: 6.0 }, Obj::RectFill { r: rect, color: red, width: 6.0 }),
+            (Obj::Ellipse { r: rect, color: red, width: 6.0 }, Obj::EllipseFill { r: rect, color: red, width: 6.0 }),
+        ] {
+            let (mut a, mut b) = (white(120, 90), white(120, 90));
+            outline.render(&mut a, None);
+            fill.render(&mut b, None);
+            for y in 0..90u32 {
+                for x in 0..120u32 {
+                    let (o, f) = (a.get_pixel(x, y)[1], b.get_pixel(x, y)[1]);
+                    // Wherever the outline paints (half covered or more), so
+                    // does the fill (AA edges may differ by a fraction).
+                    assert!(o > 128 || f < 160, "{fill:?} ({x}, {y}): outline {o} fill {f}");
+                }
+            }
+            assert_eq!(b.get_pixel(60, 45), [200, 0, 0, 255], "solid inside");
+            assert_eq!(b.get_pixel(2, 2), [255, 255, 255, 255], "nothing outside");
+            assert!(fill.bounds(None).unwrap().x <= 16.0);
+        }
+        let mut img = white(120, 90);
+        Obj::RectFill { r: rect, color: C4::new(0, 0, 0, 128), width: 3.0 }.render(&mut img, None);
+        let mut vals = std::collections::BTreeSet::new();
+        for y in 25..65 {
+            for x in 25..95 {
+                vals.insert(img.get_pixel(x, y)[0]);
+            }
+        }
+        assert_eq!(vals.len(), 1, "{vals:?}");
+    }
+
+    #[test]
+    fn marker_path_is_one_multiply_stroke() {
+        let mut img = white(100, 60);
+        let pts = vec![Pt::new(10.0, 30.0), Pt::new(50.0, 30.0), Pt::new(10.0, 31.0)];
+        Obj::MarkerPath { pts, color: C4::new(250, 220, 0, 90), width: 12.0 }.render(&mut img, None);
+        // Doubled back over itself: still one blend.
+        let v = img.get_pixel(30, 30);
+        let w = img.get_pixel(48, 30);
+        assert_eq!(v, w, "overlapping parts blend once");
+        assert!(v[2] + 50 < v[0], "a yellow tint: {v:?}");
     }
 
     #[test]

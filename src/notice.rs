@@ -70,6 +70,8 @@ pub fn compose(done: &[Done], uploading: bool) -> Option<Note> {
             Done::Copied => "Copied".to_string(),
             Done::Saved(p) if single => format!("Saved \u{b7} {}", file_name(p)),
             Done::Saved(p) => format!("Saved {}", file_name(p)),
+            Done::SavedDesktop(p) if single => format!("Saved to Desktop \u{b7} {}", file_name(p)),
+            Done::SavedDesktop(p) => format!("Saved {} to Desktop", file_name(p)),
             Done::Failed(what, e) => {
                 failed = true;
                 format!("{what} failed: {}", reason(e))
@@ -241,6 +243,11 @@ mod tests {
         assert_eq!((n.text.as_str(), n.kind), ("Copied \u{b7} Saved a.jpg", ToastKind::Success));
         let n = compose(&[Done::Copied], true).unwrap();
         assert_eq!((n.text.as_str(), n.kind, n.ttl), ("Copied \u{b7} Uploading\u{2026}", ToastKind::Success, UPLOAD_TTL));
+        let desk = Done::SavedDesktop(PathBuf::from("/home/me/Desktop").join("b.png"));
+        let n = compose(&[Done::Copied, desk.clone()], false).unwrap();
+        assert_eq!((n.text.as_str(), n.kind), ("Copied \u{b7} Saved b.png to Desktop", ToastKind::Success));
+        let n = compose(&[desk], false).unwrap();
+        assert_eq!((n.text.as_str(), n.kind), ("Saved to Desktop \u{b7} b.png", ToastKind::Success));
         let n = compose(&[Done::Copied, Done::Failed("Save", "disk full".into())], false).unwrap();
         assert_eq!((n.text.as_str(), n.kind, n.ttl), ("Copied \u{b7} Save failed: disk full", ToastKind::Error, ERROR_TTL));
     }
@@ -292,6 +299,7 @@ mod tests {
             ("link-copied", Some(upload_note(&Ok("https://i.imgur.com/aB3xYz9.png".into()), true))),
             ("upload-failed", Some(upload_note(&Err("WinHttpSendRequest: The operation timed out".into()), true))),
             ("save-failed", compose(&[Done::Failed("Save", "access denied (os error 5)".into())], false)),
+            ("saved-desktop", compose(&[Done::SavedDesktop(PathBuf::from("/home/me/Desktop/2026-10-11_14-02.png"))], false)),
         ];
         for (tn, th, bg) in [("dark", &crate::theme::DARK, [38u8, 44, 58]), ("light", &crate::theme::LIGHT, [214, 222, 232])] {
             for s in [1.0f32, 2.0] {
