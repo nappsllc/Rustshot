@@ -374,8 +374,10 @@ size apply to the selection too. Every edit is one undo step. A callout
 (drag or click) starts typing at once: <kbd>Enter</kbd> for a new line, the
 bubble keeps its width and grows down, <kbd>Esc</kbd> or a click outside
 finishes; click a selected callout to type in it again. Spotlights keep
-their rectangles bright and dim the rest of the selection to half; the
-magnifier shows the area under its source twice as large. Object actions
+their rectangles bright and dim the rest of the selection to half (what
+is below them: annotations drawn after a spotlight stay bright); the
+magnifier shows the area under its source twice as large. Save As and
+Save to Desktop are in the menu of the Save button's chevron. Object actions
 (<kbd>Del</kbd>, <kbd>Ctrl</kbd>+<kbd>D</kbd>, …) win over the other keys
 while objects are selected.
 
