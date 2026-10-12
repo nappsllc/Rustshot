@@ -37,3 +37,33 @@ No new dependencies (Win32 via the existing `windows` features, Xlib FFI, AppKit
 - Hover now pauses the recording toast too (before: restart of 6 s).
 - X11 pin placement relies on the WM honouring USPosition / client moves; drag uses XMoveWindow (not `_NET_WM_MOVERESIZE`) except under XWayland. Opacity on X11 needs a compositor. macOS pins: drag + double-click only, compile-checked only.
 - Merge-conflict hot spots for the annotation-rework agent: `editor/mod.rs` (`run_finish`, `apply_act`, `act_of`, App fields), `toolbar.rs` output group/test widths, `keymap.rs` ALL count, `export::Task`.
+
+## Review fixes (commit 19a81bf)
+
+- I1, zoom limits:
+  - The zoom is capped so the zoomed image is no bigger than the virtual screen and at most 32 Mpx. The cap is never below 100 %. It is enforced in `zoom_cap` and `zoom_step_capped`, and in `set_view` on Windows and X11.
+  - Window sizes are computed in u64 with checked multiplies. A window past the hard limit is refused (`render_by` returns None) before anything is allocated, and the allocation uses `try_reserve`.
+  - Zooming in samples the nearest source pixel straight into the window, so there is no zoomed copy or f32 temp.
+  - `Dib::put_alpha` returns false when it puts nothing up (for example when `CreateDIBSection` fails). The pin then keeps its previous zoom and origin.
+  - Tests: `the_zoom_is_capped_by_screen_and_pixels`, `rendering_zoomed`, `pin_win::the_zoom_is_capped`, and the X11 test (the wheel stops at the cap).
+- I2, X11 errors:
+  - Every pins-thread iteration runs under `wind::x_guarded`, so X errors are logged instead of exiting the process.
+  - `XSetIOErrorExitHandler` (looked up with dlsym, libX11 1.7+) sets a flag. The pins thread then forgets its pins, sets the count to 0 and ends; the daemon lives on.
+  - Pin windows set `WM_PROTOCOLS`/`WM_DELETE_WINDOW`, and that ClientMessage closes the pin. Test: the Delete step in `pin_windows_come_zoom_and_go`.
+- I3, thumbnail press: the press now takes the mouse capture, and `WM_CAPTURECHANGED` clears it. A click needs the press and the release on the same button. Test: the WM_LBUTTONDOWN, WM_CAPTURECHANGED and cross-button steps in `the_thumbnail_window`.
+- I4, pins destroyed from outside: `WM_NCDESTROY` unregisters the pin and updates the count and tray, and `WM_CLOSE` goes through `close`. Test: `pins_closed_from_outside_leave_the_list`.
+- I5, picture cache: `PIC` holds only a Weak link to the capture plus the small scaled picture, and is cleared when the card goes down on Windows, X11 and macOS. The OCR path's `Arc::unwrap_or_clone` therefore does not copy. Test: the `picture_kept` and strong-count checks in `the_thumbnail_renders`.
+- Minor fixes:
+  - X11 `open` and `close_all` no longer wait for a reply, so a slow render no longer gives a false "not available". Exports run off the pins thread.
+  - Windows pins are created with WS_EX_NOACTIVATE and shown with SW_SHOWNOACTIVATE. The first click clears the style and takes the foreground.
+  - OLE is initialised once per thread.
+  - Drag file names include milliseconds and a counter.
+  - A drop hides only the card that was dragged.
+  - Pin tests now count the test thread's own list rather than the global count, so parallel tests cannot race on it.
+- OCR test: `two_copy_texts_in_flight_both_deliver` is now gated with a condvar. The first job waits until the second has been delivered, so there is no wall-clock race.
+- Verification:
+  - Windows `cargo test` ran twice, 925 passed / 0 failed both times.
+  - `live_pin_on_screen` passed.
+  - `cargo clippy --all-targets -D warnings` is clean for Windows, Linux and macOS.
+  - Docker x11 (full run, `-Ref worktree`) passed everything, with Linux unit tests at 897 passed, including `pin_windows_come_zoom_and_go`.
+- Not done (minor): M2 (X11 raises the window on every put and copies the faded buffer), M6 (an update restart does not wait for pins), M8 (zoom drift of about a pixel).
