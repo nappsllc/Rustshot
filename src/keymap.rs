@@ -241,6 +241,11 @@ impl Action {
     }
 }
 
+/// A chord a typing key may have: with Ctrl or Alt (else it would type).
+pub fn typing_ok(c: &Chord) -> bool {
+    c.ctrl || c.alt
+}
+
 /// What the Meta modifier is called here: the Windows key, Super on
 /// Linux, ⌘ (Cmd) on macOS.
 #[cfg(windows)]
@@ -340,6 +345,14 @@ impl Keymap {
             if !a.while_recording() && good.iter().any(|c| c.meta) {
                 warn.push(format!("[shortcuts] {k}: Meta chords do not reach the editor"));
             }
+            // A typing key without Ctrl or Alt would eat what is typed.
+            let (good, plain): (Vec<Chord>, Vec<Chord>) = good.into_iter().partition(|c| !a.while_typing() || typing_ok(c));
+            if !plain.is_empty() {
+                warn.push(format!("[shortcuts] {k}: a key used while typing needs Ctrl or Alt (ignored)"));
+                if good.is_empty() {
+                    continue; // keep the default
+                }
+            }
             km.chords[a.index()] = good;
         }
         (km, warn)
@@ -385,7 +398,21 @@ impl Keymap {
         out.extend(self.conflicts_in(2));
         out.extend(self.conflicts_in(3));
         out.extend(self.conflicts_in(4));
+        // The Edit window asks its zoom keys first, typing or not.
+        for a in Action::ALL.into_iter().filter(|a| a.while_typing()) {
+            for c in self.chords(a) {
+                if let Some(z) = Action::ALL.into_iter().find(|z| z.edit_window() && self.chords(*z).contains(c)) {
+                    out.push((*c, vec![z, a]));
+                }
+            }
+        }
         out
+    }
+
+    /// Typing keys bound without Ctrl or Alt (they would eat what is
+    /// typed; [`Keymap::from_config`] drops them, Settings shows them).
+    pub fn plain_typing(&self) -> Vec<Action> {
+        Action::ALL.into_iter().filter(|a| a.while_typing() && self.chords(*a).iter().any(|c| !typing_ok(c))).collect()
     }
 
     fn conflicts_in(&self, group: u8) -> Vec<(Chord, Vec<Action>)> {
@@ -445,6 +472,27 @@ mod tests {
 
     fn shown(km: &Keymap, a: Action) -> Vec<String> {
         km.chords(a).iter().map(Chord::display).collect()
+    }
+
+    /// Typing keys need Ctrl or Alt (a plain key, Shift+key or F-key is
+    /// dropped with a warning, the default kept), and one shared with the
+    /// Edit window's zoom is a conflict (the zoom wins there).
+    #[test]
+    fn typing_keys_need_a_modifier_and_dodge_the_zoom() {
+        let cfg = |pairs: &[(&str, &str)]| pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<BTreeMap<_, _>>();
+        for bad in ["B", "Shift+B", "F5"] {
+            let (km, warn) = Keymap::from_config(&cfg(&[("text_bold", bad)]));
+            assert_eq!(shown(&km, Action::TextBold), ["Ctrl+B"], "{bad}: the default stays");
+            assert!(warn.iter().any(|w| w.contains("needs Ctrl or Alt")), "{bad}: {warn:?}");
+        }
+        let (km, warn) = Keymap::from_config(&cfg(&[("text_bold", "Alt+B, F6")]));
+        assert_eq!((shown(&km, Action::TextBold), warn.len()), (vec!["Alt+B".to_string()], 1));
+        let (km, _) = Keymap::from_config(&cfg(&[("text_italic", "Ctrl+0")]));
+        assert!(km.conflicts().iter().any(|(_, v)| v[..] == [Action::ZoomFit, Action::TextItalic]), "{:?}", km.conflicts());
+        let mut km = Keymap::defaults();
+        km.set(Action::TextUnderline, vec![Chord::parse("U").unwrap()]);
+        assert_eq!(km.plain_typing(), [Action::TextUnderline]);
+        assert!(Keymap::defaults().plain_typing().is_empty() && Keymap::defaults().conflicts().is_empty());
     }
 
     #[test]
