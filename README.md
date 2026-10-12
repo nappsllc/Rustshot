@@ -108,6 +108,7 @@ rustshot full --raw > shot.png    # PNG bytes to stdout
 rustshot update                   # check for a newer release
 rustshot settings                 # open the Settings window
 rustshot history                  # open the History window (captures kept; Edit)
+rustshot history --list           # print them: captured, kind, WxH, bytes, file (tab-separated)
 rustshot launcher                 # the capture launcher: what, after a delay, then what
 rustshot register-screenclip on   # Windows: Win+Shift+S opens Rustshot (off undoes it)
 rustshot --help
@@ -272,7 +273,7 @@ opens it in the Edit window.
 ### History and the Edit window
 
 Every screenshot that is copied, saved, uploaded or pinned is kept in
-`%LOCALAPPDATA%\rustshot\history\<yyyy-mm-dd>\<hhmmss>\` (Linux:
+`%LOCALAPPDATA%\rustshot-data\history\<yyyy-mm-dd>\<hhmmss>\` (Linux:
 `~/.local/share/rustshot/history`, macOS: `~/Library/Application
 Support/rustshot/history`): the selection **without** its annotations
 (`original.png`), the annotations (`annotations.json`), a thumbnail and
@@ -285,7 +286,8 @@ starts, every hour and when the limits change. Turning *Keep a history
 of captures* off (`history = false`) keeps nothing new; what is already
 kept still expires (History shows how many and offers **Clear
 history…**). Saved and uploaded files are never touched (only **Clear
-history…** with *Also delete saved files* removes them).
+history…** with *Also delete saved files* removes them). Uninstalling Rustshot keeps the history unless you tick
+*Also remove capture history* in the uninstaller.
 
 **History** (<kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd>, `history_hotkey`,
 or the tray's **History…**, which shows how many captures today) lists

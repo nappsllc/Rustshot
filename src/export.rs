@@ -471,9 +471,31 @@ fn replace_file(from: &Path, to: &Path) -> std::io::Result<()> {
     use windows::Win32::Storage::FileSystem::{MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW};
     let w = |p: &Path| p.as_os_str().encode_wide().chain(Some(0)).collect::<Vec<u16>>();
     let (f, t) = (w(from), w(to));
-    // SAFETY: both are NUL-terminated UTF-16 strings that outlive the call.
-    unsafe { MoveFileExW(windows::core::PCWSTR(f.as_ptr()), windows::core::PCWSTR(t.as_ptr()), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) }
-        .map_err(|e| std::io::Error::from_raw_os_error(e.code().0 & 0xFFFF))
+    // A file someone has open (another thread or process reading it, a
+    // virus scanner, the search indexer) cannot be replaced: Access is
+    // denied (5) or a sharing violation (32) until they close it, which
+    // readers do quickly. Wait for that, up to about 2 s; a folder in the
+    // way fails at once.
+    const ACCESS_DENIED: i32 = 5;
+    const SHARING_VIOLATION: i32 = 32;
+    let mut pause = std::time::Duration::from_millis(5);
+    let give_up = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        // SAFETY: both are NUL-terminated UTF-16 strings that outlive the call.
+        let r = unsafe { MoveFileExW(windows::core::PCWSTR(f.as_ptr()), windows::core::PCWSTR(t.as_ptr()), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) }
+            .map_err(|e| std::io::Error::from_raw_os_error(e.code().0 & 0xFFFF));
+        match r {
+            Err(e)
+                if matches!(e.raw_os_error(), Some(ACCESS_DENIED | SHARING_VIOLATION))
+                    && !to.is_dir()
+                    && std::time::Instant::now() < give_up =>
+            {
+                std::thread::sleep(pause);
+                pause = (pause * 2).min(std::time::Duration::from_millis(100));
+            }
+            r => return r,
+        }
+    }
 }
 
 /// Rename `from` over `to` (replacing it), then flush the folder so the
@@ -1062,6 +1084,32 @@ mod tests {
         assert!(sub.is_dir());
         let left = std::fs::read_dir(&dir).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().ends_with(TMP_SUFFIX)).count();
         assert_eq!(left, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A reader that has the file open (the History window listing,
+    /// another process, a virus scanner) does not make a save fail: the
+    /// replace waits for it (it failed with "replace ...: Access is denied"
+    /// in `concurrent_updates_all_land`).
+    #[test]
+    fn a_save_waits_for_a_reader_of_the_old_file() {
+        let dir = std::env::temp_dir().join(format!("rustshot_test_atomic_open_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("meta.json");
+        std::fs::write(&f, b"old").unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let g = f.clone();
+        let reader = std::thread::spawn(move || {
+            let open = std::fs::File::open(&g).unwrap();
+            tx.send(()).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            drop(open);
+        });
+        rx.recv().unwrap();
+        write_atomic(&f, b"new").expect("replaced once the reader is done");
+        reader.join().unwrap();
+        assert_eq!(std::fs::read(&f).unwrap(), b"new");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

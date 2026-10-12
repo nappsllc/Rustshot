@@ -12,7 +12,7 @@ Rustshot does not collect, store or transmit personal data or telemetry.
   *deletehash* imgur returns (the key that deletes the upload again), the
   time, the kind (image or video) and a 72 × 48 thumbnail: in the
   capture's History entry, or else in `uploads.json` (the last 50) beside
-  the history folder (`%LOCALAPPDATA%\rustshot`, Linux
+  the history folder (`%LOCALAPPDATA%\rustshot-data`, Linux
   `$XDG_DATA_HOME/rustshot`, macOS `~/Library/Application Support/rustshot`).
   The deletehash is never logged, shown or sent anywhere except in the one
   request **Delete from Imgur…** makes (`DELETE
@@ -23,7 +23,7 @@ Rustshot does not collect, store or transmit personal data or telemetry.
   is sent anywhere.
 - Settings are stored locally in `config.toml` in your user config folder.
 - History (on by default; off in Settings › Capture › History): each capture
-  is kept on this computer only, in `%LOCALAPPDATA%\rustshot\history`
+  is kept on this computer only, in `%LOCALAPPDATA%\rustshot-data\history`
   (Linux: `$XDG_DATA_HOME/rustshot/history`, macOS:
   `~/Library/Application Support/rustshot/history`) — the unannotated image,
   its annotations, a thumbnail, and details such as the time, size, source

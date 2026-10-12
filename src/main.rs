@@ -100,8 +100,9 @@ enum Cmd {
     Daemon { after_update: bool },
     /// Check for a newer release and open its download page.
     Update,
-    /// Open the History window (in this process).
-    History,
+    /// Open the History window (in this process); `list`: print the
+    /// entries instead (`--list`).
+    History { list: bool },
     /// Open the capture launcher (in the running daemon, if any).
     Launcher,
     /// Open the Settings window (in the running daemon, if any).
@@ -161,7 +162,8 @@ Commands:
             launching again while it runs triggers a capture)
   update    Check for a newer release and open its download page
   settings  Open the Settings window
-  history   Open the History window (captures kept, Edit)
+  history   Open the History window (captures kept, Edit); --list prints them:
+            captured, kind, WxH, bytes, file (tab-separated, newest first)
   launcher  Open the capture launcher (source, delay, what follows)
   config    Show or validate the config file (--check)
   register-screenclip on|off
@@ -250,10 +252,11 @@ fn parse_from(args: &[String]) -> Result<Parsed, String> {
             Some(Cmd::Update)
         }
         Some("history") => {
-            if let Some(a) = rest.first() {
+            let list = rest.first().is_some_and(|a| a == "--list");
+            if let Some(a) = rest.get(list as usize) {
                 return Err(format!("unexpected argument '{a}'"));
             }
-            Some(Cmd::History)
+            Some(Cmd::History { list })
         }
         Some("settings") => {
             if let Some(a) = rest.first() {
@@ -704,8 +707,21 @@ fn run() -> Result<()> {
             Ok(())
         }
         Cmd::Screenclip(ref uri) => screenclip(uri),
-        Cmd::History => {
+        Cmd::History { list: false } => {
             history_ui::run_here();
+            Ok(())
+        }
+        Cmd::History { list: true } => {
+            // Newest first; nothing (and no error) without a history folder.
+            if let Some(root) = history::find_root() {
+                use std::io::Write;
+                let mut out = std::io::stdout().lock();
+                for e in history::Store::new(root).list() {
+                    if writeln!(out, "{}", history::list_line(&e)).is_err() {
+                        break; // the reader went away (`| head`)
+                    }
+                }
+            }
             Ok(())
         }
         Cmd::Settings => {
@@ -950,8 +966,10 @@ mod cli_tests {
 
     #[test]
     fn history_command() {
-        assert!(matches!(cmd(&["history"]), Cmd::History));
+        assert!(matches!(cmd(&["history"]), Cmd::History { list: false }));
+        assert!(matches!(cmd(&["history", "--list"]), Cmd::History { list: true }));
         assert!(p(&["history", "x"]).is_err());
+        assert!(p(&["history", "--list", "x"]).is_err());
         assert!(HELP.contains("history   Open the History window"));
     }
 
