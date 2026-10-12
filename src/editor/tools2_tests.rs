@@ -465,7 +465,8 @@ fn new_buttons_have_tooltips_and_shortcuts() {
     assert_eq!(at(Act::SaveAs), at(Act::Save) + 1, "Save · Save As · Save to Desktop");
     assert_eq!(at(Act::SaveDesktop), at(Act::SaveAs) + 1);
     assert_eq!(at(Act::Fill), at(Act::Size(1)) + 1, "next to the size");
-    assert_eq!(at(Act::Tool(Tool::Counter)), at(Act::Tool(Tool::Text)) + 1);
+    assert_eq!(at(Act::Tool(Tool::Callout)), at(Act::Tool(Tool::Text)) + 1);
+    assert_eq!(at(Act::Tool(Tool::Counter)), at(Act::Tool(Tool::Callout)) + 1);
 }
 
 // ---- previews ---------------------------------------------------------------

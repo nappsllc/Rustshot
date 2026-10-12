@@ -20,13 +20,18 @@ pub struct Ui<'a> {
 }
 
 impl Ui<'_> {
-    fn px(&self, v: f32) -> f32 {
+    pub(super) fn px(&self, v: f32) -> f32 {
         v * self.s
     }
 
     /// A crisp "1 px" line at this scale.
     fn line(&self) -> f32 {
         self.s.round().max(1.0)
+    }
+
+    /// A crisp 1 px line (for sibling chrome modules).
+    pub(super) fn line_px(&self) -> f32 {
+        self.line()
     }
 }
 
@@ -67,14 +72,14 @@ pub fn surface(f: &mut Fb, ui: &Ui, r: FRect, radius: f32, layers: &[usize], k: 
 }
 
 /// Draw `s` vertically centred on `cy`; returns the advance width.
-fn text(f: &mut Fb, ui: &Ui, size: f32, s: &str, x: f32, cy: f32, c: C4) -> f32 {
+pub(super) fn text(f: &mut Fb, ui: &Ui, size: f32, s: &str, x: f32, cy: f32, c: C4) -> f32 {
     let Some(font) = ui.font else { return 0.0 };
     let _p = crate::perf::span(crate::perf::K::Text);
     let px = ui.px(size);
     f.draw_text(font, px, s, x, cy - text_height(font, px) / 2.0, c)
 }
 
-fn tw(ui: &Ui, size: f32, s: &str) -> f32 {
+pub(super) fn tw(ui: &Ui, size: f32, s: &str) -> f32 {
     ui.font.map(|f| text_width(f, ui.px(size), s)).unwrap_or(0.0)
 }
 
@@ -91,7 +96,22 @@ pub fn act_icon(a: Act) -> &'static str {
             Tool::Counter => "counter",
             Tool::Pixelate => "pixel",
             Tool::Invert => "invert",
+            Tool::Select => "select",
+            Tool::Callout => "callout",
+            Tool::Spotlight => "spotlight",
+            Tool::Magnify => "magnify",
         },
+        Act::ObjFront => "front",
+        Act::ObjBack => "back",
+        Act::ObjDup => "dup",
+        Act::ObjDelete => "trash",
+        Act::ObjSize(d) if d < 0 => "minus",
+        Act::ObjSize(_) => "plus",
+        Act::ObjStyle(crate::objects::CalloutStyle::Rounded) => "callout",
+        Act::ObjStyle(crate::objects::CalloutStyle::Cloud) => "cloudshape",
+        Act::ObjStyle(crate::objects::CalloutStyle::Ellipse) => "ellipse",
+        Act::ObjFill => "fill",
+        Act::ObjColor => "",
         Act::Undo => "undo",
         Act::Redo => "redo",
         Act::Size(d) if d < 0 => "minus",
@@ -321,7 +341,7 @@ fn checker(f: &mut Fb, ui: &Ui, r: FRect, rad: f32, k: f32) {
 
 /// A round swatch of radius `rad`: a checkerboard under a translucent
 /// colour, then the colour and its rim.
-fn swatch_r(f: &mut Fb, ui: &Ui, cx: f32, cy: f32, rad: f32, c: C4, k: f32) {
+pub(super) fn swatch_r(f: &mut Fb, ui: &Ui, cx: f32, cy: f32, rad: f32, c: C4, k: f32) {
     if c.a < 255 {
         checker(f, ui, FRect { x: cx - rad, y: cy - rad, w: 2.0 * rad, h: 2.0 * rad }, rad, k);
     }
@@ -749,7 +769,7 @@ fn button(f: &mut Fb, ui: &Ui, it: &Item, act: Act, (hovered, pressed): (bool, b
 
 /// The fill toggle's glyph: the shape (a square, or a circle for the
 /// ellipse), solid when filling, outlined otherwise.
-fn fill_icon(f: &mut Fb, ui: &Ui, cx: f32, cy: f32, round: bool, on: bool, c: C4) {
+pub(super) fn fill_icon(f: &mut Fb, ui: &Ui, cx: f32, cy: f32, round: bool, on: bool, c: C4) {
     let side = ui.px(15.0).round();
     let lw = ui.px(2.0);
     let r = FRect { x: (cx - side / 2.0).round(), y: (cy - side / 2.0).round(), w: side, h: side };
@@ -821,7 +841,7 @@ pub fn size_preview(f: &mut Fb, ui: &Ui, b: FRect, tool: Tool, size: f32, c: C4,
                 }
             }
         }
-        Tool::Text => {
+        Tool::Text | Tool::Callout => {
             let Some(font) = ui.font else { return };
             let mut px = size;
             while px > 4.0 && text_height(font, px) > cap {
@@ -837,7 +857,12 @@ pub fn size_preview(f: &mut Fb, ui: &Ui, b: FRect, tool: Tool, size: f32, c: C4,
             let tag = crate::objects::Obj::Counter { c: c0, n: 1, color: c.fade(k), d, tail: None };
             tag.render_into(&mut f.surf(), None);
         }
-        Tool::Invert => {}
+        Tool::Magnify => {
+            // The loupe's ring, its diameter capped to the box.
+            let r = (size / 4.0).clamp(3.0, cap / 2.0 - 1.0);
+            f.stroke_circle(b.x + b.w / 2.0, cy, r, ui.px(2.0), c.fade(k));
+        }
+        Tool::Invert | Tool::Select | Tool::Spotlight => {}
     }
 }
 
@@ -1056,6 +1081,21 @@ pub fn act_tip(a: Act, km: &Keymap) -> (&'static str, Vec<String>) {
         Act::Tool(Tool::Counter) => "Number (Ctrl+drag: pointer)",
         Act::Tool(Tool::Pixelate) => "Pixelate",
         Act::Tool(Tool::Invert) => "Invert",
+        Act::Tool(Tool::Select) => "Select (Shift: add, drag: marquee)",
+        Act::Tool(Tool::Callout) => "Callout",
+        Act::Tool(Tool::Spotlight) => "Spotlight",
+        Act::Tool(Tool::Magnify) => "Magnify",
+        Act::ObjColor => "Colour",
+        Act::ObjFill => "Fill",
+        Act::ObjSize(d) if d < 0 => "Smaller",
+        Act::ObjSize(_) => "Larger",
+        Act::ObjStyle(crate::objects::CalloutStyle::Rounded) => "Rounded",
+        Act::ObjStyle(crate::objects::CalloutStyle::Cloud) => "Cloud",
+        Act::ObjStyle(crate::objects::CalloutStyle::Ellipse) => "Ellipse",
+        Act::ObjFront => "Bring to front",
+        Act::ObjBack => "Send to back",
+        Act::ObjDup => "Duplicate",
+        Act::ObjDelete => "Delete",
         Act::Undo => "Undo",
         Act::Redo => "Redo",
         Act::Size(d) if d < 0 => "Smaller",
@@ -1311,7 +1351,7 @@ fn union(a: FRect, b: FRect) -> FRect {
 
 /// A panel at `r` with up to all four shadow layers: the widest spreads
 /// 9 px sideways and reaches 12 + 9 px below.
-fn surface_bounds(ui: &Ui, r: FRect) -> FRect {
+pub(super) fn surface_bounds(ui: &Ui, r: FRect) -> FRect {
     let (sp, dy) = (ui.px(SHADOW[3].1), ui.px(SHADOW[3].0));
     grow4(r, sp + 1.0 + AA, 1.0 + AA, sp + 1.0 + AA, dy + sp + 1.0 + AA)
 }

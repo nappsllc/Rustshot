@@ -1,0 +1,689 @@
+//! Editing committed objects in the overlay. The select tool (V) picks
+//! the object under a press (Shift toggles it, a drag on empty space is a
+//! marquee); with any other tool Ctrl+click does (the number tool keeps
+//! Ctrl for its tail), so a plain press always draws and drawing stays
+//! fast. A selection moves by dragging (snapping to other objects' edges
+//! and the image centre within 6 px, Alt: free; a 40 % ghost stays at the
+//! origin), resizes by its square handles, re-aims ends / tails / the
+//! loupe by its round handles, nudges with the arrows (Shift: 10 px), and
+//! takes Del, Ctrl+D, front / back, colour and size from the keys, the
+//! toolbar or its mini-toolbar. Every change is one undo step.
+//!
+//! Callouts: a drag (or a click) with the callout tool places a bubble
+//! and starts typing in it: a caret, Enter for a new line, the text wraps
+//! to the bubble's width and the bubble grows down; Esc or a click
+//! outside finishes. A click on a selected callout (select tool) or on any
+//! callout with the callout tool edits its text again.
+
+use super::compose::{CaretUi, ObjSelUi};
+use super::mini::{self, MiniIn, MiniUi};
+use super::toolbar::Act;
+use super::{tools, Edit, Handle, Interact, Tool, CLICK_PX, HANDLE_HIT};
+use crate::objects::{callout, edit as oe, CalloutStyle, FRect, Obj, Pt};
+use crate::wind::Mods;
+use std::time::Instant;
+
+/// Snap reach, logical px.
+pub(super) const SNAP_PX: f32 = 6.0;
+/// The ghost's opacity.
+pub(super) const GHOST: f32 = 0.4;
+/// Slack round an object a press still hits, logical px.
+const HIT_PX: f32 = 6.0;
+/// What a duplicate is offset by, logical px.
+const DUP_PX: f32 = 12.0;
+
+/// The object selection and the callout being typed in.
+#[derive(Default)]
+pub(super) struct ObjState {
+    /// Selected objects (indices into `objects`, ascending).
+    pub sel: Vec<usize>,
+    pub cedit: Option<CalloutEdit>,
+    /// Snap guides of the drag.
+    pub guides: Vec<(Pt, Pt)>,
+    /// The callout shape new bubbles get (the last one chosen).
+    pub style: CalloutStyle,
+    /// The mini-toolbar item and the handle under the pointer.
+    pub mini_hover: Option<usize>,
+    pub hot: Option<(bool, usize)>,
+    /// The mini-toolbar as laid out by the last frame (hit tests).
+    pub mini: Option<MiniUi>,
+    /// Ctrl+press on an object with a drawing tool: a click (no drag)
+    /// selects it (a drag draws, Ctrl snapping as before).
+    pub click_pick: Option<(usize, Pt)>,
+}
+
+/// Typing in a callout.
+pub(super) struct CalloutEdit {
+    pub idx: usize,
+    /// Byte index of the caret in the text.
+    pub caret: usize,
+    /// Last edit, for the caret blink.
+    pub at: Instant,
+    /// A bubble placed for this edit: removed again if left empty.
+    pub fresh: bool,
+}
+
+/// A handle of the selection.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(super) enum OHandle {
+    Box(Handle),
+    Point(usize, oe::Point),
+}
+
+fn corners(b: FRect) -> Vec<(Handle, Pt)> {
+    vec![
+        (Handle::NW, Pt::new(b.x, b.y)),
+        (Handle::NE, Pt::new(b.x1(), b.y)),
+        (Handle::SE, Pt::new(b.x1(), b.y1())),
+        (Handle::SW, Pt::new(b.x, b.y1())),
+    ]
+}
+
+/// The tool whose size range an object's size steps in.
+fn tool_of(o: &Obj) -> Tool {
+    match o {
+        Obj::Path { .. } => Tool::Path,
+        Obj::Line { .. } => Tool::Line,
+        Obj::Arrow { .. } => Tool::Arrow,
+        Obj::Rect { .. } | Obj::RectFill { .. } => Tool::Rect,
+        Obj::Ellipse { .. } | Obj::EllipseFill { .. } => Tool::Ellipse,
+        Obj::Marker { .. } | Obj::MarkerPath { .. } => Tool::Marker,
+        Obj::Text { .. } => Tool::Text,
+        Obj::Pixelate { .. } => Tool::Pixelate,
+        Obj::Invert { .. } => Tool::Invert,
+        Obj::Counter { .. } => Tool::Counter,
+        Obj::Callout { .. } => Tool::Callout,
+        Obj::Spotlight { .. } => Tool::Spotlight,
+        Obj::Magnify { .. } => Tool::Magnify,
+    }
+}
+
+/// `b` resized by dragging `h` to `p` (`aspect`: keep the box's shape).
+fn resize_box(h: Handle, b: FRect, p: Pt, aspect: bool) -> FRect {
+    let (mut x0, mut y0, mut x1, mut y1) = (b.x, b.y, b.x1(), b.y1());
+    match h {
+        Handle::NW => (x0, y0) = (p.x, p.y),
+        Handle::N => y0 = p.y,
+        Handle::NE => (x1, y0) = (p.x, p.y),
+        Handle::E => x1 = p.x,
+        Handle::SE => (x1, y1) = (p.x, p.y),
+        Handle::S => y1 = p.y,
+        Handle::SW => (x0, y1) = (p.x, p.y),
+        Handle::W => x0 = p.x,
+    }
+    let corner = matches!(h, Handle::NW | Handle::NE | Handle::SE | Handle::SW);
+    if aspect && corner && b.w > 0.0 && b.h > 0.0 {
+        // The larger relative change wins; the opposite corner stays.
+        let k = ((x1 - x0).abs() / b.w).max((y1 - y0).abs() / b.h);
+        let (w, hh) = (b.w * k, b.h * k);
+        let (ax, ay) = match h {
+            Handle::NW => (b.x1(), b.y1()),
+            Handle::NE => (b.x, b.y1()),
+            Handle::SE => (b.x, b.y),
+            _ => (b.x1(), b.y),
+        };
+        let sx = if matches!(h, Handle::NW | Handle::SW) { -1.0 } else { 1.0 };
+        let sy = if matches!(h, Handle::NW | Handle::NE) { -1.0 } else { 1.0 };
+        (x0, x1) = (ax, ax + sx * w);
+        (y0, y1) = (ay, ay + sy * hh);
+    }
+    let r = FRect::from_pts(Pt::new(x0, y0), Pt::new(x1, y1));
+    FRect { w: r.w.max(2.0), h: r.h.max(2.0), ..r }
+}
+
+impl Edit {
+    fn hit_slack(&self) -> f32 {
+        HIT_PX * self.ui_scale()
+    }
+
+    /// The topmost object under `p`.
+    pub(super) fn obj_at(&self, p: Pt) -> Option<usize> {
+        let tol = self.hit_slack();
+        (0..self.objects.len()).rev().find(|&i| oe::hit(&self.objects[i], p, tol, self.font.as_ref()))
+    }
+
+    /// The selection's box: the union of the selected objects' boxes.
+    pub(super) fn osel_box(&self) -> Option<FRect> {
+        let font = self.font.as_ref();
+        oe::union(self.obj.sel.iter().filter_map(|&i| self.objects.get(i)).filter_map(|o| oe::sel_box(o, font)))
+    }
+
+    /// Push an undo step when the objects differ from the last one.
+    pub(super) fn commit_edits(&mut self) {
+        if self.hist.get(self.hi) != Some(&self.objects) {
+            self.push_history();
+        }
+    }
+
+    /// The selection's square and round handles (none while typing in a
+    /// callout or dragging the selection).
+    pub(super) fn obj_handles(&self) -> (Vec<(Handle, Pt)>, Vec<(OHandle, Pt)>) {
+        if self.obj.sel.is_empty() || self.obj.cedit.is_some() || matches!(self.interact, Interact::ObjMove { moved: true, .. }) {
+            return (Vec::new(), Vec::new());
+        }
+        let font = self.font.as_ref();
+        if let [i] = self.obj.sel[..] {
+            let Some(o) = self.objects.get(i) else { return (Vec::new(), Vec::new()) };
+            let Some(b) = oe::sel_box(o, font) else { return (Vec::new(), Vec::new()) };
+            let sq = match oe::boxes(o) {
+                oe::Boxes::None => Vec::new(),
+                oe::Boxes::Corners => corners(b),
+                oe::Boxes::All => super::handle_points(b).to_vec(),
+            };
+            let round = oe::points(o).into_iter().map(|(w, p)| (OHandle::Point(i, w), p)).collect();
+            return (sq, round);
+        }
+        (self.osel_box().map(corners).unwrap_or_default(), Vec::new())
+    }
+
+    /// The handle under `p` (round ones first: a tail by a corner).
+    pub(super) fn obj_handle_at(&self, p: Pt) -> Option<OHandle> {
+        let reach = HANDLE_HIT * self.ui_scale();
+        let near = |q: &Pt| (q.x - p.x).hypot(q.y - p.y) <= reach;
+        let (sq, round) = self.obj_handles();
+        round.iter().find(|(_, q)| near(q)).map(|(h, _)| *h).or_else(|| sq.iter().find(|(_, q)| near(q)).map(|(h, _)| OHandle::Box(*h)))
+    }
+
+    /// The hot handle under `p`, for the chrome: (round?, index).
+    pub(super) fn obj_hot_at(&self, p: Pt) -> Option<(bool, usize)> {
+        let reach = HANDLE_HIT * self.ui_scale();
+        let near = |q: &Pt| (q.x - p.x).hypot(q.y - p.y) <= reach;
+        let (sq, round) = self.obj_handles();
+        if let Some(i) = round.iter().position(|(_, q)| near(q)) {
+            return Some((true, i));
+        }
+        sq.iter().position(|(_, q)| near(q)).map(|i| (false, i))
+    }
+
+    /// A press on a handle of the selection: resize, or move the point.
+    pub(super) fn handle_press(&mut self, h: OHandle) {
+        self.interact = match h {
+            OHandle::Box(handle) => {
+                let orig = self.obj.sel.iter().map(|&i| self.objects[i].clone()).collect();
+                let Some(bx) = self.osel_box() else { return };
+                Interact::ObjResize { handle, orig, bx }
+            }
+            OHandle::Point(idx, which) => Interact::ObjPoint { idx, which, orig: self.objects[idx].clone() },
+        };
+    }
+
+    /// A press with the select tool (or Ctrl with another): the object
+    /// under `p` is selected (Shift: toggled) and the selection starts
+    /// moving; on empty space a marquee starts (`marquee`: the select
+    /// tool). True when the press was taken.
+    pub(super) fn select_press(&mut self, p: Pt, mods: Mods, marquee: bool) -> bool {
+        if let Some(i) = self.obj_at(p) {
+            let was = self.obj.sel.contains(&i);
+            if mods.shift {
+                if was {
+                    self.obj.sel.retain(|&k| k != i);
+                } else {
+                    self.obj.sel.push(i);
+                    self.obj.sel.sort_unstable();
+                }
+                return true;
+            }
+            if !was {
+                self.obj.sel = vec![i];
+            }
+            let orig = self.obj.sel.iter().map(|&k| self.objects[k].clone()).collect();
+            let bx = self.osel_box().unwrap_or(FRect { x: p.x, y: p.y, w: 0.0, h: 0.0 });
+            self.interact = Interact::ObjMove { start: p, orig, bx, moved: false, hit: i, was_sel: was };
+            return true;
+        }
+        if marquee {
+            let base = if mods.shift { self.obj.sel.clone() } else { Vec::new() };
+            self.obj.sel = base.clone();
+            self.interact = Interact::Marquee { anchor: p, cur: p, base };
+            return true;
+        }
+        false
+    }
+
+    /// Where the snapping image is: the capture's selection, else the shot.
+    fn snap_image(&self) -> FRect {
+        self.sel.unwrap_or(FRect { x: 0.0, y: 0.0, w: self.shot.size.0 as f32, h: self.shot.size.1 as f32 })
+    }
+
+    /// The extra shift that snaps box `b` (already moved) to the other
+    /// objects' edges or the image centre, and its guides.
+    pub(super) fn snap_box(&self, b: FRect) -> (f32, f32, Vec<(Pt, Pt)>) {
+        let reach = SNAP_PX * self.ui_scale();
+        let font = self.font.as_ref();
+        let others: Vec<FRect> = (0..self.objects.len())
+            .filter(|i| !self.obj.sel.contains(i))
+            .filter_map(|i| oe::sel_box(&self.objects[i], font))
+            .collect();
+        let img = self.snap_image();
+        // (target value, the box it belongs to; `None`: the image centre)
+        let best = |tests: [f32; 3], cands: &mut dyn Iterator<Item = (f32, Option<FRect>)>| {
+            let mut best: Option<(f32, f32, Option<FRect>)> = None;
+            for (c, ob) in cands {
+                for t in tests {
+                    let d = c - t;
+                    if d.abs() <= reach && best.is_none_or(|(bd, _, _)| d.abs() < bd.abs()) {
+                        best = Some((d, c, ob));
+                    }
+                }
+            }
+            best
+        };
+        let mut xs = others.iter().flat_map(|o| [(o.x, Some(*o)), (o.x1(), Some(*o))]).chain([(img.x + img.w / 2.0, None)]);
+        let mut ys = others.iter().flat_map(|o| [(o.y, Some(*o)), (o.y1(), Some(*o))]).chain([(img.y + img.h / 2.0, None)]);
+        let bx = best([b.x, b.x1(), b.x + b.w / 2.0], &mut xs);
+        let by = best([b.y, b.y1(), b.y + b.h / 2.0], &mut ys);
+        let (sx, sy) = (bx.map_or(0.0, |v| v.0), by.map_or(0.0, |v| v.0));
+        let m = FRect { x: b.x + sx, y: b.y + sy, ..b };
+        let mut g = Vec::new();
+        if let Some((_, c, ob)) = bx {
+            let (y0, y1) = match ob {
+                Some(o) => (m.y.min(o.y), m.y1().max(o.y1())),
+                None => (img.y, img.y1()),
+            };
+            g.push((Pt::new(c, y0), Pt::new(c, y1)));
+        }
+        if let Some((_, c, ob)) = by {
+            let (x0, x1) = match ob {
+                Some(o) => (m.x.min(o.x), m.x1().max(o.x1())),
+                None => (img.x, img.x1()),
+            };
+            g.push((Pt::new(x0, c), Pt::new(x1, c)));
+        }
+        (sx, sy, g)
+    }
+
+    /// A callout keeps its text inside: at least the height it needs.
+    pub(super) fn refit_callout(&mut self, idx: usize) {
+        let font = self.font.clone();
+        if let Some(Obj::Callout { r, text, size, style, .. }) = self.objects.get_mut(idx) {
+            let need = callout::needed_h(font.as_ref(), *r, text, *size, *style);
+            if need > r.h {
+                r.h = need;
+            }
+        }
+        self.dirty = true;
+    }
+
+    /// A pointer move during an object interaction.
+    pub(super) fn obj_drag(&mut self, p: Pt, mods: Mods) {
+        let mut it = std::mem::replace(&mut self.interact, Interact::None);
+        match &mut it {
+            Interact::ObjMove { start, orig, bx, moved, .. } => {
+                if !*moved && (p.x - start.x).hypot(p.y - start.y) < CLICK_PX {
+                    self.interact = it;
+                    return;
+                }
+                *moved = true;
+                let (mut dx, mut dy) = (p.x - start.x, p.y - start.y);
+                self.obj.guides.clear();
+                if !mods.alt {
+                    let (sx, sy, g) = self.snap_box(FRect { x: bx.x + dx, y: bx.y + dy, ..*bx });
+                    dx += sx;
+                    dy += sy;
+                    self.obj.guides = g;
+                }
+                for (k, &i) in self.obj.sel.iter().enumerate() {
+                    let mut o = orig[k].clone();
+                    oe::translate(&mut o, dx, dy);
+                    self.objects[i] = o;
+                }
+                self.dirty = true;
+            }
+            Interact::ObjResize { handle, orig, bx } => {
+                let keep = self.obj.sel.len() > 1 || orig.first().is_some_and(|o| oe::boxes(o) == oe::Boxes::Corners) || mods.shift;
+                let nb = resize_box(*handle, *bx, p, keep);
+                for (k, &i) in self.obj.sel.clone().iter().enumerate() {
+                    let mut o = orig[k].clone();
+                    oe::map_box(&mut o, *bx, nb);
+                    self.objects[i] = o;
+                    if matches!(self.objects[i], Obj::Callout { .. }) {
+                        self.refit_callout(i);
+                    }
+                }
+                self.dirty = true;
+            }
+            Interact::ObjPoint { idx, which, orig } => {
+                let mut o = orig.clone();
+                let mut q = p;
+                // Shift: a line's end in 45-degree steps from the other.
+                if mods.shift
+                    && let Obj::Line { a, b, .. } | Obj::Arrow { a, b, .. } | Obj::Marker { a, b, .. } = &o
+                {
+                    let other = if *which == oe::Point::A { *b } else { *a };
+                    q = self.snap_point(other, p, true);
+                }
+                oe::set_point(&mut o, *which, q);
+                self.objects[*idx] = o;
+                self.dirty = true;
+            }
+            Interact::Marquee { anchor, cur, base } => {
+                *cur = p;
+                let r = FRect::from_pts(*anchor, p);
+                let font = self.font.as_ref();
+                let mut sel = base.clone();
+                for (i, o) in self.objects.iter().enumerate() {
+                    let hit = oe::sel_box(o, font).is_some_and(|b| b.x <= r.x1() && r.x <= b.x1() && b.y <= r.y1() && r.y <= b.y1());
+                    if hit && !sel.contains(&i) {
+                        sel.push(i);
+                    }
+                }
+                sel.sort_unstable();
+                self.obj.sel = sel;
+            }
+            _ => {}
+        }
+        self.interact = it;
+    }
+
+    /// The end of an object interaction (`it`, taken out of `interact`).
+    pub(super) fn obj_release(&mut self, it: Interact) {
+        self.obj.guides.clear();
+        match it {
+            Interact::ObjMove { moved: true, .. } | Interact::ObjResize { .. } | Interact::ObjPoint { .. } => self.commit_edits(),
+            Interact::ObjMove { moved: false, hit, was_sel, start, .. } => {
+                if was_sel && self.obj.sel.len() > 1 {
+                    // A click in a group picks that one.
+                    self.obj.sel = vec![hit];
+                } else if was_sel && self.tool == Some(Tool::Select) && matches!(self.objects.get(hit), Some(Obj::Callout { .. })) {
+                    self.begin_callout_edit(hit, Some(start), false);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Delete, duplicate, restack, restyle or resize the selection (the
+    /// mini-toolbar's and the keys' acts); true when handled.
+    pub(super) fn obj_act(&mut self, act: Act) -> bool {
+        if self.obj.sel.is_empty() {
+            return false;
+        }
+        self.finish_callout_edit();
+        if self.obj.sel.is_empty() {
+            return true;
+        }
+        let sel = self.obj.sel.clone();
+        match act {
+            Act::ObjDelete => {
+                for &i in sel.iter().rev() {
+                    self.objects.remove(i);
+                }
+                self.obj.sel.clear();
+            }
+            Act::ObjDup => {
+                let d = DUP_PX * self.ui_scale();
+                let n = self.objects.len();
+                for &i in &sel {
+                    let mut o = self.objects[i].clone();
+                    oe::translate(&mut o, d, d);
+                    self.objects.push(o);
+                }
+                self.obj.sel = (n..n + sel.len()).collect();
+            }
+            Act::ObjFront | Act::ObjBack => {
+                let (picked, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut self.objects).into_iter().enumerate().partition(|(i, _)| sel.contains(i));
+                let (picked, rest): (Vec<Obj>, Vec<Obj>) = (picked.into_iter().map(|p| p.1).collect(), rest.into_iter().map(|p| p.1).collect());
+                let k = picked.len();
+                if act == Act::ObjFront {
+                    let n = rest.len();
+                    self.objects = rest.into_iter().chain(picked).collect();
+                    self.obj.sel = (n..n + k).collect();
+                } else {
+                    self.objects = picked.into_iter().chain(rest).collect();
+                    self.obj.sel = (0..k).collect();
+                }
+            }
+            Act::ObjFill => {
+                let on = !sel.iter().filter_map(|&i| oe::fill(&self.objects[i])).next().unwrap_or(false);
+                for &i in &sel {
+                    oe::set_fill(&mut self.objects[i], on);
+                }
+            }
+            Act::ObjStyle(st) => {
+                self.obj.style = st;
+                for &i in &sel {
+                    if let Obj::Callout { style, .. } = &mut self.objects[i] {
+                        *style = st;
+                    }
+                    self.refit_callout(i);
+                }
+            }
+            Act::ObjSize(d) => {
+                for &i in &sel {
+                    let o = &mut self.objects[i];
+                    let Some(v) = oe::size(o) else { continue };
+                    let (lo, hi) = tools::range(tool_of(o));
+                    let step = if matches!(o, Obj::Magnify { .. }) { 5.0 } else { 1.0 };
+                    oe::set_size(o, (v + d as f32 * step).clamp(lo, hi));
+                    if matches!(o, Obj::Callout { .. }) {
+                        self.refit_callout(i);
+                    }
+                }
+                let v = sel.first().and_then(|&i| oe::size(&self.objects[i]));
+                if let Some(v) = v {
+                    self.notice = Some(super::Toast::new(format!("Size {}", v as i32), super::ToastKind::Info));
+                }
+            }
+            Act::ObjColor => {
+                self.palette_open = true;
+                return true;
+            }
+            _ => return false,
+        }
+        self.dirty = true;
+        self.commit_edits();
+        true
+    }
+
+    /// A colour from the palette or the picker for the selection.
+    pub(super) fn color_selection(&mut self, c: crate::uifb::C4) -> bool {
+        if self.obj.sel.is_empty() {
+            return false;
+        }
+        for &i in &self.obj.sel.clone() {
+            oe::set_color(&mut self.objects[i], c);
+        }
+        self.dirty = true;
+        self.commit_edits();
+        true
+    }
+
+    /// The selection's colour: the first selected object with one.
+    pub(super) fn sel_color(&self) -> Option<crate::uifb::C4> {
+        self.obj.sel.iter().filter_map(|&i| self.objects.get(i)).find_map(oe::color)
+    }
+
+    /// Arrow keys: the selection moves 1 px (Shift: 10) times the scale.
+    pub(super) fn nudge(&mut self, dx: f32, dy: f32) {
+        let k = self.shot.scale.round().max(1.0);
+        for &i in &self.obj.sel.clone() {
+            oe::translate(&mut self.objects[i], dx * k, dy * k);
+        }
+        self.dirty = true;
+        self.commit_edits();
+    }
+
+    /// Start typing in callout `idx`: the caret at `at` (a click), else at
+    /// the end. `fresh`: the bubble was just placed.
+    pub(super) fn begin_callout_edit(&mut self, idx: usize, at: Option<Pt>, fresh: bool) {
+        let Some(Obj::Callout { r, text, size, style, .. }) = self.objects.get(idx) else { return };
+        let caret = match (at, self.font.as_ref()) {
+            (Some(p), Some(f)) => callout::caret_near(f, &callout::layout(f, *r, text, *size, *style), text, p, *size),
+            _ => text.len(),
+        };
+        self.obj.sel = vec![idx];
+        self.obj.cedit = Some(CalloutEdit { idx, caret, at: Instant::now(), fresh });
+        self.tool = self.tool.filter(|t| *t == Tool::Select || *t == Tool::Callout);
+    }
+
+    /// Done typing: a bubble placed for this edit and left empty goes;
+    /// otherwise the text is one undo step.
+    pub(super) fn finish_callout_edit(&mut self) {
+        let Some(ce) = self.obj.cedit.take() else { return };
+        let empty = matches!(self.objects.get(ce.idx), Some(Obj::Callout { text, .. }) if text.trim().is_empty());
+        if ce.fresh && empty {
+            self.objects.remove(ce.idx);
+            self.obj.sel.clear();
+            self.dirty = true;
+            return;
+        }
+        self.commit_edits();
+    }
+
+    /// Place callout `o` (a finished drag of the callout tool) and type in it.
+    pub(super) fn place_callout(&mut self, o: Obj) {
+        self.objects.push(o);
+        let i = self.objects.len() - 1;
+        self.refit_callout(i);
+        self.begin_callout_edit(i, None, true);
+    }
+
+    /// The caret's text and position while typing.
+    fn cedit_text(&mut self) -> Option<(&mut String, &mut usize)> {
+        let ce = self.obj.cedit.as_mut()?;
+        ce.at = Instant::now();
+        match self.objects.get_mut(ce.idx) {
+            Some(Obj::Callout { text, .. }) => Some((text, &mut ce.caret)),
+            _ => None,
+        }
+    }
+
+    /// A typed character into the callout.
+    pub(super) fn callout_char(&mut self, ch: char) {
+        let Some((text, caret)) = self.cedit_text() else { return };
+        let mut i = (*caret).min(text.len());
+        while i > 0 && !text.is_char_boundary(i) {
+            i -= 1;
+        }
+        text.insert(i, ch);
+        *caret = i + ch.len_utf8();
+        let idx = self.obj.cedit.as_ref().map(|c| c.idx).unwrap_or(0);
+        self.refit_callout(idx);
+    }
+
+    /// A key while typing in a callout (all keys are taken).
+    pub(super) fn callout_key(&mut self, vk: u32) {
+        use crate::wind::key;
+        if vk == key::ESCAPE {
+            self.finish_callout_edit();
+            return;
+        }
+        if vk == key::RETURN {
+            self.callout_char('\n');
+            return;
+        }
+        let font = self.font.clone();
+        let Some(ce) = self.obj.cedit.as_ref() else { return };
+        let idx = ce.idx;
+        let lay = match (&font, self.objects.get(idx)) {
+            (Some(f), Some(Obj::Callout { r, text, size, style, .. })) => Some((callout::layout(f, *r, text, *size, *style), *size)),
+            _ => None,
+        };
+        let Some((text, caret)) = self.cedit_text() else { return };
+        let c = (*caret).min(text.len());
+        if vk == key::LEFT {
+            *caret = super::prev_boundary(text, c);
+        } else if vk == key::RIGHT {
+            *caret = super::next_boundary(text, c);
+        } else if vk == key::HOME {
+            *caret = 0;
+        } else if vk == key::END {
+            *caret = text.len();
+        } else if vk == key::BACK && c > 0 {
+            let p = super::prev_boundary(text, c);
+            text.replace_range(p..c, "");
+            *caret = p;
+        } else if vk == key::DELETE && c < text.len() {
+            let n = super::next_boundary(text, c);
+            text.replace_range(c..n, "");
+        } else if (vk == key::UP || vk == key::DOWN)
+            && let (Some(f), Some((lay, px))) = (&font, &lay)
+        {
+            let at = callout::caret_at(f, lay, text, c, *px);
+            let dy = if vk == key::UP { -lay.line_h } else { lay.line_h };
+            *caret = callout::caret_near(f, lay, text, Pt::new(at.x, at.y + dy + lay.line_h / 2.0), *px);
+        }
+        self.refit_callout(idx);
+    }
+
+    /// The callout under `p` is being typed in.
+    pub(super) fn in_cedit(&self, p: Pt) -> bool {
+        self.obj.cedit.as_ref().is_some_and(|c| match self.objects.get(c.idx) {
+            Some(Obj::Callout { r, .. }) => super::hit(*r, p),
+            _ => false,
+        })
+    }
+
+    /// Move the caret to a click in the callout being typed in.
+    pub(super) fn cedit_click(&mut self, p: Pt) {
+        let font = self.font.clone();
+        let Some(ce) = self.obj.cedit.as_mut() else { return };
+        if let (Some(f), Some(Obj::Callout { r, text, size, style, .. })) = (&font, self.objects.get(ce.idx)) {
+            ce.caret = callout::caret_near(f, &callout::layout(f, *r, text, *size, *style), text, p, *size);
+            ce.at = Instant::now();
+        }
+    }
+
+    /// The caret blink phase while typing in a callout.
+    pub(super) fn cedit_caret_on(&self) -> Option<bool> {
+        self.obj.cedit.as_ref().map(|c| super::blink_on(c.at))
+    }
+
+    /// What the frame shows of the objects: the ghost, the selection
+    /// chrome, guides, marquee, caret and mini-toolbar.
+    #[allow(clippy::type_complexity)]
+    pub(super) fn obj_scene(&mut self, area: FRect, s: f32) -> (Vec<Obj>, Option<ObjSelUi>, Option<FRect>, Option<CaretUi>, Option<MiniUi>) {
+        let font = self.font.clone();
+        let font = font.as_ref();
+        let ghost = match &self.interact {
+            Interact::ObjMove { moved: true, orig, .. } => orig.iter().filter_map(|o| oe::faded(o, GHOST)).collect(),
+            _ => Vec::new(),
+        };
+        let marquee = match &self.interact {
+            Interact::Marquee { anchor, cur, .. } => Some(FRect::from_pts(*anchor, *cur)),
+            _ => None,
+        };
+        let dragging = matches!(self.interact, Interact::ObjMove { moved: true, .. });
+        let osel = (!self.obj.sel.is_empty() && !dragging).then(|| {
+            let (sq, round) = self.obj_handles();
+            let mut u = ObjSelUi { square: sq.iter().map(|h| h.1).collect(), round: round.iter().map(|h| h.1).collect(), hot: self.obj.hot, ..Default::default() };
+            match self.obj.sel[..] {
+                [i] => match &self.objects[i] {
+                    Obj::Line { a, b, .. } | Obj::Arrow { a, b, .. } | Obj::Marker { a, b, .. } => u.line = Some((*a, *b)),
+                    o => u.boxes.extend(oe::sel_box(o, font)),
+                },
+                _ => u.boxes.extend(self.osel_box()),
+            }
+            u
+        });
+        let caret = self.obj.cedit.as_ref().filter(|c| super::blink_on(c.at)).and_then(|ce| {
+            let f = font?;
+            let Some(Obj::Callout { r, text, size, style, color, fill, .. }) = self.objects.get(ce.idx) else { return None };
+            let lay = callout::layout(f, *r, text, *size, *style);
+            let at = callout::caret_at(f, &lay, text, ce.caret, *size);
+            let ink = if *fill { crate::objects::counter_ink(*color) } else { *color };
+            Some(CaretUi { r: FRect { x: at.x, y: at.y, w: (2.0 * s).round().max(1.0), h: lay.line_h.round() }, color: ink.with_alpha(255) })
+        });
+        let idle = matches!(self.interact, Interact::None);
+        let mini = (idle && !self.obj.sel.is_empty()).then(|| self.osel_box()).flatten().map(|b| {
+            let sel = &self.obj.sel;
+            let one = (sel.len() == 1).then(|| &self.objects[sel[0]]);
+            let inp = MiniIn {
+                color: self.sel_color(),
+                fill: one.and_then(oe::fill),
+                size: one.and_then(oe::size),
+                text: one.is_some_and(|o| matches!(o, Obj::Text { .. } | Obj::Callout { .. })),
+                style: one.and_then(|o| match o {
+                    Obj::Callout { style, .. } => Some(*style),
+                    _ => None,
+                }),
+                count: sel.len(),
+            };
+            let mut m = mini::layout(&inp, b, area, s);
+            m.hover = self.obj.mini_hover.filter(|i| *i < m.items.len());
+            m
+        });
+        self.obj.mini = mini.clone();
+        (ghost, osel, marquee, caret, mini)
+    }
+}

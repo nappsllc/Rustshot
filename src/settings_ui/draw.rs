@@ -597,7 +597,7 @@ fn wayland() -> bool {
 }
 
 /// The overlay rows of Key bindings: (label, actions).
-pub const KEY_ROWS: [(&str, &[Action]); 9] = [
+pub const KEY_ROWS: [(&str, &[Action]); 11] = [
     (
         "Tools",
         &[
@@ -612,6 +612,14 @@ pub const KEY_ROWS: [(&str, &[Action]); 9] = [
             Action::ToolPixelate,
             Action::ToolInvert,
         ],
+    ),
+    (
+        "Select \u{b7} Callout \u{b7} Spotlight \u{b7} Magnify",
+        &[Action::ToolSelect, Action::ToolCallout, Action::ToolSpotlight, Action::ToolMagnify],
+    ),
+    (
+        "Selected objects: delete \u{b7} duplicate \u{b7} front \u{b7} back",
+        &[Action::DeleteObject, Action::Duplicate, Action::BringFront, Action::SendBack],
     ),
     ("Stroke size - / +", &[Action::SizeDown, Action::SizeUp]),
     ("Copy \u{b7} Save \u{b7} Upload", &[Action::Copy, Action::Save, Action::Upload]),

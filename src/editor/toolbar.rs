@@ -34,7 +34,8 @@ const LABEL_H: f32 = 22.0;
 const LABEL_GAP: f32 = 8.0;
 const LABEL_MIN_ROOM: f32 = 30.0;
 
-pub const TOOL_ORDER: [Tool; 10] = [
+pub const TOOL_ORDER: [Tool; 14] = [
+    Tool::Select,
     Tool::Path,
     Tool::Line,
     Tool::Arrow,
@@ -42,9 +43,12 @@ pub const TOOL_ORDER: [Tool; 10] = [
     Tool::Ellipse,
     Tool::Marker,
     Tool::Text,
+    Tool::Callout,
     Tool::Counter,
     Tool::Pixelate,
     Tool::Invert,
+    Tool::Spotlight,
+    Tool::Magnify,
 ];
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -105,6 +109,17 @@ pub enum Act {
     PickColor(C4),
     /// The picker's eyedropper on/off.
     Eyedrop,
+    /// The object mini-toolbar: the colour (opens the palette), the fill,
+    /// the size a step, the callout's shape, front / back, duplicate,
+    /// delete.
+    ObjColor,
+    ObjFill,
+    ObjSize(i32),
+    ObjStyle(crate::objects::CalloutStyle),
+    ObjFront,
+    ObjBack,
+    ObjDup,
+    ObjDelete,
 }
 
 /// Which device dropdown of the Record popover.
@@ -692,18 +707,18 @@ mod tests {
 
     #[test]
     fn single_row_metrics() {
-        let tb = layout(&inp(r(100.0, 100.0, 840.0, 300.0)));
+        let tb = layout(&inp(r(100.0, 100.0, 980.0, 300.0)));
         assert!(!tb.wrapped);
-        assert_eq!((tb.bar.w, tb.bar.h), (869.0, 44.0));
-        // 800 wide (+ the slack) is too narrow for the one row now.
-        assert!(layout(&inp(r(100.0, 100.0, 800.0, 300.0))).wrapped);
+        assert_eq!((tb.bar.w, tb.bar.h), (1005.0, 44.0));
+        // 930 wide (+ the slack) is too narrow for the one row now.
+        assert!(layout(&inp(r(100.0, 100.0, 930.0, 300.0))).wrapped);
     }
 
     /// Invert has no size, Pixelate and Invert no colour: those controls
     /// are there but disabled (they consume the press).
     #[test]
     fn size_and_colour_controls_follow_the_tool() {
-        let mut i = inp(r(100.0, 100.0, 840.0, 300.0));
+        let mut i = inp(r(100.0, 100.0, 980.0, 300.0));
         i.sizes = false;
         i.colors = false;
         let tb = layout(&i);
@@ -713,15 +728,15 @@ mod tests {
             assert!(tb.contains(Pt::new(b.x + 5.0, b.y + 5.0)));
         }
         assert!(tb.items.iter().any(|it| it.kind == Kind::Value && it.disabled));
-        assert_eq!(tb.bar.w, 869.0, "same width");
+        assert_eq!(tb.bar.w, 1005.0, "same width");
     }
 
     #[test]
     fn busy_swaps_outputs_for_ok_and_keeps_width() {
-        let mut i = inp(r(100.0, 100.0, 840.0, 300.0));
+        let mut i = inp(r(100.0, 100.0, 980.0, 300.0));
         i.busy = true;
         let tb = layout(&i);
-        assert_eq!(tb.bar.w, 869.0);
+        assert_eq!(tb.bar.w, 1005.0);
         assert!(tb.items.iter().any(|it| it.kind == Kind::Btn(Act::Accept)));
         assert!(!tb.items.iter().any(|it| it.kind == Kind::Btn(Act::Copy)));
     }
@@ -730,7 +745,7 @@ mod tests {
     fn wraps_on_narrow_selection() {
         let tb = layout(&inp(r(100.0, 100.0, 440.0, 170.0)));
         assert!(tb.wrapped);
-        assert_eq!((tb.bar.w, tb.bar.h), (439.0, 85.0));
+        assert_eq!((tb.bar.w, tb.bar.h), (565.0, 85.0));
         assert!(tb.items.iter().any(|i| i.kind == Kind::SepH));
         assert!(btn(&tb, Act::Exit).y > btn(&tb, Act::Undo).y, "actions on row 2");
         assert!((btn(&tb, Act::Exit).x1() - (tb.bar.x1() - PAD)).abs() < 1e-3, "row 2 right-aligned");
@@ -756,8 +771,8 @@ mod tests {
         // A little off centre: only as far as it must.
         let tb = layout(&inp(r(300.0, 100.0, 900.0, 300.0)));
         assert_eq!(cx(tb.bar), 750.0, "room for it: centred");
-        let tb = layout(&inp(r(100.0, 100.0, 300.0, 300.0)));
-        assert!(tb.wrapped && cx(tb.bar) == 250.0, "wrapped, centred");
+        let tb = layout(&inp(r(300.0, 100.0, 300.0, 300.0)));
+        assert!(tb.wrapped && cx(tb.bar) == 450.0, "wrapped, centred");
         // Selections narrower than the bar: centred all the same.
         for x in [600.0, 900.0, 1100.0] {
             let tb = layout(&inp(r(x, 300.0, 120.0, 90.0)));
@@ -784,7 +799,7 @@ mod tests {
 
     #[test]
     fn flips_above_near_bottom() {
-        let tb = layout(&inp(r(100.0, 700.0, 840.0, 340.0)));
+        let tb = layout(&inp(r(100.0, 700.0, 980.0, 340.0)));
         assert_eq!(tb.bar.y, 648.0);
         assert!(tb.above);
     }
@@ -812,11 +827,12 @@ mod tests {
 
     #[test]
     fn scales_with_dpi() {
-        let mut i = inp(r(100.0, 100.0, 1700.0, 300.0));
+        let mut i = inp(r(100.0, 100.0, 2000.0, 300.0));
+        i.area = r(0.0, 0.0, 3840.0, 2160.0);
         i.s = 2.0;
         let tb = layout(&i);
         assert!(!tb.wrapped);
-        assert_eq!(tb.bar.w, 1738.0);
+        assert_eq!(tb.bar.w, 2010.0);
         assert_eq!(btn(&tb, Act::Undo).w, 64.0);
     }
 
@@ -880,7 +896,7 @@ mod tests {
     #[test]
     fn palette_above_bar_when_no_room_below_it() {
         let colors = [C4::rgb(1, 2, 3); 10];
-        let mut i = inp(r(100.0, 100.0, 840.0, 300.0));
+        let mut i = inp(r(100.0, 100.0, 980.0, 300.0));
         i.area = r(0.0, 0.0, 1920.0, 464.0); // bar fits (ends at 452) but the popover does not
         i.palette = Some(&colors);
         let tb = layout(&i);
@@ -954,10 +970,10 @@ mod tests {
 
     #[test]
     fn record_button_joins_the_outputs() {
-        let mut i = inp(r(100.0, 100.0, 900.0, 300.0));
+        let mut i = inp(r(100.0, 100.0, 1020.0, 300.0));
         i.record = true;
         let tb = layout(&i);
-        assert_eq!(tb.bar.w, 869.0 + BTN + IN_GAP);
+        assert_eq!(tb.bar.w, 1005.0 + BTN + IN_GAP);
         let rec = btn(&tb, Act::Record);
         assert_eq!(rec.x1() + IN_GAP, btn(&tb, Act::Copy).x, "first of the output group");
         assert_eq!(tb.act_at(centre(rec)), Some(Act::Record));

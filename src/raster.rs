@@ -89,6 +89,10 @@ impl<'a> Surf<'a> {
         self.w
     }
 
+    pub fn order(&self) -> Order {
+        self.order
+    }
+
     /// Blend one pixel: straight-alpha source over an opaque destination.
     pub fn blend_px(&mut self, x: i32, y: i32, c: C4, cov: f32, blend: Blend) {
         let (x, y) = (x - self.ox, y - self.oy);
@@ -116,6 +120,38 @@ impl<'a> Surf<'a> {
             self.data[idx + i] = v.round().clamp(0.0, 255.0) as u8;
         }
         self.data[idx + 3] = 255;
+    }
+
+    /// The raw bytes of pixel (`x`, `y`) (image coordinates) in the
+    /// surface's own order; `None` outside the window.
+    #[inline]
+    pub fn get_raw(&self, x: i32, y: i32) -> Option<[u8; 4]> {
+        let (x, y) = (x - self.ox, y - self.oy);
+        if x < 0 || y < 0 || x >= self.w as i32 || y >= self.h as i32 {
+            return None;
+        }
+        let i = (y as u32 * self.w + x as u32) as usize * 4;
+        self.data.get(i..i + 4).map(|p| [p[0], p[1], p[2], p[3]])
+    }
+
+    /// Mix raw pixel `px` (the surface's order) over pixel (`x`, `y`) by
+    /// coverage `cov` (1: replaced); the result is opaque.
+    #[inline]
+    pub fn mix_raw(&mut self, x: i32, y: i32, px: [u8; 4], cov: f32) {
+        let (x, y) = (x - self.ox, y - self.oy);
+        if x < 0 || y < 0 || x >= self.w as i32 || y >= self.h as i32 || cov <= 0.0 {
+            return;
+        }
+        let i = (y as u32 * self.w + x as u32) as usize * 4;
+        let Some(d) = self.data.get_mut(i..i + 4) else { return };
+        if cov >= 1.0 {
+            d[..3].copy_from_slice(&px[..3]);
+        } else {
+            for c in 0..3 {
+                d[c] = (px[c] as f32 * cov + d[c] as f32 * (1.0 - cov)).round().clamp(0.0, 255.0) as u8;
+            }
+        }
+        d[3] = 255;
     }
 
     /// Stroke a polyline (or a single point) with round caps/joins and AA.
@@ -428,6 +464,32 @@ impl Mask {
             for x in x0..x1 {
                 let d = (x as f32 + 0.5 - c.x).hypot(y as f32 + 0.5 - c.y) - radius;
                 self.put(x, y, (0.5 - d).clamp(0.0, 1.0));
+            }
+        }
+    }
+
+    /// Lower the coverage by `o`'s (same window): a ring is a shape
+    /// minus the same shape inset.
+    pub fn cut(&mut self, o: &Mask) {
+        if (self.x0, self.y0, self.x1, self.y1) != (o.x0, o.y0, o.x1, o.y1) {
+            return;
+        }
+        for (a, b) in self.a.iter_mut().zip(&o.a) {
+            *a = a.saturating_sub(*b);
+        }
+    }
+
+    /// Every covered pixel: `f(x, y, coverage)` in image coordinates.
+    pub fn each(&self, mut f: impl FnMut(i32, i32, f32)) {
+        let w = (self.x1 - self.x0) as usize;
+        if w == 0 {
+            return;
+        }
+        for (r, row) in self.a.chunks_exact(w).enumerate() {
+            for (i, &v) in row.iter().enumerate() {
+                if v > 0 {
+                    f(self.x0 + i as i32, self.y0 + r as i32, v as f32 / 255.0);
+                }
             }
         }
     }

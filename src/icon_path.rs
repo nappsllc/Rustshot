@@ -38,6 +38,46 @@ pub const ICONS: &[(&str, &[Shape])] = &[
     ]),
     ("invert", &[Circle(12.0, 12.0, 10.0), Path("M12 18a6 6 0 0 0 0-12v12z")]), // contrast
     ("counter", &[Circle(12.0, 12.0, 10.0), Path("M10 9.5 12.5 7.5v9")]), // circle with a "1"
+    ("select", &[Path("M4.037 4.688a.495.495 0 0 1 .651-.651l16 6.5a.5.5 0 0 1-.063.947l-6.124 1.58a2 2 0 0 0-1.438 1.435l-1.579 6.126a.5.5 0 0 1-.947.063z")]), // mouse-pointer-2
+    ("callout", &[Path("M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z")]), // message-square
+    ("cloudshape", &[Path("M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z")]), // cloud
+    ("ellipse", &[Path("M2 12a10 7 0 1 0 20 0a10 7 0 1 0-20 0")]),
+    ("spotlight", &[ // focus
+        Circle(12.0, 12.0, 3.0),
+        Path("M3 7V5a2 2 0 0 1 2-2h2"),
+        Path("M17 3h2a2 2 0 0 1 2 2v2"),
+        Path("M21 17v2a2 2 0 0 1-2 2h-2"),
+        Path("M7 21H5a2 2 0 0 1-2-2v-2"),
+    ]),
+    ("magnify", &[Circle(11.0, 11.0, 8.0), Path("m21 21-4.3-4.3"), Path("M11 8v6"), Path("M8 11h6")]), // zoom-in
+    ("trash", &[
+        Path("M3 6h18"),
+        Path("M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"),
+        Path("M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"),
+    ]),
+    ("dup", &[ // copy-plus
+        Rect { x: 8.0, y: 8.0, w: 14.0, h: 14.0, r: 2.0 },
+        Path("M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"),
+        Path("M15 12v6"),
+        Path("M12 15h6"),
+    ]),
+    ("fill", &[ // paint-bucket
+        Path("m19 11-8-8-8.6 8.6a2 2 0 0 0 0 2.8l5.2 5.2c.8.8 2 .8 2.8 0L19 11Z"),
+        Path("m5 2 5 5"),
+        Path("M2 13h15"),
+        Path("M22 20a2 2 0 1 1-4 0c0-1.6 1.7-2.4 2-4 .3 1.6 2 2.4 2 4Z"),
+    ]),
+    ("front", &[ // bring-to-front
+        Rect { x: 8.0, y: 8.0, w: 8.0, h: 8.0, r: 2.0 },
+        Path("M4 10a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2"),
+        Path("M14 20a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-4a2 2 0 0 0-2-2"),
+    ]),
+    ("back", &[ // send-to-back
+        Rect { x: 14.0, y: 14.0, w: 8.0, h: 8.0, r: 2.0 },
+        Rect { x: 2.0, y: 2.0, w: 8.0, h: 8.0, r: 2.0 },
+        Path("M7 14v1a2 2 0 0 0 2 2h1"),
+        Path("M14 7h1a2 2 0 0 1 2 2v1"),
+    ]),
     ("save-desktop", &[ // monitor-down
         Path("M12 13V7"),
         Path("m15 10-3 3-3-3"),
