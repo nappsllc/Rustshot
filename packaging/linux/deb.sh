@@ -37,7 +37,7 @@ Priority: optional
 Architecture: amd64
 Maintainer: nappsllc <noreply@github.com>
 Depends: libx11-6, libxrandr2, libxext6, libxfixes3
-Recommends: ffmpeg, pulseaudio-utils, libpipewire-0.3-0t64 | libpipewire-0.3-0
+Recommends: ffmpeg, libpulse0, pulseaudio-utils, libpipewire-0.3-0t64 | libpipewire-0.3-0, libopus0, bzip2, curl
 Installed-Size: $(du -sk "$stage/usr" | cut -f1)
 Description: screenshot tool with annotation and upload
  Rustshot captures the screen or a region, lets you annotate the

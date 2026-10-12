@@ -7,7 +7,8 @@
 //! Download and verification: the `.bz2` is fetched with curl (plain HTTP,
 //! no redirects, cut off past the pinned size) into the private folder;
 //! its SHA-256 must be the pinned one *before* it is unpacked. It is
-//! unpacked by the system's `/usr/bin/bzip2 -dc` (a fixed path, run
+//! unpacked by the system's `/usr/bin/bzip2 -dc` (a fixed path, or the
+//! one inside the snap, `$SNAP/usr/bin/bzip2`: [`bzip2_in`]; run
 //! without a shell, the output cut off past the pinned size; without it
 //! the user is told "bzip2 is needed to unpack OpenH264"). The library's
 //! own SHA-256 is checked after unpacking and again every time before it
@@ -27,6 +28,19 @@ use std::path::{Path, PathBuf};
 pub const BZIP2: &str = "/usr/bin/bzip2";
 /// What the user is told without it.
 pub const NO_BZIP2: &str = "bzip2 is needed to unpack OpenH264";
+
+/// The bzip2 to run: [`BZIP2`], else (in a snap, whose base may lack it)
+/// the one the snap ships, `$SNAP/usr/bin/bzip2` (`snap`: `$SNAP`, an
+/// absolute, read-only install folder). `is_file` says what exists.
+pub fn bzip2_in(snap: Option<OsString>, is_file: impl Fn(&Path) -> bool) -> Option<PathBuf> {
+    let sys = PathBuf::from(BZIP2);
+    if is_file(&sys) {
+        return Some(sys);
+    }
+    let snap = PathBuf::from(snap?);
+    let p = snap.join("usr/bin/bzip2");
+    (snap.is_absolute() && is_file(&p)).then_some(p)
+}
 
 /// Where the library is kept: `$XDG_DATA_HOME/rustshot/openh264` (when
 /// that is absolute), else `~/.local/share/rustshot/openh264`.
@@ -173,14 +187,14 @@ mod imp {
     /// Unpack `src` (bzip2) into `dst` with [`BZIP2`], at most `max`
     /// bytes (the pinned size; more is refused).
     pub fn unpack_bzip2(src: &Path, dst: &Path, max: u64) -> Result<(), String> {
-        if !Path::new(BZIP2).is_file() {
+        let Some(bzip2) = bzip2_in(std::env::var_os("SNAP"), Path::is_file) else {
             return Err(NO_BZIP2.into());
-        }
+        };
         let input = std::fs::File::open(src).map_err(|e| e.to_string())?;
-        let mut cmd = Command::new(BZIP2);
+        let mut cmd = Command::new(&bzip2);
         cmd.arg("-dc").stdin(input).stdout(Stdio::piped()).stderr(Stdio::null());
         child::prepare(&mut cmd, None);
-        let mut ch = cmd.spawn().map_err(|e| format!("run {BZIP2}: {e}"))?;
+        let mut ch = cmd.spawn().map_err(|e| format!("run {}: {e}", bzip2.display()))?;
         let mut out = std::fs::OpenOptions::new().write(true).create_new(true).open(dst).map_err(|e| format!("{}: {e}", dst.display()))?;
         let mut got = 0u64;
         let mut buf = [0u8; 64 * 1024];
@@ -213,7 +227,7 @@ mod imp {
         let st = ch.wait().map_err(|e| e.to_string())?;
         r?;
         if !st.success() {
-            return Err(format!("{BZIP2} could not unpack OpenH264 ({st})"));
+            return Err(format!("{} could not unpack OpenH264 ({st})", bzip2.display()));
         }
         out.sync_all().map_err(|e| e.to_string())
     }
@@ -849,6 +863,20 @@ mod tests {
         assert!(!unpacked.get(), "never unpacked");
         assert!(!bz2.exists() && !dest.exists(), "the download is deleted");
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn bzip2_is_the_systems_else_the_snaps() {
+        let root = if cfg!(windows) { "C:/snap/rustshot/7" } else { "/snap/rustshot/7" };
+        let sys = |q: &Path| q == Path::new(BZIP2);
+        assert_eq!(bzip2_in(None, sys), Some(PathBuf::from(BZIP2)));
+        assert_eq!(bzip2_in(Some(root.into()), sys), Some(PathBuf::from(BZIP2)));
+        let snapped = Path::new(root).join("usr/bin/bzip2");
+        let has = |q: &Path| q == snapped;
+        assert_eq!(bzip2_in(Some(root.into()), has), Some(snapped.clone()));
+        assert_eq!(bzip2_in(None, has), None);
+        // A relative $SNAP is not trusted.
+        assert_eq!(bzip2_in(Some("rustshot".into()), |q: &Path| q.ends_with("usr/bin/bzip2") && q != Path::new(BZIP2)), None);
     }
 
     #[test]

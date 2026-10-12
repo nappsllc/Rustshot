@@ -3,7 +3,8 @@
 //! (folder, daily subfolders,
 //! format and JPEG quality, the Save As toggle and a file-name pattern
 //! editor with a live preview; "Reset tool sizes & colours" for the
-//! drawing tools' remembered settings) and **Shortcuts** (the editor keymap), with
+//! drawing tools' remembered settings), **Shortcuts** (the editor keymap) and
+//! **Recording** (the Record popover's defaults: [`recording`]), with
 //! **OK** / **Cancel** / **Apply**. Opened from the tray ("Settings…") and
 //! by `rustshot settings` ([`show`], [`run_here`]).
 //!
@@ -52,7 +53,9 @@ const LABEL_W: f32 = 168.0;
 const TABS_Y: f32 = 16.0;
 const BODY_Y: f32 = 72.0;
 
-pub const TABS: [&str; 3] = ["General", "Saving", "Shortcuts"];
+mod recording;
+
+pub const TABS: [&str; 4] = ["General", "Saving", "Shortcuts", "Recording"];
 /// (label, config value)
 const THEMES: [(&str, &str); 3] = [("Auto", "auto"), ("Dark", "dark"), ("Light", "light")];
 const RENDERERS: [(&str, &str); 2] = [("GDI", "gdi"), ("Software", "software")];
@@ -168,6 +171,8 @@ pub struct Form {
     pub ask: bool,
     pub filename: TextState,
     pub keys: Keymap,
+    /// The Recording tab's values (every `rec_*` key, `record_hotkey`).
+    pub rec: recording::RecForm,
 }
 
 impl Form {
@@ -189,6 +194,7 @@ impl Form {
             ask: cfg.save_dialog,
             filename: TextState::new(&cfg.filename_pattern),
             keys: Keymap::from_config(&cfg.shortcuts).0,
+            rec: recording::RecForm::new(cfg),
         }
     }
 
@@ -241,6 +247,7 @@ impl Form {
         if self.filename.text != was.filename.text {
             c.filename_pattern = self.filename.text.clone();
         }
+        self.rec.apply(&was.rec, &mut c);
         let changed: Vec<Action> = Action::ALL.into_iter().filter(|a| self.keys.chords(*a) != was.keys.chords(*a)).collect();
         if !changed.is_empty() {
             let mut km = Keymap::from_config(&onto.shortcuts).0;
@@ -516,6 +523,8 @@ pub struct Settings {
     pub hotkey_failures: Vec<hotkey::Failure>,
     /// The tools' sizes and colours were reset (a note says so).
     tools_reset: bool,
+    /// The Recording tab's device lists and encoder status.
+    rec_lists: recording::Lists,
     set_autostart: fn(bool) -> Result<(), String>,
 }
 
@@ -538,6 +547,7 @@ impl Settings {
             folder_probe: None,
             hotkey_failures: Vec::new(),
             tools_reset: false,
+            rec_lists: recording::Lists::default(),
             set_autostart: crate::autostart::set,
         }
     }
@@ -878,7 +888,10 @@ fn paint(ui: &mut Ui, s: &mut Settings) -> Option<Click> {
         match s.tab {
             0 => general(ui, s, body),
             1 => saving(ui, s, body, &mut click),
-            _ => shortcuts(ui, s, body, &mut click),
+            2 => shortcuts(ui, s, body, &mut click),
+            _ => {
+                recording::tab(ui, s, body);
+            }
         }
 
         // Bottom bar: the config-file link (General), then OK / Cancel / Apply.
@@ -1535,6 +1548,8 @@ impl Driver for Window {
                     self.s.hotkey_failures = failures;
                     changed = true;
                 }
+                // The Recording tab's devices were listed.
+                changed |= self.s.rec_lists.poll();
                 while let Ok(p) = self.picked.1.try_recv() {
                     self.picking = false;
                     if let Some(p) = p {

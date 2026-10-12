@@ -11,6 +11,10 @@ finish-args:
   - --share=ipc
   - --share=network
   - --filesystem=xdg-pictures
+  # Recording: system sound and the microphone (PulseAudio, or PipeWire's
+  # Pulse server). The screen (ScreenCast) and the camera bubble (Camera)
+  # come through xdg-desktop-portal, which asks the user: no --device=all.
+  - --socket=pulseaudio
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin
   env:
