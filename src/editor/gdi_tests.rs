@@ -733,6 +733,8 @@ fn perf_gdi_object_drag() {
             app.mouse = (x, y);
             app.pointer_move(x, y);
             let rects = app.damage().unwrap_or_else(|| vec![[0, 0, w as i32, h as i32]]);
+            // Through a GDI region, as WM_PAINT gets them.
+            let rects = crate::wind::paint_rects_for(&rects);
             let rects: Vec<PxRect> = rects.iter().map(|r| PxRect::new(r[0], r[1], r[2], r[3])).collect();
             edit_of(&mut app).paint_gdi(t.dc, &rects);
             let _ = t.pixels();
