@@ -22,9 +22,16 @@ apps:
     desktop: usr/share/applications/io.github.nappsllc.rustshot.desktop
     # desktop: the xdg-desktop-portal interfaces (ScreenCast for recording on
     # Wayland, Screenshot, the camera portal); camera: the camera bubble
-    # (V4L2). No screencast-legacy: it is a privileged interface and the
-    # portals need none (docs/STORES.md).
-    plugs: [x11, network, home, desktop, camera]
+    # (V4L2); audio-record + pulseaudio: system sound and the microphone
+    # while recording. No screencast-legacy: it is a privileged interface
+    # and the portals need none (docs/STORES.md).
+    plugs: [x11, network, home, desktop, camera, audio-record, pulseaudio]
+    environment:
+      # The staged libraries (dlopen'ed: libpulse-simple, libopus,
+      # libpipewire and its modules) rather than the base snap's.
+      LD_LIBRARY_PATH: $SNAP/usr/lib/x86_64-linux-gnu:$SNAP/usr/lib/x86_64-linux-gnu/pulseaudio
+      PIPEWIRE_MODULE_DIR: $SNAP/usr/lib/x86_64-linux-gnu/pipewire-0.3
+      SPA_PLUGIN_DIR: $SNAP/usr/lib/x86_64-linux-gnu/spa-0.2
 
 parts:
   rustshot:
@@ -32,7 +39,22 @@ parts:
     source: .
     rust-channel: stable
     build-packages: [libx11-dev, libxrandr-dev, libxext-dev, libxfixes-dev]
-    stage-packages: [libx11-6, libxrandr2, libxext6, libxfixes3]
+    stage-packages:
+      - libx11-6
+      - libxrandr2
+      - libxext6
+      - libxfixes3
+      # Recording: sound (libpulse-simple), Opus for MP4s made with
+      # OpenH264, PipeWire for the ScreenCast/Camera portals' streams, and
+      # bzip2 + curl for the user-requested OpenH264 download (no ffmpeg in
+      # a snap).
+      - libpulse0
+      - libopus0
+      - libpipewire-0.3-0t64
+      - libpipewire-0.3-modules
+      - libspa-0.2-modules
+      - bzip2
+      - curl
     parse-info: [usr/share/metainfo/io.github.nappsllc.rustshot.metainfo.xml]
     override-build: |
       craftctl default

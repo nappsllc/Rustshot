@@ -36,8 +36,9 @@ manual first submission where noted.
 3. First submission by hand: upload `rustshot-<v>-x64.msix` from the release,
    listing text, screenshots, age rating, privacy policy URL
    `https://github.com/nappsllc/rustshot/blob/main/PRIVACY.md`, and the
-   `runFullTrust` justification ("desktop screenshot tool: global hotkeys and
-   screen capture").
+   `runFullTrust` justification ("desktop screenshot and screen recording
+   tool: global hotkeys, screen capture") and the microphone/webcam
+   justification (see [Recording permissions](#recording-permissions-what-to-declare-and-why)).
 4. Azure AD app for the Store API (Partner Center › Account settings › User
    management › Azure AD applications, role Manager). **Secrets**:
    `MSSTORE_TENANT_ID`, `MSSTORE_CLIENT_ID`, `MSSTORE_CLIENT_SECRET`.
@@ -60,7 +61,37 @@ Store upload package; end users cannot install it directly.
 4. After it merges, set `PUBLISH_WINGET=true`.
 
 ## Known issues
-- Linux builds are X11-only; Wayland sessions need XWayland (stated in metainfo).
+- Screenshots and global hotkeys on Linux are X11-only; Wayland sessions
+  need XWayland (stated in metainfo). Screen recording works on Wayland
+  through the ScreenCast portal.
+
+## Recording permissions (what to declare, and why)
+Rustshot records the screen (MP4 or GIF), optionally with system sound, the
+microphone and a camera bubble. Everything is captured only while a
+recording runs (the camera also while its bubble is shown before one),
+saved locally, never uploaded (PRIVACY.md). Use these justifications in the
+submission notes:
+
+| Store | Declared | Justification |
+|---|---|---|
+| Microsoft Store (MSIX) | `DeviceCapability` `microphone`, `webcam` (`packaging/windows/AppxManifest.xml.in`) | "Screen recordings can include the user's microphone (off by default) and a camera bubble (off by default); both only while recording, when the user turns them on." System sound (WASAPI loopback) and the screen (desktop duplication) need no capability; `runFullTrust` already covers them ("desktop screenshot and screen recording tool: global hotkeys, screen capture"). |
+| Mac App Store | `com.apple.security.device.audio-input`, `com.apple.security.device.camera` (`packaging/macos/mas.entitlements`), with `NSMicrophoneUsageDescription` and `NSCameraUsageDescription` in Info.plist (`bundle.sh`) | Same text as above. The screen comes through ScreenCaptureKit and the Screen Recording privacy permission (no entitlement); system sound through ScreenCaptureKit's audio. App Privacy stays "Data not collected": recordings never leave the Mac. |
+| Developer ID (dmg, Homebrew) | `packaging/macos/devid.entitlements` (audio-input, camera; no sandbox), signed with `--options runtime` in `ci.yml` | Without them the hardened runtime denies the microphone and camera silently. |
+| Flathub | `--socket=pulseaudio` | System sound (the output's monitor source) and the microphone, read with libpulse-simple while recording (PipeWire's Pulse server works). The screen and the camera come through xdg-desktop-portal (ScreenCast, Camera), which ask the user; no `--device=all` and no PipeWire socket (the portals hand over the stream). |
+| Snap Store | plugs `audio-record`, `pulseaudio` (sound), `camera` (bubble, V4L2 on X11), `desktop` (portals) | `audio-record` and `camera` are not auto-connected: ask for auto-connection in the forum request with the text above, or users run `snap connect rustshot:audio-record` / `rustshot:camera`. No `screencast-legacy` (see Snap Store below). |
+| AUR / deb | optional dependencies only | `ffmpeg` (MP4 with ffmpeg), `libpulse` / `pulseaudio-utils` (sound), `libpipewire` (Wayland, camera portal), `opus` and `bzip2` (MP4 with OpenH264), `curl` (the OpenH264 download). |
+
+MP4 on Linux without ffmpeg (Flatpak, Snap, or no ffmpeg installed): the
+first MP4 recording offers to download Cisco's OpenH264 (on the user's
+request, from `ciscobinary.openh264.org`, checked against a SHA-256 pinned
+in the source, kept in the app's data folder). Rustshot never bundles
+OpenH264. The Flatpak does not add the `org.freedesktop.Platform.ffmpeg-full`
+extension (it has only the libraries, not the `ffmpeg` command Rustshot
+runs) or the runtime's `openh264` extension (a different OpenH264 build
+than the one pinned and verified in the source); revisit both if Rustshot
+ever links libavcodec or accepts the runtime's library. The snap stages
+`libpulse0`, `libopus0`, `libpipewire-0.3-0t64` (+ modules), `bzip2` and
+`curl` for the same reasons, and does not stage ffmpeg (size).
 
 ## Flathub
 1. Wait for the screenshots, then open a PR to https://github.com/flathub/flathub
@@ -79,8 +110,10 @@ Store upload package; end users cannot install it directly.
    → secret `SNAPCRAFT_STORE_CREDENTIALS`.
 3. Set `PUBLISH_SNAP=true`. Builds land on `edge`; promote with
    `snapcraft release rustshot <rev> stable`.
-4. Plugs: `x11`, `network`, `home`, `desktop` (auto-connected) and `camera`
-   (`snap connect rustshot:camera` unless the store grants auto-connection).
+4. Plugs: `x11`, `network`, `home`, `desktop`, `pulseaudio` (auto-connected),
+   `camera` and `audio-record` (`snap connect rustshot:camera`,
+   `snap connect rustshot:audio-record` unless the store grants
+   auto-connection; see [Recording permissions](#recording-permissions-what-to-declare-and-why)).
    Recording on Wayland and the camera there go through xdg-desktop-portal
    (ScreenCast, Screenshot, Camera), reached through the `desktop` plug; the
    snap does not plug `screencast-legacy` (a privileged interface that needs

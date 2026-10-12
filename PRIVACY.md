@@ -17,9 +17,16 @@ Rustshot does not collect, store or transmit personal data or telemetry.
   `objects.githubusercontent.com` / `release-assets.githubusercontent.com`).
   These requests carry no data about you or your screenshots; GitHub sees
   your IP address and a `rustshot/<version>` user agent, as with any download.
-- Screen recording: the screen, sound and camera are captured only while a
-  recording runs (the camera also while its bubble is shown before one).
-  Recordings are saved locally; nothing is uploaded.
+- Screen recording: the screen, system sound, microphone and camera are
+  captured only while a recording runs, and the camera also while its
+  bubble is shown before one (Record popover with Camera on). Sound, the
+  microphone and the camera are each recorded only when you turn them on;
+  your operating system asks for the microphone, camera and (macOS,
+  Wayland, Flatpak) screen permission first.
+  Recordings (MP4 or GIF) are written straight to your save folder; they
+  are never uploaded (Upload is for screenshots only), and Rustshot keeps
+  no other copy. Settings › Recording lists the names of your microphones
+  and cameras to choose from; it does not open them.
 - OpenH264 (Linux without ffmpeg, only if you choose **Download OpenH264**
   when you first record MP4): Rustshot downloads Cisco's OpenH264 library
   once from Cisco (`http://ciscobinary.openh264.org/`, plain HTTP as Cisco

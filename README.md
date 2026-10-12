@@ -24,8 +24,11 @@ renderer.
 - **Export:** copy to the clipboard, save as PNG, JPEG or BMP straight into
   a dated folder (or through the native save dialog), or upload to imgur
   with the link copied for you.
-- **Settings window** for the theme, hotkeys, saving and every editor
-  shortcut (no need to edit `config.toml` by hand).
+- **Screen recording** of a region or a screen to MP4 or GIF, with system
+  sound, the microphone and an on-screen camera bubble
+  ([Recording](#recording)).
+- **Settings window** for the theme, hotkeys, saving, recording and every
+  editor shortcut (no need to edit `config.toml` by hand).
 - **Modern overlay UI:** dark and light themes that follow your OS, a grouped
   toolbar that wraps and repositions near screen edges, tooltips with the real
   shortcuts, and short animations.
@@ -96,7 +99,7 @@ rustshot --help
 Open **Settings…** from the tray menu (Windows), or run `rustshot settings`
 (a running daemon opens its window; otherwise the window opens on its own;
 on Linux and macOS, where there is no tray icon, this is the way in). On
-Linux the Settings window is *(experimental)*. Three tabs:
+Linux the Settings window is *(experimental)*. Four tabs:
 
 - **General:** theme (Auto follows the OS), UI size (Auto follows each
   display's scaling; 75-200 % on top of it), the overlay renderer
@@ -106,6 +109,12 @@ Linux the Settings window is *(experimental)*. Three tabs:
   `config.toml`.
 - **Saving:** see [Saving](#saving).
 - **Shortcuts:** every editor shortcut (see below).
+- **Recording:** what the Record popover starts with: format (MP4 or
+  GIF), frame rate, MP4 quality, system sound, microphone and its device,
+  the camera bubble (camera, shape, size, mirror, ring colour and width),
+  the 3-2-1 countdown and the record hotkey; on Linux also the MP4
+  encoder (Auto, ffmpeg or OpenH264) with what is installed ("ffmpeg
+  found at /usr/bin/ffmpeg", "OpenH264 downloaded", or not available).
 
 **OK** saves and closes, **Apply** saves and keeps the window open,
 **Cancel** (or <kbd>Esc</kbd>) discards. The running daemon picks the new
@@ -202,14 +211,74 @@ redo = "Ctrl+Shift+Z, Ctrl+Y"  # accept (Enter), cancel (Esc),
 ui_bigger = "Ctrl+=, Ctrl+Shift+=, Ctrl+NumpadAdd"  # ui_smaller, ui_reset
 ```
 
-`record` (unbound by default) opens the Record popover for the selection
-(Windows). There is no `stop_recording` action: the overlay is hidden while
+`record` (unbound by default) opens the Record popover for the selection.
+There is no `stop_recording` action: the overlay is hidden while
 a recording runs, so the record hotkey (`record_hotkey`) toggles start and
 stop, and the control bar's Stop button and the tray's **Stop recording**
 end it too. A `rustshot gui` run with no tasks records as well and exits
 when the recording ends (`saved: <path>`, exit 0; 1 on failure, 2 when it
 is cancelled during the countdown); with tasks (`--copy`, `--path`, …)
 Record is not offered.
+
+### Recording
+
+Press the record hotkey (default <kbd>Meta</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd>),
+select an area (or press <kbd>Enter</kbd> for the monitor under the
+pointer) and choose **Start recording**; or click **Record** (the camera
+icon) in the overlay toolbar. The Record popover offers:
+
+- **MP4** (H.264 + AAC, or Opus with OpenH264 on Linux; 30 or 60 fps;
+  Low / Medium / High quality; areas larger than 4096 × 2304 are scaled to
+  fit) or **GIF** (10 or 15 fps, full size, no sound).
+- **System sound** and **Microphone** (with its device; MP4 only).
+- **Camera**: a round, rounded-square or square bubble (S / M / L) showing
+  your camera, mirrored by default, with a ring in your accent or any
+  colour. It is a real window on the screen, so it is in the recording;
+  drag it anywhere (it snaps to the area's corners).
+
+After a 3-2-1 countdown (Settings › Recording turns it off) a red border
+marks the area and a control bar beside it shows the time, **Pause**,
+**Mute** (with a microphone) and **Stop**; neither is in the video (on
+Windows and macOS; see the notes below). Stop with the bar, the record
+hotkey again, or the tray's **Stop recording**. The file goes where a
+screenshot would (save folder, daily subfolder, file-name pattern) as
+`.mp4` or `.gif`; it is written as `<name>.part` and renamed when it is
+complete, and a notification says where it is (click it to open the
+folder). Defaults for every choice are in Settings › Recording.
+
+Per platform:
+
+- **Windows 10/11:** desktop duplication (GDI when it is not available),
+  Media Foundation's H.264 encoder (the graphics card's when there is one)
+  and WASAPI sound. Windows N editions need the Media Feature Pack for
+  MP4. Windows asks for microphone and camera access (Settings › Privacy).
+- **Linux, X11:** the screen through XShm. MP4 uses `ffmpeg` when it is
+  installed (libx264, else libopenh264 or VA-API). Without ffmpeg (and in
+  the Flatpak and Snap) the first MP4 recording asks: **Download
+  OpenH264** (Cisco's library, about 1 MB, checked against a SHA-256 built
+  into Rustshot), **Install ffmpeg** (shows the command for your
+  distribution), **Record GIF instead** or **Cancel**; the choice is kept
+  (`rec_linux_encoder`, Settings › Recording). Sound is read with
+  `libpulse-simple` (or `parec`), which works on PipeWire too. The camera
+  is read with V4L2.
+- **Linux, Wayland (and Flatpak on any session):** the screen comes
+  through the xdg-desktop-portal ScreenCast dialog (pick the screen; the
+  area is cropped from it) and PipeWire; the portal remembers the choice
+  where it can, so later recordings do not ask again. The camera comes
+  through the camera portal. There is no red border (the compositor shows
+  its own indicator), and the bar and the bubble are normal windows the
+  compositor places.
+- **macOS 12.3+:** ScreenCaptureKit (screen and system sound),
+  AVAssetWriter and AVCaptureSession; macOS asks for Screen Recording,
+  microphone and camera permission. This code has not been run on a Mac
+  yet.
+
+Limitations: one recording at a time; no editing or trimming; no upload
+of recordings; MJPG-only cameras are not supported; X11 cannot hide a
+window from the recording, so there the bar sits outside the area (or
+shrinks to a small pill in the corner when you record your only screen);
+a selection spanning two screens on Wayland records the whole shared
+screen.
 
 ## Configuration
 
@@ -252,6 +321,23 @@ check_updates = true              # daemon checks GitHub once a day
 skip_version = ""                 # a version the daily check ignores ("Skip this version")
 renderer = "gdi"                  # Windows overlay: "gdi" (low memory) or "software"; ignored elsewhere
 upload_client_id = "313baf0c7b4d3ff"
+record_hotkey = "Meta+Shift+R"    # starts (select an area) and stops a recording
+rec_format = "mp4"                # Record popover defaults: "mp4" or "gif"
+rec_fps = 30                      # MP4: 30 or 60
+rec_gif_fps = 15                  # GIF: 10 or 15
+rec_quality = "medium"            # MP4: "low", "medium" or "high"
+rec_system_audio = true
+rec_mic = false
+rec_mic_device = ""               # "" = the default microphone
+rec_camera = false
+rec_camera_device = ""            # "" = the first camera
+rec_camera_shape = "circle"       # "circle", "rounded" or "square"
+rec_camera_size = "m"             # "s", "m" or "l" (160, 240, 320 px)
+rec_camera_mirror = true
+rec_camera_ring_color = ""        # "" = the accent, or "#rrggbb"
+rec_camera_ring_width = 3         # 0 (no ring) to 16
+rec_countdown = true              # 3-2-1 before the first frame
+rec_linux_encoder = "auto"        # Linux MP4: "auto", "ffmpeg" or "openh264"
 ```
 
 ## Updates
@@ -297,8 +383,12 @@ Limitations:
 
 ## Platform notes
 
-- **Linux** needs an **X11** session (or XWayland). Native Wayland capture and
-  hotkeys are not supported yet. Runtime dependencies: `libx11`, `libxrandr`.
+- **Linux** needs an **X11** session (or XWayland) for screenshots and
+  hotkeys; native Wayland capture and hotkeys are not supported yet
+  (recording is: see [Recording](#recording)). Runtime dependencies:
+  `libx11`, `libxrandr`, `libxext`, `libxfixes`; optional for recording:
+  `ffmpeg`, `libpulse` (or `pulseaudio-utils`), `libpipewire-0.3`
+  (Wayland, camera portal), `libopus`, `bzip2` and `curl` (OpenH264).
   Screen recording on X11 records MP4 with `ffmpeg` and GIF without it.
   Without ffmpeg, the first MP4 recording offers to download Cisco's
   OpenH264 (about 1 MB, checked against a pinned SHA-256 and kept in
@@ -315,7 +405,8 @@ Limitations:
 - **Mixed-DPI setups** (for example a 150 % laptop with a 100 % monitor): the
   editor captures the monitor under the cursor instead of spanning all of them.
 - **macOS** asks for *Screen Recording* permission on first capture
-  (System Settings › Privacy & Security).
+  (System Settings › Privacy & Security), and for the microphone and
+  camera the first time a recording uses them.
 
 ## Building from source
 
@@ -338,7 +429,9 @@ boards) and [docs/superpowers](docs/superpowers) (specs and plans).
 
 ## Privacy
 
-No telemetry. Images leave your machine only when you choose **Upload**. The
+No telemetry. Images leave your machine only when you choose **Upload**;
+recordings never do (the screen, sound and camera are captured only while
+a recording runs or the camera bubble is shown). The
 daemon's update check is a single anonymous request to the GitHub Releases
 API, at most once a day, and can be turned off with `check_updates = false`;
 an update you accept is downloaded from GitHub's release servers.

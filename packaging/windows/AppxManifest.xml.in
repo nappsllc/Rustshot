@@ -50,5 +50,10 @@
   <Capabilities>
     <Capability Name="internetClient" />
     <rescap:Capability Name="runFullTrust" />
+    <!-- Recording: the microphone and the camera bubble (Windows asks the
+         user; Settings > Privacy lists Rustshot). System sound and the
+         screen need no capability. -->
+    <DeviceCapability Name="microphone" />
+    <DeviceCapability Name="webcam" />
   </Capabilities>
 </Package>
