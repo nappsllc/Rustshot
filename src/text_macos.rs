@@ -31,12 +31,19 @@ unsafe fn styled_font(name: Ref, size: f64, face: &Face) -> Ref {
         if font.is_null() || traits == 0 {
             return font;
         }
-        let t = CTFontCreateCopyWithSymbolicTraits(font, size, std::ptr::null(), traits, BOLD_TRAIT | ITALIC_TRAIT);
-        if t.is_null() {
-            return font;
+        // Both traits, else (no bold italic member) bold, else italic:
+        // what the family has.
+        for want in [traits, traits & BOLD_TRAIT, traits & ITALIC_TRAIT] {
+            if want == 0 {
+                continue;
+            }
+            let t = CTFontCreateCopyWithSymbolicTraits(font, size, std::ptr::null(), want, BOLD_TRAIT | ITALIC_TRAIT);
+            if !t.is_null() {
+                CFRelease(font);
+                return t;
+            }
         }
-        CFRelease(font);
-        t
+        font
     }
 }
 

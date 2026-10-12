@@ -113,9 +113,29 @@ fn cache() -> &'static Found {
     C.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// The face of `f` in style `i`: found once (the files read and
+/// `fc-match` run without the lock held), then kept.
 fn found(f: Family, i: usize) -> Option<(FontArc, bool)> {
-    let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
-    c.entry((f, i)).or_insert_with(|| find(f, i)).clone()
+    if let Some(v) = cache().lock().unwrap_or_else(|e| e.into_inner()).get(&(f, i)) {
+        return v.clone();
+    }
+    let v = find(f, i);
+    cache().lock().unwrap_or_else(|e| e.into_inner()).entry((f, i)).or_insert(v).clone()
+}
+
+/// Find every family's faces on a thread of their own (once), so the
+/// first bold or serif text does not wait for the disk or `fc-match`.
+fn warm() {
+    static STARTED: std::sync::Once = std::sync::Once::new();
+    STARTED.call_once(|| {
+        let _ = std::thread::Builder::new().name("rustshot-fonts".into()).spawn(|| {
+            for f in Family::ALL {
+                for i in 0..4 {
+                    let _ = found(f, i);
+                }
+            }
+        });
+    });
 }
 
 /// The shear of a synthesized italic: tan(12 degrees).
@@ -123,7 +143,9 @@ const SHEAR: f32 = 0.212_556_56;
 
 impl Face {
     pub fn load() -> Option<Self> {
-        Some(Face::new(Family::Sans, 400, false, false, false))
+        let f = Face::new(Family::Sans, 400, false, false, false);
+        warm();
+        Some(f)
     }
 
     /// `family` at `weight` (700 and up: bold), italic; the line styles are
