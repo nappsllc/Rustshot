@@ -812,7 +812,9 @@ fn perf_gdi_magnifier() {
             app.mouse = (400, 300);
             app.pointer_down(400, 300);
         }
-        let (mut tt, mut area) = (vec![], vec![]);
+        let (mut tt, mut area, mut nr) = (vec![], vec![], vec![]);
+        crate::perf::force_on();
+        let _ = crate::perf::take();
         for k in 0..300 {
             let (x, y) = (500 + (k % 150) * 7, 400 + (k % 150) * 4);
             let t0 = Instant::now();
@@ -830,14 +832,24 @@ fn perf_gdi_magnifier() {
             let _ = t.pixels();
             tt.push((Instant::now() - t0).as_secs_f64() * 1000.0);
             area.push(rects.iter().map(|r| r.w() as f64 * r.h() as f64).sum::<f64>());
+            nr.push(rects.len() as f64);
         }
         println!(
-            "GDI BENCH 4K {name}, magnifier {}: median {:.2} p90 {:.2} max {:.2} ms | damage {:.0} px",
+            "GDI BENCH 4K {name}, magnifier {}: median {:.2} p90 {:.2} max {:.2} ms | rects {:.0} (max {:.0}) damage {:.0} px",
             if on { "on" } else { "off" },
             pct(&mut tt.clone(), 0.5),
             pct(&mut tt.clone(), 0.9),
             pct(&mut tt, 1.0),
+            pct(&mut nr.clone(), 0.5),
+            pct(&mut nr, 1.0),
             pct(&mut area, 0.5)
         );
+        let per: Vec<String> = crate::perf::NAMES
+            .iter()
+            .zip(crate::perf::take())
+            .filter(|(_, (ms, _))| *ms > 0.0)
+            .map(|(k, (ms, c))| format!("{k} {:.3} ms ({:.1})", ms / 300.0, c as f64 / 300.0))
+            .collect();
+        println!("  per move: {}", per.join(", "));
     }
 }

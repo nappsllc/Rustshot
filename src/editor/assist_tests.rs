@@ -137,7 +137,7 @@ fn magnifier_samples_the_pixels_around_the_pointer() {
     assert_eq!(m.px[0], pixel(e, 400 - 8, 600 - 8), "row by row from the top left");
     assert_eq!(m.text, mag_text(400, 600, want));
     assert!(!m.square, "round by default");
-    let c = sc.cross.expect("crosshair");
+    let c = sc.cross.clone().expect("crosshair");
     assert_eq!((c.x, c.y, c.lw), (400, 600, 1));
     // Off the image: black.
     let px = ed(&mut a).pixels_around((0, 0), MAG_N);
@@ -165,7 +165,7 @@ fn magnifier_shows_while_selecting_only() {
     a.on_event(Ev::Down { x: 100, y: 100 });
     mv(&mut a, 300, 250);
     let sc = scene(&mut a);
-    assert_eq!(sc.cross.map(|c| (c.x, c.y)), Some((300, 250)));
+    assert_eq!(sc.cross.as_ref().map(|c| (c.x, c.y)), Some((300, 250)));
     a.on_event(Ev::Up { x: 300, y: 250 });
     assert!(scene(&mut a).mag.is_none(), "a selection, idle: the toolbar instead");
     // Resizing it: yes; moving it: no.
@@ -232,6 +232,21 @@ fn magnifier_repaints_cover_every_changed_pixel() {
     for (x, y) in [(200, 160), (420, 300), (430, 305)] {
         assert_dirty_covers(&mut a, "new sel", |a| mv(a, x, y));
     }
+    // Resizing a selection: the crosshair is left out under the
+    // toolbar, which follows the selection.
+    let sel = fr(200.0, 150.0, 600.0, 300.0);
+    let mut b = app(Some(sel));
+    settled(&mut b);
+    b.on_event(Ev::Down { x: 800, y: 450 });
+    for (x, y) in [(810, 470), (700, 520), (1000, 380), (1003, 382)] {
+        assert_dirty_covers(&mut b, "resize", |b| mv(b, x, y));
+    }
+    let sc = ed(&mut b).scene.clone().unwrap();
+    let c = sc.cross.as_ref().expect("crosshair while resizing");
+    assert!(!c.skip.is_empty(), "the toolbar's bounds");
+    assert!(assist::cross_bounds(c, sc.size).iter().all(|r| c.skip.iter().all(|k| !r.intersects(k))));
+    let want = settled(&mut b);
+    assert_tiles_match(&mut b, &want, "resize crosshair", 5);
     // Square.
     ed(&mut a).cfg.magnifier_square = true;
     assert_dirty_covers(&mut a, "square", |a| mv(a, 431, 305));

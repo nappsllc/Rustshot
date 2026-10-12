@@ -1171,6 +1171,15 @@ pub fn dirty_rects(prev: Option<&Scene>, now: &Scene, font: Option<&crate::text:
         if e == El::Sel && sel_dirty(prev, now, &mut out) {
             continue;
         }
+        if e == El::Cross
+            && let (Some(a), Some(b)) = (&prev.cross, &now.cross)
+        {
+            // One band per line from the old to the new position (a move
+            // is a few pixels): two rects, not four, so a drag stays
+            // under the damage rect cap.
+            out.extend(assist::cross_dirty(a, b, now.size));
+            continue;
+        }
         if e == El::Draft
             && let Some(keep) = stable_draft(prev, now)
         {

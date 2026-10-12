@@ -141,12 +141,36 @@ impl Assist {
 }
 
 /// The crosshair: 1 px lines through the pointer's pixel across the
-/// whole overlay (accent at 60 %).
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// whole overlay (accent at 60 %), left out under the toolbar (`skip`:
+/// its bounds), so a drag never redraws the bar for it.
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct CrossUi {
     pub x: i32,
     pub y: i32,
     pub lw: i32,
+    pub skip: Vec<PxRect>,
+}
+
+impl CrossUi {
+    /// The two lines (horizontal, vertical; the vertical without the
+    /// crossing), each minus `skip`.
+    fn parts(&self, size: (u32, u32)) -> Vec<PxRect> {
+        let (w, h) = (size.0 as i32, size.1 as i32);
+        let lines = [
+            PxRect::new(0, self.y, w, self.y + self.lw),
+            PxRect::new(self.x, 0, self.x + self.lw, self.y),
+            PxRect::new(self.x, self.y + self.lw, self.x + self.lw, h),
+        ];
+        cut(lines.into_iter().filter(|r| !r.is_empty()).collect(), &self.skip)
+    }
+}
+
+/// `v` minus every rect of `skip`.
+fn cut(mut v: Vec<PxRect>, skip: &[PxRect]) -> Vec<PxRect> {
+    for k in skip {
+        v = v.iter().flat_map(|r| r.minus_iter(k)).collect();
+    }
+    v
 }
 
 /// The magnifier: the loupe square `r` (round unless `square`), its
@@ -341,7 +365,9 @@ impl Edit {
         let ring = self.assist.ring.as_ref().map(|r| RingUi { c: r.c, colors: r.colors.clone(), cur: r.cur, hot: r.hot, custom: r.custom });
         let Some((x, y)) = self.mouse_px(mouse).filter(|_| self.mag_on()) else { return (None, None, ring) };
         let lw = s.round().max(1.0) as i32;
-        let cross = CrossUi { x: x - (lw - 1) / 2, y: y - (lw - 1) / 2, lw };
+        let ui = Ui { th: &self.th, s, font: self.ui_font };
+        let skip = self.toolbar.as_ref().map_or(Vec::new(), |t| chrome::toolbar_bounds(&ui, t).into_iter().map(PxRect::outer).collect());
+        let cross = CrossUi { x: x - (lw - 1) / 2, y: y - (lw - 1) / 2, lw, skip };
         let px = self.pixels_around((x, y), MAG_N);
         let c = px[MAG_N * MAG_N / 2];
         let text = mag_text(x, y, c);
@@ -526,16 +552,13 @@ fn grid_line(c: C4) -> C4 {
 
 pub fn cross(f: &mut Fb, ui: &Ui, c: &CrossUi, size: (u32, u32)) {
     let col = ui.th.accent.with_alpha(153);
-    let (w, h) = (size.0 as i32, size.1 as i32);
-    f.fill_rect(0, c.y, w, c.lw, col);
-    // The vertical line skips the horizontal one (no darker dot).
-    f.fill_rect(c.x, 0, c.lw, c.y, col);
-    f.fill_rect(c.x, c.y + c.lw, c.lw, h - c.y - c.lw, col);
+    for r in c.parts(size) {
+        f.fill_rect(r.x0, r.y0, r.w(), r.h(), col);
+    }
 }
 
 pub fn cross_bounds(c: &CrossUi, size: (u32, u32)) -> Vec<PxRect> {
-    let (w, h) = (size.0 as i32, size.1 as i32);
-    vec![PxRect::new(0, c.y, w, c.y + c.lw), PxRect::new(c.x, 0, c.x + c.lw, h)]
+    c.parts(size)
 }
 
 /// A disc or a rounded rect, row by row: the shape's partly covered
@@ -597,10 +620,24 @@ fn shape_rows(
     }
 }
 
-/// An anti-aliased disc of radius `rad` (fast [`Fb::fill_circle`]).
-fn disc(f: &mut Fb, cx: f32, cy: f32, rad: f32, c: C4) {
+/// An anti-aliased disc of radius `rad` (fast [`Fb::fill_circle`]),
+/// leaving out the pixels nearer than `hole` to its centre (something
+/// opaque covers them next: the magnified pixels).
+fn disc(f: &mut Fb, cx: f32, cy: f32, rad: f32, hole: f32, c: C4) {
     let r = FRect { x: cx - rad, y: cy - rad, w: 2.0 * rad, h: 2.0 * rad };
-    shape_rows(f, r, true, 0.0, |f, x, y, k| f.blend_px(x, y, c.fade(k)), |f, y, x0, x1| f.fill_rect(x0, y, x1 - x0, 1, c));
+    shape_rows(f, r, true, 0.0, |f, x, y, k| f.blend_px(x, y, c.fade(k)), |f, y, x0, x1| {
+        let dy = y as f32 + 0.5 - cy;
+        let o = hole * hole - dy * dy;
+        if hole <= 0.0 || o <= 0.0 {
+            f.fill_rect(x0, y, x1 - x0, 1, c);
+            return;
+        }
+        let h = o.sqrt();
+        // Pixel centres strictly inside the hole are skipped.
+        let (a, b) = (((cx - h - 0.5).floor() as i32 + 1).clamp(x0, x1), ((cx + h - 0.5).ceil() as i32).clamp(x0, x1));
+        f.fill_rect(x0, y, a - x0, 1, c);
+        f.fill_rect(b, y, x1 - b, 1, c);
+    });
 }
 
 /// A circle outline `w` wide just inside radius `rad`, visiting only
@@ -630,18 +667,45 @@ fn circle_line(f: &mut Fb, cx: f32, cy: f32, rad: f32, w: f32, c: C4) {
     }
 }
 
+/// What a crosshair move repaints: the band between the old and new
+/// horizontal lines and the one between the vertical lines (each line
+/// alone when they are far apart).
+pub fn cross_dirty(a: &CrossUi, b: &CrossUi, size: (u32, u32)) -> Vec<PxRect> {
+    // Left out only where both frames leave the line out.
+    let both: Vec<PxRect> = a.skip.iter().flat_map(|p| b.skip.iter().map(move |q| p.intersect(q))).filter(|r| !r.is_empty()).collect();
+    cut(cross_bands(a, b, size), &both)
+}
+
+fn cross_bands(a: &CrossUi, b: &CrossUi, size: (u32, u32)) -> Vec<PxRect> {
+    let (w, h) = (size.0 as i32, size.1 as i32);
+    let mut v = Vec::with_capacity(4);
+    if (a.y - b.y).abs() <= 64 {
+        v.push(PxRect::new(0, a.y.min(b.y), w, (a.y + a.lw).max(b.y + b.lw)));
+    } else {
+        v.extend([PxRect::new(0, a.y, w, a.y + a.lw), PxRect::new(0, b.y, w, b.y + b.lw)]);
+    }
+    if (a.x - b.x).abs() <= 64 {
+        v.push(PxRect::new(a.x.min(b.x), 0, (a.x + a.lw).max(b.x + b.lw), h));
+    } else {
+        v.extend([PxRect::new(a.x, 0, a.x + a.lw, h), PxRect::new(b.x, 0, b.x + b.lw, h)]);
+    }
+    v
+}
+
 pub fn mag(f: &mut Fb, ui: &Ui, m: &MagUi) {
     let r = m.r;
     let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
     let rad = ui.px(12.0);
+    // Inside this the magnified pixels are opaque (fully covered).
+    let hole = m.cell * MAG_N as f32 / 2.0 - 1.0;
     if m.square {
         chrome::surface(f, ui, r, 12.0, &chrome::SMALL_LAYERS, 1.0);
     } else {
         for &i in chrome::SMALL_LAYERS.iter().rev() {
             let (dy, sp) = (ui.px(SHADOW[i].0), ui.px(SHADOW[i].1));
-            disc(f, cx, cy + dy, r.w / 2.0 + sp, ui.th.shadow[i]);
+            disc(f, cx, cy + dy, r.w / 2.0 + sp, hole - dy, ui.th.shadow[i]);
         }
-        disc(f, cx, cy, r.w / 2.0, ui.th.surface);
+        disc(f, cx, cy, r.w / 2.0, hole, ui.th.surface);
     }
     // The pixels, clipped to the inner shape: whole runs of a cell's
     // color, its first column and row in the grid line's.
@@ -716,10 +780,10 @@ pub fn ring(f: &mut Fb, ui: &Ui, r: &RingUi) {
     let ro = ui.px(ring_outer());
     for &i in chrome::SMALL_LAYERS.iter().rev() {
         let (dy, sp) = (ui.px(SHADOW[i].0), ui.px(SHADOW[i].1));
-        disc(f, cx, cy + dy, ro + sp, ui.th.shadow[i]);
+        disc(f, cx, cy + dy, ro + sp, 0.0, ui.th.shadow[i]);
     }
     let lw = ui.line_px();
-    disc(f, cx, cy, ro, ui.th.surface);
+    disc(f, cx, cy, ro, 0.0, ui.th.surface);
     circle_line(f, cx, cy, ro, lw, ui.th.border);
     let n = r.colors.len();
     for (i, c) in r.colors.iter().enumerate() {

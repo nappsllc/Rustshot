@@ -2414,8 +2414,9 @@ struct Edit {
     assist: assist::Assist,
 }
 
-/// More merged dirty rects than this invalidate the whole window.
-const MAX_DAMAGE_RECTS: usize = 16;
+/// More merged dirty rects than this invalidate the whole window (a
+/// selection drag with the magnifier and its crosshair takes up to 16).
+const MAX_DAMAGE_RECTS: usize = 24;
 
 const HANDLE_HIT: f32 = 10.0; // handle hit radius, logical px (20 px target)
 const CLICK_PX: f32 = 2.5; // movement below this counts as a click
