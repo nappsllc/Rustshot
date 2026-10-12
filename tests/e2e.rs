@@ -245,7 +245,7 @@ fn daemon_stays_alive() {
     std::fs::write(
         root.join("rustshot").join("config.toml"),
         format!(
-            "renderer = \"{}\"\ncheck_updates = false\ncapture_hotkey = \"Ctrl+Alt+Shift+F11\"\nquit_hotkey = \"Ctrl+Alt+Shift+F10\"\n",
+            "renderer = \"{}\"\ncheck_updates = false\ncapture_hotkey = \"Ctrl+Alt+Shift+F11\"\nquit_hotkey = \"Ctrl+Alt+Shift+F10\"\n{NO_OTHER_HOTKEYS}",
             renderer()
         ),
     )
@@ -498,23 +498,22 @@ fn wait_pid_window(pid: u32, ms: u64) -> Option<HWND> {
     }
 }
 
-/// Row of `action` in the Settings shortcut table, which lists
-/// `keymap::Action::ALL` in order (read from the source, so new actions
-/// anywhere in the list keep this right).
-fn action_row(action: &str) -> usize {
-    let src = include_str!("../src/keymap.rs");
-    let all = &src[src.find("pub const ALL").expect("Action::ALL")..];
-    let all = &all[all.find("= [").expect("Action::ALL list") + 3..];
-    let all = &all[..all.find("];").expect("end of Action::ALL")];
-    let want = format!("Action::{action}");
-    all.split(',').map(str::trim).filter(|e| !e.is_empty()).position(|e| e == want).unwrap_or_else(|| panic!("{want} not in Action::ALL"))
-}
+/// The daemon's other global hotkeys off (their defaults, Ctrl+Shift+R /
+/// F / W, would take keys from the desktop while a test runs).
+const NO_OTHER_HOTKEYS: &str = "record_hotkey = \"\"\ncapture_full_hotkey = \"\"\ncapture_window_hotkey = \"\"\nrepeat_hotkey = \"\"\n";
 
-#[test]
-fn action_rows_follow_the_keymap() {
-    assert_eq!(action_row("ToolPencil"), 0);
-    assert!(action_row("Accept") > 0 && action_row("Cancel") == action_row("Accept") + 1);
-}
+/// Tab presses from the Settings rail to Accept's key cap in Key bindings:
+/// the six global rows, then the overlay rows (`KEY_ROWS` in
+/// src/settings_ui/draw.rs): Tools (10 caps), Stroke size (2), Copy ·
+/// Save · Upload (3), then Accept.
+const ACCEPT_TABS: usize = 6 + 10 + 2 + 3 + 1;
+/// From Accept's cap to the footer's OK: the 11 caps after it, the
+/// header's Reset to defaults, then Open config file, Apply, Cancel, OK.
+const ACCEPT_TO_OK: usize = 11 + 1 + 4;
+/// Tab presses from the rail to General's Save to field: Theme, the
+/// four accent swatches, Launch at login, Show icon in tray, Copy after
+/// capture, Play shutter sound, Change…, then the field.
+const FOLDER_TABS: usize = 11;
 
 /// Keys posted one by one with a short pause (each is its own frame).
 fn keys(hwnd: HWND, vks: &[u32]) {
@@ -525,8 +524,8 @@ fn keys(hwnd: HWND, vks: &[u32]) {
 }
 
 /// The Settings window in a private daemon (own instance name, config dir
-/// and unusual hotkeys): Saving → JPEG into another folder (with the
-/// rewrite question), Shortcuts → Accept on K; the daemon reloads (its
+/// and unusual hotkeys): General → JPG into another folder (with the
+/// rewrite question), Key bindings → Accept on K; the daemon reloads (its
 /// capture hotkey moves to the one now in the file), and a capture
 /// accepted with K writes `<folder>/<date>/<name>.jpg`.
 ///
@@ -542,7 +541,7 @@ fn settings_window_saves_and_the_daemon_reloads() {
     let root = config_root("settings", &renderer());
     let cfg = root.join("rustshot").join("config.toml");
     let shots = root.join("shots");
-    let base = "check_updates = false\ncapture_hotkey = \"Ctrl+Alt+Shift+F11\"\nquit_hotkey = \"Ctrl+Alt+Shift+F10\"\n";
+    let base = format!("check_updates = false\ncapture_hotkey = \"Ctrl+Alt+Shift+F11\"\nquit_hotkey = \"Ctrl+Alt+Shift+F10\"\n{NO_OTHER_HOTKEYS}");
     std::fs::write(&cfg, format!("# e2e\n{base}")).unwrap();
     let instance = format!("e2e-set-{}", std::process::id());
     let run = |args: &[&str]| {
@@ -562,14 +561,16 @@ fn settings_window_saves_and_the_daemon_reloads() {
         assert_eq!(wait_exit(&mut c, 5000), Some(0), "`rustshot settings` hands over to the daemon");
         let w = wait_pid_window(pid, 5000).expect("settings window in the daemon");
         std::thread::sleep(Duration::from_millis(500));
-        keys(w, &[TAB, 0x27, TAB, 0x23]); // tabs → Saving, folder field, End
+        // The rail, then General's Save to field: End, clear, type.
+        keys(w, &vec![TAB; 1 + FOLDER_TABS]);
+        keys(w, &[0x23]);
         keys(w, &[0x08; 120]); // clear the folder
         for ch in shots.display().to_string().chars() {
             char_msg(w, ch);
         }
         std::thread::sleep(Duration::from_millis(200));
-        // Browse, subfolder toggle, pattern, format: JPEG; then the quality slider.
-        keys(w, &[TAB, TAB, TAB, TAB, 0x28, TAB]);
+        // The PNG / JPG choice: JPG.
+        keys(w, &[TAB, 0x27]);
         // Meanwhile the file gets a new capture hotkey (as if edited by hand):
         // the window's untouched values follow the file.
         std::fs::write(&cfg, format!("# e2e\n{}", base.replace("F11", "F9"))).unwrap();
@@ -589,11 +590,12 @@ fn settings_window_saves_and_the_daemon_reloads() {
         assert_eq!(wait_exit(&mut run(&["settings"]).spawn().unwrap(), 5000), Some(0));
         let w = wait_pid_window(pid, 5000).expect("settings window again");
         std::thread::sleep(Duration::from_millis(500));
-        // tabs → Shortcuts, table: Home, Down to Accept's row, rebind box: record K.
-        keys(w, &[TAB, 0x27, 0x27, TAB, 0x24]);
-        keys(w, &vec![0x28; action_row("Accept")]);
-        keys(w, &[TAB, RET, 'K' as u32]);
-        keys(w, &[TAB, TAB, RET]); // Reset all, OK
+        // The rail → Key bindings; Accept's cap: record K; then OK.
+        keys(w, &[TAB, 0x28, 0x28, 0x28]);
+        keys(w, &vec![TAB; ACCEPT_TABS]);
+        keys(w, &[RET, 'K' as u32]);
+        keys(w, &vec![TAB; ACCEPT_TO_OK]);
+        keys(w, &[RET]);
         assert!(wait_gone(pid, 5000), "OK closes the window");
         let text = std::fs::read_to_string(&cfg).unwrap();
         assert!(text.contains("[shortcuts]\naccept = \"K\""), "{text}");
@@ -639,7 +641,7 @@ fn tool_size_is_remembered_in_the_config() {
     let (mut child, hwnd, root) = launch_editor("toolmem");
     let cfg = root.join("rustshot").join("config.toml");
     let before = std::fs::read_to_string(&cfg).unwrap();
-    key(hwnd, 'D' as u32); // Line
+    key(hwnd, 'L' as u32); // Line
     // WM_MOUSEWHEEL: one notch up (the delta in the high word), past the
     // wheel's 160 ms throttle from the capture's start.
     std::thread::sleep(Duration::from_millis(300));

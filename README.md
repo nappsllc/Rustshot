@@ -30,14 +30,17 @@ renderer.
 - **Screen recording** of a region or a screen to MP4 or GIF, with system
   sound, the microphone and an on-screen camera bubble
   ([Recording](#recording)).
-- **Settings window** for the theme, hotkeys, saving, recording and every
-  editor shortcut (no need to edit `config.toml` by hand).
+- **Settings window** for the theme and accent, hotkeys, saving,
+  recording, uploads and every editor shortcut (no need to edit
+  `config.toml` by hand).
 - **Modern overlay UI:** dark and light themes that follow your OS, a grouped
   toolbar that wraps and repositions near screen edges, tooltips with the real
   shortcuts, and short animations.
 - **Multi-monitor aware:** spans all monitors when they share a scale factor;
   the toolbar and notices stay on the monitor you're working on.
-- **Global hotkey daemon** (default <kbd>Meta</kbd>+<kbd>Shift</kbd>+<kbd>X</kbd>).
+- **Global hotkey daemon** (capture a region with <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd>,
+  the full screen, a window, a recording, or the last region again; see
+  [Global hotkeys](#global-hotkeys)).
 - **Scriptable CLI** for headless captures (`rustshot full --clip`,
   `--region`, `--raw` to stdout, `--upload`, delays).
 - **In-app updates** for direct downloads: download, verify and restart
@@ -102,22 +105,39 @@ rustshot --help
 Open **Settings…** from the tray menu (Windows), or run `rustshot settings`
 (a running daemon opens its window; otherwise the window opens on its own;
 on Linux and macOS, where there is no tray icon, this is the way in). On
-Linux the Settings window is *(experimental)*. Four tabs:
+Linux the Settings window is *(experimental)*. A rail on the left picks the
+section:
 
-- **General:** theme (Auto follows the OS), UI size (Auto follows each
-  display's scaling; 75-200 % on top of it), *Snap to windows* and the
-  overlay renderer (Windows), start at login (hidden for store installs), the daily update
-  check, and the global capture and quit hotkeys (click a box, then press
-  the keys; <kbd>Backspace</kbd> clears it). *Open config file* opens
-  `config.toml`.
-- **Saving:** see [Saving](#saving).
-- **Shortcuts:** every editor shortcut (see below).
+- **General:** theme (System follows the OS, Dark, Light) and accent
+  (Periwinkle, Teal, Amber or any `#rrggbb`: the custom swatch; the window
+  previews it before **Apply**), *Launch at login* (hidden for store
+  installs), *Show icon in tray* (Windows; off, the daemon runs without an
+  icon: the hotkeys and a second `rustshot` launch still capture, and the
+  row warns when no capture hotkey is set), *Copy to clipboard after
+  capture* (a save or upload also copies the image), *Play shutter
+  sound*, *Save to* (with **Change…**) and the file name with an example
+  and PNG / JPG.
+- **Capture:** daily subfolders and their pattern, *Ask where to save*,
+  the format (PNG, JPG or BMP) and JPEG quality, the file-name pattern
+  editor (see [Saving](#saving)), the overlay's UI size (Auto follows each
+  display's scaling; 75-200 % on top of it), *Snap to windows*, the
+  renderer (Windows) and *Reset tool sizes & colours*.
 - **Recording:** what the Record popover starts with: format (MP4 or
-  GIF), frame rate, MP4 quality, system sound, microphone and its device,
-  the camera bubble (camera, shape, size, mirror, ring colour and width),
-  the 3-2-1 countdown and the record hotkey; on Linux also the MP4
-  encoder (Auto, ffmpeg or OpenH264) with what is installed ("ffmpeg
-  found at /usr/bin/ffmpeg", "OpenH264 downloaded", or not available).
+  GIF), frame rate, MP4 quality, the 3-2-1 countdown, system sound,
+  microphone and its device, the camera bubble (camera, shape, size,
+  mirror, ring colour and width); on Linux also the MP4 encoder (Auto,
+  ffmpeg or OpenH264) with what is installed ("ffmpeg found at
+  /usr/bin/ffmpeg", "OpenH264 downloaded", or not available).
+- **Key bindings:** the global hotkeys and every editor shortcut (see
+  below). Click a row (or a key cap) and press the new keys; <kbd>Esc</kbd>
+  cancels, <kbd>Backspace</kbd> unbinds. **Reset to defaults** (top right)
+  puts every key back.
+- **Upload:** the Imgur client id and *Copy link after upload*.
+- **About:** the version with *Check for updates* (the update dialog),
+  the daily update check, and links to the website, the source, the
+  issue tracker, the release notes and the licenses.
+
+*Open config file* (bottom left) opens `config.toml`.
 
 **OK** saves and closes, **Apply** saves and keeps the window open,
 **Cancel** (or <kbd>Esc</kbd>) discards. The running daemon picks the new
@@ -126,7 +146,7 @@ re-registered. A hotkey that cannot be registered (another app uses it,
 or it is not a valid hotkey) is reported once, in the window or as a tray
 notification (Windows; on Linux and macOS on stderr), and the previous one
 is kept; while it stays unregistered
-the window says so next to its box, and **Apply** tries again. Saving
+the window says so under its row, and **Apply** tries again. Saving
 rewrites `config.toml`: if the file has comments or keys Rustshot does not
 know, the first save asks before removing them. A `config.toml` with an
 error is never overwritten silently: the window shows the error and offers
@@ -152,11 +172,13 @@ the full path. <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> always asks
 extension you pick), and *Ask where to save* makes
 <kbd>Ctrl</kbd>+<kbd>S</kbd> ask too. The clipboard and uploads stay PNG.
 
-In Settings › Saving: the folder (with **Browse…**), daily subfolders and
-their pattern, the format (JPEG has a quality slider, 1-100, default 90),
-and the file name. The token buttons insert at the caret of the last
-pattern field you used; the line under the field shows where the next
-capture would go. **Restore** brings back `%F_%H-%M`, **Clear** empties it.
+In Settings › General: the folder (with **Change…**) and the file name;
+in Settings › Capture: daily subfolders and their pattern, the format (JPG
+has a quality slider, 1-100, default 90) and the pattern editor. The token
+buttons insert at the caret of the last pattern field you used; the line
+above them shows where the next capture would go. **Restore** brings back
+`%F_%H-%M`, **Clear** empties it. With *Copy to clipboard after capture*
+on, a save (or an upload) also copies the image.
 
 | Token | Meaning | Token | Meaning |
 |---|---|---|---|
@@ -189,17 +211,40 @@ The windows are listed once, when the overlay opens. Parts are the child
 windows an app has: on Windows most classic apps have them (many modern
 ones draw everything in one window); on X11 few toolkits do; macOS lists
 none. On Wayland there are no window positions to snap to, so only
-dragging works. `snap_windows = false` (or Settings › General) turns it
-off; a click then selects the whole screen.
+dragging works. `snap_windows = false` (or Settings › Capture) turns it
+off; a click then selects the whole screen. The *Capture window* hotkey
+snaps even then.
+
+### Global hotkeys
+
+| Action | Default | Config key |
+|---|---|---|
+| Capture region (the overlay) | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> | `capture_hotkey` |
+| Capture full screen (saved at once, no overlay) | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> | `capture_full_hotkey` |
+| Capture window (the overlay picking a window: a click selects it) | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>W</kbd> | `capture_window_hotkey` |
+| Record video (again: stop) | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> | `record_hotkey` |
+| Repeat last capture (the same region, saved at once) | none | `repeat_hotkey` |
+| Quit Rustshot | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>Q</kbd> | `quit_hotkey` |
+
+These are the defaults of a new `config.toml`; a file that already has a
+key keeps its value (older versions wrote <kbd>Shift</kbd>+<kbd>Win</kbd>+<kbd>X</kbd>
+and <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd>). A global hotkey takes
+its keys from every app (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> is
+Save As in many of them); while the overlay is open, a global hotkey's
+keys act as the overlay's own (there <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd>
+is Save As), only Quit always quits. Repeat last capture remembers the
+region for as long as the daemon runs; before the first capture it opens
+the overlay.
 
 ### Editor shortcuts
 
 | Action | Keys |
 |---|---|
-| Pencil / Line / Arrow | <kbd>P</kbd> / <kbd>D</kbd> / <kbd>A</kbd> |
-| Rectangle / Ellipse / Marker | <kbd>R</kbd> / <kbd>C</kbd> / <kbd>M</kbd> |
-| Text / Pixelate / Invert | <kbd>T</kbd> / <kbd>B</kbd> / <kbd>I</kbd> |
-| Stroke size | mouse wheel, or the − / + buttons |
+| Pencil / Line / Arrow | <kbd>P</kbd> / <kbd>L</kbd> / <kbd>A</kbd> |
+| Rectangle / Ellipse / Marker | <kbd>R</kbd> / <kbd>E</kbd> / <kbd>M</kbd> |
+| Text / Number / Pixelate / Invert | <kbd>T</kbd> / <kbd>N</kbd> / <kbd>X</kbd> (or <kbd>B</kbd>) / <kbd>I</kbd> |
+| Stroke size − / + | <kbd>[</kbd> / <kbd>]</kbd>, the mouse wheel, or the − / + buttons |
+| Save to Desktop | <kbd>Ctrl</kbd>+<kbd>D</kbd> |
 | Undo / Redo | <kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> (or <kbd>Ctrl</kbd>+<kbd>Y</kbd>) |
 | Copy / Save / Upload | <kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>Ctrl</kbd>+<kbd>S</kbd> / <kbd>Ctrl</kbd>+<kbd>U</kbd> |
 | Save As (always asks) | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> |
@@ -216,11 +261,13 @@ off; a click then selects the whole screen.
 On macOS, <kbd>⌘</kbd> works wherever <kbd>Ctrl</kbd> is listed.
 
 The keys above (except arrows, <kbd>Tab</kbd>, the mouse wheel and
-hold-while-drawing modifiers) can be remapped in Settings › Shortcuts: select an action, press
-its new keys (<kbd>Backspace</kbd> unbinds it), and **Reset all** goes back
-to the defaults. Rebinding sets a single chord; an action with two (Redo's
-<kbd>Ctrl</kbd>+<kbd>Y</kbd>) gets its second one back with **Reset all**, or
-list several in `config.toml`. Keys bound to two actions are shown in red with a note;
+hold-while-drawing modifiers) can be remapped in Settings › Key bindings:
+click its key cap, press the new keys (<kbd>Esc</kbd> cancels,
+<kbd>Backspace</kbd> unbinds it), and **Reset to defaults** goes back to the
+defaults. Rebinding sets a single chord; an action with two (Redo's
+<kbd>Ctrl</kbd>+<kbd>Y</kbd>, Pixelate's <kbd>B</kbd>) gets its second one
+back with **Reset to defaults**, or list several in `config.toml`. Keys
+bound to two actions are shown in red with a note;
 the first action in the list wins. In `config.toml` the same lives in a
 `[shortcuts]` table at the end (one or more chords separated by commas,
 `""` unbinds; `rustshot config --check` reports unknown actions and chords
@@ -229,7 +276,8 @@ bound twice):
 ```toml
 [shortcuts]
 tool_pencil = "P"         # tool_line, tool_arrow, tool_rectangle, tool_circle,
-                          # tool_marker, tool_text, tool_pixelate, tool_invert
+                          # tool_marker, tool_text, tool_counter, tool_pixelate,
+                          # tool_invert, size_down, size_up, save_desktop
 save_as = "Ctrl+Shift+S"  # copy, save, upload, undo, select_all, toggle_palette,
 redo = "Ctrl+Shift+Z, Ctrl+Y"  # accept (Enter), cancel (Esc),
 ui_bigger = "Ctrl+=, Ctrl+Shift+=, Ctrl+NumpadAdd"  # ui_smaller, ui_reset
@@ -253,7 +301,7 @@ Record is not offered.
 
 ### Recording
 
-Press the record hotkey (default <kbd>Meta</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd>),
+Press the record hotkey (default <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd>),
 select an area (or press <kbd>Enter</kbd> for the monitor under the
 pointer) and choose **Start recording**; or click **Record** (the camera
 icon) in the overlay toolbar. The Record popover offers:
@@ -344,8 +392,14 @@ draw_font_size = 16.0
 undo_limit = 100
 user_colors = ["#f04438", "#ff8a1f", "#ffc532", "#2dc06f", "#19b5d6",
                "#3b82f6", "#8b5cf6", "#ec4899", "#ffffff", "#111318"]
-capture_hotkey = "Shift+Meta+X"
+capture_hotkey = "Ctrl+Shift+S"   # the overlay
 quit_hotkey = "Ctrl+Alt+Shift+Q"
+capture_full_hotkey = "Ctrl+Shift+F"    # every monitor, saved at once
+capture_window_hotkey = "Ctrl+Shift+W"  # the overlay picking a window
+repeat_hotkey = ""                # the last region again ("" = none)
+show_tray = true                  # false = no tray icon (hotkeys still work)
+copy_after_capture = false        # a save or upload also copies the image
+shutter_sound = false             # a short click when a capture is taken
 copy_url_after_upload = true
 capture_active_monitor = false    # true = only the monitor under the cursor
 snap_windows = true               # outline the window under the pointer; a click selects it
@@ -354,7 +408,7 @@ check_updates = true              # daemon checks GitHub once a day
 skip_version = ""                 # a version the daily check ignores ("Skip this version")
 renderer = "gdi"                  # Windows overlay: "gdi" (low memory) or "software"; ignored elsewhere
 upload_client_id = "313baf0c7b4d3ff"
-record_hotkey = "Meta+Shift+R"    # starts (select an area) and stops a recording
+record_hotkey = "Ctrl+Shift+R"    # starts (select an area) and stops a recording
 rec_format = "mp4"                # Record popover defaults: "mp4" or "gif"
 rec_fps = 30                      # MP4: 30 or 60
 rec_gif_fps = 15                  # GIF: 10 or 15
@@ -376,7 +430,7 @@ rec_linux_encoder = "auto"        # Linux MP4: "auto", "ffmpeg" or "openh264"
 ## Updates
 
 The daemon checks GitHub for a new release once a day (turn it off in
-Settings › General or with `check_updates = false`); the tray's *Check for
+Settings › About or with `check_updates = false`); the tray's *Check for
 updates* (Windows) or `rustshot update` (any platform) checks now. A new
 version opens a dialog with the release notes (on Linux the dialog is
 *(experimental)*; on macOS the daily check only announces it on stderr and
