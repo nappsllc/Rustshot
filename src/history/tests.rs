@@ -248,7 +248,10 @@ fn the_writer_thread_writes_in_order() {
 fn pruning_runs_with_history_off() {
     let r = TempRoot::new("off");
     let st = Store::new(&r.0);
-    let old = add(&st, (2020, 1, 1, 10, 0, 0), 8);
+    // Its own id: what is being written or edited is kept by id in this
+    // process, and pruning_leaves_open_entries_alone holds
+    // 2020-01-01/100000 open at the same time (in another folder).
+    let old = add(&st, (2020, 1, 3, 10, 0, 0), 8);
     let cfg = crate::config::Config { history: false, ..crate::config::Config::default() };
     keep_pruned(&r.0, &cfg);
     flush(std::time::Duration::from_secs(20));
