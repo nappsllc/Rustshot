@@ -15,6 +15,7 @@ mod export;
 mod fonts;
 mod hotkey;
 mod icon_path;
+mod imgur;
 mod instance;
 mod keymap;
 // Blocks, delegate classes and dispatch for the macOS recorder; the block

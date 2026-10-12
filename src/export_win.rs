@@ -211,6 +211,15 @@ fn upload_winhttp(png: &[u8], client_id: &str) -> Result<String, String> {
     extract_json_string(&text, "link").ok_or_else(|| format!("no link in response: {text}"))
 }
 
+/// HTTPS POST of `body` with `headers`; returns (status, body). Long
+/// send/receive timeouts (5 min): a recording can be tens of MB.
+#[cfg_attr(test, allow(dead_code))] // tests never upload
+pub fn http_post(host: &str, path: &str, headers: &[(&str, &str)], body: &[u8]) -> Result<(u32, String), String> {
+    let headers = headers.iter().map(|(k, v)| format!("{k}: {v}")).collect::<Vec<_>>().join("\r\n");
+    let resp = winhttp_send("POST", host, path, &headers, body, true, 300_000)?;
+    read_all(&resp).map(|t| (resp.status, t))
+}
+
 /// HTTPS GET; a non-2xx status is an `Err("HTTP <code>")`.
 pub fn http_get(host: &str, path: &str, headers: &[(&str, &str)]) -> Result<String, String> {
     let headers = headers
@@ -261,6 +270,7 @@ fn winhttp_send(
     headers: &str,
     body: &[u8],
     follow_redirects: bool,
+    io_ms: i32,
 ) -> Result<Response, String> {
     use std::ptr;
     use windows::Win32::Networking::WinHttp::{
@@ -285,7 +295,7 @@ fn winhttp_send(
         if session.0.is_null() {
             return Err(err("WinHttpOpen"));
         }
-        let _ = WinHttpSetTimeouts(session.0, 10_000, 10_000, 30_000, 30_000);
+        let _ = WinHttpSetTimeouts(session.0, 10_000, 10_000, io_ms, io_ms);
 
         let host = wide(host);
         let conn = Handle(WinHttpConnect(session.0, PCWSTR(host.as_ptr()), 443, 0));
@@ -410,17 +420,22 @@ fn winhttp(
     headers: &str,
     body: &[u8],
 ) -> Result<(u32, String), String> {
-    let resp = winhttp_send(method, host, path, headers, body, true)?;
+    let resp = winhttp_send(method, host, path, headers, body, true, 30_000)?;
+    read_all(&resp).map(|t| (resp.status, t))
+}
+
+/// The whole response body, as text.
+fn read_all(resp: &Response) -> Result<String, String> {
     let mut out: Vec<u8> = Vec::new();
     let mut buf = vec![0u8; 16 * 1024];
     loop {
-        let n = read_some(&resp, &mut buf)?;
+        let n = read_some(resp, &mut buf)?;
         if n == 0 {
             break;
         }
         out.extend_from_slice(&buf[..n]);
     }
-    Ok((resp.status, String::from_utf8_lossy(&out).into_owned()))
+    Ok(String::from_utf8_lossy(&out).into_owned())
 }
 
 const MAX_REDIRECTS: usize = 5;
@@ -442,7 +457,7 @@ pub fn download_to(
     let mut current = url.to_string();
     for _ in 0..=MAX_REDIRECTS {
         let (host, path) = split_https_url(&current).ok_or("unexpected download URL")?;
-        let resp = winhttp_send("GET", host, path, "", &[], false)?;
+        let resp = winhttp_send("GET", host, path, "", &[], false, 30_000)?;
         match resp.status {
             301 | 302 | 303 | 307 | 308 => {
                 let next = location(&resp).ok_or("redirect without a Location")?;

@@ -6,6 +6,8 @@ Rustshot does not collect, store or transmit personal data or telemetry.
   only the selected image to imgur (https://imgur.com) using Rustshot's
   public client id; imgur's privacy policy then applies to that image. The
   returned link is copied to your clipboard and printed to the console.
+  A recording is uploaded only when you click **Copy link** on the notice
+  after it (MP4s through imgur's video upload, which imgur then transcodes).
 - Settings are stored locally in `config.toml` in your user config folder.
 - Update check (direct downloads only; off with `check_updates = false` or in
   Settings): at most once a day, and when you choose *Check for updates*, the

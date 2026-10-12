@@ -336,7 +336,7 @@ pub fn run_action(a: NoteAct, file: &std::path::Path, done: impl FnOnce(Note) + 
             let path = file.to_path_buf();
             let cfg = crate::config::load();
             let spawned = std::thread::Builder::new().name("upload-recording".into()).spawn(move || {
-                let res = std::fs::read(&path).map_err(|e| format!("read {}: {e}", path.display())).and_then(|b| upload(&b, &cfg.upload_client_id));
+                let res = upload(&path, &cfg.upload_client_id);
                 let copied = res.as_ref().is_ok_and(|u| crate::export::copy_text_to_clipboard(u).is_ok());
                 done(upload_note(&res, copied));
             });
@@ -348,17 +348,28 @@ pub fn run_action(a: NoteAct, file: &std::path::Path, done: impl FnOnce(Note) + 
     }
 }
 
-/// Upload `bytes` (tests never do).
-fn upload(bytes: &[u8], client_id: &str) -> Result<String, String> {
+/// Upload the recording `file` (tests never do): an MP4 through Imgur's
+/// video upload (multipart, then the transcode polled, see `imgur`), a
+/// GIF like a screenshot.
+fn upload(file: &std::path::Path, client_id: &str) -> Result<String, String> {
     #[cfg(test)]
     {
-        let _ = (bytes, client_id);
+        let _ = (file, client_id);
         Err("no uploader in tests".into())
     }
     #[cfg(not(test))]
     {
-        crate::export::do_upload(bytes, client_id)
+        if is_video(file) {
+            crate::imgur::upload_video_file(file, client_id)
+        } else {
+            std::fs::read(file).map_err(|e| format!("read {}: {e}", file.display())).and_then(|b| crate::export::do_upload(&b, client_id))
+        }
     }
+}
+
+/// An MP4 (a video for Imgur, not an image).
+fn is_video(p: &std::path::Path) -> bool {
+    p.extension().is_some_and(|e| e.eq_ignore_ascii_case("mp4"))
 }
 
 /// Open the folder with `file` selected (Windows Explorer, macOS Finder;
@@ -751,6 +762,12 @@ mod tests {
 
     /// The buttons: 24 px high, 8 px apart, inside the 36 px panel, right
     /// of the text; hits find them; the window holds them and the shadow.
+    #[test]
+    fn mp4s_go_to_the_video_upload() {
+        assert!(is_video(std::path::Path::new("a/b.MP4")));
+        assert!(!is_video(std::path::Path::new("a/b.gif")));
+    }
+
     #[test]
     fn note_buttons_layout_and_hits() {
         let n = recording_saved(&PathBuf::from("a.mp4"), Duration::from_secs(1), 10, &[], true);
