@@ -727,6 +727,39 @@ fn render_object_previews() {
     }
 }
 
+/// The Blur / Invert button: a click picks Blur; a long press opens a
+/// menu with both, and Invert from it picks Invert (the button then shows
+/// Invert, its tooltip too); a press outside closes the menu.
+#[test]
+fn the_blur_button_holds_invert_too() {
+    let mut a = app();
+    ed(&mut a).prepare(None, (0, 0), Instant::now());
+    let btn = |a: &mut App| ed(a).toolbar.as_ref().unwrap().items.iter().find(|i| i.kind == toolbar::Kind::Btn(Act::Tool(Tool::Blur))).unwrap().r;
+    let b = btn(&mut a);
+    let (bx, by) = ((b.x + b.w / 2.0) as i32, (b.y + b.h / 2.0) as i32);
+    click(&mut a, bx, by);
+    assert_eq!(ed(&mut a).tool, Some(Tool::Blur), "a click");
+    // A long press: the menu.
+    down(&mut a, bx, by);
+    ed(&mut a).slot_hold = Some(Instant::now() - Duration::from_millis(500));
+    ed(&mut a).prepare(None, (0, 0), Instant::now());
+    up(&mut a, bx, by);
+    assert!(ed(&mut a).slot_menu && ed(&mut a).tool == Some(Tool::Blur), "the release picks nothing");
+    ed(&mut a).prepare(None, (0, 0), Instant::now());
+    let tb = ed(&mut a).toolbar.clone().unwrap();
+    let row = tb.items.iter().find(|i| matches!(i.kind, toolbar::Kind::MenuItem { act: Act::Tool(Tool::Invert), .. })).expect("an Invert row").r;
+    assert!(tb.items.iter().any(|i| matches!(i.kind, toolbar::Kind::MenuItem { act: Act::Tool(Tool::Blur), .. })));
+    click(&mut a, (row.x + row.w / 2.0) as i32, (row.y + row.h / 2.0) as i32);
+    assert_eq!(ed(&mut a).tool, Some(Tool::Invert));
+    assert!(!ed(&mut a).slot_menu);
+    assert_eq!(toolbar::slot_act(Act::Tool(Tool::Blur), ed(&mut a).tool), Act::Tool(Tool::Invert), "it shows Invert");
+    assert_eq!(chrome::act_tip(toolbar::slot_act(Act::Tool(Tool::Blur), Some(Tool::Invert)), &ed(&mut a).keys).0, "Invert");
+    // Open again, then a press on the capture only closes it.
+    ed(&mut a).slot_menu = true;
+    click(&mut a, 700, 500);
+    assert!(!ed(&mut a).slot_menu && ed(&mut a).objects.is_empty());
+}
+
 /// The text style: the mini-toolbar of a text has the font box, B / I /
 /// U / S and the alignment (a callout no alignment); its acts style the
 /// selection (one undo step) and the tool remembers them; the font list

@@ -40,9 +40,10 @@ const LABEL_H: f32 = 22.0;
 const LABEL_GAP: f32 = 8.0;
 const LABEL_MIN_ROOM: f32 = 30.0;
 
-/// The tool buttons. Blur took Invert's slot (the bar keeps its width):
-/// Invert is its key (I), and the slot shows it while it is the tool
-/// ([`slot_act`]).
+/// The tool buttons. Blur and Invert share a slot (the bar keeps its
+/// width): a click picks Blur, a long press opens a menu with both
+/// ([`SLOT_MENU`]), and the slot shows Invert while it is the tool (key I;
+/// [`slot_act`], its tooltip too).
 pub const TOOL_ORDER: [Tool; 14] = [
     Tool::Select,
     Tool::Path,
@@ -282,6 +283,8 @@ pub struct Input<'a> {
     /// The save menu while it is open: the keys of Save As, Save to
     /// Desktop and Open with.
     pub save_menu: Option<&'a [String; 3]>,
+    /// The Blur / Invert menu while it is open: their keys.
+    pub slot_menu: Option<&'a [String; 2]>,
 }
 
 /// What shapes the color picker popover.
@@ -477,7 +480,10 @@ pub fn layout(inp: &Input) -> Toolbar {
             texts.extend(keys.iter().cloned());
             Some(place_save_menu(bar, above, &mut items, inp))
         }
-        (None, None, None) => None,
+        (None, None, None) => inp.slot_menu.map(|keys| {
+            texts.extend(keys.iter().cloned());
+            place_slot_menu(bar, above, &mut items, inp)
+        }),
     };
     // The mode switch above the selection (recording works here).
     let mut extra = Vec::new();
@@ -526,10 +532,32 @@ pub fn layout_docked(inp: &Input, bar: FRect) -> Toolbar {
             texts.extend(keys.iter().cloned());
             Some(place_save_menu(bar, false, &mut items, inp))
         }
-        (None, None, None) => None,
+        (None, None, None) => inp.slot_menu.map(|keys| {
+            texts.extend(keys.iter().cloned());
+            place_slot_menu(bar, false, &mut items, inp)
+        }),
     };
     Toolbar { bar, pop, items, wrapped: false, above: false, texts, extra: Vec::new(), mode: None, video: false, docked: true }
 }
+
+/// The Blur / Invert button's menu (a long press on it): its two tools.
+pub const SLOT_MENU: [(Act, &str); 2] = [(Act::Tool(Tool::Blur), "Blur"), (Act::Tool(Tool::Invert), "Invert")];
+
+/// The Blur / Invert menu under (or over) its button, as the save menu.
+fn place_slot_menu(bar: FRect, above: bool, items: &mut Vec<Item>, inp: &Input) -> FRect {
+    let s = inp.s;
+    let (pw, ph) = (SLOT_MENU_W * s, (SLOT_MENU.len() as f32 * MENU_ROW + 2.0 * PAD) * s);
+    let anchor = items.iter().find(|it| it.kind == Kind::Btn(Act::Tool(Tool::Blur))).map_or(bar, |it| it.r);
+    let (px, py) = place_pop(pw, ph, anchor, bar, above, inp);
+    for (i, (act, label)) in SLOT_MENU.into_iter().enumerate() {
+        let r = FRect { x: px + PAD * s, y: py + (PAD + i as f32 * MENU_ROW) * s, w: pw - 2.0 * PAD * s, h: MENU_ROW * s };
+        items.push(Item { kind: Kind::MenuItem { act, label, key: i }, r, disabled: false });
+    }
+    FRect { x: px, y: py, w: pw, h: ph }
+}
+
+/// The Blur / Invert menu's width (logical px).
+const SLOT_MENU_W: f32 = 160.0;
 
 /// The save menu's rows.
 pub const SAVE_MENU: [(Act, &str); 3] = [(Act::SaveAs, "Save as\u{2026}"), (Act::SaveDesktop, "Save to Desktop"), (Act::OpenWith, "Open with\u{2026}")];
@@ -810,6 +838,7 @@ mod tests {
             fills: true,
             pick: None,
             save_menu: None,
+            slot_menu: None,
         }
     }
 

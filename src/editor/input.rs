@@ -313,6 +313,17 @@ impl Edit {
                 .filter(|tb| tb.contains(p))
                 .map(|tb| (tb.act_at(p), tb.index_at(p)));
             let Some((act, idx)) = on_bar else { return false };
+            // The Blur / Invert button: a click picks Blur (on release),
+            // a long press opens the menu with both.
+            let slot = idx
+                .and_then(|i| self.toolbar.as_ref().and_then(|tb| tb.items.get(i)))
+                .is_some_and(|it| it.kind == toolbar::Kind::Btn(Act::Tool(Tool::Blur)));
+            if slot && !self.rec.open {
+                self.pressed = idx;
+                self.slot_menu = false;
+                self.slot_hold = Some(Instant::now());
+                return true;
+            }
             {
                 self.pressed = idx;
                 if self.text.is_some() {
@@ -404,6 +415,9 @@ impl Edit {
                 return; // already dragging
             }
             self.save_menu = false;
+            if std::mem::take(&mut self.slot_menu) {
+                return; // a press outside the Blur / Invert menu closes it
+            }
             // The mini-toolbar over the selected objects.
             if let Some(act) = self.obj.mini.as_ref().filter(|m| m.contains(p)).map(|m| m.act_at(p)) {
                 if let Some(act) = act {
@@ -576,7 +590,26 @@ impl Edit {
     pub(super) fn pointer_up(&mut self) {
         {
             self.pressed = None;
+            // The Blur / Invert button let go before the menu opened: a
+            // click, Blur.
+            if self.slot_hold.take().is_some() {
+                self.apply_act(Act::Tool(Tool::Blur), Pt::new(0.0, 0.0));
+            }
             end_interaction(self);
+        }
+    }
+
+    /// How long a press on the Blur / Invert button opens its menu.
+    pub(super) const SLOT_HOLD: Duration = Duration::from_millis(400);
+
+    /// The Blur / Invert button held long enough: its menu opens (the
+    /// release then picks nothing).
+    pub(super) fn slot_long_press(&mut self, now: Instant) {
+        if self.slot_hold.is_some_and(|t| now.saturating_duration_since(t) >= Self::SLOT_HOLD) {
+            self.slot_hold = None;
+            self.slot_menu = true;
+            self.palette_open = false;
+            self.save_menu = false;
         }
     }
 
@@ -603,9 +636,12 @@ impl Edit {
         if act != Act::SaveMenu {
             self.save_menu = false;
         }
+        // A pick from the Blur / Invert menu picks (never toggles off).
+        let from_menu = std::mem::take(&mut self.slot_menu);
         match act {
             // Video mode draws nothing (the recording is live).
             Act::Tool(_) if self.rec.open => {}
+            Act::Tool(t) if from_menu && self.tool == Some(t) => {}
             Act::Tool(t) => {
                 self.finish_callout_edit();
                 // The Edit window always has a tool: off again is Select.

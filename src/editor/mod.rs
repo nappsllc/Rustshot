@@ -1772,8 +1772,9 @@ fn video_key(edit: &Edit, vk: u32, mods: Mods) -> Option<Act> {
 /// Esc: close a device list or the ring's palette, drop the current
 /// tool / draft / palette, or cancel the capture (video mode's Close).
 fn cancel_key(edit: &mut Edit) {
-    if edit.save_menu {
+    if edit.save_menu || edit.slot_menu {
         edit.save_menu = false;
+        edit.slot_menu = false;
         return;
     }
     if edit.obj.cedit.is_some() {
@@ -2441,6 +2442,10 @@ struct Edit {
     palette_open: bool,
     /// The Save split button's menu is open.
     save_menu: bool,
+    /// The Blur / Invert button's menu is open; the button held since
+    /// (a long press opens it, a click picks Blur).
+    slot_menu: bool,
+    slot_hold: Option<Instant>,
     rec: RecPop,
     done: bool,
     cancelled: bool,
@@ -2525,6 +2530,8 @@ impl Edit {
             toolbar: None,
             palette_open: false,
             save_menu: false,
+            slot_menu: false,
+            slot_hold: None,
             rec,
             done: false,
             cancelled: false,
@@ -3306,7 +3313,7 @@ fn animating(edit: &Edit, app_notice: Option<&Toast>, now: Instant) -> bool {
     let tip_pending = edit.hover.is_some() && now.saturating_duration_since(edit.hover_at) < Duration::from_millis(500);
     let toast_moving = edit.notice.as_ref().or(app_notice).is_some_and(|t| t.animating(now));
     // The Camera row says "Looking for cameras…" until the list comes.
-    edit.mo.active(now) || tip_pending || toast_moving || edit.rec.cams_looking() || edit.guides_fading(now)
+    edit.mo.active(now) || tip_pending || toast_moving || edit.rec.cams_looking() || edit.guides_fading(now) || edit.slot_hold.is_some()
 }
 
 /// The last frame no longer matches: something animates (or did when it

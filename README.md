@@ -489,8 +489,8 @@ is below them: annotations drawn after a spotlight stay bright); the
 magnifier shows the area under its source twice as large. The blur
 (<kbd>B</kbd>) blurs its rectangle's own pixels, its size the strength;
 move and resize it like a pixelate. It shares a toolbar button with
-Invert (<kbd>I</kbd>): the button shows whichever of the two was picked
-last, and holding it down opens a menu with both. A text or callout has
+Invert (<kbd>I</kbd>): a click picks Blur, the button shows Invert while
+Invert is the tool, and holding it down opens a menu with both. A text or callout has
 one style: its mini-toolbar (and the text tool's, over the text being
 typed) has a font list (the OS UI font, a serif, a monospace), bold,
 italic, underline and strikethrough, and for a text left / center / right

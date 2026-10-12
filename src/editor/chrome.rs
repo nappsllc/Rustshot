@@ -1532,6 +1532,7 @@ mod tests {
             fills: true,
             pick: None,
             save_menu: None,
+            slot_menu: None,
         });
         let mut d = buf(800, 200, 0);
         let st = BarState {

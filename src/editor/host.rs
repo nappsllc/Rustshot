@@ -350,9 +350,10 @@ impl Canvas {
         }
         // An open popover or picker closes on a press outside it.
         if !self.on_canvas(p) {
-            if self.e.palette_open || self.e.save_menu || self.e.pick.is_some() {
+            if self.e.palette_open || self.e.save_menu || self.e.slot_menu || self.e.pick.is_some() {
                 self.e.palette_open = false;
                 self.e.save_menu = false;
+                self.e.slot_menu = false;
                 self.e.close_picker(true);
                 return true;
             }
@@ -363,6 +364,7 @@ impl Canvas {
             return true;
         }
         self.e.save_menu = false;
+        self.e.slot_menu = false;
         self.e.canvas_press(self.view.to_img(p));
         self.after_input();
         true
@@ -577,11 +579,13 @@ impl Canvas {
     /// Lay out the docked toolbar (and its popovers) for this frame.
     fn layout_bar(&mut self, now: Instant) {
         let e = &mut self.e;
+        e.slot_long_press(now);
         let colors = palette_colors(&e.cfg);
         let cur = e.cur_tool();
         let recents = e.recents();
         let pv = e.pick.as_ref().map(|p| toolbar::PickView { ring: false, alpha: p.has_alpha(), recents: &recents });
         let save_keys = [Act::SaveAs, Act::SaveDesktop, Act::OpenWith].map(|a| chrome::act_tip(a, &e.keys).1.join("+"));
+        let slot_keys = toolbar::SLOT_MENU.map(|(a, _)| chrome::act_tip(a, &e.keys).1.join("+"));
         let inp = toolbar::Input {
             sel: e.sel.unwrap_or(FRect { x: 0.0, y: 0.0, w: 1.0, h: 1.0 }),
             area: self.win,
@@ -599,10 +603,11 @@ impl Canvas {
             fills: tools::has_fill(cur),
             pick: pv.as_ref(),
             save_menu: e.save_menu.then_some(&save_keys),
+            slot_menu: e.slot_menu.then_some(&slot_keys),
         };
         e.toolbar = Some(toolbar::layout_docked(&inp, self.bar));
         e.mo.bar.snap(1.0);
-        if e.palette_open || e.pick.is_some() || e.save_menu {
+        if e.palette_open || e.pick.is_some() || e.save_menu || e.slot_menu {
             e.mo.pop.set(1.0, 100, now);
         } else {
             e.mo.pop.snap(0.0);
@@ -630,6 +635,7 @@ impl Canvas {
             fills: true,
             pick: None,
             save_menu: None,
+            slot_menu: None,
         };
         toolbar::docked_width(&inp)
     }
@@ -975,7 +981,7 @@ impl Canvas {
             && let Some(it) = e.hover.and_then(|i| tb.items.get(i))
             && let toolbar::Kind::Btn(act) | toolbar::Kind::Rainbow(act) = it.kind
         {
-            let (label, keys) = chrome::act_tip(act, &e.keys);
+            let (label, keys) = chrome::act_tip(toolbar::slot_act(act, e.tool), &e.keys);
             let in_pop = tb.pop.is_some_and(|p| toolbar::hit(p, Pt::new(it.r.x + 1.0, it.r.y + 1.0)));
             let at = chrome::TipAt { anchor: it.r, area: self.win, below: !in_pop };
             chrome::tooltip(f, &ui, at, label, &keys, anim::ease_out(shown_ms / 80.0));

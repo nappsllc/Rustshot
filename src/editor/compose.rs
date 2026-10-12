@@ -570,6 +570,7 @@ impl Edit {
     /// draft; the result is `self.scene`. Also records what is drawn for
     /// `stale()` and rebuilds `composed` when objects changed.
     pub(super) fn prepare(&mut self, app_notice: Option<&Toast>, mouse: (i32, i32), now: Instant) {
+        self.slot_long_press(now);
         if self.dirty || self.spots_stale() {
             let _p = crate::perf::span(crate::perf::K::Bake);
             self.rebuild();
@@ -617,6 +618,7 @@ impl Edit {
         });
         let busy = !self.tasks.is_empty();
         let save_keys = [Act::SaveAs, Act::SaveDesktop, Act::OpenWith].map(|a| chrome::act_tip(a, &self.keys).1.join("+"));
+        let slot_keys = toolbar::SLOT_MENU.map(|(a, _)| chrome::act_tip(a, &self.keys).1.join("+"));
         self.toolbar = self.sel.map(|sel| {
             toolbar::layout(&toolbar::Input {
                 sel,
@@ -636,6 +638,7 @@ impl Edit {
                 fills: tools::has_fill(cur),
                 pick: pv.as_ref(),
                 save_menu: self.save_menu.then_some(&save_keys),
+                slot_menu: self.slot_menu.then_some(&slot_keys),
             })
         });
 
@@ -645,7 +648,7 @@ impl Edit {
         } else {
             self.mo.bar.snap(0.0);
         }
-        if self.palette_open || self.pick.is_some() || self.save_menu {
+        if self.palette_open || self.pick.is_some() || self.save_menu || self.slot_menu {
             self.mo.pop.set(1.0, 100, now);
         } else {
             self.mo.pop.snap(0.0);
@@ -720,7 +723,7 @@ impl Edit {
                 let pop_below = tb.pop.is_some_and(|p| toolbar::hit(p, c) && p.y >= tb.bar.y1() - 0.5);
                 match it.kind {
                     toolbar::Kind::Btn(act) | toolbar::Kind::Rainbow(act) | toolbar::Kind::Swatch { act: act @ toolbar::Act::RingPalette, .. } => {
-                        let (label, keys) = chrome::act_tip(act, &self.keys);
+                        let (label, keys) = chrome::act_tip(toolbar::slot_act(act, self.tool), &self.keys);
                         tip = Some(TipUi { anchor: it.r, act, label, keys, area, below: pop_below, k });
                     }
                     // Why the Camera row does nothing: below its switch,
