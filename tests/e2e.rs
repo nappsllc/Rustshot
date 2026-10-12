@@ -562,7 +562,7 @@ fn settings_window_saves_and_the_daemon_reloads() {
         let w = wait_pid_window(pid, 5000).expect("settings window in the daemon");
         std::thread::sleep(Duration::from_millis(500));
         // The rail, then General's Save to field: End, clear, type.
-        keys(w, &vec![TAB; 1 + FOLDER_TABS]);
+        keys(w, &[TAB; 1 + FOLDER_TABS]);
         keys(w, &[0x23]);
         keys(w, &[0x08; 120]); // clear the folder
         for ch in shots.display().to_string().chars() {
@@ -592,9 +592,9 @@ fn settings_window_saves_and_the_daemon_reloads() {
         std::thread::sleep(Duration::from_millis(500));
         // The rail → Key bindings; Accept's cap: record K; then OK.
         keys(w, &[TAB, 0x28, 0x28, 0x28]);
-        keys(w, &vec![TAB; ACCEPT_TABS]);
+        keys(w, &[TAB; ACCEPT_TABS]);
         keys(w, &[RET, 'K' as u32]);
-        keys(w, &vec![TAB; ACCEPT_TO_OK]);
+        keys(w, &[TAB; ACCEPT_TO_OK]);
         keys(w, &[RET]);
         assert!(wait_gone(pid, 5000), "OK closes the window");
         let text = std::fs::read_to_string(&cfg).unwrap();
