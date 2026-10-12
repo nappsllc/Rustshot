@@ -14,8 +14,12 @@ use windows::Win32::Graphics::Gdi::{
     HGDIOBJ, OUT_TT_PRECIS, TEXTMETRICW, TRANSPARENT,
 };
 
+/// The annotation face: Segoe UI at a GDI weight (400 regular, 600
+/// semibold).
 #[derive(Clone)]
-pub struct Face;
+pub struct Face {
+    weight: i32,
+}
 
 /// A memory DC with the face selected at a pixel size; freed on drop.
 struct FontDc {
@@ -25,7 +29,7 @@ struct FontDc {
 }
 
 impl FontDc {
-    fn new(px: f32) -> Option<Self> {
+    fn new(px: f32, weight: i32) -> Option<Self> {
         unsafe {
             let dc = CreateCompatibleDC(None);
             if dc.is_invalid() {
@@ -38,7 +42,7 @@ impl FontDc {
                 0,
                 0,
                 0,
-                FW_NORMAL.0 as i32,
+                weight,
                 0,
                 0,
                 0,
@@ -66,6 +70,32 @@ impl FontDc {
     }
 }
 
+/// Run `f` with a DC holding the face at `px` / `weight`: the last few are
+/// kept (creating a font and a DC per measure cost tens of microseconds,
+/// and a wrap measures many times). A nested call gets a fresh one.
+fn with_dc<R>(px: f32, weight: i32, f: impl FnOnce(&FontDc) -> R) -> Option<R> {
+    thread_local! {
+        static DCS: std::cell::RefCell<Vec<((i32, i32), FontDc)>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    let key = (px.round().max(1.0) as i32, weight);
+    DCS.with(|c| match c.try_borrow_mut() {
+        Ok(mut v) => {
+            if let Some(i) = v.iter().position(|(k, _)| *k == key) {
+                let e = v.remove(i);
+                v.push(e);
+            } else {
+                let fd = FontDc::new(px, weight)?;
+                if v.len() >= 4 {
+                    v.remove(0);
+                }
+                v.push((key, fd));
+            }
+            v.last().map(|(_, fd)| f(fd))
+        }
+        Err(_) => FontDc::new(px, weight).map(|fd| f(&fd)),
+    })
+}
+
 /// A strong right-to-left character (Hebrew, Arabic and their
 /// presentation forms, Syriac, Thaana, N'Ko...).
 fn is_rtl(c: char) -> bool {
@@ -84,16 +114,23 @@ impl Drop for FontDc {
 
 impl Face {
     pub fn load() -> Option<Self> {
-        FontDc::new(16.0).map(|_| Face)
+        FontDc::new(16.0, FW_NORMAL.0 as i32).map(|_| Face { weight: FW_NORMAL.0 as i32 })
+    }
+
+    /// The same face at semibold (FW_SEMIBOLD).
+    pub fn semibold(&self) -> Face {
+        Face { weight: 600 }
     }
 
     pub fn metrics(&self, px: f32) -> (f32, f32, f32) {
-        let Some(fd) = FontDc::new(px) else { return (px * 0.8, px * 0.2, 0.0) };
-        let mut tm = TEXTMETRICW::default();
-        if !unsafe { GetTextMetricsW(fd.dc, &mut tm) }.as_bool() {
-            return (px * 0.8, px * 0.2, 0.0);
+        let tm = with_dc(px, self.weight, |fd| {
+            let mut tm = TEXTMETRICW::default();
+            unsafe { GetTextMetricsW(fd.dc, &mut tm) }.as_bool().then_some(tm)
+        });
+        match tm.flatten() {
+            Some(tm) => (tm.tmAscent as f32, tm.tmDescent as f32, tm.tmExternalLeading as f32),
+            None => (px * 0.8, px * 0.2, 0.0),
         }
-        (tm.tmAscent as f32, tm.tmDescent as f32, tm.tmExternalLeading as f32)
     }
 
     /// The caret before byte `idx` (from the line's left) as Uniscribe
@@ -110,8 +147,7 @@ impl Face {
         let wide: Vec<u16> = line.encode_utf16().collect();
         let cp = line.get(..idx)?.encode_utf16().count();
         let n = wide.len() as i32;
-        let fd = FontDc::new(px)?;
-        unsafe {
+        with_dc(px, self.weight, |fd| unsafe {
             let mut ssa: *mut core::ffi::c_void = std::ptr::null_mut();
             ScriptStringAnalyse(
                 fd.dc,
@@ -132,14 +168,17 @@ impl Face {
             let x = if cp < wide.len() { ScriptStringCPtoX(ssa, cp as i32, false) } else { ScriptStringCPtoX(ssa, n - 1, true) };
             let _ = ScriptStringFree(&mut ssa);
             x.ok().map(|x| x as f32)
-        }
+        })
+        .flatten()
     }
 
     pub fn width(&self, line: &str, px: f32) -> f32 {
-        let Some(fd) = FontDc::new(px) else { return 0.0 };
-        let mut r = RECT::default();
-        fd.text(line, &mut r, DT_CALCRECT);
-        (r.right - r.left).max(0) as f32
+        with_dc(px, self.weight, |fd| {
+            let mut r = RECT::default();
+            fd.text(line, &mut r, DT_CALCRECT);
+            (r.right - r.left).max(0) as f32
+        })
+        .unwrap_or(0.0)
     }
 
     pub fn draw(
@@ -151,7 +190,10 @@ impl Face {
         clip: (i32, i32, i32, i32),
         f: &mut dyn FnMut(i32, i32, f32),
     ) {
-        let Some(fd) = FontDc::new(px) else { return };
+        with_dc(px, self.weight, |fd| Self::draw_with(fd, line, px, top, clip, f));
+    }
+
+    fn draw_with(fd: &FontDc, line: &str, px: f32, top: Pt, clip: (i32, i32, i32, i32), f: &mut dyn FnMut(i32, i32, f32)) {
         let mut ext = RECT::default();
         fd.text(line, &mut ext, DT_CALCRECT);
         // Overhang (italic-ish fallback glyphs, combining marks) beyond the

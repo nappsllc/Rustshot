@@ -409,7 +409,7 @@ fn save_to_desktop_writes_the_capture_there() {
     let _ = crate::notice::take_shown();
     let mut a = app();
     a.kind = RunKind::Daemon;
-    assert!(!item(&mut a, |k| *k == toolbar::Kind::Btn(Act::SaveDesktop)).disabled);
+    assert!(!item(&mut a, |k| *k == toolbar::Kind::Btn(Act::SaveMenu)).disabled);
     ed(&mut a).cfg.filename_pattern = "shot".into();
     ed(&mut a).cfg.save_subfolder = true;
     ed(&mut a).cfg.save_format = "jpg".into();
@@ -424,7 +424,11 @@ fn save_to_desktop_writes_the_capture_there() {
     ed(&mut a).sel = Some(r(10.0, 10.0, 40.0, 30.0));
     ed(&mut a).cfg.filename_pattern = "shot".into();
     ed(&mut a).cfg.save_format = "jpg".into();
-    let b = item(&mut a, |k| *k == toolbar::Kind::Btn(Act::SaveDesktop));
+    // Through the Save button's menu.
+    let b = item(&mut a, |k| *k == toolbar::Kind::Btn(Act::SaveMenu));
+    click(&mut a, mid(b.r).0, mid(b.r).1);
+    assert!(ed(&mut a).save_menu, "the menu opens");
+    let b = item(&mut a, |k| matches!(k, toolbar::Kind::MenuItem { act: Act::SaveDesktop, .. }));
     click(&mut a, mid(b.r).0, mid(b.r).1);
     assert!(d.join("shot_1.jpg").is_file());
     let shown = crate::notice::take_shown();
@@ -462,10 +466,21 @@ fn new_buttons_have_tooltips_and_shortcuts() {
         ed(&mut a).toolbar.clone().unwrap()
     };
     let at = |x: Act| tb.items.iter().position(|i| i.kind == toolbar::Kind::Btn(x)).unwrap();
-    assert_eq!(at(Act::SaveAs), at(Act::Save) + 1, "Save · Save As · Save to Desktop");
-    assert_eq!(at(Act::SaveDesktop), at(Act::SaveAs) + 1);
+    assert_eq!(at(Act::SaveMenu), at(Act::Save) + 1, "Save's split chevron");
+    assert!(tb.items.iter().all(|i| i.kind != toolbar::Kind::Btn(Act::SaveAs) && i.kind != toolbar::Kind::Btn(Act::SaveDesktop)), "in its menu");
+    // The chevron opens the menu: Save As, then Save to Desktop, with keys.
+    ed(&mut a).save_menu = true;
+    let m = a.mouse;
+    ed(&mut a).prepare(None, m, Instant::now());
+    let tb = ed(&mut a).toolbar.clone().unwrap();
+    let rows: Vec<Act> = tb.items.iter().filter_map(|i| match i.kind { toolbar::Kind::MenuItem { act, .. } => Some(act), _ => None }).collect();
+    assert_eq!(rows, [Act::SaveAs, Act::SaveDesktop]);
+    assert_eq!(tb.texts.len(), 2);
+    assert!(tb.texts[0].ends_with('S') && tb.texts[1].ends_with('D'), "{:?}", tb.texts);
+    assert!(tb.pop.is_some());
     assert_eq!(at(Act::Fill), at(Act::Size(1)) + 1, "next to the size");
-    assert_eq!(at(Act::Tool(Tool::Counter)), at(Act::Tool(Tool::Text)) + 1);
+    assert_eq!(at(Act::Tool(Tool::Callout)), at(Act::Tool(Tool::Text)) + 1);
+    assert_eq!(at(Act::Tool(Tool::Counter)), at(Act::Tool(Tool::Callout)) + 1);
 }
 
 // ---- previews ---------------------------------------------------------------
@@ -531,10 +546,11 @@ fn render_tools2_previews() {
             ed(&mut a).tool = Some(Tool::Rect);
             save(&settled_frame(&mut a), &name("toolbar-fill-off"));
             let mut a = fresh();
-            hover(&mut a, Act::SaveDesktop);
-            save(&settled_frame(&mut a), &name("toolbar-save-desktop-tip"));
+            ed(&mut a).save_menu = true;
+            hover(&mut a, Act::SaveMenu);
+            save(&settled_frame(&mut a), &name("toolbar-save-menu"));
             let mut a = fresh();
-            hover(&mut a, Act::SaveAs);
+            hover(&mut a, Act::SaveMenu);
             save(&settled_frame(&mut a), &name("toolbar-save-as-tip"));
             let mut a = fresh();
             ed(&mut a).tool = Some(Tool::Counter);

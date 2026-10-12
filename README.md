@@ -338,8 +338,14 @@ recording starts video mode, and a delay waits that long.
 | Pencil / Line / Arrow | <kbd>P</kbd> / <kbd>L</kbd> / <kbd>A</kbd> |
 | Rectangle / Ellipse / Marker | <kbd>R</kbd> / <kbd>E</kbd> / <kbd>M</kbd> |
 | Text / Number / Pixelate / Invert | <kbd>T</kbd> / <kbd>N</kbd> / <kbd>X</kbd> (or <kbd>B</kbd>) / <kbd>I</kbd> |
+| Select objects / Callout / Spotlight / Magnify | <kbd>V</kbd> / <kbd>K</kbd> / <kbd>S</kbd> / <kbd>Z</kbd> |
+| Pick an object with any tool | <kbd>Ctrl</kbd>+click (<kbd>Shift</kbd>+click adds or removes; drag on empty space with the select tool for a marquee) |
+| Delete / duplicate the selected objects | <kbd>Del</kbd> (or <kbd>Backspace</kbd>) / <kbd>Ctrl</kbd>+<kbd>D</kbd> |
+| Bring to front / send to back | <kbd>Ctrl</kbd>+<kbd>]</kbd> / <kbd>Ctrl</kbd>+<kbd>[</kbd> |
+| Nudge the selected objects | arrow keys (1 px) / <kbd>Shift</kbd>+arrows (10 px) |
+| Drag without snapping | hold <kbd>Alt</kbd> |
 | Stroke size − / + | <kbd>[</kbd> / <kbd>]</kbd>, the mouse wheel, or the − / + buttons |
-| Save to Desktop | <kbd>Ctrl</kbd>+<kbd>D</kbd> |
+| Save to Desktop | <kbd>Ctrl</kbd>+<kbd>D</kbd> (with no objects selected) |
 | Undo / Redo | <kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> (or <kbd>Ctrl</kbd>+<kbd>Y</kbd>) |
 | Copy / Save / Upload | <kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>Ctrl</kbd>+<kbd>S</kbd> / <kbd>Ctrl</kbd>+<kbd>U</kbd> |
 | Save As (always asks) | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> |
@@ -356,6 +362,24 @@ recording starts video mode, and a delay waits that long.
 | Keep aspect ratio while resizing | hold <kbd>Ctrl</kbd> |
 
 On macOS, <kbd>⌘</kbd> works wherever <kbd>Ctrl</kbd> is listed.
+
+Annotations stay editable until the capture is finished: pick one with the
+select tool and drag it (it snaps to other objects' edges and the
+selection's centre within 6 px; a 40 % ghost stays where it was), resize
+it by its square handles, re-aim a line's or arrow's ends, a callout's tail
+or the magnifier's source and loupe by their round handles. The
+mini-toolbar above the selection sets its colour, fill, size and (for a
+callout) shape, restacks, duplicates and deletes; the toolbar's colour and
+size apply to the selection too. Every edit is one undo step. A callout
+(drag or click) starts typing at once: <kbd>Enter</kbd> for a new line, the
+bubble keeps its width and grows down, <kbd>Esc</kbd> or a click outside
+finishes; click a selected callout to type in it again. Spotlights keep
+their rectangles bright and dim the rest of the selection to half (what
+is below them: annotations drawn after a spotlight stay bright); the
+magnifier shows the area under its source twice as large. Save As and
+Save to Desktop are in the menu of the Save button's chevron. Object actions
+(<kbd>Del</kbd>, <kbd>Ctrl</kbd>+<kbd>D</kbd>, …) win over the other keys
+while objects are selected.
 
 The keys above (except arrows, <kbd>Tab</kbd>, the mouse wheel and
 hold-while-drawing modifiers) can be remapped in Settings › Key bindings:

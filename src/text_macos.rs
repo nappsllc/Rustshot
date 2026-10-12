@@ -75,9 +75,9 @@ struct Line {
 }
 
 impl Line {
-    fn new(s: &str, px: f32) -> Option<Self> {
+    fn new(s: &str, px: f32, bold: bool) -> Option<Self> {
         unsafe {
-            let name = cfstr("Helvetica");
+            let name = cfstr(if bold { "HelveticaNeue-Medium" } else { "Helvetica" });
             if name.is_null() {
                 return None;
             }
@@ -136,23 +136,31 @@ impl Drop for Line {
     }
 }
 
+/// The annotation face: Helvetica, or Helvetica Neue Medium (semibold).
 #[derive(Clone)]
-pub struct Face;
+pub struct Face {
+    bold: bool,
+}
 
 impl Face {
     pub fn load() -> Option<Self> {
-        Line::new("a", 16.0).map(|_| Face)
+        Line::new("a", 16.0, false).map(|_| Face { bold: false })
+    }
+
+    /// The same face at semibold (Helvetica Neue Medium).
+    pub fn semibold(&self) -> Face {
+        Face { bold: true }
     }
 
     pub fn metrics(&self, px: f32) -> (f32, f32, f32) {
-        match Line::new(" ", px) {
+        match Line::new(" ", px, self.bold) {
             Some(l) => (l.ascent as f32, l.descent as f32, l.leading as f32),
             None => (px * 0.8, px * 0.2, 0.0),
         }
     }
 
     pub fn width(&self, line: &str, px: f32) -> f32 {
-        Line::new(line, px).map_or(0.0, |l| l.width as f32)
+        Line::new(line, px, self.bold).map_or(0.0, |l| l.width as f32)
     }
 
     pub fn draw(
@@ -164,7 +172,7 @@ impl Face {
         clip: (i32, i32, i32, i32),
         f: &mut dyn FnMut(i32, i32, f32),
     ) {
-        let Some(l) = Line::new(line, px) else { return };
+        let Some(l) = Line::new(line, px, self.bold) else { return };
         let pad = (px / 3.0).ceil() as i32 + 2;
         let (ox, oy) = (top.x.round() as i32, top.y.round() as i32);
         let x0 = (ox - pad).max(clip.0);

@@ -147,10 +147,10 @@ pub struct Config {
 
 /// The drawing tools whose size and colour are remembered
 /// (`tool_<id>_size`, `tool_<id>_color`).
-pub const TOOL_IDS: [&str; 9] = ["pencil", "line", "arrow", "rect", "ellipse", "marker", "text", "counter", "pixelate"];
+pub const TOOL_IDS: [&str; 11] = ["pencil", "line", "arrow", "rect", "ellipse", "marker", "text", "counter", "pixelate", "callout", "magnify"];
 
 /// The tools that draw filled or outlined (`tool_<id>_fill`).
-pub const FILL_IDS: [&str; 2] = ["rect", "ellipse"];
+pub const FILL_IDS: [&str; 3] = ["rect", "ellipse", "callout"];
 
 /// Every remembered tool key (`tool_<id>_size`, `_color`, `_fill`): what
 /// Settings' "Reset tool sizes & colours" removes.

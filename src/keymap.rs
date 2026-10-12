@@ -10,6 +10,8 @@ use std::collections::BTreeMap;
 /// Editor actions in table order (the first wins when two share a chord).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum Action {
+    /// The select tool: pick, move and resize objects.
+    ToolSelect,
     ToolPencil,
     ToolLine,
     ToolArrow,
@@ -17,10 +19,14 @@ pub enum Action {
     ToolCircle,
     ToolMarker,
     ToolText,
+    /// Speech bubbles.
+    ToolCallout,
     /// The numbered tags (the counter tool).
     ToolCounter,
     ToolPixelate,
     ToolInvert,
+    ToolSpotlight,
+    ToolMagnify,
     /// The current tool's stroke size one step down / up (also the wheel).
     SizeDown,
     SizeUp,
@@ -56,10 +62,18 @@ pub enum Action {
     RecPause,
     RecMute,
     RecHidePill,
+    /// With objects selected (they win over the other actions then):
+    /// remove them, duplicate them, bring them to the front / send them
+    /// to the back.
+    DeleteObject,
+    Duplicate,
+    BringFront,
+    SendBack,
 }
 
 impl Action {
-    pub const ALL: [Action; 32] = [
+    pub const ALL: [Action; 40] = [
+        Action::ToolSelect,
         Action::ToolPencil,
         Action::ToolLine,
         Action::ToolArrow,
@@ -67,9 +81,12 @@ impl Action {
         Action::ToolCircle,
         Action::ToolMarker,
         Action::ToolText,
+        Action::ToolCallout,
         Action::ToolCounter,
         Action::ToolPixelate,
         Action::ToolInvert,
+        Action::ToolSpotlight,
+        Action::ToolMagnify,
         Action::SizeDown,
         Action::SizeUp,
         Action::Copy,
@@ -92,11 +109,22 @@ impl Action {
         Action::RecPause,
         Action::RecMute,
         Action::RecHidePill,
+        Action::DeleteObject,
+        Action::Duplicate,
+        Action::BringFront,
+        Action::SendBack,
     ];
 
     /// A while-recording chord: global (Meta allowed), not an overlay key.
     pub fn while_recording(self) -> bool {
         matches!(self, Action::RecPause | Action::RecMute | Action::RecHidePill)
+    }
+
+    /// An object action: active only while objects are selected, and
+    /// then before every other action (its chords may be another's, as
+    /// Ctrl+D is Save to Desktop's).
+    pub fn on_objects(self) -> bool {
+        matches!(self, Action::DeleteObject | Action::Duplicate | Action::BringFront | Action::SendBack)
     }
 
     /// Config key in the `[shortcuts]` table.
@@ -115,6 +143,7 @@ impl Action {
 
     fn info(self) -> (&'static str, &'static str, &'static [&'static str]) {
         match self {
+            Action::ToolSelect => ("tool_select", "Select objects", &["V"]),
             Action::ToolPencil => ("tool_pencil", "Pencil", &["P"]),
             Action::ToolLine => ("tool_line", "Line", &["L"]),
             Action::ToolArrow => ("tool_arrow", "Arrow", &["A"]),
@@ -122,10 +151,13 @@ impl Action {
             Action::ToolCircle => ("tool_circle", "Ellipse", &["E"]),
             Action::ToolMarker => ("tool_marker", "Marker", &["M"]),
             Action::ToolText => ("tool_text", "Text", &["T"]),
+            Action::ToolCallout => ("tool_callout", "Callout", &["K"]),
             Action::ToolCounter => ("tool_counter", "Number", &["N"]),
             // X as on the design boards; B (blur) as before.
             Action::ToolPixelate => ("tool_pixelate", "Pixelate", &["X", "B"]),
             Action::ToolInvert => ("tool_invert", "Invert", &["I"]),
+            Action::ToolSpotlight => ("tool_spotlight", "Spotlight", &["S"]),
+            Action::ToolMagnify => ("tool_magnify", "Magnify", &["Z"]),
             Action::SizeDown => ("size_down", "Stroke size -", &["["]),
             Action::SizeUp => ("size_up", "Stroke size +", &["]"]),
             Action::Copy => ("copy", "Copy", &["Ctrl+C"]),
@@ -149,6 +181,10 @@ impl Action {
             Action::RecPause => ("rec_pause", "Pause / resume", &["Ctrl+Alt+Shift+P"]),
             Action::RecMute => ("rec_mute", "Mute microphone", &["Ctrl+Alt+Shift+M"]),
             Action::RecHidePill => ("rec_hide_pill", "Hide / show controls", &["Ctrl+Alt+Shift+H"]),
+            Action::DeleteObject => ("delete_object", "Delete selected objects", &["Del", "Backspace"]),
+            Action::Duplicate => ("duplicate", "Duplicate selected objects", &["Ctrl+D"]),
+            Action::BringFront => ("bring_front", "Bring objects to front", &["Ctrl+]"]),
+            Action::SendBack => ("send_back", "Send objects to back", &["Ctrl+["]),
         }
     }
 
@@ -268,7 +304,16 @@ impl Keymap {
     /// The overlay action bound to `vk` with exactly these modifiers
     /// (never a while-recording chord).
     pub fn resolve(&self, vk: u32, mods: Mods) -> Option<Action> {
-        Action::ALL.into_iter().filter(|a| !a.while_recording()).find(|a| self.chords(*a).iter().any(|c| c.matches(vk, mods)))
+        Action::ALL
+            .into_iter()
+            .filter(|a| !a.while_recording() && !a.on_objects())
+            .find(|a| self.chords(*a).iter().any(|c| c.matches(vk, mods)))
+    }
+
+    /// The object action bound to `vk` with these modifiers (asked first
+    /// while objects are selected).
+    pub fn resolve_objects(&self, vk: u32, mods: Mods) -> Option<Action> {
+        Action::ALL.into_iter().filter(|a| a.on_objects()).find(|a| self.chords(*a).iter().any(|c| c.matches(vk, mods)))
     }
 
     pub fn chords(&self, a: Action) -> &[Chord] {
@@ -276,18 +321,20 @@ impl Keymap {
     }
 
     /// Chords bound to more than one action (actions in table order). The
-    /// overlay keys and the while-recording chords are apart (the overlay
-    /// is never open during a recording): each group is checked within
-    /// itself.
+    /// overlay keys, the while-recording chords (the overlay is never open
+    /// during a recording) and the object actions (which win while objects
+    /// are selected) are apart: each group is checked within itself.
     pub fn conflicts(&self) -> Vec<(Chord, Vec<Action>)> {
-        let mut out = self.conflicts_in(false);
-        out.extend(self.conflicts_in(true));
+        let mut out = self.conflicts_in(0);
+        out.extend(self.conflicts_in(1));
+        out.extend(self.conflicts_in(2));
         out
     }
 
-    fn conflicts_in(&self, rec: bool) -> Vec<(Chord, Vec<Action>)> {
+    fn conflicts_in(&self, group: u8) -> Vec<(Chord, Vec<Action>)> {
         let mut by: BTreeMap<Chord, Vec<Action>> = BTreeMap::new();
-        for a in Action::ALL.into_iter().filter(|a| a.while_recording() == rec) {
+        let of = |a: &Action| if a.while_recording() { 1 } else if a.on_objects() { 2 } else { 0 };
+        for a in Action::ALL.into_iter().filter(|a| of(a) == group) {
             for c in self.chords(a) {
                 let v = by.entry(*c).or_default();
                 if !v.contains(&a) {
@@ -334,7 +381,8 @@ mod tests {
     #[test]
     fn defaults_match_spec_table() {
         let km = Keymap::defaults();
-        let want: [(Action, &[&str]); 32] = [
+        let want: [(Action, &[&str]); 40] = [
+            (Action::ToolSelect, &["V"]),
             (Action::ToolPencil, &["P"]),
             (Action::ToolLine, &["L"]),
             (Action::ToolArrow, &["A"]),
@@ -342,9 +390,12 @@ mod tests {
             (Action::ToolCircle, &["E"]),
             (Action::ToolMarker, &["M"]),
             (Action::ToolText, &["T"]),
+            (Action::ToolCallout, &["K"]),
             (Action::ToolCounter, &["N"]),
             (Action::ToolPixelate, &["X", "B"]),
             (Action::ToolInvert, &["I"]),
+            (Action::ToolSpotlight, &["S"]),
+            (Action::ToolMagnify, &["Z"]),
             (Action::SizeDown, &["["]),
             (Action::SizeUp, &["]"]),
             (Action::Copy, &["Ctrl+C"]),
@@ -367,6 +418,10 @@ mod tests {
             (Action::RecPause, &["Ctrl+Alt+Shift+P"]),
             (Action::RecMute, &["Ctrl+Alt+Shift+M"]),
             (Action::RecHidePill, &["Ctrl+Alt+Shift+H"]),
+            (Action::DeleteObject, &["Del", "Backspace"]),
+            (Action::Duplicate, &["Ctrl+D"]),
+            (Action::BringFront, &["Ctrl+]"]),
+            (Action::SendBack, &["Ctrl+["]),
         ];
         for (a, keys) in want {
             assert_eq!(shown(&km, a), keys, "{a:?}");
@@ -494,7 +549,16 @@ mod tests {
         assert_eq!(km.resolve(key::SPACE, NONE), Some(Action::TogglePalette));
         assert_eq!(km.resolve(key::RETURN, NONE), Some(Action::Accept));
         assert_eq!(km.resolve(key::ESCAPE, NONE), Some(Action::Cancel));
-        assert_eq!(km.resolve(key::DELETE, NONE), None);
+        assert_eq!(km.resolve(key::DELETE, NONE), None, "Del is an object action");
+        assert_eq!(km.resolve_objects(key::DELETE, NONE), Some(Action::DeleteObject));
+        assert_eq!(km.resolve_objects('D' as u32, m(true, false, false)), Some(Action::Duplicate), "over Save to Desktop");
+        assert_eq!(km.resolve_objects('D' as u32, NONE), None);
+        assert_eq!(km.resolve_objects(key::RBRACKET, m(true, false, false)), Some(Action::BringFront));
+        assert_eq!(km.resolve_objects(key::LBRACKET, m(true, false, false)), Some(Action::SendBack));
+        assert_eq!(km.resolve('V' as u32, NONE), Some(Action::ToolSelect));
+        assert_eq!(km.resolve('K' as u32, NONE), Some(Action::ToolCallout));
+        assert_eq!(km.resolve('S' as u32, NONE), Some(Action::ToolSpotlight));
+        assert_eq!(km.resolve('Z' as u32, NONE), Some(Action::ToolMagnify));
         let ctrl = m(true, false, false);
         assert_eq!(km.resolve(key::EQUALS, ctrl), Some(Action::UiBigger));
         assert_eq!(km.resolve(key::EQUALS, m(true, true, false)), Some(Action::UiBigger), "Ctrl+Plus");

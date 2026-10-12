@@ -1,7 +1,118 @@
+//! Annotation objects: retained data (geometry, colour, size; z-order is
+//! the list order), rendered from that data. [`json`] writes and reads
+//! them (`annotations.json`), [`edit`] hit-tests and transforms them for
+//! the select tool, [`callout`] lays out speech bubbles.
+
+pub mod callout;
+pub mod edit;
+// The History / Edit window reads and writes annotations.json next.
+#[allow(dead_code)]
+pub mod json;
+
+pub use callout::Style as CalloutStyle;
+#[allow(unused_imports)]
+pub use json::{from_json, to_json};
+
 use crate::text::AnnotFont;
 use crate::pixbuf::PixBuf;
 use crate::raster::{Blend, Mask, Surf};
 use crate::uifb::C4;
+
+/// The annotation object (the editor's name for it is `Obj`).
+#[allow(dead_code)]
+pub type Object = Obj;
+
+/// Spotlights dim everything else in the selection by this alpha of black.
+pub const SPOT_ALPHA: u8 = 128;
+
+/// One channel dimmed by a spotlight: `(v * (255 - a) + 127) / 255`, the
+/// overlay's dimmer formula toward black.
+#[inline]
+pub fn spot_dim(v: u8) -> u8 {
+    ((v as u32 * (255 - SPOT_ALPHA as u32) + 127) / 255) as u8
+}
+
+/// A spotlight's pixel rect (`x0, y0, x1, y1`, end-exclusive; edges
+/// rounded): the pixels it keeps bright.
+pub fn spot_px(r: FRect) -> (i32, i32, i32, i32) {
+    (r.x.round() as i32, r.y.round() as i32, r.x1().round() as i32, r.y1().round() as i32)
+}
+
+/// The spotlights of `objs` (their rects, in order).
+pub fn spots(objs: &[Obj]) -> impl Iterator<Item = FRect> + '_ {
+    objs.iter().filter_map(|o| match o {
+        Obj::Spotlight { r } => Some(*r),
+        _ => None,
+    })
+}
+
+/// A pixel rect `(x0, y0, x1, y1)`, end-exclusive.
+pub type Px = (i32, i32, i32, i32);
+
+/// The spotlight pass of a bake: after the objects below the topmost
+/// spotlight (`at`), every pixel inside `area` (the capture's selection)
+/// and outside all `spots` is dimmed; the objects above it stay bright.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SpotPass {
+    pub at: usize,
+    pub area: Px,
+    pub spots: Vec<Px>,
+}
+
+impl SpotPass {
+    /// The pass of `objs` over `area`; `None` without spotlights.
+    pub fn of(objs: &[Obj], area: Px) -> Option<SpotPass> {
+        let at = objs.iter().rposition(Obj::is_spot)?;
+        Some(SpotPass { at, area, spots: spots(objs).map(spot_px).collect() })
+    }
+
+    /// Dim the surface's pixels inside the area and outside every spot.
+    pub fn apply(&self, sf: &mut Surf) {
+        let (bx0, by0, bx1, by1) = sf.bounds();
+        let (x0, y0) = (self.area.0.max(bx0), self.area.1.max(by0));
+        let (x1, y1) = (self.area.2.min(bx1), self.area.3.min(by1));
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
+        let w = (bx1 - bx0) as usize;
+        let ch = sf.order().rgb_idx();
+        for y in y0..y1 {
+            let row = &mut sf.data[(y - by0) as usize * w * 4..][..w * 4];
+            // The spots crossing this row, as x spans.
+            let mut x = x0;
+            while x < x1 {
+                let lit = self.spots.iter().filter(|s| y >= s.1 && y < s.3 && x >= s.0 && x < s.2).map(|s| s.2).max();
+                if let Some(e) = lit {
+                    x = e;
+                    continue;
+                }
+                // Dim up to the next spot starting on this row.
+                let next = self.spots.iter().filter(|s| y >= s.1 && y < s.3 && s.0 > x).map(|s| s.0).min().unwrap_or(x1).min(x1);
+                for p in row[(x - bx0) as usize * 4..(next - bx0) as usize * 4].as_chunks_mut::<4>().0 {
+                    for c in ch {
+                        p[c] = spot_dim(p[c]);
+                    }
+                }
+                x = next;
+            }
+        }
+    }
+}
+
+/// Render `objs` in order into `buf`, the spotlight pass at the topmost
+/// spotlight (over the whole image): the image as exported.
+#[allow(dead_code)]
+pub fn render_all(buf: &mut PixBuf, objs: &[Obj], font: Option<&AnnotFont>) {
+    let area = (0, 0, buf.width() as i32, buf.height() as i32);
+    let pass = SpotPass::of(objs, area);
+    let mut sf = Surf::from_buf(buf);
+    for (j, o) in objs.iter().enumerate() {
+        o.render_into(&mut sf, font);
+        if pass.as_ref().is_some_and(|p| p.at == j) {
+            pass.as_ref().unwrap().apply(&mut sf);
+        }
+    }
+}
 
 /// A point in image (physical pixel) coordinates.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -183,6 +294,34 @@ pub enum Obj {
         color: C4,
         d: f32,
         tail: Option<Pt>,
+    },
+    /// A speech bubble `r` with a tail to `tail` and wrapped `text` at
+    /// `size` px ([`callout`]).
+    Callout {
+        r: FRect,
+        tail: Pt,
+        text: String,
+        color: C4,
+        size: f32,
+        style: CalloutStyle,
+        fill: bool,
+    },
+    /// Keeps `r` bright and dims everything else in the selection (all
+    /// spotlights together: their union stays bright). Draws no pixels of
+    /// its own: the dim is a pass over what is below the topmost one
+    /// ([`SpotPass`]).
+    Spotlight {
+        r: FRect,
+    },
+    /// A loupe of `radius` at `dst` showing `zoom` x the area around `src`
+    /// (radius / zoom), with a ring round both and a connector.
+    Magnify {
+        src: Pt,
+        dst: Pt,
+        radius: f32,
+        zoom: f32,
+        color: C4,
+        width: f32,
     },
 }
 
@@ -426,6 +565,16 @@ impl Obj {
                 pts.extend(tail.filter(|_| counter_tail(*c, *d, *tail).is_some()));
                 bbox(&pts, 2.0)
             }
+            Obj::Callout { r, tail, .. } => Some(callout::bounds(*r, *tail)),
+            // (Its outline while drawn reaches a pixel or two out.)
+            Obj::Spotlight { r } => Some(grown(*r, 3.0)),
+            Obj::Magnify { src, dst, radius, zoom, width, .. } => {
+                let (rs, m) = (radius / zoom.max(1.0), width.max(0.5) + 2.0);
+                let a = FRect { x: src.x - rs - m, y: src.y - rs - m, w: 2.0 * (rs + m), h: 2.0 * (rs + m) };
+                let b = FRect { x: dst.x - radius - m, y: dst.y - radius - m, w: 2.0 * (radius + m), h: 2.0 * (radius + m) };
+                let (x0, y0) = (a.x.min(b.x), a.y.min(b.y));
+                Some(FRect { x: x0, y: y0, w: a.x1().max(b.x1()) - x0, h: a.y1().max(b.y1()) - y0 })
+            }
             Obj::Text { pos, text, size, .. } => {
                 let (w, h, _) = font?.measure(text, *size);
                 // Overhang, rounding to whole pixels and AA bleed.
@@ -452,6 +601,7 @@ impl Obj {
     }
 
     /// Bake this object into the image.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn render(&self, buf: &mut PixBuf, font: Option<&AnnotFont>) {
         self.render_into(&mut Surf::from_buf(buf), font);
     }
@@ -525,8 +675,112 @@ impl Obj {
                 m.blend(sf, *color, Blend::Normal);
             }
             Obj::Counter { c, n, color, d, tail } => counter(sf, *c, *n, *color, *d, *tail),
+            Obj::Callout { r, tail, text, color, size, style, fill } => {
+                callout::render(sf, *r, *tail, text, *color, *size, *style, *fill, font);
+            }
+            // The dim is the spotlight pass over the finished image.
+            Obj::Spotlight { .. } => {}
+            Obj::Magnify { src, dst, radius, zoom, color, width } => magnify(sf, None, *src, *dst, *radius, *zoom, *color, *width),
         }
     }
+
+    /// A spotlight (draws nothing itself; see [`SpotPass`]).
+    pub fn is_spot(&self) -> bool {
+        matches!(self, Obj::Spotlight { .. })
+    }
+
+    /// Reads pixels anywhere in its bounds to draw any of them: a window
+    /// must hold its whole bounds to render it (pixelate cells are
+    /// handled by [`Obj::pixel_grid`]).
+    pub fn reads_far(&self) -> bool {
+        matches!(self, Obj::Magnify { .. })
+    }
+
+    /// The magnifier: the area it reads (the source, a pixel round) and
+    /// the loupe it draws them into.
+    pub fn loupe_parts(&self) -> Option<(FRect, FRect)> {
+        let Obj::Magnify { src, dst, radius, zoom, width, .. } = self else { return None };
+        let rs = radius / zoom.max(1.0) + 2.0;
+        let rl = radius + width.max(1.0) + 2.0;
+        Some((
+            FRect { x: src.x - rs, y: src.y - rs, w: 2.0 * rs, h: 2.0 * rs },
+            FRect { x: dst.x - rl, y: dst.y - rl, w: 2.0 * rl, h: 2.0 * rl },
+        ))
+    }
+
+    /// Render a magnifier reading its source from `source` (a surface
+    /// holding the image as drawn below it, around the source) instead
+    /// of from `sf`; anything else renders as usual.
+    pub fn render_with_source(&self, sf: &mut Surf, source: &Surf, font: Option<&AnnotFont>) {
+        match self {
+            Obj::Magnify { src, dst, radius, zoom, color, width } => magnify(sf, Some(source), *src, *dst, *radius, *zoom, *color, *width),
+            o => o.render_into(sf, font),
+        }
+    }
+}
+
+/// The loupe: the pixels around `src` (in `ext`, else already in the
+/// surface, which must hold them) scaled `zoom` x into a disc at `dst`,
+/// then one mask for the rings and the connector.
+#[allow(clippy::too_many_arguments)]
+fn magnify(sf: &mut Surf, ext: Option<&Surf>, src: Pt, dst: Pt, radius: f32, zoom: f32, color: C4, width: f32) {
+    let zoom = zoom.max(1.0);
+    let rs = radius / zoom;
+    if radius < 2.0 {
+        return;
+    }
+    if ![src.x, src.y, dst.x, dst.y, radius, zoom].iter().all(|v| v.is_finite()) || radius > 1.0e5 {
+        return;
+    }
+    // Copy the source first (the loupe may cover it): only the part the
+    // read surface holds.
+    let (bx0, by0, bx1, by1) = ext.map_or(sf.bounds(), |e| e.bounds());
+    let clip = |v: f32, lo: i32, hi: i32| (v as f64).clamp(lo as f64, hi as f64) as i32;
+    let (sx0, sy0) = (clip((src.x - rs).floor() - 1.0, bx0, bx1), clip((src.y - rs).floor() - 1.0, by0, by1));
+    let (sx1, sy1) = (clip((src.x + rs).ceil() + 1.0, bx0, bx1), clip((src.y + rs).ceil() + 1.0, by0, by1));
+    let sw = (sx1 - sx0).max(0) as usize;
+    let mut tmp = vec![None; sw * (sy1 - sy0).max(0) as usize];
+    for y in sy0..sy1 {
+        for x in sx0..sx1 {
+            tmp[(y - sy0) as usize * sw + (x - sx0) as usize] = match ext {
+                Some(e) => e.get_raw(x, y),
+                None => sf.get_raw(x, y),
+            };
+        }
+    }
+    let mut m = Mask::new(sf, (dst.x - radius).floor() as i32 - 1, (dst.y - radius).floor() as i32 - 1, (dst.x + radius).ceil() as i32 + 1, (dst.y + radius).ceil() as i32 + 1);
+    m.disc(dst, radius);
+    m.each(|x, y, cov| {
+        let qx = (src.x + (x as f32 + 0.5 - dst.x) / zoom).floor() as i32;
+        let qy = (src.y + (y as f32 + 0.5 - dst.y) / zoom).floor() as i32;
+        if qx < sx0 || qy < sy0 || qx >= sx1 || qy >= sy1 {
+            return;
+        }
+        if let Some(px) = tmp[(qy - sy0) as usize * sw + (qx - sx0) as usize] {
+            sf.mix_raw(x, y, px, cov);
+        }
+    });
+    // Rings round the loupe and the source, the connector between them.
+    let w = width.max(1.0);
+    let ws = (w / 2.0).max(1.0);
+    let pts = [
+        Pt::new(src.x - rs - w, src.y - rs - w),
+        Pt::new(src.x + rs + w, src.y + rs + w),
+        Pt::new(dst.x - radius - w, dst.y - radius - w),
+        Pt::new(dst.x + radius + w, dst.y + radius + w),
+    ];
+    let mut ring = Mask::around(sf, &pts, 2.0);
+    ring.ellipse_ring(FRect { x: dst.x - radius, y: dst.y - radius, w: 2.0 * radius, h: 2.0 * radius }, w);
+    ring.ellipse_ring(FRect { x: src.x - rs, y: src.y - rs, w: 2.0 * rs, h: 2.0 * rs }, ws);
+    let (dx, dy) = (dst.x - src.x, dst.y - src.y);
+    let d = dx.hypot(dy);
+    if d > radius + rs + 2.0 {
+        let (ux, uy) = (dx / d, dy / d);
+        let a = Pt::new(src.x + ux * rs, src.y + uy * rs);
+        let b = Pt::new(dst.x - ux * radius, dst.y - uy * radius);
+        ring.polyline(&[a, b], ws);
+    }
+    ring.blend(sf, color, Blend::Normal);
 }
 
 #[cfg(test)]

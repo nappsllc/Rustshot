@@ -89,6 +89,10 @@ impl<'a> Surf<'a> {
         self.w
     }
 
+    pub fn order(&self) -> Order {
+        self.order
+    }
+
     /// Blend one pixel: straight-alpha source over an opaque destination.
     pub fn blend_px(&mut self, x: i32, y: i32, c: C4, cov: f32, blend: Blend) {
         let (x, y) = (x - self.ox, y - self.oy);
@@ -116,6 +120,38 @@ impl<'a> Surf<'a> {
             self.data[idx + i] = v.round().clamp(0.0, 255.0) as u8;
         }
         self.data[idx + 3] = 255;
+    }
+
+    /// The raw bytes of pixel (`x`, `y`) (image coordinates) in the
+    /// surface's own order; `None` outside the window.
+    #[inline]
+    pub fn get_raw(&self, x: i32, y: i32) -> Option<[u8; 4]> {
+        let (x, y) = (x - self.ox, y - self.oy);
+        if x < 0 || y < 0 || x >= self.w as i32 || y >= self.h as i32 {
+            return None;
+        }
+        let i = (y as u32 * self.w + x as u32) as usize * 4;
+        self.data.get(i..i + 4).map(|p| [p[0], p[1], p[2], p[3]])
+    }
+
+    /// Mix raw pixel `px` (the surface's order) over pixel (`x`, `y`) by
+    /// coverage `cov` (1: replaced); the result is opaque.
+    #[inline]
+    pub fn mix_raw(&mut self, x: i32, y: i32, px: [u8; 4], cov: f32) {
+        let (x, y) = (x - self.ox, y - self.oy);
+        if x < 0 || y < 0 || x >= self.w as i32 || y >= self.h as i32 || cov <= 0.0 {
+            return;
+        }
+        let i = (y as u32 * self.w + x as u32) as usize * 4;
+        let Some(d) = self.data.get_mut(i..i + 4) else { return };
+        if cov >= 1.0 {
+            d[..3].copy_from_slice(&px[..3]);
+        } else {
+            for c in 0..3 {
+                d[c] = (px[c] as f32 * cov + d[c] as f32 * (1.0 - cov)).round().clamp(0.0, 255.0) as u8;
+            }
+        }
+        d[3] = 255;
     }
 
     /// Stroke a polyline (or a single point) with round caps/joins and AA.
@@ -357,10 +393,28 @@ impl Mask {
             (r.y1() + 1.0).ceil() as i32,
             (self.x0, self.y0, self.x1, self.y1),
         );
+        let full = |qx: f32, qy: f32| qx <= 0.0 && qy <= 0.0 && qx.max(qy) - rad <= -0.5;
+        let w = (self.x1 - self.x0) as usize;
         for y in y0..y1 {
             let qy = (y as f32 + 0.5 - cy).abs() - hy;
             for x in x0..x1 {
                 let qx = (x as f32 + 0.5 - cx).abs() - hx;
+                if full(qx, qy) {
+                    // Inside by half a pixel or more: covered (the SDF's 1),
+                    // and so is the run up to the mirror pixel.
+                    let mut e = x;
+                    while e < x1 && full((e as f32 + 0.5 - cx).abs() - hx, qy) {
+                        e += 1;
+                    }
+                    let row = (y - self.y0) as usize * w;
+                    self.a[row + (x - self.x0) as usize..row + (e - self.x0) as usize].fill(255);
+                    for xx in e..x1 {
+                        let qx = (xx as f32 + 0.5 - cx).abs() - hx;
+                        let d = qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - rad;
+                        self.put(xx, y, (0.5 - d).clamp(0.0, 1.0));
+                    }
+                    break;
+                }
                 let d = qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - rad;
                 self.put(x, y, (0.5 - d).clamp(0.0, 1.0));
             }
@@ -432,8 +486,19 @@ impl Mask {
         }
     }
 
-    /// Blend `c` through the mask, once per pixel.
-    pub fn blend(&self, sf: &mut Surf, c: C4, blend: Blend) {
+    /// Lower the coverage by `o`'s (same window): a ring is a shape
+    /// minus the same shape inset.
+    pub fn cut(&mut self, o: &Mask) {
+        if (self.x0, self.y0, self.x1, self.y1) != (o.x0, o.y0, o.x1, o.y1) {
+            return;
+        }
+        for (a, b) in self.a.iter_mut().zip(&o.a) {
+            *a = a.saturating_sub(*b);
+        }
+    }
+
+    /// Every covered pixel: `f(x, y, coverage)` in image coordinates.
+    pub fn each(&self, mut f: impl FnMut(i32, i32, f32)) {
         let w = (self.x1 - self.x0) as usize;
         if w == 0 {
             return;
@@ -441,7 +506,41 @@ impl Mask {
         for (r, row) in self.a.chunks_exact(w).enumerate() {
             for (i, &v) in row.iter().enumerate() {
                 if v > 0 {
-                    sf.blend_px(self.x0 + i as i32, self.y0 + r as i32, c, v as f32 / 255.0, blend);
+                    f(self.x0 + i as i32, self.y0 + r as i32, v as f32 / 255.0);
+                }
+            }
+        }
+    }
+
+    /// Blend `c` through the mask, once per pixel.
+    pub fn blend(&self, sf: &mut Surf, c: C4, blend: Blend) {
+        let w = (self.x1 - self.x0) as usize;
+        if w == 0 {
+            return;
+        }
+        // Fully covered by an opaque normal colour: the pixel is the colour
+        // (what `blend_px` computes then), written directly.
+        let solid = (c.a == 255 && blend == Blend::Normal).then(|| {
+            let mut px = [0u8, 0, 0, 255];
+            for (v, i) in [c.r, c.g, c.b].into_iter().zip(sf.order.rgb_idx()) {
+                px[i] = v;
+            }
+            px
+        });
+        let (ox, oy, sw) = (sf.ox, sf.oy, sf.w as usize);
+        for (r, row) in self.a.chunks_exact(w).enumerate() {
+            let y = self.y0 + r as i32;
+            for (i, &v) in row.iter().enumerate() {
+                if v == 255
+                    && let Some(px) = solid
+                {
+                    // The mask lies inside the surface window.
+                    let at = ((y - oy) as usize * sw + (self.x0 + i as i32 - ox) as usize) * 4;
+                    if let Some(d) = sf.data.get_mut(at..at + 4) {
+                        d.copy_from_slice(&px);
+                    }
+                } else if v > 0 {
+                    sf.blend_px(self.x0 + i as i32, y, c, v as f32 / 255.0, blend);
                 }
             }
         }

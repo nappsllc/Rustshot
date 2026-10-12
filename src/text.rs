@@ -45,6 +45,12 @@ impl AnnotFont {
         imp::Face::load().map(AnnotFont)
     }
 
+    /// The same font at semibold where the OS has it (GDI FW_SEMIBOLD,
+    /// Helvetica Neue Medium on macOS; Linux keeps its one face).
+    pub fn semibold(&self) -> Self {
+        AnnotFont(self.0.semibold())
+    }
+
     pub fn metrics(&self, px: f32) -> LineMetrics {
         let (ascent, descent, gap) = self.0.metrics(px);
         LineMetrics { ascent, descent, line_height: (ascent + descent + gap).max(px * 1.1) }
@@ -82,6 +88,34 @@ impl AnnotFont {
         (w, m.line_height * n as f32, m)
     }
 
+    /// `text`'s coverage drawn with its top-left at the origin (its own
+    /// box, unclipped): what [`TextCov::blend`] draws anywhere at a whole
+    /// pixel offset, so a text drawn again and again is rasterised once.
+    pub fn coverage(&self, text: &str, px: f32) -> TextCov {
+        let (w, h, m) = self.measure(text, px);
+        let pad = (px / 3.0).ceil() + 3.0;
+        let (x0, y0) = (-pad as i32, -pad as i32);
+        let (x1, y1) = ((w + pad).ceil() as i32, (h + pad).ceil() as i32);
+        let (cw, ch) = ((x1 - x0).max(0) as usize, (y1 - y0).max(0) as usize);
+        let mut a = vec![0u8; cw * ch];
+        let mut y = 0.0;
+        for line in text.split('\n') {
+            if !line.trim().is_empty() {
+                self.0.draw(line, px, Pt::new(0.0, y), m.ascent, (x0, y0, x1, y1), &mut |x, y, cov| {
+                    if x >= x0 && y >= y0 && x < x1 && y < y1 && cov > 0.0 {
+                        let i = (y - y0) as usize * cw + (x - x0) as usize;
+                        let v = (cov.min(1.0) * 255.0).round() as u8;
+                        if v > a[i] {
+                            a[i] = v;
+                        }
+                    }
+                });
+            }
+            y += m.line_height;
+        }
+        TextCov { x0, y0, w: cw, h: ch, a }
+    }
+
     /// Draw `text` with its top-left at `top`, clipped to the surface.
     pub fn render(&self, sf: &mut Surf, text: &str, px: f32, top: Pt, color: C4) {
         let (w, h, m) = self.measure(text, px);
@@ -104,6 +138,33 @@ impl AnnotFont {
                 self.0.draw(line, px, Pt::new(top.x, y), m.ascent, clip, &mut |x, y, cov| mask.put(x, y, cov));
             }
             y += m.line_height;
+        }
+        mask.blend(sf, color, Blend::Normal);
+    }
+}
+
+/// A text's coverage at the origin ([`AnnotFont::coverage`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextCov {
+    pub x0: i32,
+    pub y0: i32,
+    pub w: usize,
+    pub h: usize,
+    pub a: Vec<u8>,
+}
+
+impl TextCov {
+    /// Blend `color` through the coverage with the text's top-left at
+    /// `at`, once per pixel, clipped to the surface.
+    pub fn blend(&self, sf: &mut Surf, at: (i32, i32), color: C4) {
+        let (ox, oy) = (self.x0 + at.0, self.y0 + at.1);
+        let mut mask = Mask::new(sf, ox, oy, ox + self.w as i32, oy + self.h as i32);
+        for (r, row) in self.a.chunks_exact(self.w.max(1)).enumerate() {
+            for (i, &v) in row.iter().enumerate() {
+                if v > 0 {
+                    mask.put(ox + i as i32, oy + r as i32, v as f32 / 255.0);
+                }
+            }
         }
         mask.blend(sf, color, Blend::Normal);
     }

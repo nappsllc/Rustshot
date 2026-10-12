@@ -595,3 +595,192 @@ fn perf_gdi_sel_drag() {
         println!("  per move: {}", per.join(", "));
     }
 }
+
+/// Object edits through the GDI layer (moves, a resize, a loupe, a
+/// restack, a delete, spotlights) paint exactly the software frame,
+/// through the damage and as random tiles, and export the software crop.
+#[test]
+fn gdi_layer_matches_software_through_object_edits() {
+    use crate::objects::edit as oe;
+    let mut app = preview_app(theme::DARK, Some(BIG));
+    let mut sw = preview_app(theme::DARK, Some(BIG));
+    let mut objs = object_set(edit_of(&mut app).font.is_some());
+    objs.push(Obj::Magnify { src: Pt::new(400.0, 450.0), dst: Pt::new(800.0, 300.0), radius: 80.0, zoom: 2.0, color: C4::rgb(255, 255, 255), width: 3.0 });
+    objs.push(Obj::Spotlight { r: FRect { x: 300.0, y: 200.0, w: 500.0, h: 400.0 } });
+    for o in &objs {
+        edit_of(&mut app).commit_object(o.clone());
+        edit_of(&mut sw).commit_object(o.clone());
+    }
+    settled(&mut app);
+    settled(&mut sw);
+    attach(&mut app);
+    let (w, h) = edit_of(&mut app).shot.size;
+    let t = Target::new(w, h);
+    let _ = app.damage();
+    edit_of(&mut app).paint_gdi(t.dc, &[PxRect::image((w, h))]);
+    let whole = [0, 0, w as i32, h as i32];
+    type Step = Box<dyn Fn(&mut Vec<Obj>)>;
+    let edits: Vec<(&str, Step)> = vec![
+        ("move rect", Box::new(|o| oe::translate(&mut o[0], 40.0, 25.0))),
+        ("move past the layer", Box::new(|o| oe::translate(&mut o[1], -900.0, -500.0))),
+        ("move under the pixelate", Box::new(|o| oe::translate(&mut o[2], 30.0, -230.0))),
+        ("loupe source", Box::new(|o| {
+            let n = o.len() - 2;
+            oe::set_point(&mut o[n], oe::Point::Src, Pt::new(330.0, 120.0))
+        })),
+        ("move spotlight", Box::new(|o| {
+            let n = o.len() - 1;
+            oe::translate(&mut o[n], 120.0, 60.0)
+        })),
+        ("resize", Box::new(|o| oe::map_box(&mut o[4], FRect { x: 1100.0, y: 100.0, w: 200.0, h: 150.0 }, FRect { x: 1000.0, y: 90.0, w: 300.0, h: 260.0 }))),
+        ("to the back", Box::new(|o| {
+            let x = o.remove(3);
+            o.insert(0, x);
+        })),
+        ("delete", Box::new(|o| {
+            o.remove(1);
+        })),
+        ("no spotlight", Box::new(|o| o.retain(|o| !o.is_spot()))),
+    ];
+    for (name, f) in &edits {
+        for a in [&mut app, &mut sw] {
+            f(&mut edit_of(a).objects);
+            edit_of(a).dirty = true;
+        }
+        let want = settled(&mut sw);
+        let rects = app.damage().unwrap_or_else(|| vec![whole]);
+        let rects: Vec<PxRect> = rects.iter().map(|r| PxRect::new(r[0], r[1], r[2], r[3])).collect();
+        edit_of(&mut app).paint_gdi(t.dc, &rects);
+        check(t.pixels(), &want, &format!("{name} (damage)"), 0);
+        let t2 = Target::new(w, h);
+        edit_of(&mut app).paint_gdi(t2.dc, &tiles((w, h), name.len() as u64));
+        check(t2.pixels(), &want, &format!("{name} (tiles)"), 0);
+        let crop = edit_of(&mut sw).export(BIG);
+        assert!(edit_of(&mut app).export(BIG) == crop, "{name}: export differs");
+    }
+}
+
+/// Object drags at 3840x2160 (the 4K perf target: under 4 ms a move):
+/// per mouse move `pointer_move` + `damage()` + paint of the damaged
+/// rects, with 27 objects on screen, dragging a rectangle, a pixelate, an
+/// arrow end, a callout side handle and a spotlight.
+/// `cargo test --release perf_gdi_object_drag -- --ignored --nocapture`
+#[test]
+#[ignore = "benchmark; run in release"]
+fn perf_gdi_object_drag() {
+    let (w, h) = (3840u32, 2160u32);
+    let sel = FRect { x: 200.0, y: 150.0, w: 3400.0, h: 1850.0 };
+    let pct = |v: &mut Vec<f64>, q: f64| {
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        v[((v.len() - 1) as f64 * q) as usize]
+    };
+    let red = C4::rgb(240, 68, 56);
+    let mut objs = Vec::new();
+    for i in 0..24u32 {
+        let (x, y) = (300.0 + (i % 6) as f32 * 520.0, 300.0 + (i / 6) as f32 * 400.0);
+        objs.push(match i % 4 {
+            0 => Obj::Rect { r: FRect { x, y, w: 300.0, h: 180.0 }, color: red, width: 4.0 },
+            1 => Obj::Arrow { a: Pt::new(x, y), b: Pt::new(x + 300.0, y + 150.0), color: red, width: 6.0 },
+            2 => Obj::Pixelate { r: FRect { x, y, w: 260.0, h: 200.0 }, cell: 12.0 },
+            _ => Obj::Counter { c: Pt::new(x + 40.0, y + 40.0), n: i, color: red, d: 40.0, tail: None },
+        });
+    }
+    objs.push(Obj::Callout {
+        r: FRect { x: 1500.0, y: 1700.0, w: 420.0, h: 120.0 },
+        tail: Pt::new(1520.0, 1900.0),
+        text: "Move this to the top, above the summary, so people see it first".into(),
+        color: red,
+        size: 24.0,
+        style: crate::objects::CalloutStyle::Rounded,
+        fill: true,
+    });
+    objs.push(Obj::Magnify { src: Pt::new(900.0, 900.0), dst: Pt::new(2600.0, 1750.0), radius: 140.0, zoom: 2.0, color: C4::rgb(255, 255, 255), width: 4.0 });
+    objs.push(Obj::Spotlight { r: FRect { x: 250.0, y: 250.0, w: 1600.0, h: 900.0 } });
+    let n = objs.len();
+    for (name, idx, from) in [
+        ("move rect", 0usize, Pt::new(450.0, 300.0)),
+        ("move pixelate", 2, Pt::new(1500.0, 400.0)),
+        ("arrow end", 1, Pt::new(1120.0, 450.0)),
+        ("callout side", n - 3, Pt::new(1500.0 + 420.0 + 4.0, 1760.0)),
+        ("move spotlight", n - 1, Pt::new(1000.0, 250.0)),
+        // The capture's selection moved with a spotlight on it: the dim
+        // follows (its edges re-baked).
+        ("capture selection (spotlight)", usize::MAX, Pt::new(3500.0, 1900.0)),
+    ] {
+        let mut app = preview_app_with(theme::DARK, Some(sel), tiled_shot(w, h));
+        for o in &objs {
+            edit_of(&mut app).commit_object(o.clone());
+        }
+        if idx != usize::MAX {
+            edit_of(&mut app).tool = Some(Tool::Select);
+            edit_of(&mut app).obj.sel = vec![idx];
+        }
+        settled(&mut app);
+        attach(&mut app);
+        let t = Target::new(w, h);
+        let _ = app.damage();
+        edit_of(&mut app).paint_gdi(t.dc, &[PxRect::image((w, h))]);
+        app.mouse = (from.x as i32, from.y as i32);
+        app.pointer_down(from.x as i32, from.y as i32);
+        assert!(!matches!(edit_of(&mut app).interact, Interact::None), "{name}: the press took the object");
+        let (mut tt, mut area) = (vec![], vec![]);
+        crate::perf::force_on();
+        let _ = crate::perf::take();
+        for k in 0..200 {
+            let d = (k % 100) as f32 * 2.0;
+            let (x, y) = ((from.x + d) as i32, (from.y + d * 0.5) as i32);
+            let t0 = Instant::now();
+            app.mouse = (x, y);
+            app.pointer_move(x, y);
+            let rects = app.damage().unwrap_or_else(|| vec![[0, 0, w as i32, h as i32]]);
+            let rects: Vec<PxRect> = rects.iter().map(|r| PxRect::new(r[0], r[1], r[2], r[3])).collect();
+            edit_of(&mut app).paint_gdi(t.dc, &rects);
+            let _ = t.pixels();
+            tt.push(t0.elapsed().as_secs_f64() * 1000.0);
+            area.push(rects.iter().map(|r| r.w() as f64 * r.h() as f64).sum::<f64>());
+            if k == 50 && std::env::var_os("RUSTSHOT_BENCH_RECTS").is_some() {
+                println!("  rects at move 50: {rects:?}");
+            }
+        }
+        app.pointer_up();
+        println!(
+            "GDI BENCH 4K object drag {name}: median {:.2} p90 {:.2} max {:.2} ms | area median {:.0} px",
+            pct(&mut tt.clone(), 0.5),
+            pct(&mut tt.clone(), 0.9),
+            pct(&mut tt, 1.0),
+            pct(&mut area, 0.5)
+        );
+        let per: Vec<String> = crate::perf::NAMES
+            .iter()
+            .zip(crate::perf::take())
+            .map(|(k, (ms, c))| format!("{k} {:.3} ms ({:.1} calls)", ms / 200.0, c as f64 / 200.0))
+            .collect();
+        println!("  per move: {}", per.join(", "));
+    }
+    // The first spotlight comes and goes (undo): the selection dims at
+    // once, re-baked into the layer and painted from it.
+    let mut app = preview_app_with(theme::DARK, Some(sel), tiled_shot(w, h));
+    for o in objs.iter().filter(|o| !o.is_spot()) {
+        edit_of(&mut app).commit_object(o.clone());
+    }
+    settled(&mut app);
+    attach(&mut app);
+    let t = Target::new(w, h);
+    let _ = app.damage();
+    edit_of(&mut app).paint_gdi(t.dc, &[PxRect::image((w, h))]);
+    let mut times = Vec::new();
+    for k in 0..10 {
+        if k % 2 == 0 {
+            edit_of(&mut app).commit_object(objs[n - 1].clone());
+        } else {
+            edit_of(&mut app).undo();
+        }
+        let t0 = Instant::now();
+        let rects = app.damage().unwrap_or_else(|| vec![[0, 0, w as i32, h as i32]]);
+        let rects: Vec<PxRect> = rects.iter().map(|r| PxRect::new(r[0], r[1], r[2], r[3])).collect();
+        edit_of(&mut app).paint_gdi(t.dc, &rects);
+        let _ = t.pixels();
+        times.push(t0.elapsed().as_secs_f64() * 1000.0);
+    }
+    println!("GDI BENCH 4K first spotlight add/undo: median {:.2} max {:.2} ms", pct(&mut times.clone(), 0.5), pct(&mut times, 1.0));
+}

@@ -21,6 +21,10 @@ const N: usize = super::toolbar::TOOL_ORDER.len();
 
 /// The number tag's diameter until one is chosen.
 pub const COUNTER_SIZE: f32 = 32.0;
+/// The callout's text size until one is chosen (the Edit board's 17 px).
+pub const CALLOUT_SIZE: f32 = 17.0;
+/// The magnifier's loupe radius until one is chosen.
+pub const MAGNIFY_SIZE: f32 = 60.0;
 
 fn slot(t: Tool) -> usize {
     ALL.iter().position(|x| *x == t).expect("every tool has a slot")
@@ -38,30 +42,33 @@ pub fn id(t: Tool) -> Option<&'static str> {
         Tool::Text => "text",
         Tool::Counter => "counter",
         Tool::Pixelate => "pixelate",
-        Tool::Invert => return None,
+        Tool::Callout => "callout",
+        Tool::Magnify => "magnify",
+        Tool::Invert | Tool::Select | Tool::Spotlight => return None,
     })
 }
 
 /// The tool has a size (all but Invert).
 pub fn has_size(t: Tool) -> bool {
-    t != Tool::Invert
+    !matches!(t, Tool::Invert | Tool::Select | Tool::Spotlight)
 }
 
 /// The tool draws in a colour (not Pixelate or Invert).
 pub fn has_color(t: Tool) -> bool {
-    !matches!(t, Tool::Pixelate | Tool::Invert)
+    !matches!(t, Tool::Pixelate | Tool::Invert | Tool::Select | Tool::Spotlight)
 }
 
 /// The tool draws filled or outlined (the rectangle and the ellipse).
 pub fn has_fill(t: Tool) -> bool {
-    matches!(t, Tool::Rect | Tool::Ellipse)
+    matches!(t, Tool::Rect | Tool::Ellipse | Tool::Callout)
 }
 
 /// The size range and step of a tool.
 pub fn range(t: Tool) -> (f32, f32) {
     match t {
-        Tool::Pixelate | Tool::Invert => (4.0, 100.0),
-        Tool::Text => (8.0, 96.0),
+        Tool::Pixelate | Tool::Invert | Tool::Select | Tool::Spotlight => (4.0, 100.0),
+        Tool::Text | Tool::Callout => (8.0, 96.0),
+        Tool::Magnify => (20.0, 300.0),
         Tool::Counter => (12.0, 120.0),
         _ => (1.0, 50.0),
     }
@@ -97,9 +104,11 @@ impl ToolMem {
             let (lo, hi) = range(t);
             let default = match t {
                 Tool::Marker => cfg.draw_marker_size,
-                Tool::Pixelate | Tool::Invert => cfg.draw_pixelate_size,
+                Tool::Pixelate | Tool::Invert | Tool::Select | Tool::Spotlight => cfg.draw_pixelate_size,
                 Tool::Text => cfg.draw_font_size,
                 Tool::Counter => COUNTER_SIZE,
+                Tool::Callout => CALLOUT_SIZE,
+                Tool::Magnify => MAGNIFY_SIZE,
                 _ => cfg.draw_thickness,
             };
             let id = id(t);
@@ -108,7 +117,8 @@ impl ToolMem {
             if let Some(c) = id.filter(|_| has_color(t)).and_then(|i| cfg.tool_colors.get(i)).and_then(|s| parse(s)) {
                 m.color[slot(t)] = c;
             }
-            m.fill[slot(t)] = has_fill(t) && id.and_then(|i| cfg.tool_fills.get(i)).copied().unwrap_or(false);
+            // Callouts start filled (the boards' red bubble).
+            m.fill[slot(t)] = has_fill(t) && id.and_then(|i| cfg.tool_fills.get(i)).copied().unwrap_or(t == Tool::Callout);
         }
         m
     }
