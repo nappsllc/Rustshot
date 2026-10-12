@@ -10,6 +10,9 @@ pub enum Task {
     /// Save to a specific file or directory. `None` = `auto_save_path`;
     /// with `ask`, a Save As dialog seeded with that folder and name.
     Save { path: Option<PathBuf>, ask: bool },
+    /// Save to the Desktop folder ([`crate::desktop`]): the filename
+    /// pattern and format, no daily folder, no dialog.
+    SaveDesktop,
     Copy,
     /// Print `WxH+X+Y` of the selection to stdout.
     Geometry,
@@ -382,6 +385,8 @@ pub fn png_bytes(img: &PixBuf) -> Result<Vec<u8>> {
 pub enum Done {
     Copied,
     Saved(PathBuf),
+    /// Saved by Save to Desktop.
+    SavedDesktop(PathBuf),
     /// (task, reason): "Copy", "Save" or "Upload".
     Failed(&'static str, String),
 }
@@ -465,6 +470,27 @@ pub fn run_export(
                     error = true;
                 }
             },
+            Task::SaveDesktop => match desktop_path(cfg, crate::desktop::dir()) {
+                Some(p) => {
+                    let target = unique_path(&p);
+                    match save_image(img, &target, cfg.jpeg_quality) {
+                        Ok(()) => {
+                            messages.push(format!("saved: {}", target.display()));
+                            done.push(Done::SavedDesktop(target));
+                        }
+                        Err(e) => {
+                            messages.push(format!("error: save: {e:#}"));
+                            done.push(Done::Failed("Save", format!("{e:#}")));
+                            error = true;
+                        }
+                    }
+                }
+                None => {
+                    messages.push("error: save: no Desktop folder".to_string());
+                    done.push(Done::Failed("Save", "no Desktop folder".into()));
+                    error = true;
+                }
+            },
             Task::Upload => {
                 let bytes = match png_bytes(img) {
                     Ok(b) => b,
@@ -485,6 +511,13 @@ pub fn run_export(
         done,
         upload,
     }
+}
+
+/// Where Save to Desktop writes in `desktop`: the filename pattern with
+/// the configured format (collisions get a suffix when saving).
+pub fn desktop_path(cfg: &Config, desktop: Option<PathBuf>) -> Option<PathBuf> {
+    let ext = Format::from_config(cfg).ext();
+    Some(desktop?.join(format!("{}.{ext}", format_filename(&cfg.filename_pattern))))
 }
 
 /// Figure out where `Save` should write, possibly asking the user.

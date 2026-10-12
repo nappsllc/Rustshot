@@ -17,11 +17,15 @@ pub enum Action {
     ToolCircle,
     ToolMarker,
     ToolText,
+    /// The numbered tags (the counter tool).
+    ToolCounter,
     ToolPixelate,
     ToolInvert,
     Copy,
     Save,
     SaveAs,
+    /// Save straight to the Desktop folder (no dialog, no daily folder).
+    SaveDesktop,
     Upload,
     Undo,
     Redo,
@@ -42,7 +46,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Action; 23] = [
+    pub const ALL: [Action; 25] = [
         Action::ToolPencil,
         Action::ToolLine,
         Action::ToolArrow,
@@ -50,11 +54,13 @@ impl Action {
         Action::ToolCircle,
         Action::ToolMarker,
         Action::ToolText,
+        Action::ToolCounter,
         Action::ToolPixelate,
         Action::ToolInvert,
         Action::Copy,
         Action::Save,
         Action::SaveAs,
+        Action::SaveDesktop,
         Action::Upload,
         Action::Undo,
         Action::Redo,
@@ -91,11 +97,13 @@ impl Action {
             Action::ToolCircle => ("tool_circle", "Circle", &["C"]),
             Action::ToolMarker => ("tool_marker", "Marker", &["M"]),
             Action::ToolText => ("tool_text", "Text", &["T"]),
+            Action::ToolCounter => ("tool_counter", "Number", &["N"]),
             Action::ToolPixelate => ("tool_pixelate", "Pixelate", &["B"]),
             Action::ToolInvert => ("tool_invert", "Invert", &["I"]),
             Action::Copy => ("copy", "Copy", &["Ctrl+C"]),
             Action::Save => ("save", "Save", &["Ctrl+S"]),
             Action::SaveAs => ("save_as", "Save As", &["Ctrl+Shift+S"]),
+            Action::SaveDesktop => ("save_desktop", "Save to Desktop", &["Ctrl+D"]),
             Action::Upload => ("upload", "Upload", &["Ctrl+U"]),
             Action::Undo => ("undo", "Undo", &["Ctrl+Z"]),
             Action::Redo => ("redo", "Redo", &["Ctrl+Shift+Z", "Ctrl+Y"]),
@@ -283,7 +291,7 @@ mod tests {
     #[test]
     fn defaults_match_spec_table() {
         let km = Keymap::defaults();
-        let want: [(Action, &[&str]); 23] = [
+        let want: [(Action, &[&str]); 25] = [
             (Action::ToolPencil, &["P"]),
             (Action::ToolLine, &["D"]),
             (Action::ToolArrow, &["A"]),
@@ -291,11 +299,13 @@ mod tests {
             (Action::ToolCircle, &["C"]),
             (Action::ToolMarker, &["M"]),
             (Action::ToolText, &["T"]),
+            (Action::ToolCounter, &["N"]),
             (Action::ToolPixelate, &["B"]),
             (Action::ToolInvert, &["I"]),
             (Action::Copy, &["Ctrl+C"]),
             (Action::Save, &["Ctrl+S"]),
             (Action::SaveAs, &["Ctrl+Shift+S"]),
+            (Action::SaveDesktop, &["Ctrl+D"]),
             (Action::Upload, &["Ctrl+U"]),
             (Action::Undo, &["Ctrl+Z"]),
             (Action::Redo, &["Ctrl+Shift+Z", "Ctrl+Y"]),
@@ -384,9 +394,9 @@ mod tests {
 
     #[test]
     fn unknown_action_and_bad_chord_warn() {
-        let (km, w) = Keymap::from_config(&cfg(&[("tool_counter", "N"), ("copy", "Ctrl+Nope")]));
+        let (km, w) = Keymap::from_config(&cfg(&[("tool_stamp", "N"), ("copy", "Ctrl+Nope")]));
         assert_eq!(w.len(), 2, "{w:?}");
-        assert!(w.iter().any(|s| s.contains("tool_counter")));
+        assert!(w.iter().any(|s| s.contains("tool_stamp")));
         assert_eq!(shown(&km, Action::Copy), ["Ctrl+C"], "bad value keeps the default");
     }
 
@@ -413,6 +423,9 @@ mod tests {
         assert_eq!(km.resolve('S' as u32, m(true, false, false)), Some(Action::Save));
         assert_eq!(km.resolve('S' as u32, m(true, true, false)), Some(Action::SaveAs));
         assert_eq!(km.resolve('S' as u32, m(true, true, true)), None);
+        assert_eq!(km.resolve('D' as u32, m(true, false, false)), Some(Action::SaveDesktop));
+        assert_eq!(km.resolve('D' as u32, NONE), Some(Action::ToolLine));
+        assert_eq!(km.resolve('N' as u32, NONE), Some(Action::ToolCounter));
         assert_eq!(km.resolve('Z' as u32, m(true, false, false)), Some(Action::Undo));
         assert_eq!(km.resolve('Z' as u32, m(true, true, false)), Some(Action::Redo));
         assert_eq!(km.resolve('A' as u32, m(true, false, false)), Some(Action::SelectAll));

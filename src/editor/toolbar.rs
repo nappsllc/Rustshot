@@ -19,8 +19,8 @@ const GROUP_GAP: f32 = 6.0;
 const SEP_LEN: f32 = 16.0;
 /// The size readout: the number, then a preview drawn at the size.
 const VALUE_W: f32 = 76.0;
-/// The busy-mode OK button spans the three output buttons it replaces.
-const ACCEPT_W: f32 = 3.0 * BTN + 2.0 * IN_GAP;
+/// The busy-mode OK button spans the four output buttons it replaces.
+const ACCEPT_W: f32 = 4.0 * BTN + 3.0 * IN_GAP;
 const ROW_GAP: f32 = 4.0;
 const SEL_GAP: f32 = 8.0;
 const NARROW: f32 = 260.0;
@@ -33,7 +33,7 @@ const LABEL_H: f32 = 22.0;
 const LABEL_GAP: f32 = 8.0;
 const LABEL_MIN_ROOM: f32 = 30.0;
 
-pub const TOOL_ORDER: [Tool; 9] = [
+pub const TOOL_ORDER: [Tool; 10] = [
     Tool::Path,
     Tool::Line,
     Tool::Arrow,
@@ -41,6 +41,7 @@ pub const TOOL_ORDER: [Tool; 9] = [
     Tool::Ellipse,
     Tool::Marker,
     Tool::Text,
+    Tool::Counter,
     Tool::Pixelate,
     Tool::Invert,
 ];
@@ -53,10 +54,14 @@ pub enum Act {
     Size(i32),
     Color(C4),
     Palette,
+    /// The rectangle / ellipse: filled or outlined.
+    Fill,
     Copy,
     Save,
     /// Keyboard only (not on the toolbar): Save As dialog.
     SaveAs,
+    /// Straight to the Desktop folder.
+    SaveDesktop,
     Upload,
     Exit,
     Accept,
@@ -184,6 +189,8 @@ pub struct Input<'a> {
     /// colour (else the palette button is).
     pub sizes: bool,
     pub colors: bool,
+    /// The current tool can be filled (else the fill toggle is disabled).
+    pub fills: bool,
     /// The colour picker while it is open (over the others).
     pub pick: Option<&'a PickView<'a>>,
 }
@@ -259,6 +266,7 @@ fn groups(inp: &Input) -> [Group; 4] {
         (Kind::Btn(Act::Size(-1)), !inp.sizes, BTN),
         (Kind::Value, !inp.sizes, VALUE_W),
         (Kind::Btn(Act::Size(1)), !inp.sizes, BTN),
+        (Kind::Btn(Act::Fill), !inp.fills, BTN),
         (Kind::Btn(Act::Palette), !inp.colors, BTN),
     ];
     let mut out: Group = if inp.busy {
@@ -271,6 +279,7 @@ fn groups(inp: &Input) -> [Group; 4] {
         v.extend([
             (Kind::Btn(Act::Copy), false, BTN),
             (Kind::Btn(Act::Save), false, BTN),
+            (Kind::Btn(Act::SaveDesktop), false, BTN),
             (Kind::Btn(Act::Upload), false, BTN),
         ]);
         v
@@ -775,6 +784,7 @@ mod tests {
             rec: None,
             sizes: true,
             colors: true,
+            fills: true,
             pick: None,
         }
     }
@@ -792,7 +802,7 @@ mod tests {
     fn single_row_metrics() {
         let tb = layout(&inp(r(100.0, 100.0, 800.0, 300.0)));
         assert!(!tb.wrapped);
-        assert_eq!((tb.bar.w, tb.bar.h), (733.0, 44.0));
+        assert_eq!((tb.bar.w, tb.bar.h), (835.0, 44.0));
     }
 
     /// Invert has no size, Pixelate and Invert no colour: those controls
@@ -809,7 +819,7 @@ mod tests {
             assert!(tb.contains(Pt::new(b.x + 5.0, b.y + 5.0)));
         }
         assert!(tb.items.iter().any(|it| it.kind == Kind::Value && it.disabled));
-        assert_eq!(tb.bar.w, 733.0, "same width");
+        assert_eq!(tb.bar.w, 835.0, "same width");
     }
 
     #[test]
@@ -817,7 +827,7 @@ mod tests {
         let mut i = inp(r(100.0, 100.0, 800.0, 300.0));
         i.busy = true;
         let tb = layout(&i);
-        assert_eq!(tb.bar.w, 733.0);
+        assert_eq!(tb.bar.w, 835.0);
         assert!(tb.items.iter().any(|it| it.kind == Kind::Btn(Act::Accept)));
         assert!(!tb.items.iter().any(|it| it.kind == Kind::Btn(Act::Copy)));
     }
@@ -826,7 +836,7 @@ mod tests {
     fn wraps_on_narrow_selection() {
         let tb = layout(&inp(r(100.0, 100.0, 440.0, 170.0)));
         assert!(tb.wrapped);
-        assert_eq!((tb.bar.w, tb.bar.h), (395.0, 85.0));
+        assert_eq!((tb.bar.w, tb.bar.h), (429.0, 85.0));
         assert!(tb.items.iter().any(|i| i.kind == Kind::SepH));
         assert!(btn(&tb, Act::Exit).y > btn(&tb, Act::Undo).y, "actions on row 2");
         assert!((btn(&tb, Act::Exit).x1() - (tb.bar.x1() - PAD)).abs() < 1e-3, "row 2 right-aligned");
@@ -908,11 +918,11 @@ mod tests {
 
     #[test]
     fn scales_with_dpi() {
-        let mut i = inp(r(100.0, 100.0, 1600.0, 300.0));
+        let mut i = inp(r(100.0, 100.0, 1700.0, 300.0));
         i.s = 2.0;
         let tb = layout(&i);
         assert!(!tb.wrapped);
-        assert_eq!(tb.bar.w, 1466.0);
+        assert_eq!(tb.bar.w, 1670.0);
         assert_eq!(btn(&tb, Act::Undo).w, 64.0);
     }
 
@@ -951,7 +961,16 @@ mod tests {
         let mut i = inp(r(1700.0, 100.0, 200.0, 300.0));
         i.palette = Some(&colors);
         let tb = layout(&i);
-        assert_eq!(tb.pop.unwrap().x1(), 1908.0);
+        let pop = tb.pop.unwrap();
+        assert!(pop.x1() <= 1908.0 && cx(pop) == cx(btn(&tb, Act::Palette)), "{pop:?}");
+        // Over a palette button near the edge it is clamped to the margin.
+        let mut i = inp(r(1700.0, 100.0, 200.0, 300.0));
+        i.area = r(0.0, 0.0, 1650.0, 1080.0);
+        i.sel = r(1400.0, 100.0, 200.0, 300.0);
+        i.palette = Some(&colors);
+        let tb = layout(&i);
+        let pop = tb.pop.unwrap();
+        assert!(pop.x1() <= 1638.0 + 0.01 && pop.x >= 12.0, "{pop:?}");
     }
 
     #[test]
@@ -1068,10 +1087,10 @@ mod tests {
 
     #[test]
     fn record_button_joins_the_outputs() {
-        let mut i = inp(r(100.0, 100.0, 800.0, 300.0));
+        let mut i = inp(r(100.0, 100.0, 900.0, 300.0));
         i.record = true;
         let tb = layout(&i);
-        assert_eq!(tb.bar.w, 733.0 + BTN + IN_GAP);
+        assert_eq!(tb.bar.w, 835.0 + BTN + IN_GAP);
         let rec = btn(&tb, Act::Record);
         assert_eq!(rec.x1() + IN_GAP, btn(&tb, Act::Copy).x, "first of the output group");
         assert_eq!(tb.act_at(centre(rec)), Some(Act::Record));

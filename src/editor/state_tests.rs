@@ -388,8 +388,9 @@ fn every_tool_drafts_then_commits_on_release() {
             (Tool::Line, Obj::Line { a, b, .. }) | (Tool::Arrow, Obj::Arrow { a, b, .. }) => {
                 *a == Pt::new(200.0, 200.0) && *b == Pt::new(300.0, 260.0)
             }
-            (Tool::Marker, Obj::Marker { a, b, color, width }) => {
-                *a == Pt::new(200.0, 200.0) && *b == Pt::new(300.0, 260.0) && color.a == 90 && *width == e.mem.size(Tool::Marker)
+            // Freehand: every point (Shift draws it straight).
+            (Tool::Marker, Obj::MarkerPath { pts, color, width }) => {
+                pts.len() == 3 && pts[0] == Pt::new(200.0, 200.0) && pts[2] == Pt::new(300.0, 260.0) && color.a == 90 && *width == e.mem.size(Tool::Marker)
             }
             (Tool::Rect, Obj::Rect { r: rr, .. })
             | (Tool::Ellipse, Obj::Ellipse { r: rr, .. })

@@ -114,6 +114,8 @@ fn ui_size_keys_work_in_every_mode_and_remap() {
 /// still centred on the selection and just below it.
 #[test]
 fn live_relayout_keeps_the_toolbar_placed() {
+    // Wide enough for the bar on one row at 125 %.
+    const BIG: FRect = FRect { x: 100.0, y: 140.0, w: 1240.0, h: 540.0 };
     let mut a = annotated(theme::DARK, BIG);
     let before = bar(&mut a);
     bigger(&mut a);

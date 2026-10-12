@@ -1,8 +1,9 @@
 //! Per-tool size and colour: each drawing tool keeps its own (pencil,
-//! line, arrow, rectangle, ellipse, marker, text: size and colour;
+//! line, arrow, rectangle, ellipse, marker, text, number: size and colour;
 //! pixelate: size; invert: nothing), remembered across captures in
-//! `config.toml` (`tool_<id>_size`, `tool_<id>_color`). A tool never set
-//! starts from the `draw_*` defaults.
+//! `config.toml` (`tool_<id>_size`, `tool_<id>_color`; the rectangle and
+//! ellipse also `tool_<id>_fill`). A tool never set starts from the
+//! `draw_*` defaults (the number tag: [`COUNTER_SIZE`]).
 
 use super::Tool;
 use crate::config::{self, Config};
@@ -15,7 +16,11 @@ use std::time::{Duration, Instant};
 pub const SAVE_DELAY: Duration = Duration::from_millis(300);
 
 /// Every tool, in the toolbar's order.
-pub const ALL: [Tool; 9] = super::toolbar::TOOL_ORDER;
+pub const ALL: [Tool; N] = super::toolbar::TOOL_ORDER;
+const N: usize = super::toolbar::TOOL_ORDER.len();
+
+/// The number tag's diameter until one is chosen.
+pub const COUNTER_SIZE: f32 = 32.0;
 
 fn slot(t: Tool) -> usize {
     ALL.iter().position(|x| *x == t).expect("every tool has a slot")
@@ -31,6 +36,7 @@ pub fn id(t: Tool) -> Option<&'static str> {
         Tool::Ellipse => "ellipse",
         Tool::Marker => "marker",
         Tool::Text => "text",
+        Tool::Counter => "counter",
         Tool::Pixelate => "pixelate",
         Tool::Invert => return None,
     })
@@ -46,11 +52,17 @@ pub fn has_color(t: Tool) -> bool {
     !matches!(t, Tool::Pixelate | Tool::Invert)
 }
 
+/// The tool draws filled or outlined (the rectangle and the ellipse).
+pub fn has_fill(t: Tool) -> bool {
+    matches!(t, Tool::Rect | Tool::Ellipse)
+}
+
 /// The size range and step of a tool.
 pub fn range(t: Tool) -> (f32, f32) {
     match t {
         Tool::Pixelate | Tool::Invert => (4.0, 100.0),
         Tool::Text => (8.0, 96.0),
+        Tool::Counter => (12.0, 120.0),
         _ => (1.0, 50.0),
     }
 }
@@ -71,21 +83,23 @@ pub fn parse(s: &str) -> Option<C4> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ToolMem {
-    size: [f32; 9],
-    color: [C4; 9],
+    size: [f32; N],
+    color: [C4; N],
+    fill: [bool; N],
 }
 
 impl ToolMem {
     /// The tools as `cfg` remembers them, the defaults for the rest.
     pub fn from_cfg(cfg: &Config) -> ToolMem {
         let base = parse(&cfg.draw_color).map(|c| c.with_alpha(255)).unwrap_or(C4::rgb(255, 0, 0));
-        let mut m = ToolMem { size: [0.0; 9], color: [base; 9] };
+        let mut m = ToolMem { size: [0.0; N], color: [base; N], fill: [false; N] };
         for t in ALL {
             let (lo, hi) = range(t);
             let default = match t {
                 Tool::Marker => cfg.draw_marker_size,
                 Tool::Pixelate | Tool::Invert => cfg.draw_pixelate_size,
                 Tool::Text => cfg.draw_font_size,
+                Tool::Counter => COUNTER_SIZE,
                 _ => cfg.draw_thickness,
             };
             let id = id(t);
@@ -94,8 +108,24 @@ impl ToolMem {
             if let Some(c) = id.filter(|_| has_color(t)).and_then(|i| cfg.tool_colors.get(i)).and_then(|s| parse(s)) {
                 m.color[slot(t)] = c;
             }
+            m.fill[slot(t)] = has_fill(t) && id.and_then(|i| cfg.tool_fills.get(i)).copied().unwrap_or(false);
         }
         m
+    }
+
+    /// `t` draws filled (only a shape with [`has_fill`]).
+    pub fn fill(&self, t: Tool) -> bool {
+        self.fill[slot(t)]
+    }
+
+    /// Flip `t`'s fill; false for a tool without one.
+    pub fn toggle_fill(&mut self, t: Tool) -> bool {
+        if !has_fill(t) {
+            return false;
+        }
+        let v = &mut self.fill[slot(t)];
+        *v = !*v;
+        true
     }
 
     pub fn size(&self, t: Tool) -> f32 {
@@ -220,6 +250,30 @@ mod tests {
         assert_eq!(m.step(Tool::Invert, 1), None);
         assert!(m.set_color(Tool::Rect, C4::rgb(1, 2, 3)));
         assert!(!m.set_color(Tool::Rect, C4::rgb(1, 2, 3)));
+    }
+
+    #[test]
+    fn counter_and_fill_memory() {
+        let m = ToolMem::from_cfg(&Config::default());
+        assert_eq!(m.size(Tool::Counter), COUNTER_SIZE);
+        assert_eq!(id(Tool::Counter), Some("counter"));
+        assert!(has_color(Tool::Counter) && has_size(Tool::Counter) && !has_fill(Tool::Counter));
+        assert!(!m.fill(Tool::Rect) && !m.fill(Tool::Ellipse));
+        let mut cfg = Config::default();
+        cfg.tool_sizes.insert("counter".into(), 500.0);
+        cfg.tool_colors.insert("counter".into(), "#112233".into());
+        cfg.tool_fills.insert("rect".into(), true);
+        cfg.tool_fills.insert("line".into(), true);
+        let mut m = ToolMem::from_cfg(&cfg);
+        assert_eq!(m.size(Tool::Counter), 120.0, "clamped");
+        assert_eq!(m.color(Tool::Counter), C4::rgb(0x11, 0x22, 0x33));
+        assert!(m.fill(Tool::Rect) && !m.fill(Tool::Ellipse) && !m.fill(Tool::Line));
+        assert!(m.toggle_fill(Tool::Ellipse) && m.fill(Tool::Ellipse));
+        assert!(!m.toggle_fill(Tool::Line) && !m.fill(Tool::Line));
+        for t in ALL {
+            assert!(id(t).is_none_or(|i| config::TOOL_IDS.contains(&i)), "{t:?}");
+            assert_eq!(has_fill(t), id(t).is_some_and(|i| config::FILL_IDS.contains(&i)), "{t:?}");
+        }
     }
 
     #[test]

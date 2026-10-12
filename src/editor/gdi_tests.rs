@@ -240,6 +240,16 @@ fn gdi_export_matches_crop() {
     e.objects.push(Obj::Rect { r: FRect { x: 500.0, y: 200.0, w: 300.0, h: 200.0 }, color: half, width: 9.0 });
     e.objects.push(Obj::Text { pos: Pt::new(400.0, 500.0), text: "Half WW".into(), color: half, size: 40.0 });
     cases.push(("translucent", app, BIG));
+    // Numbered tags (one cut by the selection edge, one with a tail), the
+    // freehand marker, filled shapes (one translucent).
+    let mut app = annotated(theme::DARK, BIG);
+    let e = edit_of(&mut app);
+    e.objects.push(Obj::Counter { c: Pt::new(245.0, 300.0), n: 1, color: C4::rgb(240, 68, 56), d: 40.0, tail: None });
+    e.objects.push(Obj::Counter { c: Pt::new(600.5, 400.25), n: 23, color: C4::new(250, 220, 0, 170), d: 52.0, tail: Some(Pt::new(700.0, 520.0)) });
+    e.objects.push(Obj::MarkerPath { pts: vec![Pt::new(300.0, 600.0), Pt::new(500.0, 640.0), Pt::new(800.0, 580.0)], color: C4::rgb(250, 220, 0).with_alpha(90), width: 18.0 });
+    e.objects.push(Obj::RectFill { r: FRect { x: 820.0, y: 200.0, w: 300.0, h: 120.0 }, color: half, width: 5.0 });
+    e.objects.push(Obj::EllipseFill { r: FRect { x: 1000.0, y: 500.0, w: 260.0, h: 140.0 }, color: C4::rgb(59, 130, 246), width: 3.0 });
+    cases.push(("tags fills marker", app, BIG));
     for (name, mut app, sel) in cases {
         settled(&mut app);
         let e = edit_of(&mut app);
