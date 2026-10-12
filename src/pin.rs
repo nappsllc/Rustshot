@@ -146,6 +146,7 @@ impl Frame {
     }
 
     /// The window's size for an image `w`×`h`.
+    #[cfg_attr(not(any(test, target_os = "linux")), allow(dead_code))]
     pub fn window(self, (w, h): (u32, u32)) -> (u32, u32) {
         let e = 2 * self.inset() as u32;
         (w + e, h + e)
@@ -491,11 +492,92 @@ pub(crate) fn cover(x: f32, y: f32, r: FRect, rad: f32) -> f32 {
 /// The pin's window pixels (premultiplied BGRA): `img` (already at its
 /// zoom) inside a `frame.border` accent border, the four shadow layers
 /// around it. `img` is RGBA, opaque.
+#[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
 pub fn render(img: &PixBuf, th: &Theme, s: f32) -> (u32, u32, Vec<u8>) {
+    render_zoomed(img, 100, th, s).unwrap_or_default()
+}
+
+/// [`render`] of `img` at `zoom` percent: shrunk by area average first,
+/// grown by sampling the nearest source pixel straight into the window
+/// (no zoomed copy). None when the window would be too big
+/// ([`MAX_WINDOW_PIXELS`]) or its memory cannot be had.
+pub fn render_zoomed(img: &PixBuf, zoom: u32, th: &Theme, s: f32) -> Option<(u32, u32, Vec<u8>)> {
+    let (sw, sh) = img.dimensions();
+    if sw == 0 || sh == 0 {
+        return None;
+    }
+    let (zw, zh) = scaled_size((sw, sh), zoom);
+    if (zw, zh) == (sw, sh) || zw > sw || zh > sh {
+        let src = img.as_raw();
+        let (xs, ys): (Vec<usize>, Vec<usize>) = (
+            (0..zw as u64).map(|x| (x * sw as u64 / zw as u64) as usize).collect(),
+            (0..zh as u64).map(|y| (y * sh as u64 / zh as u64) as usize).collect(),
+        );
+        render_by((zw, zh), th, s, |x, y| {
+            let i = (ys[y] * sw as usize + xs[x]) * 4;
+            [src[i], src[i + 1], src[i + 2]]
+        })
+    } else {
+        let small = resample(img, zw, zh);
+        let src = small.as_raw();
+        render_by((zw, zh), th, s, |x, y| {
+            let i = (y * zw as usize + x) * 4;
+            [src[i], src[i + 1], src[i + 2]]
+        })
+    }
+}
+
+/// The largest window a pin may have (pixels): about 32 Mpx, 128 MB of
+/// pixels; [`zoom_cap`] keeps the zoom under it.
+pub const MAX_PIXELS: u64 = 32_000_000;
+/// Hard limit for [`render_zoomed`] (the frame on top of [`MAX_PIXELS`],
+/// or a capture already bigger than it at 100 %).
+const MAX_WINDOW_PIXELS: u64 = 600_000_000;
+
+/// The highest zoom for an image `img` (px) on a desktop `screen` (the
+/// virtual screen, px): the zoomed image no bigger than the screen and
+/// [`MAX_PIXELS`], never below 100 % (the capture fit there already).
+pub fn zoom_cap((w, h): (u32, u32), (vw, vh): (u32, u32)) -> u32 {
+    let (w, h) = (w.max(1) as f64, h.max(1) as f64);
+    let k = (vw.max(1) as f64 / w).min(vh.max(1) as f64 / h).min((MAX_PIXELS as f64 / (w * h)).sqrt());
+    ((k * 100.0).floor() as u32).clamp(100, ZOOM_MAX)
+}
+
+/// The size of the virtual screen (all monitors' bounding box), px.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub fn screen_size() -> (u32, u32) {
+    let mons = crate::capture::monitors().unwrap_or_default();
+    let (mut x0, mut y0, mut x1, mut y1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+    for m in &mons {
+        x0 = x0.min(m.x);
+        y0 = y0.min(m.y);
+        x1 = x1.max(m.x + m.w as i32);
+        y1 = y1.max(m.y + m.h as i32);
+    }
+    if mons.is_empty() { (1920, 1080) } else { ((x1 - x0).max(1) as u32, (y1 - y0).max(1) as u32) }
+}
+
+/// [`zoom_step`], at most `cap`.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub fn zoom_step_capped(z: u32, notches: i32, cap: u32) -> u32 {
+    zoom_step(z, notches).min(cap.max(100))
+}
+
+/// The window pixels around an image `iw`×`ih` whose RGB at (x, y) is
+/// `px(x, y)` (see [`render`]).
+fn render_by((iw, ih): (u32, u32), th: &Theme, s: f32, px_at: impl Fn(usize, usize) -> [u8; 3]) -> Option<(u32, u32, Vec<u8>)> {
     let fr = Frame::at(s);
-    let (iw, ih) = img.dimensions();
-    let (w, h) = fr.window((iw, ih));
-    let mut out = vec![0u8; w as usize * h as usize * 4];
+    let e = 2 * fr.inset() as u64;
+    let (w64, h64) = (iw as u64 + e, ih as u64 + e);
+    let n = w64.checked_mul(h64)?;
+    if n > MAX_WINDOW_PIXELS || w64 > u32::MAX as u64 || h64 > u32::MAX as u64 {
+        return None;
+    }
+    let (w, h) = (w64 as u32, h64 as u32);
+    let len = usize::try_from(n.checked_mul(4)?).ok()?;
+    let mut out = Vec::new();
+    out.try_reserve_exact(len).ok()?;
+    out.resize(len, 0u8);
     let m = fr.margin;
     let b = fr.border;
     // The bordered rect, window px.
@@ -508,7 +590,6 @@ pub fn render(img: &PixBuf, th: &Theme, s: f32) -> (u32, u32, Vec<u8>) {
         })
         .collect();
     let acc = th.accent;
-    let src = img.as_raw();
     let (x0, y0, x1, y1) = (m, m, m + iw as i32 + 2 * b, m + ih as i32 + 2 * b);
     for y in 0..h as i32 {
         let row = &mut out[y as usize * w as usize * 4..(y as usize + 1) * w as usize * 4];
@@ -517,8 +598,8 @@ pub fn render(img: &PixBuf, th: &Theme, s: f32) -> (u32, u32, Vec<u8>) {
             if x >= x0 && x < x1 && y >= y0 && y < y1 {
                 let (ix, iy) = (x - x0 - b, y - y0 - b);
                 if ix >= 0 && iy >= 0 && (ix as u32) < iw && (iy as u32) < ih {
-                    let i = (iy as usize * iw as usize + ix as usize) * 4;
-                    px.copy_from_slice(&[src[i + 2], src[i + 1], src[i], 255]);
+                    let [r, g, bl] = px_at(ix as usize, iy as usize);
+                    px.copy_from_slice(&[bl, g, r, 255]);
                 } else {
                     px.copy_from_slice(&[acc.b, acc.g, acc.r, 255]);
                 }
@@ -533,7 +614,7 @@ pub fn render(img: &PixBuf, th: &Theme, s: f32) -> (u32, u32, Vec<u8>) {
             px.copy_from_slice(&[0, 0, 0, a]);
         }
     }
-    (w, h, out)
+    Some((w, h, out))
 }
 
 // --- the windows ---------------------------------------------------------------
@@ -664,6 +745,46 @@ pub(crate) mod tests {
             z = zoom_step(z, -1);
         }
         assert_eq!(z, ZOOM_MIN);
+    }
+
+    /// The zoom cap: the zoomed image no bigger than the virtual screen
+    /// nor 32 Mpx, never under 100 %; the wheel stops there.
+    #[test]
+    fn the_zoom_is_capped_by_screen_and_pixels() {
+        assert_eq!(zoom_cap((200, 100), (3840, 2160)), 400, "small: the full range");
+        assert_eq!(zoom_cap((1920, 1080), (3840, 2160)), 200, "twice the size fits the screen");
+        assert_eq!(zoom_cap((3840, 2160), (3840, 2160)), 100, "a full screen: 100 %");
+        assert_eq!(zoom_cap((7680, 4320), (7680, 4320)), 100, "never under 100 % (it was captured so)");
+        // 32 Mpx: a 2000x2000 image on a huge desktop stops at 282 %.
+        let c = zoom_cap((2000, 2000), (20000, 20000));
+        assert_eq!(c, 282);
+        let (w, h) = scaled_size((2000, 2000), c);
+        assert!((w as u64) * (h as u64) <= MAX_PIXELS);
+        assert_eq!(zoom_cap((0, 0), (0, 0)), 100);
+        assert_eq!(zoom_step_capped(190, 1, 200), 200);
+        assert_eq!(zoom_step_capped(200, 3, 200), 200);
+        assert_eq!(zoom_step_capped(200, -1, 200), 182);
+        assert_eq!(zoom_step_capped(100, 1, 50), 100, "the cap is at least 100 %");
+    }
+
+    /// Zoomed in, the window is sampled straight from the capture (nearest
+    /// pixel); zoomed out, averaged; a window past the hard limit is None.
+    #[test]
+    fn rendering_zoomed() {
+        let img = sample_shot(40, 30);
+        let th = &crate::theme::DARK;
+        let (w, h, px) = render_zoomed(&img, 200, th, 1.0).unwrap();
+        let fr = Frame::at(1.0);
+        assert_eq!((w, h), fr.window((80, 60)));
+        let i = fr.inset() as u32;
+        let at = |x: u32, y: u32| &px[((y * w + x) * 4) as usize..][..4];
+        let src = img.get_pixel(39, 29);
+        assert_eq!(at(i + 79, i + 59), [src[2], src[1], src[0], 255]);
+        let (w2, h2, _) = render_zoomed(&img, 50, th, 1.0).unwrap();
+        assert_eq!((w2, h2), fr.window((20, 15)));
+        assert_eq!(render_zoomed(&PixBuf::default(), 100, th, 1.0), None);
+        // Past the hard limit: refused before anything is allocated.
+        assert_eq!(render_by((30000, 30000), th, 1.0, |_, _| [0, 0, 0]), None);
     }
 
     #[test]

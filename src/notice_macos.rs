@@ -159,6 +159,7 @@ pub fn replace(note: Note) -> bool {
 
 pub fn hide() {
     UP.with(|u| *u.borrow_mut() = None);
+    super::forget_picture();
     WIN.with(|w| {
         if let Some(w) = w.borrow_mut().as_mut() {
             w.layer.hide();

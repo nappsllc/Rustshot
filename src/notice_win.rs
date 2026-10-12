@@ -18,7 +18,7 @@ use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
-use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
+use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 const CLASS: PCWSTR = w!("rustshot_notice");
@@ -93,14 +93,26 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 LRESULT(0)
             }
             WM_LBUTTONDOWN => {
+                // Captured: the release comes here wherever it happens, so
+                // a press never holds the note for good.
+                SetCapture(hwnd);
                 set_press(Some(lp_pt(lp)));
                 LRESULT(0)
             }
             WM_LBUTTONUP => {
-                // A click only after a press here (not the end of a drag).
-                if set_press(None).is_some() {
-                    click(lp_pt(lp));
+                let p = lp_pt(lp);
+                let press = set_press(None);
+                let _ = ReleaseCapture();
+                // A click only after a press on the same button here.
+                if let Some(q) = press
+                    && same_target(q, p)
+                {
+                    click(p);
                 }
+                LRESULT(0)
+            }
+            WM_CAPTURECHANGED => {
+                set_press(None);
                 LRESULT(0)
             }
             WM_LATER => {
@@ -163,6 +175,15 @@ fn click(p: Pt) {
     }
 }
 
+/// Points `a` and `b` (window px) are on the same button of the note up.
+fn same_target(a: Pt, b: Pt) -> bool {
+    WIN.with(|w| {
+        let w = w.borrow();
+        let Some(l) = w.as_ref().and_then(|w| w.up.as_ref()).and_then(|u| u.layout.as_ref()) else { return false };
+        act_at(l, a).is_some() && act_at(l, a) == act_at(l, b)
+    })
+}
+
 /// Set (or clear) the press on the note; the one before.
 fn set_press(p: Option<Pt>) -> Option<Pt> {
     WIN.with(|w| {
@@ -189,7 +210,12 @@ fn drag_out(hwnd: HWND, p: Pt) {
     set_press(None);
     let Some(file) = super::drag_file(&note) else { return };
     match drag_file_out(hwnd, &file) {
-        Ok(true) => hide(),
+        // Dropped: this card goes (not a newer note that replaced it meanwhile).
+        Ok(true) => {
+            if WIN.with(|w| w.borrow().as_ref().and_then(|w| w.up.as_ref()).is_some_and(|u| u.note == note)) {
+                hide();
+            }
+        }
         Ok(false) => {}
         Err(e) => eprintln!("rustshot: drag {}: {e}", file.display()),
     }
@@ -206,6 +232,18 @@ fn drag_file_out(hwnd: HWND, file: &std::path::Path) -> windows::core::Result<bo
     Ok(effect != DROPEFFECT_NONE)
 }
 
+/// Run `init` (OLE's initialisation) once on this thread.
+fn ole_once(init: impl FnOnce() -> windows::core::Result<()>) {
+    thread_local! {
+        static DONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    if !DONE.with(|d| d.replace(true))
+        && let Err(e) = init()
+    {
+        eprintln!("rustshot: OLE: {e}");
+    }
+}
+
 /// The shell's data object for `file` (what Explorer drags: `CF_HDROP`
 /// and its own formats).
 fn data_object(file: &std::path::Path) -> windows::core::Result<windows::Win32::System::Com::IDataObject> {
@@ -214,7 +252,7 @@ fn data_object(file: &std::path::Path) -> windows::core::Result<windows::Win32::
     let path: Vec<u16> = file.as_os_str().to_string_lossy().encode_utf16().chain(Some(0)).collect();
     unsafe {
         // Drag and drop needs OLE on this thread (S_FALSE: it was already).
-        let _ = OleInitialize(None);
+        ole_once(|| OleInitialize(None));
         let item: IShellItem = SHCreateItemFromParsingName(PCWSTR(path.as_ptr()), None)?;
         item.BindToHandler(None, &BHID_DataObject)
     }
@@ -334,6 +372,8 @@ pub fn hide() {
 
 fn take_down(win: &mut Win) {
     win.up = None;
+    // The picture of a thumbnail is not kept once it is down.
+    super::forget_picture();
     unsafe {
         let _ = KillTimer(Some(win.hwnd), TIMER);
         let _ = ShowWindow(win.hwnd, SW_HIDE);
@@ -428,6 +468,23 @@ mod tests {
         assert!(frozen.is_some(), "held while hovered");
         let _ = crate::pin::take_opened();
         let pin = l.buttons.iter().find(|b| b.0 == NoteAct::Pin).unwrap().1;
+        let save = l.buttons.iter().find(|b| b.0 == NoteAct::ThumbSave).unwrap().1;
+        let lp = |r: crate::objects::FRect| LPARAM(((r.y + r.h / 2.0) as isize) << 16 | (r.x + r.w / 2.0) as isize);
+        let pressed = || WIN.with(|w| w.borrow().as_ref().unwrap().up.as_ref().unwrap().press);
+        unsafe {
+            // A press, then the capture is lost (released elsewhere, another
+            // window took it): no longer pressed, the clock goes on.
+            SendMessageW(hwnd, WM_LBUTTONDOWN, Some(WPARAM(1)), Some(lp(pin)));
+            assert!(pressed().is_some());
+            SendMessageW(hwnd, WM_CAPTURECHANGED, None, None);
+            assert!(pressed().is_none(), "the capture went: the press too");
+            // Pressed on Pin, released on Save: neither acts.
+            SendMessageW(hwnd, WM_LBUTTONDOWN, Some(WPARAM(1)), Some(lp(pin)));
+            SendMessageW(hwnd, WM_LBUTTONUP, None, Some(lp(save)));
+            assert!(pressed().is_none());
+        }
+        assert!(crate::pin::take_opened().is_empty(), "no click across buttons");
+        assert!(WIN.with(|w| w.borrow().as_ref().unwrap().up.is_some()), "the card is still up");
         click(Pt::new(pin.x + pin.w / 2.0, pin.y + pin.h / 2.0));
         assert_eq!(crate::pin::take_opened(), [((320, 180), (12, 34))]);
         assert!(WIN.with(|w| w.borrow().as_ref().unwrap().up.is_none()), "the card went");

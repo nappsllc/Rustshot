@@ -208,6 +208,7 @@ impl State {
 
     fn take_down(&mut self) {
         self.up = None;
+        super::forget_picture();
         self.win.hide();
         x::flush(&self.d);
     }

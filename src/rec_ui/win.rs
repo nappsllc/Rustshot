@@ -259,19 +259,19 @@ impl Dib {
     /// Put `bgra` (`w`x`h`, premultiplied BGRA) on layered window `hwnd`
     /// at (x, y).
     pub(crate) fn put(&mut self, hwnd: HWND, x: i32, y: i32, w: u32, h: u32, bgra: &[u8]) {
-        self.put_alpha(hwnd, x, y, w, h, bgra, 255);
+        let _ = self.put_alpha(hwnd, x, y, w, h, bgra, 255);
     }
 
     /// [`Dib::put`] with the whole layer at constant alpha `alpha` (a
-    /// pin's opacity).
+    /// pin's opacity). False when nothing was put up (the size is out of
+    /// range, or the DIB section could not be made).
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn put_alpha(&mut self, hwnd: HWND, x: i32, y: i32, w: u32, h: u32, bgra: &[u8], alpha: u8) {
-        if w == 0 || h == 0 || bgra.len() < (w * h * 4) as usize {
-            return;
-        }
-        let Some((mem, bits)) = self.ensure(w, h) else { return };
+    pub(crate) fn put_alpha(&mut self, hwnd: HWND, x: i32, y: i32, w: u32, h: u32, bgra: &[u8], alpha: u8) -> bool {
+        let n = (w as usize).checked_mul(h as usize).and_then(|n| n.checked_mul(4));
+        let Some(n) = n.filter(|&n| n > 0 && bgra.len() >= n && w <= i32::MAX as u32 && h <= i32::MAX as u32) else { return false };
+        let Some((mem, bits)) = self.ensure(w, h) else { return false };
         unsafe {
-            std::ptr::copy_nonoverlapping(bgra.as_ptr(), bits, (w * h * 4) as usize);
+            std::ptr::copy_nonoverlapping(bgra.as_ptr(), bits, n);
             let screen = GetDC(None);
             let blend = BLENDFUNCTION {
                 BlendOp: AC_SRC_OVER as u8,
@@ -293,6 +293,7 @@ impl Dib {
             );
             ReleaseDC(None, screen);
         }
+        true
     }
 }
 

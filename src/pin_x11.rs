@@ -15,7 +15,7 @@
 //! an override-redirect window that grabs the pointer until a choice or a
 //! click elsewhere.
 
-use super::{apply, dragged, is_double, is_drag, menu, menu_at, menu_layout, render, render_menu, resample, scaled_size, zoom_about, zoom_step, Cmd as PinCmd, Frame, MenuLayout, View};
+use super::{apply, dragged, is_double, is_drag, menu, menu_at, menu_layout, render_menu, render_zoomed, scaled_size, zoom_about, zoom_step_capped, Cmd as PinCmd, Frame, MenuLayout, View};
 use crate::objects::Pt;
 use crate::pixbuf::PixBuf;
 use crate::rec_ui::x11::{self as x, Disp, Kind, Win};
@@ -28,7 +28,8 @@ use std::time::{Duration, Instant};
 /// The windows' name (what `xprop`/`xwininfo` and the Docker harness see).
 pub const TITLE: &str = "Rustshot pin";
 const TICK: Duration = Duration::from_millis(16);
-const REPLY: Duration = Duration::from_millis(1000);
+#[cfg(test)]
+const REPLY: Duration = Duration::from_millis(5000);
 
 const KEY_PRESS: c_int = 2;
 const BUTTON1_MASK: c_uint = 1 << 8;
@@ -48,6 +49,9 @@ enum Cmd {
     /// Tests: wheel `notches` (Ctrl: `ctrl`) at `at` over pin `i`.
     #[cfg(test)]
     Wheel(usize, i32, bool, (i32, i32), Sender<()>),
+    /// Tests: the window manager's close for pin `i`.
+    #[cfg(test)]
+    Delete(usize, Sender<()>),
 }
 
 static TX: OnceLock<Option<Mutex<Sender<Cmd>>>> = OnceLock::new();
@@ -63,6 +67,7 @@ fn sender() -> Option<Sender<Cmd>> {
     tx.as_ref().map(|m| m.lock().unwrap_or_else(|e| e.into_inner()).clone())
 }
 
+#[cfg(test)]
 fn ask<T>(make: impl FnOnce(Sender<T>) -> Cmd, dflt: T) -> T {
     let Some(tx) = sender() else { return dflt };
     let (rtx, rrx) = mpsc::channel();
@@ -72,13 +77,45 @@ fn ask<T>(make: impl FnOnce(Sender<T>) -> Cmd, dflt: T) -> T {
     rrx.recv_timeout(REPLY).unwrap_or(dflt)
 }
 
+/// Hand the pin to the pins thread (true once it has it: a slow render
+/// there is no "not available"; a window that cannot be made is logged).
 pub fn open(img: Arc<PixBuf>, at: (i32, i32), th: Theme) -> bool {
-    ask(|r| Cmd::Open(img, at, th, r), false)
+    let Some(tx) = sender() else { return false };
+    let (rtx, _rrx) = mpsc::channel();
+    tx.send(Cmd::Open(img, at, th, rtx)).is_ok()
 }
 
 pub fn close_all() {
-    if TX.get().is_some_and(|t| t.is_some()) {
-        ask(Cmd::CloseAll, ());
+    if TX.get().is_some_and(|t| t.is_some())
+        && let Some(tx) = sender()
+    {
+        let (rtx, _rrx) = mpsc::channel();
+        let _ = tx.send(Cmd::CloseAll(rtx));
+    }
+}
+
+/// Set by the pins Display's IO-error exit handler: the connection is
+/// gone; the thread lets its pins go and ends (the daemon lives on).
+static DEAD: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+unsafe extern "C" fn io_exit(_dpy: *mut c_void, _data: *mut c_void) {
+    eprintln!("rustshot: the pins' X connection is gone; pins closed");
+    DEAD.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Make a lost connection on `dpy` end the pins thread, not the process
+/// (`XSetIOErrorExitHandler`, libX11 1.7+; looked up, so an older libX11
+/// still runs, its IO errors fatal as before).
+fn survive_io_errors(dpy: *mut c_void) {
+    type SetExit = unsafe extern "C" fn(*mut c_void, unsafe extern "C" fn(*mut c_void, *mut c_void), *mut c_void);
+    static LIB: OnceLock<Option<crate::rec::linux::dl::Lib>> = OnceLock::new();
+    let lib = LIB.get_or_init(|| crate::rec::linux::dl::Lib::open("libX11.so.6").ok());
+    // SAFETY: the libX11 symbol's C signature.
+    let set = lib.as_ref().and_then(|l| unsafe { l.sym::<SetExit>("XSetIOErrorExitHandler") }.ok());
+    match set {
+        // SAFETY: an open Display; the handler only sets a flag.
+        Some(f) => unsafe { f(dpy, io_exit, core::ptr::null_mut()) },
+        None => eprintln!("rustshot: libX11 has no XSetIOErrorExitHandler; a lost pins connection ends the daemon"),
     }
 }
 
@@ -98,6 +135,8 @@ struct Pin {
     moved: bool,
     /// The last press (time, root px), for a double-click.
     last: Option<(Instant, (i32, i32))>,
+    /// The highest zoom ([`super::zoom_cap`]).
+    cap: u32,
 }
 
 impl Pin {
@@ -110,13 +149,14 @@ impl Pin {
         (self.origin.0 + w as i32 / 2, self.origin.1 + h as i32 / 2)
     }
 
-    fn redraw(&mut self) {
-        let (w, h) = self.zoomed();
-        let (ww, wh, px) =
-            if (w, h) == self.img.dimensions() { render(&self.img, &self.th, self.s) } else { render(&resample(&self.img, w, h), &self.th, self.s) };
+    /// Render at the zoom and show; false (the old pixels kept) when the
+    /// window cannot be had.
+    fn redraw(&mut self) -> bool {
+        let Some((ww, wh, px)) = render_zoomed(&self.img, self.view.zoom, &self.th, self.s) else { return false };
         self.px = px;
         self.size = (ww, wh);
         self.show();
+        true
     }
 
     /// The pixels at the opacity, where the origin says.
@@ -137,11 +177,17 @@ impl Pin {
     }
 
     fn set_view(&mut self, v: View, about: (i32, i32)) {
-        let z0 = self.view.zoom;
+        let v = View { zoom: v.zoom.min(self.cap), ..v };
+        let (old, o) = (self.view, self.origin);
         self.view = v;
-        if v.zoom != z0 {
-            self.origin = zoom_about(self.origin, about, z0, v.zoom);
-            self.redraw();
+        if v.zoom != old.zoom {
+            self.origin = zoom_about(self.origin, about, old.zoom, v.zoom);
+            if !self.redraw() {
+                eprintln!("rustshot: a pin at {} % does not fit in memory; kept at {} %", v.zoom, old.zoom);
+                self.view = View { zoom: old.zoom, ..v };
+                self.origin = o;
+                self.show();
+            }
         } else {
             self.show();
         }
@@ -151,7 +197,7 @@ impl Pin {
         let v = if ctrl {
             View { opacity: super::opacity_step(self.view.opacity, notches), ..self.view }
         } else {
-            View { zoom: zoom_step(self.view.zoom, notches), ..self.view }
+            View { zoom: zoom_step_capped(self.view.zoom, notches, self.cap), ..self.view }
         };
         if v != self.view {
             self.set_view(v, at);
@@ -174,6 +220,8 @@ struct State {
     menu: Option<Menu>,
     /// Keycodes of Esc, C and S.
     keys: (c_uint, c_uint, c_uint),
+    /// `WM_PROTOCOLS` and `WM_DELETE_WINDOW`: the window manager's close.
+    delete: (c_ulong, c_ulong),
 }
 
 fn run(rx: Receiver<Cmd>, ok: Sender<bool>) {
@@ -187,9 +235,21 @@ fn run(rx: Receiver<Cmd>, ok: Sender<bool>) {
     };
     // SAFETY: an open Display.
     let keys = unsafe { (XKeysymToKeycode(d.dpy, 0xFF1B) as c_uint, XKeysymToKeycode(d.dpy, 0x63) as c_uint, XKeysymToKeycode(d.dpy, 0x73) as c_uint) };
+    survive_io_errors(d.dpy);
+    // SAFETY: an open Display; the names are NUL-terminated.
+    let delete = unsafe { (XInternAtom(d.dpy, c"WM_PROTOCOLS".as_ptr(), 0), XInternAtom(d.dpy, c"WM_DELETE_WINDOW".as_ptr(), 0)) };
     let _ = ok.send(true);
-    let mut st = State { d, pins: Vec::new(), menu: None, keys };
+    let mut st = State { d, pins: Vec::new(), menu: None, keys, delete };
     loop {
+        if DEAD.load(std::sync::atomic::Ordering::SeqCst) {
+            // No more requests on a dead connection: the windows went
+            // with it.
+            std::mem::forget(std::mem::take(&mut st.pins));
+            std::mem::forget(st.menu.take());
+            super::set_count(0);
+            std::mem::forget(st);
+            return;
+        }
         let cmd = if st.pins.is_empty() {
             match rx.recv() {
                 Ok(c) => Some(c),
@@ -202,13 +262,24 @@ fn run(rx: Receiver<Cmd>, ok: Sender<bool>) {
                 Err(RecvTimeoutError::Disconnected) => return,
             }
         };
-        if let Some(c) = cmd {
-            st.handle(c);
-            while let Ok(c) = rx.try_recv() {
-                st.handle(c);
-            }
+        // X errors on this Display (a window the server refused, a pin
+        // already gone) are logged, never Xlib's default exit.
+        let dpy = st.d.dpy;
+        // SAFETY: this thread's open Display, used by it alone.
+        let ((), failed) = unsafe {
+            crate::wind::x_guarded(dpy, || {
+                if let Some(c) = cmd {
+                    st.handle(c);
+                    while let Ok(c) = rx.try_recv() {
+                        st.handle(c);
+                    }
+                }
+                st.events();
+            })
+        };
+        if failed {
+            eprintln!("rustshot: an X error on the pins' connection (ignored)");
         }
-        st.events();
     }
 }
 
@@ -240,6 +311,23 @@ impl State {
                 }
                 let _ = r.send(());
             }
+            #[cfg(test)]
+            Cmd::Delete(i, r) => {
+                if let Some(w) = self.pins.get(i).map(|p| p.win.win) {
+                    let c = XClientMessage {
+                        type_: CLIENT_MESSAGE,
+                        serial: 0,
+                        send_event: 1,
+                        display: self.d.dpy,
+                        window: w,
+                        message_type: self.delete.0,
+                        format: 32,
+                        data: [self.delete.1 as c_long, 0, 0, 0, 0],
+                    };
+                    self.client_message(&c);
+                }
+                let _ = r.send(());
+            }
         }
     }
 
@@ -252,7 +340,8 @@ impl State {
             }
         };
         let s = scale(&self.d);
-        let mut pin = Pin { win, img, th, s, view: View::default(), origin: at, px: Vec::new(), size: (0, 0), press: None, moved: false, last: None };
+        let cap = super::zoom_cap(img.dimensions(), super::screen_size());
+        let mut pin = Pin { win, img, th, s, view: View::default(), origin: at, px: Vec::new(), size: (0, 0), press: None, moved: false, last: None, cap };
         let (w, h) = Frame::at(s).window(pin.zoomed());
         let (wx, wy) = Frame::at(s).window_pos(at);
         // SAFETY: an open Display and its new window.
@@ -266,8 +355,15 @@ impl State {
             hints.flags = US_POSITION | P_POSITION;
             (hints.x, hints.y, hints.width, hints.height) = (wx, wy, w as c_int, h as c_int);
             XSetWMNormalHints(self.d.dpy, pin.win.win, &mut hints);
+            // The window manager's close (Alt+F4, its menu) asks us,
+            // instead of killing the whole connection.
+            let mut del = self.delete.1;
+            XSetWMProtocols(self.d.dpy, pin.win.win, &mut del, 1);
         }
-        pin.redraw();
+        if !pin.redraw() {
+            eprintln!("rustshot: the pin's window could not be made");
+            return false;
+        }
         self.pins.push(pin);
         self.report();
         true
@@ -283,6 +379,12 @@ impl State {
         while let Some(ev) = x::next_event(&self.d) {
             // SAFETY: every event starts with its type.
             let ty = unsafe { ev.type_ };
+            if ty == CLIENT_MESSAGE {
+                // SAFETY: a ClientMessage (the layout below).
+                let c = unsafe { *(&ev as *const x::XEvent as *const XClientMessage) };
+                self.client_message(&c);
+                continue;
+            }
             if ty == x::EV_CONFIGURE {
                 // SAFETY: a ConfigureNotify.
                 let c = unsafe { ev.configure };
@@ -319,6 +421,14 @@ impl State {
                 }
                 _ => self.motion(&e),
             }
+        }
+    }
+
+    /// A client message: the window manager's `WM_DELETE_WINDOW` closes
+    /// that pin.
+    fn client_message(&mut self, c: &XClientMessage) {
+        if c.message_type == self.delete.0 && c.data[0] as c_ulong == self.delete.1 {
+            self.close(c.window);
         }
     }
 
@@ -479,7 +589,8 @@ impl State {
             PinCmd::Copy | PinCmd::Save | PinCmd::SaveAs => {
                 let Some(p) = self.pins.iter().find(|p| p.win.win == pin) else { return };
                 let (img, at, centre, th) = (p.img.clone(), p.origin, p.centre(), p.th);
-                super::export(&img, at, centre, c, th);
+                // Off this thread: a Save As dialog never freezes the pins.
+                let _ = std::thread::Builder::new().name("pin-export".into()).spawn(move || super::export(&img, at, centre, c, th));
             }
             PinCmd::Zoom100 | PinCmd::Opacity(_) => {
                 if let Some(p) = self.pins.iter_mut().find(|p| p.win.win == pin)
@@ -514,6 +625,22 @@ const GRAB_MODE_ASYNC: c_int = 1;
 const US_POSITION: c_long = 1 << 0;
 const P_POSITION: c_long = 1 << 2;
 
+const CLIENT_MESSAGE: c_int = 33;
+
+/// `XClientMessageEvent` (format 32).
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct XClientMessage {
+    type_: c_int,
+    serial: c_ulong,
+    send_event: c_int,
+    display: *mut c_void,
+    window: c_ulong,
+    message_type: c_ulong,
+    format: c_int,
+    data: [c_long; 5],
+}
+
 #[repr(C)]
 struct XSizeHints {
     flags: c_long,
@@ -538,6 +665,8 @@ struct XSizeHints {
 #[link(name = "X11")]
 unsafe extern "C" {
     fn XSelectInput(dpy: *mut c_void, w: c_ulong, mask: c_long) -> c_int;
+    fn XInternAtom(dpy: *mut c_void, name: *const c_char, only_if_exists: c_int) -> c_ulong;
+    fn XSetWMProtocols(dpy: *mut c_void, w: c_ulong, protocols: *mut c_ulong, count: c_int) -> c_int;
     fn XSetWMNormalHints(dpy: *mut c_void, w: c_ulong, hints: *mut XSizeHints);
     fn XKeysymToKeycode(dpy: *mut c_void, keysym: c_ulong) -> u8;
     fn XResourceManagerString(dpy: *mut c_void) -> *mut c_char;
@@ -595,6 +724,13 @@ mod tests {
         assert_eq!(q[0].1, View { zoom: 121, opacity: 70 });
         assert_eq!(q[0].2, (100, 100), "zoomed about its corner");
         assert_eq!(crate::pin::COUNT.load(std::sync::atomic::Ordering::SeqCst), 2);
+        // The window manager's close (WM_DELETE_WINDOW) closes one pin.
+        ask(|r| Cmd::Delete(1, r), ());
+        assert_eq!(query().len(), 1);
+        // The zoom stops at the cap.
+        ask(|r| Cmd::Wheel(0, 40, false, (100, 100), r), ());
+        let z = query()[0].1.zoom;
+        assert!(z <= crate::pin::zoom_cap((120, 80), crate::pin::screen_size()) && z > 121, "{z}");
         close_all();
         assert!(query().is_empty());
         assert_eq!(crate::pin::COUNT.load(std::sync::atomic::Ordering::SeqCst), 0);

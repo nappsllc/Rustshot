@@ -7,7 +7,7 @@
 //! screen capture: they are the user's content, a later capture may want
 //! them.
 
-use super::{apply, dragged, menu, render, resample, scaled_size, zoom_about, zoom_step, Cmd, Entry, Frame, View};
+use super::{apply, dragged, menu, render_zoomed, scaled_size, zoom_about, zoom_step_capped, Cmd, Entry, Frame, View};
 use crate::pixbuf::PixBuf;
 use crate::rec_ui::Dib;
 use crate::theme::Theme;
@@ -40,6 +40,8 @@ struct Pin {
     drag: Option<((i32, i32), (i32, i32))>,
     /// Wheel delta short of a notch.
     wheel: i32,
+    /// The highest zoom ([`super::zoom_cap`]).
+    cap: u32,
 }
 
 impl Pin {
@@ -52,23 +54,23 @@ impl Pin {
         (self.origin.0 + w as i32 / 2, self.origin.1 + h as i32 / 2)
     }
 
-    /// Render at the current zoom and show.
-    fn redraw(&mut self) {
-        let (w, h) = self.zoomed();
-        let (ww, wh, px) = if (w, h) == self.img.dimensions() {
-            render(&self.img, &self.th, self.s)
-        } else {
-            render(&resample(&self.img, w, h), &self.th, self.s)
-        };
+    /// Render at the current zoom and show; false (nothing changed on
+    /// screen, the old pixels kept) when the window cannot be had.
+    fn redraw(&mut self) -> bool {
+        let Some((ww, wh, px)) = render_zoomed(&self.img, self.view.zoom, &self.th, self.s) else { return false };
+        let (x, y) = Frame::at(self.s).window_pos(self.origin);
+        if !self.dib.put_alpha(self.hwnd, x, y, ww, wh, &px, self.view.alpha()) {
+            return false;
+        }
         self.px = px;
         self.size = (ww, wh);
-        self.show();
+        true
     }
 
     /// Put the rendered pixels up at the origin and opacity.
     fn show(&mut self) {
         let (x, y) = Frame::at(self.s).window_pos(self.origin);
-        self.dib.put_alpha(self.hwnd, x, y, self.size.0, self.size.1, &self.px, self.view.alpha());
+        let _ = self.dib.put_alpha(self.hwnd, x, y, self.size.0, self.size.1, &self.px, self.view.alpha());
     }
 
     /// Move the window to the origin (a drag: nothing redrawn).
@@ -79,12 +81,20 @@ impl Pin {
         }
     }
 
+    /// Show at `v` (a new zoom about `about`); a zoom the window cannot
+    /// have keeps the one before.
     fn set_view(&mut self, v: View, about: (i32, i32)) {
-        let z0 = self.view.zoom;
+        let v = View { zoom: v.zoom.min(self.cap), ..v };
+        let (old, o) = (self.view, self.origin);
         self.view = v;
-        if v.zoom != z0 {
-            self.origin = zoom_about(self.origin, about, z0, v.zoom);
-            self.redraw();
+        if v.zoom != old.zoom {
+            self.origin = zoom_about(self.origin, about, old.zoom, v.zoom);
+            if !self.redraw() {
+                eprintln!("rustshot: a pin at {} % does not fit in memory; kept at {} %", v.zoom, old.zoom);
+                self.view = View { zoom: old.zoom, ..v };
+                self.origin = o;
+                self.show();
+            }
         } else {
             self.show();
         }
@@ -125,7 +135,22 @@ fn key_down(vk: u16) -> bool {
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     unsafe {
         match msg {
+            // Destroyed by anyone (not only `close`): out of the list.
+            WM_NCDESTROY => {
+                forget(hwnd);
+                DefWindowProcW(hwnd, msg, wp, lp)
+            }
+            // A close request from outside (another tool, the system).
+            WM_CLOSE => {
+                close(hwnd);
+                LRESULT(0)
+            }
+            WM_RBUTTONDOWN => {
+                activate(hwnd);
+                DefWindowProcW(hwnd, msg, wp, lp)
+            }
             WM_LBUTTONDOWN => {
+                activate(hwnd);
                 SetCapture(hwnd);
                 let c = cursor();
                 with_pin(hwnd, |p| p.drag = Some((c, p.origin)));
@@ -200,7 +225,7 @@ fn wheel(hwnd: HWND, delta: i32, ctrl: bool, at: (i32, i32)) {
         let v = if ctrl {
             View { opacity: super::opacity_step(p.view.opacity, notches), ..p.view }
         } else {
-            View { zoom: zoom_step(p.view.zoom, notches), ..p.view }
+            View { zoom: zoom_step_capped(p.view.zoom, notches, p.cap), ..p.view }
         };
         if v != p.view {
             p.set_view(v, at);
@@ -316,7 +341,9 @@ pub fn open(img: Arc<PixBuf>, at: (i32, i32), th: Theme) -> bool {
     if !register() {
         return false;
     }
-    let ex = WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW;
+    // Shown without taking the focus from the user's app; a click on it
+    // makes it a normal (activatable) window, so Esc reaches it.
+    let ex = WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
     let Some(hwnd) = (unsafe {
         GetModuleHandleW(None)
             .ok()
@@ -326,29 +353,57 @@ pub fn open(img: Arc<PixBuf>, at: (i32, i32), th: Theme) -> bool {
     };
     let (w, h) = img.dimensions();
     let s = scale_at((at.0 + w as i32 / 2, at.1 + h as i32 / 2));
-    let mut pin = Pin { hwnd, img, th, s, view: View::default(), origin: at, dib: Dib::default(), px: Vec::new(), size: (0, 0), drag: None, wheel: 0 };
-    pin.redraw();
-    unsafe {
-        // Tests never take the user's focus.
-        #[cfg(not(test))]
-        {
-            let _ = ShowWindow(hwnd, SW_SHOW);
-            let _ = SetForegroundWindow(hwnd);
+    let cap = super::zoom_cap((w, h), super::screen_size());
+    let mut pin = Pin { hwnd, img, th, s, view: View::default(), origin: at, dib: Dib::default(), px: Vec::new(), size: (0, 0), drag: None, wheel: 0, cap };
+    if !pin.redraw() {
+        eprintln!("rustshot: the pin's window could not be made ({w}x{h})");
+        unsafe {
+            let _ = DestroyWindow(hwnd);
         }
-        #[cfg(test)]
+        return false;
+    }
+    unsafe {
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-        let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+        let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     }
     PINS.with(|p| p.borrow_mut().push(pin));
     report();
     true
 }
 
+/// A click on pin `hwnd`: from now on it can be the foreground window
+/// (the keyboard: Esc, Ctrl+C...), and it is now.
+fn activate(hwnd: HWND) {
+    unsafe {
+        let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+        if ex & WS_EX_NOACTIVATE.0 != 0 {
+            SetWindowLongW(hwnd, GWL_EXSTYLE, (ex & !WS_EX_NOACTIVATE.0) as i32);
+        }
+        // Tests never take the user's focus.
+        #[cfg(not(test))]
+        let _ = SetForegroundWindow(hwnd);
+    }
+}
+
+/// Pin `hwnd` is being destroyed: drop it from the list if it is still
+/// there (it was destroyed by someone else), and say so.
+fn forget(hwnd: HWND) {
+    let gone = PINS.with(|p| {
+        let Ok(mut p) = p.try_borrow_mut() else { return None };
+        let i = p.iter().position(|p| p.hwnd == hwnd)?;
+        Some(p.remove(i))
+    });
+    if gone.is_some() {
+        drop(gone);
+        report();
+    }
+}
+
 /// Close pin `hwnd` (out of the list first: destroying it runs its
 /// window procedure).
 fn close(hwnd: HWND) {
     let pin = PINS.with(|p| {
-        let mut p = p.borrow_mut();
+        let mut p = p.try_borrow_mut().ok()?;
         let i = p.iter().position(|p| p.hwnd == hwnd)?;
         Some(p.remove(i))
     });
@@ -362,7 +417,7 @@ fn close(hwnd: HWND) {
 }
 
 pub fn close_all() {
-    let pins = PINS.with(|p| std::mem::take(&mut *p.borrow_mut()));
+    let pins = PINS.with(|p| p.try_borrow_mut().map(|mut p| std::mem::take(&mut *p)).unwrap_or_default());
     for pin in pins {
         unsafe {
             let _ = DestroyWindow(pin.hwnd);
@@ -449,21 +504,60 @@ mod tests {
         assert!(left < 16000 / 2, "closed: {left} pixels still match");
     }
 
+    /// A pin closed or destroyed from outside (WM_CLOSE from another tool,
+    /// DestroyWindow) leaves the list: the count, the tray and a waiting
+    /// one-shot run follow.
+    #[test]
+    fn pins_closed_from_outside_leave_the_list() {
+        let img = Arc::new(crate::pin::tests::sample_shot(40, 30));
+        assert!(open(img.clone(), (40, 600), crate::theme::DARK));
+        assert!(open(img, (120, 600), crate::theme::DARK));
+        let (a, b) = PINS.with(|p| (p.borrow()[0].hwnd, p.borrow()[1].hwnd));
+        let n = || PINS.with(|p| p.borrow().iter().filter(|p| p.hwnd == a || p.hwnd == b).count());
+        unsafe {
+            SendMessageW(a, WM_CLOSE, None, None);
+            assert!(!IsWindow(Some(a)).as_bool());
+            assert_eq!(n(), 1);
+            DestroyWindow(b).unwrap();
+        }
+        assert_eq!(n(), 0, "destroyed by someone else: gone from the list too");
+    }
+
+    /// The zoom stops at the cap (the virtual screen, 32 Mpx); a big
+    /// capture can still be pinned at 100 %.
+    #[test]
+    fn the_zoom_is_capped() {
+        let img = Arc::new(PixBuf::new(1600, 1000));
+        assert!(open(img, (0, 0), crate::theme::DARK));
+        let hwnd = PINS.with(|p| p.borrow().last().unwrap().hwnd);
+        let cap = with_pin(hwnd, |p| p.cap).unwrap();
+        assert!((100..=400).contains(&cap));
+        for _ in 0..30 {
+            wheel(hwnd, 120, false, (0, 0));
+        }
+        assert_eq!(with_pin(hwnd, |p| p.view.zoom), Some(cap));
+        let (w, h) = with_pin(hwnd, |p| p.size).unwrap();
+        assert!((w as u64) * (h as u64) <= super::super::MAX_PIXELS + 4_000_000, "{w}x{h}");
+        close(hwnd);
+    }
+
     #[test]
     fn a_pin_window_zooms_fades_moves_and_closes() {
         close_all();
         let img = Arc::new(crate::pin::tests::sample_shot(120, 80));
         assert!(open(img.clone(), (200, 150), crate::theme::DARK));
         assert!(open(img, (400, 150), crate::theme::LIGHT));
-        assert_eq!(crate::pin::COUNT.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert_eq!(PINS.with(|p| p.borrow().len()), 2);
         let hwnd = PINS.with(|p| p.borrow()[0].hwnd);
         unsafe {
             let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
             for (f, name) in [(WS_EX_LAYERED, "layered"), (WS_EX_TOPMOST, "top-most"), (WS_EX_TOOLWINDOW, "no taskbar button")] {
                 assert!(ex & f.0 != 0, "{name}");
             }
-            assert_eq!(ex & WS_EX_NOACTIVATE.0, 0, "it takes the keyboard (Esc)");
+            assert_ne!(ex & WS_EX_NOACTIVATE.0, 0, "shown without taking the focus");
             assert!(IsWindowVisible(hwnd).as_bool());
+            activate(hwnd);
+            assert_eq!(GetWindowLongW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_NOACTIVATE.0, 0, "clicked: it takes the keyboard (Esc)");
         }
         let fr = with_pin(hwnd, |p| Frame::at(p.s)).unwrap();
         let r = rect(hwnd);
@@ -493,10 +587,10 @@ mod tests {
         assert_eq!((rect(hwnd).left, rect(hwnd).top), fr.window_pos(o));
         run(hwnd, Cmd::Close);
         assert!(!unsafe { IsWindow(Some(hwnd)) }.as_bool());
-        assert_eq!(crate::pin::COUNT.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(PINS.with(|p| p.borrow().len()), 1);
         let other = PINS.with(|p| p.borrow()[0].hwnd);
         run(other, Cmd::CloseAll);
-        assert_eq!(crate::pin::COUNT.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(PINS.with(|p| p.borrow().len()), 0);
         assert!(!unsafe { IsWindow(Some(other)) }.as_bool());
     }
 }

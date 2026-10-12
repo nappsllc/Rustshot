@@ -714,23 +714,37 @@ fn fit(t: &str, s: f32, size: f32, max: f32) -> String {
 
 thread_local! {
     /// The last thumbnail picture made (the image, its size): drawn every
-    /// frame of the fade, scaled once.
-    static PIC: std::cell::RefCell<Option<(Arc<PixBuf>, PixBuf)>> = const { std::cell::RefCell::new(None) };
+    /// frame of the fade, scaled once. Only a weak link to the capture:
+    /// the card's note owns it, and it goes with the card.
+    static PIC: std::cell::RefCell<Option<(std::sync::Weak<PixBuf>, PixBuf)>> = const { std::cell::RefCell::new(None) };
 }
 
 fn picture(img: &Arc<PixBuf>, (w, h): (u32, u32)) -> PixBuf {
     PIC.with(|p| {
         let mut p = p.borrow_mut();
         if let Some((src, pic)) = p.as_ref()
-            && Arc::ptr_eq(src, img)
+            && std::ptr::eq(src.as_ptr(), Arc::as_ptr(img))
+            && src.strong_count() > 0
             && pic.dimensions() == (w, h)
         {
             return pic.clone();
         }
         let pic = crate::pin::resample(img, w, h);
-        *p = Some((img.clone(), pic.clone()));
+        *p = Some((Arc::downgrade(img), pic.clone()));
         pic
     })
+}
+
+/// The card is down: its picture is not kept.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub fn forget_picture() {
+    PIC.with(|p| *p.borrow_mut() = None);
+}
+
+/// Tests: whether a card's picture is kept.
+#[cfg(test)]
+fn picture_kept() -> bool {
+    PIC.with(|p| p.borrow().is_some())
 }
 
 /// The card at opacity `k`; with the pointer on it (`hover` some) its
@@ -859,7 +873,11 @@ pub fn drag_file(note: &Note) -> Option<std::path::PathBuf> {
             }
         }
     }
-    let name = format!("rustshot-{}.png", crate::export::format_filename("%Y-%m-%d_%H-%M-%S"));
+    // Unique per drag (a drop target may still be reading the last one).
+    static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_millis());
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let name = format!("rustshot-{}-{ms:03}-{n}.png", crate::export::format_filename("%Y-%m-%d_%H-%M-%S"));
     let path = dir.join(name);
     std::fs::write(&path, crate::export::png_bytes(&t.img).ok()?).ok()?;
     Some(path)
@@ -1312,6 +1330,13 @@ mod tests {
                 assert!(a(&faded, (c.x + c.w / 2.0) as u32, (c.y + 20.0 * s) as u32) < 160, "it fades");
             }
         }
+        // The scaled picture is kept for the fade, but never the capture
+        // itself, and not at all once the card is down.
+        let t = n.thumb.as_ref().unwrap();
+        assert!(picture_kept());
+        assert_eq!(Arc::strong_count(&t.img), 1, "only the note holds the capture");
+        forget_picture();
+        assert!(!picture_kept());
         // A long file name is cut to the card.
         assert!(fit(&"x".repeat(300), 1.0, 12.0, 150.0).ends_with('\u{2026}'));
         assert_eq!(fit("Copied", 1.0, 12.0, 150.0), "Copied");
@@ -1330,6 +1355,9 @@ mod tests {
         // Not saved: the picture as a PNG in the temp folder.
         let f = drag_file(&n).expect("a file to drag");
         assert!(f.extension().is_some_and(|e| e == "png") && f.is_file());
+        let f2 = drag_file(&n).unwrap();
+        assert_ne!(f, f2, "each drag its own file");
+        let _ = std::fs::remove_file(&f2);
         let png = std::fs::read(&f).unwrap();
         assert_eq!(PixBuf::from_png(&png).unwrap().dimensions(), (64, 48));
         let _ = std::fs::remove_file(&f);
