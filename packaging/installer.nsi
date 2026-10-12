@@ -9,6 +9,8 @@
 !define PRODUCT_NAME "rustshot"
 !define PRODUCT_DISPLAY "Rustshot"
 !define PRODUCT_EXE "rustshot.exe"
+!define PRODUCT_PUBLISHER "PowerNapps"
+!define UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}"
 
 Unicode true
 ManifestDPIAware true
@@ -31,6 +33,7 @@ Page directory
 Page components
 Page instfiles
 UninstPage uninstConfirm
+UninstPage components
 UninstPage instfiles
 
 Section "${PRODUCT_DISPLAY} (required)" SecMain
@@ -54,16 +57,24 @@ Section "${PRODUCT_DISPLAY} (required)" SecMain
   CreateDirectory "$SMPROGRAMS\${PRODUCT_DISPLAY}"
   CreateShortcut "$SMPROGRAMS\${PRODUCT_DISPLAY}\${PRODUCT_DISPLAY}.lnk" "$INSTDIR\${PRODUCT_EXE}"
   CreateShortcut "$SMPROGRAMS\${PRODUCT_DISPLAY}\Uninstall.lnk" "$INSTDIR\uninstall.exe"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" \
-      "DisplayName" "${PRODUCT_DISPLAY}"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" \
-      "DisplayVersion" "${PRODUCT_VERSION}"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" \
-      "Publisher" "${PRODUCT_DISPLAY}"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" \
-      "UninstallString" '"$INSTDIR\uninstall.exe"'
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}" \
-      "DisplayIcon" "$INSTDIR\${PRODUCT_EXE}"
+  ; Settings > Apps > Installed apps. The key name stays "rustshot", so an
+  ; install or update over any older version (the in-app update runs this
+  ; section too) rewrites every value here.
+  WriteRegStr HKCU "${UNINST_KEY}" "DisplayName" "${PRODUCT_DISPLAY}"
+  WriteRegStr HKCU "${UNINST_KEY}" "DisplayVersion" "${PRODUCT_VERSION}"
+  WriteRegStr HKCU "${UNINST_KEY}" "Publisher" "${PRODUCT_PUBLISHER}"
+  WriteRegStr HKCU "${UNINST_KEY}" "UninstallString" '"$INSTDIR\uninstall.exe"'
+  WriteRegStr HKCU "${UNINST_KEY}" "QuietUninstallString" '"$INSTDIR\uninstall.exe" /S'
+  WriteRegStr HKCU "${UNINST_KEY}" "DisplayIcon" "$INSTDIR\${PRODUCT_EXE},0"
+  WriteRegStr HKCU "${UNINST_KEY}" "InstallLocation" "$INSTDIR"
+  WriteRegStr HKCU "${UNINST_KEY}" "URLInfoAbout" "https://powernapps.net"
+  WriteRegStr HKCU "${UNINST_KEY}" "HelpLink" "https://github.com/nappsllc/rustshot/issues"
+  WriteRegStr HKCU "${UNINST_KEY}" "URLUpdateInfo" "https://github.com/nappsllc/rustshot/releases"
+  WriteRegDWORD HKCU "${UNINST_KEY}" "NoModify" 1
+  WriteRegDWORD HKCU "${UNINST_KEY}" "NoRepair" 1
+  ; What is installed, in KB, measured once the files above are written.
+  ${GetSize} "$INSTDIR" "/S=0K /G=0" $0 $1 $2
+  WriteRegDWORD HKCU "${UNINST_KEY}" "EstimatedSize" $0
 SectionEnd
 
 Section "Desktop shortcut" SecDesktop
@@ -119,7 +130,7 @@ Function .onInstSuccess
   ${EndIf}
 FunctionEnd
 
-Section "Uninstall"
+Section "-un.Main"
   ; Win+Shift+S back to the Snipping Tool (also drops the user's choice of
   ; Rustshot and restores a RegisteredApplications value it replaced); our
   ; ProgID again in case the exe could not run (Software\rustshot, with
@@ -140,6 +151,13 @@ Section "Uninstall"
   RMDir "$SMPROGRAMS\${PRODUCT_DISPLAY}"
   Delete "$DESKTOP\${PRODUCT_DISPLAY}.lnk"
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCT_NAME}"
-  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}"
+  DeleteRegKey HKCU "${UNINST_KEY}"
   DeleteRegKey HKCU "Software\${PRODUCT_NAME}"
+SectionEnd
+
+; Off unless ticked, so never in a silent uninstall: the capture history
+; (history::find_root) is the user's data. Saved files are not touched.
+Section /o "un.Also remove capture history" SecUnHistory
+  RMDir /r "$LOCALAPPDATA\${PRODUCT_NAME}-data\history"
+  RMDir "$LOCALAPPDATA\${PRODUCT_NAME}-data"
 SectionEnd
