@@ -473,9 +473,9 @@ impl Window {
                 let owner = self.hwnd.0 as usize;
                 std::thread::spawn(move || {
                     #[cfg(windows)]
-                    let h = Some(windows::Win32::Foundation::HWND(owner as *mut core::ffi::c_void)).filter(|_| owner != 0);
+                    let h = (owner != 0).then_some(windows::Win32::Foundation::HWND(owner as *mut core::ffi::c_void));
                     #[cfg(not(windows))]
-                    let h = Some(Hwnd(owner as _)).filter(|_| owner != 0);
+                    let h = (owner != 0).then_some(Hwnd(owner as _));
                     let _ = tx.send((ids, crate::ui::folder_dialog::pick_folder(h, &start)));
                 });
             }
