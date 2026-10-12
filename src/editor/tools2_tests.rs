@@ -448,6 +448,13 @@ fn new_buttons_have_tooltips_and_shortcuts() {
     assert_eq!(chrome::act_tip(Act::Tool(Tool::Counter), &km).1, ["N"]);
     assert_eq!(chrome::act_tip(Act::Fill, &km), ("Fill shape", Vec::new()));
     assert_eq!(action_of(Act::SaveDesktop), Some(Action::SaveDesktop));
+    let (label, keys) = chrome::act_tip(Act::SaveAs, &km);
+    assert_eq!(label, "Save as\u{2026}");
+    assert_eq!(keys.last().map(String::as_str), Some("S"), "{keys:?}");
+    assert_eq!(keys.len(), 3, "Ctrl+Shift+S: {keys:?}");
+    assert_eq!(action_of(Act::SaveAs), Some(Action::SaveAs));
+    assert_eq!(chrome::act_icon(Act::SaveAs), "save-as");
+    assert_ne!(chrome::act_icon(Act::SaveAs), chrome::act_icon(Act::Save));
     let mut a = app();
     let tb = {
         let m = a.mouse;
@@ -455,7 +462,8 @@ fn new_buttons_have_tooltips_and_shortcuts() {
         ed(&mut a).toolbar.clone().unwrap()
     };
     let at = |x: Act| tb.items.iter().position(|i| i.kind == toolbar::Kind::Btn(x)).unwrap();
-    assert_eq!(at(Act::SaveDesktop), at(Act::Save) + 1, "next to Save");
+    assert_eq!(at(Act::SaveAs), at(Act::Save) + 1, "Save · Save As · Save to Desktop");
+    assert_eq!(at(Act::SaveDesktop), at(Act::SaveAs) + 1);
     assert_eq!(at(Act::Fill), at(Act::Size(1)) + 1, "next to the size");
     assert_eq!(at(Act::Tool(Tool::Counter)), at(Act::Tool(Tool::Text)) + 1);
 }
@@ -478,7 +486,7 @@ fn shot2x() -> Shot {
 
 /// Preview PNGs under `RUSTSHOT_PREVIEW_DIR`: the toolbar with the new
 /// buttons (the number tool, the fill toggle off and on, its tooltip, Save
-/// to Desktop's tooltip), tags at several sizes and colours, filled and
+/// to Desktop's and Save As's tooltips), tags at several sizes and colours, filled and
 /// translucent shapes, the straight marker, the size preview sheet.
 #[test]
 #[ignore = "writes preview PNGs; set RUSTSHOT_PREVIEW_DIR"]
@@ -525,6 +533,9 @@ fn render_tools2_previews() {
             let mut a = fresh();
             hover(&mut a, Act::SaveDesktop);
             save(&settled_frame(&mut a), &name("toolbar-save-desktop-tip"));
+            let mut a = fresh();
+            hover(&mut a, Act::SaveAs);
+            save(&settled_frame(&mut a), &name("toolbar-save-as-tip"));
             let mut a = fresh();
             ed(&mut a).tool = Some(Tool::Counter);
             hover(&mut a, Act::Tool(Tool::Counter));

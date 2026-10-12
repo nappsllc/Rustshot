@@ -169,7 +169,8 @@ asked for) saves without a dialog to
 By default that is `Pictures/rustshot/2026-10-10/2026-10-10_14-30.png`: one
 folder per day (Pictures is the system's: on Windows the Pictures folder
 also when OneDrive moved it, on Linux `XDG_PICTURES_DIR`). A name that is taken gets `_1`, `_2`, ...; the toast shows
-the full path. <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> always asks
+the full path. <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> (or the
+toolbar's Save As button, between Save and Save to Desktop) always asks
 (Save As, seeded with that folder and name; the format follows the
 extension you pick), and *Ask where to save* makes
 <kbd>Ctrl</kbd>+<kbd>S</kbd> ask too. The clipboard and uploads stay PNG.

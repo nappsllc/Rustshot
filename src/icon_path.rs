@@ -64,6 +64,13 @@ pub const ICONS: &[(&str, &[Shape])] = &[
         Path("m7 10 5 5 5-5"),
         Path("M12 15V3"),
     ]),
+    // Save As: Lucide file-pen (a file being named), so it reads apart
+    // from Save's download tray and Save to Desktop's monitor-down.
+    ("save-as", &[ // file-pen
+        Path("M12.5 22H18a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v9.5"),
+        Path("M14 2v4a2 2 0 0 0 2 2h4"),
+        Path("M13.378 15.626a1 1 0 1 0-3.004-3.004l-5.01 5.012a2 2 0 0 0-.506.854l-.837 2.87a.5.5 0 0 0 .62.62l2.87-.837a2 2 0 0 0 .854-.506z"),
+    ]),
     ("cloud", &[ // cloud-upload
         Path("M12 13v8"),
         Path("M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"),
