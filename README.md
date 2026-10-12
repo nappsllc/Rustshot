@@ -104,7 +104,7 @@ rustshot gui --clip               # select, annotate, Enter copies to clipboard
 rustshot full --path ~/Pictures   # whole desktop, no editor
 rustshot screen -n 1 --edit       # second monitor, open the editor
 rustshot gui --region 800x600+100+100 --upload
-rustshot gui --accept-on-select   # drag a region: copied at once (Shift on release to adjust)
+rustshot gui --accept-on-select   # drag a region: copied at once (Alt on release to adjust)
 rustshot full --raw > shot.png    # PNG bytes to stdout
 rustshot update                   # check for a newer release
 rustshot settings                 # open the Settings window
@@ -368,7 +368,9 @@ snaps even then.
 While picking a region (before anything is selected, and while a
 selection is drawn or resized) a magnifier follows the pointer: 17 × 17
 pixels at 8× with a pixel grid, the pointer's pixel outlined, and under it
-the position and color (`640, 360 · #1e2027`); a thin accent crosshair runs
+the position (image pixels, as the size label counts them: with a monitor
+left of or above the primary, `0, 0` is the top-left of the whole capture)
+and color (`640, 360 · #1e2027`); a thin accent crosshair runs
 through the pointer across the whole overlay. It flips to stay on screen
 and off the pointer. <kbd>H</kbd> copies that color as `#rrggbb`.
 Settings › Capture *Show magnifier* turns it off, *Square magnifier* makes
@@ -377,7 +379,8 @@ it square (`magnifier`, `magnifier_square`).
 **Right-click** anywhere (but on an object with the select tool) opens a
 ring of the palette's colors around the pointer, the current one ringed:
 move towards a color and release to pick it, or click, then click a color.
-The centre opens the color picker (once something is selected). The color
+The centre opens the color picker (on its own at the ring when nothing is
+selected yet). The color
 goes to the selected objects, else to the current tool (and is
 remembered). <kbd>Esc</kbd>, a click elsewhere or releasing back in the
 centre closes it.
@@ -385,8 +388,12 @@ centre closes it.
 *Accept on select* (Settings › Capture, `accept_on_select = "copy"` or
 `"save"`; `--accept-on-select` copies, or runs the command's
 `--path`/`--clip`/`--upload`) finishes the capture as soon as a region is
-drawn or a window clicked, without the toolbar; hold <kbd>Shift</kbd> while
-releasing to adjust it first. When the overlay opens, a card shows the keys
+drawn or a window clicked, without the toolbar; hold <kbd>Alt</kbd> while
+releasing to adjust it first (<kbd>Shift</kbd> still makes it square, and a
+square region is accepted). A slip under 8 × 8 px and a plain click that
+selects the whole screen are not accepted. `full`/`screen` need `--edit`
+(or a `--region`) with the flag. On X11 the right button no longer acts as
+a left click in Rustshot's windows. When the overlay opens, a card shows the keys
 (as remapped) for three seconds or until the pointer moves or a key is
 pressed (*Show hints in the overlay*, `overlay_hints`).
 

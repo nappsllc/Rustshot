@@ -571,7 +571,7 @@ fn capture(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) 
         ui.switch("magnifier_square", &mut f.magnifier_square, tok);
     });
     ui.enabled = on;
-    srow(ui, tok, "Accept on select", Some("Copy or save as soon as a region is drawn; hold Shift to adjust"), |ui| {
+    srow(ui, tok, "Accept on select", Some("Copy or save as soon as a region is drawn; hold Alt to adjust"), |ui| {
         ui.seg("accept_on_select", &labels(&ACCEPTS), &mut f.accept, tok);
     });
     if let Some(on) = f.screenclip.as_mut() {

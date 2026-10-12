@@ -187,7 +187,7 @@ Options (gui/full/screen):
       --noedit           Capture without showing the editor (gui)
       --edit             Show the editor (full/screen)
       --accept-on-select Export as soon as a region is drawn (copy, or the
-                         --path/--clip/--upload tasks); Shift on release skips it
+                         --path/--clip/--upload tasks); Alt on release skips it
   -n, --number <N>       Monitor index for screen (0-based, default 0)
       --check            (config) Validate the config file and exit non-zero on errors
 
