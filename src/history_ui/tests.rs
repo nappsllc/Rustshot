@@ -438,6 +438,153 @@ fn thumbnails_are_bounded_and_follow_edits() {
     assert_ne!(h.thumb_of(&id).unwrap().as_raw(), before.as_raw(), "the new one");
 }
 
+/// Give the board's uploaded capture a kept deletehash (its record).
+fn with_record(st: &Store) -> String {
+    let e = st.list().into_iter().find(|e| e.meta.uploaded.is_some()).expect("an uploaded capture");
+    st.update(&e.id, |m| {
+        m.upload = Some(crate::uploads::Info { deletehash: crate::uploads::Secret::new("dhKq2"), time: 1, kind: crate::uploads::UpKind::Image, thumb: None })
+    })
+    .unwrap();
+    e.id
+}
+
+/// "Uploaded" keeps the captures with a link; their cards' ⋯ menu adds
+/// Copy link, and Delete from Imgur… once the deletehash is kept.
+#[test]
+fn uploaded_filter_and_card_menu() {
+    let (_r, st) = fixture("uploaded");
+    let mut h = history(&st);
+    h.filter = Filter::Uploaded;
+    let shown: Vec<String> = h.shown().iter().map(|(i, _)| history::title(&h.entries[*i].meta)).collect();
+    assert_eq!(shown, ["Slack \u{2014} #design-review"]);
+    assert_eq!(h.groups().len(), 1);
+    assert_eq!(draw::FILTERS[3], (Filter::Uploaded, "Uploaded"));
+    let up = h.entries.iter().find(|e| e.meta.uploaded.is_some()).unwrap().clone();
+    let plain = h.entries.iter().find(|e| e.meta.uploaded.is_none() && !e.meta.kind.is_recording()).unwrap().clone();
+    let rec = h.entries.iter().find(|e| e.meta.kind.is_recording()).unwrap().clone();
+    use draw::MenuAct as M;
+    assert_eq!(draw::card_acts(&h, &plain), [M::SaveAs, M::OpenWith, M::ShowInFolder, M::CopyPath, M::Delete]);
+    assert_eq!(draw::card_acts(&h, &rec), [M::OpenWith, M::ShowInFolder, M::CopyPath, M::Delete]);
+    // Uploaded before records were kept: no deletehash, no delete.
+    assert_eq!(draw::card_acts(&h, &up), [M::SaveAs, M::OpenWith, M::ShowInFolder, M::CopyPath, M::CopyLink, M::Delete]);
+    with_record(&st);
+    h.reload();
+    let up = h.entry(&up.id).unwrap().clone();
+    assert_eq!(draw::card_acts(&h, &up), [M::SaveAs, M::OpenWith, M::ShowInFolder, M::CopyPath, M::CopyLink, M::DeleteUpload, M::Delete]);
+    assert_eq!(M::DeleteUpload.label(), "Delete from Imgur\u{2026}");
+    assert_eq!(M::OpenWith.label(), "Open with\u{2026}");
+}
+
+/// Delete from Imgur… asks first; its button deletes (a fake Imgur):
+/// the link and record go and the toast says so; a failure says why and
+/// keeps them.
+#[test]
+fn deleting_an_upload_asks_then_deletes() {
+    let (_r, st) = fixture("unupload");
+    let id = with_record(&st);
+    let mut h = history(&st);
+    h.ask_unupload = Some(id.clone());
+    assert!(h.asking());
+    let (title, para, check, ok) = h.dialog_texts();
+    assert_eq!((title.as_str(), check, ok), ("Delete from Imgur?", None, "Delete from Imgur"));
+    assert!(para.starts_with("rs.sh/a8Kq2 stops working"), "{para}");
+    assert_eq!(h.dialog_ok(), [Act::DeleteUpload(id.clone())]);
+    assert!(!h.asking());
+    h.ask_unupload = Some(id.clone());
+    assert!(h.escape() && h.ask_unupload.is_none(), "Esc answers no");
+
+    let refused = |_: &str, _: &str, _: &[(&str, &str)]| Ok((403, r#"{"data":{"error":"Permission denied"},"success":false}"#.to_string()));
+    let d = delete_upload(&st, &id, "cid", &refused);
+    assert_eq!((d.text.as_str(), d.kind), ("Couldn't delete from Imgur: Permission denied", crate::editor::style::ToastKind::Error));
+    assert!(st.get(&id).unwrap().meta.uploaded.is_some(), "kept after a failure");
+
+    let asked = std::cell::RefCell::new(String::new());
+    let ok_http = |h: &str, p: &str, _: &[(&str, &str)]| {
+        *asked.borrow_mut() = format!("{h}{p}");
+        Ok((200, r#"{"data":true,"success":true,"status":200}"#.to_string()))
+    };
+    let d = delete_upload(&st, &id, "cid", &ok_http);
+    assert_eq!((d.text.as_str(), d.changed), ("Deleted from Imgur", true));
+    assert_eq!(*asked.borrow(), "api.imgur.com/3/image/dhKq2");
+    let m = st.get(&id).unwrap().meta;
+    assert_eq!((m.uploaded, m.upload), (None, None));
+    assert!(delete_upload(&st, &id, "cid", &ok_http).text.contains("no upload"), "nothing left to delete");
+}
+
+/// The header still fits at the smallest window with the fourth filter.
+#[test]
+fn the_header_fits_at_the_minimum_width() {
+    let (_r, st) = fixture("header");
+    let mut h = history(&st);
+    h.sel = vec![h.entries[0].id.clone()];
+    for w in [MIN.0 as f32, 900.0, 960.0] {
+        let l = layout_of(&h, w, 600.0);
+        let last = l.views.last().map_or(l.filters.last().unwrap().0, |v| v.0);
+        let right = l.panel_btn.unwrap_or(l.more);
+        assert!(last.x1() + 6.0 <= right.x, "at {w}: {last:?} runs into {right:?}");
+        assert!(l.search.unwrap().x1() <= l.filters[0].0.x, "at {w}");
+    }
+}
+
+/// Open with… opens the saved file of an unedited capture, else a
+/// temporary picture (no chooser in tests).
+#[test]
+fn open_with_picks_the_file() {
+    let (_r, st) = fixture("openwith");
+    let dir = std::env::temp_dir().join(format!("rustshot-hist-ow-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let saved = dir.join("kept.png");
+    std::fs::write(&saved, b"png").unwrap();
+    let e = st.list().into_iter().find(|e| !e.meta.edited && !e.meta.kind.is_recording()).unwrap();
+    st.update(&e.id, |m| m.saved = Some(saved.clone())).unwrap();
+    crate::open_with::OPENED.with(|o| o.borrow_mut().clear());
+    assert_eq!(open_with(&st, &e.id, &Config::default(), None).kind, crate::editor::style::ToastKind::Success);
+    let edited = st.list().into_iter().find(|e| e.meta.edited).unwrap();
+    open_with(&st, &edited.id, &Config::default(), None);
+    let opened = crate::open_with::OPENED.with(|o| o.borrow().clone());
+    assert_eq!(opened[0], saved);
+    assert!(opened[1].starts_with(crate::open_with::temp_dir()), "an edited one as it looks now");
+    let _ = std::fs::remove_file(&opened[1]);
+    let _ = std::fs::remove_dir_all(&dir);
+    // Ctrl+O asks for it.
+    let mut h = history(&st);
+    h.sel = vec![e.id.clone()];
+    let mut inp = Input::default();
+    inp.feed(&Ev::Key { vk: 'O' as u32, up: false, repeat: false, mods: Mods { ctrl: true, ..Mods::default() } });
+    let (_, acts) = render(&mut h, &DARK, 960, 640, 1.0, &inp);
+    assert_eq!(acts, [Act::OpenWith(e.id)]);
+}
+
+#[test]
+fn preview_history_upload_pngs() {
+    for (tn, th) in [("dark", DARK), ("light", LIGHT)] {
+        let (_r, st) = fixture(&format!("pv-up-{tn}"));
+        let id = with_record(&st);
+        // The Uploaded filter, the card's badge and its menu.
+        let mut h = history(&st);
+        h.filter = Filter::Uploaded;
+        h.menu = Some(Menu::Card(id.clone()));
+        let (img, _) = render(&mut h, &th, 960, 640, 1.0, &Input::default());
+        crate::ui::preview::save(&format!("history-uploaded-menu-{tn}.png"), &img);
+        // All, with the badge among the others; the list's cloud.
+        let mut h = history(&st);
+        let (img, _) = render(&mut h, &th, 960, 640, 1.0, &Input::default());
+        crate::ui::preview::save(&format!("history-uploaded-badge-{tn}.png"), &img);
+        h.view = View::List;
+        let (img, _) = render(&mut h, &th, 960, 640, 1.0, &Input::default());
+        crate::ui::preview::save(&format!("history-uploaded-list-{tn}.png"), &img);
+        // The question.
+        let mut h = history(&st);
+        h.ask_unupload = Some(id);
+        let (img, _) = render(&mut h, &th, 960, 640, 1.0, &Input::default());
+        crate::ui::preview::save(&format!("history-unupload-{tn}.png"), &img);
+        // The smallest window.
+        let mut h = history(&st);
+        let (img, _) = render(&mut h, &th, MIN.0, MIN.1, 1.0, &Input::default());
+        crate::ui::preview::save(&format!("history-min-{tn}.png"), &img);
+    }
+}
+
 /// A frame's kit for measuring (layout helpers that need fonts).
 fn layout_ui() -> crate::ui::Ui<'static> {
     let img: &'static mut Vec<u8> = Box::leak(Box::new(vec![0u8; 4]));

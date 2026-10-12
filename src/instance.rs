@@ -63,6 +63,12 @@ pub fn signal_settings() -> bool {
     imp::signal_settings()
 }
 
+/// Ask a running daemon to open its capture launcher; false when no
+/// daemon is reachable (an older one ignores it, as with Settings).
+pub fn signal_launcher() -> bool {
+    imp::signal_launcher()
+}
+
 /// Ask a running daemon to start the capture of hotkey slot `slot` (0
 /// region, 2 record, 3 full screen, 4 window); false when no daemon is
 /// reachable. A daemon older than this takes any of them as a region
@@ -99,11 +105,20 @@ mod imp {
     pub const WM_CAPTURE: u32 = WM_APP + 7;
     /// Posted to the tray window: "open Settings".
     pub const WM_SETTINGS: u32 = WM_APP + 8;
+    /// Posted to the tray window: "open the capture launcher".
+    pub const WM_LAUNCHER: u32 = WM_APP + 9;
 
     pub fn signal_settings() -> bool {
         unsafe {
             FindWindowW(super::tray_class(), PCWSTR::null())
                 .is_ok_and(|hwnd| PostMessageW(Some(hwnd), WM_SETTINGS, WPARAM(0), LPARAM(0)).is_ok())
+        }
+    }
+
+    pub fn signal_launcher() -> bool {
+        unsafe {
+            FindWindowW(super::tray_class(), PCWSTR::null())
+                .is_ok_and(|hwnd| PostMessageW(Some(hwnd), WM_LAUNCHER, WPARAM(0), LPARAM(0)).is_ok())
         }
     }
 
@@ -198,6 +213,10 @@ mod imp {
             }
             if m == WM_SETTINGS {
                 crate::settings_ui::show();
+                return LRESULT(0);
+            }
+            if m == WM_LAUNCHER {
+                crate::launcher::show();
                 return LRESULT(0);
             }
             DefWindowProcW(h, m, w, l)
@@ -431,6 +450,7 @@ mod imp {
                     match line.trim() {
                         "capture" if tx.send(HotEvent::Capture).is_err() => break,
                         "settings" => crate::settings_ui::show(),
+                        "launcher" => crate::launcher::show(),
                         _ => {}
                     }
                 }
@@ -488,6 +508,10 @@ mod imp {
 
     pub fn signal_settings() -> bool {
         send_line(&default_path(), b"settings\n")
+    }
+
+    pub fn signal_launcher() -> bool {
+        send_line(&default_path(), b"launcher\n")
     }
 
     fn solo(err: impl std::fmt::Display, lock: Option<File>) -> Option<Instance> {

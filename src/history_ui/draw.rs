@@ -118,8 +118,11 @@ pub enum MenuAct {
     OpenFolder,
     Settings,
     SaveAs,
+    OpenWith,
     ShowInFolder,
     CopyPath,
+    CopyLink,
+    DeleteUpload,
     Delete,
 }
 
@@ -130,6 +133,9 @@ impl MenuAct {
             MenuAct::OpenFolder => "Open history folder",
             MenuAct::Settings => "Settings\u{2026}",
             MenuAct::SaveAs => "Save As\u{2026}",
+            MenuAct::OpenWith => "Open with\u{2026}",
+            MenuAct::CopyLink => "Copy link",
+            MenuAct::DeleteUpload => "Delete from Imgur\u{2026}",
             MenuAct::ShowInFolder => "Show in folder",
             MenuAct::CopyPath => "Copy file path",
             MenuAct::Delete => "Delete",
@@ -193,7 +199,7 @@ impl Lay {
 }
 
 /// The filter labels.
-pub const FILTERS: [(Filter, &str); 3] = [(Filter::All, "All"), (Filter::Shots, "Screenshots"), (Filter::Recordings, "Recordings")];
+pub const FILTERS: [(Filter, &str); 4] = [(Filter::All, "All"), (Filter::Shots, "Screenshots"), (Filter::Recordings, "Recordings"), (Filter::Uploaded, "Uploaded")];
 
 fn seg_item_w(ui: &Ui, label: &str) -> f32 {
     (ui.text_w(11.5, label) + 18.0).ceil()
@@ -391,19 +397,15 @@ pub fn bar_lay(ui: &Ui, lay: &Lay, n: usize) -> (FRect, [FRect; 4], String) {
 /// A menu's rows (window coordinates).
 pub fn menu_lay(lay: &Lay, h: &History, items: &[(FRect, Target)]) -> Option<(FRect, Vec<(FRect, MenuAct)>)> {
     let m = h.menu.as_ref()?;
-    let (acts, anchor): (&[MenuAct], FRect) = match m {
-        Menu::More => (&[MenuAct::Clear, MenuAct::OpenFolder, MenuAct::Settings], lay.more),
+    let (acts, anchor): (Vec<MenuAct>, FRect) = match m {
+        Menu::More => (vec![MenuAct::Clear, MenuAct::OpenFolder, MenuAct::Settings], lay.more),
         Menu::Card(id) => {
             let a = items.iter().find(|(_, t)| *t == Target::Quick(id.clone(), Quick::More)).map(|x| x.0)?;
             let e = h.entry(id)?;
-            let acts: &[MenuAct] = if e.meta.kind.is_recording() {
-                &[MenuAct::ShowInFolder, MenuAct::CopyPath, MenuAct::Delete]
-            } else {
-                &[MenuAct::SaveAs, MenuAct::ShowInFolder, MenuAct::CopyPath, MenuAct::Delete]
-            };
-            (acts, a)
+            (card_acts(h, e), a)
         }
     };
+    let acts = &acts[..];
     let mh = 12.0 + acts.len() as f32 * (MENU_ROW + 1.0);
     let x = (anchor.x1() - MENU_W).clamp(4.0, (lay.w - MENU_W - 4.0).max(4.0));
     let below = anchor.y1() + 6.0;
@@ -411,6 +413,25 @@ pub fn menu_lay(lay: &Lay, h: &History, items: &[(FRect, Target)]) -> Option<(FR
     let r = FRect { x, y, w: MENU_W, h: mh };
     let rows = acts.iter().enumerate().map(|(i, a)| (FRect { x: x + 6.0, y: y + 6.0 + i as f32 * (MENU_ROW + 1.0), w: MENU_W - 12.0, h: MENU_ROW }, *a)).collect();
     Some((r, rows))
+}
+
+/// A card's ⋯ menu: Save As (screenshots), Open with, Show in folder,
+/// Copy file path, then Copy link and Delete from Imgur… when it was
+/// uploaded (the latter when its deletehash was kept), Delete.
+pub fn card_acts(h: &History, e: &Entry) -> Vec<MenuAct> {
+    let mut v = Vec::new();
+    if !e.meta.kind.is_recording() {
+        v.push(MenuAct::SaveAs);
+    }
+    v.extend([MenuAct::OpenWith, MenuAct::ShowInFolder, MenuAct::CopyPath]);
+    if e.meta.uploaded.is_some() {
+        v.push(MenuAct::CopyLink);
+        if h.can_unupload(&e.id) {
+            v.push(MenuAct::DeleteUpload);
+        }
+    }
+    v.push(MenuAct::Delete);
+    v
 }
 
 /// The "Clear history?" / "Delete N captures?" dialog: its rect, the
@@ -867,7 +888,8 @@ fn paint_body(ui: &mut Ui, h: &mut History, lay: &Lay, t: &WTok, hover: Option<&
 }
 
 
-fn kind_badge(ui: &mut Ui, e: &Entry, x: f32, y: f32, t: &WTok) {
+/// The kind's badge at (x, y); its width.
+fn kind_badge(ui: &mut Ui, e: &Entry, x: f32, y: f32, t: &WTok) -> f32 {
     let gif = e.meta.kind == Kind::Gif;
     let w = if gif { ui.text_w(10.5, "GIF") + 12.0 } else { 26.0 };
     let b = FRect { x, y, w, h: 20.0 };
@@ -878,6 +900,14 @@ fn kind_badge(ui: &mut Ui, e: &Entry, x: f32, y: f32, t: &WTok) {
         let name = if e.meta.kind == Kind::Mp4 { "video" } else { "camera" };
         icon(ui, name, x + 6.0, y + 3.0, 14.0, C4::rgb(0xEC, 0xEE, 0xF3));
     }
+    w
+}
+
+/// "Uploaded": a cloud badge beside the kind's.
+fn upload_badge(ui: &mut Ui, x: f32, y: f32, t: &WTok) {
+    let b = FRect { x, y, w: 26.0, h: 20.0 };
+    fill(ui, b, 5.0, t.badge);
+    icon(ui, "cloud", x + 6.0, y + 3.0, 14.0, C4::rgb(0xEC, 0xEE, 0xF3));
 }
 
 /// The picture of `id` in `box_` (contained, over the checkerboard).
@@ -936,7 +966,10 @@ fn paint_card(ui: &mut Ui, h: &mut History, lay: &Lay, it: &ItemLay, e: &Entry, 
         let cb = FRect { x: th.x + 8.0, y: th.y + 8.0, w: 20.0, h: 20.0 };
         checkbox(ui, cb, selected, t);
     } else {
-        kind_badge(ui, e, th.x + 8.0, th.y + 8.0, t);
+        let bw = kind_badge(ui, e, th.x + 8.0, th.y + 8.0, t);
+        if e.meta.uploaded.is_some() {
+            upload_badge(ui, th.x + 8.0 + bw + 4.0, th.y + 8.0, t);
+        }
     }
     if e.meta.edited {
         let tw = ui.text_w(10.5, "Edited");
@@ -1073,6 +1106,10 @@ fn paint_row(ui: &mut Ui, h: &mut History, lay: &Lay, it: &ItemLay, e: &Entry, t
     }
     let rec = e.meta.kind.is_recording();
     icon(ui, if rec { "video" } else { "camera" }, ty_x, cy - 7.0, 14.0, t.tx2);
+    if e.meta.uploaded.is_some() {
+        // Uploaded: the cloud before the type.
+        icon(ui, "cloud", ty_x - 19.0, cy - 7.0, 14.0, t.tx2);
+    }
     let ty = if rec { format!("{} \u{b7} {}", e.meta.kind.label(), history::duration_text(e.meta.duration_ms)) } else { e.meta.format.clone() };
     let ty = ui.fit_text(11.5, &ty, 92.0 - 19.0);
     text(ui, 11.5, &ty, ty_x + 19.0, cy, t.tx2, false);
@@ -1243,7 +1280,7 @@ fn paint_menu(ui: &mut Ui, h: &History, lay: &Lay, t: &WTok, hover: Option<&Targ
     ring(ui, r, 10.0, t.bd);
     for (rr, a) in rows {
         let hov = hover == Some(&Target::MenuItem(a));
-        let danger = matches!(a, MenuAct::Delete | MenuAct::Clear);
+        let danger = matches!(a, MenuAct::Delete | MenuAct::Clear | MenuAct::DeleteUpload);
         if hov {
             fill(ui, rr, 6.0, if danger { t.erbg } else { t.acbg });
         }
@@ -1282,7 +1319,7 @@ fn paint_dialog(ui: &mut Ui, h: &History, lay: &Lay, t: &WTok, hover: Option<&Ta
         text(ui, 12.0, &check, cb.x + 24.0, cb.y + 9.0, t.tx, false);
     }
     button(ui, cancel, "Cancel", None, Style::Plain, hover == Some(&Target::ClearCancel), t);
-    let style = if h.ask_delete.is_some() { Style::Danger } else { Style::Solid };
+    let style = if h.ask_delete.is_some() || h.ask_unupload.is_some() { Style::Danger } else { Style::Solid };
     button(ui, ok, okl, None, style, hover == Some(&Target::ClearOk), t);
 }
 

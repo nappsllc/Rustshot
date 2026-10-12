@@ -58,6 +58,11 @@ pub enum NoteAct {
     /// The thumbnail card itself (no button): the pointer on it shows the
     /// buttons and holds the card.
     Card,
+    /// The delayed capture's pill: call the capture off.
+    CancelDelay,
+    /// The tray's "Delete from Imgur?": delete it, or not.
+    DeleteUpload,
+    KeepUpload,
 }
 
 impl NoteAct {
@@ -72,6 +77,8 @@ impl NoteAct {
             NoteAct::Edit => "Edit",
             NoteAct::Dismiss => "Close",
             NoteAct::Card => "",
+            NoteAct::CancelDelay | NoteAct::KeepUpload => "Cancel",
+            NoteAct::DeleteUpload => "Delete from Imgur",
         }
     }
 
@@ -88,7 +95,7 @@ impl NoteAct {
 
     /// The first button is the accent one.
     fn primary(self) -> bool {
-        matches!(self, NoteAct::CopyLink | NoteAct::Copy | NoteAct::Edit)
+        matches!(self, NoteAct::CopyLink | NoteAct::Copy | NoteAct::Edit | NoteAct::DeleteUpload)
     }
 }
 
@@ -107,6 +114,9 @@ pub struct Note {
     pub entry: Option<String>,
     /// A screenshot's thumbnail card (bottom-right) instead of the toast.
     pub thumb: Option<Thumb>,
+    /// Bottom-right like the card, not bottom-centre (the delayed
+    /// capture's pill).
+    pub corner: bool,
 }
 
 /// What a thumbnail card shows and acts on: the capture and where it was.
@@ -134,7 +144,7 @@ impl std::fmt::Debug for Thumb {
 impl Note {
     fn new(text: String, kind: ToastKind) -> Note {
         let ttl = if kind == ToastKind::Error { ERROR_TTL } else { TTL };
-        Note { text, kind, ttl, actions: Vec::new(), file: None, thumb: None, entry: None }
+        Note { text, kind, ttl, actions: Vec::new(), file: None, thumb: None, entry: None, corner: false }
     }
 
     /// A plain note (no buttons): `text` with the usual time.
@@ -181,7 +191,7 @@ pub fn recording_saved(path: &std::path::Path, length: Duration, bytes: u64, war
     }
     actions.extend([NoteAct::Open, NoteAct::ShowInFolder]);
     let kind = if warnings.is_empty() { ToastKind::Success } else { ToastKind::Error };
-    Note { text, kind, ttl: ACTION_TTL, actions, file: Some(path.to_path_buf()), thumb: None, entry: None }
+    Note { text, kind, ttl: ACTION_TTL, actions, file: Some(path.to_path_buf()), thumb: None, entry: None, corner: false }
 }
 
 fn reason(e: &str) -> String {
@@ -379,10 +389,10 @@ pub fn upload_configured(cfg: &crate::config::Config) -> bool {
 
 /// Carry out button `a` of a note about `file`: the note to show next, if
 /// any ("Copied", "Uploading…"; an upload's result follows on `done`).
-pub fn run_action(a: NoteAct, file: &std::path::Path, done: impl FnOnce(Note) + Send + 'static) -> Option<Note> {
+pub fn run_action(a: NoteAct, file: &std::path::Path, entry: Option<String>, done: impl FnOnce(Note) + Send + 'static) -> Option<Note> {
     match a {
         // A thumbnail's buttons act on its picture (`run_note_action`).
-        NoteAct::ThumbCopy | NoteAct::ThumbSave | NoteAct::Pin | NoteAct::Edit | NoteAct::Dismiss | NoteAct::Card => None,
+        NoteAct::ThumbCopy | NoteAct::ThumbSave | NoteAct::Pin | NoteAct::Edit | NoteAct::Dismiss | NoteAct::Card | NoteAct::CancelDelay | NoteAct::DeleteUpload | NoteAct::KeepUpload => None,
         NoteAct::Open => {
             crate::actions::open_path(file);
             None
@@ -400,6 +410,12 @@ pub fn run_action(a: NoteAct, file: &std::path::Path, done: impl FnOnce(Note) + 
             let cfg = crate::config::load();
             let spawned = std::thread::Builder::new().name("upload-recording".into()).spawn(move || {
                 let res = upload(&path, &cfg.upload_client_id);
+                if let Ok(link) = &res {
+                    // Its record: the recording's History entry, or uploads.json.
+                    let root = crate::history::find_root();
+                    let at = root.as_deref().zip(entry.as_deref()).filter(|_| cfg.history);
+                    crate::uploads::finished(link, at);
+                }
                 let copied = res.as_ref().is_ok_and(|u| crate::export::copy_text_to_clipboard(u).is_ok());
                 done(upload_note(&res, copied));
             });
@@ -610,7 +626,7 @@ pub fn thumbnail(done: &[Done], uploading: bool, img: Arc<PixBuf>, at: (i32, i32
         actions.push(NoteAct::Edit);
     }
     actions.extend([NoteAct::ThumbCopy, NoteAct::ThumbSave, NoteAct::Pin]);
-    Some(Note { text, kind: ToastKind::Success, ttl: ACTION_TTL, actions, file: saved_file(done), thumb: Some(Thumb { img, at, entry: entry.clone() }), entry })
+    Some(Note { text, kind: ToastKind::Success, ttl: ACTION_TTL, actions, file: saved_file(done), thumb: Some(Thumb { img, at, entry: entry.clone() }), entry, corner: false })
 }
 
 /// The last file `done` saved.
@@ -693,7 +709,7 @@ pub fn thumb_layout(t: &Thumb, s: f32) -> ThumbLayout {
 /// Where a note's `size` window goes on the work area `work`: a
 /// thumbnail bottom-right, a toast bottom-centre ([`place`]).
 pub fn place_note(work: crate::capture::IRect, note: &Note, (w, h): (u32, u32)) -> (i32, i32) {
-    if note.thumb.is_some() {
+    if note.thumb.is_some() || note.corner {
         (work.0 + work.2 as i32 - w as i32, work.1 + work.3 as i32 - h as i32)
     } else {
         place(work, (w, h))
@@ -856,6 +872,11 @@ pub fn run_note_action(note: &Note, a: NoteAct, th: Theme, done: impl FnOnce(Not
     match a {
         NoteAct::Card => Next::Keep,
         NoteAct::Dismiss => Next::Hide,
+        NoteAct::CancelDelay => {
+            crate::launcher::cancel();
+            Next::Hide
+        }
+        NoteAct::DeleteUpload | NoteAct::KeepUpload => crate::uploads::answer(a == NoteAct::DeleteUpload, done).map_or(Next::Hide, Next::Show),
         NoteAct::Edit => {
             if let Some(id) = note.entry.as_ref().or(note.thumb.as_ref().and_then(|t| t.entry.as_ref())) {
                 crate::edit_ui::open(id);
@@ -880,7 +901,7 @@ pub fn run_note_action(note: &Note, a: NoteAct, th: Theme, done: impl FnOnce(Not
             thumb_after(note, &res.done).map_or(Next::Keep, Next::Show)
         }
         NoteAct::CopyLink | NoteAct::Copy | NoteAct::Open | NoteAct::ShowInFolder => match &note.file {
-            Some(f) => run_action(a, f, done).map_or(Next::Hide, Next::Show),
+            Some(f) => run_action(a, f, note.entry.clone(), done).map_or(Next::Hide, Next::Show),
             None => Next::Hide,
         },
     }

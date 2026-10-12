@@ -73,6 +73,7 @@ pub enum Request {
     Save,
     SaveAs,
     SaveDesktop,
+    OpenWith,
     Copy,
     Upload,
     Pin,
@@ -464,6 +465,7 @@ impl Canvas {
                 Task::Save { ask: true, .. } => Request::SaveAs,
                 Task::Save { .. } => Request::Save,
                 Task::SaveDesktop => Request::SaveDesktop,
+                Task::OpenWith => Request::OpenWith,
                 Task::Upload => Request::Upload,
                 Task::Pin => Request::Pin,
                 Task::Text => Request::CopyText,
@@ -579,7 +581,7 @@ impl Canvas {
         let cur = e.cur_tool();
         let recents = e.recents();
         let pv = e.pick.as_ref().map(|p| toolbar::PickView { ring: false, alpha: p.has_alpha(), recents: &recents });
-        let save_keys = [Act::SaveAs, Act::SaveDesktop].map(|a| chrome::act_tip(a, &e.keys).1.join("+"));
+        let save_keys = [Act::SaveAs, Act::SaveDesktop, Act::OpenWith].map(|a| chrome::act_tip(a, &e.keys).1.join("+"));
         let inp = toolbar::Input {
             sel: e.sel.unwrap_or(FRect { x: 0.0, y: 0.0, w: 1.0, h: 1.0 }),
             area: self.win,

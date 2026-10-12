@@ -648,7 +648,7 @@ pub const KEY_ROWS: [(&str, &[Action]); 14] = [
     ("Copy \u{b7} Save \u{b7} Upload", &[Action::Copy, Action::Save, Action::Upload]),
     ("Copy text", &[Action::CopyText]),
     ("Accept \u{b7} Cancel", &[Action::Accept, Action::Cancel]),
-    ("Save As \u{b7} Save to Desktop", &[Action::SaveAs, Action::SaveDesktop]),
+    ("Save As \u{b7} Save to Desktop \u{b7} Open with", &[Action::SaveAs, Action::SaveDesktop, Action::OpenWith]),
     ("Undo \u{b7} Redo", &[Action::Undo, Action::Redo]),
     ("Select all \u{b7} Palette", &[Action::SelectAll, Action::TogglePalette]),
     ("Record", &[Action::Record]),

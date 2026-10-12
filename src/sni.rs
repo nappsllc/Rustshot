@@ -226,15 +226,34 @@ impl Sni {
         let node = |id: i32, props: Vec<(&'static str, Value)>, kids: Vec<Value>| {
             Value::Struct(vec![Value::I32(id), props_dict(props, names), Value::Array("v".into(), kids)])
         };
+        // The submenus ("Recent uploads"): each top item with its own.
+        let entries = self.entries();
+        let tree = tray::nest(&self.view.menu);
+        let sub = |kids: &[usize], depth: i32| -> Vec<Value> {
+            if depth == 0 {
+                return Vec::new();
+            }
+            kids.iter().map(|k| Value::variant(node(entries[*k].0, item_props(entries[*k].1), vec![]))).collect()
+        };
+        let with_sub = |i: usize, kids: &[usize], depth: i32| {
+            let (id, it) = entries[i];
+            let mut props = item_props(it);
+            if !kids.is_empty() {
+                props.push(("children-display", Value::str("submenu")));
+            }
+            node(id, props, sub(kids, depth))
+        };
         if parent == 0 {
             let kids = if depth == 0 {
                 Vec::new()
             } else {
-                self.entries().into_iter().map(|(id, it)| Value::variant(node(id, item_props(it), vec![]))).collect()
+                tree.iter().map(|(i, kids)| Value::variant(with_sub(*i, kids, depth - 1))).collect()
             };
             return Some(node(0, root_props(), kids));
         }
-        self.item(parent).map(|it| node(parent, item_props(it), vec![]))
+        let i = entries.iter().position(|(id, _)| *id == parent)?;
+        let kids = tree.iter().find(|(p, _)| *p == i).map(|(_, k)| k.clone()).unwrap_or_default();
+        Some(with_sub(i, &kids, depth))
     }
 
     /// The item's property `p`.
