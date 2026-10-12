@@ -167,7 +167,8 @@ asked for) saves without a dialog to
     <folder>/<subfolder pattern>/<file name pattern>.<png|jpg|bmp>
 
 By default that is `Pictures/rustshot/2026-10-10/2026-10-10_14-30.png`: one
-folder per day. A name that is taken gets `_1`, `_2`, ...; the toast shows
+folder per day (Pictures is the system's: on Windows the Pictures folder
+also when OneDrive moved it, on Linux `XDG_PICTURES_DIR`). A name that is taken gets `_1`, `_2`, ...; the toast shows
 the full path. <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> always asks
 (Save As, seeded with that folder and name; the format follows the
 extension you pick), and *Ask where to save* makes

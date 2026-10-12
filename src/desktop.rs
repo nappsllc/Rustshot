@@ -1,12 +1,13 @@
-//! The user's Desktop folder, for "Save to Desktop".
+//! The user's Desktop folder, for "Save to Desktop", and Pictures folder,
+//! where captures go by default (`<Pictures>/rustshot`).
 //!
-//! - Windows: the Desktop known folder (`SHGetKnownFolderPath`), which
-//!   follows a desktop moved by OneDrive or by hand; `%USERPROFILE%\Desktop`
-//!   when that fails.
-//! - Linux: `XDG_DESKTOP_DIR` from `$XDG_CONFIG_HOME/user-dirs.dirs` (or
-//!   `~/.config/user-dirs.dirs`), localised names included; `~/Desktop`
-//!   without one.
-//! - macOS: `~/Desktop`.
+//! - Windows: the known folder (`SHGetKnownFolderPath`: `FOLDERID_Desktop`,
+//!   `FOLDERID_Pictures`), which follows a folder moved by OneDrive or by
+//!   hand; `%USERPROFILE%\Desktop` (`\Pictures`) when that fails.
+//! - Linux: `XDG_DESKTOP_DIR` / `XDG_PICTURES_DIR` from
+//!   `$XDG_CONFIG_HOME/user-dirs.dirs` (or `~/.config/user-dirs.dirs`),
+//!   localised names included; `~/Desktop` (`~/Pictures`) without one.
+//! - macOS: `~/Desktop`, `~/Pictures`.
 //!
 //! The lookups are plain functions of what they read (the known folder,
 //! environment variables, the file), so tests run every platform's.
@@ -27,6 +28,31 @@ impl Probe<'_> {
     }
 }
 
+/// Which of the user's folders.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Folder {
+    Desktop,
+    Pictures,
+}
+
+impl Folder {
+    /// The folder's usual name under the home.
+    fn name(self) -> &'static str {
+        match self {
+            Folder::Desktop => "Desktop",
+            Folder::Pictures => "Pictures",
+        }
+    }
+
+    /// Its `user-dirs.dirs` key.
+    fn xdg_key(self) -> &'static str {
+        match self {
+            Folder::Desktop => "XDG_DESKTOP_DIR",
+            Folder::Pictures => "XDG_PICTURES_DIR",
+        }
+    }
+}
+
 #[cfg(test)]
 thread_local! {
     /// Tests: the Desktop this thread's exports see (`Some(None)`: none).
@@ -39,36 +65,65 @@ pub fn dir() -> Option<PathBuf> {
     if let Some(d) = TEST_DIR.with(|t| t.borrow().clone()) {
         return d;
     }
+    folder(Folder::Desktop)
+}
+
+/// The Pictures folder (not created here); `None` when there is no home.
+pub fn pictures() -> Option<PathBuf> {
+    folder(Folder::Pictures)
+}
+
+/// `f` on this system.
+fn folder(f: Folder) -> Option<PathBuf> {
     let env = |k: &str| std::env::var(k).ok();
     let read = |p: &Path| std::fs::read_to_string(p).ok();
-    let probe = Probe { known: &known_folder, env: &env, read: &read };
+    let known = || known_folder(f);
+    let probe = Probe { known: &known, env: &env, read: &read };
     #[cfg(windows)]
-    return windows_dir(&probe);
+    return windows_folder(f, &probe);
     #[cfg(target_os = "macos")]
-    return mac_dir(&probe);
+    return mac_folder(f, &probe);
     #[cfg(not(any(windows, target_os = "macos")))]
-    return xdg_dir(&probe);
+    return xdg_folder(f, &probe);
 }
 
-/// Windows: the known folder, else `%USERPROFILE%\Desktop`.
+/// Windows: the known folder, else `%USERPROFILE%\<name>`.
 #[cfg_attr(not(windows), allow(dead_code))]
-pub fn windows_dir(p: &Probe) -> Option<PathBuf> {
-    (p.known)().filter(|d| !d.as_os_str().is_empty()).or_else(|| p.var("USERPROFILE").map(|h| PathBuf::from(h).join("Desktop")))
+pub fn windows_folder(f: Folder, p: &Probe) -> Option<PathBuf> {
+    (p.known)().filter(|d| !d.as_os_str().is_empty()).or_else(|| p.var("USERPROFILE").map(|h| PathBuf::from(h).join(f.name())))
 }
 
-/// macOS: `~/Desktop`.
+/// macOS: `~/<name>`.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-pub fn mac_dir(p: &Probe) -> Option<PathBuf> {
-    p.var("HOME").map(|h| PathBuf::from(h).join("Desktop"))
+pub fn mac_folder(f: Folder, p: &Probe) -> Option<PathBuf> {
+    p.var("HOME").map(|h| PathBuf::from(h).join(f.name()))
 }
 
-/// Linux (XDG): `XDG_DESKTOP_DIR` from `user-dirs.dirs`, else `~/Desktop`.
+/// Linux (XDG): the folder's key in `user-dirs.dirs`, else `~/<name>`.
 #[cfg_attr(any(windows, target_os = "macos"), allow(dead_code))]
-pub fn xdg_dir(p: &Probe) -> Option<PathBuf> {
+pub fn xdg_folder(f: Folder, p: &Probe) -> Option<PathBuf> {
     let home = p.var("HOME")?;
     let cfg = p.var("XDG_CONFIG_HOME").filter(|c| c.starts_with('/')).map_or_else(|| PathBuf::from(&home).join(".config"), PathBuf::from);
-    let from_file = (p.read)(&cfg.join("user-dirs.dirs")).and_then(|t| user_dir(&t, "XDG_DESKTOP_DIR", &home));
-    Some(from_file.unwrap_or_else(|| PathBuf::from(&home).join("Desktop")))
+    let from_file = (p.read)(&cfg.join("user-dirs.dirs")).and_then(|t| user_dir(&t, f.xdg_key(), &home));
+    Some(from_file.unwrap_or_else(|| PathBuf::from(&home).join(f.name())))
+}
+
+/// [`windows_folder`] for the Desktop.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn windows_dir(p: &Probe) -> Option<PathBuf> {
+    windows_folder(Folder::Desktop, p)
+}
+
+/// [`mac_folder`] for the Desktop.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn mac_dir(p: &Probe) -> Option<PathBuf> {
+    mac_folder(Folder::Desktop, p)
+}
+
+/// [`xdg_folder`] for the Desktop.
+#[cfg_attr(any(windows, target_os = "macos"), allow(dead_code))]
+pub fn xdg_dir(p: &Probe) -> Option<PathBuf> {
+    xdg_folder(Folder::Desktop, p)
 }
 
 /// `key`'s folder in a `user-dirs.dirs` text: `KEY="$HOME/Folder"` or an
@@ -106,13 +161,17 @@ pub fn user_dir(text: &str, key: &str, home: &str) -> Option<PathBuf> {
     found
 }
 
-/// The Desktop known folder (Windows).
+/// `f`'s known folder (Windows).
 #[cfg(windows)]
-fn known_folder() -> Option<PathBuf> {
+fn known_folder(f: Folder) -> Option<PathBuf> {
     use windows::Win32::System::Com::CoTaskMemFree;
-    use windows::Win32::UI::Shell::{FOLDERID_Desktop, SHGetKnownFolderPath, KF_FLAG_DEFAULT};
+    use windows::Win32::UI::Shell::{FOLDERID_Desktop, FOLDERID_Pictures, SHGetKnownFolderPath, KF_FLAG_DEFAULT};
+    let id = match f {
+        Folder::Desktop => &FOLDERID_Desktop,
+        Folder::Pictures => &FOLDERID_Pictures,
+    };
     unsafe {
-        let p = SHGetKnownFolderPath(&FOLDERID_Desktop, KF_FLAG_DEFAULT, None).ok()?;
+        let p = SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, None).ok()?;
         let s = p.to_string().ok();
         CoTaskMemFree(Some(p.0 as *const core::ffi::c_void));
         s.filter(|s| !s.is_empty()).map(PathBuf::from)
@@ -120,7 +179,7 @@ fn known_folder() -> Option<PathBuf> {
 }
 
 #[cfg(not(windows))]
-fn known_folder() -> Option<PathBuf> {
+fn known_folder(_: Folder) -> Option<PathBuf> {
     None
 }
 
@@ -179,6 +238,24 @@ mod tests {
         assert_eq!(user_dir("#XDG_DESKTOP_DIR=\"/x\"\nXDG_DESKTOP_DIR=\"relative\"", "XDG_DESKTOP_DIR", h), None);
         assert_eq!(user_dir("XDG_DESKTOP_DIR=\"/a\"\nXDG_DESKTOP_DIR=\"/b\"", "XDG_DESKTOP_DIR", h), Some(PathBuf::from("/b")), "the last wins");
         assert_eq!(user_dir("XDG_DESKTOP_DIRX=\"/a\"", "XDG_DESKTOP_DIR", h), None);
+    }
+
+    /// Pictures: OneDrive's on Windows, `XDG_PICTURES_DIR` (localised) on
+    /// Linux, `~/Pictures` on macOS and as the fallback.
+    #[test]
+    fn pictures_follows_the_same_rules() {
+        let od = r"C:\Users\me\OneDrive\Pictures";
+        let w = |p: &Probe| windows_folder(Folder::Pictures, p);
+        assert_eq!(probe_with(Some(od), &[("USERPROFILE", r"C:\Users\me")], &[], w), Some(PathBuf::from(od)));
+        assert_eq!(probe_with(None, &[("USERPROFILE", r"C:\Users\me")], &[], w), Some(PathBuf::from(r"C:\Users\me").join("Pictures")));
+        let file = "XDG_DESKTOP_DIR=\"$HOME/Desk\"\nXDG_PICTURES_DIR=\"$HOME/Изображения\"\n";
+        let x = |p: &Probe| xdg_folder(Folder::Pictures, p);
+        let got = probe_with(None, &[("HOME", "/home/me")], &[("/home/me/.config/user-dirs.dirs", file)], x);
+        assert_eq!(got, Some(PathBuf::from("/home/me/Изображения")));
+        let got = probe_with(None, &[("HOME", "/home/me")], &[("/home/me/.config/user-dirs.dirs", "XDG_DESKTOP_DIR=\"/d\"\n")], x);
+        assert_eq!(got, Some(PathBuf::from("/home/me/Pictures")), "no entry: ~/Pictures");
+        let m = |p: &Probe| mac_folder(Folder::Pictures, p);
+        assert_eq!(probe_with(None, &[("HOME", "/Users/me")], &[], m), Some(PathBuf::from("/Users/me/Pictures")));
     }
 
     #[test]
