@@ -1377,6 +1377,18 @@ fn source_keys_pick_screen_window_region() {
     key(&mut a, '1' as u32);
     key(&mut a, 'R' as u32);
     assert_eq!(ed(&mut a).tool, Some(Tool::Rect));
+    // The redesign's tool keys there too (L line, E ellipse, X pixelate);
+    // in video mode they draw nothing.
+    for (k, t) in [('L', Tool::Line), ('E', Tool::Ellipse), ('X', Tool::Pixelate)] {
+        key(&mut a, k as u32);
+        assert_eq!(ed(&mut a).tool, Some(t), "{k}");
+    }
+    key(&mut a, '2' as u32);
+    let before = ed(&mut a).tool;
+    key(&mut a, 'L' as u32);
+    assert_eq!(ed(&mut a).tool, before, "video mode: no tool change");
+    key(&mut a, 'F' as u32);
+    assert_eq!(ed(&mut a).rec.source, rec_ui::RecSource::Screen, "F is the source again");
 }
 
 /// A GIF: the sound rows say "Not recorded in GIF" and are disabled; the
@@ -1976,12 +1988,13 @@ fn capture_window_forces_snapping() {
 }
 
 /// A global hotkey pressed in the overlay is the overlay's key: the
-/// default capture chord Ctrl+Shift+S is Save As there; Quit still quits.
+/// capture chord set to Ctrl+Shift+S is Save As there; Quit still quits.
 #[test]
 fn global_chords_reach_the_overlay() {
     let mut a = app(Some(r(10.0, 10.0, 200.0, 100.0)));
     a.kind = RunKind::Daemon;
-    assert_eq!(a.cfg.capture_hotkey, "Ctrl+Shift+S");
+    assert_eq!(a.cfg.capture_hotkey, "Shift+Meta+X", "the default");
+    a.cfg.capture_hotkey = "Ctrl+Shift+S".into();
     // A chord bound in the overlay ("]" = size up) does its overlay job.
     ed(&mut a).tool = Some(Tool::Rect);
     let before = ed(&mut a).mem.size(Tool::Rect);

@@ -649,7 +649,7 @@ fn restore_clear_reset_and_links() {
     s.form.capture = None;
     s.on(Click::ResetAll);
     assert_eq!(s.form.keys, Keymap::defaults());
-    assert_eq!(s.form.capture, Chord::parse("Ctrl+Shift+S"));
+    assert_eq!(s.form.capture, Chord::parse("Shift+Meta+X"));
     assert_eq!(s.on(Click::Browse), vec![Act::Browse]);
     assert_eq!(s.on(Click::OpenConfig), vec![Act::OpenConfig]);
     assert_eq!(s.on(Click::CheckUpdates), vec![Act::CheckUpdates]);

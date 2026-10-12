@@ -29,7 +29,8 @@ pub enum HotEvent {
     /// A global hotkey was pressed: slot `i` (0 capture, 1 quit, 2 record,
     /// 3 full screen, 4 window, 5 repeat). The daemon
     /// runs [`slot_event`]`(i)`, or, with the overlay open, hands the chord
-    /// to the overlay as a key (Ctrl+Shift+S is Save As in there).
+    /// to the overlay as a key (a chord bound there, e.g. Ctrl+Shift+S Save
+    /// As, does its overlay job).
     Pressed(usize),
     /// Stop the recording in progress (the tray).
     #[cfg_attr(not(windows), allow(dead_code))] // the Linux/macOS trays come later
@@ -690,7 +691,7 @@ mod tests {
     fn new_global_actions_are_slots() {
         let cfg = Config { repeat_hotkey: "Ctrl+Alt+P".into(), ..Config::default() };
         let w = wanted(&cfg);
-        assert_eq!(w, ["Ctrl+Shift+S", "Ctrl+Alt+Shift+Q", "Ctrl+Shift+R", "Ctrl+Shift+F", "Ctrl+Shift+W", "Ctrl+Alt+P"]);
+        assert_eq!(w, ["Shift+Meta+X", "Ctrl+Alt+Shift+Q", "Shift+Meta+R", "Shift+Meta+F", "Shift+Meta+W", "Ctrl+Alt+P"]);
         let specs = specs_for(&w);
         for (i, (id, _, ev)) in specs.iter().enumerate() {
             assert!(*id == i as i32 + 1 && matches!(ev, HotEvent::Pressed(j) if *j == i));
@@ -699,7 +700,7 @@ mod tests {
         assert!(matches!(slot_event(4), HotEvent::CaptureWindow));
         assert!(matches!(slot_event(5), HotEvent::RepeatLast));
         let mut calls = Vec::new();
-        let (now, f) = plan_reload(&s2("", ""), &w, registrar(&["Ctrl+Shift+W"], &mut calls));
+        let (now, f) = plan_reload(&s2("", ""), &w, registrar(&["Shift+Meta+W"], &mut calls));
         assert_eq!(now[4], "");
         assert_eq!((f.len(), f[0].slot, f[0].cause), (1, 4, Cause::InUse));
     }

@@ -459,7 +459,7 @@ impl App {
             }
             HotEvent::StopRecording => {}
             // A global hotkey: inside the overlay its chord is the
-            // overlay's key (Ctrl+Shift+S: Save As there), else its action.
+            // overlay's key (Ctrl+Shift+S, if bound globally: Save As there), else its action.
             // Quit always quits.
             HotEvent::Pressed(i) if i != 1 && matches!(self.st, State::Edit(_)) => self.forward_hotkey(i),
             HotEvent::Pressed(i) => return self.on_hot(crate::hotkey::slot_event(i)),
@@ -600,6 +600,10 @@ impl App {
         }
         let Some(run) = self.rec.as_ref() else { return };
         let length = run.length(now);
+        // The tray's tip says the time recorded (once a second).
+        if !self.one_shot() && ended.is_none() {
+            crate::tray::set_elapsed(length);
+        }
         let Some(end) = ended else { return };
         self.rec = None;
         self.recording_over(end, length);

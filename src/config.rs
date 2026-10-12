@@ -88,7 +88,7 @@ pub struct Config {
     pub rec_format: String,
     /// Recording: MP4 frame rate, 30 or 60.
     pub rec_fps: u32,
-    /// Recording: GIF frame rate, 10 or 15.
+    /// Recording: GIF frame rate, 10, 15 or 24.
     pub rec_gif_fps: u32,
     /// Recording: MP4 quality, "low", "medium" or "high".
     pub rec_quality: String,
@@ -104,7 +104,8 @@ pub struct Config {
     pub rec_camera_device: String,
     /// Recording: bubble shape, "circle", "rounded" or "square".
     pub rec_camera_shape: String,
-    /// Recording: bubble size, "s", "m" or "l" (160/240/320 logical px).
+    /// Recording: bubble size, "s", "m", "l" or "xl" (120/160/200/240
+    /// logical px).
     pub rec_camera_size: String,
     /// Recording: mirror the camera image.
     pub rec_camera_mirror: bool,
@@ -119,11 +120,9 @@ pub struct Config {
     pub rec_camera_ring_color: String,
     /// Recording: the ring's width in logical px (0 = no ring).
     pub rec_camera_ring_width: u32,
-    // --- Recorder redesign (recorder-redesign branch) ---
     /// Recording: a GIF stops by itself after this many seconds (15, 30
-    /// or 60; the Record panel's "Max length").
+    /// or 60; video mode's panel and Settings › Recording "Max length").
     pub rec_gif_max: u32,
-    // --- end recorder redesign ---
     /// The colour picker's recent custom colours, newest first (at most
     /// [`RECENT_MAX`]).
     pub recent_colors: Vec<String>,
@@ -204,10 +203,10 @@ impl Default for Config {
             draw_pixelate_size: 12.0,
             draw_font_size: 16.0,
             undo_limit: 100,
-            capture_hotkey: "Ctrl+Shift+S".into(),
+            capture_hotkey: "Shift+Meta+X".into(),
             quit_hotkey: "Ctrl+Alt+Shift+Q".into(),
-            capture_full_hotkey: "Ctrl+Shift+F".into(),
-            capture_window_hotkey: "Ctrl+Shift+W".into(),
+            capture_full_hotkey: "Shift+Meta+F".into(),
+            capture_window_hotkey: "Shift+Meta+W".into(),
             repeat_hotkey: String::new(),
             show_tray: true,
             copy_after_capture: false,
@@ -240,11 +239,11 @@ impl Default for Config {
             rec_camera_size: "m".into(),
             rec_camera_mirror: true,
             rec_countdown: true,
-            record_hotkey: "Ctrl+Shift+R".into(),
+            record_hotkey: "Shift+Meta+R".into(),
             rec_linux_encoder: "auto".into(),
             rec_camera_ring_color: String::new(),
             rec_camera_ring_width: RING_WIDTH_DEFAULT,
-            rec_gif_max: 30, // recorder redesign
+            rec_gif_max: 30,
             recent_colors: Vec::new(),
             tool_sizes: BTreeMap::new(),
             tool_colors: BTreeMap::new(),
@@ -1051,7 +1050,6 @@ pub fn to_toml(c: &Config) -> String {
         c.rec_camera_ring_width,
         c.recent_colors.iter().map(|s| q(s)).collect::<Vec<_>>().join(", "),
     );
-    // Recorder redesign.
     out.push_str(&format!("rec_gif_max = {}
 ", c.rec_gif_max));
     for id in TOOL_IDS {
@@ -1552,15 +1550,19 @@ bogus = 1
         }
     }
 
-    /// The redesign's keys: the new global hotkeys (Ctrl+Shift+S/F/W/R as
-    /// on the boards, repeat unbound), the tray, copy-after-capture and the
+    /// The redesign's keys: the new global hotkeys (Win+Shift+X/F/W/R —
+    /// the boards' Ctrl+Shift chords are common app keys —, repeat unbound), the tray, copy-after-capture and the
     /// shutter sound; a file without them gets the defaults, one with them
     /// keeps its values.
     #[test]
     fn redesign_keys_defaults_and_roundtrip() {
         let d = Config::default();
         let hk = [d.capture_hotkey.as_str(), d.capture_full_hotkey.as_str(), d.capture_window_hotkey.as_str(), d.record_hotkey.as_str()];
-        assert_eq!(hk, ["Ctrl+Shift+S", "Ctrl+Shift+F", "Ctrl+Shift+W", "Ctrl+Shift+R"]);
+        assert_eq!(hk, ["Shift+Meta+X", "Shift+Meta+F", "Shift+Meta+W", "Shift+Meta+R"]);
+        for h in hk {
+            let c = crate::keymap::Chord::parse(h).unwrap();
+            assert!(c.meta && c.shift && !c.ctrl && !c.alt, "{h}: Win+Shift");
+        }
         assert_eq!(d.repeat_hotkey, "");
         assert!(d.show_tray && !d.copy_after_capture && !d.shutter_sound);
         let c = Config {
@@ -1577,7 +1579,11 @@ bogus = 1
         // An older file (written before these keys) keeps its own hotkeys.
         let old = parse_config("capture_hotkey = \"Shift+Meta+X\"\nrecord_hotkey = \"Meta+Shift+R\"\n").unwrap();
         assert_eq!((old.capture_hotkey.as_str(), old.record_hotkey.as_str()), ("Shift+Meta+X", "Meta+Shift+R"));
-        assert_eq!(old.capture_full_hotkey, "Ctrl+Shift+F");
+        assert_eq!(old.capture_full_hotkey, "Shift+Meta+F");
+        let older = parse_config("capture_hotkey = \"Ctrl+Shift+S\"
+record_hotkey = \"Ctrl+Shift+R\"
+").unwrap();
+        assert_eq!((older.capture_hotkey.as_str(), older.record_hotkey.as_str()), ("Ctrl+Shift+S", "Ctrl+Shift+R"), "custom keys kept");
         assert!(parse_config("show_tray = 1").is_err());
         let w = hotkey_warnings(&Config { repeat_hotkey: "Nope+".into(), ..Config::default() });
         assert!(w.len() == 1 && w[0].starts_with("repeat_hotkey"), "{w:?}");
@@ -1618,7 +1624,7 @@ bogus = 1
         assert!(!d.rec_camera && d.rec_camera_device.is_empty());
         assert_eq!((d.rec_camera_shape.as_str(), d.rec_camera_size.as_str()), ("circle", "m"));
         assert!(d.rec_camera_mirror && d.rec_countdown);
-        assert_eq!(d.record_hotkey, "Ctrl+Shift+R");
+        assert_eq!(d.record_hotkey, "Shift+Meta+R");
         assert!(crate::keymap::Chord::parse(&d.record_hotkey).is_some());
         assert_eq!(d.rec_linux_encoder, "auto");
         assert_eq!(parse_config(&to_toml(&d)).unwrap(), d);
