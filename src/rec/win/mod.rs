@@ -4,6 +4,7 @@
 
 pub mod dxgi;
 pub mod gdi_poll;
+mod gpu;
 pub mod mf;
 pub use super::yuv as nv12;
 pub mod wasapi;
@@ -27,9 +28,15 @@ pub enum SourceKind {
 
 /// Frames of `area` (physical virtual-screen pixels): Desktop Duplication
 /// when it works, GDI polling otherwise (RDP sessions, some drivers,
-/// rotated outputs).
-pub fn open_source(area: IRect) -> Result<(Box<dyn FrameSource>, SourceKind)> {
-    match DxgiSource::open(area) {
+/// rotated outputs). With `nv12` (the MP4 size, from [`nv12::fit`]) the
+/// duplication hands out NV12 of that size, scaled and converted on the
+/// GPU, where it can; frames are BGRA otherwise (GIF, GDI, no GPU path).
+pub fn open_source(area: IRect, nv12: Option<(u32, u32)>) -> Result<(Box<dyn FrameSource>, SourceKind)> {
+    let dxgi = match nv12 {
+        Some(out) => DxgiSource::open_nv12(area, out),
+        None => DxgiSource::open(area),
+    };
+    match dxgi {
         Ok(s) => Ok((Box::new(s), SourceKind::Dxgi)),
         Err(e) => {
             eprintln!("rustshot: desktop duplication unavailable ({e:#}); recording with GDI");

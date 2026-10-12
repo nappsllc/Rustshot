@@ -57,13 +57,56 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
     }
 }
 
+/// Paints [`COLOURS`] as vertical bars of equal width, left to right.
+unsafe extern "system" fn bars_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    unsafe {
+        match msg {
+            WM_ERASEBKGND => LRESULT(1),
+            WM_PAINT => {
+                let mut ps = PAINTSTRUCT::default();
+                let dc = BeginPaint(hwnd, &mut ps);
+                let mut rc = RECT::default();
+                let _ = GetClientRect(hwnd, &mut rc);
+                let n = COLOURS.len() as i32;
+                for (i, &(r, g, b)) in COLOURS.iter().enumerate() {
+                    let brush = CreateSolidBrush(COLORREF(u32::from(r) | u32::from(g) << 8 | u32::from(b) << 16));
+                    let i = i as i32;
+                    let bar = RECT { left: rc.right * i / n, top: 0, right: rc.right * (i + 1) / n, bottom: rc.bottom };
+                    FillRect(dc, &bar, brush);
+                    let _ = DeleteObject(HGDIOBJ(brush.0));
+                }
+                let _ = EndPaint(hwnd, &ps);
+                LRESULT(0)
+            }
+            WM_DESTROY => {
+                PostQuitMessage(0);
+                LRESULT(0)
+            }
+            _ => DefWindowProcW(hwnd, msg, wp, lp),
+        }
+    }
+}
+
 impl TestWindow {
     pub(crate) fn open(x: i32, y: i32, w: i32, h: i32, period_ms: u32) -> TestWindow {
+        TestWindow::spawn(x, y, w, h, period_ms, false)
+    }
+
+    /// A still window showing [`COLOURS`] as `w / 6` px wide vertical bars.
+    pub(crate) fn bars(x: i32, y: i32, w: i32, h: i32) -> TestWindow {
+        TestWindow::spawn(x, y, w, h, 1_000_000, true)
+    }
+
+    fn spawn(x: i32, y: i32, w: i32, h: i32, period_ms: u32, bars: bool) -> TestWindow {
         let (tx, rx) = mpsc::channel();
         let thread = std::thread::spawn(move || unsafe {
             let inst = GetModuleHandleW(None).unwrap();
-            let class = w!("rustshot_rec_test_window");
-            let wc = WNDCLASSW { lpfnWndProc: Some(wndproc), hInstance: inst.into(), lpszClassName: class, ..Default::default() };
+            let (class, proc_): (PCWSTR, WNDPROC) = if bars {
+                (w!("rustshot_rec_test_bars"), Some(bars_wndproc))
+            } else {
+                (w!("rustshot_rec_test_window"), Some(wndproc))
+            };
+            let wc = WNDCLASSW { lpfnWndProc: proc_, hInstance: inst.into(), lpszClassName: class, ..Default::default() };
             RegisterClassW(&wc); // fails harmlessly when already registered
             let hwnd = CreateWindowExW(
                 WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
@@ -132,6 +175,11 @@ pub(crate) fn spec(format: RecFormat, fps: u32, area: crate::capture::IRect, out
     RecSpec { format, fps, quality: Quality::Medium, area, system_audio: false, mic: None, out }
 }
 
+/// What the recorder asks the source for: NV12 at the MP4 size for MP4.
+pub(crate) fn mp4_size(spec: &RecSpec) -> Option<(u32, u32)> {
+    (spec.format == RecFormat::Mp4).then(|| nv12::fit(spec.area.2, spec.area.3))
+}
+
 /// Record `secs` with `enc` built on the spec's `.part` path.
 pub(crate) fn record(
     spec: RecSpec,
@@ -139,7 +187,7 @@ pub(crate) fn record(
     secs: f64,
     enc: impl FnOnce(&Path, u32, u32) -> Box<dyn VideoEncoder>,
 ) -> (PathBuf, SourceKind) {
-    let (src, kind) = open_source(spec.area).unwrap();
+    let (src, kind) = open_source(spec.area, mp4_size(&spec)).unwrap();
     let (w, h) = src.size();
     let enc = enc(&spec.part_path(), w, h);
     let s = Session::start(spec, src, audio, enc).unwrap();
@@ -257,7 +305,7 @@ fn live_rec_dxgi_failure_falls_back_to_gdi() {
     crate::capture::enable_dpi_awareness();
     let win = TestWindow::open(260, 260, 160, 120, 100);
     dxgi::FORCE_FAIL.with(|f| f.set(true));
-    let r = open_source(win.rect());
+    let r = open_source(win.rect(), None);
     dxgi::FORCE_FAIL.with(|f| f.set(false));
     let (mut src, kind) = r.unwrap();
     assert_eq!(kind, SourceKind::Gdi);
@@ -268,7 +316,7 @@ fn live_rec_dxgi_failure_falls_back_to_gdi() {
     let c = &f.bgra[(60 * 160 + 80) * 4..(60 * 160 + 80) * 4 + 3];
     assert!(COLOURS.iter().any(|&(r, g, b)| c == [b, g, r]), "centre {c:?}");
     // And the real path works here too (unless the machine has no duplication).
-    match open_source(win.rect()).unwrap().1 {
+    match open_source(win.rect(), None).unwrap().1 {
         SourceKind::Dxgi => {}
         SourceKind::Gdi => eprintln!("note: desktop duplication is unavailable on this machine"),
     }
@@ -417,7 +465,7 @@ fn aac_delay() -> Duration {
     let dir = out_dir();
     let path = dir.join("aac.mp4");
     let mut e = MfEncoder::create(&path, 64, 64, 30, Quality::Low, true).unwrap();
-    let black = crate::rec::Frame { w: 64, h: 64, bgra: vec![0; 64 * 64 * 4], ts: Duration::ZERO };
+    let black = crate::rec::Frame::bgra(64, 64, vec![0; 64 * 64 * 4], Duration::ZERO);
     for i in 0..60u64 {
         e.push_video(&crate::rec::Frame { ts: Duration::from_millis(i * 1000 / 30), ..black.clone() }).unwrap();
         if i % 3 == 0 {
@@ -493,7 +541,7 @@ fn live_rec_mp4_audio_after_silence() {
     let mut spec = spec(RecFormat::Mp4, 30, win.rect(), dir.join("audio.mp4"));
     spec.system_audio = true;
     let img = wav(0.0, 0.6, 0.2);
-    let (src, _) = open_source(spec.area).unwrap();
+    let (src, _) = open_source(spec.area, mp4_size(&spec)).unwrap();
     let (w, h) = src.size();
     let enc = MfEncoder::create(&spec.part_path(), w, h, 30, Quality::Low, true).unwrap();
     let loud = std::sync::Arc::new(std::sync::Mutex::new(None));
@@ -534,6 +582,50 @@ fn live_rec_mp4_audio_after_silence() {
     assert!((-0.02..=0.12).contains(&off), "onset offset {off:.3} s");
 }
 
+/// Passes a Desktop Duplication source through, publishing its mean work
+/// (copying, compositing, converting; not waiting) per frame.
+struct TimedSource {
+    inner: DxgiSource,
+    work: std::sync::Arc<std::sync::Mutex<Duration>>,
+}
+
+impl crate::rec::FrameSource for TimedSource {
+    fn next(&mut self, deadline: Instant) -> Option<crate::rec::Frame> {
+        let f = self.inner.next(deadline);
+        *self.work.lock().unwrap() = self.inner.work_per_frame();
+        f
+    }
+    fn size(&self) -> (u32, u32) {
+        self.inner.size()
+    }
+}
+
+/// Passes an encoder through, timing `push_video` (total, frames).
+struct TimedEncoder {
+    inner: Box<dyn VideoEncoder>,
+    push: std::sync::Arc<std::sync::Mutex<(Duration, u32)>>,
+}
+
+impl VideoEncoder for TimedEncoder {
+    fn push_video(&mut self, f: &crate::rec::Frame) -> anyhow::Result<()> {
+        let t = Instant::now();
+        let r = self.inner.push_video(f);
+        let mut p = self.push.lock().unwrap();
+        p.0 += t.elapsed();
+        p.1 += 1;
+        r
+    }
+    fn push_audio(&mut self, pcm: &[f32], ts: Duration) -> anyhow::Result<()> {
+        self.inner.push_audio(pcm, ts)
+    }
+    fn finish(self: Box<Self>) -> anyhow::Result<()> {
+        self.inner.finish()
+    }
+    fn audio(&self) -> bool {
+        self.inner.audio()
+    }
+}
+
 #[test]
 #[ignore = "benchmark: prints capture and conversion timings"]
 fn bench_rec_capture() {
@@ -549,8 +641,9 @@ fn bench_rec_capture() {
         ("1920x1080", (prim.x, prim.y, 1920.min(prim.w), 1080.min(prim.h))),
         ("desktop", (x0, y0, (x1 - x0) as u32, (y1 - y0) as u32)),
     ];
+    let tick = || Instant::now() + Duration::from_millis(16);
     for (name, area) in areas {
-        let n = 60;
+        let n = 120;
         let (ow, oh) = nv12::fit(area.2, area.3);
         let mut out = Vec::new();
         let mut scratch = Vec::new();
@@ -558,19 +651,29 @@ fn bench_rec_capture() {
             Ok(mut s) => {
                 let mut conv = Duration::ZERO;
                 for _ in 0..n {
-                    let f = s.next(Instant::now() + Duration::from_millis(50)).unwrap();
+                    let f = s.next(tick()).unwrap();
                     let t = Instant::now();
                     nv12::convert_into(&f.bgra, f.w, f.h, ow, oh, &mut out, &mut scratch);
                     conv += t.elapsed();
                 }
+                let (cap, conv) = (s.work_per_frame(), conv / n);
                 eprintln!(
-                    "{name} {}x{}: DXGI copy+cursor {:?}/frame, NV12 ({ow}x{oh}) {:?}/frame",
+                    "{name} {}x{} CPU: DXGI copy+cursor {cap:?}/frame, NV12 ({ow}x{oh}) {conv:?}/frame, total {:?}",
                     area.2,
                     area.3,
-                    s.work_per_frame(),
-                    conv / n
+                    cap + conv
                 );
             }
+            Err(e) => eprintln!("{name}: DXGI unavailable: {e:#}"),
+        }
+        match DxgiSource::open_nv12(area, (ow, oh)) {
+            Ok(mut s) if s.on_gpu() => {
+                for _ in 0..n {
+                    assert!(s.next(tick()).unwrap().nv12.is_some());
+                }
+                eprintln!("{name} {}x{} GPU: copy+cursor+NV12 ({ow}x{oh})+readback {:?}/frame", area.2, area.3, s.work_per_frame());
+            }
+            Ok(_) => eprintln!("{name}: no GPU conversion here"),
             Err(e) => eprintln!("{name}: DXGI unavailable: {e:#}"),
         }
         let mut g = GdiPollSource::open(area).unwrap();
@@ -579,23 +682,205 @@ fn bench_rec_capture() {
         }
         eprintln!("{name}: GDI poll {:?}/frame", g.work_per_frame());
     }
-    if mf::available() {
-        let dir = out_dir();
-        let (w, h) = (1920.min(prim.w), 1080.min(prim.h));
-        let mut e = MfEncoder::create(&dir.join("bench.mp4"), w, h, 30, Quality::Medium, false).unwrap();
-        eprintln!("H.264 encoder: {:?}, hardware: {}", e.encoder_name(), e.hardware());
-        let mut s = DxgiSource::open((prim.x, prim.y, w, h)).map(|s| Box::new(s) as Box<dyn crate::rec::FrameSource>)
-            .unwrap_or_else(|_| Box::new(GdiPollSource::open((prim.x, prim.y, w, h)).unwrap()));
-        let t = Instant::now();
-        for i in 0..60u64 {
-            let mut f = s.next(Instant::now() + Duration::from_millis(50)).unwrap();
-            f.ts = Duration::from_millis(i * 33);
-            e.push_video(&f).unwrap();
-        }
-        eprintln!("capture+convert+encode 60 frames at {w}x{h}: {:?}/frame", t.elapsed() / 60);
-        Box::new(e).finish().unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
+    if !mf::available() {
+        return;
     }
+    // Real recordings (capture thread, queue, encoder): what reaches the MP4.
+    let dir = out_dir();
+    let secs = 4.0;
+    for (name, area) in areas {
+        let out = nv12::fit(area.2, area.3);
+        for fps in [30, 60] {
+            for gpu in [false, true] {
+                let src = if gpu { DxgiSource::open_nv12(area, out) } else { DxgiSource::open(area) };
+                let Ok(src) = src else { continue };
+                if gpu && !src.on_gpu() {
+                    continue;
+                }
+                let work = std::sync::Arc::new(std::sync::Mutex::new(Duration::ZERO));
+                let push = std::sync::Arc::new(std::sync::Mutex::new((Duration::ZERO, 0)));
+                let spec = spec(RecFormat::Mp4, fps, area, dir.join(format!("bench-{name}-{fps}-{gpu}.mp4")));
+                let enc = MfEncoder::create(&spec.part_path(), area.2, area.3, fps, Quality::Medium, false).unwrap();
+                let hw = enc.hardware();
+                let enc = TimedEncoder { inner: Box::new(enc), push: push.clone() };
+                let src = TimedSource { inner: src, work: work.clone() };
+                let s = Session::start(spec, Box::new(src), vec![], Box::new(enc)).unwrap();
+                std::thread::sleep(Duration::from_secs_f64(secs));
+                let st = s.stats();
+                let path = s.stop().unwrap();
+                let p = mf::probe(&path).unwrap();
+                let (pt, pn) = *push.lock().unwrap();
+                let cap = *work.lock().unwrap();
+                let push = pt / pn.max(1);
+                eprintln!(
+                    "session {name} {}x{} -> {}x{} @ {fps} fps, {} conversion (hw encoder {hw}): capture {cap:?}/frame, encoder push {push:?}/frame, capture+convert {:?}/frame; {} frames in {:.2} s of MP4 ({:.1} fps), {} dropped",
+                    area.2,
+                    area.3,
+                    p.size.0,
+                    p.size.1,
+                    if gpu { "GPU" } else { "CPU" },
+                    if gpu { cap } else { cap + push },
+                    p.frames,
+                    p.duration.as_secs_f64(),
+                    p.frames as f64 / p.duration.as_secs_f64().max(0.001),
+                    st.dropped
+                );
+            }
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Y, U, V at (x, y) of a tight NV12 picture of `w`×`h`.
+fn yuv_at(nv: &[u8], w: u32, h: u32, x: u32, y: u32) -> [u8; 3] {
+    let (w, h, x, y) = (w as usize, h as usize, x as usize, y as usize);
+    let c = w * h + (y / 2) * w + (x / 2) * 2;
+    [nv[y * w + x], nv[c], nv[c + 1]]
+}
+
+/// NV12 Y, U, V of the solid colour `rgb`, by the CPU conversion.
+fn expect_yuv((r, g, b): (u8, u8, u8)) -> [u8; 3] {
+    let nv = nv12::convert(&[b, g, r, 255].repeat(4), 2, 2, 2, 2);
+    [nv[0], nv[4], nv[5]]
+}
+
+fn near(a: [u8; 3], b: [u8; 3], tol: u8) -> bool {
+    a.iter().zip(b).all(|(x, y)| x.abs_diff(y) <= tol)
+}
+
+/// Where the bar centres of a [`TestWindow::bars`] window at `win` land in
+/// the `out`-sized picture of `area`.
+fn bar_centres(win: crate::capture::IRect, area: crate::capture::IRect, out: (u32, u32)) -> Vec<(u32, u32)> {
+    let n = COLOURS.len() as i32;
+    let (ww, wh) = (win.2 as i32, win.3 as i32);
+    (0..n)
+        .map(|i| {
+            let cx = win.0 + (ww * i / n + ww * (i + 1) / n) / 2;
+            let cy = win.1 + wh / 2;
+            let sx = f64::from(cx - area.0) * f64::from(out.0) / f64::from(area.2);
+            let sy = f64::from(cy - area.1) * f64::from(out.1) / f64::from(area.3);
+            (sx as u32, sy as u32)
+        })
+        .collect()
+}
+
+/// The colour-bar window, and the areas recorded around it: the window
+/// itself (no scaling) and a 4608×432 area (scaled to 4096×384).
+fn bar_areas(win: &TestWindow) -> [crate::capture::IRect; 2] {
+    let r = win.rect();
+    [r, (r.0 - 100, r.1 - 100, 4608, 432)]
+}
+
+/// The GPU's NV12 (scaled or not) matches the CPU conversion of the same
+/// desktop image, and the colours are the BT.709 limited-range values.
+#[test]
+#[ignore = "records the real desktop"]
+fn live_rec_gpu_nv12_matches_the_cpu_conversion() {
+    crate::capture::enable_dpi_awareness();
+    let win = TestWindow::bars(300, 300, 384, 128);
+    for area in bar_areas(&win) {
+        let out = nv12::fit(area.2, area.3);
+        let tick = || Instant::now() + Duration::from_millis(50);
+        // One duplication of an output at a time.
+        let c = match DxgiSource::open(area) {
+            Ok(mut s) => s.next(tick()).unwrap(),
+            Err(e) => return eprintln!("SKIP: desktop duplication is unavailable here: {e:#}"),
+        };
+        let g = match DxgiSource::open_nv12(area, out) {
+            Ok(mut s) if s.on_gpu() => s.next(tick()).unwrap(),
+            Ok(_) => return eprintln!("SKIP: no GPU conversion on this machine"),
+            Err(e) => panic!("{e:#}"),
+        };
+        assert!(g.bgra.is_empty() && (g.w, g.h) == (area.2, area.3));
+        let g = g.nv12.expect("an NV12 frame");
+        assert_eq!((g.w, g.h, g.data.len()), (out.0, out.1, nv12::size(out.0, out.1)));
+        let cn = nv12::convert(&c.bgra, c.w, c.h, out.0, out.1);
+        for (k, &(x, y)) in bar_centres(win.rect(), area, out).iter().enumerate() {
+            let (a, b, want) = (yuv_at(&g.data, out.0, out.1, x, y), yuv_at(&cn, out.0, out.1, x, y), expect_yuv(COLOURS[k]));
+            eprintln!("{area:?} -> {out:?}: bar {k} at ({x}, {y}): GPU {a:?}, CPU {b:?}, expected {want:?}");
+            assert!(near(a, want, 2), "GPU {a:?}, expected {want:?}");
+            assert!(near(b, want, 1), "CPU {b:?}, expected {want:?}");
+        }
+        // The whole picture (other windows, edges, the scaling filter).
+        let ys = (out.0 * out.1) as usize;
+        let mad = |a: &[u8], b: &[u8]| a.iter().zip(b).map(|(x, y)| u64::from(x.abs_diff(*y))).sum::<u64>() as f64 / a.len() as f64;
+        let (my, muv) = (mad(&g.data[..ys], &cn[..ys]), mad(&g.data[ys..], &cn[ys..]));
+        eprintln!("{area:?}: mean |dY| {my:.3}, mean |dUV| {muv:.3}");
+        // Scaling: bilinear-like on the GPU, a box filter on the CPU.
+        let tol = if out == (area.2 & !1, area.3 & !1) { 0.5 } else { 4.0 };
+        assert!(my < tol && muv < tol, "mean |dY| {my}, |dUV| {muv}");
+    }
+}
+
+/// The pointer is drawn into the GPU picture as the CPU path draws it
+/// (alpha-blended, clipped at the area's edge).
+#[test]
+#[ignore = "records the real desktop"]
+fn live_rec_gpu_pointer_is_composited() {
+    crate::capture::enable_dpi_awareness();
+    let win = TestWindow::bars(300, 300, 384, 128);
+    let area = win.rect();
+    let out = nv12::fit(area.2, area.3);
+    // 16×16: opaque white rows on top, half-transparent black below.
+    let px: Vec<u8> = (0..16 * 16).flat_map(|i| if i / 16 < 8 { [255u8; 4] } else { [0, 0, 0, 128] }).collect();
+    // Over the black bar (5th of 6: x 256..320), then half outside the top-left corner.
+    let spots = [(area.0 + 280, area.1 + 56), (area.0 - 8, area.1 - 4)];
+    // One duplication of an output at a time.
+    let cpu: Vec<_> = match DxgiSource::open(area) {
+        Ok(mut s) => spots.iter().map(|&pos| s.frame_with_pointer(pos, 16, 16, &px)).collect(),
+        Err(e) => return eprintln!("SKIP: desktop duplication is unavailable here: {e:#}"),
+    };
+    let mut gpu = match DxgiSource::open_nv12(area, out) {
+        Ok(s) if s.on_gpu() => s,
+        Ok(_) => return eprintln!("SKIP: no GPU conversion on this machine"),
+        Err(e) => panic!("{e:#}"),
+    };
+    for (&pos, c) in spots.iter().zip(cpu) {
+        let g = gpu.frame_with_pointer(pos, 16, 16, &px).nv12.expect("an NV12 frame");
+        let cn = nv12::convert(&c.bgra, c.w, c.h, out.0, out.1);
+        let worst = g.data.iter().zip(&cn).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+        let (x, y) = ((pos.0 - area.0).max(0) as u32 + 2, (pos.1 - area.1).max(0) as u32 + 2);
+        let at = yuv_at(&g.data, out.0, out.1, x, y);
+        eprintln!("pointer at {pos:?}: largest GPU/CPU difference {worst}; white part {at:?}");
+        assert!(near(at, expect_yuv((255, 255, 255)), 2), "the pointer's white shows: {at:?}");
+        assert!(worst <= 3, "GPU and CPU pictures differ by {worst}");
+    }
+}
+
+/// MP4s made through the GPU path, scaled and not, decode to the colours.
+#[test]
+#[ignore = "records the real desktop"]
+fn live_rec_mp4_colour_bars_decode() {
+    crate::capture::enable_dpi_awareness();
+    if skip_without_mf(false) {
+        return;
+    }
+    let win = TestWindow::bars(300, 300, 384, 128);
+    let dir = out_dir();
+    for (i, area) in bar_areas(&win).into_iter().enumerate() {
+        let out = nv12::fit(area.2, area.3);
+        let src = match DxgiSource::open_nv12(area, out) {
+            Ok(s) if s.on_gpu() => s,
+            Ok(_) => return eprintln!("SKIP: no GPU conversion on this machine"),
+            Err(e) => return eprintln!("SKIP: desktop duplication is unavailable here: {e:#}"),
+        };
+        let spec = spec(RecFormat::Mp4, 30, area, dir.join(format!("bars{i}.mp4")));
+        let enc = MfEncoder::create(&spec.part_path(), area.2, area.3, 30, Quality::High, false).unwrap();
+        let s = Session::start(spec, Box::new(src), vec![], Box::new(enc)).unwrap();
+        std::thread::sleep(Duration::from_secs(1));
+        let path = s.stop().unwrap();
+        let pts = bar_centres(win.rect(), area, out);
+        let p = mf::probe_at(&path, &pts).unwrap();
+        eprintln!("{area:?}: {} frames of {:?}; luma at the bars (last frame) {:?}", p.frames, p.size, p.luma_at.last());
+        assert_eq!(p.size, out);
+        assert!(p.frames >= 25, "{} frames", p.frames);
+        let last = p.luma_at.last().unwrap();
+        for (k, &y) in last.iter().enumerate() {
+            let want = expect_yuv(COLOURS[k])[0];
+            assert!(y.abs_diff(want) <= 4, "bar {k}: luma {y}, expected {want}");
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A display that presents nothing after the duplication starts (a static
@@ -618,4 +903,79 @@ fn live_rec_dxgi_static_display_is_seeded_from_gdi() {
     };
     let c = &src.canvas()[(60 * 160 + 80) * 4..][..3];
     assert_eq!(c, [0, 0, 255], "the window's red, as BGR");
+}
+
+/// The same with the canvas on the GPU: the NV12 frame shows the window.
+#[test]
+#[ignore = "records the real desktop"]
+fn live_rec_gpu_canvas_is_seeded_from_gdi() {
+    crate::capture::enable_dpi_awareness();
+    let win = TestWindow::open(280, 280, 160, 120, 1_000_000); // stays red
+    let area = win.rect();
+    let out = nv12::fit(area.2, area.3);
+    dxgi::NO_FIRST_FRAME.with(|f| f.set(true));
+    let r = DxgiSource::open_nv12(area, out);
+    dxgi::NO_FIRST_FRAME.with(|f| f.set(false));
+    let mut src = match r {
+        Ok(s) if s.on_gpu() => s,
+        Ok(_) => return eprintln!("SKIP: no GPU conversion on this machine"),
+        Err(e) => return eprintln!("SKIP: desktop duplication is unavailable here: {e:#}"),
+    };
+    let f = src.next(Instant::now()).unwrap().nv12.expect("an NV12 frame");
+    let c = yuv_at(&f.data, f.w, f.h, 80, 60);
+    assert!(near(c, expect_yuv((255, 0, 0)), 2), "the window's red: {c:?}");
+}
+
+/// Without the GPU conversion (unavailable, or failing in the middle of
+/// a recording) frames are BGRA, and one MP4 takes both kinds.
+#[test]
+#[ignore = "records the real desktop"]
+fn live_rec_gpu_conversion_falls_back_to_the_cpu() {
+    crate::capture::enable_dpi_awareness();
+    if skip_without_mf(false) {
+        return;
+    }
+    let win = TestWindow::bars(300, 300, 384, 128);
+    let area = win.rect();
+    let out = nv12::fit(area.2, area.3);
+    let tick = || Instant::now() + Duration::from_millis(30);
+    dxgi::NO_GPU.with(|f| f.set(true));
+    let r = DxgiSource::open_nv12(area, out);
+    dxgi::NO_GPU.with(|f| f.set(false));
+    match r {
+        Ok(mut s) => {
+            assert!(!s.on_gpu());
+            let f = s.next(tick()).unwrap();
+            assert!(f.nv12.is_none() && f.bgra.len() == (area.2 * area.3 * 4) as usize);
+        }
+        Err(e) => return eprintln!("SKIP: desktop duplication is unavailable here: {e:#}"),
+    }
+    let mut s = DxgiSource::open_nv12(area, out).unwrap();
+    if !s.on_gpu() {
+        return eprintln!("SKIP: no GPU conversion on this machine");
+    }
+    let dir = out_dir();
+    let path = dir.join("fallback.mp4");
+    let mut e = MfEncoder::create(&path, area.2, area.3, 30, Quality::High, false).unwrap();
+    for i in 0..30u64 {
+        if i == 15 {
+            s.stop_gpu("the test");
+            assert!(!s.on_gpu());
+        }
+        let mut f = s.next(tick()).unwrap();
+        assert_eq!(f.nv12.is_some(), i < 15, "frame {i}");
+        f.ts = Duration::from_millis(i * 1000 / 30);
+        e.push_video(&f).unwrap();
+    }
+    Box::new(e).finish().unwrap();
+    let pts = bar_centres(area, area, out);
+    let p = mf::probe_at(&path, &pts).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(p.frames, 30);
+    for (i, row) in p.luma_at.iter().enumerate() {
+        for (k, &y) in row.iter().enumerate() {
+            let want = expect_yuv(COLOURS[k])[0];
+            assert!(y.abs_diff(want) <= 4, "frame {i}, bar {k}: luma {y}, expected {want}");
+        }
+    }
 }

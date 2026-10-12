@@ -414,7 +414,9 @@ fn prepare(spec: &RecSpec, mic: MicFlags) -> Result<Parts> {
     if let Some(dir) = spec.out.parent() {
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
     }
-    let (src, _) = recwin::open_source(spec.area)?;
+    // MP4: NV12 at the encoder's size, made on the GPU where it can be.
+    let nv12 = (spec.format == RecFormat::Mp4).then(|| recwin::nv12::fit(spec.area.2, spec.area.3));
+    let (src, _) = recwin::open_source(spec.area, nv12)?;
     let (w, h) = src.size();
     let mut audio: Vec<Box<dyn AudioSource>> = Vec::new();
     let mut warnings = Vec::new();

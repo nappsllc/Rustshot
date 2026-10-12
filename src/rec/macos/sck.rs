@@ -292,7 +292,7 @@ impl FrameSource for SckSource {
             l = self.shared.cv.wait_timeout(l, left).unwrap_or_else(|e| e.into_inner()).0;
         }
         let (w, h) = self.shared.size;
-        Some(Frame { w, h, bgra: l.px.clone(), ts: Duration::ZERO })
+        Some(Frame::bgra(w, h, l.px.clone(), Duration::ZERO))
     }
 
     fn size(&self) -> (u32, u32) {

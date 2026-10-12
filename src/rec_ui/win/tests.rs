@@ -147,7 +147,7 @@ struct Still;
 impl FrameSource for Still {
     fn next(&mut self, _deadline: Instant) -> Option<crate::rec::Frame> {
         std::thread::sleep(Duration::from_millis(5));
-        Some(crate::rec::Frame { w: 4, h: 4, bgra: vec![128; 64], ts: Duration::MAX })
+        Some(crate::rec::Frame::bgra(4, 4, vec![128; 64], Duration::MAX))
     }
     fn size(&self) -> (u32, u32) {
         (4, 4)

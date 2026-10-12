@@ -519,8 +519,17 @@ impl VideoEncoder for MfEncoder {
         if self.poisoned {
             bail!("the MP4 is incomplete after an earlier write error");
         }
-        if (f.w, f.h) != (self.in_w, self.in_h) || f.bgra.len() != f.w as usize * f.h as usize * 4 {
-            bail!("frame is {}x{} ({} bytes); the recording is {}x{}", f.w, f.h, f.bgra.len(), self.in_w, self.in_h);
+        if (f.w, f.h) != (self.in_w, self.in_h) {
+            bail!("frame is {}x{}; the recording is {}x{}", f.w, f.h, self.in_w, self.in_h);
+        }
+        match &f.nv12 {
+            Some(p) if (p.w, p.h) != (self.out_w, self.out_h) || p.data.len() != nv12::size(p.w, p.h) => {
+                bail!("NV12 picture is {}x{} ({} bytes); the MP4 is {}x{}", p.w, p.h, p.data.len(), self.out_w, self.out_h)
+            }
+            None if f.bgra.len() != f.w as usize * f.h as usize * 4 => {
+                bail!("frame is {}x{} ({} bytes of BGRA)", f.w, f.h, f.bgra.len())
+            }
+            _ => {}
         }
         com_init();
         let mut t = i64::try_from(f.ts.as_nanos() / 100).unwrap_or(i64::MAX);
@@ -536,11 +545,17 @@ impl VideoEncoder for MfEncoder {
                 self.fill_silence((t - HNS / 2).max(0) as u64 * RATE / HNS as u64)?;
             }
         }
-        let mut nv = std::mem::take(&mut self.nv12);
-        nv12::convert_into(&f.bgra, f.w, f.h, self.out_w, self.out_h, &mut nv, &mut self.scaled);
-        let r = self.sample(&nv, t, self.frame_dur).and_then(|s| self.write(self.video, &s));
-        self.nv12 = nv;
-        r?;
+        if let Some(p) = &f.nv12 {
+            // Converted (and scaled) on the GPU by the source.
+            let s = self.sample(&p.data, t, self.frame_dur)?;
+            self.write(self.video, &s)?;
+        } else {
+            let mut nv = std::mem::take(&mut self.nv12);
+            nv12::convert_into(&f.bgra, f.w, f.h, self.out_w, self.out_h, &mut nv, &mut self.scaled);
+            let r = self.sample(&nv, t, self.frame_dur).and_then(|s| self.write(self.video, &s));
+            self.nv12 = nv;
+            r?;
+        }
         self.last_video = Some(t);
         Ok(())
     }

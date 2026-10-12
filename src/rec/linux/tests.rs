@@ -225,7 +225,7 @@ impl FrameSource for StallingFrames {
             let i = ((y * self.w + x) * 4) as usize;
             bgra[i..i + 4].copy_from_slice(&[255, 255, 255, 255]);
         }
-        Some(crate::rec::Frame { w: self.w, h: self.h, bgra, ts: Duration::ZERO })
+        Some(crate::rec::Frame::bgra(self.w, self.h, bgra, Duration::ZERO))
     }
 
     fn size(&self) -> (u32, u32) {
@@ -354,7 +354,7 @@ fn bar_frame(w: u32, h: u32, n: u32, ts: Duration) -> crate::rec::Frame {
             bgra[i..i + 4].copy_from_slice(&[255, 255, 255, 255]);
         }
     }
-    crate::rec::Frame { w, h, bgra, ts }
+    crate::rec::Frame::bgra(w, h, bgra, ts)
 }
 
 /// Per-stream durations from `ffprobe -show_entries stream=codec_type,duration`.

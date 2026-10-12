@@ -9,12 +9,21 @@
 //! changed, the last canvas is handed out again. Lost access (desktop
 //! switch, mode change, UAC prompt) re-creates the duplication.
 //!
+//! For MP4 ([`DxgiSource::open_nv12`]) the canvas stays on the GPU instead
+//! (when every output is on one adapter): new desktop images are copied
+//! into a texture of the area, and each frame is scaled and converted to
+//! NV12 there by the video processor ([`super::gpu`]) and read back once.
+//! When that cannot be set up, or fails later, the source goes back to the
+//! CPU canvas (seeded from GDI) and hands out BGRA, which the encoder
+//! converts itself.
+//!
 //! Physical pixels throughout: output desktop coordinates are physical in
 //! a per-monitor-DPI-aware process. Rotated outputs are not supported
 //! here (the caller falls back to GDI).
 
 use crate::capture::IRect;
-use crate::rec::{Frame, FrameSource};
+use super::gpu::Gpu;
+use crate::rec::{Frame, FrameSource, Nv12};
 use anyhow::{bail, Context, Result};
 use std::time::{Duration, Instant};
 use windows::core::Interface;
@@ -34,6 +43,8 @@ thread_local! {
     /// Tests make [`DxgiSource::open`] see no first frame (a display that
     /// is not presenting), to exercise the GDI seed.
     pub(crate) static NO_FIRST_FRAME: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Tests make the GPU conversion unavailable, to exercise the CPU one.
+    pub(crate) static NO_GPU: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// How long to wait before trying to re-create a lost duplication again.
@@ -73,8 +84,14 @@ struct Pointer {
 pub struct DxgiSource {
     area: IRect,
     outs: Vec<Output>,
-    /// The latest desktop image of the area (no pointer), BGRA.
+    /// The latest desktop image of the area (no pointer), BGRA; empty while
+    /// `gpu` holds it.
     canvas: Vec<u8>,
+    /// The GPU canvas and NV12 converter (MP4), when in use.
+    gpu: Option<Gpu>,
+    /// The last NV12 picture made, and whether anything changed since.
+    last_nv12: Option<Nv12>,
+    dirty: bool,
     pointer: Pointer,
     /// Time spent copying and compositing (not waiting), for measurements.
     work: Duration,
@@ -115,23 +132,29 @@ fn staging(device: &ID3D11Device, w: u32, h: u32) -> Result<ID3D11Texture2D> {
     tex.context("no staging texture")
 }
 
+/// A D3D11 device on `adapter`, with video support (the video processor of
+/// the GPU conversion) when the driver has it.
 fn create_device(adapter: &IDXGIAdapter1) -> Result<(ID3D11Device, ID3D11DeviceContext)> {
-    let (mut dev, mut ctx) = (None, None);
-    unsafe {
-        D3D11CreateDevice(
-            adapter,
-            D3D_DRIVER_TYPE_UNKNOWN,
-            HMODULE::default(),
-            D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-            None,
-            D3D11_SDK_VERSION,
-            Some(&mut dev),
-            None,
-            Some(&mut ctx),
-        )
-    }
-    .context("create a D3D11 device")?;
-    Ok((dev.context("no device")?, ctx.context("no context")?))
+    let make = |flags: D3D11_CREATE_DEVICE_FLAG| {
+        let (mut dev, mut ctx) = (None, None);
+        unsafe {
+            D3D11CreateDevice(
+                adapter,
+                D3D_DRIVER_TYPE_UNKNOWN,
+                HMODULE::default(),
+                flags,
+                None,
+                D3D11_SDK_VERSION,
+                Some(&mut dev),
+                None,
+                Some(&mut ctx),
+            )
+        }
+        .context("create a D3D11 device")?;
+        Ok((dev.context("no device")?, ctx.context("no context")?))
+    };
+    make(D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT)
+        .or_else(|_| make(D3D11_CREATE_DEVICE_BGRA_SUPPORT))
 }
 
 impl Output {
@@ -238,6 +261,9 @@ impl DxgiSource {
             area,
             outs,
             canvas: vec![0; area.2 as usize * area.3 as usize * 4],
+            gpu: None,
+            last_nv12: None,
+            dirty: true,
             pointer: Pointer::default(),
             work: Duration::ZERO,
             frames: 0,
@@ -263,12 +289,66 @@ impl DxgiSource {
         Ok(s)
     }
 
+    /// [`DxgiSource::open`], handing out frames as NV12 of `out` (even;
+    /// the area scaled to it) converted on the GPU, or BGRA as `open` does
+    /// when that is not possible here.
+    pub fn open_nv12(area: IRect, out: (u32, u32)) -> Result<DxgiSource> {
+        let mut s = DxgiSource::open(area)?;
+        if let Err(e) = s.start_gpu(out) {
+            eprintln!("rustshot: GPU colour conversion unavailable ({e:#}); converting on the CPU");
+        }
+        Ok(s)
+    }
+
+    /// Whether frames are converted to NV12 on the GPU (now).
+    #[cfg_attr(not(test), allow(dead_code))] // tests and benchmarks
+    pub fn on_gpu(&self) -> bool {
+        self.gpu.is_some()
+    }
+
+    /// Move the canvas to the GPU and convert there from now on.
+    fn start_gpu(&mut self, out: (u32, u32)) -> Result<()> {
+        #[cfg(test)]
+        if NO_GPU.with(|f| f.get()) {
+            bail!("GPU conversion disabled by the test");
+        }
+        let o = &self.outs[0];
+        if self.outs.iter().any(|p| p.device.as_raw() != o.device.as_raw()) {
+            bail!("the area spans outputs of more than one adapter");
+        }
+        let gpu = Gpu::new(&o.device, &o.ctx, self.area, out)?;
+        gpu.upload(self.area, &self.canvas);
+        self.gpu = Some(gpu);
+        self.canvas = Vec::new();
+        self.dirty = true;
+        Ok(())
+    }
+
+    /// Give up the GPU conversion (it failed): back to a CPU canvas,
+    /// seeded from GDI, and BGRA frames.
+    pub(crate) fn stop_gpu(&mut self, why: &str) {
+        if self.gpu.take().is_none() {
+            return;
+        }
+        eprintln!("rustshot: GPU colour conversion failed ({why}); converting on the CPU");
+        self.last_nv12 = None;
+        self.canvas = vec![0; self.area.2 as usize * self.area.3 as usize * 4];
+        for i in 0..self.outs.len() {
+            self.seed(self.outs[i].isect);
+        }
+    }
+
     /// Copy `r` (virtual-screen px, inside the area) into the canvas from GDI.
     fn seed(&mut self, r: IRect) {
         if r.2 == 0 || r.3 == 0 {
             return;
         }
         let Some(px) = super::gdi_poll::snapshot(r) else { return };
+        self.dirty = true;
+        if let Some(g) = &self.gpu {
+            g.upload(r, &px);
+            return;
+        }
         let stride = self.area.2 as usize * 4;
         let row = r.2 as usize * 4;
         let x = (r.0 - self.area.0) as usize * 4;
@@ -326,8 +406,14 @@ impl DxgiSource {
         }
         let t0 = Instant::now();
         let mut copied = false;
+        // The GPU canvas takes the image straight from the duplication; an
+        // output whose device was re-created (device removed) cannot.
+        let gpu = self.gpu.as_ref().filter(|g| g.device.as_raw() == o.device.as_raw());
+        let gpu_lost = self.gpu.is_some() && gpu.is_none();
         if info.LastPresentTime != 0
-            && let (Some(res), Some(stg)) = (res, &o.staging)
+            && o.isect.2 > 0
+            && o.isect.3 > 0
+            && let Some(res) = res
             && let Ok(tex) = res.cast::<ID3D11Texture2D>()
         {
             let (ix, iy, iw, ih) = o.isect;
@@ -339,10 +425,20 @@ impl DxgiSource {
                 bottom: (iy - o.desk.top) as u32 + ih,
                 back: 1,
             };
-            unsafe { o.ctx.CopySubresourceRegion(stg, 0, 0, 0, 0, &tex, 0, Some(&bx)) };
-            copied = true;
+            if let Some(g) = gpu {
+                let (x, y) = ((ix - area.0) as u32, (iy - area.1) as u32);
+                unsafe { o.ctx.CopySubresourceRegion(&g.canvas, 0, x, y, 0, &tex, 0, Some(&bx)) };
+                o.seen = true;
+                self.dirty = true;
+            } else if let Some(stg) = &o.staging {
+                unsafe { o.ctx.CopySubresourceRegion(stg, 0, 0, 0, 0, &tex, 0, Some(&bx)) };
+                copied = true;
+            }
         }
         let p = &mut self.pointer;
+        if info.LastMouseUpdateTime != 0 || info.PointerShapeBufferSize > 0 {
+            self.dirty = true;
+        }
         if info.LastMouseUpdateTime != 0 {
             let visible = info.PointerPosition.Visible.as_bool();
             // Several outputs may report; the newest visible one wins, and
@@ -384,7 +480,78 @@ impl DxgiSource {
                 o.seen = true;
             }
         }
+        if gpu_lost {
+            self.stop_gpu("the display device was re-created");
+        }
         self.work += t0.elapsed();
+    }
+
+    /// The frame for now from what the outputs gave so far, with the pointer.
+    fn frame(&mut self) -> Frame {
+        let t0 = Instant::now();
+        let (w, h) = (self.area.2, self.area.3);
+        let f = match self.gpu.is_some().then(|| self.gpu_frame()).flatten() {
+            Some(nv12) => Frame { w, h, bgra: Vec::new(), ts: Duration::ZERO, nv12: Some(nv12) },
+            None => {
+                let mut bgra = self.canvas.clone();
+                draw_pointer(&mut bgra, self.area, &self.pointer);
+                Frame::bgra(w, h, bgra, Duration::ZERO)
+            }
+        };
+        self.work += t0.elapsed();
+        self.frames += 1;
+        f
+    }
+
+    /// The frame for now with a colour pointer of `w`×`h` BGRA `px` at
+    /// `pos` (virtual-screen px) in place of the real one; nothing polled.
+    #[cfg(test)]
+    pub(crate) fn frame_with_pointer(&mut self, pos: (i32, i32), w: u32, h: u32, px: &[u8]) -> Frame {
+        self.pointer = Pointer {
+            info: DXGI_OUTDUPL_POINTER_SHAPE_INFO {
+                Type: DXGI_OUTDUPL_POINTER_SHAPE_TYPE_COLOR.0 as u32,
+                Width: w,
+                Height: h,
+                Pitch: w * 4,
+                ..Default::default()
+            },
+            shape: px.to_vec(),
+            pos,
+            visible: true,
+            owner: 0,
+            updated: i64::MAX,
+        };
+        self.dirty = true;
+        self.frame()
+    }
+
+    /// The frame as NV12 from the GPU canvas (the last one again when
+    /// nothing changed); `None` when the conversion failed (and was given
+    /// up).
+    fn gpu_frame(&mut self) -> Option<Nv12> {
+        if !self.dirty
+            && let Some(f) = &self.last_nv12
+        {
+            return Some(f.clone());
+        }
+        let gpu = self.gpu.as_mut()?;
+        let p = &self.pointer;
+        let area = self.area;
+        let pointer = pointer_box(area, p).map(|r| (r, move |px: &mut [u8], r: IRect| draw_pointer(px, r, p)));
+        let r = gpu.convert(pointer.as_ref().map(|(r, d)| (*r, d as super::gpu::DrawPointer)));
+        match r {
+            Ok(data) => {
+                let (w, h) = gpu.out;
+                let f = Nv12 { w, h, data: std::sync::Arc::new(data) };
+                self.last_nv12 = Some(f.clone());
+                self.dirty = false;
+                Some(f)
+            }
+            Err(e) => {
+                self.stop_gpu(&format!("{e:#}"));
+                None
+            }
+        }
     }
 }
 
@@ -397,17 +564,23 @@ impl FrameSource for DxgiSource {
             let ms = (left.as_millis() as u32) / (n - i) as u32;
             self.poll(i, ms);
         }
-        let t0 = Instant::now();
-        let mut bgra = self.canvas.clone();
-        draw_pointer(&mut bgra, self.area, &self.pointer);
-        self.work += t0.elapsed();
-        self.frames += 1;
-        Some(Frame { w: self.area.2, h: self.area.3, bgra, ts: Duration::ZERO })
+        Some(self.frame())
     }
 
     fn size(&self) -> (u32, u32) {
         (self.area.2, self.area.3)
     }
+}
+
+/// The part of the area (virtual-screen px) the pointer covers, if any.
+fn pointer_box(area: IRect, p: &Pointer) -> Option<IRect> {
+    if !p.visible || p.shape.is_empty() {
+        return None;
+    }
+    let mono = p.info.Type == DXGI_OUTDUPL_POINTER_SHAPE_TYPE_MONOCHROME.0 as u32;
+    let (w, h) = (p.info.Width as i32, if mono { p.info.Height as i32 / 2 } else { p.info.Height as i32 });
+    let r = RECT { left: p.pos.0, top: p.pos.1, right: p.pos.0 + w, bottom: p.pos.1 + h };
+    intersect(area, &r)
 }
 
 /// Composite the pointer shape onto `bgra` (the area's pixels).

@@ -598,7 +598,7 @@ impl Latest {
     fn next(&mut self, deadline: Instant) -> Option<Frame> {
         if let Some((bgra, n)) = self.slot.take_after(self.seen, deadline) {
             self.seen = n;
-            let f = Frame { w: self.size.0, h: self.size.1, bgra, ts: Duration::ZERO };
+            let f = Frame::bgra(self.size.0, self.size.1, bgra, Duration::ZERO);
             self.last = Some(f.clone());
             return Some(f);
         }

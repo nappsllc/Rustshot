@@ -378,7 +378,7 @@ impl FrameSource for XShmSource {
             Some(mut bgra) => {
                 // SAFETY: requests on our Display, errors recorded.
                 unsafe { guarded(self.dpy, || self.draw_cursor(&mut bgra)) };
-                let f = Frame { w: self.area.2, h: self.area.3, bgra, ts: Duration::ZERO };
+                let f = Frame::bgra(self.area.2, self.area.3, bgra, Duration::ZERO);
                 self.last = Some(f.clone());
                 Some(f)
             }

@@ -147,7 +147,7 @@ impl FrameSource for GdiPollSource {
         let bgra = self.grab(true)?;
         self.work += t0.elapsed();
         self.frames += 1;
-        Some(Frame { w, h, bgra, ts: Duration::ZERO })
+        Some(Frame::bgra(w, h, bgra, Duration::ZERO))
     }
 
     fn size(&self) -> (u32, u32) {
