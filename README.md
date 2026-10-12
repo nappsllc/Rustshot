@@ -27,6 +27,9 @@ renderer.
 - **Export:** copy to the clipboard, save as PNG, JPEG or BMP straight into
   a dated folder (or through the native save dialog), or upload to imgur
   with the link copied for you.
+- **Pin to screen** (<kbd>Ctrl</kbd>+<kbd>P</kbd>): the selection stays on
+  top where it was, to zoom, fade and compare ([Pins](#pins-and-the-thumbnail)),
+  and a **thumbnail** after each capture to copy, save, pin or drag it out.
 - **Screen recording** of a region or a screen to MP4 or GIF, with system
   sound, the microphone and an on-screen camera bubble
   ([Recording](#recording)).
@@ -116,7 +119,8 @@ section:
   icon: the hotkeys and a second `rustshot` launch still capture, and the
   row warns when no capture hotkey is set), *Copy to clipboard after
   capture* (a save or upload also copies the image), *Play shutter
-  sound*, *Save to* (with **Change…**) and the file name with an example
+  sound*, *Show thumbnail after capture* (see
+  [Pins and the thumbnail](#pins-and-the-thumbnail)), *Save to* (with **Change…**) and the file name with an example
   and PNG / JPG.
 - **Capture:** daily subfolders and their pattern, *Ask where to save*,
   the format (PNG, JPG or BMP) and JPEG quality, the file-name pattern
@@ -199,6 +203,36 @@ on, a save (or an upload) also copies the image.
 
 Characters Windows does not allow in names (`<>:"/\|?*`) become `-`; in the
 subfolder pattern `/` nests folders (`%Y/%m`) and `..` is dropped.
+
+### Pins and the thumbnail
+
+**Pin to screen** (<kbd>Ctrl</kbd>+<kbd>P</kbd> in the overlay, or the pin
+button at the end of the toolbar's output group) turns the selection, with
+its annotations, into a borderless window that stays on top, exactly where
+it was captured, with a thin accent border. On a pin:
+
+| Do | To |
+|---|---|
+| drag | move it |
+| mouse wheel | zoom it about the pointer (25-400 %) |
+| <kbd>Ctrl</kbd>+wheel | change its opacity (20-100 %) |
+| double-click, <kbd>Esc</kbd> | close it |
+| right-click | Copy, Save, Save As…, Zoom 100 %, Opacity, Close, Close all pins |
+| <kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>Ctrl</kbd>+<kbd>S</kbd> | copy it / save it |
+
+Pin as many as you like; they belong to the daemon, and the tray menu offers
+**Close all pins** while any are up (a one-shot `rustshot gui` stays until
+its last pin is closed). Pins are not hidden from screenshots. On macOS a
+pin can be dragged and double-clicked closed for now (no zoom or menu yet).
+
+After a screenshot is copied or saved, a **thumbnail** card appears in the
+bottom-right corner of that monitor for 6 seconds (it waits while the
+pointer is on it), in place of the "Copied" / "Saved" toast; errors,
+uploads and recordings keep the toast. Point at it for **Copy**, **Save**
+(to the save folder), **Pin** and **×**; on Windows drag it into another
+app or a folder to drop the PNG file (the saved file, or a temporary copy).
+Turn it off with *Show thumbnail after capture* in Settings › General
+(`show_thumbnail = false`).
 
 ### Selecting
 
@@ -285,6 +319,7 @@ recording starts video mode, and a delay waits that long.
 | Undo / Redo | <kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> (or <kbd>Ctrl</kbd>+<kbd>Y</kbd>) |
 | Copy / Save / Upload | <kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>Ctrl</kbd>+<kbd>S</kbd> / <kbd>Ctrl</kbd>+<kbd>U</kbd> |
 | Save As (always asks) | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> |
+| Pin to screen | <kbd>Ctrl</kbd>+<kbd>P</kbd> |
 | Select the whole screen | <kbd>Ctrl</kbd>+<kbd>A</kbd> |
 | Toggle the color palette | <kbd>Space</kbd> |
 | Bigger / smaller UI, back to Auto | <kbd>Ctrl</kbd>+<kbd>=</kbd> (or <kbd>Ctrl</kbd>+<kbd>+</kbd>, keypad <kbd>+</kbd>) / <kbd>Ctrl</kbd>+<kbd>-</kbd> / <kbd>Ctrl</kbd>+<kbd>0</kbd> |
@@ -314,7 +349,7 @@ bound twice):
 [shortcuts]
 tool_pencil = "P"         # tool_line, tool_arrow, tool_rectangle, tool_circle,
                           # tool_marker, tool_text, tool_counter, tool_pixelate,
-                          # tool_invert, size_down, size_up, save_desktop
+                          # tool_invert, size_down, size_up, save_desktop, pin
 save_as = "Ctrl+Shift+S"  # copy, save, upload, undo, select_all, toggle_palette,
 redo = "Ctrl+Shift+Z, Ctrl+Y"  # accept (Enter), cancel (Esc),
 ui_bigger = "Ctrl+=, Ctrl+Shift+=, Ctrl+NumpadAdd"  # ui_smaller, ui_reset
@@ -474,6 +509,7 @@ repeat_hotkey = ""                # the last region again ("" = none)
 show_tray = true                  # false = no tray icon (hotkeys still work)
 copy_after_capture = false        # a save or upload also copies the image
 shutter_sound = false             # a short click when a capture is taken
+show_thumbnail = true             # the thumbnail card after a copied or saved capture
 copy_url_after_upload = true
 capture_active_monitor = false    # true = only the monitor under the cursor
 snap_windows = true               # outline the window under the pointer; a click selects it

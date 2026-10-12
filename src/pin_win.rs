@@ -383,6 +383,72 @@ mod tests {
         r
     }
 
+    /// Let the windows paint (DWM composes them a frame or two later).
+    fn settle() {
+        let t0 = std::time::Instant::now();
+        let mut msg = MSG::default();
+        while t0.elapsed() < std::time::Duration::from_millis(400) {
+            unsafe {
+                while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                    let _ = TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(15));
+        }
+    }
+
+    /// The screen at `r` (global physical px).
+    fn grab(r: (i32, i32, u32, u32)) -> PixBuf {
+        let shot = crate::capture::grab_edit(None, false).expect("screen");
+        crate::capture::crop_global(&shot, r).expect("crop")
+    }
+
+    /// On the real screen: the pin shows the image pixel for pixel where
+    /// it was captured, the accent border around it; zoomed to 200 % it
+    /// covers twice the area; at 40 % opacity what is under shows through;
+    /// closed, it is gone.
+    #[test]
+    #[ignore = "live: puts a pin on the screen and captures it"]
+    fn live_pin_on_screen() {
+        close_all();
+        let mut img = PixBuf::new(160, 100);
+        for (i, p) in img.as_raw_mut().as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            let (x, y) = (i % 160, i / 160);
+            *p = if (x / 20 + y / 20) % 2 == 0 { [250, 30, 200, 255] } else { [20, 220, 60, 255] };
+        }
+        let img = Arc::new(img);
+        let at = (300, 260);
+        assert!(open(img.clone(), at, crate::theme::DARK));
+        settle();
+        let hwnd = PINS.with(|p| p.borrow()[0].hwnd);
+        let shot = grab((at.0, at.1, 160, 100));
+        let same = (0..100).flat_map(|y| (0..160).map(move |x| (x, y))).filter(|&(x, y)| shot.get_pixel(x, y) == img.get_pixel(x, y)).count();
+        assert!(same > 160 * 100 * 98 / 100, "the pin on screen: {same} of 16000 pixels");
+        let a = crate::theme::DARK.accent;
+        let edge = grab((at.0 - 1, at.1 + 50, 1, 1)).get_pixel(0, 0);
+        assert_eq!(edge, [a.r, a.g, a.b, 255], "the accent border");
+        // 200 %: the bottom-right quarter of the image now sits at +160,+100.
+        wheel(hwnd, 120 * 7, false, at);
+        let z = with_pin(hwnd, |p| p.view.zoom).unwrap();
+        run(hwnd, Cmd::Zoom100);
+        with_pin(hwnd, |p| p.set_view(View { zoom: 200, ..p.view }, at));
+        settle();
+        assert!(z > 100);
+        let big = grab((at.0 + 300, at.1 + 180, 1, 1)).get_pixel(0, 0);
+        assert_eq!(big, img.get_pixel(150, 90), "zoomed: the image's corner at twice the distance");
+        // 40 %: blended with what is under.
+        run(hwnd, Cmd::Opacity(40));
+        settle();
+        let faded = grab((at.0 + 10, at.1 + 10, 1, 1)).get_pixel(0, 0);
+        assert_ne!(faded, img.get_pixel(5, 5), "see-through");
+        run(hwnd, Cmd::Close);
+        settle();
+        let gone = grab((at.0, at.1, 160, 100));
+        let left = (0..100).flat_map(|y| (0..160).map(move |x| (x, y))).filter(|&(x, y)| gone.get_pixel(x, y) == img.get_pixel(x / 2, y / 2)).count();
+        assert!(left < 16000 / 2, "closed: {left} pixels still match");
+    }
+
     #[test]
     fn a_pin_window_zooms_fades_moves_and_closes() {
         close_all();

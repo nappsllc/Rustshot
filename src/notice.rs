@@ -683,14 +683,16 @@ pub fn place_note(work: crate::capture::IRect, note: &Note, (w, h): (u32, u32)) 
 }
 
 /// When the note was shown, as held at `now`: the pointer on it (`held`)
-/// stops its clock (back to fully shown if it was fading out), so it
-/// goes on from where it was once the pointer leaves.
+/// stops its clock at the age it had when the hold began (`frozen`, kept
+/// by the caller between ticks; back to fully shown if it was fading
+/// out), so it goes on from there once the pointer leaves.
 #[cfg_attr(target_os = "macos", allow(dead_code))] // no hover there
-pub fn hold(since: Instant, now: Instant, ttl: Duration, held: bool) -> Instant {
+pub fn hold(since: Instant, now: Instant, ttl: Duration, held: bool, frozen: &mut Option<Duration>) -> Instant {
     if !held {
+        *frozen = None;
         return since;
     }
-    let age = now.saturating_duration_since(since).clamp(FADE_IN, ttl.max(FADE_IN));
+    let age = *frozen.get_or_insert_with(|| now.saturating_duration_since(since).clamp(FADE_IN, ttl.max(FADE_IN)));
     now.checked_sub(age).unwrap_or(since)
 }
 
@@ -770,7 +772,8 @@ fn render_thumb(note: &Note, t: &Thumb, th: &Theme, s: f32, k: f32, hover: Optio
         if hover.is_none() {
             return;
         }
-        surface(f, &ui, l.pill, 9.0, &ALL_LAYERS, k);
+        // The pill floats over the picture: the small shadow (layers 1, 3).
+        surface(f, &ui, l.pill, 9.0, &[0, 2], k);
         for &(a, r) in &l.act.buttons {
             let hot = hover == Some(a);
             match a {
@@ -975,6 +978,7 @@ pub fn take_shown() -> Vec<(Note, (i32, i32))> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::objects::Pt;
     use std::path::PathBuf;
 
     fn saved(n: &str) -> Done {
@@ -1154,6 +1158,213 @@ mod tests {
         let wide: Vec<u16> = b[20..].as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
         assert_eq!(String::from_utf16_lossy(&wide[..wide.len() - 2]), "C:\\a.gif");
         assert_eq!(&wide[wide.len() - 2..], &[0, 0]);
+    }
+
+    fn shot(w: u32, h: u32) -> Arc<PixBuf> {
+        Arc::new(crate::pin::tests::sample_shot(w, h))
+    }
+
+    /// The card comes for a screenshot that was copied or saved, not for
+    /// a failure, an upload or nothing; it knows the file saved.
+    #[test]
+    fn a_thumbnail_for_copied_or_saved_captures() {
+        let img = shot(320, 200);
+        let n = thumbnail(&[Done::Copied], false, img.clone(), (40, 50)).unwrap();
+        assert_eq!((n.text.as_str(), n.kind, n.ttl), ("Copied to clipboard", ToastKind::Success, ACTION_TTL));
+        assert_eq!(n.file, None);
+        assert_eq!(n.thumb.as_ref().map(|t| t.at), Some((40, 50)));
+        assert_eq!(n.actions, [NoteAct::Dismiss, NoteAct::ThumbCopy, NoteAct::ThumbSave, NoteAct::Pin], "Edit waits for History");
+        assert!(!edit_enabled());
+        let n = thumbnail(&[Done::Copied, saved("a.png")], false, img.clone(), (0, 0)).unwrap();
+        assert_eq!(n.text, "Copied \u{b7} Saved a.png");
+        assert_eq!(n.file, Some(PathBuf::from("D:\\Downloads").join("a.png")));
+        let desk = Done::SavedDesktop(PathBuf::from("/home/me/Desktop/b.png"));
+        assert_eq!(thumbnail(&[desk], false, img.clone(), (0, 0)).unwrap().file, Some(PathBuf::from("/home/me/Desktop/b.png")));
+        assert_eq!(thumbnail(&[Done::Copied], true, img.clone(), (0, 0)), None, "an upload: the toast says its link");
+        assert_eq!(thumbnail(&[Done::Copied, Done::Failed("Save", "disk full".into())], false, img.clone(), (0, 0)), None);
+        assert_eq!(thumbnail(&[], false, img.clone(), (0, 0)), None, "a cancelled save dialog");
+        assert_eq!(thumbnail(&[Done::Copied], false, Arc::new(PixBuf::default()), (0, 0)), None);
+        // After its own Save button: the same card, saying so, with the file.
+        let n = thumbnail(&[Done::Copied], false, img, (0, 0)).unwrap();
+        let after = thumb_after(&n, &[saved("c.png")]).unwrap();
+        assert_eq!((after.text.as_str(), after.thumb.clone()), ("Saved \u{b7} c.png", n.thumb.clone()));
+        assert_eq!(after.file, Some(PathBuf::from("D:\\Downloads").join("c.png")));
+        let failed = thumb_after(&n, &[Done::Failed("Copy", "busy".into())]).unwrap();
+        assert!(failed.thumb.is_none() && failed.kind == ToastKind::Error, "a failure: the error toast");
+        assert_eq!(thumb_after(&n, &[]), None);
+    }
+
+    /// 200 px wide at 1x; the picture keeps its aspect ratio inside a box
+    /// 56-140 high; the buttons sit in the picture (Close top-right, the
+    /// pill centred at the bottom), found before the card itself.
+    #[test]
+    fn thumbnail_layout() {
+        for s in [1.0f32, 1.5, 2.0] {
+            for (w, h) in [(1600u32, 900u32), (300, 2000), (2000, 100), (40, 30)] {
+                let t = Thumb { img: shot(w, h), at: (0, 0) };
+                let l = thumb_layout(&t, s);
+                let card = l.act.panel;
+                assert_eq!(card.w, (200.0 * s).round(), "{w}x{h}@{s}");
+                assert!(l.img.h >= (56.0 * s).round() && l.img.h <= (140.0 * s).round(), "{:?}", l.img);
+                assert!(l.pic.0 as f32 <= l.img.w && l.pic.1 as f32 <= l.img.h);
+                let (ka, kb) = (w as f32 / h as f32, l.pic.0 as f32 / l.pic.1 as f32);
+                assert!((ka - kb).abs() / ka < 0.1 || l.pic.0 <= 2 || l.pic.1 <= 2, "aspect {ka} vs {kb}");
+                assert!(l.pic.0 <= w && l.pic.1 <= h, "never enlarged");
+                assert_eq!(l.act.size, ((card.x1() + (16.0 * s).round()) as u32, (card.y1() + (24.0 * s).round()) as u32));
+                for &(a, r) in &l.act.buttons {
+                    // The card under its buttons: hit near its corner.
+                    let c = if a == NoteAct::Card { Pt::new(r.x + 2.0, r.y + 2.0) } else { Pt::new(r.x + r.w / 2.0, r.y + r.h / 2.0) };
+                    assert_eq!(act_at(&l.act, c), Some(a), "{a:?}");
+                    if a != NoteAct::Card {
+                        assert!(r.x >= l.img.x && r.x1() <= l.img.x1() && r.y >= l.img.y && r.y1() <= l.img.y1(), "{a:?} in the picture");
+                    }
+                }
+                assert_eq!(l.act.buttons.last().map(|b| b.0), Some(NoteAct::Card));
+                let pill_c = l.pill.x + l.pill.w / 2.0;
+                assert!((pill_c - (l.img.x + l.img.w / 2.0)).abs() <= 1.0, "the pill is centred");
+                let close = l.act.buttons[0];
+                assert_eq!(close.0, NoteAct::Dismiss);
+                assert!(close.1.x1() > l.img.x1() - 10.0 * s && close.1.y < l.img.y + 10.0 * s, "Close top-right");
+                // The line under the picture is no button, only the card.
+                assert_eq!(act_at(&l.act, Pt::new(l.act.text_x + 2.0, l.img.y1() + 4.0 * s)), Some(NoteAct::Card));
+                assert_eq!(act_at(&l.act, Pt::new(1.0, 1.0)), None, "the shadow room");
+            }
+        }
+        let note = thumbnail(&[Done::Copied], false, shot(800, 600), (0, 0)).unwrap();
+        assert_eq!(note_size(&note, 1.0), act_layout(&note, 1.0).size);
+    }
+
+    /// The card goes bottom-right of the work area (the card 16 px from
+    /// its right edge, 24 above its bottom); a toast stays bottom-centre.
+    #[test]
+    fn the_thumbnail_sits_bottom_right_of_the_work_area() {
+        let n = thumbnail(&[Done::Copied], false, shot(800, 450), (0, 0)).unwrap();
+        for (work, s) in [((0, 0, 1920, 1032), 1.0f32), ((1920, 0, 2560, 1400), 1.5), ((-1280, -1024, 1280, 984), 2.0)] {
+            let size = note_size(&n, s);
+            let (x, y) = place_note(work, &n, size);
+            assert_eq!((x + size.0 as i32, y + size.1 as i32), (work.0 + work.2 as i32, work.1 + work.3 as i32), "{work:?}");
+            let card = act_layout(&n, s).panel;
+            let right = work.0 + work.2 as i32 - (x + card.x1() as i32);
+            let bottom = work.1 + work.3 as i32 - (y + card.y1() as i32);
+            assert_eq!((right, bottom), ((16.0 * s).round() as i32, (24.0 * s).round() as i32));
+        }
+        let toast = compose(&[Done::Copied], false).unwrap();
+        let work = (1920, 0, 1920, 1032);
+        assert_eq!(place_note(work, &toast, (300, 80)), place(work, (300, 80)));
+    }
+
+    /// The pointer on a card (or a recording's buttons) stops its clock:
+    /// it goes on from there once the pointer leaves; one that was fading
+    /// out comes back fully.
+    #[test]
+    fn the_clock_holds_while_hovered() {
+        let t0 = Instant::now();
+        let at = |ms: u64| t0 + Duration::from_millis(ms);
+        let ttl = ACTION_TTL;
+        let mut f = None;
+        assert_eq!(hold(t0, at(2000), ttl, false, &mut f), t0, "not held: unchanged");
+        // Held at 2 s: still 2 s old, tick after tick, however long.
+        let mut since = t0;
+        for ms in (2000..9000).step_by(16) {
+            since = hold(since, at(ms), ttl, true, &mut f);
+            assert_eq!(at(ms) - since, Duration::from_secs(2), "{ms}");
+        }
+        assert_eq!(opacity(at(9000) - hold(since, at(9000), ttl, true, &mut f), ttl), Some(1.0), "fully shown");
+        let s2 = hold(since, at(9000), ttl, true, &mut f);
+        // Let go: the remaining 4 s, then the fade.
+        assert_eq!(hold(s2, at(9016), ttl, false, &mut f), s2);
+        assert_eq!(f, None);
+        assert!(opacity(at(9000 + 3900) - s2, ttl).is_some());
+        assert_eq!(opacity(at(9000 + 4000) + FADE_OUT - s2, ttl), None);
+        // Caught while fading out: back to fully shown, at the end of its time.
+        let late = hold(t0, at(6100), ttl, true, &mut None);
+        assert_eq!(at(6100) - late, ttl);
+        assert_eq!(opacity(at(6100) - late, ttl), Some(1.0));
+        // Held while fading in: it finishes the fade-in.
+        let early = hold(t0, at(10), ttl, true, &mut None);
+        assert_eq!(at(10) - early, FADE_IN);
+    }
+
+    /// The card's pixels: the picture inside, the corners of the window
+    /// clear (the shadow fits), the buttons only with the pointer on it.
+    #[test]
+    fn the_thumbnail_renders() {
+        let n = thumbnail(&[Done::Copied], false, shot(640, 400), (0, 0)).unwrap();
+        for th in [&crate::theme::DARK, &crate::theme::LIGHT] {
+            for s in [1.0f32, 2.0] {
+                let l = act_layout(&n, s);
+                let (w, h, plain) = render_note(&n, th, s, 1.0, None);
+                assert_eq!((w, h), l.size);
+                let a = |px: &[u8], x: u32, y: u32| px[((y * w + x) * 4 + 3) as usize];
+                assert!(a(&plain, 0, 0) < 8 && a(&plain, w - 1, h - 1) < 8 && a(&plain, w - 1, 0) < 8, "corners clear");
+                let c = l.panel;
+                assert!(a(&plain, (c.x + c.w / 2.0) as u32, (c.y + 20.0 * s) as u32) > 240, "the picture is opaque");
+                let (_, _, hov) = render_note(&n, th, s, 1.0, Some(NoteAct::Card));
+                let pin = l.buttons.iter().find(|b| b.0 == NoteAct::Pin).unwrap().1;
+                let differ = (pin.y as u32..pin.y1() as u32).any(|y| {
+                    (pin.x as u32..pin.x1() as u32).any(|x| {
+                        let i = ((y * w + x) * 4) as usize;
+                        plain[i..i + 4] != hov[i..i + 4]
+                    })
+                });
+                assert!(differ, "the buttons show on hover");
+                let (_, _, faded) = render_note(&n, th, s, 0.25, None);
+                assert!(a(&faded, (c.x + c.w / 2.0) as u32, (c.y + 20.0 * s) as u32) < 160, "it fades");
+            }
+        }
+        // A long file name is cut to the card.
+        assert!(fit(&"x".repeat(300), 1.0, 12.0, 150.0).ends_with('\u{2026}'));
+        assert_eq!(fit("Copied", 1.0, 12.0, 150.0), "Copied");
+    }
+
+    /// The card's Close and its own line do nothing to a toast's file;
+    /// the card itself is no action; dragging takes the saved file.
+    #[test]
+    fn thumbnail_actions_and_the_drag_file() {
+        let n = thumbnail(&[Done::Copied], false, shot(64, 48), (5, 6)).unwrap();
+        assert_eq!(run_note_action(&n, NoteAct::Card, crate::theme::DARK, |_| {}), Next::Keep);
+        assert_eq!(run_note_action(&n, NoteAct::Dismiss, crate::theme::DARK, |_| {}), Next::Hide);
+        let _ = crate::pin::take_opened();
+        assert_eq!(run_note_action(&n, NoteAct::Pin, crate::theme::DARK, |_| {}), Next::Hide);
+        assert_eq!(crate::pin::take_opened(), [((64, 48), (5, 6))], "pinned where it was captured");
+        // Not saved: the picture as a PNG in the temp folder.
+        let f = drag_file(&n).expect("a file to drag");
+        assert!(f.extension().is_some_and(|e| e == "png") && f.is_file());
+        let png = std::fs::read(&f).unwrap();
+        assert_eq!(PixBuf::from_png(&png).unwrap().dimensions(), (64, 48));
+        let _ = std::fs::remove_file(&f);
+        // Saved: that file.
+        let dir = std::env::temp_dir().join(format!("rustshot-drag-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let saved_at = dir.join("shot.png");
+        std::fs::write(&saved_at, b"x").unwrap();
+        let s = Note { file: Some(saved_at.clone()), ..n };
+        assert_eq!(drag_file(&s), Some(saved_at));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Preview PNGs of the thumbnail card (dark and light, 1x and 2x, a
+    /// wide and a tall capture, with and without the pointer on it).
+    #[test]
+    #[ignore = "writes preview PNGs; set RUSTSHOT_PREVIEW_DIR"]
+    fn render_thumbnail_previews() {
+        let Some(dir) = std::env::var_os("RUSTSHOT_PREVIEW_DIR") else { return };
+        let dir = PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let cards = [
+            ("copied", thumbnail(&[Done::Copied], false, shot(1280, 720), (0, 0)).unwrap(), None),
+            ("saved-hover", thumbnail(&[saved("2026-10-12_09-41-07.png")], false, shot(1280, 720), (0, 0)).unwrap(), Some(NoteAct::Pin)),
+            ("tall-hover", thumbnail(&[Done::Copied, saved("a-rather-long-file-name-2026-10-12.png")], false, shot(400, 900), (0, 0)).unwrap(), Some(NoteAct::Card)),
+        ];
+        for (tn, th, bg) in [("dark", &crate::theme::DARK, [38u8, 44, 58]), ("light", &crate::theme::LIGHT, [214, 222, 232])] {
+            for s in [1.0f32, 2.0] {
+                for (name, note, hover) in &cards {
+                    let (w, h, px) = render_note(note, th, s, 1.0, *hover);
+                    let img = PixBuf::from_raw(w, h, crate::rec_ui::layer_over(&px, bg)).unwrap();
+                    std::fs::write(dir.join(format!("{tn}-thumb-{name}@{s}x.png")), img.to_png().unwrap()).unwrap();
+                }
+            }
+        }
     }
 
     /// The after-stop toast and "No mic input", dark and light, 1x and 2x.

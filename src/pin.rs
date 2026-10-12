@@ -636,7 +636,7 @@ pub fn take_opened() -> Vec<Opened> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]

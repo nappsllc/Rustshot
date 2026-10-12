@@ -46,6 +46,8 @@ struct Up {
     /// The left button went down here (window px): a click, or a drag
     /// out of a thumbnail once it moves.
     press: Option<Pt>,
+    /// Its age while held (see [`hold`]).
+    frozen: Option<std::time::Duration>,
 }
 
 struct Win {
@@ -196,18 +198,25 @@ fn drag_out(hwnd: HWND, p: Pt) {
 /// Drag `file` out (a modal loop until it is dropped or called off):
 /// true when something took it.
 fn drag_file_out(hwnd: HWND, file: &std::path::Path) -> windows::core::Result<bool> {
-    use windows::Win32::System::Com::IDataObject;
-    use windows::Win32::System::Ole::{OleInitialize, DROPEFFECT_COPY, DROPEFFECT_NONE};
-    use windows::Win32::UI::Shell::{IShellItem, SHCreateItemFromParsingName, SHDoDragDrop, BHID_DataObject};
+    use windows::Win32::System::Ole::{DROPEFFECT_COPY, DROPEFFECT_NONE};
+    use windows::Win32::UI::Shell::SHDoDragDrop;
+    let data = data_object(file)?;
+    // No drop source of ours: the shell's default one.
+    let effect = unsafe { SHDoDragDrop(Some(hwnd), &data, None, DROPEFFECT_COPY)? };
+    Ok(effect != DROPEFFECT_NONE)
+}
+
+/// The shell's data object for `file` (what Explorer drags: `CF_HDROP`
+/// and its own formats).
+fn data_object(file: &std::path::Path) -> windows::core::Result<windows::Win32::System::Com::IDataObject> {
+    use windows::Win32::System::Ole::OleInitialize;
+    use windows::Win32::UI::Shell::{IShellItem, SHCreateItemFromParsingName, BHID_DataObject};
     let path: Vec<u16> = file.as_os_str().to_string_lossy().encode_utf16().chain(Some(0)).collect();
     unsafe {
         // Drag and drop needs OLE on this thread (S_FALSE: it was already).
         let _ = OleInitialize(None);
         let item: IShellItem = SHCreateItemFromParsingName(PCWSTR(path.as_ptr()), None)?;
-        let data: IDataObject = item.BindToHandler(None, &BHID_DataObject)?;
-        // No drop source of ours: the shell's default one.
-        let effect = SHDoDragDrop(Some(hwnd), &data, None, DROPEFFECT_COPY)?;
-        Ok(effect != DROPEFFECT_NONE)
+        item.BindToHandler(None, &BHID_DataObject)
     }
 }
 
@@ -268,7 +277,7 @@ fn monitor_at(at: (i32, i32)) -> (crate::capture::IRect, f32) {
 
 fn up_for(note: Note, th: Theme, s: f32, pos: (i32, i32), since: Instant) -> Up {
     let layout = (!note.actions.is_empty()).then(|| act_layout(&note, s));
-    Up { note, th, s, pos, since, k: None, layout, hover: None, dirty: false, press: None }
+    Up { note, th, s, pos, since, k: None, layout, hover: None, dirty: false, press: None, frozen: None }
 }
 
 pub fn show(note: Note, at: (i32, i32), th: Theme) -> bool {
@@ -339,7 +348,8 @@ fn tick() {
         let Some(up) = win.up.as_mut() else { return };
         // Held while the pointer is on its buttons (or the card), or it
         // is pressed.
-        up.since = hold(up.since, Instant::now(), up.note.ttl, up.hover.is_some() || up.press.is_some());
+        let held = up.hover.is_some() || up.press.is_some();
+        up.since = hold(up.since, Instant::now(), up.note.ttl, held, &mut up.frozen);
         let Some(k) = opacity(up.since.elapsed(), up.note.ttl) else {
             take_down(win);
             return;
@@ -394,6 +404,47 @@ mod tests {
         hide();
         assert!(!unsafe { IsWindowVisible(hwnd) }.as_bool());
         assert!(!replace(note("x")), "gone");
+    }
+
+    /// The thumbnail card: bottom-right of the work area, clickable, its
+    /// buttons drawn once the pointer is on it (and the card held), Pin
+    /// pins the capture where it was and takes the card down.
+    #[test]
+    fn the_thumbnail_window() {
+        let img = std::sync::Arc::new(crate::pin::tests::sample_shot(320, 180));
+        let n = super::super::thumbnail(&[crate::export::Done::Copied], false, img, (12, 34)).unwrap();
+        assert!(show(n.clone(), (0, 0), crate::theme::DARK));
+        let hwnd = WIN.with(|w| w.borrow().as_ref().unwrap().hwnd);
+        assert_eq!(ex_style(hwnd) & WS_EX_TRANSPARENT.0, 0, "it takes clicks");
+        let (work, s) = monitor_at((0, 0));
+        let mut r = windows::Win32::Foundation::RECT::default();
+        unsafe { GetWindowRect(hwnd, &mut r).unwrap() };
+        assert_eq!((r.right, r.bottom), (work.0 + work.2 as i32, work.1 + work.3 as i32), "bottom-right");
+        let l = act_layout(&n, s);
+        let card = l.panel;
+        hover(hwnd, Some(Pt::new(card.x + 4.0, card.y + 4.0)));
+        assert_eq!(WIN.with(|w| w.borrow().as_ref().unwrap().up.as_ref().unwrap().hover), Some(NoteAct::Card));
+        let frozen = WIN.with(|w| w.borrow().as_ref().unwrap().up.as_ref().unwrap().frozen);
+        assert!(frozen.is_some(), "held while hovered");
+        let _ = crate::pin::take_opened();
+        let pin = l.buttons.iter().find(|b| b.0 == NoteAct::Pin).unwrap().1;
+        click(Pt::new(pin.x + pin.w / 2.0, pin.y + pin.h / 2.0));
+        assert_eq!(crate::pin::take_opened(), [((320, 180), (12, 34))]);
+        assert!(WIN.with(|w| w.borrow().as_ref().unwrap().up.is_none()), "the card went");
+        assert!(!unsafe { IsWindowVisible(hwnd) }.as_bool());
+    }
+
+    /// What dragging the card out hands over: the shell's data object for
+    /// the file, with CF_HDROP.
+    #[test]
+    fn the_drag_carries_the_file() {
+        use windows::Win32::System::Com::{DVASPECT_CONTENT, FORMATETC, TYMED_HGLOBAL};
+        let f = std::env::temp_dir().join(format!("rustshot-drag-{}.png", std::process::id()));
+        std::fs::write(&f, crate::pixbuf::PixBuf::from_pixel(2, 2, [1, 2, 3, 255]).to_png().unwrap()).unwrap();
+        let data = data_object(&f).expect("a data object");
+        let fmt = FORMATETC { cfFormat: 15, ptd: std::ptr::null_mut(), dwAspect: DVASPECT_CONTENT.0, lindex: -1, tymed: TYMED_HGLOBAL.0 as u32 };
+        assert!(unsafe { data.QueryGetData(&fmt) }.is_ok(), "CF_HDROP");
+        let _ = std::fs::remove_file(&f);
     }
 
     /// A note with buttons takes clicks (not click-through) and stays 6 s;

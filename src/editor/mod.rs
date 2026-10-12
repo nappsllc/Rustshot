@@ -3392,6 +3392,8 @@ mod tools2_tests;
 mod uisize_tests;
 #[cfg(test)]
 mod snap_tests;
+#[cfg(test)]
+mod pin_tests;
 
 #[cfg(test)]
 mod tests {

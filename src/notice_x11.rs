@@ -105,6 +105,8 @@ struct Up {
     layout: Option<ActLayout>,
     hover: Option<NoteAct>,
     dirty: bool,
+    /// Its age while held (see [`hold`]).
+    frozen: Option<Duration>,
 }
 
 struct State {
@@ -192,7 +194,7 @@ impl State {
             Some(_) => self.win.set_input(&[(0, 0, size.0.min(u16::MAX as u32) as u16, size.1.min(u16::MAX as u32) as u16)]),
             None => self.win.set_input(&[]),
         }
-        self.up = Some(Up { note, th, s, work, pos, since, k: None, layout, hover: None, dirty: false });
+        self.up = Some(Up { note, th, s, work, pos, since, k: None, layout, hover: None, dirty: false, frozen: None });
     }
 
     fn replace(&mut self, note: Note) -> bool {
@@ -265,7 +267,7 @@ impl State {
     fn tick(&mut self) {
         let Some(up) = self.up.as_mut() else { return };
         // Held while the pointer is on its buttons (or the card).
-        up.since = hold(up.since, Instant::now(), up.note.ttl, up.hover.is_some());
+        up.since = hold(up.since, Instant::now(), up.note.ttl, up.hover.is_some(), &mut up.frozen);
         let Some(k) = opacity(up.since.elapsed(), up.note.ttl) else {
             self.take_down();
             return;
