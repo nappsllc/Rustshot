@@ -159,6 +159,16 @@ pub struct Config {
     /// Editor shortcut overrides from the `[shortcuts]` table
     /// (`action id -> "Ctrl+Shift+S"`; see `keymap`).
     pub shortcuts: BTreeMap<String, String>,
+    /// The overlay's pixel magnifier and crosshair while a region is
+    /// being picked (Settings › Capture "Show magnifier").
+    pub magnifier: bool,
+    /// The magnifier is square (default: round).
+    pub magnifier_square: bool,
+    /// Releasing the mouse on a new region runs this at once and closes:
+    /// "off", "copy" or "save" (Shift while releasing skips it).
+    pub accept_on_select: String,
+    /// The hint card when the overlay opens (Settings › General).
+    pub overlay_hints: bool,
 }
 
 /// The drawing tools whose size and color are remembered
@@ -236,6 +246,10 @@ impl Default for Config {
             copy_after_capture: false,
             shutter_sound: false,
             show_thumbnail: true,
+            magnifier: true,
+            magnifier_square: false,
+            accept_on_select: "off".into(),
+            overlay_hints: true,
             history: true,
             history_days: 30,
             history_max_mb: 2048,
@@ -864,6 +878,12 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
             "copy_after_capture" => cfg.copy_after_capture = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "shutter_sound" => cfg.shutter_sound = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "show_thumbnail" => cfg.show_thumbnail = as_bool(val).map_err(|e| bad("boolean", &e))?,
+            "magnifier" => cfg.magnifier = as_bool(val).map_err(|e| bad("boolean", &e))?,
+            "magnifier_square" => cfg.magnifier_square = as_bool(val).map_err(|e| bad("boolean", &e))?,
+            "accept_on_select" => {
+                cfg.accept_on_select = one_of(val, &["off", "copy", "save"]).map_err(|e| bad("value", &e))?
+            }
+            "overlay_hints" => cfg.overlay_hints = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "history" => cfg.history = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "history_days" => {
                 cfg.history_days =
