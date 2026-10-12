@@ -34,9 +34,16 @@ pub enum OcrError {
     /// Windows: no OCR language among the user's languages.
     #[cfg_attr(not(windows), allow(dead_code))]
     NoLanguage,
+    /// The engine took longer than [`TIMEOUT`] (Windows, tesseract).
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
+    TimedOut,
     /// Anything else, with the engine's reason.
     Failed(String),
 }
+
+/// How long one recognition may take (Vision has no deadline of ours).
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// One recognized word and its box (image px, top-left origin).
 #[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))] // tesseract gives plain text
@@ -135,7 +142,8 @@ pub fn upscale2(img: &PixBuf) -> PixBuf {
             }
         }
     }
-    PixBuf::from_raw(ow, oh, out).expect("sized above")
+    // Sized above; never panic on the worker (panic = "abort").
+    PixBuf::from_raw(ow, oh, out).unwrap_or_else(|| img.clone())
 }
 
 /// `img` as recognition wants it: ×2 when small (see [`upscale_factor`]).
@@ -231,6 +239,7 @@ pub fn note(res: &Result<String, OcrError>, copied: Result<(), String>) -> Note 
             Err(e) => Note::plain(format!("Copy failed: {e}"), ToastKind::Error),
         },
         Err(OcrError::NoTesseract) => Note::plain("Install tesseract for text recognition", ToastKind::Error),
+        Err(OcrError::TimedOut) => Note::plain("Text recognition timed out", ToastKind::Error),
         Err(OcrError::NoLanguage) => Note::plain("No text recognition language is installed", ToastKind::Error),
         Err(OcrError::Failed(e)) => Note::plain(format!("Text recognition failed: {e}"), ToastKind::Error),
     }
@@ -311,6 +320,7 @@ mod tests {
         assert_eq!((none.text.as_str(), none.kind), ("No text found", ToastKind::Info));
         assert_eq!(note(&Err(OcrError::NoTesseract), Ok(())).text, "Install tesseract for text recognition");
         assert_eq!(note(&Err(OcrError::NoTesseract), Ok(())).kind, ToastKind::Error);
+        assert_eq!(note(&Err(OcrError::TimedOut), Ok(())).text, "Text recognition timed out");
         assert!(note(&Err(OcrError::Failed("boom".into())), Ok(())).text.ends_with("boom"));
         assert!(note(&ok("a"), Err("busy".into())).text.contains("busy"));
         assert_eq!(line_count("a\n\nb\n"), 2);

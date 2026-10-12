@@ -100,7 +100,10 @@ pub fn recognize(img: &PixBuf) -> Result<String, OcrError> {
             return Err(OcrError::Failed("cannot make an image".into()));
         }
         let alloc: *mut c_void = msg0(handler_cls, objc_sel(c"alloc"));
-        let handler = Id::owned(msg2(alloc, objc_sel(c"initWithCGImage:options:"), image, dict(&[])));
+        // A failed `init…` releases the allocation itself (Cocoa's
+        // initializer contract), so a nil result leaks nothing; releasing
+        // `alloc` here would be a double release.
+        let handler = if alloc.is_null() { None } else { Id::owned(msg2(alloc, objc_sel(c"initWithCGImage:options:"), image, dict(&[]))) };
         CGImageRelease(image);
         let handler = handler.ok_or_else(|| OcrError::Failed("no Vision handler".into()))?;
         let mut err: *mut c_void = core::ptr::null_mut();

@@ -39,7 +39,7 @@ fn texts(notes: &[crate::notice::Note]) -> Vec<&str> {
 /// Tick until the recognition is over (it never blocks the UI thread).
 fn settle(a: &mut App) {
     let t0 = Instant::now();
-    while a.ocr.is_some() {
+    while !a.ocr.is_empty() {
         assert!(!a.idle(), "busy while the text is recognized");
         assert!(t0.elapsed() < Duration::from_secs(10), "recognition never finished");
         std::thread::sleep(Duration::from_millis(5));
@@ -141,6 +141,37 @@ fn copy_text_hotkey_picks_an_area_then_recognizes() {
     assert_eq!(crate::ocr::COPIED.with(|c| c.borrow().clone()), ["160x40"]);
     let shown: Vec<_> = crate::notice::take_shown().into_iter().map(|n| n.0).collect();
     assert_eq!(texts(&shown), ["Copied text \u{b7} 1 line"]);
+}
+
+/// A second Copy text while the first is still being recognized: both
+/// deliver (copied and announced), none is dropped.
+#[test]
+fn two_copy_texts_in_flight_both_deliver() {
+    let (a, copied, shown) = daemon_ocr(
+        |img| {
+            if img.height() == 200 {
+                // The first one is slow: the second starts meanwhile.
+                std::thread::sleep(Duration::from_millis(300));
+            }
+            Ok(format!("{}x{}", img.width(), img.height()))
+        },
+        |a| {
+            key_m(a, 'O' as u32, NONE);
+            assert_eq!(a.ocr.len(), 1);
+            assert!(a.on_hot(HotEvent::Pressed(6)));
+            FAKE_GRAB.with(|g| *g.borrow_mut() = Some(Ok(synthetic_shot())));
+            a.on_event(Ev::Timer);
+            // 300x180 around the same centre (the notices' anchor).
+            a.on_event(Ev::Down { x: 100, y: 90 });
+            a.on_event(Ev::Move { x: 200, y: 120 });
+            a.on_event(Ev::Move { x: 400, y: 270 });
+            a.on_event(Ev::Up { x: 400, y: 270 });
+            assert_eq!(a.ocr.len(), 2, "both in flight");
+        },
+    );
+    assert!(a.ocr.is_empty());
+    assert_eq!(copied, ["300x180", "300x200"], "the quick second one first, then the first");
+    assert_eq!(texts(&shown), ["Copied text \u{b7} 1 line", "Copied text \u{b7} 1 line"]);
 }
 
 /// Preview PNGs under `RUSTSHOT_PREVIEW_DIR`: the toolbar with Copy text

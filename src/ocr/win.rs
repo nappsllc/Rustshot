@@ -31,8 +31,7 @@ const STARTED: i32 = 0;
 const COMPLETED: i32 = 1;
 const CANCELED: i32 = 2;
 
-/// How long one recognition may take.
-const TIMEOUT: Duration = Duration::from_secs(30);
+use super::TIMEOUT;
 
 /// A `Windows.Foundation.Rect`.
 #[repr(C)]
@@ -119,7 +118,7 @@ impl Com {
         if let Ok(c) = self.query(&IID_CLOSABLE) {
             unsafe {
                 let f: unsafe extern "system" fn(*mut c_void) -> HRESULT = c.slot(6);
-                let _ = f(c.0);
+                debug_hr(f(c.0), "Close");
             }
         }
     }
@@ -148,6 +147,13 @@ impl Drop for Com {
             let f: unsafe extern "system" fn(*mut c_void) -> u32 = self.slot(2);
             f(self.0);
         }
+    }
+}
+
+/// A failure we go on after (Close, Cancel): only told in debug builds.
+fn debug_hr(hr: HRESULT, what: &str) {
+    if cfg!(debug_assertions) && hr.is_err() {
+        eprintln!("rustshot: ocr: {what} failed: {}", hr.message().trim());
     }
 }
 
@@ -187,6 +193,9 @@ impl Drop for Apartment {
 /// RGBA rows into a BGRA plane with `stride` bytes per row.
 pub(super) fn fill_bgra(dst: &mut [u8], stride: usize, img: &PixBuf) {
     let w = img.width() as usize;
+    if w == 0 {
+        return;
+    }
     for (y, row) in img.as_raw().chunks_exact(w * 4).enumerate() {
         let Some(out) = dst.get_mut(y * stride..y * stride + w * 4) else { break };
         for (o, s) in out.as_chunks_mut::<4>().0.iter_mut().zip(row.as_chunks::<4>().0) {
@@ -197,6 +206,9 @@ pub(super) fn fill_bgra(dst: &mut [u8], stride: usize, img: &PixBuf) {
 
 /// A BGRA8 `SoftwareBitmap` holding `img`.
 fn software_bitmap(img: &PixBuf) -> Result<Com, OcrError> {
+    if img.width() == 0 || img.height() == 0 {
+        return Err(fail("empty area"));
+    }
     let fac = factory("Windows.Graphics.Imaging.SoftwareBitmap", &IID_SOFTWARE_BITMAP_FACTORY)?;
     let mut bmp = core::ptr::null_mut();
     let hr = unsafe {
@@ -257,9 +269,9 @@ fn wait(op: &Com) -> Result<Option<Com>, OcrError> {
             STARTED if t0.elapsed() > TIMEOUT => {
                 unsafe {
                     let f: unsafe extern "system" fn(*mut c_void) -> HRESULT = info.slot(9);
-                    let _ = f(info.0);
+                    debug_hr(f(info.0), "Cancel");
                 }
-                return Err(fail("timed out"));
+                return Err(OcrError::TimedOut);
             }
             STARTED => std::thread::sleep(Duration::from_millis(5)),
             COMPLETED => break,

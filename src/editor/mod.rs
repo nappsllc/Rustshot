@@ -249,7 +249,7 @@ pub fn run(
         st: State::Hidden,
         exit_code,
         upload_slot,
-        ocr: None,
+        ocr: Vec::new(),
         updates,
         update_pending: None,
         restart_pending: false,
@@ -316,8 +316,8 @@ struct App {
     st: State,
     exit_code: Arc<AtomicI32>,
     upload_slot: UploadSlot,
-    /// Copy text: the recognition in flight.
-    ocr: Option<OcrJob>,
+    /// Copy text: the recognitions in flight (each delivers its result).
+    ocr: Vec<OcrJob>,
     /// Results from the background update checker (daemon only).
     updates: Option<Receiver<crate::update::Release>>,
     /// A newer release found; shown in the update dialog once no capture is up.
@@ -797,7 +797,7 @@ impl App {
             && self.pending.is_none()
             && self.rec.is_none()
             && self.upload_slot.lock().unwrap_or_else(|e| e.into_inner()).is_none()
-            && self.ocr.is_none()
+            && self.ocr.is_empty()
     }
 
     /// Answer a waiting update worker once we are idle. Captures stay
@@ -1123,7 +1123,7 @@ impl App {
             let th = theme::resolve(&job.cfg);
             match self.kind {
                 // Off the UI thread; `poll_ocr` copies and says so.
-                RunKind::Daemon => self.ocr = Some(OcrJob { rx: crate::ocr::spawn(job.img), at, th }),
+                RunKind::Daemon => self.ocr.push(OcrJob { rx: crate::ocr::spawn(job.img), at, th }),
                 // The overlay is gone and nothing else runs: wait here.
                 RunKind::OneShot => {
                     let res = crate::ocr::recognize(&job.img);
@@ -1144,24 +1144,30 @@ impl App {
 
     /// Copy text finished: copy what was found and say so (the notice,
     /// or a tray balloon where there is none).
+    /// Every job in flight delivers its own result, in the order they end.
     fn poll_ocr(&mut self) {
-        let Some(job) = &self.ocr else { return };
-        let res = match job.rx.try_recv() {
-            Ok(res) => res,
-            Err(std::sync::mpsc::TryRecvError::Empty) => return,
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(crate::ocr::OcrError::Failed("the recognizer stopped".into())),
-        };
-        let job = self.ocr.take().expect("checked");
-        if let Err(e) = &res {
-            eprintln!("rustshot: text recognition: {e:?}");
-        }
-        let note = crate::ocr::finish(&res);
-        let text = note.text.clone();
-        if matches!(self.st, State::Edit(_)) {
-            // A newer capture is up: its own toast.
-            self.notice = Some(Toast::new(text, note.kind));
-        } else if !crate::notice::show(note, job.at, job.th) {
-            crate::tray::notify(&text);
+        let mut done = Vec::new();
+        self.ocr.retain(|job| {
+            let res = match job.rx.try_recv() {
+                Ok(res) => res,
+                Err(std::sync::mpsc::TryRecvError::Empty) => return true,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(crate::ocr::OcrError::Failed("the recognizer stopped".into())),
+            };
+            done.push((res, job.at, job.th));
+            false
+        });
+        for (res, at, th) in done {
+            if let Err(e) = &res {
+                eprintln!("rustshot: text recognition: {e:?}");
+            }
+            let note = crate::ocr::finish(&res);
+            let text = note.text.clone();
+            if matches!(self.st, State::Edit(_)) {
+                // A newer capture is up: its own toast.
+                self.notice = Some(Toast::new(text, note.kind));
+            } else if !crate::notice::show(note, at, th) {
+                crate::tray::notify(&text);
+            }
         }
     }
 
@@ -3657,7 +3663,7 @@ mod tests {
             st: State::Edit(Box::new(edit)),
             exit_code: Arc::new(AtomicI32::new(0)),
             upload_slot: Arc::new(Mutex::new(None)),
-            ocr: None,
+            ocr: Vec::new(),
             updates: None,
             update_pending: None,
             restart_pending: false,
