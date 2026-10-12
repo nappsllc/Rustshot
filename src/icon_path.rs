@@ -108,6 +108,57 @@ pub const ICONS: &[(&str, &[Shape])] = &[
         Path("m2 2 20 20"),
         Path("M9 9v3a3 3 0 0 0 5.12 2.12"),
     ]),
+    // --- Recorder (Video / Recording boards) ---
+    ("monitor", &[Rect { x: 2.0, y: 3.0, w: 20.0, h: 14.0, r: 2.0 }, Path("M8 21h8"), Path("M12 17v4")]),
+    ("window", &[Rect { x: 2.0, y: 4.0, w: 20.0, h: 16.0, r: 2.0 }, Path("M10 4v4"), Path("M2 8h20"), Path("M6 4v4")]),
+    ("region", &[
+        Path("M5 3a2 2 0 0 0-2 2"),
+        Path("M19 3a2 2 0 0 1 2 2"),
+        Path("M21 19a2 2 0 0 1-2 2"),
+        Path("M5 21a2 2 0 0 1-2-2"),
+        Path("M9 3h1"),
+        Path("M9 21h1"),
+        Path("M14 3h1"),
+        Path("M14 21h1"),
+        Path("M3 9v1"),
+        Path("M21 9v1"),
+        Path("M3 14v1"),
+        Path("M21 14v1"),
+    ]),
+    ("round", &[Circle(12.0, 12.0, 9.0)]),
+    ("square", &[Rect { x: 3.0, y: 3.0, w: 18.0, h: 18.0, r: 4.0 }]),
+    ("film", &[
+        Rect { x: 3.0, y: 3.0, w: 18.0, h: 18.0, r: 2.0 },
+        Path("M7 3v18"),
+        Path("M3 7.5h4"),
+        Path("M3 12h18"),
+        Path("M3 16.5h4"),
+        Path("M17 3v18"),
+        Path("M17 7.5h4"),
+        Path("M17 16.5h4"),
+    ]),
+    ("gif", &[
+        Rect { x: 2.0, y: 5.0, w: 20.0, h: 14.0, r: 2.0 },
+        Path("M8.5 10.5a1.75 1.75 0 1 0 0 3h.75v-1.5"),
+        Path("M12.5 10v4"),
+        Path("M15.5 14v-4h2.5"),
+        Path("M15.5 12h2"),
+    ]),
+    ("camera", &[
+        Path("M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"),
+        Circle(12.0, 13.0, 3.0),
+    ]),
+    ("volume", &[
+        Path("M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z"),
+        Path("M16 9a5 5 0 0 1 0 6"),
+        Path("M19.364 18.364a9 9 0 0 0 0-12.728"),
+    ]),
+    ("enter", &[Path("M20 4v7a4 4 0 0 1-4 4H4"), Path("m9 10-5 5 5 5")]), // corner-down-left
+    ("video-off", &[
+        Path("M10.66 6H14a2 2 0 0 1 2 2v2.5l5.248-3.062A.5.5 0 0 1 22 7.87v8.196"),
+        Path("M16 16a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h2"),
+        Path("m2 2 20 20"),
+    ]),
 ];
 
 /// The Settings window's rail and row icons (Lucide, as on the Settings

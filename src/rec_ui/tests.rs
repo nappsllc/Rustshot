@@ -13,17 +13,22 @@ fn secs(n: f64) -> Duration {
 fn opts_follow_the_config_and_the_format() {
     let cfg = Config::default();
     let o = RecOpts::from_config(&cfg);
-    assert_eq!((o.format, o.fps(), o.fps_choices()), (RecFormat::Mp4, 30, [30, 60]));
+    assert_eq!((o.format, o.fps(), o.fps_choices()), (RecFormat::Mp4, 30, &[30, 60][..]));
     assert!(o.system && !o.mic && o.mic_dev.is_empty() && !o.camera);
     let cfg = Config { rec_format: "gif".into(), rec_gif_fps: 10, rec_fps: 60, rec_mic: true, ..Config::default() };
     let mut o = RecOpts::from_config(&cfg);
-    assert_eq!((o.format, o.fps(), o.fps_choices()), (RecFormat::Gif, 10, [10, 15]));
+    assert_eq!((o.format, o.fps(), o.fps_choices()), (RecFormat::Gif, 10, &[10, 15, 24][..]));
+    assert_eq!((o.gif_max, o.countdown), (30, true));
+    assert_eq!(o.max_len(), Some(Duration::from_secs(30)), "a GIF stops by itself");
     o.set_fps(60); // not a GIF rate: ignored
     assert_eq!(o.fps(), 10);
     o.set_fps(15);
     assert_eq!(o.fps(), 15);
+    o.set_fps(24);
+    assert_eq!(o.fps(), 24, "GIF at 24 fps");
     o.format = RecFormat::Mp4;
     assert_eq!(o.fps(), 60, "each format keeps its own rate");
+    assert_eq!(o.max_len(), None, "an MP4 runs until stopped");
 }
 
 #[test]
@@ -263,7 +268,7 @@ impl AudioSource for Tone {
 #[test]
 fn muted_source_reads_silence() {
     let muted = Arc::new(AtomicBool::new(false));
-    let mut m = Muted { inner: Tone(vec![0.5; 8]), muted: muted.clone() };
+    let mut m = Muted { inner: Tone(vec![0.5; 8]), muted: muted.clone(), level: None };
     let mut out = vec![1.0];
     assert_eq!(m.read(&mut out), 8);
     assert_eq!(out[1], 0.5);
@@ -357,12 +362,12 @@ fn render_recording_previews() {
         for s in [1.0f32, 2.0] {
             let ui = Ui { th, s, font: Some(crate::fonts::ui_font()) };
             let views = [
-                ("recording", bar::BarView { elapsed: secs(83.0), paused: false, mic: Some(false), stopping: false, compact: false, asking: false }, Some(bar::BarAct::Stop)),
-                ("paused", bar::BarView { elapsed: secs(754.0), paused: true, mic: Some(true), stopping: false, compact: false, asking: false }, None),
-                ("nomic", bar::BarView { elapsed: secs(5.0), paused: false, mic: None, stopping: false, compact: false, asking: false }, Some(bar::BarAct::Pause)),
-                ("stopping", bar::BarView { elapsed: secs(9.0), paused: false, mic: None, stopping: true, compact: false, asking: false }, None),
-                ("compact", bar::BarView { elapsed: secs(42.0), paused: false, mic: Some(false), stopping: false, compact: true, asking: false }, None),
-                ("asking", bar::BarView { elapsed: secs(0.0), paused: false, mic: None, stopping: false, compact: false, asking: true }, None),
+                ("recording", bar::BarView { elapsed: secs(83.0), paused: false, mic: Some(false), cam: None, system: None, stopping: false, compact: false, asking: false }, Some(bar::BarAct::Stop)),
+                ("paused", bar::BarView { elapsed: secs(754.0), paused: true, mic: Some(true), cam: Some(true), system: Some(true), stopping: false, compact: false, asking: false }, None),
+                ("nomic", bar::BarView { elapsed: secs(5.0), paused: false, mic: None, cam: None, system: None, stopping: false, compact: false, asking: false }, Some(bar::BarAct::Pause)),
+                ("stopping", bar::BarView { elapsed: secs(9.0), paused: false, mic: None, cam: None, system: None, stopping: true, compact: false, asking: false }, None),
+                ("compact", bar::BarView { elapsed: secs(42.0), paused: false, mic: Some(false), cam: None, system: None, stopping: false, compact: true, asking: false }, None),
+                ("asking", bar::BarView { elapsed: secs(0.0), paused: false, mic: None, cam: None, system: None, stopping: false, compact: false, asking: true }, None),
             ];
             for (vn, v, hover) in views {
                 let l = bar::layout(&ui, &v);
@@ -370,9 +375,9 @@ fn render_recording_previews() {
                 let px = render_layer(w, h, |f| bar::draw(f, &ui, &l, &v, hover, None));
                 save(&format!("{tn}-bar-{vn}@{s}x.png"), w, h, &px, bg);
             }
-            for n in [3, 1] {
+            for (n, frac) in [(3, 1.0), (2, 0.6), (1, 0.25)] {
                 let (w, h) = countdown::size(s);
-                let px = render_layer(w as usize, h as usize, |f| countdown::draw(f, &ui, n));
+                let px = render_layer(w as usize, h as usize, |f| countdown::draw(f, &ui, n, frac));
                 save(&format!("{tn}-countdown-{n}@{s}x.png"), w as usize, h as usize, &px, bg);
             }
         }
@@ -507,7 +512,7 @@ fn macos_geometry_converts_to_points() {
 fn bar_pill_and_countdown_geometry_at_a_scale() {
     use crate::editor::style::Ui;
     let th = crate::theme::DARK;
-    let view = bar::BarView { elapsed: secs(65.0), paused: false, mic: Some(false), stopping: false, compact: false, asking: false };
+    let view = bar::BarView { elapsed: secs(65.0), paused: false, mic: Some(false), cam: None, system: None, stopping: false, compact: false, asking: false };
     let pill = bar::BarView { compact: true, ..view.clone() };
     let at = |s: f32, v: &bar::BarView| bar::layout(&Ui { th: &th, s, font: None }, v);
     let (full1, pill1) = (at(1.0, &view), at(1.0, &pill));
@@ -521,11 +526,11 @@ fn bar_pill_and_countdown_geometry_at_a_scale() {
             assert_eq!(l.buttons.len(), one.buttons.len());
             assert!((l.panel.x - bar::MARGIN * s).abs() < 0.01, "the panel sits MARGIN (scaled) inside");
         }
-        assert_eq!(countdown::size(s), ((160.0 * s).ceil() as u32, (160.0 * s).ceil() as u32), "{s}");
+        assert_eq!(countdown::size(s), ((144.0 * s).ceil() as u32, (144.0 * s).ceil() as u32), "{s}");
         // Drawn: the round panel is inside the window, nothing at the corner.
         let ui = Ui { th: &th, s, font: Some(crate::fonts::ui_font()) };
         let (w, h) = countdown::size(s);
-        let px = render_layer(w as usize, h as usize, |f| countdown::draw(f, &ui, 3));
+        let px = render_layer(w as usize, h as usize, |f| countdown::draw(f, &ui, 3, 1.0));
         assert_eq!(px[3], 0, "corner transparent at {s}");
         assert!(px.chunks(4).any(|p| p[3] > 200), "panel drawn at {s}");
         // Placed below the area, the gap (8 logical px) scaled.
@@ -555,4 +560,151 @@ fn border_ignores_the_ui_size() {
         let t: Vec<i32> = g.border_monitors().iter().map(|m| m.1).collect();
         assert_eq!(t, [2, 3, 4], "UI size {mult}");
     }
+}
+
+/// The countdown's arc: full at the start of each second, draining to
+/// none by its end; the number 3, 2, 1.
+#[test]
+fn countdown_arc_drains_each_second() {
+    let t = t0();
+    let mut m = Machine::new();
+    m.start(true, t);
+    let at = |ms: u64| m.countdown_frac(t + Duration::from_millis(ms)).unwrap();
+    assert_eq!(at(0), (3, 1.0));
+    let (n, f) = at(250);
+    assert!(n == 3 && (f - 0.75).abs() < 1e-3, "{n} {f}");
+    let (n, f) = at(1500);
+    assert!(n == 2 && (f - 0.5).abs() < 1e-3, "{n} {f}");
+    let (n, f) = at(2999);
+    assert!(n == 1 && f < 0.01, "{n} {f}");
+    m.tick(t + COUNTDOWN);
+    assert_eq!(m.countdown_frac(t + COUNTDOWN), None, "recording: no countdown");
+}
+
+/// A GIF's max length stops the recording once, paused time not counted.
+#[test]
+fn max_length_auto_stops_once() {
+    let t = t0();
+    let mut m = Machine::new();
+    m.start(false, t);
+    let max = Some(Duration::from_secs(15));
+    assert_eq!(m.auto_stop(max, t + secs(14.9)), None);
+    m.toggle_pause(t + secs(10.0));
+    assert_eq!(m.auto_stop(max, t + secs(30.0)), None, "paused: not running");
+    m.toggle_pause(t + secs(20.0));
+    assert_eq!(m.auto_stop(max, t + secs(24.9)), None, "14.9 s recorded");
+    assert_eq!(m.auto_stop(max, t + secs(25.0)), Some(Effect::Stop));
+    assert_eq!(m.phase(), Phase::Stopping);
+    assert_eq!(m.auto_stop(max, t + secs(26.0)), None, "once");
+    let mut m = Machine::new();
+    m.start(false, t);
+    assert_eq!(m.auto_stop(None, t + secs(3600.0)), None, "MP4: no cap");
+}
+
+/// The pill's toggles: pause (amber, Resume), the microphone, the camera
+/// (hidden), the system sound; each only when there is one; the compact
+/// pill for a narrow region or on the timer's click.
+#[test]
+fn pill_states_follow_the_buttons() {
+    let t = t0();
+    let mut run = Run::fake_with(false, true, true, false, t);
+    let v = run.view(t);
+    assert_eq!((v.paused, v.mic, v.cam, v.system, v.compact), (false, Some(false), Some(false), None, false));
+    run.act(bar::BarAct::Pause, t + secs(1.0));
+    assert!(run.view(t).paused);
+    run.act(bar::BarAct::Pause, t + secs(2.0));
+    assert!(!run.view(t).paused);
+    run.act(bar::BarAct::Mute, t);
+    assert_eq!(run.view(t).mic, Some(true), "muted");
+    run.act(bar::BarAct::Camera, t);
+    assert_eq!(run.view(t).cam, Some(true), "camera hidden");
+    run.act(bar::BarAct::Camera, t);
+    assert_eq!(run.view(t).cam, Some(false));
+    run.act(bar::BarAct::System, t);
+    assert_eq!(run.view(t).system, None, "no system sound: nothing to mute");
+    run.mic_flags().sys_open.store(true, Ordering::SeqCst);
+    run.act(bar::BarAct::System, t);
+    assert_eq!(run.view(t).system, Some(true));
+    run.act(bar::BarAct::Compact, t);
+    assert!(run.view(t).compact, "H / the timer");
+    run.act(bar::BarAct::Compact, t);
+    assert!(!run.view(t).compact);
+    let narrow = Run::fake_with(false, false, false, true, t);
+    assert!(narrow.view(t).compact, "a region under 520 px");
+    let none = Run::fake(false, false, t);
+    assert_eq!((none.view(t).mic, none.view(t).cam), (None, None));
+}
+
+/// Discard stops the recording and deletes the file: it ends cancelled.
+#[test]
+fn discard_deletes_the_file() {
+    let dir = std::env::temp_dir().join(format!("rustshot-discard-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("a.mp4");
+    std::fs::write(&file, b"x").unwrap();
+    let t = t0();
+    let mut run = Run::fake(false, false, t);
+    run.act(bar::BarAct::Discard, t + secs(2.0));
+    assert_eq!(run.phase(), Phase::Stopping);
+    assert_eq!(run.log, [Effect::Go, Effect::Stop]);
+    run.fake_end = Some(End::Saved { path: file.clone(), warnings: vec![] });
+    assert_eq!(run.tick(t + secs(3.0)), Some(End::Cancelled));
+    assert!(!file.exists(), "deleted");
+    // Stop keeps it.
+    std::fs::write(&file, b"x").unwrap();
+    let mut run = Run::fake(false, false, t);
+    run.act(bar::BarAct::Stop, t + secs(2.0));
+    run.fake_end = Some(End::Saved { path: file.clone(), warnings: vec![] });
+    assert!(matches!(run.tick(t + secs(3.0)), Some(End::Saved { .. })));
+    assert!(file.exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Silent (unmuted) for 5 s while recording: "No mic input", once; sound
+/// or muting resets the watch.
+#[test]
+fn silent_microphone_is_said_once() {
+    let t = t0();
+    let mut run = Run::fake(false, true, t);
+    let peak = |run: &Run, v: f32| run.mic_flags().level.store(v.to_bits(), Ordering::Relaxed);
+    run.tick(t);
+    run.tick(t + secs(4.9));
+    assert_eq!(run.take_notice(), None);
+    peak(&run, 0.2);
+    run.tick(t + secs(5.0));
+    peak(&run, 0.0);
+    run.tick(t + secs(6.0));
+    run.tick(t + secs(10.9));
+    assert_eq!(run.take_notice(), None, "heard at 5 s: the watch starts again");
+    run.tick(t + secs(11.0));
+    assert_eq!(run.take_notice(), Some(NO_MIC_INPUT));
+    run.tick(t + secs(30.0));
+    assert_eq!(run.take_notice(), None, "once per recording");
+    // Muted: not a problem.
+    let mut run = Run::fake(false, true, t);
+    run.toggle_mute();
+    run.tick(t);
+    run.tick(t + secs(20.0));
+    assert_eq!(run.take_notice(), None);
+    // No microphone: nothing to watch.
+    let mut run = Run::fake(false, false, t);
+    run.tick(t);
+    run.tick(t + secs(20.0));
+    assert_eq!(run.take_notice(), None);
+}
+
+/// The estimate toast: the encoded height, the rate and MB a minute.
+#[test]
+fn estimate_follows_size_rate_and_format() {
+    let mut o = RecOpts::from_config(&Config::default());
+    o.mic = false;
+    o.system = false;
+    assert_eq!(o.estimate((1920, 1080), crate::rec::Quality::Medium), "1080p \u{b7} 30 fps \u{b7} est. 47 MB / min");
+    o.system = true;
+    let with_sound = o.estimate((1920, 1080), crate::rec::Quality::Medium);
+    assert!(with_sound.ends_with("est. 48 MB / min"), "{with_sound}");
+    assert!(o.estimate((640, 360), crate::rec::Quality::Low).starts_with("360p \u{b7} 30 fps \u{b7} est. "));
+    o.format = RecFormat::Gif;
+    o.fps_gif = 10;
+    assert_eq!(o.estimate((400, 300), crate::rec::Quality::Medium), "300p \u{b7} 10 fps \u{b7} est. 3.6 MB / min");
 }

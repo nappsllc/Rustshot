@@ -119,6 +119,11 @@ pub struct Config {
     pub rec_camera_ring_color: String,
     /// Recording: the ring's width in logical px (0 = no ring).
     pub rec_camera_ring_width: u32,
+    // --- Recorder redesign (recorder-redesign branch) ---
+    /// Recording: a GIF stops by itself after this many seconds (15, 30
+    /// or 60; the Record panel's "Max length").
+    pub rec_gif_max: u32,
+    // --- end recorder redesign ---
     /// The colour picker's recent custom colours, newest first (at most
     /// [`RECENT_MAX`]).
     pub recent_colors: Vec<String>,
@@ -154,7 +159,7 @@ pub fn tool_key_names() -> Vec<String> {
 pub const RECENT_MAX: usize = 8;
 
 /// The camera ring's default width (logical px) and the widest it gets.
-pub const RING_WIDTH_DEFAULT: u32 = 3;
+pub const RING_WIDTH_DEFAULT: u32 = 2; // recorder redesign: 2 px accent ring (+ 1 px dark halo)
 pub const RING_WIDTH_MAX: u32 = 16;
 
 /// What a remembered tool key holds.
@@ -239,6 +244,7 @@ impl Default for Config {
             rec_linux_encoder: "auto".into(),
             rec_camera_ring_color: String::new(),
             rec_camera_ring_width: RING_WIDTH_DEFAULT,
+            rec_gif_max: 30, // recorder redesign
             recent_colors: Vec::new(),
             tool_sizes: BTreeMap::new(),
             tool_colors: BTreeMap::new(),
@@ -882,7 +888,7 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
             "renderer" => cfg.renderer = as_string(val).map_err(|e| bad("string", &e))?,
             "rec_format" => cfg.rec_format = one_of(val, &["mp4", "gif"]).map_err(|e| bad("value", &e))?,
             "rec_fps" => cfg.rec_fps = fps_of(val, &[30, 60]).map_err(|e| bad("number", &e))?,
-            "rec_gif_fps" => cfg.rec_gif_fps = fps_of(val, &[10, 15]).map_err(|e| bad("number", &e))?,
+            "rec_gif_fps" => cfg.rec_gif_fps = fps_of(val, &[10, 15, 24]).map_err(|e| bad("number", &e))?,
             "rec_quality" => {
                 cfg.rec_quality = one_of(val, &["low", "medium", "high"]).map_err(|e| bad("value", &e))?
             }
@@ -895,7 +901,7 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
                 cfg.rec_camera_shape =
                     one_of(val, &["circle", "rounded", "square"]).map_err(|e| bad("value", &e))?
             }
-            "rec_camera_size" => cfg.rec_camera_size = one_of(val, &["s", "m", "l"]).map_err(|e| bad("value", &e))?,
+            "rec_camera_size" => cfg.rec_camera_size = one_of(val, &["s", "m", "l", "xl"]).map_err(|e| bad("value", &e))?,
             "rec_camera_mirror" => cfg.rec_camera_mirror = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "rec_countdown" => cfg.rec_countdown = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "record_hotkey" => cfg.record_hotkey = as_string(val).map_err(|e| bad("string", &e))?,
@@ -912,6 +918,8 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
                     .filter(|w| *w <= RING_WIDTH_MAX as u64)
                     .ok_or_else(|| bad(&format!("number (0-{RING_WIDTH_MAX})"), val))? as u32
             }
+            // Recorder redesign.
+            "rec_gif_max" => cfg.rec_gif_max = fps_of(val, &[15, 30, 60]).map_err(|e| bad("number (15, 30 or 60)", &e))?,
             "recent_colors" => cfg.recent_colors = as_array(val).map_err(|e| bad("array", &e))?,
             k => match tool_key(k) {
                 Some((id, ToolKey::Fill)) => {
@@ -1043,6 +1051,9 @@ pub fn to_toml(c: &Config) -> String {
         c.rec_camera_ring_width,
         c.recent_colors.iter().map(|s| q(s)).collect::<Vec<_>>().join(", "),
     );
+    // Recorder redesign.
+    out.push_str(&format!("rec_gif_max = {}
+", c.rec_gif_max));
     for id in TOOL_IDS {
         if let Some(v) = c.tool_sizes.get(id) {
             out.push_str(&format!("tool_{id}_size = {v}\n"));
@@ -1669,7 +1680,7 @@ bogus = 1
             "rec_camera = 0",
             "rec_camera_device = x",
             "rec_camera_shape = \"hexagon\"",
-            "rec_camera_size = \"xl\"",
+            "rec_camera_size = \"xxl\"",
             "rec_camera_mirror = on",
             "rec_countdown = 1",
             "record_hotkey = R",
@@ -1701,7 +1712,7 @@ bogus = 1
         assert_eq!(back, c, "every value survives");
         assert!(!rewrite_loses(&to_toml(&c)));
         let d = Config::default();
-        assert_eq!((d.rec_camera_ring_color.as_str(), d.rec_camera_ring_width), ("", 3));
+        assert_eq!((d.rec_camera_ring_color.as_str(), d.rec_camera_ring_width), ("", 2));
         assert!(d.recent_colors.is_empty() && d.tool_sizes.is_empty() && !to_toml(&d).contains("tool_"));
         for bad in ["tool_line_size = \"5\"", "tool_line_size = -1", "tool_line_size = 0", "tool_text_color = 3", "recent_colors = \"#fff\"", "rec_camera_ring_width = 17", "rec_camera_ring_width = -1", "rec_camera_ring_color = 1"] {
             let e = parse_config(bad).expect_err(bad);

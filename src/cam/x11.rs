@@ -77,6 +77,8 @@ struct Geo {
     /// Where the compositor put the shape's top-left (a managed window on
     /// Wayland: `ConfigureNotify`).
     placed: Option<(i32, i32)>,
+    /// Hidden by the recording's camera button (the camera stays open).
+    hidden: bool,
 }
 
 impl Geo {
@@ -197,6 +199,7 @@ fn window_thread(sh: Arc<Shared>, managed: bool, ready: mpsc::Sender<Result<()>>
                         continue;
                     }
                     g.drag = Some(((p.x_root, p.y_root), g.pos));
+                    g.paint_gen += 1; // see-through while dragged
                 }
                 xw::EV_MOTION => {
                     if let Some((c0, p0)) = g.drag {
@@ -205,9 +208,26 @@ fn window_thread(sh: Arc<Shared>, managed: bool, ready: mpsc::Sender<Result<()>>
                         g.paint_gen += 1;
                     }
                 }
+                // The wheel (buttons 4 up, 5 down): a size up or down.
+                xw::EV_BUTTON_PRESS if p.button == 4 || p.button == 5 => {
+                    let delta = if p.button == 4 { 1 } else { -1 };
+                    if let Some(look) = super::wheel_look(g.look, delta) {
+                        g.look = look;
+                        g.tpl = super::template(look, g.scale, &g.th);
+                        g.tpl_gen += 1;
+                        sh.side.store(g.tpl.d, Ordering::SeqCst);
+                        g.frame = None;
+                        g.pos = g.home();
+                        g.paint_gen += 1;
+                        super::note_resized(look.size);
+                    }
+                }
                 xw::EV_BUTTON_RELEASE if p.button == 1 => {
                     if g.drag.take().is_some() {
-                        super::remember(super::rel_of(g.pos, g.area, g.tpl.d as i32, g.scale));
+                        let d = g.tpl.d as i32;
+                        g.pos = super::settle(g.pos, g.area, d, g.scale);
+                        super::remember(super::rel_of(g.pos, g.area, d, g.scale));
+                        g.paint_gen += 1;
                     }
                 }
                 xw::EV_EXPOSE => g.paint_gen += 1,
@@ -233,13 +253,15 @@ fn window_thread(sh: Arc<Shared>, managed: bool, ready: mpsc::Sender<Result<()>>
                 *lock(&sh.spare) = Some(f); // fitted before a size change
             }
         }
-        if lock(&sh.error).is_some() {
+        if lock(&sh.error).is_some() || lock(&sh.geo).hidden {
             if !hidden {
                 win.hide();
                 hidden = true;
+                paint_gen = u64::MAX; // shown again: painted again
             }
         } else {
             let g = lock(&sh.geo);
+            hidden = false;
             if g.tpl_gen != tpl_gen {
                 tpl_gen = g.tpl_gen;
                 win.set_input(&input_runs(&g.tpl));
@@ -247,6 +269,9 @@ fn window_thread(sh: Arc<Shared>, managed: bool, ready: mpsc::Sender<Result<()>>
             if g.paint_gen != paint_gen {
                 paint_gen = g.paint_gen;
                 super::compose(&g.tpl, g.frame.as_ref(), g.look.mirror, &mut px);
+                if g.drag.is_some() {
+                    super::fade_layer(&mut px, super::DRAG_OPACITY);
+                }
                 let pad = g.tpl.pad as i32;
                 let w = g.tpl.w;
                 // A managed window is placed once; the compositor keeps it.
@@ -303,6 +328,7 @@ impl Bubble {
             drag: None,
             frame: None,
             placed: None,
+            hidden: false,
         };
         geo.pos = geo.home();
         let side = geo.tpl.d;
@@ -367,6 +393,27 @@ impl Bubble {
     /// A camera picture is shown.
     pub fn has_picture(&self) -> bool {
         self.shared.picture.load(Ordering::SeqCst)
+    }
+
+    /// The look it has now (the wheel may have resized it).
+    #[allow(dead_code)] // Windows tests use it; kept alike
+    pub fn look(&self) -> Option<Look> {
+        Some(lock(&self.shared.geo).look)
+    }
+
+    /// Being dragged (drawn at [`super::DRAG_OPACITY`]).
+    #[allow(dead_code)] // kept alike
+    pub fn dragging(&self) -> bool {
+        lock(&self.shared.geo).drag.is_some()
+    }
+
+    /// Hide it during the recording (the camera button) or show it again.
+    pub fn set_hidden(&mut self, hidden: bool) {
+        let mut g = lock(&self.shared.geo);
+        if g.hidden != hidden {
+            g.hidden = hidden;
+            g.paint_gen += 1;
+        }
     }
 
     /// Wait up to `timeout` for the camera's first picture; false when

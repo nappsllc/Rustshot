@@ -12,6 +12,7 @@
 pub mod bar;
 pub mod border;
 pub mod countdown;
+pub mod meter;
 #[cfg(windows)]
 mod win;
 #[cfg(windows)]
@@ -193,15 +194,59 @@ fn linux_encoder(spec: &mut RecSpec) -> anyhow::Result<crate::rec::linux::native
 
 /// The recording border's colour (`border 2 px red`).
 pub const RED: C4 = C4::rgb(0xF0, 0x3E, 0x3E);
+/// The boards' recording red (`--rec`): the Start and Stop buttons, the
+/// timer's dot, a muted microphone or hidden camera.
+pub const REC: C4 = C4::rgb(0xFF, 0x5A, 0x5A);
+/// The paused dot and a clipping level meter (`#FFB454`).
+pub const AMBER: C4 = C4::rgb(0xFF, 0xB4, 0x54);
+/// Text on the red buttons (`#1A0A0A`).
+pub const ON_REC: C4 = C4::rgb(0x1A, 0x0A, 0x0A);
 
-/// The Record popover's choices, seeded from the config.
+/// The sound rows' value in GIF mode.
+pub const NOT_IN_GIF: &str = "Not recorded in GIF";
+
+/// What the Record panel records: the monitor (F), a window picked like
+/// window snapping (W), or the selected region (R).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecSource {
+    Screen,
+    Window,
+    Region,
+}
+
+/// The key that picks `s` in the Record panel (built in, like the mode
+/// keys 1 and 2).
+pub fn source_key(s: RecSource) -> &'static str {
+    match s {
+        RecSource::Screen => "F",
+        RecSource::Window => "W",
+        RecSource::Region => "R",
+    }
+}
+
+/// The GIF frame rates on offer, and its length caps (seconds).
+pub const GIF_FPS: [u32; 3] = [10, 15, 24];
+pub const GIF_MAX: [u32; 3] = [15, 30, 60];
+/// Regions narrower than this (logical px) get the compact pill.
+pub const COMPACT_W: f32 = 520.0;
+/// The toast when the microphone is silent this long while recording.
+pub const NO_MIC_INPUT: &str = "No mic input";
+pub const SILENCE: Duration = Duration::from_secs(5);
+/// Peaks below this count as silence (about -50 dBFS).
+const SILENT_PEAK: f32 = 0.003;
+
+/// The Record panel's choices, seeded from the config.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RecOpts {
     pub format: RecFormat,
     /// MP4 frame rate: 30 or 60.
     pub fps_mp4: u32,
-    /// GIF frame rate: 10 or 15.
+    /// GIF frame rate: 10, 15 or 24.
     pub fps_gif: u32,
+    /// A GIF stops by itself after this many seconds (15, 30 or 60).
+    pub gif_max: u32,
+    /// 3-2-1 before the first frame (the panel's Countdown 0 / 3s).
+    pub countdown: bool,
     pub system: bool,
     pub mic: bool,
     /// Microphone endpoint id; "" = the default device.
@@ -224,7 +269,9 @@ impl RecOpts {
         RecOpts {
             format: RecFormat::from_config(&cfg.rec_format),
             fps_mp4: if cfg.rec_fps >= 60 { 60 } else { 30 },
-            fps_gif: if cfg.rec_gif_fps <= 10 { 10 } else { 15 },
+            fps_gif: GIF_FPS.into_iter().find(|f| *f >= cfg.rec_gif_fps).unwrap_or(24),
+            gif_max: GIF_MAX.into_iter().find(|m| *m >= cfg.rec_gif_max).unwrap_or(60),
+            countdown: cfg.rec_countdown,
             system: cfg.rec_system_audio,
             mic: cfg.rec_mic,
             mic_dev: cfg.rec_mic_device.clone(),
@@ -257,12 +304,38 @@ impl RecOpts {
         }
     }
 
-    /// The two frame rates the popover offers for the chosen format.
-    pub fn fps_choices(&self) -> [u32; 2] {
+    /// The frame rates offered for the chosen format.
+    pub fn fps_choices(&self) -> &'static [u32] {
         match self.format {
-            RecFormat::Mp4 => [30, 60],
-            RecFormat::Gif => [10, 15],
+            RecFormat::Mp4 => &[30, 60],
+            RecFormat::Gif => &GIF_FPS,
         }
+    }
+
+    /// How long the recording may run before it stops by itself: a GIF's
+    /// max length; an MP4 runs until stopped.
+    pub fn max_len(&self) -> Option<Duration> {
+        (self.format == RecFormat::Gif).then(|| Duration::from_secs(u64::from(self.gif_max)))
+    }
+
+    /// The estimate toast while the panel is open, for a `w`x`h` (physical
+    /// px) recording: "1080p · 30 fps · est. 2.1 MB / min". MP4 from its
+    /// bit rate (and 128 kbit/s of sound when there is any); GIF from a
+    /// rough 0.05 bytes per pixel and frame (screen content, frames that
+    /// repeat are only a delay).
+    pub fn estimate(&self, (w, h): (u32, u32), q: crate::rec::Quality) -> String {
+        let fps = self.fps();
+        let (eh, bytes_s) = match self.format {
+            RecFormat::Mp4 => {
+                let (ew, eh) = crate::rec::mp4_fit(w, h);
+                let sound = if self.system || self.mic { 128_000.0 } else { 0.0 };
+                (eh, (f64::from(crate::rec::bitrate(ew, eh, fps, q)) + sound) / 8.0)
+            }
+            RecFormat::Gif => (h, f64::from(w) * f64::from(h) * f64::from(fps) * 0.05),
+        };
+        let mb = bytes_s * 60.0 / 1_000_000.0;
+        let mb = if mb >= 10.0 { format!("{mb:.0}") } else { format!("{mb:.1}") };
+        format!("{eh}p \u{b7} {fps} fps \u{b7} est. {mb} MB / min")
     }
 
     pub fn set_fps(&mut self, n: u32) {
@@ -491,6 +564,22 @@ impl Machine {
             return None;
         }
         self.countdown(now)
+    }
+
+    /// The countdown's number and how much of its second is left (1 → 0:
+    /// the 4 px arc drains over each second), outside it `None`.
+    pub fn countdown_frac(&self, now: Instant) -> Option<(u32, f32)> {
+        let n = self.countdown(now)?;
+        let left = self.go_at?.saturating_duration_since(now).as_secs_f32();
+        let frac = (left - (n - 1) as f32).clamp(0.0, 1.0);
+        Some((n, frac))
+    }
+
+    /// The length cap reached (a GIF's max length; paused time does not
+    /// count): stop, once.
+    pub fn auto_stop(&mut self, max: Option<Duration>, now: Instant) -> Option<Effect> {
+        let max = max?;
+        if self.phase == Phase::Recording && self.elapsed(now) >= max { self.stop(now) } else { None }
     }
 
     /// Pause/Resume: recording ⇄ paused.
@@ -749,28 +838,57 @@ pub fn layer_over(bgra: &[u8], bg: [u8; 3]) -> Vec<u8> {
 // Audio mute
 // ---------------------------------------------------------------------------
 
-/// The microphone as the control bar sees it: whether its source opened
-/// (set by the worker once it did: only then is there a Mute button) and
-/// whether it is muted.
+/// Whether the pill shows only the timer and Stop: the region is narrower
+/// than [`COMPACT_W`] logical px (`w` physical px at UI scale `scale`), or
+/// the user asked for it (the timer click / H).
+pub fn compact_pill(w: u32, scale: f32, by_user: bool) -> bool {
+    by_user || (w as f32 / scale.max(0.01)) < COMPACT_W
+}
+
+/// The sound as the control bar sees it: whether the microphone's source
+/// opened (set by the worker once it did: only then is there a Mute
+/// button), whether it is muted, its latest peak (silence detection), and
+/// the same for the system sound.
 #[derive(Clone, Debug, Default)]
 pub struct MicFlags {
     pub muted: Arc<AtomicBool>,
     pub open: Arc<AtomicBool>,
+    /// The microphone's latest peak (`f32` bits), muted or not.
+    pub level: Arc<std::sync::atomic::AtomicU32>,
+    pub sys_muted: Arc<AtomicBool>,
+    pub sys_open: Arc<AtomicBool>,
 }
 
 impl MicFlags {
     /// `inner` (the microphone, which opened) to record, mutable from the bar.
     pub fn opened<A>(&self, inner: A) -> Muted<A> {
         self.open.store(true, Ordering::SeqCst);
-        Muted { inner, muted: self.muted.clone() }
+        Muted { inner, muted: self.muted.clone(), level: Some(self.level.clone()) }
+    }
+
+    /// `inner` (the system sound, which opened) to record, mutable from the bar.
+    pub fn system<A>(&self, inner: A) -> Muted<A> {
+        self.sys_open.store(true, Ordering::SeqCst);
+        Muted { inner, muted: self.sys_muted.clone(), level: None }
+    }
+
+    /// The microphone's latest peak, 0..=1.
+    pub fn peak(&self) -> f32 {
+        f32::from_bits(self.level.load(Ordering::Relaxed))
     }
 }
 
 /// An audio source the control bar can mute: silence (same timing) while
-/// `muted` is set.
+/// `muted` is set; its peak goes to `level` (before muting).
 pub struct Muted<A> {
     pub inner: A,
     pub muted: Arc<AtomicBool>,
+    pub level: Option<Arc<std::sync::atomic::AtomicU32>>,
+}
+
+/// The largest magnitude among `s` (0 for none).
+pub fn peak_of(s: &[f32]) -> f32 {
+    s.iter().fold(0.0f32, |m, v| m.max(v.abs())).min(1.0)
 }
 
 impl<A: AudioSource> AudioSource for Muted<A> {
@@ -789,6 +907,11 @@ impl<A: AudioSource> AudioSource for Muted<A> {
     fn read_timed(&mut self, out: &mut Vec<f32>) -> (usize, Option<Instant>) {
         let start = out.len();
         let r = self.inner.read_timed(out);
+        if let Some(l) = &self.level
+            && out.len() > start
+        {
+            l.store(peak_of(&out[start..]).to_bits(), Ordering::Relaxed);
+        }
         if self.muted.load(Ordering::Relaxed) {
             out[start..].fill(0.0);
         }
@@ -901,6 +1024,21 @@ pub struct Run {
     /// The placement hint was handed out (once per recording).
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     hint_taken: bool,
+    /// It stops by itself after this long (a GIF's max length).
+    max: Option<Duration>,
+    /// With a camera bubble: whether it is hidden (the pill's camera button).
+    cam: Option<bool>,
+    /// The region is narrower than [`COMPACT_W`]: the compact pill.
+    narrow: bool,
+    /// The user toggled the compact pill (the timer, H).
+    compact_user: bool,
+    /// Discard pressed: the file is deleted once it is finished.
+    discard: bool,
+    /// The microphone has been silent since (while recording).
+    silent_since: Option<Instant>,
+    /// "No mic input" was said (once per recording) / waits to be taken.
+    mic_noted: bool,
+    notice: Option<&'static str>,
     /// Effects carried out (tests run without windows or a worker).
     #[cfg(test)]
     pub(crate) log: Vec<Effect>,
@@ -913,6 +1051,44 @@ pub struct Run {
 }
 
 impl Run {
+    /// A recording's state before its windows: `cam` when it has a bubble,
+    /// `narrow` for a region below [`COMPACT_W`].
+    fn base(mic: MicFlags, countdown: bool, cam: bool, narrow: bool) -> Run {
+        Run {
+            m: Machine::new(),
+            mic,
+            #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
+            ui: None,
+            countdown,
+            hint_taken: false,
+            max: None,
+            cam: cam.then_some(false),
+            narrow,
+            compact_user: false,
+            discard: false,
+            silent_since: None,
+            mic_noted: false,
+            notice: None,
+            #[cfg(test)]
+            log: Vec::new(),
+            #[cfg(test)]
+            fake_end: None,
+            #[cfg(test)]
+            fake_ready: false,
+        }
+    }
+
+    /// Whether `geom`'s region gets the compact pill.
+    fn narrow_of(geom: &Geom) -> bool {
+        compact_pill(geom.area.2, geom.area_scale(), false)
+    }
+
+    /// Stop by itself after `max` (a GIF's max length).
+    pub fn with_max(mut self, max: Option<Duration>) -> Run {
+        self.max = max;
+        self
+    }
+
     /// Start recording `spec` (the pipeline opens in the background; with
     /// `countdown` it captures after 3-2-1). `nudge` gets a `WM_TIMER`
     /// when the control bar is clicked, so the owner ticks at once.
@@ -928,20 +1104,8 @@ impl Run {
         bubble: Option<crate::cam::Bubble>,
     ) -> anyhow::Result<Run> {
         let mic = MicFlags::default();
-        let ui = win::Recorder::start(spec, geom, th, mic.clone(), nudge, bubble)?;
-        let mut run = Run {
-            m: Machine::new(),
-            mic,
-            ui: Some(ui),
-            countdown,
-            hint_taken: false,
-            #[cfg(test)]
-            log: Vec::new(),
-            #[cfg(test)]
-            fake_end: None,
-            #[cfg(test)]
-            fake_ready: false,
-        };
+        let mut run = Run::base(mic.clone(), countdown, bubble.is_some(), Run::narrow_of(&geom));
+        run.ui = Some(win::Recorder::start(spec, geom, th, mic, nudge, bubble)?);
         let now = Instant::now();
         if let Some(e) = run.m.start(countdown, now) {
             run.apply(e);
@@ -972,20 +1136,8 @@ impl Run {
         let enc = linux_encoder(&mut spec)?;
         let asking = portal::needs_portal_now();
         let mic = MicFlags::default();
-        let ui = x11::Recorder::start(spec, geom, th, mic.clone(), enc, bubble, asking)?;
-        let mut run = Run {
-            m: Machine::new(),
-            mic,
-            ui: Some(ui),
-            countdown,
-            hint_taken: false,
-            #[cfg(test)]
-            log: Vec::new(),
-            #[cfg(test)]
-            fake_end: None,
-            #[cfg(test)]
-            fake_ready: false,
-        };
+        let mut run = Run::base(mic.clone(), countdown, bubble.is_some(), Run::narrow_of(&geom));
+        run.ui = Some(x11::Recorder::start(spec, geom, th, mic, enc, bubble, asking)?);
         let now = Instant::now();
         if asking {
             run.m.ask();
@@ -1010,20 +1162,8 @@ impl Run {
         bubble: Option<crate::cam::Bubble>,
     ) -> anyhow::Result<Run> {
         let mic = MicFlags::default();
-        let ui = macos::Recorder::start(spec, geom, th, mic.clone(), bubble)?;
-        let mut run = Run {
-            m: Machine::new(),
-            mic,
-            ui: Some(ui),
-            countdown,
-            hint_taken: false,
-            #[cfg(test)]
-            log: Vec::new(),
-            #[cfg(test)]
-            fake_end: None,
-            #[cfg(test)]
-            fake_ready: false,
-        };
+        let mut run = Run::base(mic.clone(), countdown, bubble.is_some(), Run::narrow_of(&geom));
+        run.ui = Some(macos::Recorder::start(spec, geom, th, mic, bubble)?);
         let now = Instant::now();
         if let Some(e) = run.m.start(countdown, now) {
             run.apply(e);
@@ -1047,21 +1187,20 @@ impl Run {
     /// A recording with no worker or windows (tests).
     #[cfg(test)]
     pub fn fake(countdown: bool, mic: bool, now: Instant) -> Run {
-        let mut run = Run {
-            m: Machine::new(),
-            mic: MicFlags { muted: Arc::default(), open: Arc::new(AtomicBool::new(mic)) },
-            #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
-            ui: None,
-            countdown,
-            hint_taken: false,
-            log: Vec::new(),
-            fake_end: None,
-            #[cfg(test)]
-            fake_ready: false,
-        };
+        let flags = MicFlags { open: Arc::new(AtomicBool::new(mic)), ..MicFlags::default() };
+        let mut run = Run::base(flags, countdown, false, false);
         if let Some(e) = run.m.start(countdown, now) {
             run.apply(e);
         }
+        run
+    }
+
+    /// [`Run::fake`] with a camera bubble and a region `narrow` or not.
+    #[cfg(test)]
+    pub fn fake_with(countdown: bool, mic: bool, cam: bool, narrow: bool, now: Instant) -> Run {
+        let mut run = Run::fake(countdown, mic, now);
+        run.cam = cam.then_some(false);
+        run.narrow = narrow;
         run
     }
 
@@ -1074,6 +1213,12 @@ impl Run {
         run.countdown = countdown;
         run.m.ask();
         run
+    }
+
+    /// Tests: the microphone flags (its level, as the worker sets it).
+    #[cfg(test)]
+    pub(crate) fn mic_flags(&self) -> &MicFlags {
+        &self.mic
     }
 
     #[cfg_attr(not(test), allow(dead_code))] // tests
@@ -1099,6 +1244,14 @@ impl Run {
         }
     }
 
+    /// Stop and throw the recording away (the pill's Discard).
+    pub fn discard(&mut self, now: Instant) {
+        if matches!(self.m.phase(), Phase::Recording | Phase::Paused) {
+            self.discard = true;
+        }
+        self.stop(now);
+    }
+
     pub fn toggle_pause(&mut self, now: Instant) {
         if let Some(e) = self.m.toggle_pause(now) {
             self.apply(e);
@@ -1112,6 +1265,31 @@ impl Run {
         }
     }
 
+    /// The system sound off/on, when it is recorded.
+    pub fn toggle_system(&mut self) {
+        if self.mic.sys_open.load(Ordering::SeqCst) {
+            self.mic.sys_muted.fetch_xor(true, Ordering::SeqCst);
+        }
+    }
+
+    /// Hide the camera bubble or show it again, when there is one.
+    pub fn toggle_camera(&mut self) {
+        let Some(hidden) = self.cam.as_mut() else { return };
+        *hidden = !*hidden;
+        #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
+        let h = *hidden;
+        #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
+        if let Some(ui) = &mut self.ui {
+            ui.set_cam_hidden(h);
+        }
+    }
+
+    /// The compact pill and back (the timer, H). A narrow region stays
+    /// compact.
+    pub fn toggle_compact(&mut self) {
+        self.compact_user = !self.compact_user;
+    }
+
     /// The microphone is being recorded (its source opened).
     fn has_mic(&self) -> bool {
         self.mic.open.load(Ordering::SeqCst)
@@ -1121,16 +1299,50 @@ impl Run {
         self.mic.muted.load(Ordering::SeqCst)
     }
 
+    /// The time recorded (frozen once stopped).
+    pub fn length(&self, now: Instant) -> Duration {
+        self.m.elapsed(now)
+    }
+
+    /// The countdown is up (it is redrawn about 60 times a second: its arc).
+    pub fn counting(&self) -> bool {
+        self.m.phase() == Phase::Countdown
+    }
+
+    /// A toast for the user (the microphone has been silent for 5 s:
+    /// "No mic input"), once.
+    pub fn take_notice(&mut self) -> Option<&'static str> {
+        self.notice.take()
+    }
+
     /// The control bar's state now.
     pub fn view(&self, now: Instant) -> bar::BarView {
+        let sys = self.mic.sys_open.load(Ordering::SeqCst).then(|| self.mic.sys_muted.load(Ordering::SeqCst));
         bar::BarView {
             // Whole seconds: the bar is redrawn only when its text changes.
             elapsed: Duration::from_secs(self.m.elapsed(now).as_secs()),
             paused: self.m.phase() == Phase::Paused,
             mic: self.has_mic().then(|| self.muted()),
+            cam: self.cam,
+            system: sys,
             stopping: self.m.phase() == Phase::Stopping,
-            compact: false,
+            compact: self.narrow || self.compact_user,
             asking: self.m.phase() == Phase::Asking,
+        }
+    }
+
+    /// Watch the microphone while recording: silent (unmuted) for
+    /// [`SILENCE`] → "No mic input", once.
+    fn watch_mic(&mut self, now: Instant) {
+        let live = self.m.phase() == Phase::Recording && self.has_mic() && !self.muted();
+        if !live || self.mic.peak() >= SILENT_PEAK {
+            self.silent_since = None;
+            return;
+        }
+        let since = *self.silent_since.get_or_insert(now);
+        if !self.mic_noted && now.saturating_duration_since(since) >= SILENCE {
+            self.mic_noted = true;
+            self.notice = Some(NO_MIC_INPUT);
         }
     }
 
@@ -1147,16 +1359,17 @@ impl Run {
         if let Some(e) = self.m.tick(now) {
             self.apply(e);
         }
+        // A GIF's max length.
+        if let Some(e) = self.m.auto_stop(self.max, now) {
+            self.apply(e);
+        }
+        self.watch_mic(now);
         #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
         let clicks = self.ui.as_mut().map(|u| u.take_clicks()).unwrap_or_default();
         #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
         let clicks: Vec<bar::BarAct> = Vec::new();
         for c in clicks {
-            match c {
-                bar::BarAct::Pause => self.toggle_pause(now),
-                bar::BarAct::Mute => self.toggle_mute(),
-                bar::BarAct::Stop => self.stop(now),
-            }
+            self.act(c, now);
         }
         let end = self.poll_end();
         if let Some(end) = end {
@@ -1165,10 +1378,36 @@ impl Run {
             if let Some(ui) = &mut self.ui {
                 ui.close();
             }
-            return Some(end);
+            return Some(self.discarded(end));
         }
         self.show(now);
         None
+    }
+
+    /// Carry out a click on the pill.
+    pub fn act(&mut self, a: bar::BarAct, now: Instant) {
+        match a {
+            bar::BarAct::Pause => self.toggle_pause(now),
+            bar::BarAct::Mute => self.toggle_mute(),
+            bar::BarAct::Stop => self.stop(now),
+            bar::BarAct::Camera => self.toggle_camera(),
+            bar::BarAct::System => self.toggle_system(),
+            bar::BarAct::Discard => self.discard(now),
+            bar::BarAct::Compact => self.toggle_compact(),
+        }
+    }
+
+    /// A discarded recording's file is deleted: it ends as cancelled.
+    fn discarded(&self, end: End) -> End {
+        match end {
+            End::Saved { path, .. } if self.discard => {
+                if let Err(e) = std::fs::remove_file(&path) {
+                    eprintln!("rustshot: could not delete the discarded {}: {e}", path.display());
+                }
+                End::Cancelled
+            }
+            e => e,
+        }
     }
 
     /// The recording's parts are open (the screen chosen).
@@ -1218,9 +1457,9 @@ impl Run {
             let view = self.view(now);
             // Windows and macOS keep the countdown out of the capture.
             #[cfg(any(windows, target_os = "macos"))]
-            let count = self.m.countdown(now);
+            let count = self.m.countdown_frac(now);
             #[cfg(target_os = "linux")]
-            let count = self.m.countdown_shown(now);
+            let count = self.m.countdown_shown(now).and(self.m.countdown_frac(now));
             if let Some(ui) = &mut self.ui {
                 ui.show(&view, count);
             }

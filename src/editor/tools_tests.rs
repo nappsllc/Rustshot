@@ -598,10 +598,15 @@ fn ring_controls_change_the_bubble() {
         assert_eq!(shown, want, "the bubble shows the look");
         shown
     };
-    assert_eq!((look(&mut a).ring, look(&mut a).ring_w), (None, 3), "the accent, 3 px");
+    assert_eq!((look(&mut a).ring, look(&mut a).ring_w), (None, 2), "the accent, 2 px");
+    // The ring's swatch in the Camera row opens its palette: the width
+    // and the colours.
+    let sw = item(&mut a, |k| matches!(k, toolbar::Kind::Swatch { act: Act::RingPalette, .. }));
+    click(&mut a, mid(sw));
+    assert!(ed(&mut a).rec.ring_pal);
     let plus = item(&mut a, |k| *k == toolbar::Kind::Btn(Act::RingSize(1)));
     click(&mut a, mid(plus));
-    assert_eq!(look(&mut a).ring_w, 4);
+    assert_eq!(look(&mut a).ring_w, 3);
     let minus = item(&mut a, |k| *k == toolbar::Kind::Btn(Act::RingSize(-1)));
     for _ in 0..6 {
         click(&mut a, mid(minus));
@@ -615,9 +620,7 @@ fn ring_controls_change_the_bubble() {
     assert!(minus_item(&mut a), "thinner is off at 0");
     click(&mut a, mid(plus));
     // The palette: the accent first, the presets, the rainbow last.
-    let sw = item(&mut a, |k| matches!(k, toolbar::Kind::Swatch { act: Act::RingPalette, .. }));
-    click(&mut a, mid(sw));
-    assert!(ed(&mut a).rec.ring_pal);
+    assert!(ed(&mut a).rec.ring_pal, "still open");
     let green = item(&mut a, |k| matches!(k, toolbar::Kind::Swatch { act: Act::RingColor(Some(c)), .. } if *c == C4::rgb(0x2d, 0xc0, 0x6f)));
     click(&mut a, mid(green));
     assert!(!ed(&mut a).rec.ring_pal);
@@ -783,7 +786,7 @@ fn ring_settings_from_the_config() {
     let look = RecOpts::from_config(&cfg).cam_look();
     assert_eq!((look.ring, look.ring_w), (Some(C4::rgb(0, 255, 0)), 6));
     let look = RecOpts::from_config(&Config::default()).cam_look();
-    assert_eq!((look.ring, look.ring_w), (None, 3));
+    assert_eq!((look.ring, look.ring_w), (None, 2), "the board's 2 px ring");
 }
 
 // ---- previews ----------------------------------------------------------------

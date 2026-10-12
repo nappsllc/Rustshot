@@ -97,6 +97,8 @@ struct State {
     dib: Dib,
     shared: Arc<Shared>,
     shown: bool,
+    /// Hidden by the recording's camera button (the camera stays open).
+    hidden: bool,
 }
 
 impl State {
@@ -150,14 +152,21 @@ fn move_to(hwnd: isize, pos: (i32, i32), pad: i32) {
 /// Compose the current picture and put it on the window.
 fn paint() {
     let job = with(|st| {
+        if st.hidden {
+            return None;
+        }
         super::compose(&st.tpl, st.frame.as_ref(), st.look.mirror, &mut st.px);
+        if st.drag.is_some() {
+            super::fade_layer(&mut st.px, super::DRAG_OPACITY);
+        }
         let pad = st.tpl.pad as i32;
         let (x, y, w) = (st.pos.0 - pad, st.pos.1 - pad, st.tpl.w);
         st.dib.put(hwnd_of(st.hwnd), x, y, w, w, &st.px);
         let first = !st.shown;
         st.shown = true;
-        (st.hwnd, first)
-    });
+        Some((st.hwnd, first))
+    })
+    .flatten();
     let Some((hwnd, first)) = job else { return };
     unsafe {
         if first {
@@ -189,12 +198,42 @@ fn take_frame() -> bool {
     false
 }
 
+/// The drop: the bubble comes to rest at the nearest corner of the area
+/// (24 px in), opaque again; that corner is remembered.
 fn end_drag() {
-    with(|st| {
-        if st.drag.take().is_some() {
-            super::remember(super::rel_of(st.pos, st.area, st.tpl.d as i32, st.scale));
+    let moved = with(|st| {
+        st.drag.take()?;
+        let d = st.tpl.d as i32;
+        st.pos = super::settle(st.pos, st.area, d, st.scale);
+        super::remember(super::rel_of(st.pos, st.area, d, st.scale));
+        Some((st.hwnd, st.pos, st.tpl.pad as i32))
+    })
+    .flatten();
+    if let Some((h, p, pad)) = moved {
+        move_to(h, p, pad);
+        paint();
+    }
+}
+
+/// One wheel notch over the bubble: a size up or down (kept at its
+/// corner); the owner hears of it ([`super::take_resized`]).
+fn wheel(delta: i32) {
+    let changed = with(|st| {
+        let look = super::wheel_look(st.look, delta)?;
+        st.look = look;
+        st.tpl = super::template(look, st.scale, &st.th);
+        st.shared.side.store(st.tpl.d, Ordering::SeqCst);
+        st.frame = None;
+        if st.drag.is_none() {
+            st.pos = st.home();
         }
-    });
+        Some(look.size)
+    })
+    .flatten();
+    if let Some(z) = changed {
+        super::note_resized(z);
+        paint();
+    }
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
@@ -211,6 +250,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 SetCapture(hwnd);
                 let at = cursor();
                 with(|st| st.drag = Some((at, st.pos)));
+                paint(); // see-through while dragged
+                LRESULT(0)
+            }
+            WM_MOUSEWHEEL => {
+                let delta = ((wp.0 >> 16) & 0xFFFF) as u16 as i16;
+                wheel(i32::from(delta));
                 LRESULT(0)
             }
             WM_MOUSEMOVE => {
@@ -391,6 +436,7 @@ impl Bubble {
             dib: Dib::default(),
             shared: shared.clone(),
             shown: false,
+            hidden: false,
         };
         st.pos = st.home();
         BUBBLE.with(|b| *b.borrow_mut() = Some(st));
@@ -421,6 +467,38 @@ impl Bubble {
     #[cfg_attr(not(test), allow(dead_code))] // tests
     pub fn pos(&self) -> Option<(i32, i32)> {
         with(|st| st.pos)
+    }
+
+    /// The look it has now (the wheel may have resized it).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn look(&self) -> Option<Look> {
+        with(|st| st.look)
+    }
+
+    /// Being dragged (drawn at [`super::DRAG_OPACITY`]).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn dragging(&self) -> bool {
+        with(|st| st.drag.is_some()).unwrap_or(false)
+    }
+
+    /// Hide it during the recording (the recording's camera button) or
+    /// show it again; the camera stays open meanwhile.
+    pub fn set_hidden(&mut self, hidden: bool) {
+        let h = with(|st| {
+            let was = st.hidden;
+            st.hidden = hidden;
+            (was != hidden).then_some(st.hwnd)
+        })
+        .flatten();
+        let Some(h) = h else { return };
+        if hidden {
+            with(|st| st.shown = false);
+            unsafe {
+                let _ = ShowWindow(hwnd_of(h), SW_HIDE);
+            }
+        } else {
+            paint();
+        }
     }
 
     /// A camera picture is shown.

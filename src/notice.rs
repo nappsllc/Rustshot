@@ -27,19 +27,100 @@ pub const FADE_OUT: Duration = Duration::from_millis(250);
 /// Longest reason shown (an HTTP error body can be long).
 const REASON_MAX: usize = 90;
 
+/// A note with buttons stays this long (and while the pointer is on it).
+pub const ACTION_TTL: Duration = Duration::from_secs(6);
+
+/// A button on a note (the toast after a recording).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NoteAct {
+    /// Upload the file and copy its link (only with upload configured).
+    CopyLink,
+    /// Copy the file itself (a GIF; Windows: as a file drop, CF_HDROP).
+    Copy,
+    Open,
+    ShowInFolder,
+}
+
+impl NoteAct {
+    pub fn label(self) -> &'static str {
+        match self {
+            NoteAct::CopyLink => "Copy link",
+            NoteAct::Copy => "Copy",
+            NoteAct::Open => "Open",
+            NoteAct::ShowInFolder => "Show in folder",
+        }
+    }
+
+    /// The first button is the accent one.
+    fn primary(self) -> bool {
+        matches!(self, NoteAct::CopyLink | NoteAct::Copy)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Note {
     pub text: String,
     pub kind: ToastKind,
     /// Visible time before the fade-out.
     pub ttl: Duration,
+    /// Buttons after the text: then the note takes clicks (it is not
+    /// click-through) and stays [`ACTION_TTL`].
+    pub actions: Vec<NoteAct>,
+    /// The file the buttons act on.
+    pub file: Option<std::path::PathBuf>,
 }
 
 impl Note {
     fn new(text: String, kind: ToastKind) -> Note {
         let ttl = if kind == ToastKind::Error { ERROR_TTL } else { TTL };
-        Note { text, kind, ttl }
+        Note { text, kind, ttl, actions: Vec::new(), file: None }
     }
+
+    /// A plain note (no buttons): `text` with the usual time.
+    pub fn plain(text: impl Into<String>, kind: ToastKind) -> Note {
+        Note::new(text.into(), kind)
+    }
+}
+
+/// "00:42", "12:07", "1:02:03".
+fn clock(d: Duration) -> String {
+    let s = d.as_secs();
+    let (h, m, s) = (s / 3600, s / 60 % 60, s % 60);
+    if h > 0 { format!("{h}:{m:02}:{s:02}") } else { format!("{m:02}:{s:02}") }
+}
+
+/// "820 KB", "1.4 MB", "36 MB".
+pub fn file_size(bytes: u64) -> String {
+    let mb = bytes as f64 / 1_000_000.0;
+    if mb < 1.0 {
+        format!("{} KB", (bytes as f64 / 1000.0).round().max(1.0) as u64)
+    } else if mb < 10.0 {
+        format!("{mb:.1} MB")
+    } else {
+        format!("{mb:.0} MB")
+    }
+}
+
+/// The toast after a recording: "Saved <file> · 00:42 · 1.4 MB" (what was
+/// left out after it) with Copy link (an MP4, when uploading is set up) or
+/// Copy (a GIF: the file itself), Open and Show in folder; it stays
+/// [`ACTION_TTL`].
+pub fn recording_saved(path: &std::path::Path, length: Duration, bytes: u64, warnings: &[String], upload: bool) -> Note {
+    let mut text = format!("Saved {} \u{b7} {} \u{b7} {}", file_name(path), clock(length), file_size(bytes));
+    for w in warnings {
+        text.push_str(" \u{2014} ");
+        text.push_str(&reason(w));
+    }
+    let gif = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("gif"));
+    let mut actions = Vec::new();
+    if gif {
+        actions.push(NoteAct::Copy);
+    } else if upload {
+        actions.push(NoteAct::CopyLink);
+    }
+    actions.extend([NoteAct::Open, NoteAct::ShowInFolder]);
+    let kind = if warnings.is_empty() { ToastKind::Success } else { ToastKind::Error };
+    Note { text, kind, ttl: ACTION_TTL, actions, file: Some(path.to_path_buf()) }
 }
 
 fn reason(e: &str) -> String {
@@ -89,7 +170,7 @@ pub fn compose(done: &[Done], uploading: bool) -> Option<Note> {
         Note::new(text, ToastKind::Error)
     } else if uploading {
         let kind = if done.is_empty() { ToastKind::Info } else { ToastKind::Success };
-        Note { text, kind, ttl: UPLOAD_TTL }
+        Note { ttl: UPLOAD_TTL, ..Note::new(text, kind) }
     } else {
         Note::new(text, ToastKind::Success)
     })
@@ -119,6 +200,248 @@ pub fn size(text: &str, s: f32) -> (u32, u32) {
     let ui = Ui { th: &crate::theme::DARK, s, font: Some(crate::fonts::ui_font()) };
     let (w, h) = toast_size(&ui, text);
     ((w + 2.0 * SIDE * s).ceil() as u32, (h + (TOP + BOTTOM) * s).ceil() as u32)
+}
+
+/// A note with buttons in its window (physical px): the window's size,
+/// the panel, where the text starts, and the buttons.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ActLayout {
+    pub size: (u32, u32),
+    pub panel: FRect,
+    pub text_x: f32,
+    pub buttons: Vec<(NoteAct, FRect)>,
+}
+
+/// Board metrics (logical px): the panel 36 high, padding 10 left and 6
+/// right, the icon 16 and 8 to the text, buttons 24 high 8 apart with 10
+/// inside, 11.5 px labels.
+const ACT_H: f32 = 36.0;
+const BTN_H: f32 = 24.0;
+const BTN_PAD: f32 = 10.0;
+const BTN_TEXT: f32 = 11.5;
+
+fn text_w(s: f32, size: f32, t: &str) -> f32 {
+    crate::uifb::text_width(crate::fonts::ui_font(), size * s, t)
+}
+
+/// Lay out `note`'s text and buttons at scale `s`.
+pub fn act_layout(note: &Note, s: f32) -> ActLayout {
+    let px = |v: f32| v * s;
+    let (x0, y0) = (px(SIDE), px(TOP));
+    let text_x = x0 + px(10.0 + 16.0 + 8.0);
+    let mut x = text_x + text_w(s, 12.0, &note.text);
+    let mut buttons = Vec::new();
+    for a in &note.actions {
+        x += px(8.0);
+        let w = (text_w(s, BTN_TEXT, a.label()) + px(2.0 * BTN_PAD)).ceil();
+        buttons.push((*a, FRect { x: x.round(), y: (y0 + px(ACT_H - BTN_H) / 2.0).round(), w, h: px(BTN_H).round() }));
+        x += w;
+    }
+    let panel = FRect { x: x0, y: y0, w: (x + px(6.0) - x0).ceil(), h: px(ACT_H).round() };
+    let size = ((panel.x1() + px(SIDE)).ceil() as u32, (panel.y1() + px(BOTTOM)).ceil() as u32);
+    ActLayout { size, panel, text_x, buttons }
+}
+
+/// The button of `l` under `p` (window px).
+pub fn act_at(l: &ActLayout, p: crate::objects::Pt) -> Option<NoteAct> {
+    l.buttons.iter().find(|(_, r)| p.x >= r.x && p.x < r.x1() && p.y >= r.y && p.y < r.y1()).map(|b| b.0)
+}
+
+/// The window size for `note` (with its buttons, if any).
+pub fn note_size(note: &Note, s: f32) -> (u32, u32) {
+    if note.actions.is_empty() { size(&note.text, s) } else { act_layout(note, s).size }
+}
+
+/// Draw a note with buttons (the board's "After stopping" toast); `hover`
+/// is the button under the pointer.
+fn draw_actions(f: &mut crate::uifb::Fb, ui: &Ui, note: &Note, l: &ActLayout, hover: Option<NoteAct>, k: f32) {
+    use crate::editor::style::{fill, ring, surface, ALL_LAYERS};
+    let th = ui.th;
+    let s = ui.s;
+    let font = crate::fonts::ui_font();
+    let rise = 4.0 * s * (1.0 - k);
+    let mv = |r: FRect| FRect { y: r.y + rise, ..r };
+    let panel = mv(l.panel);
+    surface(f, ui, panel, 12.0, &ALL_LAYERS, k);
+    let cy = panel.y + panel.h / 2.0;
+    let (icon, color) = match note.kind {
+        ToastKind::Info => ("info", th.accent),
+        ToastKind::Success => ("okc", th.success),
+        ToastKind::Error => ("alert", th.error),
+    };
+    let isz = 16.0 * s;
+    crate::icon_path::draw_icon(f, icon, panel.x + 10.0 * s, cy - isz / 2.0, isz, color.fade(k));
+    let tpx = 12.0 * s;
+    f.draw_text(font, tpx, &note.text, l.text_x, cy - crate::uifb::text_height(font, tpx) / 2.0, th.text.fade(k));
+    for &(a, r) in &l.buttons {
+        let r = mv(r);
+        let rad = 6.0 * s;
+        let hot = hover == Some(a);
+        let fg = if a.primary() {
+            fill(f, r, rad, if hot { th.accent_bg_hover } else { th.accent_bg }.fade(k));
+            ring(f, ui, r, rad, th.accent_ring.fade(k));
+            th.accent_fg
+        } else {
+            fill(f, r, rad, if hot { th.bg_pressed } else { th.bg_hover }.fade(k));
+            th.text
+        };
+        let bpx = BTN_TEXT * s;
+        let tx = r.x + (r.w - crate::uifb::text_width(font, bpx, a.label())) / 2.0;
+        f.draw_text(font, bpx, a.label(), tx, r.y + r.h / 2.0 - crate::uifb::text_height(font, bpx) / 2.0, fg.fade(k));
+    }
+}
+
+/// [`render`] for any note, `hover` over one of its buttons.
+pub fn render_note(note: &Note, th: &Theme, s: f32, k: f32, hover: Option<NoteAct>) -> (u32, u32, Vec<u8>) {
+    if note.actions.is_empty() {
+        return render(note, th, s, k);
+    }
+    let l = act_layout(note, s);
+    let ui = Ui { th, s, font: Some(crate::fonts::ui_font()) };
+    let (w, h) = l.size;
+    let px = crate::rec_ui::render_layer(w as usize, h as usize, |f| draw_actions(f, &ui, note, &l, hover, k));
+    (w, h, px)
+}
+
+/// Whether uploading is set up (an Imgur client id): Copy link is offered.
+pub fn upload_configured(cfg: &crate::config::Config) -> bool {
+    !cfg.upload_client_id.trim().is_empty()
+}
+
+/// Carry out button `a` of a note about `file`: the note to show next, if
+/// any ("Copied", "Uploading…"; an upload's result follows on `done`).
+pub fn run_action(a: NoteAct, file: &std::path::Path, done: impl FnOnce(Note) + Send + 'static) -> Option<Note> {
+    match a {
+        NoteAct::Open => {
+            crate::actions::open_path(file);
+            None
+        }
+        NoteAct::ShowInFolder => {
+            show_in_folder(file);
+            None
+        }
+        NoteAct::Copy => Some(match copy_file(file) {
+            Ok(()) => Note::plain("Copied to clipboard", ToastKind::Success),
+            Err(e) => Note::plain(format!("Copy failed: {}", reason(&format!("{e:#}"))), ToastKind::Error),
+        }),
+        NoteAct::CopyLink => {
+            let path = file.to_path_buf();
+            let cfg = crate::config::load();
+            let spawned = std::thread::Builder::new().name("upload-recording".into()).spawn(move || {
+                let res = std::fs::read(&path).map_err(|e| format!("read {}: {e}", path.display())).and_then(|b| upload(&b, &cfg.upload_client_id));
+                let copied = res.as_ref().is_ok_and(|u| crate::export::copy_text_to_clipboard(u).is_ok());
+                done(upload_note(&res, copied));
+            });
+            Some(match spawned {
+                Ok(_) => Note { ttl: UPLOAD_TTL, ..Note::plain("Uploading\u{2026}", ToastKind::Info) },
+                Err(e) => Note::plain(format!("Upload failed: {e}"), ToastKind::Error),
+            })
+        }
+    }
+}
+
+/// Upload `bytes` (tests never do).
+fn upload(bytes: &[u8], client_id: &str) -> Result<String, String> {
+    #[cfg(test)]
+    {
+        let _ = (bytes, client_id);
+        Err("no uploader in tests".into())
+    }
+    #[cfg(not(test))]
+    {
+        crate::export::do_upload(bytes, client_id)
+    }
+}
+
+/// Open the folder with `file` selected (Windows Explorer, macOS Finder;
+/// elsewhere the folder).
+pub fn show_in_folder(file: &std::path::Path) {
+    #[cfg(test)]
+    {
+        let _ = file;
+    }
+    #[cfg(all(windows, not(test)))]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows::core::{w, PCWSTR};
+        use windows::Win32::UI::Shell::ShellExecuteW;
+        use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+        let args: Vec<u16> = std::ffi::OsString::from(format!("/select,\"{}\"", file.display())).encode_wide().chain(Some(0)).collect();
+        unsafe {
+            ShellExecuteW(None, w!("open"), w!("explorer.exe"), PCWSTR(args.as_ptr()), PCWSTR::null(), SW_SHOWNORMAL);
+        }
+    }
+    #[cfg(all(target_os = "macos", not(test)))]
+    {
+        let _ = std::process::Command::new("open").arg("-R").arg(file).spawn();
+    }
+    #[cfg(all(not(windows), not(target_os = "macos"), not(test)))]
+    {
+        if let Some(dir) = file.parent() {
+            crate::actions::open_path(dir);
+        }
+    }
+}
+
+/// Put `file` itself on the clipboard: on Windows as a file drop
+/// (`CF_HDROP`, what Explorer and chat apps paste); elsewhere its path.
+pub fn copy_file(file: &std::path::Path) -> anyhow::Result<()> {
+    #[cfg(test)]
+    {
+        let _ = file;
+        Ok(())
+    }
+    #[cfg(all(windows, not(test)))]
+    {
+        copy_hdrop(file)
+    }
+    #[cfg(all(not(windows), not(test)))]
+    {
+        crate::export::copy_text_to_clipboard(&file.display().to_string())
+    }
+}
+
+/// The `DROPFILES` block for `file`: the header, then the path in UTF-16,
+/// double NUL-terminated.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn hdrop_bytes(file: &std::path::Path) -> Vec<u8> {
+    // DROPFILES: pFiles (u32), pt (2 × i32), fNC (i32), fWide (i32).
+    let mut out = Vec::new();
+    out.extend_from_slice(&20u32.to_le_bytes());
+    out.extend_from_slice(&[0u8; 12]);
+    out.extend_from_slice(&1i32.to_le_bytes());
+    for u in file.as_os_str().to_string_lossy().encode_utf16().chain([0, 0]) {
+        out.extend_from_slice(&u.to_le_bytes());
+    }
+    out
+}
+
+#[cfg(all(windows, not(test)))]
+fn copy_hdrop(file: &std::path::Path) -> anyhow::Result<()> {
+    use anyhow::Context;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData};
+    use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+    const CF_HDROP: u32 = 15;
+    let bytes = hdrop_bytes(file);
+    unsafe {
+        OpenClipboard(None).context("open the clipboard")?;
+        let r = (|| -> anyhow::Result<()> {
+            EmptyClipboard().context("empty the clipboard")?;
+            let h = GlobalAlloc(GMEM_MOVEABLE, bytes.len()).context("GlobalAlloc")?;
+            let p = GlobalLock(h) as *mut u8;
+            if p.is_null() {
+                anyhow::bail!("GlobalLock failed");
+            }
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), p, bytes.len());
+            let _ = GlobalUnlock(h);
+            // The clipboard owns the memory from here.
+            SetClipboardData(CF_HDROP, Some(HANDLE(h.0))).context("SetClipboardData")?;
+            Ok(())
+        })();
+        let _ = CloseClipboard();
+        r
+    }
 }
 
 /// Where a `size` window goes on a monitor's work area (physical px):
@@ -305,6 +628,92 @@ mod tests {
             for s in [1.0f32, 2.0] {
                 for (name, note) in &notes {
                     let (w, h, px) = render(note.as_ref().unwrap(), th, s, 1.0);
+                    let img = crate::pixbuf::PixBuf::from_raw(w, h, crate::rec_ui::layer_over(&px, bg)).unwrap();
+                    std::fs::write(dir.join(format!("{tn}-notice-{name}@{s}x.png")), img.to_png().unwrap()).unwrap();
+                }
+            }
+        }
+    }
+
+    /// After a recording: "Saved <file> · 00:42 · 1.4 MB" with Copy link
+    /// (an MP4, uploading set up) or Copy (a GIF: the file), Open and Show
+    /// in folder; it stays 6 s.
+    #[test]
+    fn the_toast_after_a_recording_has_buttons() {
+        let mp4 = PathBuf::from("shots").join("rustshot-2026-10-10-2131.mp4");
+        let n = recording_saved(&mp4, Duration::from_secs(42), 1_400_000, &[], true);
+        assert_eq!(n.text, "Saved rustshot-2026-10-10-2131.mp4 \u{b7} 00:42 \u{b7} 1.4 MB");
+        assert_eq!((n.kind, n.ttl), (ToastKind::Success, ACTION_TTL));
+        assert_eq!(n.actions, [NoteAct::CopyLink, NoteAct::Open, NoteAct::ShowInFolder]);
+        assert_eq!(n.file.as_deref(), Some(mp4.as_path()));
+        let n = recording_saved(&mp4, Duration::from_secs(3725), 36_200_000, &[], false);
+        assert_eq!(n.actions, [NoteAct::Open, NoteAct::ShowInFolder], "no upload set up: no Copy link");
+        assert!(n.text.ends_with("1:02:05 \u{b7} 36 MB"), "{}", n.text);
+        let gif = PathBuf::from("/home/me/Videos/clip.gif");
+        let n = recording_saved(&gif, Duration::from_secs(7), 820_400, &["microphone not recorded: busy".into()], true);
+        assert_eq!(n.actions, [NoteAct::Copy, NoteAct::Open, NoteAct::ShowInFolder], "a GIF: Copy copies the file");
+        assert_eq!(n.text, "Saved clip.gif \u{b7} 00:07 \u{b7} 820 KB \u{2014} microphone not recorded: busy");
+        assert_eq!(n.kind, ToastKind::Error, "something was left out");
+        assert_eq!(NoteAct::ShowInFolder.label(), "Show in folder");
+        assert!(upload_configured(&crate::config::Config::default()));
+        assert!(!upload_configured(&crate::config::Config { upload_client_id: " ".into(), ..Default::default() }));
+    }
+
+    /// The buttons: 24 px high, 8 px apart, inside the 36 px panel, right
+    /// of the text; hits find them; the window holds them and the shadow.
+    #[test]
+    fn note_buttons_layout_and_hits() {
+        let n = recording_saved(&PathBuf::from("a.mp4"), Duration::from_secs(1), 10, &[], true);
+        for s in [1.0f32, 2.0] {
+            let l = act_layout(&n, s);
+            assert_eq!(l.buttons.len(), 3);
+            assert_eq!(l.panel.h, (36.0 * s).round());
+            let mut x = l.text_x;
+            for (a, r) in &l.buttons {
+                assert_eq!(r.h, (24.0 * s).round(), "{a:?}");
+                assert!(r.x > x && r.y >= l.panel.y && r.y1() <= l.panel.y1() && r.x1() <= l.panel.x1(), "{a:?} {r:?}");
+                assert_eq!(act_at(&l, crate::objects::Pt::new(r.x + 2.0, r.y + 2.0)), Some(*a));
+                x = r.x1();
+            }
+            assert_eq!(act_at(&l, crate::objects::Pt::new(l.text_x + 1.0, l.panel.y + 4.0)), None, "the text is no button");
+            assert_eq!(note_size(&n, s), l.size);
+            let (w, h, px) = render_note(&n, &crate::theme::DARK, s, 1.0, Some(NoteAct::Open));
+            assert_eq!((w, h), l.size);
+            assert!(px[3] < 8 && px[(w * h * 4 - 1) as usize] < 8, "the corners are clear");
+        }
+        // A plain note: the plain layout.
+        let p = Note::plain("Copied to clipboard", ToastKind::Success);
+        assert_eq!(note_size(&p, 1.0), size(&p.text, 1.0));
+    }
+
+    /// CF_HDROP: a DROPFILES header (files at byte 20, wide), then the
+    /// path in UTF-16 with a double NUL.
+    #[test]
+    fn hdrop_block() {
+        let b = hdrop_bytes(std::path::Path::new("C:\\a.gif"));
+        assert_eq!(&b[..4], &20u32.to_le_bytes());
+        assert_eq!(&b[16..20], &1i32.to_le_bytes(), "wide");
+        let wide: Vec<u16> = b[20..].as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
+        assert_eq!(String::from_utf16_lossy(&wide[..wide.len() - 2]), "C:\\a.gif");
+        assert_eq!(&wide[wide.len() - 2..], &[0, 0]);
+    }
+
+    /// The after-stop toast and "No mic input", dark and light, 1x and 2x.
+    #[test]
+    #[ignore = "writes preview PNGs; set RUSTSHOT_PREVIEW_DIR"]
+    fn render_recording_notice_previews() {
+        let Some(dir) = std::env::var_os("RUSTSHOT_PREVIEW_DIR") else { return };
+        let dir = PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let notes = [
+            ("saved-mp4", recording_saved(&PathBuf::from("rustshot-2026-10-10-2131.mp4"), Duration::from_secs(42), 1_400_000, &[], true), Some(NoteAct::CopyLink)),
+            ("saved-gif", recording_saved(&PathBuf::from("rustshot-2026-10-10-2131.gif"), Duration::from_secs(12), 3_100_000, &[], true), None),
+            ("no-mic-input", Note::plain(crate::rec_ui::NO_MIC_INPUT, ToastKind::Error), None),
+        ];
+        for (tn, th, bg) in [("dark", &crate::theme::DARK, [38u8, 44, 58]), ("light", &crate::theme::LIGHT, [214, 222, 232])] {
+            for s in [1.0f32, 2.0] {
+                for (name, note, hover) in &notes {
+                    let (w, h, px) = render_note(note, th, s, 1.0, *hover);
                     let img = crate::pixbuf::PixBuf::from_raw(w, h, crate::rec_ui::layer_over(&px, bg)).unwrap();
                     std::fs::write(dir.join(format!("{tn}-notice-{name}@{s}x.png")), img.to_png().unwrap()).unwrap();
                 }

@@ -84,19 +84,19 @@ fn bubble_shows_pictures_follows_the_area_and_releases_the_camera() {
         }
     }
     // Bottom left of the area, inset; the window is the shadow's pad larger.
-    let (d, pad) = (240, pad(1.0) as i32);
-    assert_eq!(b.pos(), Some((116, 700 - 16 - d)));
+    let (d, pad) = (160, pad(1.0) as i32);
+    assert_eq!(b.pos(), Some((124, 700 - 24 - d)));
     let r = rect(h);
-    assert_eq!((r.left, r.top, r.right - r.left), (116 - pad, 700 - 16 - d - pad, d + 2 * pad));
+    assert_eq!((r.left, r.top, r.right - r.left), (124 - pad, 700 - 24 - d - pad, d + 2 * pad));
     // The selection moves: the bubble keeps its corner.
     b.set_anchor((0, 0, 1000, 700), 1.0);
-    assert_eq!(b.pos(), Some((16, 700 - 16 - d)));
-    assert_eq!(rect(h).left, 16 - pad);
+    assert_eq!(b.pos(), Some((24, 700 - 24 - d)));
+    assert_eq!(rect(h).left, 24 - pad);
     // Larger: still at its corner, the window grows.
     b.set_look(Look { size: CamSize::L, ..M }, &DARK);
-    assert_eq!(b.pos(), Some((16, 700 - 16 - 320)));
+    assert_eq!(b.pos(), Some((24, 700 - 24 - 200)));
     let r = rect(h);
-    assert_eq!(r.right - r.left, 320 + 2 * pad);
+    assert_eq!(r.right - r.left, 200 + 2 * pad);
     // A picture of the old size is dropped; one of the new size comes.
     assert!(b.wait_picture(Duration::from_secs(10)), "pictures at the new size");
     assert!(b.error().is_none());
@@ -165,12 +165,12 @@ fn bubble_waits_for_a_picture_and_keeps_off_the_toolbar() {
     assert!(b.wait_picture(Duration::from_secs(1)), "a picture within a second");
     assert!(b.has_picture());
     let home = b.pos().unwrap();
-    assert_eq!(home, (116, 700 - 16 - 240));
+    assert_eq!(home, (124, 700 - 24 - 160));
     // A popover down the left side: the bubble moves to the bottom right.
     let screen = (0, 0, 1920, 1080);
     b.set_avoid(&[(110, 100, 320, 600)], screen);
-    assert_eq!(b.pos(), Some((900 - 16 - 240, 700 - 16 - 240)));
-    assert_eq!(rect(b.hwnd()).left, 900 - 16 - 240 - pad(1.0) as i32);
+    assert_eq!(b.pos(), Some((900 - 24 - 160, 700 - 24 - 160)));
+    assert_eq!(rect(b.hwnd()).left, 900 - 24 - 160 - pad(1.0) as i32);
     // The toolbar is gone: back where it was left.
     b.clear_avoid();
     assert_eq!(b.pos(), Some(home));
