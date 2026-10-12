@@ -313,7 +313,7 @@ mod tests {
         let light = Config { theme: "light".into(), ..teal.clone() };
         assert_eq!(resolve(&light).accent, C4::rgb(0x16, 0x89, 0x7F));
         let other = Config { ui_color: "#123456".into(), theme: "light".into(), ..Config::default() };
-        assert_eq!(resolve(&other).accent, C4::rgb(0x12, 0x34, 0x56), "a custom colour is used as is");
+        assert_eq!(resolve(&other).accent, C4::rgb(0x12, 0x34, 0x56), "a custom color is used as is");
     }
 
     #[test]

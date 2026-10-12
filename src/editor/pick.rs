@@ -606,7 +606,7 @@ mod tests {
         assert!(p.hex_ok);
         assert_eq!(p.color(), C4::rgb(0, 0, 255));
         p.type_char('x');
-        assert!(!p.hex_ok, "not a colour");
+        assert!(!p.hex_ok, "not a color");
         assert_eq!(p.color(), C4::rgb(0, 0, 255), "keeps the last good one");
         p.backspace();
         assert!(p.hex_ok);

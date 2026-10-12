@@ -420,11 +420,23 @@ impl Edit {
 
     /// A callout keeps its text inside: at least the height it needs.
     pub(super) fn refit_callout(&mut self, idx: usize) {
+        self.fit_callout(idx, false, true);
+    }
+
+    /// Fit callout `idx`'s height to its text: grow only, or (`shrink`, a
+    /// text size change) also shrink. The bubble grows and shrinks away
+    /// from its tail (`away`; else down, as while a handle drags it), so
+    /// the tail stays as drawn.
+    pub(super) fn fit_callout(&mut self, idx: usize, shrink: bool, away: bool) {
         let font = self.font.clone();
-        if let Some(Obj::Callout { r, text, size, style, .. }) = self.objects.get_mut(idx) {
+        if let Some(Obj::Callout { r, tail, text, size, style, .. }) = self.objects.get_mut(idx) {
             let need = callout::needed_h(font.as_ref(), *r, text, *size, *style);
-            if need > r.h {
-                r.h = need;
+            let h = if shrink { need } else { need.max(r.h) };
+            if h != r.h {
+                if away && callout::tail_below(*r, *tail) {
+                    r.y -= h - r.h;
+                }
+                r.h = h;
             }
         }
         self.dirty = true;
@@ -485,7 +497,7 @@ impl Edit {
                         *slot = o;
                     }
                     if callout {
-                        self.refit_callout(i);
+                        self.fit_callout(i, false, false);
                     }
                 }
                 self.dirty = true;
@@ -554,6 +566,8 @@ impl Edit {
         }
         if let Act::ObjStyle(st) = act {
             self.obj.style = st;
+            self.cfg.callout_style = st.id().into();
+            self.pending.set("tool_callout_style".into(), Some(crate::config::toml_str(st.id())), Instant::now());
         }
         // Colour, fill, size and shape restyle a bubble being typed in
         // (it stays open, a new one included); the others finish it first,
@@ -624,7 +638,7 @@ impl Edit {
                     let step = if matches!(o, Obj::Magnify { .. }) { 5.0 } else { 1.0 };
                     oe::set_size(o, (v + d as f32 * step).clamp(lo, hi));
                     if matches!(o, Obj::Callout { .. }) {
-                        self.refit_callout(i);
+                        self.fit_callout(i, true, true);
                     }
                 }
                 let v = sel.first().and_then(|&i| oe::size(&self.objects[i]));
@@ -638,6 +652,9 @@ impl Edit {
             }
             _ => return false,
         }
+        if matches!(act, Act::ObjSize(_) | Act::ObjFill) {
+            self.remember_sel();
+        }
         self.dirty = true;
         if matches!(act, Act::ObjSize(_)) {
             self.commit_coalesced("size");
@@ -647,7 +664,34 @@ impl Edit {
         true
     }
 
-    /// A colour from the palette or the picker for the selection.
+    /// The selection's size, color and fill become what its tools draw
+    /// next (remembered, as when set with the tool itself).
+    fn remember_sel(&mut self) {
+        let now = Instant::now();
+        for &i in &self.obj.sel.clone() {
+            let Some(o) = self.objects.get(i) else { continue };
+            let t = tool_of(o);
+            let (size, color, fill) = (oe::size(o), oe::color(o), oe::fill(o));
+            if let Some(v) = size.filter(|_| tools::has_size(t)) {
+                self.mem.set_size(t, v);
+                self.remember_size(t, now);
+            }
+            if let Some(c) = color.filter(|_| tools::has_color(t))
+                && self.mem.set_color(t, c)
+            {
+                self.remember_color(t, now);
+            }
+            if let Some(on) = fill
+                && self.mem.set_fill(t, on)
+                && let Some(id) = tools::id(t)
+            {
+                self.cfg.tool_fills.insert(id.into(), on);
+                self.pending.set(format!("tool_{id}_fill"), Some(on.to_string()), now);
+            }
+        }
+    }
+
+    /// A color from the palette or the picker for the selection.
     pub(super) fn color_selection(&mut self, c: crate::uifb::C4) -> bool {
         if self.obj.sel.is_empty() {
             return false;
@@ -657,6 +701,7 @@ impl Edit {
                 oe::set_color(o, c);
             }
         }
+        self.remember_sel();
         self.dirty = true;
         self.commit_edits();
         true

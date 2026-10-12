@@ -161,7 +161,7 @@ fn tools_remember_size_and_colour_into_the_next_capture() {
     act(&mut a, Act::Size(1));
     let before = ed(&mut a).mem.clone();
     act(&mut a, Act::Color(green));
-    assert_eq!(ed(&mut a).mem, before, "no colour for pixelate");
+    assert_eq!(ed(&mut a).mem, before, "no color for pixelate");
     key(&mut a, key_esc());
     key(&mut a, key_esc()); // the tool off, then the capture closes
     assert!(matches!(a.st, State::Hidden));
@@ -341,7 +341,7 @@ fn picker_drags_live_esc_reverts_enter_keeps() {
     key(&mut a, wind::key::RETURN);
     assert!(ed(&mut a).pick.is_none() && !ed(&mut a).done, "Enter closes the picker, not the capture");
     assert_eq!(ed(&mut a).color(), c);
-    assert_eq!(ed(&mut a).recents(), [c], "a recent colour");
+    assert_eq!(ed(&mut a).recents(), [c], "a recent color");
     assert!(ed(&mut a).pending.get("tool_line_color").is_some() && ed(&mut a).pending.get("recent_colors").is_some());
     // A click outside closes it, keeping the colour, and does nothing else.
     open_picker(&mut a);
@@ -375,7 +375,7 @@ fn picker_keyboard_hex_and_opacity() {
     type_str(&mut a, "x");
     assert!(!ed(&mut a).pick.as_ref().unwrap().hex_ok);
     key(&mut a, wind::key::RETURN);
-    assert!(ed(&mut a).pick.is_some(), "Enter waits for a colour that reads");
+    assert!(ed(&mut a).pick.is_some(), "Enter waits for a color that reads");
     key(&mut a, wind::key::BACK);
     // Tab to the opacity slider; Shift+Left takes 10 % off.
     key(&mut a, wind::key::TAB);
@@ -423,7 +423,7 @@ fn picker_slider_and_recents_by_mouse() {
     type_str(&mut a, "#abcdef");
     key(&mut a, wind::key::RETURN);
     let r = ed(&mut a).recents();
-    assert_eq!((r.len(), r[0]), (8, C4::new(0xab, 0xcd, 0xef, 0xcc)), "the field sets the colour, not its opacity");
+    assert_eq!((r.len(), r[0]), (8, C4::new(0xab, 0xcd, 0xef, 0xcc)), "the field sets the color, not its opacity");
 }
 
 /// The eyedropper: the loupe follows the pointer, a click takes the
@@ -568,7 +568,7 @@ fn dirty_rects_cover_the_ring_controls() {
     assert_dirty_covers(&mut a, "ring wider", |a| act(a, Act::RingSize(1)));
     assert_dirty_covers(&mut a, "ring off", |a| ed(a).rec.opts.cam_ring_w = 0);
     assert_dirty_covers(&mut a, "ring palette", |a| act(a, Act::RingPalette));
-    assert_dirty_covers(&mut a, "ring colour", |a| act(a, Act::RingColor(Some(C4::rgb(45, 192, 111)))));
+    assert_dirty_covers(&mut a, "ring color", |a| act(a, Act::RingColor(Some(C4::rgb(45, 192, 111)))));
     assert_dirty_covers(&mut a, "ring picker", |a| act(a, Act::RingWheel));
     snap_all(&mut a);
     assert_dirty_covers(&mut a, "back to the popover", |a| key(a, key_esc()));

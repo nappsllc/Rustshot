@@ -991,7 +991,7 @@ mod tests {
         assert_eq!(counter_ink(C4::rgb(59, 130, 246)), C4::rgb(255, 255, 255));
         assert_eq!(counter_ink(C4::rgb(250, 220, 0)), C4::rgb(0, 0, 0), "black on yellow");
         assert_eq!(counter_ink(C4::rgb(255, 255, 255)), C4::rgb(0, 0, 0));
-        assert_eq!(counter_ink(C4::new(0, 0, 0, 77)).a, 77, "the colour's opacity");
+        assert_eq!(counter_ink(C4::new(0, 0, 0, 77)).a, 77, "the color's opacity");
         for (d, n) in [(20.0f32, 1u32), (32.0, 7), (48.0, 12), (96.0, 100)] {
             let mut img = white(140, 140);
             let o = Obj::Counter { c: Pt::new(70.0, 70.0), n, color: C4::rgb(20, 40, 160), d, tail: None };

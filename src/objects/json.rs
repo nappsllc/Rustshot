@@ -471,7 +471,7 @@ impl F<'_> {
     }
     fn color(&self, k: &str) -> Result<C4> {
         let s = self.str(k)?;
-        let (r, g, b, a) = crate::config::parse_color(s).ok_or_else(|| anyhow!("annotations.json: {}.{k}: bad colour {s:?}", self.ty))?;
+        let (r, g, b, a) = crate::config::parse_color(s).ok_or_else(|| anyhow!("annotations.json: {}.{k}: bad color {s:?}", self.ty))?;
         Ok(C4::new(r, g, b, a))
     }
     fn pts(&self, k: &str) -> Result<Vec<Pt>> {

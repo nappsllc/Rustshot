@@ -146,10 +146,19 @@ impl ToolMem {
         self.color[slot(t)]
     }
 
-    /// Set `t`'s size (tests).
-    #[cfg(test)]
+    /// Set `t`'s size (clamped to its range).
     pub fn set_size(&mut self, t: Tool, v: f32) {
-        self.size[slot(t)] = v;
+        let (lo, hi) = range(t);
+        self.size[slot(t)] = v.clamp(lo, hi);
+    }
+
+    /// Set `t`'s fill; false for a tool without one.
+    pub fn set_fill(&mut self, t: Tool, on: bool) -> bool {
+        if !has_fill(t) {
+            return false;
+        }
+        self.fill[slot(t)] = on;
+        true
     }
 
     /// Step `t`'s size by `dir` within its range; the new size when it

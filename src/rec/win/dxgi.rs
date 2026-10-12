@@ -301,7 +301,7 @@ impl DxgiSource {
     pub fn open_nv12(area: IRect, out: (u32, u32)) -> Result<DxgiSource> {
         let mut s = DxgiSource::open(area)?;
         if let Err(e) = s.start_gpu(out) {
-            eprintln!("rustshot: GPU colour conversion unavailable ({e:#}); converting on the CPU");
+            eprintln!("rustshot: GPU color conversion unavailable ({e:#}); converting on the CPU");
         }
         Ok(s)
     }
@@ -336,7 +336,7 @@ impl DxgiSource {
         if self.gpu.take().is_none() {
             return;
         }
-        eprintln!("rustshot: GPU colour conversion failed ({why}); converting on the CPU");
+        eprintln!("rustshot: GPU color conversion failed ({why}); converting on the CPU");
         self.last_nv12 = None;
         self.canvas = vec![0; self.area.2 as usize * self.area.3 as usize * 4];
         for i in 0..self.outs.len() {

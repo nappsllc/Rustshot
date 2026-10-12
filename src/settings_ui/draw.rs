@@ -572,8 +572,8 @@ fn capture(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) 
             ui.seg("renderer", &labels(&RENDERERS), &mut f.renderer, tok);
         });
     }
-    let help = if done { "Done: the next capture starts from the defaults" } else { "Each tool remembers its last size and colour" };
-    srow(ui, tok, "Tool sizes & colours", Some(help), |ui| {
+    let help = if done { "Done: the next capture starts from the defaults" } else { "Each tool remembers its last size and color" };
+    srow(ui, tok, "Tool sizes & colors", Some(help), |ui| {
         if ui.cbutton("reset_tools", "Reset", Some("set-rotate"), false, tok) {
             *click = Some(Click::ResetTools);
         }

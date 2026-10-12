@@ -956,6 +956,7 @@ impl App {
             stroke_pts: Vec::new(),
             interact: Interact::None,
             mem: tools::ToolMem::from_cfg(&cfg),
+            obj: select::ObjState { style: crate::objects::CalloutStyle::from_id(&cfg.callout_style).unwrap_or_default(), ..Default::default() },
             last_tool: Tool::Path,
             pending: tools::Pending::default(),
             // Tests never write the user's config.
@@ -985,7 +986,6 @@ impl App {
             hot_handle: None,
             snap: None,
             hover_win: Default::default(),
-            obj: Default::default(),
             baked: Vec::new(),
             baked_area: (0, 0, 0, 0),
         };
@@ -4016,6 +4016,7 @@ mod tests {
             stroke_pts: Vec::new(),
             interact: Interact::None,
             mem: tools::ToolMem::from_cfg(&cfg),
+            obj: select::ObjState { style: crate::objects::CalloutStyle::from_id(&cfg.callout_style).unwrap_or_default(), ..Default::default() },
             last_tool: Tool::Path,
             pending: tools::Pending::default(),
             cfg_path: None,
@@ -4044,7 +4045,6 @@ mod tests {
             hot_handle: None,
             snap: None,
             hover_win: Default::default(),
-            obj: Default::default(),
             baked: Vec::new(),
             baked_area: (0, 0, 0, 0),
         };

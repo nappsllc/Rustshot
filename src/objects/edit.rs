@@ -269,7 +269,7 @@ pub fn translate(o: &mut Obj, dx: f32, dy: f32) {
 /// Scale `o` from box `from` onto box `to` (a resize): points map
 /// linearly; a text's size follows the height, a tag's diameter and a
 /// loupe's radius the mean scale; strokes keep their width, a callout its
-/// text size (it re-wraps).
+/// text size (it re-wraps) and its tail's tip.
 pub fn map_box(o: &mut Obj, from: FRect, to: FRect) {
     let sx = if from.w.abs() > 1e-3 { to.w / from.w } else { 1.0 };
     let sy = if from.h.abs() > 1e-3 { to.h / from.h } else { 1.0 };
@@ -308,10 +308,9 @@ pub fn map_box(o: &mut Obj, from: FRect, to: FRect) {
                 m(t);
             }
         }
-        Obj::Callout { r, tail, .. } => {
-            mr(r);
-            m(tail);
-        }
+        // The tail's tip stays where it points: resizing the bubble
+        // never re-aims it.
+        Obj::Callout { r, .. } => mr(r),
         Obj::Magnify { src, dst, radius, .. } => {
             m(src);
             m(dst);
@@ -509,7 +508,7 @@ mod tests {
         map_box(&mut o, from, FRect { x: 15.0, y: 5.0, w: 200.0, h: 50.0 });
         let Obj::Callout { r, tail, size: px, .. } = &o else { unreachable!() };
         assert_eq!((r.w, *px), (200.0, 16.0), "wider, same text size");
-        assert_eq!(*tail, Pt::new(15.0 + 20.0 * 2.0, 85.0));
+        assert_eq!(*tail, Pt::new(15.0 + 20.0, 85.0), "the tip stays");
         let mut t = Obj::Text { pos: Pt::new(0.0, 0.0), text: "x".into(), color: red(), size: 20.0 };
         map_box(&mut t, FRect { x: 0.0, y: 0.0, w: 10.0, h: 10.0 }, FRect { x: 0.0, y: 0.0, w: 20.0, h: 20.0 });
         assert_eq!(size(&t), Some(40.0));

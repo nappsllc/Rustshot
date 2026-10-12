@@ -55,7 +55,7 @@ fn form_round_trip_keeps_every_value() {
         renderer: "vulkan".into(),
         capture_hotkey: "Hyper+X".into(),
         save_format: "JPEG".into(),
-        ui_color: "not a colour".into(),
+        ui_color: "not a color".into(),
         ..Config::default()
     };
     let f = Form::new(&odd, None);
@@ -128,7 +128,7 @@ fn accent_swatches_and_custom_colour() {
     f.accent_hex.set("#00ff88");
     assert_eq!(f.apply(&cfg, &cfg).ui_color, "#00ff88");
     f.accent_hex.set("#zz");
-    assert_eq!(f.apply(&cfg, &cfg).ui_color, "", "not a colour: not written");
+    assert_eq!(f.apply(&cfg, &cfg).ui_color, "", "not a color: not written");
     let teal = Config { ui_color: "#5cc8c2".into(), ..cfg.clone() };
     let mut f = Form::new(&teal, None);
     f.accent = 0;

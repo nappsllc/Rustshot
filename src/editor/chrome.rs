@@ -1105,7 +1105,7 @@ pub fn act_tip(a: Act, km: &Keymap) -> (&'static str, Vec<String>) {
         Act::Tool(Tool::Callout) => "Callout",
         Act::Tool(Tool::Spotlight) => "Spotlight",
         Act::Tool(Tool::Magnify) => "Magnify",
-        Act::ObjColor => "Colour",
+        Act::ObjColor => "Color",
         Act::ObjFill => "Fill",
         Act::ObjSize(d) if d < 0 => "Smaller",
         Act::ObjSize(_) => "Larger",

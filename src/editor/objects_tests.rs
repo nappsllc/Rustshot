@@ -287,7 +287,9 @@ fn colour_and_size_go_to_the_selection() {
     assert_eq!(oe::color(&e.objects[0]), Some(blue));
     assert_eq!(oe::size(&e.objects[0]), Some(5.0));
     assert!(matches!(e.objects[0], Obj::RectFill { .. }), "filled");
-    assert_eq!(e.mem.color(Tool::Rect), tool_color, "the tool keeps its own");
+    assert_ne!(blue, tool_color);
+    assert_eq!(e.mem.color(Tool::Rect), blue, "the tool remembers it");
+    assert!(e.mem.fill(Tool::Rect), "and the fill");
     assert_eq!(e.hi, 4, "one step each");
     // The mini-toolbar: colour, fill, size, front / back, duplicate, delete.
     e.prepare(None, (0, 0), Instant::now());
@@ -784,7 +786,7 @@ fn a_new_callout_survives_restyling() {
 
 /// The colour picker and its eyedropper over a selection: the objects
 /// show the colour as it changes, keeping it is one undo step, Esc puts
-/// them back; the tool's own colour is left alone.
+/// them back; a kept color is also the tool's next one.
 #[test]
 fn the_picker_colours_the_selection() {
     let mut a = with(vec![rect(300.0, 300.0, 200.0, 100.0)]);
@@ -793,7 +795,7 @@ fn the_picker_colours_the_selection() {
     click(&mut a, 350, 301);
     let e = ed(&mut a);
     e.open_picker(pick::Target::Tool);
-    assert_eq!(e.pick.as_ref().unwrap().color(), RED, "starts at the selection's colour");
+    assert_eq!(e.pick.as_ref().unwrap().color(), RED, "starts at the selection's color");
     e.pick.as_mut().unwrap().set_color(C4::rgb(10, 200, 30));
     e.pick_changed();
     assert_eq!(oe::color(&e.objects[0]), Some(C4::rgb(10, 200, 30)), "live on the object");
@@ -801,7 +803,8 @@ fn the_picker_colours_the_selection() {
     e.close_picker(true);
     assert_eq!(oe::color(&e.objects[0]), Some(C4::rgb(10, 200, 30)));
     assert_eq!(e.hi, 2, "one step");
-    assert_eq!(e.mem.color(Tool::Rect), tool);
+    assert_ne!(tool, C4::rgb(10, 200, 30));
+    assert_eq!(e.mem.color(Tool::Rect), C4::rgb(10, 200, 30), "kept: the tool remembers it");
     // Esc puts it back.
     e.open_picker(pick::Target::Tool);
     e.pick.as_mut().unwrap().set_color(C4::rgb(1, 1, 1));
@@ -1033,4 +1036,68 @@ fn guides_fade_out() {
     assert!(!g.is_empty() && k > 0.5 && super::animating(e, None, now));
     let (g, _) = e.guides_now(now + Duration::from_millis(150));
     assert!(g.is_empty() && !e.guides_fading(now + Duration::from_millis(150)));
+}
+
+/// What a callout is given while selected or typed in (color, size,
+/// fill, shape) is what the next callout gets, here and in the config.
+#[test]
+fn a_callouts_style_is_remembered() {
+    let mut a = app();
+    key(&mut a, 'K' as u32);
+    click(&mut a, 400, 300);
+    let State::Edit(e) = std::mem::replace(&mut a.st, State::Hidden) else { unreachable!() };
+    let mut e = *e;
+    let fill0 = e.mem.fill(Tool::Callout);
+    for act in [Act::ObjStyle(CalloutStyle::Cloud), Act::ObjSize(1), Act::ObjFill] {
+        a.apply_act(&mut e, act);
+    }
+    e.color_selection(C4::rgb(10, 20, 30));
+    assert_eq!(e.mem.color(Tool::Callout), C4::rgb(10, 20, 30));
+    assert_eq!(e.mem.size(Tool::Callout), tools::CALLOUT_SIZE + 1.0);
+    assert_eq!(e.mem.fill(Tool::Callout), !fill0);
+    assert_eq!(e.cfg.callout_style, "cloud");
+    assert_eq!(e.cfg.tool_colors.get("callout").map(String::as_str), Some("#0a141e"));
+    let keys: Vec<String> = e.pending.take().into_iter().map(|(k, _)| k).collect();
+    for k in ["tool_callout_style", "tool_callout_size", "tool_callout_color", "tool_callout_fill"] {
+        assert!(keys.iter().any(|x| x == k), "{k} queued: {keys:?}");
+    }
+    a.st = State::Edit(Box::new(e));
+    type_str(&mut a, "Hi");
+    key(&mut a, key::ESCAPE);
+    click(&mut a, 700, 600);
+    let Obj::Callout { style, size, fill, color, .. } = ed(&mut a).objects[1].clone() else { panic!() };
+    assert_eq!((style, size, fill, color), (CalloutStyle::Cloud, tools::CALLOUT_SIZE + 1.0, !fill0, C4::rgb(10, 20, 30)));
+    // A new overlay starts from the config.
+    let mut cfg = ed(&mut a).cfg.clone();
+    cfg.callout_style = "ellipse".into();
+    let mut b = app();
+    ed(&mut b).obj.style = crate::objects::CalloutStyle::from_id(&cfg.callout_style).unwrap();
+    assert_eq!(ed(&mut b).obj.style, CalloutStyle::Ellipse);
+}
+
+/// A text size change refits the bubble away from its tail, and resizing
+/// the bubble by a handle leaves the tail's tip where it points.
+#[test]
+fn callout_size_and_resize_keep_the_tail() {
+    let tip = Pt::new(420.0, 520.0);
+    let r0 = FRect { x: 300.0, y: 300.0, w: 260.0, h: 60.0 };
+    let c = Obj::Callout { r: r0, tail: tip, text: "Two words and then some more so it wraps".into(), color: RED, size: 17.0, style: CalloutStyle::Rounded, fill: true };
+    let mut a = with(vec![c.clone()]);
+    ed(&mut a).tool = Some(Tool::Select);
+    ed(&mut a).obj.sel = vec![0];
+    for d in [4, 4, -6] {
+        let State::Edit(e) = std::mem::replace(&mut a.st, State::Hidden) else { unreachable!() };
+        let mut e = *e;
+        a.apply_act(&mut e, Act::ObjSize(d));
+        let Obj::Callout { r, tail, .. } = e.objects[0].clone() else { panic!() };
+        assert_eq!(tail, tip, "size {d}: the tip stays");
+        assert!((r.y1() - r0.y1()).abs() < 0.01, "size {d}: the edge by the tail stays ({r:?})");
+        a.st = State::Edit(Box::new(e));
+    }
+    // Resize: the bubble scales, the tip does not.
+    let mut o = c;
+    oe::map_box(&mut o, r0, FRect { x: 250.0, y: 250.0, w: 400.0, h: 120.0 });
+    let Obj::Callout { r, tail, .. } = o else { panic!() };
+    assert_eq!(tail, tip);
+    assert_eq!(r, FRect { x: 250.0, y: 250.0, w: 400.0, h: 120.0 });
 }
