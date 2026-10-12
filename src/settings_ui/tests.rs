@@ -756,6 +756,15 @@ fn click(s: &mut Settings, focus: &mut FocusState, id: &str, k: f32) -> Option<C
     render(s, &DARK, k, &input, focus).1
 }
 
+/// Scroll the section so control `id` sits near the top of the viewport.
+fn reveal(s: &mut Settings, focus: &mut FocusState, id: &str) {
+    render(s, &DARK, 1.0, &Input::default(), focus);
+    let r = focus.rect_of(id).unwrap_or_else(|| panic!("{id} drawn"));
+    let sec = s.section;
+    s.scroll[sec] = (s.scroll[sec] + r.y - viewport().y - 40.0).max(0.0);
+    render(s, &DARK, 1.0, &Input::default(), focus);
+}
+
 fn press(vk: u32, mods: wind::Mods) -> Input {
     let mut input = Input::default();
     input.feed(&Ev::Key { vk, up: false, repeat: false, mods });
@@ -1012,8 +1021,34 @@ fn capture_controls_click() {
     assert_eq!(click(&mut s, &mut focus, "reset_tools", 1.0), None, "outside the viewport");
     s.scroll[CAPTURE] = 1e6;
     assert_eq!(click(&mut s, &mut focus, "reset_tools", 1.0), Some(Click::ResetTools));
+    reveal(&mut s, &mut focus, "snap_windows");
     click(&mut s, &mut focus, "snap_windows", 1.0);
     assert!(!s.form.snap);
+    // The magnifier (round unless Square), Accept on select.
+    assert!(s.form.magnifier && !s.form.magnifier_square && s.form.accept == 0);
+    reveal(&mut s, &mut focus, "magnifier_square");
+    click(&mut s, &mut focus, "magnifier_square", 1.0);
+    assert!(s.form.magnifier_square);
+    click(&mut s, &mut focus, "magnifier", 1.0);
+    assert!(!s.form.magnifier);
+    reveal(&mut s, &mut focus, "accept_on_select");
+    let r = focus.rect_of("accept_on_select").unwrap();
+    let (x, y) = ((r.x1() - 12.0) as i32, (r.y + r.h / 2.0) as i32);
+    let mut input = Input::default();
+    for e in [Ev::Move { x, y }, Ev::Down { x, y }, Ev::Up { x, y }] {
+        input.feed(&e);
+    }
+    render(&mut s, &DARK, 1.0, &input, &mut focus);
+    assert_eq!(s.form.accept, 2, "Save");
+    let c = s.form.apply(&s.loaded, &s.loaded);
+    assert!(!c.magnifier && c.magnifier_square && c.accept_on_select == "save");
+    // General: the hint card.
+    let mut g = sample();
+    let mut gfocus = FocusState::default();
+    assert!(g.form.hints);
+    reveal(&mut g, &mut gfocus, "overlay_hints");
+    click(&mut g, &mut gfocus, "overlay_hints", 1.0);
+    assert!(!g.form.hints && !g.form.apply(&g.loaded, &g.loaded).overlay_hints);
     // The Win+Shift+S switch lives here (sample() offers it), not in General.
     assert_eq!(s.form.screenclip, Some(true));
     click(&mut s, &mut focus, "screenclip", 1.0);

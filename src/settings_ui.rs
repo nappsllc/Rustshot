@@ -72,6 +72,8 @@ pub const ABOUT: usize = 5;
 const THEMES: [(&str, &str); 3] = [("System", "auto"), ("Dark", "dark"), ("Light", "light")];
 const RENDERERS: [(&str, &str); 2] = [("GDI", "gdi"), ("Software", "software")];
 const FORMATS: [(&str, &str); 3] = [("PNG", "png"), ("JPG", "jpg"), ("BMP", "bmp")];
+/// Capture › Accept on select (`accept_on_select`).
+pub const ACCEPTS: [(&str, &str); 3] = [("Off", "off"), ("Copy", "copy"), ("Save", "save")];
 const DEFAULT_FILENAME: &str = "%F_%H-%M";
 /// Capture › History: how long and how much it keeps (value, label).
 pub const HISTORY_DAYS: [(u32, &str); 4] = [(7, "7 days"), (30, "30 days"), (90, "90 days"), (365, "1 year")];
@@ -239,6 +241,12 @@ pub struct Form {
     pub keys: Keymap,
     /// The Recording section's values (every `rec_*` key, `record_hotkey`).
     pub rec: recording::RecForm,
+    /// Capture › Overlay: the magnifier, round or square, and Accept on
+    /// select ([`ACCEPTS`] index); General: the overlay's hint card.
+    pub magnifier: bool,
+    pub magnifier_square: bool,
+    pub accept: usize,
+    pub hints: bool,
 }
 
 impl Form {
@@ -279,6 +287,10 @@ impl Form {
             copy_url: cfg.copy_url_after_upload,
             keys: Keymap::from_config(&cfg.shortcuts).0,
             rec: recording::RecForm::new(cfg),
+            magnifier: cfg.magnifier,
+            magnifier_square: cfg.magnifier_square,
+            accept: ACCEPTS.iter().position(|a| cfg.accept_on_select.trim().eq_ignore_ascii_case(a.1)).unwrap_or(0),
+            hints: cfg.overlay_hints,
         }
     }
 
@@ -409,6 +421,18 @@ impl Form {
             c.copy_url_after_upload = self.copy_url;
         }
         self.rec.apply(&was.rec, &mut c);
+        if self.magnifier != was.magnifier {
+            c.magnifier = self.magnifier;
+        }
+        if self.magnifier_square != was.magnifier_square {
+            c.magnifier_square = self.magnifier_square;
+        }
+        if self.accept != was.accept && let Some(a) = ACCEPTS.get(self.accept) {
+            c.accept_on_select = a.1.into();
+        }
+        if self.hints != was.hints {
+            c.overlay_hints = self.hints;
+        }
         let changed: Vec<Action> = Action::ALL.into_iter().filter(|a| self.keys.chords(*a) != was.keys.chords(*a)).collect();
         if !changed.is_empty() {
             let mut km = Keymap::from_config(&onto.shortcuts).0;

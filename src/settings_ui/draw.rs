@@ -442,6 +442,9 @@ fn general(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) 
     srow(ui, tok, "Show thumbnail after capture", None, |ui| {
         ui.switch("show_thumbnail", &mut f.thumbnail, tok);
     });
+    srow(ui, tok, "Show hints in the overlay", Some("The keys, for a few seconds when it opens"), |ui| {
+        ui.switch("overlay_hints", &mut f.hints, tok);
+    });
     ui.sec("Saving", tok);
     srow(ui, tok, "Save to", None, |ui| {
         if ui.cbutton("browse", "Change\u{2026}", None, false, tok) {
@@ -559,6 +562,18 @@ fn capture(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) 
     srow(ui, tok, "Snap to windows", Some(help), |ui| {
         ui.switch("snap_windows", &mut f.snap, tok);
     });
+    srow(ui, tok, "Show magnifier", Some("Zoomed pixels and a crosshair while selecting; H copies the color"), |ui| {
+        ui.switch("magnifier", &mut f.magnifier, tok);
+    });
+    let on = ui.enabled;
+    ui.enabled = on && f.magnifier;
+    srow(ui, tok, "Square magnifier", Some("Round when off"), |ui| {
+        ui.switch("magnifier_square", &mut f.magnifier_square, tok);
+    });
+    ui.enabled = on;
+    srow(ui, tok, "Accept on select", Some("Copy or save as soon as a region is drawn; hold Shift to adjust"), |ui| {
+        ui.seg("accept_on_select", &labels(&ACCEPTS), &mut f.accept, tok);
+    });
     if let Some(on) = f.screenclip.as_mut() {
         srow_ex(ui, tok, "Use Win+Shift+S and Print Screen", Some(SCREENCLIP_HELP), false, ROW_H, |ui| {
             ui.switch("screenclip", on, tok);
@@ -646,7 +661,7 @@ pub const KEY_ROWS: [(&str, &[Action]); 14] = [
     ),
     ("Stroke size - / +", &[Action::SizeDown, Action::SizeUp]),
     ("Copy \u{b7} Save \u{b7} Upload", &[Action::Copy, Action::Save, Action::Upload]),
-    ("Copy text", &[Action::CopyText]),
+    ("Copy text \u{b7} Copy color", &[Action::CopyText, Action::CopyColor]),
     ("Accept \u{b7} Cancel", &[Action::Accept, Action::Cancel]),
     ("Save As \u{b7} Save to Desktop", &[Action::SaveAs, Action::SaveDesktop]),
     ("Undo \u{b7} Redo", &[Action::Undo, Action::Redo]),
