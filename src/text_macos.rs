@@ -1,9 +1,51 @@
-//! macOS annotation text: CoreText (Helvetica, with the system cascade list
-//! for other scripts). Each line is a `CTLine` drawn into an 8-bit gray
-//! `CGBitmapContext`; the gray level is the coverage.
+//! macOS annotation text: CoreText (Helvetica, Times for serif, Menlo for
+//! mono, with the system cascade list for other scripts; bold and italic
+//! by the font's symbolic traits). Each line is a `CTLine` drawn into an
+//! 8-bit gray `CGBitmapContext`; the gray level is the coverage.
 
 use crate::objects::Pt;
+use crate::text::Family;
 use std::ffi::c_void;
+
+/// Lines and strikes are drawn by `text.rs`.
+pub const NATIVE_DECO: bool = false;
+
+/// The font dropdown's name for `f`.
+pub fn family_label(f: Family) -> &'static str {
+    match f {
+        Family::Sans => "Helvetica",
+        Family::Serif => "Times",
+        Family::Mono => "Menlo",
+    }
+}
+
+const ITALIC_TRAIT: u32 = 1 << 0;
+const BOLD_TRAIT: u32 = 1 << 1;
+
+/// `name` at `size` with the bold / italic traits of `face` (the plain
+/// font when the family has no such member).
+unsafe fn styled_font(name: Ref, size: f64, face: &Face) -> Ref {
+    unsafe {
+        let font = CTFontCreateWithName(name, size, std::ptr::null());
+        let traits = if face.weight >= 700 { BOLD_TRAIT } else { 0 } | if face.italic { ITALIC_TRAIT } else { 0 };
+        if font.is_null() || traits == 0 {
+            return font;
+        }
+        // Both traits, else (no bold italic member) bold, else italic:
+        // what the family has.
+        for want in [traits, traits & BOLD_TRAIT, traits & ITALIC_TRAIT] {
+            if want == 0 {
+                continue;
+            }
+            let t = CTFontCreateCopyWithSymbolicTraits(font, size, std::ptr::null(), want, BOLD_TRAIT | ITALIC_TRAIT);
+            if !t.is_null() {
+                CFRelease(font);
+                return t;
+            }
+        }
+        font
+    }
+}
 
 type Ref = *const c_void;
 
@@ -30,6 +72,7 @@ unsafe extern "C" {
     static kCTFontAttributeName: Ref;
     static kCTForegroundColorFromContextAttributeName: Ref;
     fn CTFontCreateWithName(name: Ref, size: f64, matrix: *const c_void) -> Ref;
+    fn CTFontCreateCopyWithSymbolicTraits(font: Ref, size: f64, matrix: *const c_void, value: u32, mask: u32) -> Ref;
     fn CTFontGetAscent(font: Ref) -> f64;
     fn CTFontGetDescent(font: Ref) -> f64;
     fn CTFontGetLeading(font: Ref) -> f64;
@@ -75,20 +118,26 @@ struct Line {
 }
 
 impl Line {
-    fn new(s: &str, px: f32, bold: bool) -> Option<Self> {
+    fn new(s: &str, px: f32, face: &Face) -> Option<Self> {
         unsafe {
-            let name = cfstr(if bold { "HelveticaNeue-Medium" } else { "Helvetica" });
+            let base = match face.family {
+                Family::Sans if face.weight >= 600 => "HelveticaNeue-Medium",
+                Family::Sans => "Helvetica",
+                Family::Serif => "Times-Roman",
+                Family::Mono => "Menlo-Regular",
+            };
+            let name = cfstr(base);
             if name.is_null() {
                 return None;
             }
-            let probe = CTFontCreateWithName(name, 100.0, std::ptr::null());
+            let probe = styled_font(name, 100.0, face);
             if probe.is_null() {
                 CFRelease(name);
                 return None;
             }
             let cell = (CTFontGetAscent(probe) + CTFontGetDescent(probe)).max(1.0);
             CFRelease(probe);
-            let font = CTFontCreateWithName(name, px as f64 * 100.0 / cell, std::ptr::null());
+            let font = styled_font(name, px as f64 * 100.0 / cell, face);
             CFRelease(name);
             if font.is_null() {
                 return None;
@@ -136,31 +185,36 @@ impl Drop for Line {
     }
 }
 
-/// The annotation face: Helvetica, or Helvetica Neue Medium (semibold).
+/// The annotation face: a family (Helvetica, Helvetica Neue Medium for
+/// semibold), bold at weight 700 and up, italic.
 #[derive(Clone)]
 pub struct Face {
-    bold: bool,
+    family: Family,
+    weight: u16,
+    italic: bool,
 }
 
 impl Face {
     pub fn load() -> Option<Self> {
-        Line::new("a", 16.0, false).map(|_| Face { bold: false })
+        let f = Face::new(Family::Sans, 400, false, false, false);
+        Line::new("a", 16.0, &f).map(|_| f)
     }
 
-    /// The same face at semibold (Helvetica Neue Medium).
-    pub fn semibold(&self) -> Face {
-        Face { bold: true }
+    /// `family` at `weight`, italic; the line styles are drawn by
+    /// `text.rs`.
+    pub fn new(family: Family, weight: u16, italic: bool, _underline: bool, _strike: bool) -> Face {
+        Face { family, weight, italic }
     }
 
     pub fn metrics(&self, px: f32) -> (f32, f32, f32) {
-        match Line::new(" ", px, self.bold) {
+        match Line::new(" ", px, self) {
             Some(l) => (l.ascent as f32, l.descent as f32, l.leading as f32),
             None => (px * 0.8, px * 0.2, 0.0),
         }
     }
 
     pub fn width(&self, line: &str, px: f32) -> f32 {
-        Line::new(line, px, self.bold).map_or(0.0, |l| l.width as f32)
+        Line::new(line, px, self).map_or(0.0, |l| l.width as f32)
     }
 
     pub fn draw(
@@ -172,7 +226,7 @@ impl Face {
         clip: (i32, i32, i32, i32),
         f: &mut dyn FnMut(i32, i32, f32),
     ) {
-        let Some(l) = Line::new(line, px, self.bold) else { return };
+        let Some(l) = Line::new(line, px, self) else { return };
         let pad = (px / 3.0).ceil() as i32 + 2;
         let (ox, oy) = (top.x.round() as i32, top.y.round() as i32);
         let x0 = (ox - pad).max(clip.0);

@@ -50,6 +50,16 @@ pub const ICONS: &[(&str, &[Shape])] = &[
         Path("M7 21H5a2 2 0 0 1-2-2v-2"),
     ]),
     ("magnify", &[Circle(11.0, 11.0, 8.0), Path("m21 21-4.3-4.3"), Path("M11 8v6"), Path("M8 11h6")]), // zoom-in
+    // droplet (the Edit board's e-blur; its `s` written out as `C`)
+    ("blur", &[Path("M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5C14 7.9 12.5 5.5 12 3c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7z")]),
+    ("bold", &[Path("M6 12h9a4 4 0 0 1 0 8H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h7a4 4 0 0 1 0 8")]), // bold
+    ("italic", &[Path("M19 4h-9"), Path("M14 20H5"), Path("M15 4 9 20")]), // italic
+    ("underline", &[Path("M6 4v6a6 6 0 0 0 12 0V4"), Path("M4 20h16")]), // underline
+    ("strike", &[Path("M16 4H9a3 3 0 0 0-2.83 4"), Path("M14 12a4 4 0 0 1 0 8H6"), Path("M4 12h16")]), // strikethrough
+    // The EditStates board's e-al / e-ac / e-ar.
+    ("align-left", &[Path("M3 3v18"), Rect { x: 7.0, y: 6.0, w: 12.0, h: 4.0, r: 1.0 }, Rect { x: 7.0, y: 14.0, w: 8.0, h: 4.0, r: 1.0 }]),
+    ("align-center", &[Path("M12 3v18"), Rect { x: 5.0, y: 6.0, w: 14.0, h: 4.0, r: 1.0 }, Rect { x: 8.0, y: 14.0, w: 8.0, h: 4.0, r: 1.0 }]),
+    ("align-right", &[Path("M21 3v18"), Rect { x: 5.0, y: 6.0, w: 12.0, h: 4.0, r: 1.0 }, Rect { x: 9.0, y: 14.0, w: 8.0, h: 4.0, r: 1.0 }]),
     ("trash", &[
         Path("M3 6h18"),
         Path("M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"),

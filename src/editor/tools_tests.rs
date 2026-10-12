@@ -157,11 +157,24 @@ fn tools_remember_size_and_color_into_the_next_capture() {
     act(&mut a, Act::Color(C4::new(250, 220, 0, 128)));
     assert_eq!(super::marker_color(ed(&mut a).color()).a, 45);
     // Pixelate: a size, no color (its palette button is off).
-    key(&mut a, 'B' as u32);
+    key(&mut a, 'X' as u32);
     act(&mut a, Act::Size(1));
     let before = ed(&mut a).mem.clone();
     act(&mut a, Act::Color(green));
     assert_eq!(ed(&mut a).mem, before, "no color for pixelate");
+    // Blur: a size of its own, no color either.
+    key(&mut a, 'B' as u32);
+    assert_eq!(ed(&mut a).mem.size(Tool::Blur), super::tools::BLUR_SIZE);
+    act(&mut a, Act::Size(1));
+    act(&mut a, Act::Size(1));
+    let before = ed(&mut a).mem.clone();
+    act(&mut a, Act::Color(green));
+    assert_eq!(ed(&mut a).mem, before, "no color for blur");
+    // The text tool's style: bold and serif, remembered.
+    key(&mut a, 'T' as u32);
+    act(&mut a, Act::ObjBold);
+    act(&mut a, Act::ObjFont(crate::text::Family::Serif));
+    act(&mut a, Act::ObjAlign(crate::text::Align::Right));
     key(&mut a, key_esc());
     key(&mut a, key_esc()); // the tool off, then the capture closes
     assert!(matches!(a.st, State::Hidden));
@@ -171,6 +184,12 @@ fn tools_remember_size_and_color_into_the_next_capture() {
     assert_eq!(a.cfg.tool_colors.get("marker").map(String::as_str), Some("#fadc0080"));
     assert_eq!(a.cfg.tool_sizes.get("pixelate"), Some(&13.0));
     assert!(!a.cfg.tool_colors.contains_key("pixelate") && !a.cfg.tool_sizes.contains_key("arrow"));
+    assert_eq!(a.cfg.tool_sizes.get("blur"), Some(&(super::tools::BLUR_SIZE + 2.0)));
+    assert!(!a.cfg.tool_colors.contains_key("blur"));
+    assert_eq!(a.cfg.tool_fonts.get("text").map(String::as_str), Some("serif"));
+    assert_eq!(a.cfg.tool_text_styles.get("text").map(String::as_str), Some("bold"));
+    assert_eq!(a.cfg.tool_aligns.get("text").map(String::as_str), Some("right"));
+    assert!(!a.cfg.tool_fonts.contains_key("callout"), "the callout keeps its own");
     // The next capture.
     FAKE_GRAB.with(|g| *g.borrow_mut() = Some(Ok(synthetic_shot())));
     a.pending = Some(Pending::editor());
@@ -180,6 +199,9 @@ fn tools_remember_size_and_color_into_the_next_capture() {
     assert_eq!(e.mem.size(Tool::Rect), 2.0);
     assert_eq!(e.mem.color(Tool::Marker), C4::new(250, 220, 0, 128));
     assert_eq!(e.mem.size(Tool::Pixelate), 13.0);
+    assert_eq!(e.mem.size(Tool::Blur), super::tools::BLUR_SIZE + 2.0);
+    let want = crate::text::TextFmt { bold: true, family: crate::text::Family::Serif, align: crate::text::Align::Right, ..Default::default() };
+    assert_eq!((e.mem.fmt(Tool::Text), e.mem.fmt(Tool::Callout)), (want, Default::default()));
     assert_eq!((e.mem.size(Tool::Arrow), e.mem.color(Tool::Arrow)), (3.0, C4::rgb(240, 68, 56)), "never changed: the defaults");
     // A line drawn now has the remembered width and color.
     key(&mut a, 'L' as u32);
@@ -255,14 +277,14 @@ fn readout_follows_the_tool() {
     let tb = e.toolbar.as_ref().unwrap();
     let dis = |k: toolbar::Kind| tb.items.iter().find(|i| i.kind == k).unwrap().disabled;
     assert!(dis(toolbar::Kind::Btn(Act::Size(1))) && dis(toolbar::Kind::Value) && dis(toolbar::Kind::Btn(Act::Palette)));
-    key(&mut a, 'B' as u32);
+    key(&mut a, 'X' as u32);
     let e = ed(&mut a);
     e.prepare(None, (0, 0), Instant::now());
     let tb = e.toolbar.as_ref().unwrap();
     let dis = |k: toolbar::Kind| tb.items.iter().find(|i| i.kind == k).unwrap().disabled;
     assert!(!dis(toolbar::Kind::Btn(Act::Size(1))) && dis(toolbar::Kind::Btn(Act::Palette)));
     // Deselected: the last tool's settings stay on show.
-    key(&mut a, 'B' as u32);
+    key(&mut a, 'X' as u32);
     assert_eq!((ed(&mut a).tool, ed(&mut a).cur_tool()), (None, Tool::Pixelate));
 }
 

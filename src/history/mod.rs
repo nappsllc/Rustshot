@@ -217,6 +217,7 @@ pub fn kind_name(o: &Obj) -> &'static str {
         Obj::Callout { .. } => "Callout",
         Obj::Spotlight { .. } => "Spotlight",
         Obj::Magnify { .. } => "Magnify",
+        Obj::Blur { .. } => "Blur",
     }
 }
 

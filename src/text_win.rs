@@ -1,10 +1,13 @@
-//! Windows annotation text: GDI with "Segoe UI". `DrawTextW` brings
-//! Uniscribe shaping (Arabic, Indic) and font linking (CJK) for free. Each
-//! line is drawn white-on-black into a 32-bit DIB with grayscale
-//! anti-aliasing; the gray level is the coverage.
+//! Windows annotation text: GDI with "Segoe UI" (Georgia for serif,
+//! Consolas for mono). `DrawTextW` brings Uniscribe shaping (Arabic,
+//! Indic) and font linking (CJK) for free. Each line is drawn
+//! white-on-black into a 32-bit DIB with grayscale anti-aliasing; the gray
+//! level is the coverage. Bold, italic, underline and strikeout are the
+//! font's own (`CreateFontW`).
 
 use crate::objects::Pt;
-use windows::core::w;
+use crate::text::Family;
+use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, RECT};
 use windows::Win32::Graphics::Gdi::{
     CreateCompatibleDC, CreateDIBSection, CreateFontW, DeleteDC, DeleteObject, DrawTextW, GdiFlush,
@@ -14,11 +17,43 @@ use windows::Win32::Graphics::Gdi::{
     HGDIOBJ, OUT_TT_PRECIS, TEXTMETRICW, TRANSPARENT,
 };
 
-/// The annotation face: Segoe UI at a GDI weight (400 regular, 600
-/// semibold).
-#[derive(Clone)]
+/// GDI draws underline and strikeout itself.
+pub const NATIVE_DECO: bool = true;
+
+/// The face name of a family.
+fn face_name(f: Family) -> PCWSTR {
+    match f {
+        Family::Sans => w!("Segoe UI"),
+        Family::Serif => w!("Georgia"),
+        Family::Mono => w!("Consolas"),
+    }
+}
+
+/// The font dropdown's name for `f`.
+pub fn family_label(f: Family) -> &'static str {
+    match f {
+        Family::Sans => "Segoe UI",
+        Family::Serif => "Georgia",
+        Family::Mono => "Consolas",
+    }
+}
+
+/// The annotation face: a family at a GDI weight (400 regular, 600
+/// semibold, 700 bold), italic, underlined, struck out.
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Face {
     weight: i32,
+    family: Family,
+    italic: bool,
+    underline: bool,
+    strike: bool,
+}
+
+impl Face {
+    /// The style bits after the weight (the DC cache's key).
+    fn bits(&self) -> i32 {
+        self.family as i32 | (self.italic as i32) << 2 | (self.underline as i32) << 3 | (self.strike as i32) << 4
+    }
 }
 
 /// A memory DC with the face selected at a pixel size; freed on drop.
@@ -29,7 +64,7 @@ struct FontDc {
 }
 
 impl FontDc {
-    fn new(px: f32, weight: i32) -> Option<Self> {
+    fn new(px: f32, face: &Face) -> Option<Self> {
         unsafe {
             let dc = CreateCompatibleDC(None);
             if dc.is_invalid() {
@@ -42,16 +77,16 @@ impl FontDc {
                 0,
                 0,
                 0,
-                weight,
-                0,
-                0,
-                0,
+                face.weight,
+                face.italic as u32,
+                face.underline as u32,
+                face.strike as u32,
                 DEFAULT_CHARSET,
                 OUT_TT_PRECIS,
                 CLIP_DEFAULT_PRECIS,
                 ANTIALIASED_QUALITY,
                 DEFAULT_PITCH.0 as u32,
-                w!("Segoe UI"),
+                face_name(face.family),
             );
             if font.is_invalid() {
                 let _ = DeleteDC(dc);
@@ -70,29 +105,32 @@ impl FontDc {
     }
 }
 
-/// Run `f` with a DC holding the face at `px` / `weight`: the last few are
-/// kept (creating a font and a DC per measure cost tens of microseconds,
-/// and a wrap measures many times). A nested call gets a fresh one.
-fn with_dc<R>(px: f32, weight: i32, f: impl FnOnce(&FontDc) -> R) -> Option<R> {
+/// The DC cache key: pixel size, weight, style bits.
+type DcKey = (i32, i32, i32);
+
+/// Run `f` with a DC holding `face` at `px`: the last few are kept
+/// (creating a font and a DC per measure cost tens of microseconds, and a
+/// wrap measures many times). A nested call gets a fresh one.
+fn with_dc<R>(px: f32, face: &Face, f: impl FnOnce(&FontDc) -> R) -> Option<R> {
     thread_local! {
-        static DCS: std::cell::RefCell<Vec<((i32, i32), FontDc)>> = const { std::cell::RefCell::new(Vec::new()) };
+        static DCS: std::cell::RefCell<Vec<(DcKey, FontDc)>> = const { std::cell::RefCell::new(Vec::new()) };
     }
-    let key = (px.round().max(1.0) as i32, weight);
+    let key = (px.round().max(1.0) as i32, face.weight, face.bits());
     DCS.with(|c| match c.try_borrow_mut() {
         Ok(mut v) => {
             if let Some(i) = v.iter().position(|(k, _)| *k == key) {
                 let e = v.remove(i);
                 v.push(e);
             } else {
-                let fd = FontDc::new(px, weight)?;
-                if v.len() >= 4 {
+                let fd = FontDc::new(px, face)?;
+                if v.len() >= 6 {
                     v.remove(0);
                 }
                 v.push((key, fd));
             }
             v.last().map(|(_, fd)| f(fd))
         }
-        Err(_) => FontDc::new(px, weight).map(|fd| f(&fd)),
+        Err(_) => FontDc::new(px, face).map(|fd| f(&fd)),
     })
 }
 
@@ -114,16 +152,17 @@ impl Drop for FontDc {
 
 impl Face {
     pub fn load() -> Option<Self> {
-        FontDc::new(16.0, FW_NORMAL.0 as i32).map(|_| Face { weight: FW_NORMAL.0 as i32 })
+        let f = Face::new(Family::Sans, FW_NORMAL.0 as u16, false, false, false);
+        FontDc::new(16.0, &f).map(|_| f)
     }
 
-    /// The same face at semibold (FW_SEMIBOLD).
-    pub fn semibold(&self) -> Face {
-        Face { weight: 600 }
+    /// `family` at GDI `weight`, italic, underlined, struck out.
+    pub fn new(family: Family, weight: u16, italic: bool, underline: bool, strike: bool) -> Face {
+        Face { weight: weight as i32, family, italic, underline, strike }
     }
 
     pub fn metrics(&self, px: f32) -> (f32, f32, f32) {
-        let tm = with_dc(px, self.weight, |fd| {
+        let tm = with_dc(px, self, |fd| {
             let mut tm = TEXTMETRICW::default();
             unsafe { GetTextMetricsW(fd.dc, &mut tm) }.as_bool().then_some(tm)
         });
@@ -147,7 +186,7 @@ impl Face {
         let wide: Vec<u16> = line.encode_utf16().collect();
         let cp = line.get(..idx)?.encode_utf16().count();
         let n = wide.len() as i32;
-        with_dc(px, self.weight, |fd| unsafe {
+        with_dc(px, self, |fd| unsafe {
             let mut ssa: *mut core::ffi::c_void = std::ptr::null_mut();
             ScriptStringAnalyse(
                 fd.dc,
@@ -173,7 +212,7 @@ impl Face {
     }
 
     pub fn width(&self, line: &str, px: f32) -> f32 {
-        with_dc(px, self.weight, |fd| {
+        with_dc(px, self, |fd| {
             let mut r = RECT::default();
             fd.text(line, &mut r, DT_CALCRECT);
             (r.right - r.left).max(0) as f32
@@ -190,7 +229,7 @@ impl Face {
         clip: (i32, i32, i32, i32),
         f: &mut dyn FnMut(i32, i32, f32),
     ) {
-        with_dc(px, self.weight, |fd| Self::draw_with(fd, line, px, top, clip, f));
+        with_dc(px, self, |fd| Self::draw_with(fd, line, px, top, clip, f));
     }
 
     fn draw_with(fd: &FontDc, line: &str, px: f32, top: Pt, clip: (i32, i32, i32, i32), f: &mut dyn FnMut(i32, i32, f32)) {

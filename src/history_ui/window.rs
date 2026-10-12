@@ -441,19 +441,33 @@ impl Window {
         match a {
             Act::Edit(id) => super::open_edit(&id),
             Act::Open(id) => {
-                if let Some(e) = self.h.entry(&id) {
-                    let f = super::file_of(e);
-                    std::thread::spawn(move || crate::actions::open_path(&f));
+                if let Some(e) = self.h.entry(&id).cloned() {
+                    self.spawn(move || match super::file_of(&store, &e) {
+                        Ok(f) => {
+                            crate::actions::open_path(&f);
+                            super::Done { text: String::new(), ..super::ok_done() }
+                        }
+                        Err(err) => super::fail_done(format!("Could not open the capture: {err:#}")),
+                    });
                 }
             }
             Act::ShowInFolder(id) => {
                 if let Some(e) = self.h.entry(&id) {
-                    crate::notice::show_in_folder(&super::file_of(e));
+                    match super::file_of(&store, e) {
+                        Ok(f) => crate::notice::show_in_folder(&f),
+                        Err(err) => self.h.note(format!("Could not show the capture: {err:#}"), crate::editor::style::ToastKind::Error),
+                    }
                 }
             }
             Act::CopyPath(id) => {
                 if let Some(e) = self.h.entry(&id) {
-                    let f = super::file_of(e);
+                    let f = match super::file_of(&store, e) {
+                        Ok(f) => f,
+                        Err(err) => {
+                            self.h.note(format!("Copy failed: {err:#}"), crate::editor::style::ToastKind::Error);
+                            return;
+                        }
+                    };
                     match crate::export::copy_text_to_clipboard(&f.display().to_string()) {
                         Ok(()) => self.h.note("File path copied", crate::editor::style::ToastKind::Success),
                         Err(e) => self.h.note(format!("Copy failed: {e:#}"), crate::editor::style::ToastKind::Error),

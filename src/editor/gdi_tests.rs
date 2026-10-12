@@ -238,7 +238,7 @@ fn gdi_export_matches_crop() {
     let half = C4::new(20, 200, 90, 128);
     e.objects.push(Obj::Arrow { a: Pt::new(300.0, 700.0), b: Pt::new(900.0, 300.0), color: half, width: 12.0 });
     e.objects.push(Obj::Rect { r: FRect { x: 500.0, y: 200.0, w: 300.0, h: 200.0 }, color: half, width: 9.0 });
-    e.objects.push(Obj::Text { pos: Pt::new(400.0, 500.0), text: "Half WW".into(), color: half, size: 40.0 });
+    e.objects.push(Obj::Text { fmt: Default::default(), pos: Pt::new(400.0, 500.0), text: "Half WW".into(), color: half, size: 40.0 });
     cases.push(("translucent", app, BIG));
     // Numbered tags (one cut by the selection edge, one with a tail), the
     // freehand marker, filled shapes (one translucent).
@@ -423,9 +423,14 @@ fn object_set(font: bool) -> Vec<Obj> {
         Obj::Pixelate { r: FRect { x: 300.0, y: 450.0, w: 100.0, h: 300.0 }, cell: 7.0 },
         Obj::Ellipse { r: FRect { x: 1350.0, y: 820.0, w: 200.0, h: 150.0 }, color: red, width: 4.0 },
         Obj::Path { pts: vec![Pt::new(600.0, 300.0), Pt::new(640.0, 340.0), Pt::new(700.0, 310.0)], color: red, width: 3.0 },
+        // A blur across the selection's edge, one over a pixelate.
+        Obj::Blur { r: FRect { x: 180.0, y: 120.0, w: 260.5, h: 140.0 }, sigma: 8.0 },
+        Obj::Blur { r: FRect { x: 320.0, y: 420.0, w: 120.0, h: 200.0 }, sigma: 14.0 },
     ];
     if font {
-        v.push(Obj::Text { pos: Pt::new(1180.0, 200.0), text: "Note\nhere".into(), color: red, size: 24.0 });
+        v.push(Obj::Text { fmt: Default::default(), pos: Pt::new(1180.0, 200.0), text: "Note\nhere".into(), color: red, size: 24.0 });
+        let fmt = crate::text::TextFmt { bold: true, italic: true, underline: true, strike: true, align: crate::text::Align::Center, family: crate::text::Family::Serif };
+        v.push(Obj::Text { fmt, pos: Pt::new(800.0, 160.0), text: "Styled\ncentre".into(), color: red, size: 28.0 });
     }
     v
 }
@@ -633,6 +638,15 @@ fn gdi_layer_matches_software_through_object_edits() {
             oe::translate(&mut o[n], 120.0, 60.0)
         })),
         ("resize", Box::new(|o| oe::map_box(&mut o[4], FRect { x: 1100.0, y: 100.0, w: 200.0, h: 150.0 }, FRect { x: 1000.0, y: 90.0, w: 300.0, h: 260.0 }))),
+        ("move blur", Box::new(|o| oe::translate(&mut o[8], 30.0, -20.0))),
+        ("blur strength", Box::new(|o| oe::set_size(&mut o[9], 20.0))),
+        ("blur resize", Box::new(|o| oe::map_box(&mut o[9], FRect { x: 320.0, y: 420.0, w: 120.0, h: 200.0 }, FRect { x: 300.0, y: 380.0, w: 210.0, h: 150.0 }))),
+        ("text style", Box::new(|o| {
+            if let Some(t) = o.iter_mut().rfind(|t| matches!(t, Obj::Text { .. })) {
+                let f = oe::fmt(t).unwrap_or_default();
+                oe::set_fmt(t, crate::text::TextFmt { bold: !f.bold, align: crate::text::Align::Right, family: crate::text::Family::Mono, ..f });
+            }
+        })),
         ("to the back", Box::new(|o| {
             let x = o.remove(3);
             o.insert(0, x);
@@ -658,6 +672,87 @@ fn gdi_layer_matches_software_through_object_edits() {
         let crop = edit_of(&mut sw).export(BIG);
         assert!(edit_of(&mut app).export(BIG) == crop, "{name}: export differs");
     }
+}
+
+/// Blur at 3840x2160 (target: an 800x400 blur under 4 ms a move): moving a
+/// committed blur with the select tool (pointer_move + damage + paint),
+/// and a draft's corner drag (damage + paint), sigma 10 and 25.
+/// `cargo test --release perf_gdi_blur_drag -- --ignored --nocapture`
+#[test]
+#[ignore = "benchmark; run in release"]
+fn perf_gdi_blur_drag() {
+    let (w, h) = (3840u32, 2160u32);
+    let sel = FRect { x: 200.0, y: 150.0, w: 3400.0, h: 1850.0 };
+    let pct = |v: &mut Vec<f64>, q: f64| {
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        v[((v.len() - 1) as f64 * q) as usize]
+    };
+    for sigma in [10.0f32, 25.0] {
+        let r = FRect { x: 1000.0, y: 600.0, w: 800.0, h: 400.0 };
+        // A committed blur moved.
+        let mut app = preview_app_with(theme::DARK, Some(sel), tiled_shot(w, h));
+        edit_of(&mut app).commit_object(Obj::Blur { r, sigma });
+        edit_of(&mut app).tool = Some(Tool::Select);
+        edit_of(&mut app).obj.sel = vec![0];
+        settled(&mut app);
+        attach(&mut app);
+        let t = Target::new(w, h);
+        let _ = app.damage();
+        edit_of(&mut app).paint_gdi(t.dc, &[PxRect::image((w, h))]);
+        let from = Pt::new(1400.0, 800.0);
+        app.mouse = (from.x as i32, from.y as i32);
+        app.pointer_down(from.x as i32, from.y as i32);
+        let mut tt = Vec::new();
+        for k in 0..100 {
+            let d = (k % 50) as f32 * 2.0;
+            let (x, y) = ((from.x + d) as i32, (from.y + d * 0.5) as i32);
+            let t0 = Instant::now();
+            app.mouse = (x, y);
+            app.pointer_move(x, y);
+            let rects = app.damage().unwrap_or_else(|| vec![[0, 0, w as i32, h as i32]]);
+            let rects: Vec<PxRect> = rects.iter().map(|r| PxRect::new(r[0], r[1], r[2], r[3])).collect();
+            edit_of(&mut app).paint_gdi(t.dc, &rects);
+            let _ = t.pixels();
+            tt.push(t0.elapsed().as_secs_f64() * 1000.0);
+        }
+        app.pointer_up();
+        println!("GDI BENCH 4K blur 800x400 sigma {sigma} move: median {:.2} p90 {:.2} max {:.2} ms", pct(&mut tt.clone(), 0.5), pct(&mut tt.clone(), 0.9), pct(&mut tt, 1.0));
+        // A draft's corner dragged.
+        let mut app = preview_app_with(theme::DARK, Some(sel), tiled_shot(w, h));
+        edit_of(&mut app).tool = Some(Tool::Blur);
+        settled(&mut app);
+        attach(&mut app);
+        let t = Target::new(w, h);
+        let _ = app.damage();
+        edit_of(&mut app).paint_gdi(t.dc, &[PxRect::image((w, h))]);
+        let mut tt = Vec::new();
+        for k in 0..60 {
+            let e = edit_of(&mut app);
+            e.interact = Interact::Drawing { start: Pt::new(r.x, r.y) };
+            let d = (k % 6) as f32 * 3.0;
+            e.draft = Some(Obj::Blur { r: FRect { w: r.w - d, h: r.h - d, ..r }, sigma });
+            let t0 = Instant::now();
+            let rects = app.damage().unwrap_or_else(|| vec![[0, 0, w as i32, h as i32]]);
+            let rects: Vec<PxRect> = rects.iter().map(|r| PxRect::new(r[0], r[1], r[2], r[3])).collect();
+            edit_of(&mut app).paint_gdi(t.dc, &rects);
+            let _ = t.pixels();
+            tt.push(t0.elapsed().as_secs_f64() * 1000.0);
+        }
+        println!("GDI BENCH 4K blur 800x400 sigma {sigma} draft drag: median {:.2} p90 {:.2} max {:.2} ms", pct(&mut tt.clone(), 0.5), pct(&mut tt.clone(), 0.9), pct(&mut tt, 1.0));
+    }
+    // The blur alone (no compose): one 800x400 block.
+    let mut block = vec![128u8; 800 * 400 * 4];
+    for (i, v) in block.iter_mut().enumerate() {
+        *v = (i * 7 % 251) as u8;
+    }
+    let (mut tmp, mut acc) = (Vec::new(), Vec::new());
+    let mut tt = Vec::new();
+    for _ in 0..30 {
+        let t0 = Instant::now();
+        crate::objects::blur::blur_block(&mut block, 800, 400, 10.0, &mut tmp, &mut acc);
+        tt.push(t0.elapsed().as_secs_f64() * 1000.0);
+    }
+    println!("BENCH blur_block 800x400 sigma 10: median {:.2} ms", pct(&mut tt, 0.5));
 }
 
 /// Object drags at 3840x2160 (the 4K perf target: under 4 ms a move):
@@ -686,6 +781,7 @@ fn perf_gdi_object_drag() {
         });
     }
     objs.push(Obj::Callout {
+        fmt: Default::default(),
         r: FRect { x: 1500.0, y: 1700.0, w: 420.0, h: 120.0 },
         tail: Pt::new(1520.0, 1900.0),
         text: "Move this to the top, above the summary, so people see it first".into(),

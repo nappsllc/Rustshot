@@ -38,9 +38,12 @@ impl Style {
     }
 }
 
-/// The bubble's text face: the annotation font at semibold (the boards').
+/// The bubble's text face: the annotation font at semibold (the boards'),
+/// in the callout's style (the caller styles `font`; bold is bold). The
+/// callout's text keeps to the left (its alignment is not used).
 fn face(font: &AnnotFont) -> AnnotFont {
-    font.semibold()
+    let f = font.semibold();
+    f.styled(crate::text::TextFmt { align: crate::text::Align::Left, ..f.fmt() })
 }
 
 /// Outline width of an unfilled bubble.
@@ -87,12 +90,12 @@ pub fn text_area(r: FRect, style: Style, px: f32) -> FRect {
 pub fn wrap(font: &AnnotFont, text: &str, px: f32, max_w: f32) -> Vec<(usize, usize)> {
     // A drag re-wraps the same text a few times a frame (the fit, the
     // bake of each window): the last few wraps are kept.
-    type Entry = (String, u32, u32, Vec<(usize, usize)>);
+    type Entry = (String, (u32, u32, u32), Vec<(usize, usize)>);
     thread_local! {
         static CACHE: std::cell::RefCell<Vec<Entry>> = const { std::cell::RefCell::new(Vec::new()) };
     }
-    let key = (px.to_bits(), max_w.to_bits());
-    if let Some(v) = CACHE.with(|c| c.borrow().iter().find(|e| (e.1, e.2) == key && e.0 == text).map(|e| e.3.clone())) {
+    let key = (px.to_bits(), max_w.to_bits(), font.key());
+    if let Some(v) = CACHE.with(|c| c.borrow().iter().find(|e| e.1 == key && e.0 == text).map(|e| e.2.clone())) {
         return v;
     }
     let v = wrap_uncached(font, text, px, max_w);
@@ -101,7 +104,7 @@ pub fn wrap(font: &AnnotFont, text: &str, px: f32, max_w: f32) -> Vec<(usize, us
         if c.len() >= 8 {
             c.remove(0);
         }
-        c.push((text.to_string(), key.0, key.1, v.clone()));
+        c.push((text.to_string(), key, v.clone()));
     });
     v
 }
@@ -122,9 +125,9 @@ fn wrap_uncached(font: &AnnotFont, text: &str, px: f32, max_w: f32) -> Vec<(usiz
 /// width).
 fn word_w(font: &AnnotFont, w: &str, px: f32) -> f32 {
     thread_local! {
-        static WORDS: std::cell::RefCell<std::collections::HashMap<(String, u32), f32>> = std::cell::RefCell::new(std::collections::HashMap::new());
+        static WORDS: std::cell::RefCell<std::collections::HashMap<(String, u32, u32), f32>> = std::cell::RefCell::new(std::collections::HashMap::new());
     }
-    let key = (w.to_string(), px.to_bits());
+    let key = (w.to_string(), px.to_bits(), font.key());
     if let Some(v) = WORDS.with(|c| c.borrow().get(&key).copied()) {
         return v;
     }
@@ -498,12 +501,12 @@ pub fn render(sf: &mut Surf, r: FRect, tip: Pt, text: &str, color: C4, px: f32, 
     let joined: Vec<&str> = lay.lines.iter().map(|&(a, b)| text[a..b].trim_end()).collect();
     // The text's raster is kept: a drag re-bakes the bubble every move,
     // and its lines change only when the wrap does.
-    type Entry = (String, u32, std::rc::Rc<crate::text::TextCov>);
+    type Entry = (String, (u32, u32), std::rc::Rc<crate::text::TextCov>);
     thread_local! {
         static COV: std::cell::RefCell<Vec<Entry>> = const { std::cell::RefCell::new(Vec::new()) };
     }
     let joined = joined.join("\n");
-    let key = px.to_bits();
+    let key = (px.to_bits(), font.key());
     let cov = COV.with(|c| c.borrow().iter().find(|e| e.1 == key && e.0 == joined).map(|e| e.2.clone()));
     let cov = cov.unwrap_or_else(|| {
         let v = std::rc::Rc::new(face(font).coverage(&joined, px));
