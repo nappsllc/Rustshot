@@ -30,6 +30,9 @@ renderer.
 - **Pin to screen** (<kbd>Ctrl</kbd>+<kbd>P</kbd>): the selection stays on
   top where it was, to zoom, fade and compare ([Pins](#pins-and-the-thumbnail)),
   and a **thumbnail** after each capture to copy, save, pin or drag it out.
+- **Copy text from an area** (OCR): <kbd>O</kbd> in the overlay, or
+  <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> to pick an area and copy its
+  text at once ([Copy text](#copy-text-ocr)).
 - **Screen recording** of a region or a screen to MP4 or GIF, with system
   sound, the microphone and an on-screen camera bubble
   ([Recording](#recording)).
@@ -264,6 +267,7 @@ snaps even then.
 | Capture window (the overlay picking a window: a click selects it) | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>W</kbd> | `capture_window_hotkey` |
 | Record video (again: stop) | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> | `record_hotkey` |
 | Repeat last capture (the same region, saved at once) | none | `repeat_hotkey` |
+| Copy text from area (pick an area, its text is copied; no annotation) | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> | `capture_text_hotkey` |
 | Quit Rustshot | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>Q</kbd> | `quit_hotkey` |
 
 <kbd>Win</kbd> is <kbd>⌘</kbd> on macOS and <kbd>Super</kbd> on Linux
@@ -276,6 +280,26 @@ capture hotkey set to <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> is
 Save As there), only Quit always quits. Repeat last capture remembers the
 region for as long as the daemon runs; before the first capture it opens
 the overlay.
+
+### Copy text (OCR)
+
+**Copy text** (the toolbar's T-in-a-frame button, <kbd>O</kbd> or
+<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> in the overlay) recognizes the
+text in the selection and copies it as plain text; the overlay closes at
+once and the notice says *Copied text · 3 lines* (or *No text found*).
+<kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> (`capture_text_hotkey`) does
+the same straight from an area pick, with no annotation step. Lines come
+top to bottom, words joined with spaces; small areas are read at twice
+their size. Nothing is bundled or downloaded, and the image never leaves
+your machine:
+
+- **Windows** uses the built-in Windows OCR (`Windows.Media.Ocr`) in your
+  profile's languages; add an OCR language under *Settings › Time &
+  language › Language & region* if the notice says none is installed.
+- **macOS** uses Vision's text recognition.
+- **Linux** runs `tesseract` when it is on `PATH` (e.g. `apt install
+  tesseract-ocr`); without it the notice says *Install tesseract for text
+  recognition*.
 
 ### Win+Shift+S and Print Screen (Windows)
 
@@ -320,6 +344,7 @@ recording starts video mode, and a delay waits that long.
 | Copy / Save / Upload | <kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>Ctrl</kbd>+<kbd>S</kbd> / <kbd>Ctrl</kbd>+<kbd>U</kbd> |
 | Save As (always asks) | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> |
 | Pin to screen | <kbd>Ctrl</kbd>+<kbd>P</kbd> |
+| Copy text (OCR) | <kbd>O</kbd> (or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd>) |
 | Select the whole screen | <kbd>Ctrl</kbd>+<kbd>A</kbd> |
 | Toggle the color palette | <kbd>Space</kbd> |
 | Bigger / smaller UI, back to Auto | <kbd>Ctrl</kbd>+<kbd>=</kbd> (or <kbd>Ctrl</kbd>+<kbd>+</kbd>, keypad <kbd>+</kbd>) / <kbd>Ctrl</kbd>+<kbd>-</kbd> / <kbd>Ctrl</kbd>+<kbd>0</kbd> |
@@ -350,7 +375,7 @@ bound twice):
 tool_pencil = "P"         # tool_line, tool_arrow, tool_rectangle, tool_circle,
                           # tool_marker, tool_text, tool_counter, tool_pixelate,
                           # tool_invert, size_down, size_up, save_desktop, pin
-save_as = "Ctrl+Shift+S"  # copy, save, upload, undo, select_all, toggle_palette,
+save_as = "Ctrl+Shift+S"  # copy, copy_text, save, upload, undo, select_all, toggle_palette,
 redo = "Ctrl+Shift+Z, Ctrl+Y"  # accept (Enter), cancel (Esc),
 ui_bigger = "Ctrl+=, Ctrl+Shift+=, Ctrl+NumpadAdd"  # ui_smaller, ui_reset
 ```
@@ -506,6 +531,7 @@ quit_hotkey = "Ctrl+Alt+Shift+Q"
 capture_full_hotkey = "Shift+Meta+F"    # every monitor, saved at once
 capture_window_hotkey = "Shift+Meta+W"  # the overlay picking a window
 repeat_hotkey = ""                # the last region again ("" = none)
+capture_text_hotkey = "Shift+Meta+T"  # pick an area, copy its text (OCR)
 show_tray = true                  # false = no tray icon (hotkeys still work)
 copy_after_capture = false        # a save or upload also copies the image
 shutter_sound = false             # a short click when a capture is taken

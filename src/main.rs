@@ -24,6 +24,7 @@ mod keymap;
 mod macos_objc;
 mod notice;
 mod objects;
+mod ocr;
 mod perf;
 // Pin to screen: the selection as an always-on-top window.
 mod pin;

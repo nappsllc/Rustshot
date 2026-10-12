@@ -229,6 +229,38 @@ fn text_tool_types_and_accepts() {
     );
 }
 
+/// Copy text (O) in a one-shot editor: the overlay closes, the area's
+/// text is recognized (Windows OCR) and the outcome is printed. Whatever
+/// is on screen there: "Copied text · N lines" (the clipboard then holds
+/// that text) or "No text found"; without an OCR language, the note
+/// saying so (exit 1).
+#[test]
+#[ignore = "live display access; may replace the clipboard's text"]
+fn copy_text_key_recognizes_the_area() {
+    let root = config_root("ocr", &renderer());
+    let mut child = rustshot(&root)
+        .env("RUSTSHOT_INSTANCE", format!("e2e-ocr-{}", std::process::id()))
+        .env("LOCALAPPDATA", &*root)
+        .args(["gui", "--region", "800x600+20+20"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn rustshot");
+    let hwnd = wait_window(&child, 8000).expect("editor window");
+    key(hwnd, 'O' as u32);
+    let code = wait_exit(&mut child, 20000);
+    let mut out = String::new();
+    use std::io::Read;
+    child.stdout.take().unwrap().read_to_string(&mut out).unwrap();
+    let line = out.lines().last().unwrap_or_default().to_string();
+    eprintln!("copy text: {line:?} (exit {code:?})");
+    match code {
+        Some(0) => assert!(line.starts_with("Copied text \u{b7} ") || line == "No text found", "{out:?}"),
+        Some(1) => assert!(line.contains("language"), "only a missing language may fail: {out:?}"),
+        c => panic!("unexpected exit {c:?}: {out:?}"),
+    }
+}
+
 /// Run locally, this briefly shows the tray icon of its own named daemon
 /// instance (it never runs beside, or touches, the default one).
 #[test]
