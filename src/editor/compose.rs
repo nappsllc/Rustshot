@@ -616,7 +616,7 @@ impl Edit {
             recents: &recents,
         });
         let busy = !self.tasks.is_empty();
-        let save_keys = [Act::SaveAs, Act::SaveDesktop].map(|a| chrome::act_tip(a, &self.keys).1.join("+"));
+        let save_keys = [Act::SaveAs, Act::SaveDesktop, Act::OpenWith].map(|a| chrome::act_tip(a, &self.keys).1.join("+"));
         self.toolbar = self.sel.map(|sel| {
             toolbar::layout(&toolbar::Input {
                 sel,

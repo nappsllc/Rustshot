@@ -142,6 +142,12 @@ pub struct Config {
     /// Recording: a GIF stops by itself after this many seconds (15, 30
     /// or 60; video mode's panel and Settings › Recording "Max length").
     pub rec_gif_max: u32,
+    /// The capture launcher's last choices: "region", "screen" or
+    /// "window"; the delay in seconds (0-60); "edit", "copy", "save" or
+    /// "pin" after the capture.
+    pub launcher_source: String,
+    pub launcher_delay: u32,
+    pub launcher_after: String,
     /// The color picker's recent custom colors, newest first (at most
     /// [`RECENT_MAX`]).
     pub recent_colors: Vec<String>,
@@ -320,6 +326,9 @@ impl Default for Config {
             rec_camera_ring_color: String::new(),
             rec_camera_ring_width: RING_WIDTH_DEFAULT,
             rec_gif_max: 30,
+            launcher_source: "region".into(),
+            launcher_delay: 0,
+            launcher_after: "edit".into(),
             recent_colors: Vec::new(),
             tool_sizes: BTreeMap::new(),
             tool_colors: BTreeMap::new(),
@@ -1032,6 +1041,15 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
             // Recorder redesign.
             "rec_gif_max" => cfg.rec_gif_max = fps_of(val, &[15, 30, 60]).map_err(|e| bad("number (15, 30 or 60)", &e))?,
             "recent_colors" => cfg.recent_colors = as_array(val).map_err(|e| bad("array", &e))?,
+            "launcher_source" => {
+                cfg.launcher_source = one_of(val, &["region", "screen", "window"]).map_err(|e| bad("value", &e))?
+            }
+            "launcher_delay" => {
+                cfg.launcher_delay = as_u64(val).ok().filter(|d| *d <= 60).ok_or_else(|| bad("number (0-60)", val))? as u32
+            }
+            "launcher_after" => {
+                cfg.launcher_after = one_of(val, &["edit", "copy", "save", "pin"]).map_err(|e| bad("value", &e))?
+            }
             "tool_callout_style" => {
                 cfg.callout_style = one_of(val, &["rounded", "cloud", "ellipse"]).map_err(|e| bad("value", &e))?
             }
@@ -1184,6 +1202,12 @@ pub fn to_toml(c: &Config) -> String {
     out.push_str(&format!("rec_gif_max = {}
 ", c.rec_gif_max));
     out.push_str(&format!("show_thumbnail = {}\n", c.show_thumbnail));
+    out.push_str(&format!(
+        "launcher_source = {}\nlauncher_delay = {}\nlauncher_after = {}\n",
+        q(&c.launcher_source),
+        c.launcher_delay,
+        q(&c.launcher_after)
+    ));
     out.push_str(&format!(
         "history = {}\nhistory_days = {}\nhistory_max_mb = {}\nhistory_hotkey = {}\nedit_save = {}\n",
         c.history,

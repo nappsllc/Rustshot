@@ -290,10 +290,12 @@ fn show_menu(hwnd: HWND) {
     unsafe {
         let items = tray::current_menu();
         let Ok(menu) = CreatePopupMenu() else { return };
-        for (i, item) in items.iter().enumerate() {
-            if *item == MenuItem::Separator {
+        // Command ids are the flat list's indexes + 1 (submenus included).
+        let append = |menu: HMENU, i: usize| {
+            let item = items[i];
+            if item == MenuItem::Separator {
                 let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-                continue;
+                return;
             }
             let mut flags = MF_STRING;
             if item.checked() == Some(true) {
@@ -301,6 +303,19 @@ fn show_menu(hwnd: HWND) {
             }
             let label: Vec<u16> = item.label().encode_utf16().chain(Some(0)).collect();
             let _ = AppendMenuW(menu, flags, i + 1, PCWSTR(label.as_ptr()));
+        };
+        for (i, kids) in tray::nest(&items) {
+            if kids.is_empty() {
+                append(menu, i);
+                continue;
+            }
+            // "Recent uploads": a submenu (destroyed with its parent).
+            let Ok(sub) = CreatePopupMenu() else { continue };
+            for k in kids {
+                append(sub, k);
+            }
+            let label: Vec<u16> = items[i].label().encode_utf16().chain(Some(0)).collect();
+            let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, PCWSTR(label.as_ptr()));
         }
         let mut pt = POINT::default();
         let _ = GetCursorPos(&mut pt);

@@ -48,6 +48,13 @@ pub enum HotEvent {
     RecDiscard,
     /// Close every pin (the tray's "Close all pins").
     ClosePins,
+    /// The launcher (or the tray's "Capture in 3 s"): this capture,
+    /// after its delay (counted down with a Cancel pill).
+    Launch(crate::launcher::Plan),
+    /// Call the delayed capture off (the tray's "Cancel capture").
+    CancelDelay,
+    /// The tray's "Delete … from Imgur…" (the upload's menu tag): ask first.
+    UploadDelete(u32),
 }
 
 /// The chords registered only while a recording runs (Settings → Key

@@ -208,7 +208,15 @@ fn upload_winhttp(png: &[u8], client_id: &str) -> Result<String, String> {
         &headers,
         png,
     )?;
-    extract_json_string(&text, "link").ok_or_else(|| format!("no link in response: {text}"))
+    crate::uploads::note_reply(&text, crate::uploads::UpKind::Image);
+    extract_json_string(&text, "link").ok_or_else(|| format!("no link in response: {}", crate::uploads::redact(&text)))
+}
+
+/// HTTPS DELETE (an upload, by its deletehash); returns (status, body).
+#[cfg_attr(test, allow(dead_code))] // tests never delete
+pub fn http_delete(host: &str, path: &str, headers: &[(&str, &str)]) -> Result<(u32, String), String> {
+    let headers = headers.iter().map(|(k, v)| format!("{k}: {v}")).collect::<Vec<_>>().join("\r\n");
+    winhttp("DELETE", host, path, &headers, &[])
 }
 
 /// HTTPS POST of `body` with `headers`; returns (status, body). Long

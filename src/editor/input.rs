@@ -768,6 +768,10 @@ impl Edit {
                 self.tasks = vec![Task::SaveDesktop];
                 self.done = true;
             }
+            Act::OpenWith => {
+                self.tasks = vec![Task::OpenWith];
+                self.done = true;
+            }
             Act::Upload => {
                 self.tasks = vec![Task::Upload];
                 self.done = true;

@@ -110,6 +110,9 @@ pub struct Meta {
     /// Where it was saved, the link it was uploaded to.
     pub saved: Option<PathBuf>,
     pub uploaded: Option<String>,
+    /// The upload's record (its deletehash, time, kind, 72 × 48
+    /// thumbnail; [`crate::uploads`]), when it was kept.
+    pub upload: Option<crate::uploads::Info>,
     /// A recording's length.
     pub duration_ms: u64,
     /// A recording's file.
@@ -387,21 +390,31 @@ fn lower_map(s: &str) -> (String, Vec<usize>) {
     (out, map)
 }
 
-/// Captures, Screenshots or Recordings (the header's filter).
+/// Captures, Screenshots, Recordings or Uploaded (the header's filter).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Filter {
     #[default]
     All,
     Shots,
     Recordings,
+    /// Those with an upload link.
+    Uploaded,
 }
 
 impl Filter {
     pub fn keeps(self, k: Kind) -> bool {
         match self {
-            Filter::All => true,
+            Filter::All | Filter::Uploaded => true,
             Filter::Shots => !k.is_recording(),
             Filter::Recordings => k.is_recording(),
+        }
+    }
+
+    /// Whether the capture `m` is shown.
+    pub fn keeps_meta(self, m: &Meta) -> bool {
+        match self {
+            Filter::Uploaded => m.uploaded.is_some(),
+            f => f.keeps(m.kind),
         }
     }
 }
@@ -447,6 +460,14 @@ pub fn meta_to_json(m: &Meta) -> String {
     if let Some(u) = &m.uploaded {
         s("uploaded", u);
     }
+    if let Some(i) = &m.upload {
+        // Kept on this computer only (PRIVACY.md); never logged.
+        s("upload_deletehash", i.deletehash.reveal());
+        s("upload_kind", i.kind.id());
+        if let Some(t) = &i.thumb {
+            s("upload_thumb", &crate::uploads::b64_encode(t));
+        }
+    }
     if let Some(p) = &m.file {
         s("file", &p.to_string_lossy());
     }
@@ -455,6 +476,9 @@ pub fn meta_to_json(m: &Meta) -> String {
         ",\"w\":{},\"h\":{},\"bytes\":{},\"scale\":{},\"duration_ms\":{},\"edited\":{}",
         m.w, m.h, m.bytes, scale, m.duration_ms, m.edited
     ));
+    if let Some(i) = &m.upload {
+        o.push_str(&format!(",\"upload_time\":{}", i.time));
+    }
     o.push_str(",\"objects\":[");
     for (i, k) in m.objects.iter().enumerate() {
         if i > 0 {
@@ -507,6 +531,12 @@ pub fn meta_from_json(s: &str) -> Result<Meta> {
         title: st("title"),
         app: st("app"),
         saved: opt("saved").map(PathBuf::from),
+        upload: opt("uploaded").and(opt("upload_kind")).map(|k| crate::uploads::Info {
+            deletehash: crate::uploads::Secret::new(opt("upload_deletehash").unwrap_or_default()),
+            time: num("upload_time") as u64,
+            kind: crate::uploads::UpKind::from_id(&k),
+            thumb: opt("upload_thumb").and_then(|t| crate::uploads::b64_decode(&t)),
+        }),
         uploaded: opt("uploaded"),
         duration_ms: num("duration_ms") as u64,
         file: opt("file").map(PathBuf::from),
@@ -730,6 +760,11 @@ impl Store {
         let (day, name) = id.split_once('/')?;
         parse_day(day)?;
         entry_name(name).then(|| self.root.join(day).join(name))
+    }
+
+    /// Entry `id`'s folder (None: not an entry id).
+    pub fn dir_of(&self, id: &str) -> Option<PathBuf> {
+        self.entry_dir(id)
     }
 
     /// A new entry's folder for a capture taken at `now`:

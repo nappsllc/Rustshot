@@ -109,6 +109,9 @@ pub enum Act {
     SaveAs,
     /// Straight to the Desktop folder.
     SaveDesktop,
+    /// Open the capture with an app the user picks (the Save menu's
+    /// "Open with…").
+    OpenWith,
     Upload,
     /// Pin the selection to the screen.
     Pin,
@@ -276,9 +279,9 @@ pub struct Input<'a> {
     pub fills: bool,
     /// The color picker while it is open (over the others).
     pub pick: Option<&'a PickView<'a>>,
-    /// The save menu while it is open: the keys of Save As and Save to
-    /// Desktop.
-    pub save_menu: Option<&'a [String; 2]>,
+    /// The save menu while it is open: the keys of Save As, Save to
+    /// Desktop and Open with.
+    pub save_menu: Option<&'a [String; 3]>,
 }
 
 /// What shapes the color picker popover.
@@ -528,14 +531,17 @@ pub fn layout_docked(inp: &Input, bar: FRect) -> Toolbar {
     Toolbar { bar, pop, items, wrapped: false, above: false, texts, extra: Vec::new(), mode: None, video: false, docked: true }
 }
 
+/// The save menu's rows.
+pub const SAVE_MENU: [(Act, &str); 3] = [(Act::SaveAs, "Save as\u{2026}"), (Act::SaveDesktop, "Save to Desktop"), (Act::OpenWith, "Open with\u{2026}")];
+
 /// The save menu under (or over) the Save button: Save As, Save to
-/// Desktop.
+/// Desktop, Open with.
 fn place_save_menu(bar: FRect, above: bool, items: &mut Vec<Item>, inp: &Input) -> FRect {
     let s = inp.s;
-    let (pw, ph) = (MENU_W * s, (2.0 * MENU_ROW + 2.0 * PAD) * s);
+    let (pw, ph) = (MENU_W * s, (SAVE_MENU.len() as f32 * MENU_ROW + 2.0 * PAD) * s);
     let anchor = items.iter().find(|it| it.kind == Kind::Btn(Act::Save)).map_or(bar, |it| it.r);
     let (px, py) = place_pop(pw, ph, anchor, bar, above, inp);
-    for (i, (act, label)) in [(Act::SaveAs, "Save as\u{2026}"), (Act::SaveDesktop, "Save to Desktop")].into_iter().enumerate() {
+    for (i, (act, label)) in SAVE_MENU.into_iter().enumerate() {
         let r = FRect { x: px + PAD * s, y: py + (PAD + i as f32 * MENU_ROW) * s, w: pw - 2.0 * PAD * s, h: MENU_ROW * s };
         items.push(Item { kind: Kind::MenuItem { act, label, key: i }, r, disabled: false });
     }
