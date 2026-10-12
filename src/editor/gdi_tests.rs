@@ -674,6 +674,87 @@ fn gdi_layer_matches_software_through_object_edits() {
     }
 }
 
+/// Blur at 3840x2160 (target: an 800x400 blur under 4 ms a move): moving a
+/// committed blur with the select tool (pointer_move + damage + paint),
+/// and a draft's corner drag (damage + paint), sigma 10 and 25.
+/// `cargo test --release perf_gdi_blur_drag -- --ignored --nocapture`
+#[test]
+#[ignore = "benchmark; run in release"]
+fn perf_gdi_blur_drag() {
+    let (w, h) = (3840u32, 2160u32);
+    let sel = FRect { x: 200.0, y: 150.0, w: 3400.0, h: 1850.0 };
+    let pct = |v: &mut Vec<f64>, q: f64| {
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        v[((v.len() - 1) as f64 * q) as usize]
+    };
+    for sigma in [10.0f32, 25.0] {
+        let r = FRect { x: 1000.0, y: 600.0, w: 800.0, h: 400.0 };
+        // A committed blur moved.
+        let mut app = preview_app_with(theme::DARK, Some(sel), tiled_shot(w, h));
+        edit_of(&mut app).commit_object(Obj::Blur { r, sigma });
+        edit_of(&mut app).tool = Some(Tool::Select);
+        edit_of(&mut app).obj.sel = vec![0];
+        settled(&mut app);
+        attach(&mut app);
+        let t = Target::new(w, h);
+        let _ = app.damage();
+        edit_of(&mut app).paint_gdi(t.dc, &[PxRect::image((w, h))]);
+        let from = Pt::new(1400.0, 800.0);
+        app.mouse = (from.x as i32, from.y as i32);
+        app.pointer_down(from.x as i32, from.y as i32);
+        let mut tt = Vec::new();
+        for k in 0..100 {
+            let d = (k % 50) as f32 * 2.0;
+            let (x, y) = ((from.x + d) as i32, (from.y + d * 0.5) as i32);
+            let t0 = Instant::now();
+            app.mouse = (x, y);
+            app.pointer_move(x, y);
+            let rects = app.damage().unwrap_or_else(|| vec![[0, 0, w as i32, h as i32]]);
+            let rects: Vec<PxRect> = rects.iter().map(|r| PxRect::new(r[0], r[1], r[2], r[3])).collect();
+            edit_of(&mut app).paint_gdi(t.dc, &rects);
+            let _ = t.pixels();
+            tt.push(t0.elapsed().as_secs_f64() * 1000.0);
+        }
+        app.pointer_up();
+        println!("GDI BENCH 4K blur 800x400 sigma {sigma} move: median {:.2} p90 {:.2} max {:.2} ms", pct(&mut tt.clone(), 0.5), pct(&mut tt.clone(), 0.9), pct(&mut tt, 1.0));
+        // A draft's corner dragged.
+        let mut app = preview_app_with(theme::DARK, Some(sel), tiled_shot(w, h));
+        edit_of(&mut app).tool = Some(Tool::Blur);
+        settled(&mut app);
+        attach(&mut app);
+        let t = Target::new(w, h);
+        let _ = app.damage();
+        edit_of(&mut app).paint_gdi(t.dc, &[PxRect::image((w, h))]);
+        let mut tt = Vec::new();
+        for k in 0..60 {
+            let e = edit_of(&mut app);
+            e.interact = Interact::Drawing { start: Pt::new(r.x, r.y) };
+            let d = (k % 6) as f32 * 3.0;
+            e.draft = Some(Obj::Blur { r: FRect { w: r.w - d, h: r.h - d, ..r }, sigma });
+            let t0 = Instant::now();
+            let rects = app.damage().unwrap_or_else(|| vec![[0, 0, w as i32, h as i32]]);
+            let rects: Vec<PxRect> = rects.iter().map(|r| PxRect::new(r[0], r[1], r[2], r[3])).collect();
+            edit_of(&mut app).paint_gdi(t.dc, &rects);
+            let _ = t.pixels();
+            tt.push(t0.elapsed().as_secs_f64() * 1000.0);
+        }
+        println!("GDI BENCH 4K blur 800x400 sigma {sigma} draft drag: median {:.2} p90 {:.2} max {:.2} ms", pct(&mut tt.clone(), 0.5), pct(&mut tt.clone(), 0.9), pct(&mut tt, 1.0));
+    }
+    // The blur alone (no compose): one 800x400 block.
+    let mut block = vec![128u8; 800 * 400 * 4];
+    for (i, v) in block.iter_mut().enumerate() {
+        *v = (i * 7 % 251) as u8;
+    }
+    let (mut tmp, mut acc) = (Vec::new(), Vec::new());
+    let mut tt = Vec::new();
+    for _ in 0..30 {
+        let t0 = Instant::now();
+        crate::objects::blur::blur_block(&mut block, 800, 400, 10.0, &mut tmp, &mut acc);
+        tt.push(t0.elapsed().as_secs_f64() * 1000.0);
+    }
+    println!("BENCH blur_block 800x400 sigma 10: median {:.2} ms", pct(&mut tt, 0.5));
+}
+
 /// Object drags at 3840x2160 (the 4K perf target: under 4 ms a move):
 /// per mouse move `pointer_move` + `damage()` + paint of the damaged
 /// rects, with 27 objects on screen, dragging a rectangle, a pixelate, an
