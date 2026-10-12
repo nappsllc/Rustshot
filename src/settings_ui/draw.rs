@@ -646,7 +646,7 @@ pub const KEY_ROWS: [(&str, &[Action]); 15] = [
         &[Action::DeleteObject, Action::Duplicate, Action::BringFront, Action::SendBack],
     ),
     ("Stroke size - / +", &[Action::SizeDown, Action::SizeUp]),
-    ("Typing: bold \u{b7} italic \u{b7} underline",&[Action::TextBold, Action::TextItalic, Action::TextUnderline]),
+    ("Typing: bold \u{b7} italic \u{b7} underline", &[Action::TextBold, Action::TextItalic, Action::TextUnderline]),
     ("Copy \u{b7} Save \u{b7} Upload", &[Action::Copy, Action::Save, Action::Upload]),
     ("Copy text", &[Action::CopyText]),
     ("Accept \u{b7} Cancel", &[Action::Accept, Action::Cancel]),

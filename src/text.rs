@@ -527,7 +527,7 @@ mod tests {
         }
     }
 
-    /// Lines line up left, centred or right within the widest one; the
+    /// Lines line up left, centered or right within the widest one; the
     /// caret follows.
     #[test]
     fn alignment_moves_shorter_lines() {

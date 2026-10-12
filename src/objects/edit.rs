@@ -517,7 +517,8 @@ mod tests {
 
     #[test]
     fn move_and_resize_map_geometry() {
-        let mut o = Obj::Callout { fmt: Default::default(),
+        let mut o = Obj::Callout {
+            fmt: Default::default(),
             r: FRect { x: 10.0, y: 10.0, w: 100.0, h: 50.0 },
             tail: Pt::new(30.0, 90.0),
             text: "hi".into(),

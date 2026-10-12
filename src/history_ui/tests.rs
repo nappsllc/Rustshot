@@ -72,7 +72,8 @@ pub(crate) fn fixture(tag: &str) -> (TempRoot, Store) {
             let objs = if edited {
                 vec![
                     crate::objects::Obj::Arrow { a: Pt::new(20.0, 70.0), b: Pt::new(90.0, 30.0), color: crate::uifb::C4::rgb(240, 68, 56), width: 3.0 },
-                    crate::objects::Obj::Callout { fmt: Default::default(),
+                    crate::objects::Obj::Callout {
+                        fmt: Default::default(),
                         r: FRect { x: 100.0, y: 10.0, w: 40.0, h: 24.0 },
                         tail: Pt::new(105.0, 50.0),
                         text: String::new(),

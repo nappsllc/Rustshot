@@ -394,7 +394,8 @@ fn callout_tail_handle_and_re_edit() {
 
 #[test]
 fn callout_styles_from_the_mini_toolbar() {
-    let mut a = with(vec![Obj::Callout { fmt: Default::default(),
+    let mut a = with(vec![Obj::Callout {
+        fmt: Default::default(),
         r: FRect { x: 300.0, y: 200.0, w: 240.0, h: 80.0 },
         tail: Pt::new(320.0, 330.0),
         text: "Hi".into(),
@@ -596,7 +597,8 @@ fn render_object_previews() {
         let png = settled(a).to_png().unwrap();
         std::fs::write(dir.join(name), png).unwrap();
     };
-    let callout = |x: f32, y: f32, style: CalloutStyle, fill: bool, text: &str| Obj::Callout { fmt: Default::default(),
+    let callout = |x: f32, y: f32, style: CalloutStyle, fill: bool, text: &str| Obj::Callout {
+        fmt: Default::default(),
         r: FRect { x, y, w: 260.0, h: 60.0 },
         tail: Pt::new(x + 50.0, y + 150.0),
         text: text.into(),

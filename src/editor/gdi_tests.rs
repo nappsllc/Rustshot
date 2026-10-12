@@ -780,7 +780,8 @@ fn perf_gdi_object_drag() {
             _ => Obj::Counter { c: Pt::new(x + 40.0, y + 40.0), n: i, color: red, d: 40.0, tail: None },
         });
     }
-    objs.push(Obj::Callout { fmt: Default::default(),
+    objs.push(Obj::Callout {
+        fmt: Default::default(),
         r: FRect { x: 1500.0, y: 1700.0, w: 420.0, h: 120.0 },
         tail: Pt::new(1520.0, 1900.0),
         text: "Move this to the top, above the summary, so people see it first".into(),

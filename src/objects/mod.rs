@@ -870,7 +870,8 @@ mod tests {
     #[test]
     fn text_render_does_not_panic_without_font() {
         let mut img = PixBuf::new(10, 10);
-        Obj::Text { fmt: Default::default(),
+        Obj::Text {
+            fmt: Default::default(),
             pos: Pt::new(1.0, 1.0),
             text: "hi".into(),
             color: C4::rgb(255, 255, 255),
@@ -910,7 +911,8 @@ mod tests {
             check(&format!("obj {n}"), |s| o.render_into(s, None));
         }
         if let Some(font) = AnnotFont::load() {
-            let t = Obj::Text { fmt: Default::default(),
+            let t = Obj::Text {
+                fmt: Default::default(),
                 pos: Pt::new(22.0, 16.0),
                 text: "Hello\nWorld wy".into(),
                 color: c,

@@ -4051,7 +4051,8 @@ mod tests {
 
         let mut app = annotated(theme::LIGHT, big);
         let e = edit_of(&mut app);
-        e.objects.push(Obj::Text { fmt: Default::default(),
+        e.objects.push(Obj::Text {
+            fmt: Default::default(),
             pos: Pt::new(300.0, 420.0),
             text: "Annotation text\nПривет, мир · مرحبا · 你好".into(),
             color: C4::rgb(240, 68, 56),
