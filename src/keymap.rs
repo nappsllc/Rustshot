@@ -138,9 +138,9 @@ impl Action {
             Action::UiBigger => ("ui_bigger", "Bigger UI", &["Ctrl+=", "Ctrl+Shift+=", "Ctrl+NumpadAdd"]),
             Action::UiSmaller => ("ui_smaller", "Smaller UI", &["Ctrl+-", "Ctrl+NumpadSubtract"]),
             Action::UiReset => ("ui_reset", "UI size: Auto", &["Ctrl+0", "Ctrl+Numpad0"]),
-            Action::RecPause => ("rec_pause", "Pause / resume", &["Shift+Meta+P"]),
-            Action::RecMute => ("rec_mute", "Mute microphone", &["Shift+Meta+M"]),
-            Action::RecHidePill => ("rec_hide_pill", "Hide / show controls", &["Shift+Meta+H"]),
+            Action::RecPause => ("rec_pause", "Pause / resume", &["Ctrl+Alt+Shift+P"]),
+            Action::RecMute => ("rec_mute", "Mute microphone", &["Ctrl+Alt+Shift+M"]),
+            Action::RecHidePill => ("rec_hide_pill", "Hide / show controls", &["Ctrl+Alt+Shift+H"]),
         }
     }
 
@@ -354,9 +354,9 @@ mod tests {
             (Action::UiBigger, &["Ctrl+=", "Ctrl+Shift+=", "Ctrl+NumpadAdd"]),
             (Action::UiSmaller, &["Ctrl+-", "Ctrl+NumpadSubtract"]),
             (Action::UiReset, &["Ctrl+0", "Ctrl+Numpad0"]),
-            (Action::RecPause, &["Shift+Meta+P"]),
-            (Action::RecMute, &["Shift+Meta+M"]),
-            (Action::RecHidePill, &["Shift+Meta+H"]),
+            (Action::RecPause, &["Ctrl+Alt+Shift+P"]),
+            (Action::RecMute, &["Ctrl+Alt+Shift+M"]),
+            (Action::RecHidePill, &["Ctrl+Alt+Shift+H"]),
         ];
         for (a, keys) in want {
             assert_eq!(shown(&km, a), keys, "{a:?}");
@@ -510,8 +510,8 @@ mod tests {
         // The same chord as an overlay key is no clash; two recording ones are.
         let (km, _) = Keymap::from_config(&cfg(&[("rec_pause", "P")]));
         assert!(km.conflicts().is_empty());
-        let (km, _) = Keymap::from_config(&cfg(&[("rec_pause", "Shift+Meta+M")]));
-        assert_eq!(km.conflicts(), [(Chord::parse("Shift+Meta+M").unwrap(), vec![Action::RecPause, Action::RecMute])]);
+        let (km, _) = Keymap::from_config(&cfg(&[("rec_pause", "Ctrl+Alt+Shift+M")]));
+        assert_eq!(km.conflicts(), [(Chord::parse("Ctrl+Alt+Shift+M").unwrap(), vec![Action::RecPause, Action::RecMute])]);
         assert_eq!(Keymap::from_config(&km.to_config()).0, km);
     }
 }

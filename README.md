@@ -348,15 +348,17 @@ recording**) and on global chords that are registered only while it runs:
 | While recording | Default |
 |---|---|
 | Stop | the record hotkey (<kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd>) |
-| Pause / resume | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> |
-| Mute the microphone | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> |
-| Hide / show the pill | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd> |
+| Pause / resume | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> |
+| Mute the microphone | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> |
+| Hide / show the pill | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd> |
 
 Remap them in Settings › Key bindings › *While recording* (or
 `rec_pause`, `rec_mute`, `rec_hide_pill` in `[shortcuts]`); one that
-cannot be registered is reported like any other hotkey (on Windows
-<kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> is the shell's "restore
-minimized windows"). On macOS they are not registered yet; use the menu.
+cannot be registered is reported like any other hotkey. (They are not
+<kbd>Win</kbd>+<kbd>Shift</kbd> chords like the capture hotkeys: on
+Windows <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> is the shell's
+"restore minimized windows" and <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>
+is taken too.) On macOS they are not registered yet; use the menu.
 
 The tray icon on Linux is a StatusNotifierItem: it shows on KDE Plasma,
 Xfce, LXQt, Cinnamon, Budgie, waybar and the like, and on GNOME with the

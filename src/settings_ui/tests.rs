@@ -989,7 +989,7 @@ fn while_recording_rows_notes() {
     }
     s.form.keys.set(Action::RecPause, vec![Chord::parse("Shift+Meta+R").unwrap()]);
     assert_eq!(s.form.rec_note(Action::RecPause).as_deref(), Some("Already used by Record video. Choose another."));
-    s.form.keys.set(Action::RecPause, vec![Chord::parse("Shift+Meta+M").unwrap()]);
+    s.form.keys.set(Action::RecPause, vec![Chord::parse("Ctrl+Alt+Shift+M").unwrap()]);
     assert_eq!(s.form.rec_note(Action::RecPause).as_deref(), Some("Already used by Mute microphone. Choose another."));
     s.form.keys.set(Action::RecPause, vec![Chord::parse("P").unwrap()]);
     assert_eq!(s.form.rec_note(Action::RecPause).as_deref(), Some(BARE_NOTE));

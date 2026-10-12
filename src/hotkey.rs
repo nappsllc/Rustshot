@@ -854,11 +854,11 @@ mod tests {
     #[test]
     fn rec_chords_are_the_keymap_rows() {
         let cfg = Config::default();
-        assert_eq!(rec_wanted(&cfg), ["Shift+Meta+P", "Shift+Meta+M", "Shift+Meta+H"]);
+        assert_eq!(rec_wanted(&cfg), ["Ctrl+Alt+Shift+P", "Ctrl+Alt+Shift+M", "Ctrl+Alt+Shift+H"]);
         let mut cfg = Config::default();
         cfg.shortcuts.insert("rec_pause".into(), "Ctrl+Alt+P".into());
         cfg.shortcuts.insert("rec_mute".into(), "".into());
-        assert_eq!(rec_wanted(&cfg), ["Ctrl+Alt+P", "", "Shift+Meta+H"]);
+        assert_eq!(rec_wanted(&cfg), ["Ctrl+Alt+P", "", "Ctrl+Alt+Shift+H"]);
         let specs = rec_specs_for(&rec_wanted(&cfg));
         assert_eq!(specs.clone().map(|s| s.0), [7, 8, 9]);
         assert!(matches!(specs[0].2, HotEvent::RecPause));
@@ -903,10 +903,10 @@ mod tests {
         assert!(!rk.active() && live.borrow().is_empty());
         rk.end(stop);
         // One chord is taken by another app: a failure for its slot, the others work.
-        let f = rk.begin(&want, |w| start(w, &["Shift+Meta+M"]), stop);
-        assert_eq!(f, [Failure { slot: REC_SLOT_BASE + 1, wanted: "Shift+Meta+M".into(), cause: Cause::InUse, kept: None }]);
-        assert_eq!(f[0].message(), format!("Couldn't register {} — it's in use by another app.", chord_label("Shift+Meta+M")));
-        assert_eq!(*live.borrow(), ["Shift+Meta+P", "Shift+Meta+H"]);
+        let f = rk.begin(&want, |w| start(w, &["Ctrl+Alt+Shift+M"]), stop);
+        assert_eq!(f, [Failure { slot: REC_SLOT_BASE + 1, wanted: "Ctrl+Alt+Shift+M".into(), cause: Cause::InUse, kept: None }]);
+        assert_eq!(f[0].message(), format!("Couldn't register {} — it's in use by another app.", chord_label("Ctrl+Alt+Shift+M")));
+        assert_eq!(*live.borrow(), ["Ctrl+Alt+Shift+P", "Ctrl+Alt+Shift+H"]);
         // New chords while recording: the old ones go, the new ones come.
         let mut want2 = want.clone();
         want2[0] = "Ctrl+Alt+P".into();
