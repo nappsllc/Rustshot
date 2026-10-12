@@ -1160,10 +1160,17 @@ impl App {
             t.ttl = 6000.0;
             edit.notice = Some(t);
         }
-        // The pointer where it is (the magnifier shows there at once).
+        // The pointer where it is (the magnifier shows there at once),
+        // and each monitor's scale (the magnifier's size on mixed DPI).
         #[cfg(not(test))]
         {
             self.mouse = edit.shot.global_to_image(capture::cursor_pos());
+            let o = edit.shot.origin;
+            edit.assist.mon_scales = capture::monitors()
+                .unwrap_or_default()
+                .iter()
+                .map(|m| ((m.x - o.0, m.y - o.1, m.w, m.h), m.scale))
+                .collect();
         }
         if accept_now {
             if edit.tasks.is_empty()
@@ -1192,6 +1199,8 @@ impl App {
             edit.shot.size.1 as i32,
         );
         self.focus_tries = 0;
+        // The hint's 3 s count from now, the overlay on screen.
+        edit.assist.restart_hint(edit.cfg.overlay_hints, Instant::now());
         if edit.done {
             let cancelled = edit.cancelled;
             self.finish(&mut edit, cancelled);
@@ -3071,7 +3080,8 @@ impl Edit {
     /// [`Edit::track_hover`] with the pointer at `p` on the capture and
     /// at `pb` in the toolbar's coordinates.
     fn track_hover_at(&mut self, p: Pt, pb: Pt) -> bool {
-        let hover = self.toolbar.as_ref().and_then(|tb| tb.index_at(pb));
+        // The color ring is over everything: no toolbar hover (nor tooltip) under it.
+        let hover = self.toolbar.as_ref().filter(|_| self.assist.ring.is_none()).and_then(|tb| tb.index_at(pb));
         let reach = HANDLE_HIT * self.ui_scale();
         let hot = self.sel.and_then(|sr| {
             handle_points(sr).iter().position(|(_, q)| (q.x - p.x).hypot(q.y - p.y) <= reach)
@@ -3132,11 +3142,16 @@ fn end_interaction(edit: &mut Edit) {
             edit.obj_release(it);
         }
         Interact::NewSel { moved, .. } => {
+            // A window clicked (or a region drawn): accept on select may
+            // take it; a plain click that selects everything does not.
+            let mut window = moved;
             if !moved {
                 // A plain click selects the window under the pointer
                 // (window snapping), else everything (Flameshot-ish).
                 let all = FRect { x: 0.0, y: 0.0, w: edit.shot.size.0 as f32, h: edit.shot.size.1 as f32 };
-                edit.sel = Some(edit.snap_rect().unwrap_or(all));
+                let snapped = edit.snap_rect();
+                window = snapped.is_some();
+                edit.sel = Some(snapped.unwrap_or(all));
             } else {
                 // A dragged area is a region, whatever the Record panel's
                 // source was (Window, Screen).
@@ -3145,7 +3160,7 @@ fn end_interaction(edit: &mut Edit) {
             if edit.accept_on_select {
                 edit.done = true;
                 edit.cancelled = false;
-            } else {
+            } else if window {
                 edit.accept_new_region();
             }
         }

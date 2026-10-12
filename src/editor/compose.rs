@@ -631,7 +631,17 @@ impl Edit {
         });
         let busy = !self.tasks.is_empty();
         let save_keys = [Act::SaveAs, Act::SaveDesktop, Act::OpenWith].map(|a| chrome::act_tip(a, &self.keys).1.join("+"));
-        self.toolbar = self.sel.map(|sel| {
+        if self.pick.is_none() {
+            self.assist.pick_at = None;
+        }
+        // Hidden while a new selection is drawn (it fades in on release):
+        // following the drag it would be redrawn on every move.
+        let bar_sel = self.sel.filter(|_| !matches!(self.interact, Interact::NewSel { .. }));
+        let standalone = match (self.sel, self.assist.pick_at, pv.as_ref()) {
+            (None, Some(at), Some(pv)) => Some(toolbar::layout_picker(pv, at, area, s)),
+            _ => None,
+        };
+        self.toolbar = bar_sel.map(|sel| {
             toolbar::layout(&toolbar::Input {
                 sel,
                 area,
@@ -651,7 +661,7 @@ impl Edit {
                 pick: pv.as_ref(),
                 save_menu: self.save_menu.then_some(&save_keys),
             })
-        });
+        }).or(standalone);
 
         let interacting = !matches!(self.interact, Interact::None);
         if self.toolbar.is_some() {
@@ -767,8 +777,23 @@ impl Edit {
             }
         });
         let kh = self.mo.hint.value(now);
-        let hint = (kh > 0.01).then(|| HintUi { area, k: kh, parts: assist::hint_parts(&self.keys, self.snap.is_some() && self.tool.is_none()) });
-        let (cross, mag, ring) = self.assist_scene(Pt::new(mouse.0 as f32, mouse.1 as f32), s);
+        let hint = (kh > 0.01).then(|| {
+            let snap = self.snap.is_some() && self.tool.is_none();
+            let parts = match &self.assist.hint_parts {
+                Some((sn, p)) if *sn == snap => p.clone(),
+                _ => {
+                    let p = assist::hint_parts(&self.keys, snap);
+                    self.assist.hint_parts = Some((snap, p.clone()));
+                    p
+                }
+            };
+            HintUi { area, k: kh, parts }
+        });
+        let label_r: Vec<FRect> = {
+            let ui = Ui { th: &self.th, s, font: self.ui_font };
+            label.iter().map(|l| chrome::size_label_bounds(&ui, l.sr, l.show_pos, l.area, (l.avoid, l.lead))).collect()
+        };
+        let (cross, mag, ring) = self.assist_scene(Pt::new(mouse.0 as f32, mouse.1 as f32), s, &label_r);
         // The eyedropper's loupe follows the pointer, off the toolbar.
         let on_chrome = |p: Pt| self.toolbar.as_ref().is_some_and(|t| t.contains(p));
         let loupe = match (self.pick.as_ref().filter(|p| p.eyedrop), self.loupe) {

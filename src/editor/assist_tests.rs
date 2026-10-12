@@ -10,6 +10,7 @@ use crate::wind::key;
 
 const NONE: Mods = Mods { shift: false, ctrl: false, alt: false };
 const SHIFT: Mods = Mods { shift: true, ctrl: false, alt: false };
+const ALT: Mods = Mods { shift: false, ctrl: false, alt: true };
 
 fn fr(x: f32, y: f32, w: f32, h: f32) -> FRect {
     FRect { x, y, w, h }
@@ -406,13 +407,62 @@ fn ring_stays_shut_where_it_does_not_apply() {
     assert!(ed(&mut a).text.is_some());
     rdown(&mut a, 650, 500);
     assert!(ed(&mut a).assist.ring.is_none());
-    // Before a selection: open, but no wheel (no toolbar to hang it on).
+    // Before a selection: the centre opens the picker on its own, for
+    // the current tool.
     let mut a = app(None);
     rdown(&mut a, 600, 400);
     rup(&mut a, 600, 400);
-    assert!(!ed(&mut a).assist.ring.as_ref().unwrap().custom);
     a.on_event(Ev::Down { x: 600, y: 400 });
-    assert!(ed(&mut a).pick.is_none() && ed(&mut a).assist.ring.is_some(), "the centre does nothing there");
+    a.on_event(Ev::Up { x: 600, y: 400 });
+    assert!(ed(&mut a).pick.is_some() && ed(&mut a).assist.ring.is_none());
+    let sc = scene(&mut a).clone();
+    let tb = ed(&mut a).toolbar.clone().expect("the picker alone");
+    assert!(tb.docked && tb.pop.is_some() && sc.bar.is_some());
+    // A recent swatch would apply; a hue drag does: the pencil changes.
+    let before = ed(&mut a).color();
+    let hue = tb.items.iter().find(|i| i.kind == toolbar::Kind::PickHue).unwrap().r;
+    let (hx, hy) = ((hue.x + 4.0) as i32, (hue.y + hue.h / 2.0) as i32);
+    a.on_event(Ev::Down { x: hx, y: hy });
+    a.on_event(Ev::Up { x: hx, y: hy });
+    assert_ne!(ed(&mut a).color(), before, "the picker sets the current tool's color");
+    // A press outside closes it (keeping the color), and the toolbar is gone.
+    a.on_event(Ev::Down { x: 50, y: 850 });
+    a.on_event(Ev::Up { x: 50, y: 850 });
+    assert!(ed(&mut a).pick.is_none());
+    scene(&mut a);
+    assert!(ed(&mut a).toolbar.is_none());
+}
+
+/// Near a monitor edge the ring sits off the press point; the dead zone
+/// stays around the press: a click there waits (click-click), nothing is
+/// highlighted or picked until the pointer moves out.
+#[test]
+fn ring_at_an_edge_waits_for_a_click() {
+    let mut a = app(None);
+    let before = ed(&mut a).color();
+    rdown(&mut a, 5, 450);
+    let r = ed(&mut a).assist.ring.clone().unwrap();
+    assert!(r.c.x > 80.0, "kept on the monitor");
+    assert_eq!(r.hot, None, "nothing highlighted at first");
+    mv(&mut a, 7, 451);
+    assert_eq!(ed(&mut a).assist.ring.as_ref().unwrap().hot, None, "still in the dead zone");
+    rup(&mut a, 7, 451);
+    let r = ed(&mut a).assist.ring.clone().expect("click mode");
+    assert!(!r.held);
+    assert_eq!(ed(&mut a).color(), before, "nothing picked");
+    // Then a click on a swatch.
+    let q = ring_swatch(r.c, 2, r.colors.len(), 1.0);
+    a.on_event(Ev::Down { x: q.x as i32, y: q.y as i32 });
+    assert_eq!(ed(&mut a).color(), r.colors[2]);
+    // A drag out from the press does pick on release.
+    let mut a = app(None);
+    rdown(&mut a, 5, 450);
+    let r = ed(&mut a).assist.ring.clone().unwrap();
+    let q = ring_swatch(r.c, 0, r.colors.len(), 1.0);
+    mv(&mut a, q.x as i32, q.y as i32);
+    rup(&mut a, q.x as i32, q.y as i32);
+    assert_eq!(ed(&mut a).color(), r.colors[0]);
+    assert!(ed(&mut a).assist.ring.is_none());
 }
 
 // ---- accept on select ----------------------------------------------------------
@@ -430,7 +480,7 @@ fn drawn(a: &mut App, moved: bool) -> Edit {
 }
 
 #[test]
-fn accept_on_select_copies_or_saves_unless_shift() {
+fn accept_on_select_copies_or_saves_unless_alt() {
     let mut a = app(None);
     let e = drawn(&mut a, true);
     assert!(!e.done, "off by default");
@@ -451,20 +501,37 @@ fn accept_on_select_copies_or_saves_unless_shift() {
     let e = drawn(&mut a, true);
     assert!(e.done && matches!(e.tasks[..], [Task::Save { path: None, ask: true }]));
 
-    // Shift on release: the toolbar, to adjust.
+    // Alt on release: the toolbar, to adjust.
+    let mut a = app(None);
+    ed(&mut a).assist.accept = Some(AcceptOn::Copy);
+    let e = {
+        let _s = hold(ALT);
+        drawn(&mut a, true)
+    };
+    assert!(!e.done && e.tasks.is_empty() && e.sel.is_some());
+    // Shift (a square region) is accepted.
     let mut a = app(None);
     ed(&mut a).assist.accept = Some(AcceptOn::Copy);
     let e = {
         let _s = hold(SHIFT);
         drawn(&mut a, true)
     };
-    assert!(!e.done && e.tasks.is_empty() && e.sel.is_some());
+    assert!(e.done);
 
-    // A click (a window, or everything): accepted too.
+    // A plain click (everything, no window under it): not accepted.
     let mut a = app(None);
     ed(&mut a).assist.accept = Some(AcceptOn::Copy);
     let e = drawn(&mut a, false);
-    assert!(e.done && e.sel.is_some() && matches!(e.tasks[..], [Task::Copy]));
+    assert!(!e.done && e.sel.is_some() && e.tasks.is_empty());
+    // A slip: under 8 x 8 logical px.
+    let mut a = app(None);
+    ed(&mut a).assist.accept = Some(AcceptOn::Copy);
+    let State::Edit(e) = std::mem::replace(&mut a.st, State::Hidden) else { unreachable!() };
+    let mut e = *e;
+    e.interact = Interact::NewSel { anchor: Pt::new(10.0, 10.0), moved: true };
+    e.sel = Some(fr(10.0, 10.0, 7.0, 40.0));
+    end_interaction(&mut e);
+    assert!(!e.done, "7 px wide");
 
     // The command's tasks win.
     let mut a = app(None);
@@ -619,19 +686,23 @@ fn hint_shows_at_open_and_goes_on_move_key_or_time() {
 
 #[test]
 fn helpers_are_never_in_the_capture() {
-    let sel = fr(100.0, 100.0, 600.0, 400.0);
-    let mut a = app(Some(sel));
-    let e = ed(&mut a);
-    let plain = e.export(sel);
-    // Hint, ring and (while resizing) the magnifier up.
-    e.interact = Interact::Resize { handle: Handle::SE, orig: sel, aspect: 1.5 };
-    a.mouse = (700, 500);
+    let area = fr(100.0, 100.0, 600.0, 400.0);
+    let mut a = app(None);
+    let plain = ed(&mut a).export(area);
+    // The hint card and the magnifier (with its crosshair) on screen.
+    mv(&mut a, 400, 300);
+    mv(&mut a, 401, 300);
+    settled(&mut a);
+    let sc = ed(&mut a).scene.clone().unwrap();
+    assert!(sc.hint.is_some() && sc.mag.is_some() && sc.cross.is_some(), "all up");
+    let f = settled(&mut a);
+    assert_ne!(crop_to_image(&f, area).as_raw(), plain.as_raw(), "they are drawn over the area");
+    assert_eq!(ed(&mut a).export(area).as_raw(), plain.as_raw(), "not in the capture");
+    // The color ring over it.
     rdown(&mut a, 400, 300);
     settled(&mut a);
-    let e = ed(&mut a);
-    let sc = e.scene.as_ref().unwrap();
-    assert!(sc.hint.is_none() || sc.mag.is_some() || sc.ring.is_some());
-    assert_eq!(e.export(sel).as_raw(), plain.as_raw());
+    assert!(ed(&mut a).scene.as_ref().unwrap().ring.is_some());
+    assert_eq!(ed(&mut a).export(area).as_raw(), plain.as_raw());
 }
 
 // ---- preview PNGs -------------------------------------------------------------

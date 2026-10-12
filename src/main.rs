@@ -74,7 +74,7 @@ mod update_ui;
 mod uploads;
 mod wind;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use capture::Shot;
 use config::Config;
 use editor::{Pending, RunKind, UploadSlot};
@@ -479,6 +479,9 @@ fn plan_capture(cmd: &Cmd) -> Result<Option<Plan>> {
         (Some(spec), None) => Some(parse_region(spec).map_err(|e| anyhow!("{e:#}"))?),
         _ => None,
     };
+    if !edit && args.accept_on_select && region.is_none() {
+        bail!("--accept-on-select needs a region or --edit");
+    }
     if !edit {
         return Ok(Some(Plan::Direct { screen, region }));
     }
@@ -1132,6 +1135,11 @@ mod cli_tests {
             Plan::Editor(p) => assert!(p.accept_on_select, "the region is the selection: at once"),
             Plan::Direct { .. } => panic!("gui opens the editor"),
         }
+        for args in [&["full", "--accept-on-select"][..], &["screen", "--accept-on-select"], &["gui", "--noedit", "--accept-on-select"]] {
+            let e = plan_capture(&cmd(args)).err().expect("an error");
+            assert_eq!(e.to_string(), "--accept-on-select needs a region or --edit");
+        }
+        assert!(matches!(plan(&["full", "--region", "4x4+0+0", "--accept-on-select"]), Plan::Direct { .. }));
         match plan(&["gui", "--region", "10x10+0+0"]) {
             Plan::Editor(p) => assert!(p.accept_new.is_none() && !p.accept_on_select),
             Plan::Direct { .. } => panic!("gui opens the editor"),

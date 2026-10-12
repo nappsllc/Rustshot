@@ -476,8 +476,7 @@ fn overlay_helper_settings_are_saved() {
     let back = config::parse_config(&text).unwrap();
     assert!(!back.magnifier && back.magnifier_square && back.accept_on_select == "copy" && !back.overlay_hints, "{text}");
     assert!(!config::rewrite_loses(&text), "nothing the writer drops");
-    let hand = format!("{text}");
-    assert!(hand.contains("accept_on_select = \"copy\""));
+    assert!(text.contains("accept_on_select = \"copy\""));
     let mut s = settings_at(&p);
     assert_eq!((s.form.magnifier, s.form.magnifier_square, s.form.accept, s.form.hints), (false, true, 1, false));
     s.form.accept = 2;

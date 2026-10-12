@@ -532,19 +532,7 @@ impl Edit {
 
     /// The loupe's pixels around `p` (black off the image), row by row.
     pub(super) fn loupe_pixels(&self, p: Pt) -> Vec<C4> {
-        let n = chrome::LOUPE_N as i32;
-        let (x0, y0) = (p.x.floor() as i32 - n / 2, p.y.floor() as i32 - n / 2);
-        let r = compose::PxRect::new(x0, y0, x0 + n, y0 + n);
-        let q = r.intersect(&compose::PxRect::image(self.shot.size));
-        let mut out = vec![C4::rgb(0, 0, 0); (n * n) as usize];
-        let buf = self.backdrop_pixels(q);
-        for y in q.y0..q.y1 {
-            for x in q.x0..q.x1 {
-                let i = (((y - q.y0) * q.w() + (x - q.x0)) * 4) as usize;
-                out[((y - y0) * n + (x - x0)) as usize] = C4::rgb(buf[i], buf[i + 1], buf[i + 2]);
-            }
-        }
-        out
+        self.pixels_around((p.x.floor() as i32, p.y.floor() as i32), chrome::LOUPE_N)
     }
 
     /// The color of the pixel at `p` (the eyedropper).

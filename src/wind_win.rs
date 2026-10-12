@@ -210,6 +210,17 @@ unsafe extern "system" fn wndproc(
     }
 }
 
+/// A button went up: the mouse capture goes only once no button is held
+/// (a right click during a left drag keeps the drag's capture).
+unsafe fn release_capture(wp: WPARAM) {
+    // MK_LBUTTON | MK_RBUTTON | MK_MBUTTON: the buttons still down.
+    if wp.0 & (0x0001 | 0x0002 | 0x0010) == 0 {
+        unsafe {
+            let _ = ReleaseCapture();
+        }
+    }
+}
+
 /// Input, timer and paint messages shared by the overlay and `run_window`;
 /// `None` = not handled here.
 unsafe fn common(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM, drv: &mut dyn Driver) -> Option<LRESULT> {
@@ -235,7 +246,7 @@ unsafe fn common(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM, drv: &mut dyn Dri
                 LRESULT(0)
             }
             WM_LBUTTONUP => {
-                let _ = ReleaseCapture();
+                release_capture(wp);
                 drv.on_event(Ev::Up {
                     x: x_of(lp),
                     y: y_of(lp),
@@ -248,7 +259,7 @@ unsafe fn common(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM, drv: &mut dyn Dri
                 if down {
                     let _ = SetCapture(hwnd);
                 } else {
-                    let _ = ReleaseCapture();
+                    release_capture(wp);
                 }
                 drv.on_event(Ev::Middle { down, x: x_of(lp), y: y_of(lp) });
                 request(hwnd, drv);
@@ -259,7 +270,7 @@ unsafe fn common(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM, drv: &mut dyn Dri
                 if down {
                     let _ = SetCapture(hwnd);
                 } else {
-                    let _ = ReleaseCapture();
+                    release_capture(wp);
                 }
                 drv.on_event(Ev::Right { down, x: x_of(lp), y: y_of(lp) });
                 request(hwnd, drv);

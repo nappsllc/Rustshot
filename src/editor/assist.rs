@@ -37,6 +37,9 @@ impl AcceptOn {
     }
 }
 
+/// Accept on select leaves regions smaller than this (logical px) alone.
+pub const ACCEPT_MIN: f32 = 8.0;
+
 /// Pixels across the magnifier (an odd count: the pointer's is the middle).
 pub const MAG_N: usize = 17;
 /// The magnifier's side, logical px (8 px per pixel plus a 2 px rim).
@@ -91,8 +94,10 @@ pub(super) struct Ring {
     /// The right button is still down (press, move, release); false: it
     /// was clicked and waits for a click on a color.
     pub held: bool,
-    /// The pointer has left the dead zone since the press.
+    /// The pointer has left the dead zone around the press since.
     pub left: bool,
+    /// Where the right button went down.
+    pub press: Pt,
     /// The centre opens the color wheel (it needs the toolbar).
     pub custom: bool,
 }
@@ -100,6 +105,13 @@ pub(super) struct Ring {
 /// The helpers' state on [`Edit`].
 pub(super) struct Assist {
     pub ring: Option<Ring>,
+    /// The color picker opened from the ring with nothing selected: it
+    /// stands alone here (no toolbar to hang off).
+    pub pick_at: Option<Pt>,
+    /// Each monitor (image coordinates) with its DPI scale.
+    pub mon_scales: Vec<(capture::IRect, f32)>,
+    /// The hint's phrases, made once (the keymap does not change).
+    pub hint_parts: Option<(bool, Vec<HintPart>)>,
     /// Accept on select: what a new region runs.
     pub accept: Option<AcceptOn>,
     /// When the hint card goes (3 s after the overlay opened, or the
@@ -116,12 +128,20 @@ impl Assist {
     pub fn new(cfg: &Config, now: Instant) -> Assist {
         Assist {
             ring: None,
+            pick_at: None,
+            mon_scales: Vec::new(),
+            hint_parts: None,
             accept: AcceptOn::from_config(&cfg.accept_on_select),
             hint_end: now + Duration::from_millis(if cfg.overlay_hints { HINT_MS } else { 0 }),
             hint_origin: None,
             #[cfg(test)]
             copied: None,
         }
+    }
+
+    /// The hint's time starts again (the overlay just came up).
+    pub fn restart_hint(&mut self, on: bool, now: Instant) {
+        self.hint_end = now + Duration::from_millis(if on { HINT_MS } else { 0 });
     }
 
     /// The hint is still up at `now` (fading out after it).
@@ -185,6 +205,8 @@ pub struct MagUi {
     /// Physical px per magnified pixel, and the rim.
     pub cell: f32,
     pub rim: f32,
+    /// Its UI scale: the monitor's under the pointer.
+    pub s: f32,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -336,6 +358,13 @@ impl Edit {
             }
     }
 
+    /// The UI scale of the monitor under `p` (`mon_scales`, filled when
+    /// the capture starts), None when unknown or one scale fits all.
+    fn scale_at(&self, p: Pt) -> Option<f32> {
+        let (_, sc) = self.assist.mon_scales.iter().find(|(m, _)| toolbar::hit(FRect { x: m.0 as f32, y: m.1 as f32, w: m.2 as f32, h: m.3 as f32 }, p))?;
+        Some(self.cfg.ui_scale.apply(*sc))
+    }
+
     /// The pointer's pixel, if it is on the capture.
     fn mouse_px(&self, m: Pt) -> Option<(i32, i32)> {
         let (x, y) = (m.x.floor() as i32, m.y.floor() as i32);
@@ -361,7 +390,7 @@ impl Edit {
     }
 
     /// The crosshair, the magnifier and the color ring of this frame.
-    pub(super) fn assist_scene(&self, mouse: Pt, s: f32) -> (Option<CrossUi>, Option<MagUi>, Option<RingUi>) {
+    pub(super) fn assist_scene(&self, mouse: Pt, s: f32, avoid_more: &[FRect]) -> (Option<CrossUi>, Option<MagUi>, Option<RingUi>) {
         let ring = self.assist.ring.as_ref().map(|r| RingUi { c: r.c, colors: r.colors.clone(), cur: r.cur, hot: r.hot, custom: r.custom });
         let Some((x, y)) = self.mouse_px(mouse).filter(|_| self.mag_on()) else { return (None, None, ring) };
         let lw = s.round().max(1.0) as i32;
@@ -371,13 +400,16 @@ impl Edit {
         let px = self.pixels_around((x, y), MAG_N);
         let c = px[MAG_N * MAG_N / 2];
         let text = mag_text(x, y, c);
-        let ui = Ui { th: &self.th, s, font: self.ui_font };
-        let cap_w = cap_width(&ui, &text);
+        // The loupe at the scale of the monitor under the pointer (mixed DPI).
+        let ms = self.scale_at(mouse).unwrap_or(s);
+        let mui = Ui { th: &self.th, s: ms, font: self.ui_font };
+        let cap_w = cap_width(&mui, &text);
         let area = monitor_at(&self.shot.monitors, mouse).unwrap_or(FRect { x: 0.0, y: 0.0, w: self.shot.size.0 as f32, h: self.shot.size.1 as f32 });
-        let avoid: Vec<FRect> = self.toolbar.iter().flat_map(|t| std::iter::once(t.bar).chain(t.pop)).collect();
-        let (r, cap) = mag_rect(mouse, area, s, cap_w, &avoid);
-        let (cell, rim) = mag_geom(s);
-        let mag = MagUi { r, cap, px, text, square: self.cfg.magnifier_square, cell, rim };
+        let mut avoid: Vec<FRect> = self.toolbar.iter().flat_map(|t| std::iter::once(t.bar).chain(t.pop)).collect();
+        avoid.extend_from_slice(avoid_more);
+        let (r, cap) = mag_rect(mouse, area, ms, cap_w, &avoid);
+        let (cell, rim) = mag_geom(ms);
+        let mag = MagUi { r, cap, px, text, square: self.cfg.magnifier_square, cell, rim, s: ms };
         (Some(cross), Some(mag), ring)
     }
 
@@ -396,10 +428,12 @@ impl Edit {
         }
         let s = self.ui_scale();
         if let Some(r) = self.assist.ring.as_mut() {
-            if (p.x - r.c.x).hypot(p.y - r.c.y) > RING_DEAD * s {
+            // The dead zone is around the press (the ring itself may sit
+            // off it, kept on the monitor).
+            if (p.x - r.press.x).hypot(p.y - r.press.y) > RING_DEAD * s {
                 r.left = true;
             }
-            let hot = ring_hit(r.c, p, r.colors.len(), s, r.held);
+            let hot = if r.held && !r.left { None } else { ring_hit(r.c, p, r.colors.len(), s, r.held) };
             if hot != r.hot {
                 r.hot = hot;
                 changed = true;
@@ -451,9 +485,7 @@ impl Edit {
         let c = ring_center(p, area, s);
         self.palette_open = false;
         self.save_menu = false;
-        let custom = self.toolbar.is_some();
-        let hot = ring_hit(c, p, colors.len(), s, true);
-        self.assist.ring = Some(Ring { c, colors, cur, hot, held: true, left: false, custom });
+        self.assist.ring = Some(Ring { c, press: p, colors, cur, hot: None, held: true, left: false, custom: true });
     }
 
     /// The right button went up: on a color it is picked; in the dead
@@ -461,10 +493,12 @@ impl Edit {
     pub(super) fn right_up(&mut self, p: Pt) {
         let s = self.ui_scale();
         let Some(r) = self.assist.ring.as_mut().filter(|r| r.held) else { return };
-        if (p.x - r.c.x).hypot(p.y - r.c.y) > RING_DEAD * s {
+        if (p.x - r.press.x).hypot(p.y - r.press.y) > RING_DEAD * s {
             r.left = true;
         }
-        match ring_hit(r.c, p, r.colors.len(), s, true) {
+        // Never moved off the press: a click, the ring waits for another.
+        let hit = if r.left { ring_hit(r.c, p, r.colors.len(), s, true) } else { None };
+        match hit {
             Some(RingHit::Swatch(i)) => {
                 let c = r.colors[i];
                 self.assist.ring = None;
@@ -485,9 +519,15 @@ impl Edit {
         let Some(r) = self.assist.ring.take() else { return };
         match ring_hit(r.c, p, r.colors.len(), s, false) {
             Some(RingHit::Swatch(i)) => self.apply_act(Act::Color(r.colors[i]), p),
-            Some(RingHit::Center) if r.custom => self.apply_act(Act::Wheel, p),
-            // The centre without the wheel (nothing selected yet): no-op.
-            Some(RingHit::Center) => self.assist.ring = Some(r),
+            Some(RingHit::Center) => {
+                // Nothing selected (no toolbar): the picker stands alone
+                // at the ring.
+                self.assist.pick_at = self.toolbar.is_none().then_some(r.c);
+                self.apply_act(Act::Wheel, p);
+                if self.pick.is_none() {
+                    self.assist.pick_at = None;
+                }
+            }
             None => {}
         }
     }
@@ -511,11 +551,17 @@ impl Edit {
     }
 
     /// Accept on select after a new region (or window click): run the
-    /// tasks (the CLI's, else the setting's) and close, unless Shift is
-    /// held (adjust first), in record or video mode, or in the Edit window.
+    /// tasks (the CLI's, else the setting's) and close, unless Alt is
+    /// held (adjust first; Shift is the square), the region is under
+    /// 8 x 8 logical px (a slip), in record or video mode, or in the Edit
+    /// window.
     pub(super) fn accept_new_region(&mut self) -> bool {
         let Some(m) = self.assist.accept else { return false };
-        if drag_mods().shift || self.rec.mode || self.rec.open || self.host.is_some() {
+        if drag_mods().alt || self.rec.mode || self.rec.open || self.host.is_some() {
+            return false;
+        }
+        let min = ACCEPT_MIN * self.ui_scale();
+        if self.sel.is_none_or(|r| r.w < min || r.h < min) {
             return false;
         }
         if self.tasks.is_empty() {
@@ -693,6 +739,7 @@ fn cross_bands(a: &CrossUi, b: &CrossUi, size: (u32, u32)) -> Vec<PxRect> {
 }
 
 pub fn mag(f: &mut Fb, ui: &Ui, m: &MagUi) {
+    let ui = &Ui { s: m.s, ..*ui };
     let r = m.r;
     let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
     let rad = ui.px(12.0);
@@ -769,6 +816,7 @@ pub fn mag(f: &mut Fb, ui: &Ui, m: &MagUi) {
 }
 
 pub fn mag_bounds(ui: &Ui, m: &MagUi) -> Vec<FRect> {
+    let ui = &Ui { s: m.s, ..*ui };
     let cap = m.cap;
     // The text may run past a panel narrower than it.
     let t = FRect { x: cap.x, y: cap.y, w: cap.w + chrome::tw(ui, 12.0, &m.text) + ui.px(8.0), h: cap.h };
