@@ -400,7 +400,7 @@ fn render_recording_previews() {
             for (i, it) in items.iter().enumerate() {
                 let font = crate::fonts::ui_font();
                 let y = r.y + 14.0 + 56.0 * i as f32;
-                f.draw_text(font, 26.0, it.label(), 34.0, y, th.text);
+                f.draw_text(font, 26.0, &it.label(), 34.0, y, th.text);
             }
         });
         save(&format!("{tn}-tray-recording.png"), w, h, &px, bg);

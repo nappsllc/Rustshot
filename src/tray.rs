@@ -21,8 +21,14 @@ pub enum MenuItem {
     /// Stop and throw the recording away.
     Discard,
     Capture,
+    /// Capture the whole screen, a window; record (when recording works here).
+    CaptureFull,
+    CaptureWindow,
+    Record,
     /// Close every pin (shown while there are any).
     ClosePins,
+    /// The History window; payload = captures kept today ("4 today").
+    History(usize),
     Settings,
     CheckUpdates,
     /// Start at login; payload = currently enabled.
@@ -33,8 +39,21 @@ pub enum MenuItem {
 }
 
 impl MenuItem {
-    pub fn label(self) -> &'static str {
+    /// The item's text ("History… · 4 today" counts today's captures).
+    pub fn label(self) -> std::borrow::Cow<'static, str> {
         match self {
+            MenuItem::History(0) => "History\u{2026}".into(),
+            MenuItem::History(n) => format!("History\u{2026} \u{b7} {n} today").into(),
+            m => m.fixed_label().into(),
+        }
+    }
+
+    fn fixed_label(self) -> &'static str {
+        match self {
+            MenuItem::CaptureFull => "Capture screen",
+            MenuItem::CaptureWindow => "Capture window",
+            MenuItem::Record => "Record video",
+            MenuItem::History(_) => "History\u{2026}",
             MenuItem::StopRecording => "Stop recording",
             MenuItem::Pause(false) => "Pause recording",
             MenuItem::Pause(true) => "Resume recording",
@@ -42,7 +61,7 @@ impl MenuItem {
             MenuItem::HideCamera(_) => "Hide camera",
             MenuItem::HidePill(_) => "Hide recording controls",
             MenuItem::Discard => "Discard recording",
-            MenuItem::Capture => "Capture",
+            MenuItem::Capture => "Capture region",
             MenuItem::ClosePins => "Close all pins",
             MenuItem::Settings => "Settings…",
             MenuItem::CheckUpdates => "Check for updates",
@@ -78,6 +97,10 @@ impl MenuItem {
             MenuItem::Autostart(_) => 13,
             MenuItem::Quit => 14,
             MenuItem::ClosePins => 15,
+            MenuItem::CaptureFull => 16,
+            MenuItem::CaptureWindow => 17,
+            MenuItem::Record => 18,
+            MenuItem::History(_) => 19,
             MenuItem::Separator => SEPARATOR_IDS,
         }
     }
@@ -126,6 +149,28 @@ pub fn menu(autostart: Option<bool>, rec: Option<RecMenu>) -> Vec<MenuItem> {
 
 /// [`menu`]; with `pins` (a pin is up) "Close all pins" follows Capture.
 pub fn menu_with(autostart: Option<bool>, rec: Option<RecMenu>, pins: bool) -> Vec<MenuItem> {
+    menu_full(autostart, rec, pins, None, false)
+}
+
+/// The menu: the capture actions (Record when `record`), "Close all pins"
+/// with `pins`, then History (`history`: today's count; `None`: History
+/// is off), then Settings, updates, Start at login, Quit.
+pub fn menu_full(autostart: Option<bool>, rec: Option<RecMenu>, pins: bool, history: Option<usize>, record: bool) -> Vec<MenuItem> {
+    let mut v = menu_old(autostart, rec, pins);
+    let at = v.iter().position(|m| *m == MenuItem::Capture).map_or(0, |i| i + 1);
+    let mut caps = vec![MenuItem::CaptureFull, MenuItem::CaptureWindow];
+    if record && rec.is_none() {
+        caps.push(MenuItem::Record);
+    }
+    v.splice(at..at, caps);
+    let set = v.iter().position(|m| *m == MenuItem::Settings).unwrap_or(v.len());
+    if let Some(n) = history {
+        v.insert(set, MenuItem::History(n));
+    }
+    v
+}
+
+fn menu_old(autostart: Option<bool>, rec: Option<RecMenu>, pins: bool) -> Vec<MenuItem> {
     let mut v = Vec::new();
     if let Some(r) = rec {
         v.extend([MenuItem::StopRecording, MenuItem::Pause(r.paused)]);
@@ -152,7 +197,13 @@ pub fn menu_with(autostart: Option<bool>, rec: Option<RecMenu>, pins: bool) -> V
 /// Current menu for this install.
 pub fn current_menu() -> Vec<MenuItem> {
     let auto = crate::update::managed_install().is_none().then(crate::autostart::is_enabled);
-    menu_with(auto, rec_menu(), crate::pin::count() > 0)
+    let cfg = crate::config::load();
+    let today = {
+        let t = crate::export::local_ymdhms();
+        (t.0, t.1, t.2)
+    };
+    let history = cfg.history.then(|| crate::history::today_count(&crate::history::default_root(), today));
+    menu_full(auto, rec_menu(), crate::pin::count() > 0, history, crate::rec_ui::supported())
 }
 
 /// The daemon event of a menu item (None: the item does its work here,
@@ -166,6 +217,10 @@ pub fn item_event(item: MenuItem) -> Option<HotEvent> {
         MenuItem::HidePill(_) => HotEvent::RecPill,
         MenuItem::Discard => HotEvent::RecDiscard,
         MenuItem::Capture => HotEvent::Capture,
+        MenuItem::CaptureFull => HotEvent::CaptureFull,
+        MenuItem::CaptureWindow => HotEvent::CaptureWindow,
+        MenuItem::Record => HotEvent::Record,
+        MenuItem::History(_) => HotEvent::History,
         MenuItem::ClosePins => HotEvent::ClosePins,
         MenuItem::Quit => HotEvent::Quit,
         MenuItem::Settings | MenuItem::CheckUpdates | MenuItem::Autostart(_) | MenuItem::Separator => return None,
@@ -396,7 +451,7 @@ pub fn draw_glyph(fb: &mut crate::uifb::Fb, x: f32, y: f32, size: f32, c: crate:
     fb.fill_circle(x + 8.0 * k, y + 8.0 * k, GLYPH_DOT_R * k, c);
 }
 
-/// Monochrome tray glyph as straight-alpha RGBA, `size`x`size`, in colour `rgb`.
+/// Monochrome tray glyph as straight-alpha RGBA, `size`x`size`, in color `rgb`.
 /// Coverage is rasterised white-on-black into an opaque scratch buffer (the
 /// rasterizer assumes an opaque destination) and its red channel becomes alpha.
 #[cfg_attr(not(test), allow(dead_code))] // tests
@@ -404,7 +459,7 @@ pub fn tray_glyph_rgba(size: u32, rgb: (u8, u8, u8)) -> Vec<u8> {
     tray_glyph_rgba_rec(size, rgb, false)
 }
 
-/// The recording dot's colour.
+/// The recording dot's color.
 pub const REC_RED: (u8, u8, u8) = (0xF0, 0x3E, 0x3E);
 const REC_DOT_R: f32 = 3.6;
 
@@ -492,6 +547,8 @@ mod tests {
             menu(Some(true), None),
             vec![
                 MenuItem::Capture,
+                MenuItem::CaptureFull,
+                MenuItem::CaptureWindow,
                 MenuItem::Settings,
                 MenuItem::CheckUpdates,
                 MenuItem::Autostart(true),
@@ -499,7 +556,12 @@ mod tests {
                 MenuItem::Quit
             ]
         );
-        assert_eq!(menu(None, None).len(), 5);
+        assert_eq!(menu(None, None).len(), 7);
+        // The full menu: Record with the capture actions, History before Settings.
+        let f = menu_full(None, None, false, Some(4), true);
+        assert_eq!(f[..6], [MenuItem::Capture, MenuItem::CaptureFull, MenuItem::CaptureWindow, MenuItem::Record, MenuItem::History(4), MenuItem::Settings]);
+        assert!(!menu_full(None, None, false, None, true).iter().any(|m| matches!(m, MenuItem::History(_))), "History off");
+        assert!(!menu_full(None, Some(RecMenu::default()), false, Some(0), true).contains(&MenuItem::Record), "not while recording");
         assert!(!menu(None, None).iter().any(|m| matches!(m, MenuItem::Autostart(_))));
         assert_eq!(*menu(None, None).last().unwrap(), MenuItem::Quit);
         assert!(!menu(Some(false), None).contains(&MenuItem::StopRecording));
@@ -511,10 +573,10 @@ mod tests {
     #[test]
     fn menu_with_pins() {
         let m = menu_with(None, None, true);
-        assert_eq!(m[..3], [MenuItem::Capture, MenuItem::ClosePins, MenuItem::Settings]);
+        assert_eq!(m[..5], [MenuItem::Capture, MenuItem::CaptureFull, MenuItem::CaptureWindow, MenuItem::ClosePins, MenuItem::Settings]);
         let r = menu_with(None, Some(RecMenu::default()), true);
         let i = r.iter().position(|m| *m == MenuItem::Capture).unwrap();
-        assert_eq!(r[i + 1], MenuItem::ClosePins);
+        assert_eq!(r[i + 3], MenuItem::ClosePins);
         assert_eq!(MenuItem::ClosePins.label(), "Close all pins");
         assert_eq!(MenuItem::ClosePins.checked(), None);
         assert_eq!(format!("{:?}", item_event(MenuItem::ClosePins)), "Some(ClosePins)");
@@ -593,7 +655,7 @@ mod tests {
             let i = ((c * size + c) * 4) as usize;
             assert_eq!(&plain[i..i + 4], &[255, 255, 255, 255]);
             assert_eq!(&rec[i..i + 4], &[REC_RED.0, REC_RED.1, REC_RED.2, 255]);
-            // The brackets keep the theme colour.
+            // The brackets keep the theme color.
             let u = size as f32 / 16.0;
             let j = ((((2.1 * u) as u32) * size + (2.1 * u) as u32) * 4) as usize;
             assert!(rec[j + 3] > 100 && rec[j] == 255 && rec[j + 1] == 255, "{:?}", &rec[j..j + 4]);
@@ -606,7 +668,11 @@ mod tests {
     #[test]
     fn labels() {
         assert_eq!(MenuItem::StopRecording.label(), "Stop recording");
-        assert_eq!(MenuItem::Capture.label(), "Capture");
+        assert_eq!(MenuItem::Capture.label(), "Capture region");
+        assert_eq!(MenuItem::History(0).label(), "History\u{2026}");
+        assert_eq!(MenuItem::History(4).label(), "History\u{2026} \u{b7} 4 today");
+        assert_eq!(MenuItem::History(4).id(), MenuItem::History(0).id());
+        assert_eq!(format!("{:?}", item_event(MenuItem::History(2))), "Some(History)");
         assert_eq!(MenuItem::Settings.label(), "Settings…");
         assert_eq!(MenuItem::CheckUpdates.label(), "Check for updates");
         assert_eq!(MenuItem::Autostart(false).label(), "Start at login");

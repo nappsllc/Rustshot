@@ -30,6 +30,15 @@ impl Mods {
     }
 }
 
+impl Mods {
+    /// The modifiers held now; none in tests (the test machine's keyboard
+    /// must not steer them).
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
+    pub fn current_or_default() -> Self {
+        if cfg!(test) { Mods::default() } else { Mods::current() }
+    }
+}
+
 /// Whether a Win/Super key is held now (`Mods` has no meta state; the
 /// Settings window's global-hotkey fields need it). False on macOS.
 #[cfg(windows)]
@@ -68,6 +77,9 @@ pub enum Ev {
     Down { x: i32, y: i32 },
     Up { x: i32, y: i32 },
     Wheel { delta: i32, x: i32, y: i32 },
+    /// The middle button went down (or up): the Edit window pans with it.
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
+    Middle { down: bool, x: i32, y: i32 },
     Key { vk: u32, up: bool, repeat: bool, mods: Mods },
     /// Text input, one UTF-16 code unit per event (WM_CHAR parity on every
     /// backend). Characters outside the BMP arrive as two events, a high
@@ -145,7 +157,7 @@ pub fn follow_scale(hwnd: Hwnd, sized_for: &mut f32, w: u32, h: u32) -> f32 {
 }
 
 /// Window icon as `_NET_WM_ICON` data: `[w, h, ARGB pixels...]` decoded from
-/// an embedded PNG (any 8-bit colour type).
+/// an embedded PNG (any 8-bit color type).
 #[cfg(any(target_os = "linux", test))]
 pub(crate) fn icon_argb(png_bytes: &[u8]) -> Option<Vec<u32>> {
     let mut dec = png::Decoder::new(png_bytes);

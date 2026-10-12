@@ -452,7 +452,7 @@ mod tests {
     #[test]
     fn the_thumbnail_window() {
         let img = std::sync::Arc::new(crate::pin::tests::sample_shot(320, 180));
-        let n = super::super::thumbnail(&[crate::export::Done::Copied], false, img, (12, 34)).unwrap();
+        let n = super::super::thumbnail(&[crate::export::Done::Copied], false, img, (12, 34), None).unwrap();
         assert!(show(n.clone(), (0, 0), crate::theme::DARK));
         let hwnd = WIN.with(|w| w.borrow().as_ref().unwrap().hwnd);
         assert_eq!(ex_style(hwnd) & WS_EX_TRANSPARENT.0, 0, "it takes clicks");

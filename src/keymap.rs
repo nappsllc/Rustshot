@@ -69,10 +69,16 @@ pub enum Action {
     Duplicate,
     BringFront,
     SendBack,
+    /// The Edit window's zoom (its keys, checked apart from the overlay's:
+    /// the UI size has the same chords there).
+    ZoomIn,
+    ZoomOut,
+    ZoomFit,
+    ZoomActual,
 }
 
 impl Action {
-    pub const ALL: [Action; 40] = [
+    pub const ALL: [Action; 44] = [
         Action::ToolSelect,
         Action::ToolPencil,
         Action::ToolLine,
@@ -113,6 +119,10 @@ impl Action {
         Action::Duplicate,
         Action::BringFront,
         Action::SendBack,
+        Action::ZoomIn,
+        Action::ZoomOut,
+        Action::ZoomFit,
+        Action::ZoomActual,
     ];
 
     /// A while-recording chord: global (Meta allowed), not an overlay key.
@@ -125,6 +135,11 @@ impl Action {
     /// Ctrl+D is Save to Desktop's).
     pub fn on_objects(self) -> bool {
         matches!(self, Action::DeleteObject | Action::Duplicate | Action::BringFront | Action::SendBack)
+    }
+
+    /// An Edit window key (its zoom): asked there before the editor's.
+    pub fn edit_window(self) -> bool {
+        matches!(self, Action::ZoomIn | Action::ZoomOut | Action::ZoomFit | Action::ZoomActual)
     }
 
     /// Config key in the `[shortcuts]` table.
@@ -185,6 +200,10 @@ impl Action {
             Action::Duplicate => ("duplicate", "Duplicate selected objects", &["Ctrl+D"]),
             Action::BringFront => ("bring_front", "Bring objects to front", &["Ctrl+]"]),
             Action::SendBack => ("send_back", "Send objects to back", &["Ctrl+["]),
+            Action::ZoomIn => ("zoom_in", "Zoom in", &["Ctrl+=", "Ctrl+Shift+=", "Ctrl+NumpadAdd"]),
+            Action::ZoomOut => ("zoom_out", "Zoom out", &["Ctrl+-", "Ctrl+NumpadSubtract"]),
+            Action::ZoomFit => ("zoom_fit", "Zoom to fit", &["Ctrl+0", "Ctrl+Numpad0"]),
+            Action::ZoomActual => ("zoom_actual", "Actual size", &["Ctrl+1"]),
         }
     }
 
@@ -306,7 +325,7 @@ impl Keymap {
     pub fn resolve(&self, vk: u32, mods: Mods) -> Option<Action> {
         Action::ALL
             .into_iter()
-            .filter(|a| !a.while_recording() && !a.on_objects())
+            .filter(|a| !a.while_recording() && !a.on_objects() && !a.edit_window())
             .find(|a| self.chords(*a).iter().any(|c| c.matches(vk, mods)))
     }
 
@@ -314,6 +333,11 @@ impl Keymap {
     /// while objects are selected).
     pub fn resolve_objects(&self, vk: u32, mods: Mods) -> Option<Action> {
         Action::ALL.into_iter().filter(|a| a.on_objects()).find(|a| self.chords(*a).iter().any(|c| c.matches(vk, mods)))
+    }
+
+    /// The Edit window key bound to `vk` with these modifiers (its zoom).
+    pub fn resolve_edit_window(&self, vk: u32, mods: Mods) -> Option<Action> {
+        Action::ALL.into_iter().filter(|a| a.edit_window()).find(|a| self.chords(*a).iter().any(|c| c.matches(vk, mods)))
     }
 
     pub fn chords(&self, a: Action) -> &[Chord] {
@@ -328,12 +352,13 @@ impl Keymap {
         let mut out = self.conflicts_in(0);
         out.extend(self.conflicts_in(1));
         out.extend(self.conflicts_in(2));
+        out.extend(self.conflicts_in(3));
         out
     }
 
     fn conflicts_in(&self, group: u8) -> Vec<(Chord, Vec<Action>)> {
         let mut by: BTreeMap<Chord, Vec<Action>> = BTreeMap::new();
-        let of = |a: &Action| if a.while_recording() { 1 } else if a.on_objects() { 2 } else { 0 };
+        let of = |a: &Action| if a.while_recording() { 1 } else if a.on_objects() { 2 } else if a.edit_window() { 3 } else { 0 };
         for a in Action::ALL.into_iter().filter(|a| of(a) == group) {
             for c in self.chords(a) {
                 let v = by.entry(*c).or_default();
@@ -381,7 +406,7 @@ mod tests {
     #[test]
     fn defaults_match_spec_table() {
         let km = Keymap::defaults();
-        let want: [(Action, &[&str]); 40] = [
+        let want: [(Action, &[&str]); 44] = [
             (Action::ToolSelect, &["V"]),
             (Action::ToolPencil, &["P"]),
             (Action::ToolLine, &["L"]),
@@ -422,6 +447,10 @@ mod tests {
             (Action::Duplicate, &["Ctrl+D"]),
             (Action::BringFront, &["Ctrl+]"]),
             (Action::SendBack, &["Ctrl+["]),
+            (Action::ZoomIn, &["Ctrl+=", "Ctrl+Shift+=", "Ctrl+NumpadAdd"]),
+            (Action::ZoomOut, &["Ctrl+-", "Ctrl+NumpadSubtract"]),
+            (Action::ZoomFit, &["Ctrl+0", "Ctrl+Numpad0"]),
+            (Action::ZoomActual, &["Ctrl+1"]),
         ];
         for (a, keys) in want {
             assert_eq!(shown(&km, a), keys, "{a:?}");

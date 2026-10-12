@@ -3,7 +3,7 @@
 //! capture, shutter sound, where and how captures are saved),
 //! **Capture** (daily subfolders, the file-name pattern editor, Save As,
 //! format and JPEG quality, the overlay's UI size, snapping and renderer,
-//! "Reset tool sizes & colours"), **Recording** (the Record popover's
+//! "Reset tool sizes & colors"), **Recording** (the Record popover's
 //! defaults: [`recording`]), **Key bindings** (the global hotkeys and the
 //! overlay keymap), **Upload** (Imgur) and **About**, with a footer of
 //! **OK** / **Cancel** / **Apply** (the board leaves it out; the window
@@ -73,21 +73,25 @@ const THEMES: [(&str, &str); 3] = [("System", "auto"), ("Dark", "dark"), ("Light
 const RENDERERS: [(&str, &str); 2] = [("GDI", "gdi"), ("Software", "software")];
 const FORMATS: [(&str, &str); 3] = [("PNG", "png"), ("JPG", "jpg"), ("BMP", "bmp")];
 const DEFAULT_FILENAME: &str = "%F_%H-%M";
+/// Capture › History: how long and how much it keeps (value, label).
+pub const HISTORY_DAYS: [(u32, &str); 4] = [(7, "7 days"), (30, "30 days"), (90, "90 days"), (365, "1 year")];
+pub const HISTORY_MB: [(u32, &str); 4] = [(1024, "1 GB"), (2048, "2 GB"), (5120, "5 GB"), (10240, "10 GB")];
 
 /// The accent swatches: Periwinkle (the theme's, `ui_color` empty), then
-/// [`crate::theme::ACCENTS`], then the custom colour.
+/// [`crate::theme::ACCENTS`], then the custom color.
 pub const ACCENT_CUSTOM: usize = 3;
 
 /// The global hotkeys of Key bindings, in board order: (label, hotkey
 /// slot: 0 capture, 1 quit, 2 record, 3 full screen, 4 window, 5 repeat,
-/// 6 copy text).
-pub const GLOBALS: [(&str, usize); 7] = [
+/// 6 copy text, 7 History).
+pub const GLOBALS: [(&str, usize); 8] = [
     ("Capture region", 0),
     ("Capture full screen", 3),
     ("Capture window", 4),
     ("Record video", 2),
     ("Repeat last capture", 5),
     ("Copy text from area", 6),
+    ("Open History", 7),
     ("Quit Rustshot", 1),
 ];
 
@@ -190,7 +194,7 @@ fn accent_value(i: usize) -> Option<String> {
 #[derive(Clone, Debug)]
 pub struct Form {
     pub theme: usize,
-    /// Accent swatch (`ui_color`), and the custom colour's text.
+    /// Accent swatch (`ui_color`), and the custom color's text.
     pub accent: usize,
     pub accent_hex: TextState,
     /// The UI size ([`uisize::LABELS`] index).
@@ -209,11 +213,18 @@ pub struct Form {
     pub shutter: bool,
     /// "Show thumbnail after capture" (`show_thumbnail`).
     pub thumbnail: bool,
+    /// Capture › History: keep it, for how long ([`HISTORY_DAYS`] index;
+    /// past the end: another value), up to how much ([`HISTORY_MB`]).
+    pub history: bool,
+    pub history_days: usize,
+    pub history_size: usize,
     pub capture: Option<Chord>,
     pub quit: Option<Chord>,
     pub full: Option<Chord>,
     pub window: Option<Chord>,
     pub repeat: Option<Chord>,
+    /// Open the History window.
+    pub history_key: Option<Chord>,
     /// Copy text from an area (OCR).
     pub text: Option<Chord>,
     pub folder: TextState,
@@ -247,12 +258,16 @@ impl Form {
             copy_after: cfg.copy_after_capture,
             shutter: cfg.shutter_sound,
             thumbnail: cfg.show_thumbnail,
+            history: cfg.history,
+            history_days: HISTORY_DAYS.iter().position(|d| d.0 == cfg.history_days).unwrap_or(usize::MAX),
+            history_size: HISTORY_MB.iter().position(|m| m.0 == cfg.history_max_mb).unwrap_or(usize::MAX),
             capture: Chord::parse(&cfg.capture_hotkey),
             quit: Chord::parse(&cfg.quit_hotkey),
             full: Chord::parse(&cfg.capture_full_hotkey),
             window: Chord::parse(&cfg.capture_window_hotkey),
             repeat: Chord::parse(&cfg.repeat_hotkey),
             text: Chord::parse(&cfg.capture_text_hotkey),
+            history_key: Chord::parse(&cfg.history_hotkey),
             folder: TextState::new(&folder_text(cfg)),
             subfolder: cfg.save_subfolder,
             subfolder_pattern: TextState::new(&cfg.subfolder_pattern),
@@ -276,6 +291,7 @@ impl Form {
             3 => self.full,
             4 => self.window,
             6 => self.text,
+            7 => self.history_key,
             _ => self.repeat,
         }
     }
@@ -288,6 +304,7 @@ impl Form {
             3 => &mut self.full,
             4 => &mut self.window,
             6 => &mut self.text,
+            7 => &mut self.history_key,
             _ => &mut self.repeat,
         }
     }
@@ -305,7 +322,7 @@ impl Form {
         if self.accent != was.accent || (self.accent == ACCENT_CUSTOM && self.accent_hex.text.trim() != was.accent_hex.text.trim()) {
             match accent_value(self.accent) {
                 Some(v) => c.ui_color = v,
-                // A custom colour that does not parse is not written.
+                // A custom color that does not parse is not written.
                 None if config::parse_color(self.accent_hex.text.trim()).is_some() => c.ui_color = self.accent_hex.text.trim().to_string(),
                 None => {}
             }
@@ -331,6 +348,15 @@ impl Form {
         if self.shutter != was.shutter {
             c.shutter_sound = self.shutter;
         }
+        if self.history != was.history {
+            c.history = self.history;
+        }
+        if self.history_days != was.history_days && let Some(d) = HISTORY_DAYS.get(self.history_days) {
+            c.history_days = d.0;
+        }
+        if self.history_size != was.history_size && let Some(m) = HISTORY_MB.get(self.history_size) {
+            c.history_max_mb = m.0;
+        }
         if self.thumbnail != was.thumbnail {
             c.show_thumbnail = self.thumbnail;
         }
@@ -348,6 +374,9 @@ impl Form {
         }
         if self.repeat != was.repeat {
             c.repeat_hotkey = chord_text(self.repeat);
+        }
+        if self.history_key != was.history_key {
+            c.history_hotkey = chord_text(self.history_key);
         }
         if self.text != was.text {
             c.capture_text_hotkey = chord_text(self.text);
@@ -589,9 +618,11 @@ pub enum Click {
     Clear,
     /// Key bindings: "Reset to defaults" (every key and global hotkey).
     ResetAll,
-    /// "Reset tool sizes & colours": the tools' remembered settings go
+    /// "Reset tool sizes & colors": the tools' remembered settings go
     /// (from the file, at once).
     ResetTools,
+    /// Capture › History: "Clear history…".
+    ClearHistory,
     /// The broken file's "Reset to defaults…".
     ResetDefaults,
     /// The reset question's Replace.
@@ -622,6 +653,8 @@ pub enum Act {
     Reload,
     /// The update dialog, checking now.
     CheckUpdates,
+    /// History's "Clear history?" (in the History window).
+    ClearHistory,
     /// Open this About link in the browser.
     Link(&'static str),
 }
@@ -666,7 +699,7 @@ pub struct Settings {
     /// The hotkeys the daemon could not register as saved
     /// ([`hotkey::outstanding`]).
     pub hotkey_failures: Vec<hotkey::Failure>,
-    /// The tools' sizes and colours were reset (a note says so).
+    /// The tools' sizes and colors were reset (a note says so).
     tools_reset: bool,
     /// The Recording section's device lists and encoder status.
     rec_lists: recording::Lists,
@@ -924,6 +957,7 @@ impl Settings {
                 vec![]
             }
             Click::ResetTools => self.reset_tools(),
+            Click::ClearHistory => vec![Act::ClearHistory],
             Click::Escape | Click::Enter => vec![],
         }
     }
@@ -1063,10 +1097,14 @@ enum Msg {
     Raise,
     /// Show this to the user ([`notify`]).
     Note(String),
+    /// Go to this section ([`show_at`]).
+    Section(usize),
 }
 
 /// The open window's inbox, if any.
 static OPEN: Mutex<Option<Sender<Msg>>> = Mutex::new(None);
+/// The section a window opened by [`show_at`] starts in.
+static START_SECTION: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(GENERAL);
 /// The daemon's event sender: told to reload after a save.
 static DAEMON: Mutex<Option<Sender<HotEvent>>> = Mutex::new(None);
 
@@ -1084,6 +1122,30 @@ fn reload_daemon() {
     if let Some(d) = lock(&DAEMON).as_ref() {
         let _ = d.send(HotEvent::ReloadConfig);
     }
+}
+
+/// Another window changed `config.toml` (History's "Keep a history of
+/// captures", the Edit window's "Don't ask again"): the daemon reloads.
+pub fn tell_daemon_reload() {
+    reload_daemon();
+}
+
+/// Open the window at `section` (History's "History settings" link goes
+/// to Capture), or bring the open one there.
+pub fn show_at(section: usize) {
+    #[cfg(not(target_os = "macos"))]
+    {
+        let open = lock(&OPEN);
+        if let Some(tx) = open.as_ref()
+            && tx.send(Msg::Section(section)).is_ok()
+        {
+            let _ = tx.send(Msg::Raise);
+            return;
+        }
+        START_SECTION.store(section, std::sync::atomic::Ordering::SeqCst);
+    }
+    let _ = section;
+    show();
 }
 
 /// Show `text` in the open Settings window (over the form, with OK);
@@ -1132,6 +1194,7 @@ fn run(rx: Receiver<Msg>) {
     let mut s = Settings::open(config::config_path(), autostart)
         .with_screenclip(crate::screenclip_win::state(), crate::screenclip_win::awaiting_choice());
     s.hotkey_failures = hotkey::outstanding();
+    s.section = START_SECTION.swap(GENERAL, std::sync::atomic::Ordering::SeqCst).min(SECTIONS.len() - 1);
     let th = crate::theme::resolve(&s.loaded);
     // Opened without a daemon (`rustshot settings`): the file's UI size.
     // In the daemon an overlay may have set it and still have the write
@@ -1151,6 +1214,7 @@ fn run(rx: Receiver<Msg>) {
         match m {
             Msg::Raise => late = true,
             Msg::Note(t) => notes.push(t),
+            Msg::Section(_) => late = true,
         }
     }
     *open = None;
@@ -1233,6 +1297,7 @@ impl Window {
             Act::CheckUpdates => {
                 std::thread::spawn(crate::actions::check_updates);
             }
+            Act::ClearHistory => crate::history_ui::show_clear(),
             Act::Link(u) => {
                 std::thread::spawn(move || crate::actions::open_link(u));
             }
@@ -1338,6 +1403,10 @@ impl Driver for Window {
                 while let Ok(m) = self.rx.try_recv() {
                     match m {
                         Msg::Raise => raise = true,
+                        Msg::Section(n) => {
+                            self.s.section = n.min(SECTIONS.len() - 1);
+                            changed = true;
+                        }
                         Msg::Note(t) => {
                             self.s.notify(t);
                             changed = true;

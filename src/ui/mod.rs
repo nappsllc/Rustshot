@@ -18,6 +18,7 @@ pub mod compact;
 pub mod controls;
 pub mod folder_dialog;
 pub mod layout;
+pub mod paint;
 mod text_field;
 
 #[cfg(test)]
@@ -371,6 +372,8 @@ pub struct Ui<'a> {
     /// Fill of text fields, dropdowns and shortcut boxes instead of the
     /// theme's recessed `field_bg`.
     pub field_fill: Option<crate::uifb::C4>,
+    /// Text fields draw no frame (the caller draws its own: History's search).
+    pub frameless: bool,
     /// Pointer input only lands inside this rect (physical px): a
     /// scrolled area's controls outside its viewport are inert.
     pub input_clip: Option<FRect>,
@@ -419,6 +422,7 @@ impl<'a> Ui<'a> {
             ctl_h: layout::H,
             field_icon: None,
             field_fill: None,
+            frameless: false,
             input_clip: None,
             focus_rect: None,
             last_alloc: FRect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 },

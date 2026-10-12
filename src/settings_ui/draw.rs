@@ -66,7 +66,7 @@ fn mark(ui: &mut Ui, x: f32, y: f32, size: f32) {
 }
 
 /// A board row (`.r`): `label` (and `help`, wrapped into the lines `h`
-/// has room for; `help_err` in the error colour) on the left, the
+/// has room for; `help_err` in the error color) on the left, the
 /// controls `f` draws laid out right to left on the right.
 pub fn srow_ex(ui: &mut Ui, tok: &Tok, label: &str, help: Option<&str>, help_err: bool, h: f32, f: impl FnOnce(&mut Ui)) {
     let b = ui.bounds();
@@ -578,6 +578,26 @@ fn capture(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) 
             *click = Some(Click::ResetTools);
         }
     });
+    ui.sec("History", tok);
+    srow(ui, tok, "Keep a history of captures", Some("Edit them again later; saved and uploaded files are not affected"), |ui| {
+        ui.switch("history", &mut f.history, tok);
+    });
+    let on = ui.enabled;
+    ui.enabled = on && f.history;
+    let days: Vec<&str> = HISTORY_DAYS.iter().map(|d| d.1).collect();
+    srow(ui, tok, "Keep for", Some("Older captures are removed"), |ui| {
+        ui.seg("history_days", &days, &mut f.history_days, tok);
+    });
+    let sizes: Vec<&str> = HISTORY_MB.iter().map(|d| d.1).collect();
+    srow(ui, tok, "Up to", Some("The oldest go first when it is full"), |ui| {
+        ui.seg("history_size", &sizes, &mut f.history_size, tok);
+    });
+    ui.enabled = on;
+    srow(ui, tok, "Clear history", Some("Remove every capture History keeps"), |ui| {
+        if ui.cbutton("clear_history", "Clear history\u{2026}", None, false, tok) {
+            *click = Some(Click::ClearHistory);
+        }
+    });
 }
 
 /// `s` cut at the start with an ellipsis to fit `w` (logical px) at 11 px.
@@ -600,7 +620,7 @@ fn wayland() -> bool {
 }
 
 /// The overlay rows of Key bindings: (label, actions).
-pub const KEY_ROWS: [(&str, &[Action]); 13] = [
+pub const KEY_ROWS: [(&str, &[Action]); 14] = [
     (
         "Tools",
         &[
@@ -634,6 +654,7 @@ pub const KEY_ROWS: [(&str, &[Action]); 13] = [
     ("Record", &[Action::Record]),
     ("Pin to screen", &[Action::Pin]),
     ("UI size + \u{b7} - \u{b7} Auto", &[Action::UiBigger, Action::UiSmaller, Action::UiReset]),
+    ("Edit window zoom + \u{b7} - \u{b7} Fit \u{b7} 1:1", &[Action::ZoomIn, Action::ZoomOut, Action::ZoomFit, Action::ZoomActual]),
 ];
 
 /// The while-recording rows of Key bindings: (label, action).

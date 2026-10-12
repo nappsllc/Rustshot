@@ -32,6 +32,9 @@ mod tools;
 mod draw;
 mod mini;
 mod select;
+mod input;
+// The editor in a normal window: the Edit window's canvas.
+pub mod host;
 
 /// Chrome styling shared with the window control kit (`crate::ui`).
 pub(crate) mod style {
@@ -120,6 +123,29 @@ impl Pending {
 }
 
 pub type UploadSlot = Arc<Mutex<Option<Receiver<Result<String, String>>>>>;
+
+/// `base` with `objs` baked in over the whole image (the spotlights dim
+/// all of it), exactly as the overlay exports a selection of that size:
+/// History's thumbnails and the Edit window's saves.
+pub fn bake_objects(base: &PixBuf, objs: &[Obj], font: Option<&AnnotFont>) -> PixBuf {
+    let mut out = base.clone();
+    if objs.is_empty() || base.width() == 0 || base.height() == 0 {
+        return out;
+    }
+    let size = base.dimensions();
+    let img = compose::PxRect::image(size);
+    let iw = base.width() as usize;
+    let bg = |r: compose::PxRect, out: &mut [u8]| {
+        let n = r.w() as usize * 4;
+        for (i, y) in (r.y0..r.y1).enumerate() {
+            out[i * n..][..n].copy_from_slice(&base.as_raw()[(y as usize * iw + r.x0 as usize) * 4..][..n]);
+        }
+    };
+    let area = compose::spot_area(None, size);
+    let bake = compose::Bake { objs, font, pass: crate::objects::SpotPass::of(objs, area), img, bg: &bg };
+    bake.window(out.as_raw_mut(), img, Order::Rgba);
+    out
+}
 
 /// A transient bottom-centre notice.
 struct Toast {
@@ -257,6 +283,8 @@ pub fn run(
         restart_pending: false,
         updating: false,
         idle_reply: None,
+        edits: crate::edit_ui::windows(),
+        quit_pending: false,
         font,
         ui_font,
         notice: None,
@@ -268,6 +296,11 @@ pub fn run(
         last_region: None,
         rec_area: None,
         wait_pins: false,
+        // Tests never write the user's history.
+        history_root: (!cfg!(test)).then(crate::history::find_root).flatten(),
+        last_entry: None,
+        upload_entry: None,
+        rec_poster: None,
         #[cfg(test)]
         rec_spec: None,
         #[cfg(test)]
@@ -275,6 +308,7 @@ pub fn run(
         #[cfg(test)]
         rec_bubble: None,
     };
+    app.keep_pruned();
     if wind::run(&mut app) != 0 {
         return 1;
     }
@@ -309,6 +343,26 @@ struct FinishJob {
     sel_global: (i32, i32),
     tasks: Vec<Task>,
     cfg: Config,
+    /// What the history keeps of it (history on).
+    hist: Option<Box<HistShot>>,
+}
+
+/// A capture for the history: the plain selection, its objects in its
+/// coordinates, and where it came from.
+struct HistShot {
+    original: PixBuf,
+    objects: Vec<Obj>,
+    title: String,
+    app: String,
+    monitor: String,
+    scale: f32,
+}
+
+/// Whether an export with `tasks` is a capture the history keeps: a
+/// picture that was copied, saved, uploaded or pinned (not Copy text or
+/// the CLI's raw output alone).
+fn history_keeps(tasks: &[Task]) -> bool {
+    tasks.iter().any(|t| matches!(t, Task::Copy | Task::Save { .. } | Task::SaveDesktop | Task::Upload | Task::Pin))
 }
 
 struct App {
@@ -332,6 +386,11 @@ struct App {
     updating: bool,
     /// Told (once) as soon as we are idle; the worker installs only then.
     idle_reply: Option<std::sync::mpsc::Sender<()>>,
+    /// This process's Edit windows: quitting asks those with unsaved
+    /// edits, an update's restart waits for them.
+    edits: &'static crate::edit_ui::Windows,
+    /// Quit was asked while Edit windows ask "Save changes?".
+    quit_pending: bool,
     font: Option<AnnotFont>,
     ui_font: Option<&'static UiFont>,
     notice: Option<Toast>,
@@ -350,6 +409,13 @@ struct App {
     rec_area: Option<capture::IRect>,
     /// A one-shot run that pinned: it closes once its pins are gone.
     wait_pins: bool,
+    /// The history folder (`None`: not kept; tests).
+    history_root: Option<std::path::PathBuf>,
+    /// The last capture's history entry, and the one whose upload runs.
+    last_entry: Option<String>,
+    upload_entry: Option<String>,
+    /// The running recording's poster and source, for its entry.
+    rec_poster: Option<Box<HistShot>>,
     /// Tests: the spec the last recording started with.
     #[cfg(test)]
     rec_spec: Option<crate::rec::RecSpec>,
@@ -373,7 +439,7 @@ impl App {
         wind::close(self.hwnd);
     }
 
-    /// Quitting under an open capture: an open picker keeps its colour (as
+    /// Quitting under an open capture: an open picker keeps its color (as
     /// closing the overlay does), then the remembered tool settings are
     /// written before we go.
     fn save_before_exit(&mut self) {
@@ -462,6 +528,8 @@ impl App {
             self.wait_pins = false;
             wind::close(self.hwnd);
         }
+        // Quitting once the Edit windows have answered.
+        self.quit_gate();
         // An update waits for us to go idle before it installs.
         self.idle_gate();
         // An update is restarting us: quit as soon as no capture is open
@@ -475,6 +543,11 @@ impl App {
     fn on_hot(&mut self, ev: HotEvent) -> bool {
         match ev {
             HotEvent::Quit => {
+                // Edit windows with unsaved edits ask first.
+                if self.edits.ask_quit() > 0 {
+                    self.quit_pending = true;
+                    return true;
+                }
                 self.request_exit(0);
                 return false;
             }
@@ -500,6 +573,8 @@ impl App {
             }
             HotEvent::StopRecording => {}
             HotEvent::ClosePins => crate::pin::close_all(),
+            // History opens over anything (a recording, another window).
+            HotEvent::History => crate::history_ui::show(),
             // The pill's buttons from the tray or a while-recording chord.
             HotEvent::RecPause | HotEvent::RecMute | HotEvent::RecCamera | HotEvent::RecPill | HotEvent::RecDiscard => {
                 let now = Instant::now();
@@ -517,7 +592,7 @@ impl App {
             // A global hotkey: inside the overlay its chord is the
             // overlay's key (Ctrl+Shift+S, if bound globally: Save As there), else its action.
             // Quit always quits.
-            HotEvent::Pressed(i) if i != 1 && matches!(self.st, State::Edit(_)) => self.forward_hotkey(i),
+            HotEvent::Pressed(i) if i != 1 && i != 7 && matches!(self.st, State::Edit(_)) => self.forward_hotkey(i),
             HotEvent::Pressed(i) => return self.on_hot(crate::hotkey::slot_event(i)),
             // A capture would show the overlay in the recording.
             HotEvent::Capture | HotEvent::Record | HotEvent::CaptureFull | HotEvent::CaptureWindow | HotEvent::RepeatLast | HotEvent::CaptureText
@@ -680,9 +755,28 @@ impl App {
             crate::tray::set_recording(false);
             self.rec_hotkeys(false);
         }
+        let poster = self.rec_poster.take();
         let code = match end {
             rec_ui::End::Saved { path, warnings } => {
                 println!("saved: {}", path.display());
+                if let (Some(root), Some(p)) = (self.history_root.clone(), poster) {
+                    let gif = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("gif"));
+                    let a = self.rec_area.unwrap_or((0, 0, 0, 0));
+                    let meta = crate::history::Meta {
+                        captured: export::local_ymdhms(),
+                        kind: if gif { crate::history::Kind::Gif } else { crate::history::Kind::Mp4 },
+                        w: a.2,
+                        h: a.3,
+                        title: p.title,
+                        app: p.app,
+                        monitor: p.monitor,
+                        scale: p.scale,
+                        duration_ms: length.as_millis() as u64,
+                        file: Some(path.clone()),
+                        ..Default::default()
+                    };
+                    crate::history::record_recording(&self.cfg, &root, Some(p.original), meta);
+                }
                 for w in &warnings {
                     eprintln!("warning: {w}");
                 }
@@ -799,6 +893,18 @@ impl App {
         }
         publish_ui_size(cfg.ui_scale);
         self.cfg = cfg;
+        // New limits apply at once.
+        self.keep_pruned();
+    }
+
+    /// The daemon keeps the history within its limits (on or off; at
+    /// start, hourly, when they change).
+    fn keep_pruned(&self) {
+        if self.kind == RunKind::Daemon
+            && let Some(root) = &self.history_root
+        {
+            crate::history::keep_pruned(root, &self.cfg);
+        }
     }
 
     /// No capture, editor, recording or export is open or about to open,
@@ -809,6 +915,23 @@ impl App {
             && self.rec.is_none()
             && self.upload_slot.lock().unwrap_or_else(|e| e.into_inner()).is_none()
             && self.ocr.is_empty()
+            && self.edits.unsaved() == 0
+    }
+
+    /// A quit asked while Edit windows asked about their unsaved edits:
+    /// done once none is left, given up when one was cancelled.
+    fn quit_gate(&mut self) {
+        if !self.quit_pending {
+            return;
+        }
+        match crate::edit_ui::quit_gate(self.edits.unsaved(), self.edits.take_cancelled()) {
+            crate::edit_ui::QuitGate::Now => {
+                self.quit_pending = false;
+                self.request_exit(0);
+            }
+            crate::edit_ui::QuitGate::Abort => self.quit_pending = false,
+            crate::edit_ui::QuitGate::Wait => {}
+        }
     }
 
     /// Answer a waiting update worker once we are idle. Captures stay
@@ -933,62 +1056,17 @@ impl App {
         };
         let sel = initial_sel.filter(|r| !r.is_trivial());
         let accept_now = accept_on_select && sel.is_some();
-        let mut edit = Edit {
-            mo: Motion::new(Instant::now()),
-            shot,
-            base,
-            composed: None,
-            frame: PixBuf::default(),
-            scene: None,
-            painted: None,
-            gdi,
-            draft_buf: Default::default(),
-            caret_drawn: None,
-            toast_drawn: None,
-            anim_drawn: false,
-            area_drawn: None,
-            objects: Vec::new(),
-            hist: vec![Vec::new()],
-            hi: 0,
-            sel,
-            tool: None,
-            draft: None,
-            stroke_pts: Vec::new(),
-            interact: Interact::None,
-            mem: tools::ToolMem::from_cfg(&cfg),
-            obj: select::ObjState { style: crate::objects::CalloutStyle::from_id(&cfg.callout_style).unwrap_or_default(), ..Default::default() },
-            last_tool: Tool::Path,
-            pending: tools::Pending::default(),
-            // Tests never write the user's config.
-            cfg_path: (!cfg!(test)).then(config::config_path),
-            pick: None,
-            loupe: None,
-            text: None,
-            tasks,
-            accept_on_select,
-            keys: Keymap::from_config(&cfg.shortcuts).0,
-            cfg,
-            toolbar: None,
-            palette_open: false,
-            save_menu: false,
-            rec,
-            done: false,
-            cancelled: false,
-            dirty: false,
-            notice: None,
-            last_wheel: Instant::now(),
-            font: self.font.clone(),
-            th,
-            ui_font: self.ui_font,
-            hover: None,
-            hover_at: Instant::now(),
-            pressed: None,
-            hot_handle: None,
-            snap: None,
-            hover_win: Default::default(),
-            baked: Vec::new(),
-            baked_area: (0, 0, 0, 0),
-        };
+        let mut edit = Edit::new(shot, base, cfg, th, self.font.clone(), self.ui_font, rec);
+        edit.gdi = gdi;
+        edit.sel = sel;
+        edit.tasks = tasks;
+        edit.accept_on_select = accept_on_select;
+        // Tests never write the user's config.
+        edit.cfg_path = (!cfg!(test)).then(config::config_path);
+        // The window in front before the overlay is: the history's source.
+        if !cfg!(test) && self.history_root.is_some() {
+            edit.source = crate::history::source::foreground();
+        }
         #[cfg(target_os = "macos")]
         if let Some(r) = self.update_pending.take() {
             let mut t = Toast::new(format!("Rustshot {} is available — run `rustshot update`", r.version), ToastKind::Info);
@@ -1033,7 +1111,7 @@ impl App {
     /// (so a native save dialog is never covered by the overlay).
     fn finish(&mut self, edit: &mut Edit, cancelled: bool) {
         wind::set_fast_timer(self.hwnd, false);
-        // An open picker keeps its colour; what the tools remember is
+        // An open picker keeps its color; what the tools remember is
         // written now and taken by the next capture.
         edit.close_picker(true);
         edit.flush_pending(true);
@@ -1050,6 +1128,21 @@ impl App {
             #[cfg(test)]
             let mons = Vec::new();
             let geom = edit.rec_geom(&mons);
+            // The history's poster: the area as it looks now.
+            self.rec_poster = (self.history_root.is_some() && edit.cfg.history).then(|| {
+                let full = FRect { x: 0.0, y: 0.0, w: edit.shot.size.0 as f32, h: edit.shot.size.1 as f32 };
+                let poster = crate::scale::fit(&edit.export_plain(edit.sel.unwrap_or(full)), 400, 280);
+                let a = geom.area;
+                let name = if cfg!(test) { String::new() } else { crate::history::source::monitor_name(a.0 + a.2 as i32 / 2, a.1 + a.3 as i32 / 2) };
+                Box::new(HistShot {
+                    original: poster,
+                    objects: Vec::new(),
+                    title: edit.source.0.clone(),
+                    app: edit.source.1.clone(),
+                    monitor: crate::history::source::monitor_text(&name, edit.shot.scale),
+                    scale: edit.shot.scale,
+                })
+            });
             wind::hide(self.hwnd);
             self.st = State::Hidden;
             let (cfg, opts, th) = (edit.cfg.clone(), edit.rec.opts.clone(), edit.th);
@@ -1110,12 +1203,47 @@ impl App {
         if edit.cfg.shutter_sound && !tasks.is_empty() && tasks != [Task::Text] {
             crate::actions::shutter();
         }
+        // History: the capture as it was, its objects, where it came from.
+        let hist = (self.history_root.is_some() && edit.cfg.history && history_keeps(&tasks)).then(|| {
+            let (original, objects) = edit.history_shot(sel);
+            let c = (g.0 + img.width() as i32 / 2, g.1 + img.height() as i32 / 2);
+            let name = if cfg!(test) { String::new() } else { crate::history::source::monitor_name(c.0, c.1) };
+            Box::new(HistShot {
+                original,
+                objects,
+                title: edit.source.0.clone(),
+                app: edit.source.1.clone(),
+                monitor: crate::history::source::monitor_text(&name, edit.shot.scale),
+                scale: edit.shot.scale,
+            })
+        });
         self.st = State::Finish(Box::new(FinishJob {
             img,
             sel_global: g,
             tasks,
             cfg: edit.cfg.clone(),
+            hist,
         }));
+    }
+
+    /// Keep the exported capture in the history (its id), saying where it
+    /// was saved.
+    fn keep_history(&mut self, h: HistShot, res: &export::ExportResult, cfg: &Config) -> Option<String> {
+        let root = self.history_root.clone()?;
+        let saved = res.done.iter().rev().find_map(|d| match d {
+            export::Done::Saved(p) | export::Done::SavedDesktop(p) => Some(p.clone()),
+            _ => None,
+        });
+        let meta = crate::history::Meta {
+            captured: export::local_ymdhms(),
+            title: h.title,
+            app: h.app,
+            monitor: h.monitor,
+            scale: h.scale,
+            saved,
+            ..Default::default()
+        };
+        crate::history::record(cfg, &root, crate::history::ShotRec { original: h.original, objects: h.objects, meta })
     }
 
     fn run_finish(&mut self, job: FinishJob) {
@@ -1128,6 +1256,10 @@ impl App {
         }
         let at = (job.sel_global.0 + job.img.width() as i32 / 2, job.sel_global.1 + job.img.height() as i32 / 2);
         let th = theme::resolve(&job.cfg);
+        let entry = job.hist.and_then(|h| self.keep_history(*h, &res, &job.cfg));
+        // Its link goes to the entry once the upload is done.
+        self.upload_entry = entry.clone().filter(|_| res.upload.is_some());
+        self.last_entry = entry.clone();
         let img = Arc::new(job.img);
         // Pin to screen: the image where it was captured.
         if job.tasks.contains(&Task::Pin) && !crate::pin::open(img.clone(), job.sel_global, th) {
@@ -1144,9 +1276,9 @@ impl App {
             let note = job
                 .cfg
                 .show_thumbnail
-                .then(|| crate::notice::thumbnail(&res.done, up, img.clone(), job.sel_global))
+                .then(|| crate::notice::thumbnail(&res.done, up, img.clone(), job.sel_global, entry.clone()))
                 .flatten()
-                .or_else(|| crate::notice::compose(&res.done, up));
+                .or_else(|| crate::notice::compose(&res.done, up).map(|n| crate::notice::with_edit(n, entry.clone())));
             if let Some(note) = note {
                 crate::notice::show(note, at, th);
             }
@@ -1227,6 +1359,10 @@ impl App {
         let (text, kind, copied) = match &res {
             Ok(url) => {
                 println!("uploaded: {url}");
+                if let (Some(root), Some(id)) = (self.history_root.as_ref(), self.upload_entry.take()) {
+                    let u = url.clone();
+                    crate::history::update(root, &id, move |m| m.uploaded = Some(u));
+                }
                 let copied = self.cfg.copy_url_after_upload
                     && export::copy_text_to_clipboard(url)
                         .map_err(|e| eprintln!("warning: could not copy URL: {e:#}"))
@@ -1252,708 +1388,43 @@ impl App {
         self.edit_tx(|this, edit| this.handle_key(edit, vk, repeat, mods));
     }
 
+    /// The pointer as a point.
+    fn mouse_pt(&self) -> Pt {
+        Pt::new(self.mouse.0 as f32, self.mouse.1 as f32)
+    }
+
     fn handle_key(&mut self, edit: &mut Edit, vk: u32, repeat: bool, mods: Mods) {
-        let left = vk == wind::key::LEFT;
-        let right = vk == wind::key::RIGHT;
-        let up = vk == wind::key::UP;
-        let down = vk == wind::key::DOWN;
-        let arrows = [left, right, up, down];
-        let is_arrow = arrows.iter().any(|a| *a);
-        let escape = vk == wind::key::ESCAPE;
-        let enter = vk == wind::key::RETURN;
-        let editing = vk == wind::key::BACK || vk == wind::key::DELETE;
-        // Auto-repeat: selection nudges and text editing keys repeat,
-        // everything else is edge-triggered.
-        if repeat && !is_arrow && !editing {
-            return;
-        }
-
-        // The UI size keys (Ctrl/Alt chords) work in every mode, the text
-        // draft and the colour picker included.
-        if (mods.ctrl || mods.alt)
-            && (edit.text.is_some() || edit.pick.is_some() || edit.obj.cedit.is_some())
-            && let Some(a @ (Action::UiBigger | Action::UiSmaller | Action::UiReset)) = edit.keys.resolve(vk, mods)
-        {
-            let now = Instant::now();
-            match a {
-                Action::UiBigger => edit.set_ui_size(edit.cfg.ui_scale.bigger(), now),
-                Action::UiSmaller => edit.set_ui_size(edit.cfg.ui_scale.smaller(), now),
-                _ => edit.set_ui_size(UiSize::Auto, now),
-            }
-            return;
-        }
-
-        // An object drag: Esc puts everything back and ends it; any other
-        // key waits for the release (no edit under the drag's feet).
-        if edit.obj_dragging() {
-            if escape {
-                edit.cancel_obj_drag();
-            }
-            return;
-        }
-
-        // Text editing mode consumes keys.
-        if edit.text.is_some() {
-            if escape {
-                edit.text = None;
-                return;
-            }
-            if enter && !mods.shift {
-                self.commit_text(edit);
-                return;
-            }
-            let td = edit.text.as_mut().expect("text draft");
-            if left {
-                td.caret = prev_boundary(&td.text, td.caret);
-            } else if right {
-                td.caret = next_boundary(&td.text, td.caret);
-            } else if vk == wind::key::HOME {
-                td.caret = 0;
-            } else if vk == wind::key::END {
-                td.caret = td.text.len();
-            } else if vk == wind::key::BACK && td.caret > 0 {
-                let p = prev_boundary(&td.text, td.caret);
-                td.text.replace_range(p..td.caret, "");
-                td.caret = p;
-            } else if vk == wind::key::DELETE {
-                let n = next_boundary(&td.text, td.caret);
-                td.text.replace_range(td.caret..n, "");
-            }
-            td.at = Instant::now();
-            return;
-        }
-
-        // Typing in a callout consumes keys.
-        if edit.obj.cedit.is_some() {
-            edit.callout_key(vk);
-            return;
-        }
-
-        // The colour picker takes every key while it is open.
-        if edit.pick.is_some() {
-            edit.pick_key(vk, mods);
-            return;
-        }
-
-        // Selected objects: their actions first (Del, Ctrl+D...), and
-        // the arrows nudge them (Shift: 10 px).
-        if !edit.obj.sel.is_empty() {
-            if let Some(a) = edit.keys.resolve_objects(vk, mods)
-                && let Some(act) = act_of(a)
-            {
-                self.apply_act(edit, act);
-                return;
-            }
-            if is_arrow && !mods.ctrl && !mods.alt {
-                let k = if mods.shift { 10.0 } else { 1.0 };
-                let (dx, dy) = if left {
-                    (-k, 0.0)
-                } else if right {
-                    (k, 0.0)
-                } else if up {
-                    (0.0, -k)
-                } else {
-                    (0.0, k)
-                };
-                edit.nudge(dx, dy);
-                return;
-            }
-        }
-
-        // Tab / Shift+Tab: into the part of the window under the pointer
-        // and back out while snapping to windows (built in, like the arrows).
-        if vk == wind::key::TAB && !mods.ctrl && !mods.alt && edit.snap_rect().is_some() {
-            if mods.shift {
-                edit.hover_win.outer();
-            } else {
-                edit.hover_win.deeper();
-            }
-            if edit.cfg.snap_tab_hint {
-                // The hint has done its job: not shown again.
-                edit.cfg.snap_tab_hint = false;
-                edit.pending.set("snap_tab_hint".into(), Some("false".into()), Instant::now());
-            }
-            return;
-        }
-
-        // Arrow keys nudge / resize the selection (built in, not remappable).
-        if is_arrow && edit.sel.is_some() && !mods.ctrl && !mods.alt {
-            let step = edit.shot.scale.round().max(1.0);
-            let dir = if left {
-                (-1.0, 0.0)
-            } else if right {
-                (1.0, 0.0)
-            } else if up {
-                (0.0, -1.0)
-            } else {
-                (0.0, 1.0)
-            };
-            let mut r = edit.sel.unwrap();
-            if mods.shift {
-                if dir.0 < 0.0 {
-                    r.x -= step;
-                    r.w += step;
-                } else if dir.0 > 0.0 {
-                    r.w += step;
-                }
-                if dir.1 < 0.0 {
-                    r.y -= step;
-                    r.h += step;
-                } else if dir.1 > 0.0 {
-                    r.h += step;
-                }
-                r.clamp_to(edit.shot.size.0 as f32, edit.shot.size.1 as f32);
-            } else {
-                r.x += dir.0 * step;
-                r.y += dir.1 * step;
-                r.clamp_to(edit.shot.size.0 as f32, edit.shot.size.1 as f32);
-            }
-            edit.sel = Some(r);
-            return;
-        }
-
-        // Built in (not remappable): 1 / 2 switch Screenshot / Video; in
-        // video mode F / W / R pick Screen / Window / Region.
-        if let Some(act) = video_key(edit, vk, mods) {
-            self.apply_act(edit, act);
-            return;
-        }
-        let Some(action) = edit.keys.resolve(vk, mods) else { return };
-        match action {
-            Action::UiBigger => edit.set_ui_size(edit.cfg.ui_scale.bigger(), Instant::now()),
-            Action::UiSmaller => edit.set_ui_size(edit.cfg.ui_scale.smaller(), Instant::now()),
-            Action::UiReset => edit.set_ui_size(UiSize::Auto, Instant::now()),
-            Action::Cancel => cancel_key(edit),
-            // In record mode (or with the Record popover open) Enter
-            // records; never in a run with tasks (`gui --copy`: no Record).
-            Action::Accept if (edit.rec.mode || edit.rec.open) && edit.tasks.is_empty() => {
-                self.apply_act(edit, Act::RecStart)
-            }
-            Action::Accept => accept_key(edit),
-            Action::SelectAll => {
-                edit.sel = Some(FRect { x: 0.0, y: 0.0, w: edit.shot.size.0 as f32, h: edit.shot.size.1 as f32 });
-                edit.interact = Interact::None;
-            }
-            // The palette popover hangs off the toolbar, which needs a selection.
-            Action::TogglePalette if edit.sel.is_none() => {}
-            Action::Record if edit.sel.is_none() || !rec_ui::supported() || !edit.tasks.is_empty() => {}
-            a => {
-                if let Some(act) = act_of(a) {
-                    self.apply_act(edit, act);
-                }
-            }
-        }
+        let m = self.mouse_pt();
+        edit.handle_key(vk, repeat, mods, m);
     }
 
     fn char_input(&mut self, c: u16) {
-        self.edit_tx(|_this, edit| {
-            // UTF-16 in, one unit at a time: a pair's high half waits for
-            // its low one (emoji and every other character past U+FFFF).
-            let c = match c {
-                0xD800..=0xDBFF => {
-                    edit.obj.high = Some(c);
-                    return;
-                }
-                0xDC00..=0xDFFF => match edit.obj.high.take() {
-                    Some(h) => 0x10000 + (((h as u32) - 0xD800) << 10) + (c as u32 - 0xDC00),
-                    None => return,
-                },
-                c => {
-                    edit.obj.high = None;
-                    c as u32
-                }
-            };
-            if edit.pick.is_some() {
-                if let Some(ch) = char::from_u32(c) {
-                    edit.pick_char(ch);
-                }
-                return;
-            }
-            if edit.obj.cedit.is_some() {
-                if let Some(ch) = char::from_u32(c).filter(|ch| !ch.is_control()) {
-                    edit.callout_char(ch);
-                }
-                return;
-            }
-            let Some(td) = edit.text.as_mut() else { return };
-            let Some(ch) = char::from_u32(c) else { return };
-            if ch.is_control() {
-                return;
-            }
-            let mut idx = td.caret.min(td.text.len());
-            while idx > 0 && !td.text.is_char_boundary(idx) {
-                idx -= 1;
-            }
-            td.text.insert(idx, ch);
-            td.caret = idx + ch.len_utf8();
-            td.at = Instant::now();
-        });
+        self.edit_tx(|_this, edit| edit.char_input(c));
     }
 
     fn wheel(&mut self, delta: i32) {
-        self.edit_tx(|_this, edit| {
-            if edit.text.is_some() || edit.obj_dragging() {
-                return;
-            }
-            if delta != 0 && edit.last_wheel.elapsed() > Duration::from_millis(160) {
-                edit.last_wheel = Instant::now();
-                let dir = if delta > 0 { 1 } else { -1 };
-                if !edit.obj_act(Act::ObjSize(dir)) {
-                    edit.adjust_size(dir);
-                }
-            }
-        });
+        self.edit_tx(|_this, edit| edit.wheel(delta));
     }
 
     fn pointer_down(&mut self, x: i32, y: i32) {
-        self.edit_tx(|this, edit| {
-            let p = Pt::new(x as f32, y as f32);
-            // The toolbar (and open palette) sits on top: it consumes the press.
-            let on_bar = edit
-                .toolbar
-                .as_ref()
-                .filter(|tb| tb.contains(p))
-                .map(|tb| (tb.act_at(p), tb.index_at(p)));
-            if let Some((act, idx)) = on_bar {
-                edit.pressed = idx;
-                if edit.text.is_some() {
-                    this.commit_text(edit);
-                }
-                // A colour or size for the bubble being typed in keeps it
-                // open; anything else on the bar finishes it.
-                if !matches!(act, Some(Act::Color(_) | Act::Palette | Act::Size(_) | Act::Fill | Act::Wheel)) {
-                    edit.finish_callout_edit();
-                }
-                if let Some(pk) = &edit.pick {
-                    let ring = pk.target == pick::Target::Ring;
-                    let in_pop = edit.toolbar.as_ref().and_then(|t| t.pop).is_some_and(|r| hit(r, p));
-                    if !in_pop {
-                        // The bar: the picker closes (keeping its colour)
-                        // and the button acts; its own button only closes it.
-                        edit.close_picker(true);
-                        if act == Some(Act::Palette) || (ring && act == Some(Act::Record)) {
-                            return;
-                        }
-                    } else if let Some(Act::Pick(part)) = act {
-                        edit.pick_press(part, p);
-                        return;
-                    } else if act != Some(Act::Eyedrop)
-                        && let Some(pk) = edit.pick.as_mut()
-                    {
-                        pk.eyedrop = false;
-                    }
-                }
-                if let Some(act) = act {
-                    this.apply_act(edit, act);
-                }
-                return;
-            }
-            // The colour picker: the eyedropper picks the pixel; any other
-            // press outside closes it (keeping the colour), nothing else.
-            if let Some(pk) = &edit.pick {
-                if pk.eyedrop {
-                    let c = edit.sample(p);
-                    if let Some(pk) = edit.pick.as_mut() {
-                        pk.set_color(c.with_alpha(pk.a));
-                        pk.eyedrop = false;
-                    }
-                    edit.loupe = None;
-                    edit.pick_changed();
-                } else {
-                    edit.close_picker(true);
-                }
-                return;
-            }
-            // Text draft: a click outside commits it.
-            if edit.text.is_some() {
-                let td = edit.text.as_ref().expect("text draft");
-                let r = text_box_rect(
-                    edit.shot.size.0 as f32,
-                    td,
-                    edit.mem.size(Tool::Text),
-                    edit.font.as_ref(),
-                    edit.ui_scale(),
-                );
-                if !hit(r, p) {
-                    let (pos, text) = (td.pos, td.text.clone());
-                    edit.text = None;
-                    this.commit_text_str(edit, pos, text);
-                }
-                return;
-            }
-            if !matches!(edit.interact, Interact::None) {
-                return; // already dragging
-            }
-            edit.save_menu = false;
-            // The mini-toolbar over the selected objects.
-            if let Some(act) = edit.obj.mini.as_ref().filter(|m| m.contains(p)).map(|m| m.act_at(p)) {
-                if let Some(act) = act {
-                    this.apply_act(edit, act);
-                }
-                return;
-            }
-            // Typing in a callout: a click in it moves the caret, outside
-            // finishes (and does nothing else).
-            if edit.obj.cedit.is_some() {
-                if edit.in_cedit(p) {
-                    edit.cedit_click(p);
-                } else {
-                    edit.finish_callout_edit();
-                }
-                return;
-            }
-            let mods = drag_mods();
-            // The selection's handles answer with any tool.
-            if !edit.obj.sel.is_empty()
-                && let Some(h) = edit.obj_handle_at(p)
-            {
-                edit.handle_press(h);
-                return;
-            }
-            // The select tool picks (or starts a marquee); Ctrl+click picks
-            // with the others (the number tool keeps Ctrl for its tail).
-            // With a drawing tool, Ctrl+press on an object not selected
-            // still draws when it drags (Ctrl snaps lines): a click picks.
-            edit.obj.click_pick = None;
-            if edit.tool == Some(Tool::Select) {
-                if edit.select_press(p, mods, true) {
-                    return;
-                }
-            } else if mods.ctrl
-                && edit.tool != Some(Tool::Counter)
-                && let Some(i) = edit.obj_at(p)
-            {
-                let draws = matches!(edit.tool, Some(t) if t != Tool::Text && t != Tool::Callout);
-                if !draws || edit.obj.sel.contains(&i) {
-                    edit.select_press(p, mods, false);
-                    return;
-                }
-                edit.obj.click_pick = Some((i, p));
-            }
-            edit.obj.sel.clear();
-            // The callout tool on a bubble types in it.
-            if edit.tool == Some(Tool::Callout)
-                && let Some(i) = edit.obj_at(p).filter(|i| matches!(edit.objects[*i], Obj::Callout { .. }))
-            {
-                edit.begin_callout_edit(i, Some(p), false);
-                return;
-            }
-            if let Some(tool) = edit.tool {
-                if tool == Tool::Text {
-                    edit.text = Some(TextDraft {
-                        pos: p,
-                        text: String::new(),
-                        caret: 0,
-                        at: Instant::now(),
-                    });
-                    return;
-                }
-                edit.stroke_pts = vec![p];
-                edit.draft = edit.make_draft(tool, p, p);
-                edit.interact = Interact::Drawing { start: p };
-                return;
-            }
-            if let Some(sr) = edit.sel {
-                for (h, hp) in handle_points(sr) {
-                    if (hp.x - p.x).hypot(hp.y - p.y) <= HANDLE_HIT * edit.ui_scale() {
-                        let aspect = if sr.h > 0.0 { sr.w / sr.h } else { 1.0 };
-                        edit.interact = Interact::Resize {
-                            handle: h,
-                            orig: sr,
-                            aspect,
-                        };
-                        return;
-                    }
-                }
-                if hit(sr, p) {
-                    edit.interact = Interact::MoveSel {
-                        start: p,
-                        orig: sr,
-                    };
-                    return;
-                }
-            }
-            edit.interact = Interact::NewSel {
-                anchor: p,
-                moved: false,
-            };
-        });
+        let p = Pt::new(x as f32, y as f32);
+        self.edit_tx(|_this, edit| edit.pointer_down(p));
     }
 
     fn pointer_move(&mut self, x: i32, y: i32) {
         let _p = crate::perf::span(crate::perf::K::Ptr);
-        self.edit_tx(|_this, edit| {
-            if matches!(edit.interact, Interact::None) {
-                return;
-            }
-            let p = Pt::new(x as f32, y as f32);
-            let mods = drag_mods();
-            let img = (edit.shot.size.0 as f32, edit.shot.size.1 as f32);
-            // A click on a window selects it: a press that moved less than
-            // SNAP_CLICK_PX is still a click.
-            let click_px = if edit.snapping() { SNAP_CLICK_PX } else { CLICK_PX };
-            match &mut edit.interact {
-                Interact::None => {}
-                Interact::NewSel { anchor, moved } => {
-                    let anchor = *anchor;
-                    let dist = (p.x - anchor.x).hypot(p.y - anchor.y);
-                    if dist >= click_px {
-                        *moved = true;
-                    }
-                    if *moved {
-                        // A pointer past the shot edge (captured drag) stops
-                        // at the edge instead of pushing the rect back in.
-                        let p = Pt::new(p.x.clamp(0.0, img.0), p.y.clamp(0.0, img.1));
-                        let cur = if mods.shift {
-                            square_within(anchor, constrain_square(anchor, p), img)
-                        } else {
-                            p
-                        };
-                        let mut r = FRect::from_pts(anchor, cur);
-                        r.clamp_to(img.0, img.1);
-                        edit.sel = Some(r);
-                    }
-                }
-                Interact::MoveSel { start, orig } => {
-                    let (start, orig) = (*start, *orig);
-                    let mut r = FRect {
-                        x: orig.x + p.x - start.x,
-                        y: orig.y + p.y - start.y,
-                        w: orig.w,
-                        h: orig.h,
-                    };
-                    r.clamp_to(img.0, img.1);
-                    edit.sel = Some(r);
-                }
-                Interact::Resize {
-                    handle,
-                    orig,
-                    aspect,
-                } => {
-                    let (h, o, a) = (*handle, *orig, *aspect);
-                    edit.sel = Some(resize_rect(h, o, p, a, &mods, img));
-                }
-                Interact::Pick(part) => {
-                    let part = *part;
-                    edit.pick_drag(part, p);
-                }
-                Interact::Drawing { start } => {
-                    let start = *start;
-                    if edit.obj.click_pick.is_some_and(|(_, q)| (p.x - q.x).hypot(p.y - q.y) >= CLICK_PX) {
-                        edit.obj.click_pick = None;
-                    }
-                    edit.drag_draft(start, p, mods);
-                }
-                Interact::ObjMove { .. } | Interact::ObjResize { .. } | Interact::ObjPoint { .. } | Interact::Marquee { .. } => {
-                    edit.obj_drag(p, mods);
-                }
-            }
-        });
+        let p = Pt::new(x as f32, y as f32);
+        self.edit_tx(|_this, edit| edit.pointer_move(p, p));
     }
 
     fn pointer_up(&mut self) {
-        self.edit_tx(|_this, edit| {
-            edit.pressed = None;
-            end_interaction(edit);
-        });
+        self.edit_tx(|_this, edit| edit.pointer_up());
     }
 
-    fn commit_text(&mut self, edit: &mut Edit) {
-        let td = edit.text.take().expect("text draft");
-        self.commit_text_str(edit, td.pos, td.text);
-    }
-
-    fn commit_text_str(&mut self, edit: &mut Edit, pos: Pt, text: String) {
-        let text = text.trim_end_matches('\n').to_string();
-        if text.trim().is_empty() {
-            return;
-        }
-        edit.commit_object(Obj::Text {
-            pos,
-            text,
-            color: edit.mem.color(Tool::Text),
-            size: edit.mem.size(Tool::Text),
-        });
-    }
-
+    #[cfg(test)]
     fn apply_act(&mut self, edit: &mut Edit, act: Act) {
-        if act != Act::SaveMenu {
-            edit.save_menu = false;
-        }
-        match act {
-            // Video mode draws nothing (the recording is live).
-            Act::Tool(_) if edit.rec.open => {}
-            Act::Tool(t) => {
-                edit.finish_callout_edit();
-                edit.tool = if edit.tool == Some(t) { None } else { Some(t) };
-                // The selection stays for the select tool only.
-                if edit.tool != Some(Tool::Select) {
-                    edit.obj.sel.clear();
-                }
-                if t != Tool::Select {
-                    edit.last_tool = t;
-                }
-                edit.draft = None;
-                edit.stroke_pts.clear();
-            }
-            Act::SaveMenu => {
-                edit.save_menu = !edit.save_menu;
-                edit.palette_open = false;
-            }
-            Act::Undo | Act::Redo => {
-                edit.finish_callout_edit();
-                if act == Act::Undo {
-                    edit.undo();
-                } else {
-                    edit.redo();
-                }
-                // Indices may name other objects now.
-                edit.obj.sel.clear();
-            }
-            // With objects selected, size, fill and colour are theirs.
-            Act::Size(d) if !edit.obj.sel.is_empty() => {
-                edit.obj_act(Act::ObjSize(d));
-            }
-            Act::Size(d) => edit.adjust_size(d),
-            Act::Fill if !edit.obj.sel.is_empty() => {
-                edit.obj_act(Act::ObjFill);
-            }
-            Act::Fill => edit.toggle_fill(Instant::now()),
-            Act::Color(c) if !edit.obj.sel.is_empty() => {
-                edit.color_selection(c);
-                edit.palette_open = false;
-            }
-            Act::Color(c) => {
-                edit.set_tool_color(c, Instant::now());
-                edit.palette_open = false;
-            }
-            Act::ObjColor | Act::ObjFill | Act::ObjSize(_) | Act::ObjStyle(_) | Act::ObjFront | Act::ObjBack | Act::ObjDup | Act::ObjDelete => {
-                edit.obj_act(act);
-            }
-            // Pixelate and Invert have no colour: no palette (Space included).
-            Act::Palette if !edit.palette_open && !tools::has_color(edit.cur_tool()) && edit.sel_color().is_none() => {}
-            // Video mode has no palette (the panel replaces the toolbar).
-            Act::Palette if edit.rec.open => {}
-            Act::Palette => edit.palette_open = !edit.palette_open,
-            Act::Wheel if !tools::has_color(edit.cur_tool()) && edit.sel_color().is_none() => {}
-            Act::Wheel => edit.open_picker(pick::Target::Tool),
-            Act::RingSize(d) => {
-                let w = (edit.rec.opts.cam_ring_w as i32 + d).clamp(0, config::RING_WIDTH_MAX as i32) as u32;
-                edit.rec.opts.cam_ring_w = w;
-                edit.remember_ring(Instant::now());
-            }
-            Act::RingPalette => {
-                edit.rec.ring_pal = !edit.rec.ring_pal;
-                edit.rec.dev_open = None;
-            }
-            Act::RingColor(c) => {
-                edit.rec.opts.cam_ring = c;
-                edit.rec.ring_pal = false;
-                edit.remember_ring(Instant::now());
-            }
-            Act::RingWheel => {
-                edit.rec.ring_pal = false;
-                edit.open_picker(pick::Target::Ring);
-            }
-            // A press on the picker (the point matters): `pointer_down`.
-            Act::Pick(_) => {}
-            Act::PickColor(c) => {
-                if let Some(pk) = edit.pick.as_mut() {
-                    pk.set_color(c);
-                }
-                edit.pick_changed();
-            }
-            Act::Eyedrop => {
-                if let Some(pk) = edit.pick.as_mut() {
-                    pk.eyedrop = !pk.eyedrop;
-                }
-                edit.loupe = None;
-            }
-            // A run with tasks has no Record button.
-            Act::Record | Act::RecStart | Act::Mode(_) if !edit.tasks.is_empty() => {}
-            Act::Record => {
-                let on = !edit.rec.open;
-                edit.set_video(on);
-            }
-            Act::Mode(on) => edit.set_video(on),
-            Act::RecSource(src) => edit.set_source(src, Pt::new(self.mouse.0 as f32, self.mouse.1 as f32)),
-            Act::RecCountdown(on) => edit.rec.opts.countdown = on,
-            Act::RecGifMax(n) => edit.rec.opts.gif_max = n,
-            Act::RecFormat(crate::rec::RecFormat::Mp4) if edit.rec.mp4 != rec_ui::Mp4::Yes => {}
-            Act::RecFormat(f) => {
-                edit.rec.opts.format = f;
-                edit.rec.wanted = f;
-                edit.rec.dev_open = None;
-            }
-            Act::RecFps(n) => edit.rec.opts.set_fps(n),
-            Act::RecSystem => edit.rec.opts.system = !edit.rec.opts.system,
-            Act::RecMic => {
-                edit.rec.opts.mic = !edit.rec.opts.mic;
-                edit.rec.dev_open = None;
-                if edit.rec.opts.mic {
-                    edit.rec.load_devs();
-                }
-            }
-            // The bubble follows (`sync_bubble`).
-            Act::RecCamera => {
-                edit.rec.load_cams();
-                edit.rec.opts.camera = !edit.rec.opts.camera && edit.rec.has_cams();
-                edit.rec.dev_open = None;
-            }
-            Act::RecShape(sh) => edit.rec.opts.cam_shape = sh,
-            Act::RecDevMenu(dev) => {
-                edit.rec.ring_pal = false;
-                match dev {
-                    Dev::Mic => edit.rec.load_devs(),
-                    Dev::Cam => edit.rec.load_cams(),
-                }
-                edit.rec.dev_open = if edit.rec.dev_open == Some(dev) { None } else { Some(dev) };
-            }
-            Act::RecDev(dev, i) => edit.rec.pick(dev, i),
-            Act::RecStart => {
-                // Nothing selected: the monitor under the pointer.
-                if edit.sel.is_none() {
-                    let p = Pt::new(self.mouse.0 as f32, self.mouse.1 as f32);
-                    edit.sel = Some(pick_area(&edit.shot.monitors, None, p));
-                }
-                edit.rec.start = true;
-                edit.done = true;
-            }
-            Act::Copy => {
-                edit.tasks = vec![Task::Copy];
-                edit.done = true;
-            }
-            Act::CopyText => {
-                edit.tasks = vec![Task::Text];
-                edit.done = true;
-            }
-            Act::Save => {
-                edit.tasks = vec![Task::Save { path: None, ask: edit.cfg.save_dialog }];
-                edit.done = true;
-            }
-            Act::SaveAs => {
-                // Always ask, seeded with the auto-save path.
-                edit.tasks = vec![Task::Save { path: None, ask: true }];
-                edit.done = true;
-            }
-            Act::SaveDesktop => {
-                edit.tasks = vec![Task::SaveDesktop];
-                edit.done = true;
-            }
-            Act::Upload => {
-                edit.tasks = vec![Task::Upload];
-                edit.done = true;
-            }
-            Act::Pin => {
-                edit.tasks = vec![Task::Pin];
-                edit.done = true;
-            }
-            Act::Exit => {
-                edit.cancelled = true;
-                edit.done = true;
-            }
-            Act::Accept => edit.done = true,
-        }
+        let m = self.mouse_pt();
+        edit.apply_act(act, m);
     }
 }
 
@@ -2017,6 +1488,8 @@ impl Driver for App {
             Ev::Timer => return self.tick(),
             // Decorated-window events (`run_window`); the overlay never gets them.
             Ev::Close | Ev::Resize(..) | Ev::Focus(_) => return false,
+            // The middle button does nothing in the overlay.
+            Ev::Middle { .. } => return false,
         }
         self.pump();
         // Only `Ev::Timer` consults this value (returned from `tick`);
@@ -2252,13 +1725,18 @@ fn cancel_key(edit: &mut Edit) {
         edit.draft = None;
         edit.stroke_pts.clear();
         edit.palette_open = false;
-        edit.tool = None;
+        // The Edit window never closes on Esc: back to Select.
+        edit.tool = edit.host.as_ref().map(|_| Tool::Select);
     }
 }
 
 /// Enter: select everything if nothing is selected, then run the given
-/// tasks (or save).
+/// tasks (or save). The Edit window saves with its own Save.
 fn accept_key(edit: &mut Edit) {
+    if edit.host.is_some() {
+        edit.finish_callout_edit();
+        return;
+    }
     if edit.sel.is_none() {
         edit.sel = Some(FRect { x: 0.0, y: 0.0, w: edit.shot.size.0 as f32, h: edit.shot.size.1 as f32 });
         if edit.accept_on_select {
@@ -2312,6 +1790,7 @@ fn act_of(a: Action) -> Option<Act> {
         Action::SelectAll | Action::Accept | Action::Cancel => return None,
         Action::UiBigger | Action::UiSmaller | Action::UiReset => return None,
         Action::RecPause | Action::RecMute | Action::RecHidePill => return None,
+        Action::ZoomIn | Action::ZoomOut | Action::ZoomFit | Action::ZoomActual => return None,
     })
 }
 
@@ -2377,7 +1856,7 @@ enum Interact {
     Drawing {
         start: Pt,
     },
-    /// Dragging in the colour picker (the hue ring, the square, opacity).
+    /// Dragging in the color picker (the hue ring, the square, opacity).
     Pick(pick::Part),
     /// Moving the selected objects (`orig`: as they were, in selection
     /// order; `bx`: their box); `hit` was pressed, `was_sel` already
@@ -2853,16 +2332,16 @@ struct Edit {
     draft: Option<Obj>,
     stroke_pts: Vec<Pt>,
     interact: Interact,
-    /// Every tool's size and colour (remembered across captures).
+    /// Every tool's size and color (remembered across captures).
     mem: tools::ToolMem,
-    /// The tool whose size and colour the toolbar shows while none is
+    /// The tool whose size and color the toolbar shows while none is
     /// chosen: the last one chosen.
     last_tool: Tool,
     /// Remembered settings waiting to be written to the config.
     pending: tools::Pending,
     /// The config file they go to (`None`: not written; tests).
     cfg_path: Option<std::path::PathBuf>,
-    /// The colour picker while it is open.
+    /// The color picker while it is open.
     pick: Option<pick::Picker>,
     /// The pointer while the eyedropper is on (the loupe follows it).
     loupe: Option<Pt>,
@@ -2903,6 +2382,10 @@ struct Edit {
     baked: Vec<Obj>,
     /// The spotlight area `composed` was baked with.
     baked_area: crate::objects::Px,
+    /// The window in front when the capture started: (title, app).
+    source: (String, String),
+    /// Hosted in the Edit window ([`host::Canvas`]); `None`: the overlay.
+    host: Option<host::Host>,
 }
 
 /// More merged dirty rects than this invalidate the whole window.
@@ -2915,14 +2398,105 @@ const CLICK_PX: f32 = 2.5; // movement below this counts as a click
 const SNAP_CLICK_PX: f32 = 4.0;
 
 impl Edit {
+    /// A fresh editor over `base` (the capture; `shot` its geometry, its
+    /// image already moved out): nothing selected, drawn or open.
+    #[allow(clippy::too_many_arguments)]
+    fn new(shot: Shot, base: PixBuf, cfg: Config, th: Theme, font: Option<AnnotFont>, ui_font: Option<&'static UiFont>, rec: RecPop) -> Edit {
+        let style = crate::objects::CalloutStyle::from_id(&cfg.callout_style).unwrap_or_default();
+        Edit {
+            mo: Motion::new(Instant::now()),
+            shot,
+            base,
+            composed: None,
+            frame: PixBuf::default(),
+            scene: None,
+            painted: None,
+            gdi: None,
+            draft_buf: Default::default(),
+            caret_drawn: None,
+            toast_drawn: None,
+            anim_drawn: false,
+            area_drawn: None,
+            objects: Vec::new(),
+            hist: vec![Vec::new()],
+            hi: 0,
+            sel: None,
+            tool: None,
+            draft: None,
+            stroke_pts: Vec::new(),
+            interact: Interact::None,
+            mem: tools::ToolMem::from_cfg(&cfg),
+            last_tool: Tool::Path,
+            pending: tools::Pending::default(),
+            cfg_path: None,
+            pick: None,
+            loupe: None,
+            text: None,
+            tasks: Vec::new(),
+            accept_on_select: false,
+            keys: Keymap::from_config(&cfg.shortcuts).0,
+            cfg,
+            toolbar: None,
+            palette_open: false,
+            save_menu: false,
+            rec,
+            done: false,
+            cancelled: false,
+            dirty: false,
+            notice: None,
+            last_wheel: Instant::now(),
+            font,
+            th,
+            ui_font,
+            hover: None,
+            hover_at: Instant::now(),
+            pressed: None,
+            hot_handle: None,
+            snap: None,
+            hover_win: Default::default(),
+            obj: select::ObjState { style, ..Default::default() },
+            baked: Vec::new(),
+            baked_area: (0, 0, 0, 0),
+            source: Default::default(),
+            host: None,
+        }
+    }
+
     /// The selection crop (`sel` in image coords) to export, objects
     /// baked in.
     fn export(&self, sel: FRect) -> PixBuf {
         #[cfg(windows)]
         if self.gdi.is_some() {
-            return self.export_gdi(sel);
+            return self.export_gdi(sel, false);
         }
         crop_to_image(self.composed(), sel)
+    }
+
+    /// [`Edit::export`] without the objects: the capture as it was (the
+    /// history's `original.png`).
+    fn export_plain(&self, sel: FRect) -> PixBuf {
+        #[cfg(windows)]
+        if self.gdi.is_some() {
+            return self.export_gdi(sel, true);
+        }
+        crop_to_image(&self.base, sel)
+    }
+
+    /// What the history keeps of export `sel`: the plain crop and the
+    /// objects moved into its coordinates (the crop's top-left is the
+    /// selection's, floored, as `crop_to_image` takes it).
+    fn history_shot(&self, sel: FRect) -> (PixBuf, Vec<Obj>) {
+        let (x0, y0) = (sel.x.floor().max(0.0), sel.y.floor().max(0.0));
+        let objs = self
+            .objects
+            .iter()
+            .cloned()
+            .map(|mut o| {
+                crate::objects::edit::translate(&mut o, -x0, -y0);
+                o
+            })
+            .collect();
+        (self.export_plain(sel), objs)
     }
 
     /// The area the spotlights dim: the selection, on whole pixels.
@@ -2941,7 +2515,9 @@ impl Edit {
         self.composed.as_ref().unwrap_or(&self.base)
     }
 
-    fn rebuild(&mut self) {
+    /// Bake the objects into `composed` where they changed; returns the
+    /// rects re-baked (`None`: maybe everywhere).
+    fn rebuild(&mut self) -> Option<Vec<compose::PxRect>> {
         let area = self.spot_area();
         #[cfg(windows)]
         if let Some(scr) = self.gdi.as_mut() {
@@ -2950,8 +2526,9 @@ impl Edit {
             scr.set_objects(&self.objects, area, self.font.as_ref());
             self.baked_area = area;
             self.dirty = false;
-            return;
+            return None;
         }
+        let mut out = None;
         if self.objects.is_empty() {
             // Nothing to bake (e.g. undid the last object): drop the copy.
             self.composed = None;
@@ -2971,12 +2548,17 @@ impl Edit {
                 && !self.baked.iter().any(Obj::is_spot);
             match (self.composed.as_mut(), damage) {
                 (Some(composed), Some(_)) if first_spot => {
+                    // The pass dims the whole area.
+                    out = None;
                     if let Some(p) = crate::objects::SpotPass::of(&self.objects, area) {
                         p.apply(&mut crate::raster::Surf::from_buf(composed));
                     }
                 }
                 // Re-bake only where the objects (or the spotlights' area) changed.
-                (Some(composed), Some(rects)) => compose::rebake(composed, base, &self.objects, area, font, &rects),
+                (Some(composed), Some(rects)) => {
+                    compose::rebake(composed, base, &self.objects, area, font, &rects);
+                    out = Some(rects);
+                }
                 _ => {
                     // Re-bake in place; allocate only when it was `None`.
                     let composed = self.composed.get_or_insert_with(|| base.clone());
@@ -2997,6 +2579,7 @@ impl Edit {
         }
         self.baked_area = area;
         self.dirty = false;
+        out
     }
 
     fn push_history(&mut self) {
@@ -3033,13 +2616,13 @@ impl Edit {
         self.dirty = true;
     }
 
-    /// The tool whose size and colour apply: the chosen one, else the
+    /// The tool whose size and color apply: the chosen one, else the
     /// last one chosen.
     fn cur_tool(&self) -> Tool {
         self.tool.unwrap_or(self.last_tool)
     }
 
-    /// The current tool's colour.
+    /// The current tool's color.
     fn color(&self) -> C4 {
         self.mem.color(self.cur_tool())
     }
@@ -3064,7 +2647,7 @@ impl Edit {
         self.pending.set(format!("tool_{id}_size"), Some(config::toml_num(v)), now);
     }
 
-    /// Set the current tool's colour (remembered).
+    /// Set the current tool's color (remembered).
     fn set_tool_color(&mut self, c: C4, now: Instant) {
         let t = self.cur_tool();
         if !tools::has_color(t) {
@@ -3074,7 +2657,7 @@ impl Edit {
         self.remember_color(t, now);
     }
 
-    /// Queue `t`'s colour for the config.
+    /// Queue `t`'s color for the config.
     fn remember_color(&mut self, t: Tool, now: Instant) {
         let Some(id) = tools::id(t).filter(|_| tools::has_color(t)) else { return };
         let v = tools::hex(self.mem.color(t));
@@ -3185,8 +2768,13 @@ impl Edit {
         if tools::has_size(t) { (self.mem.size(t) as i32).to_string() } else { String::new() }
     }
 
-    /// The overlay's UI scale: the shot's OS scale times the UI size.
+    /// The overlay's UI scale: the shot's OS scale times the UI size. In
+    /// the Edit window: the window's scale over the zoom (chrome sizes in
+    /// image px that come out at the window's size on screen).
     fn ui_scale(&self) -> f32 {
+        if let Some(h) = &self.host {
+            return h.s;
+        }
         self.cfg.ui_scale.apply(self.shot.scale)
     }
 
@@ -3318,7 +2906,7 @@ impl Edit {
         }
     }
 
-    /// Queue the camera ring's colour and width for the config.
+    /// Queue the camera ring's color and width for the config.
     fn remember_ring(&mut self, now: Instant) {
         let c = self.rec.opts.cam_ring.map(|c| tools::hex(c.with_alpha(255))).unwrap_or_default();
         let w = self.rec.opts.cam_ring_w;
@@ -3368,7 +2956,13 @@ impl Edit {
 
     /// Track the hovered toolbar item / handle; true when either changed.
     fn track_hover(&mut self, p: Pt) -> bool {
-        let hover = self.toolbar.as_ref().and_then(|tb| tb.index_at(p));
+        self.track_hover_at(p, p)
+    }
+
+    /// [`Edit::track_hover`] with the pointer at `p` on the capture and
+    /// at `pb` in the toolbar's coordinates.
+    fn track_hover_at(&mut self, p: Pt, pb: Pt) -> bool {
+        let hover = self.toolbar.as_ref().and_then(|tb| tb.index_at(pb));
         let reach = HANDLE_HIT * self.ui_scale();
         let hot = self.sel.and_then(|sr| {
             handle_points(sr).iter().position(|(_, q)| (q.x - p.x).hypot(q.y - p.y) <= reach)
@@ -3584,7 +3178,7 @@ fn text_box_rect(win_w: f32, td: &TextDraft, font_px: f32, font: Option<&AnnotFo
     FRect { x, y: td.pos.y - pad, w, h }
 }
 
-/// The marker's translucency on top of the colour's own opacity.
+/// The marker's translucency on top of the color's own opacity.
 fn marker_color(c: C4) -> C4 {
     c.with_alpha(((c.a as u32 * 90 + 127) / 255) as u8)
 }
@@ -3640,7 +3234,7 @@ fn blink_on(at: Instant) -> bool {
     (at.elapsed().as_millis() / 530).is_multiple_of(2)
 }
 
-/// Blends toward a dim colour by alpha `a`, two RGBA pixels per `u64`
+/// Blends toward a dim color by alpha `a`, two RGBA pixels per `u64`
 /// (SWAR, 16-bit lanes): per channel `(v * (255 - a) + c * a + 127) / 255`.
 /// For integer inputs that is exactly the rounding of the former per-pixel
 /// float blend (`n / 255` is never within float error of a half), so the
@@ -3817,6 +3411,8 @@ mod objects_tests;
 mod ocr_tests;
 #[cfg(test)]
 mod pin_tests;
+#[cfg(test)]
+mod history_tests;
 
 #[cfg(test)]
 mod tests {
@@ -3899,6 +3495,63 @@ mod tests {
         app.pending = None;
         assert!(app.restart_due(), "idle: quit now");
         assert!(!app.restart_pending && !app.restart_due(), "once");
+    }
+
+    /// An Edit window with unsaved edits holds an update's restart (and
+    /// its install) until it is saved or closed; one without does not.
+    #[test]
+    fn restart_waits_for_unsaved_edit_windows() {
+        let mut app = preview_app(theme::DARK, None);
+        app.st = State::Hidden;
+        let clean = app.edits.add_for_tests("2026-10-05/143200", false);
+        let dirty = app.edits.add_for_tests("2026-10-05/143300", true);
+        app.restart_pending = true;
+        assert!(!app.restart_due(), "unsaved edits");
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.idle_reply = Some(tx);
+        app.idle_gate();
+        assert!(rx.try_recv().is_err(), "no install meanwhile");
+        dirty.store(false, Ordering::SeqCst); // saved
+        app.idle_gate();
+        assert_eq!(rx.try_recv(), Ok(()));
+        assert!(app.restart_due(), "saved: restart");
+        drop(clean);
+    }
+
+    /// Quit asks the Edit windows with unsaved edits and waits for their
+    /// answers: done once none is left, given up on Cancel; with none
+    /// unsaved it quits at once.
+    #[test]
+    fn quit_asks_unsaved_edit_windows_first() {
+        use crate::edit_ui::{QuitGate, quit_gate};
+        assert_eq!(quit_gate(0, false), QuitGate::Now);
+        assert_eq!(quit_gate(2, false), QuitGate::Wait);
+        assert_eq!(quit_gate(1, true), QuitGate::Abort);
+        assert_eq!(quit_gate(0, true), QuitGate::Abort);
+
+        let mut app = preview_app(theme::DARK, None);
+        app.st = State::Hidden;
+        let a = app.edits.add_for_tests("2026-10-05/143200", true);
+        let _b = app.edits.add_for_tests("2026-10-05/143300", false);
+        assert!(app.on_hot(HotEvent::Quit), "still running: the window asks");
+        assert!(app.quit_pending);
+        app.quit_gate();
+        assert!(app.quit_pending, "waiting for the answer");
+        // Cancel in the window's question: the quit is off.
+        app.edits.cancel_for_tests();
+        app.quit_gate();
+        assert!(!app.quit_pending);
+        // Again; this time the window is saved (or closed).
+        assert!(app.on_hot(HotEvent::Quit));
+        a.store(false, Ordering::SeqCst);
+        app.edits.remove_for_tests("2026-10-05/143200");
+        app.quit_gate();
+        assert!(!app.quit_pending, "quit");
+        // Nothing unsaved: quit at once.
+        let mut app = preview_app(theme::DARK, None);
+        app.st = State::Hidden;
+        let _c = app.edits.add_for_tests("2026-10-05/143400", false);
+        assert!(!app.on_hot(HotEvent::Quit));
     }
 
     /// An upload still in flight keeps the daemon from being idle.
@@ -3993,61 +3646,8 @@ mod tests {
         let ui_font = Some(fonts::ui_font());
         let mut shot = shot;
         let base = std::mem::take(&mut shot.image);
-        let edit = Edit {
-            mo: Motion::new(Instant::now()),
-            shot,
-            composed: None,
-            base,
-            frame: PixBuf::default(),
-            scene: None,
-            painted: None,
-            gdi: None,
-            draft_buf: Default::default(),
-            caret_drawn: None,
-            toast_drawn: None,
-            anim_drawn: false,
-            area_drawn: None,
-            objects: Vec::new(),
-            hist: vec![Vec::new()],
-            hi: 0,
-            sel,
-            tool: None,
-            draft: None,
-            stroke_pts: Vec::new(),
-            interact: Interact::None,
-            mem: tools::ToolMem::from_cfg(&cfg),
-            obj: select::ObjState { style: crate::objects::CalloutStyle::from_id(&cfg.callout_style).unwrap_or_default(), ..Default::default() },
-            last_tool: Tool::Path,
-            pending: tools::Pending::default(),
-            cfg_path: None,
-            pick: None,
-            loupe: None,
-            text: None,
-            tasks: Vec::new(),
-            accept_on_select: false,
-            keys: Keymap::defaults(),
-            cfg: cfg.clone(),
-            toolbar: None,
-            palette_open: false,
-            save_menu: false,
-            rec: RecPop::new(RecOpts::from_config(&cfg), false),
-            done: false,
-            cancelled: false,
-            dirty: false,
-            notice: None,
-            last_wheel: Instant::now(),
-            font: font.clone(),
-            th,
-            ui_font,
-            hover: None,
-            hover_at: Instant::now(),
-            pressed: None,
-            hot_handle: None,
-            snap: None,
-            hover_win: Default::default(),
-            baked: Vec::new(),
-            baked_area: (0, 0, 0, 0),
-        };
+        let mut edit = Edit::new(shot, base, cfg.clone(), th, font.clone(), ui_font, RecPop::new(RecOpts::from_config(&cfg), false));
+        edit.sel = sel;
         App {
             cfg,
             kind: RunKind::OneShot,
@@ -4062,6 +3662,8 @@ mod tests {
             restart_pending: false,
             updating: false,
             idle_reply: None,
+            edits: Box::leak(Box::new(crate::edit_ui::Windows::new())),
+            quit_pending: false,
             font,
             ui_font,
             notice: None,
@@ -4073,6 +3675,10 @@ mod tests {
             last_region: None,
             rec_area: None,
             wait_pins: false,
+            history_root: None,
+            last_entry: None,
+            upload_entry: None,
+            rec_poster: None,
             rec_spec: None,
             rec_cam: None,
             rec_bubble: None,
@@ -4875,7 +4481,7 @@ mod tests {
         e.pressed = Some(4);
         e.hot_handle = Some(2);
         v.push(("objects hover pressed", app));
-        // The colour picker (recents, a translucent colour, a focus), the
+        // The color picker (recents, a translucent color, a focus), the
         // eyedropper's loupe, the camera ring's palette.
         let mut app = annotated(theme::DARK, big);
         let e = edit_of(&mut app);

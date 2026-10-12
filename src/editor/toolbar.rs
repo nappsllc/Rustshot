@@ -70,7 +70,7 @@ pub enum Act {
     Copy,
     /// Copy the selection's text (OCR).
     CopyText,
-    /// The object mini-toolbar: the colour (opens the palette), the fill,
+    /// The object mini-toolbar: the color (opens the palette), the fill,
     /// the size a step, the callout's shape, front / back, duplicate,
     /// delete.
     ObjColor,
@@ -114,19 +114,19 @@ pub enum Act {
     RecGifMax(u32),
     /// "Start recording".
     RecStart,
-    /// The palette's rainbow swatch: the colour picker for the tool.
+    /// The palette's rainbow swatch: the color picker for the tool.
     Wheel,
     /// The camera ring's width, a step thinner or thicker.
     RingSize(i32),
     /// Open/close the ring's palette.
     RingPalette,
-    /// A ring colour (`None`: the theme's accent).
+    /// A ring color (`None`: the theme's accent).
     RingColor(Option<C4>),
-    /// The ring palette's rainbow swatch: the colour picker for the ring.
+    /// The ring palette's rainbow swatch: the color picker for the ring.
     RingWheel,
-    /// A press on a part of the colour picker (the point says where).
+    /// A press on a part of the color picker (the point says where).
     Pick(Part),
-    /// A recent colour in the picker.
+    /// A recent color in the picker.
     PickColor(C4),
     /// The picker's eyedropper on/off.
     Eyedrop,
@@ -195,23 +195,23 @@ pub enum Kind {
     DevItem { dev: Dev, i: usize, on: bool },
     /// The popover's primary button.
     Primary { act: Act, label: &'static str },
-    /// A colour swatch that acts (`on`: the chosen one).
+    /// A color swatch that acts (`on`: the chosen one).
     Swatch { act: Act, c: C4, on: bool },
-    /// The rainbow swatch at the end of a palette: the colour picker.
+    /// The rainbow swatch at the end of a palette: the color picker.
     Rainbow(Act),
-    /// The camera ring's width readout and preview (logical px, colour).
+    /// The camera ring's width readout and preview (logical px, color).
     RingValue { w: u32, c: C4 },
     /// The picker's hue ring (the wheel's bounding square).
     PickHue,
     /// The saturation/value square inside the ring.
     PickSv,
-    /// The live swatch of the colour picked.
+    /// The live swatch of the color picked.
     PickSwatch,
     /// The hex field.
     PickHex,
     /// The opacity slider's track.
     PickAlpha,
-    /// Recent colour `i`.
+    /// Recent color `i`.
     Recent { i: usize, c: C4 },
     /// A row of the save menu: its act, label, and its keys
     /// (`Toolbar::texts[key]`).
@@ -246,19 +246,19 @@ pub struct Input<'a> {
     /// selection is dragged (it would repaint on every move).
     pub top: bool,
     /// The current tool has a size (else `– N +` is disabled) and a
-    /// colour (else the palette button is).
+    /// color (else the palette button is).
     pub sizes: bool,
     pub colors: bool,
     /// The current tool can be filled (else the fill toggle is disabled).
     pub fills: bool,
-    /// The colour picker while it is open (over the others).
+    /// The color picker while it is open (over the others).
     pub pick: Option<&'a PickView<'a>>,
     /// The save menu while it is open: the keys of Save As and Save to
     /// Desktop.
     pub save_menu: Option<&'a [String; 2]>,
 }
 
-/// What shapes the colour picker popover.
+/// What shapes the color picker popover.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PickView<'a> {
     /// Over the Record button (the camera ring), else the palette button.
@@ -294,8 +294,8 @@ pub struct RecView<'a> {
     pub devs: Option<(Dev, &'a [String])>,
     /// Index into the open list of the chosen one.
     pub dev_sel: usize,
-    /// The camera ring: its colour (`None` = accent), width (logical px),
-    /// and whether its palette is open (with these colours).
+    /// The camera ring: its color (`None` = accent), width (logical px),
+    /// and whether its palette is open (with these colors).
     pub ring: Option<C4>,
     pub ring_w: u32,
     pub ring_pal: bool,
@@ -328,6 +328,9 @@ pub struct Toolbar {
     pub mode: Option<FRect>,
     /// Video mode: `bar` is the setup panel.
     pub video: bool,
+    /// Docked in the Edit window: no surface of its own (the window draws
+    /// the strip).
+    pub docked: bool,
 }
 
 type Group = Vec<(Kind, bool, f32)>;
@@ -456,7 +459,50 @@ pub fn layout(inp: &Input) -> Toolbar {
         let up = above.then(|| pop.map_or(bar, |p| union(bar, p))).filter(|b| b.y1() <= sel.y + 0.5);
         super::panel::place_top(sel, area, s, false, up, &mut items, &mut extra)
     });
-    Toolbar { bar, pop, items, wrapped, above, texts, extra, mode, video: false }
+    Toolbar { bar, pop, items, wrapped, above, texts, extra, mode, video: false, docked: false }
+}
+
+/// The Edit window's groups: the overlay's tools, history and size groups,
+/// then Save, Save As, Save to Desktop, Copy, Upload (no Record, Copy
+/// text, Pin or Close: the window has its own).
+fn docked_groups(inp: &Input) -> [Group; 4] {
+    let [tools, history, size, _] = groups(inp);
+    let out = [Act::Save, Act::SaveAs, Act::SaveDesktop, Act::Copy, Act::Upload].into_iter().map(|a| (Kind::Btn(a), false, BTN)).collect();
+    [tools, history, size, out]
+}
+
+/// The width the docked toolbar's buttons take (logical px).
+pub fn docked_width(inp: &Input) -> f32 {
+    row_w(&docked_groups(inp)) + 2.0 * DOCK_PAD
+}
+
+/// The docked toolbar's side padding (logical px).
+const DOCK_PAD: f32 = 8.0;
+
+/// The toolbar docked in the Edit window's top strip `bar` (the window's
+/// physical px, `inp.s` its scale): one row from the left, centred
+/// vertically; the palette, color picker and save menu open below it,
+/// kept inside `inp.area` (the window).
+pub fn layout_docked(inp: &Input, bar: FRect) -> Toolbar {
+    let s = inp.s;
+    let gs = docked_groups(inp);
+    let mut items = Vec::new();
+    place_row(&gs, 0.0, 0.0, &mut items);
+    let (x, y) = (bar.x + DOCK_PAD * s, bar.y + ((bar.h - BTN * s) / 2.0).round());
+    for it in &mut items {
+        it.r = FRect { x: (x + it.r.x * s).round(), y: y + it.r.y * s, w: (it.r.w * s).round(), h: (it.r.h * s).round() };
+    }
+    let mut texts = Vec::new();
+    let pop = match (inp.pick, inp.palette, inp.save_menu) {
+        (Some(pv), _, _) => Some(place_picker(pv, bar, false, &mut items, inp)),
+        (None, Some(colors), _) => Some(place_palette(colors, bar, false, &mut items, inp)),
+        (None, None, Some(keys)) => {
+            texts.extend(keys.iter().cloned());
+            Some(place_save_menu(bar, false, &mut items, inp))
+        }
+        (None, None, None) => None,
+    };
+    Toolbar { bar, pop, items, wrapped: false, above: false, texts, extra: Vec::new(), mode: None, video: false, docked: true }
 }
 
 /// The save menu under (or over) the Save button: Save As, Save to
@@ -509,7 +555,7 @@ fn place_pop(pw: f32, ph: f32, anchor: FRect, bar: FRect, above: bool, inp: &Inp
 /// Popover 6 px from the bar on the side away from the selection (below a
 /// bar that sits below it, above a bar that sits above/inside it), falling
 /// back to the other side when it does not fit; centred over the swatch
-/// button, one row of dots and the rainbow swatch (the colour picker).
+/// button, one row of dots and the rainbow swatch (the color picker).
 fn place_palette(colors: &[C4], bar: FRect, above: bool, items: &mut Vec<Item>, inp: &Input) -> FRect {
     let s = inp.s;
     let m = MARGIN * s;
@@ -544,7 +590,7 @@ fn place_palette(colors: &[C4], bar: FRect, above: bool, items: &mut Vec<Item>, 
     FRect { x: px, y: py, w: pw, h: ph }
 }
 
-/// The colour picker's width and padding (logical px).
+/// The color picker's width and padding (logical px).
 pub const PICK_W: f32 = 232.0;
 const PICK_PAD: f32 = 12.0;
 /// The hue ring's outer diameter and thickness.
@@ -557,9 +603,9 @@ const ALPHA_H: f32 = 24.0;
 const RECENT_DOT: f32 = 22.0;
 const RECENT_GAP: f32 = 4.0;
 
-/// The colour picker: the hue ring with the saturation/value square inside,
+/// The color picker: the hue ring with the saturation/value square inside,
 /// then the live swatch, the hex field and the eyedropper, the opacity
-/// slider (tool colours) and the recent colours; centred over the palette
+/// slider (tool colors) and the recent colors; centred over the palette
 /// button (or the Record button, for the camera ring), placed like the
 /// Record popover.
 pub(super) fn place_picker(pv: &PickView, bar: FRect, above: bool, items: &mut Vec<Item>, inp: &Input) -> FRect {
@@ -671,6 +717,7 @@ impl Toolbar {
             extra: self.extra.iter().map(|r| f(*r)).collect(),
             mode: self.mode.map(f),
             video: self.video,
+            docked: self.docked,
         }
     }
 }
@@ -755,7 +802,7 @@ mod tests {
         assert!(layout(&inp(r(100.0, 100.0, 960.0, 300.0))).wrapped);
     }
 
-    /// Invert has no size, Pixelate and Invert no colour: those controls
+    /// Invert has no size, Pixelate and Invert no color: those controls
     /// are there but disabled (they consume the press).
     #[test]
     fn size_and_colour_controls_follow_the_tool() {

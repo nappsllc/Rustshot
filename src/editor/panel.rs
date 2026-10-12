@@ -256,7 +256,7 @@ pub fn layout(inp: &Input, rv: &RecView) -> Toolbar {
         y += SMALL_ROW_H + GAP;
     }
     // The camera ring's palette, below the camera row: thinner, the
-    // width, thicker; the accent, the palette's colours, the rainbow.
+    // width, thicker; the accent, the palette's colors, the rainbow.
     let ring_pal = (cam_on && rv.ring_pal).then(|| {
         let n = rv.ring_colors.len() + 2;
         let rows = n.div_ceil(RING_PAL_COLS);
@@ -324,10 +324,10 @@ pub fn layout(inp: &Input, rv: &RecView) -> Toolbar {
         items.push(Item { kind: Kind::Grip, r, disabled: false });
         extra.push(r);
     }
-    // The camera ring's colour picker, by the panel.
+    // The camera ring's color picker, by the panel.
     let pop = inp.pick.map(|pv| super::toolbar::place_picker(pv, bar, above, &mut items, inp));
     debug_assert!(texts.len() >= LIST_TEXT);
-    Toolbar { bar, pop, items, wrapped: false, above, texts, extra, mode, video: true }
+    Toolbar { bar, pop, items, wrapped: false, above, texts, extra, mode, video: true, docked: false }
 }
 
 /// The panel's items (not the top row or grip) lie inside it (tests).
@@ -561,7 +561,7 @@ mod tests {
         let first = tb.items.iter().position(|i| i.kind == Kind::SegTrack).unwrap();
         assert!(matches!(tb.items[first + 1].kind, Kind::Seg { label: "Screen", icon: "monitor", .. }), "Screen first");
         // The camera on: the ring's swatch in its row; its palette (the
-        // width, the colours) below the row, the panel no taller.
+        // width, the colors) below the row, the panel no taller.
         let h = tb.bar.h;
         v.camera = true;
         let tb = panel(r(240.0, 110.0, 960.0, 420.0), &v);

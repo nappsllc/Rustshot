@@ -423,7 +423,7 @@ fn screen_pixels(x: i32, y: i32, w: i32, h: i32) -> Vec<u8> {
     }
 }
 
-/// A still backdrop for the screen: a top-most window of one colour over
+/// A still backdrop for the screen: a top-most window of one color over
 /// the primary monitor, on its own thread (with a message loop), taken
 /// down on drop. The overlay captures it, so both renderers show the same
 /// picture whatever the desktop does between the runs.
@@ -524,7 +524,7 @@ fn settled_pixels(x: i32, y: i32, w: i32, h: i32, before: &[u8], ms: u64) -> Vec
 
 /// The overlay as shown on screen is the same with either renderer:
 /// open it, read the screen back, compare. The desktop behind is a still
-/// backdrop of one colour (so each run's screenshot is the same), and each
+/// backdrop of one color (so each run's screenshot is the same), and each
 /// read waits for the screen to settle (no fade-in frame), so the two
 /// differ only where the renderers do. Run against a release build
 /// (`RUSTSHOT_E2E_BIN`) for speed. Writes both captures as PNGs to
@@ -634,15 +634,15 @@ const NO_OTHER_HOTKEYS: &str =
     "record_hotkey = \"\"\ncapture_full_hotkey = \"\"\ncapture_window_hotkey = \"\"\nrepeat_hotkey = \"\"\ncapture_text_hotkey = \"\"\n";
 
 /// Tab presses from the Settings rail to Accept's key cap in Key bindings:
-/// the seven global rows, then the overlay rows (`KEY_ROWS` in
+/// the eight global rows, then the overlay rows (`KEY_ROWS` in
 /// src/settings_ui/draw.rs): Tools (10 caps), Select · Callout ·
 /// Spotlight · Magnify (4), Selected objects (4), Stroke size (2), Copy ·
 /// Save · Upload (3), Copy text (1), then Accept.
-const ACCEPT_TABS: usize = 7 + 10 + 4 + 4 + 2 + 3 + 1 + 1;
-/// From Accept's cap to the footer's OK: the 12 overlay caps after it,
+const ACCEPT_TABS: usize = 8 + 10 + 4 + 4 + 2 + 3 + 1 + 1;
+/// From Accept's cap to the footer's OK: the 16 overlay caps after it (the Edit window's zoom: 4),
 /// the 3 While recording rows, the header's Reset to defaults, then Open
 /// config file, Apply, Cancel, OK.
-const ACCEPT_TO_OK: usize = 12 + 3 + 1 + 4;
+const ACCEPT_TO_OK: usize = 16 + 3 + 1 + 4;
 /// Tab presses from the rail to General's Save to field: Theme, the
 /// four accent swatches, Launch at login, Show icon in tray, Copy after
 /// capture, Play shutter sound, Show thumbnail after capture, Change…,

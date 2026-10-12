@@ -30,6 +30,10 @@ renderer.
 - **Pin to screen** (<kbd>Ctrl</kbd>+<kbd>P</kbd>): the selection stays on
   top where it was, to zoom, fade and compare ([Pins](#pins-and-the-thumbnail)),
   and a **thumbnail** after each capture to copy, save, pin or drag it out.
+- **History and re-editing:** every capture is kept (30 days, up to 2 GB)
+  with its annotations still editable; <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd>
+  opens the History window, and **Edit** reopens a capture in a zoomable
+  window with the overlay's tools ([History](#history-and-the-edit-window)).
 - **Copy text from an area** (OCR): <kbd>O</kbd> in the overlay, or
   <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> to pick an area and copy its
   text at once ([Copy text](#copy-text-ocr)).
@@ -103,6 +107,7 @@ rustshot gui --region 800x600+100+100 --upload
 rustshot full --raw > shot.png    # PNG bytes to stdout
 rustshot update                   # check for a newer release
 rustshot settings                 # open the Settings window
+rustshot history                  # open the History window (captures kept; Edit)
 rustshot register-screenclip on   # Windows: Win+Shift+S opens Rustshot (off undoes it)
 rustshot --help
 ```
@@ -235,7 +240,64 @@ uploads and recordings keep the toast. Point at it for **Copy**, **Save**
 (to the save folder), **Pin** and **×**; on Windows drag it into another
 app or a folder to drop the PNG file (the saved file, or a temporary copy).
 Turn it off with *Show thumbnail after capture* in Settings › General
-(`show_thumbnail = false`).
+(`show_thumbnail = false`). When History keeps the capture, the card (and
+the toast, with the thumbnail off) starts with an accent **Edit** that
+opens it in the Edit window.
+
+### History and the Edit window
+
+Every screenshot that is copied, saved, uploaded or pinned is kept in
+`%LOCALAPPDATA%\rustshot\history\<yyyy-mm-dd>\<hhmmss>\` (Linux:
+`~/.local/share/rustshot/history`, macOS: `~/Library/Application
+Support/rustshot/history`): the selection **without** its annotations
+(`original.png`), the annotations (`annotations.json`), a thumbnail and
+what is known about it (when, the size, the file it was saved to, the
+monitor, the window and app it came from, the uploaded link). Recordings
+keep their file's place and a poster. Entries older than 30 days go, then
+the oldest until the history fits in 2 GB (`history_days`,
+`history_max_mb`; Settings › Capture › History), checked when Rustshot
+starts, every hour and when the limits change. Turning *Keep a history
+of captures* off (`history = false`) keeps nothing new; what is already
+kept still expires (History shows how many and offers **Clear
+history…**). Saved and uploaded files are never touched (only **Clear
+history…** with *Also delete saved files* removes them).
+
+**History** (<kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd>, `history_hotkey`,
+or the tray's **History…**, which shows how many captures today) lists
+them by day as cards or rows. Search matches the window title, the app,
+the file name and the date (Esc clears); filter Screenshots or Recordings;
+a click shows the details on the right, <kbd>Ctrl</kbd>/<kbd>Shift</kbd>+click
+or a drag on empty space selects several (Copy, Save to folder…, Delete).
+Hovering a card offers Edit, Copy, Save, Upload, Pin and more; a
+double-click (or <kbd>Enter</kbd>, <kbd>E</kbd>) edits. <kbd>Del</kbd>
+removes from History only (several after asking).
+
+The **Edit window** reopens a capture with its annotations as objects: the
+overlay's toolbar docked at the top, every tool and object edit (the
+select tool, handles, mini-toolbars, callouts, multi-select, snapping) at
+any zoom, the objects listed on the left (top is front-most; drag to
+reorder, <kbd>Del</kbd> removes; collapses to a rail).
+
+| Do | Keys |
+|---|---|
+| Zoom in / out | <kbd>Ctrl</kbd>+<kbd>=</kbd> / <kbd>Ctrl</kbd>+<kbd>-</kbd>, or <kbd>Ctrl</kbd>+wheel (about the pointer) |
+| Zoom to fit / 100 % | <kbd>Ctrl</kbd>+<kbd>0</kbd> / <kbd>Ctrl</kbd>+<kbd>1</kbd> |
+| Pan | <kbd>Space</kbd>+drag, the middle button, the wheel (<kbd>Shift</kbd>: sideways) |
+| Tool size | <kbd>[</kbd> / <kbd>]</kbd>, <kbd>Alt</kbd>+wheel |
+| Close | <kbd>Ctrl</kbd>+<kbd>W</kbd> |
+
+(`zoom_in`, `zoom_out`, `zoom_fit`, `zoom_actual` in `[shortcuts]`.)
+**Save** (<kbd>Ctrl</kbd>+<kbd>S</kbd>) asks whether to **overwrite the
+original** (the file it was saved to, replaced in place; the History
+entry stays) or **save as
+a new file** (`<name>-edited.png`), with *Don't ask again*
+(`edit_save = "overwrite"` or `"new"`); closing with unsaved changes asks
+first (Discard, Save as copy, Save). The entry is marked *Edited* and keeps
+the new annotations; `original.png` is never changed, so a capture can
+always be edited again. Save As, Save to Desktop, Copy and Upload work as
+in the overlay. Quitting Rustshot asks each Edit window with unsaved
+changes first, and an update waits for them. On macOS the History and Edit windows are not available
+yet (the history folder opens instead).
 
 ### Selecting
 
@@ -268,6 +330,7 @@ snaps even then.
 | Record video (again: stop) | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> | `record_hotkey` |
 | Repeat last capture (the same region, saved at once) | none | `repeat_hotkey` |
 | Copy text from area (pick an area, its text is copied; no annotation) | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> | `capture_text_hotkey` |
+| Open History | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd> | `history_hotkey` |
 | Quit Rustshot | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>Q</kbd> | `quit_hotkey` |
 
 <kbd>Win</kbd> is <kbd>⌘</kbd> on macOS and <kbd>Super</kbd> on Linux
@@ -562,6 +625,11 @@ show_tray = true                  # false = no tray icon (hotkeys still work)
 copy_after_capture = false        # a save or upload also copies the image
 shutter_sound = false             # a short click when a capture is taken
 show_thumbnail = true             # the thumbnail card after a copied or saved capture
+history = true                    # keep a history of captures (History, Edit)
+history_days = 30                 # entries older than this go
+history_max_mb = 2048             # then the oldest until it fits
+history_hotkey = "Shift+Meta+H"   # the History window
+edit_save = ""                    # the Edit window's Save: "" asks, "overwrite", "new"
 copy_url_after_upload = true
 capture_active_monitor = false    # true = only the monitor under the cursor
 snap_windows = true               # outline the window under the pointer; a click selects it

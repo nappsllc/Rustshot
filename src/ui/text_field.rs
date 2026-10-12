@@ -257,7 +257,9 @@ impl Ui<'_> {
         st.scroll = st.scroll.min((full - inner.w + 1.0).max(0.0)).max(0.0);
 
         let focused = self.focus.focused == Some(id) && self.enabled;
-        field_frame(self, r, focused, self.hovered(r));
+        if !self.frameless {
+            field_frame(self, r, focused, self.hovered(r));
+        }
         if let Some(name) = icon {
             let sz = self.px(16.0);
             let c = th_icon(self);
@@ -301,7 +303,7 @@ impl Ui<'_> {
     }
 }
 
-/// The field icon's colour (dimmed when disabled).
+/// The field icon's color (dimmed when disabled).
 fn th_icon(ui: &Ui) -> crate::uifb::C4 {
     ui.theme.icon.fade(if ui.enabled { 1.0 } else { 0.4 })
 }

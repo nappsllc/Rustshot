@@ -31,7 +31,7 @@ const INTROSPECT: &str = "org.freedesktop.DBus.Introspectable";
 const PEER: &str = "org.freedesktop.DBus.Peer";
 /// The icon sizes sent (the host picks the closest).
 pub const ICON_SIZES: [u32; 3] = [22, 32, 48];
-/// The glyph's colour on a dark panel and on a light one.
+/// The glyph's color on a dark panel and on a light one.
 const ON_DARK: (u8, u8, u8) = (255, 255, 255);
 const ON_LIGHT: (u8, u8, u8) = (0x1B, 0x1C, 0x20);
 
@@ -298,7 +298,7 @@ fn item_props(it: MenuItem) -> Vec<(&'static str, Value)> {
     if it == MenuItem::Separator {
         return vec![("type", Value::str("separator")), ("visible", Value::Bool(true))];
     }
-    let mut p = vec![("label", Value::str(it.label())), ("enabled", Value::Bool(true)), ("visible", Value::Bool(true))];
+    let mut p = vec![("label", Value::str(&it.label())), ("enabled", Value::Bool(true)), ("visible", Value::Bool(true))];
     if let Some(on) = it.checked() {
         p.push(("toggle-type", Value::str("checkmark")));
         p.push(("toggle-state", Value::I32(i32::from(on))));
@@ -469,7 +469,7 @@ pub fn watcher_change(m: &Message) -> Option<bool> {
 }
 
 // ---------------------------------------------------------------------------
-// The panel's colour
+// The panel's color
 // ---------------------------------------------------------------------------
 
 const PORTAL: &str = "org.freedesktop.portal.Desktop";
@@ -477,7 +477,7 @@ const PORTAL_PATH: &str = "/org/freedesktop/portal/desktop";
 const SETTINGS: &str = "org.freedesktop.portal.Settings";
 
 /// Whether the panel is light, from the desktop (`XDG_CURRENT_DESKTOP`)
-/// and the colour scheme (`org.freedesktop.appearance color-scheme`:
+/// and the color scheme (`org.freedesktop.appearance color-scheme`:
 /// 1 dark, 2 light, 0 no preference). GNOME's top bar is dark in both
 /// schemes; elsewhere the panel follows the scheme (no preference: dark).
 pub fn light_panel(desktop: &str, scheme: Option<u32>) -> bool {
@@ -485,7 +485,7 @@ pub fn light_panel(desktop: &str, scheme: Option<u32>) -> bool {
     !gnome && scheme == Some(2)
 }
 
-/// The colour scheme through the Settings portal (None: no portal).
+/// The color scheme through the Settings portal (None: no portal).
 pub fn color_scheme(bus: &mut dyn Bus) -> Option<u32> {
     let args = || vec![Value::str("org.freedesktop.appearance"), Value::str("color-scheme")];
     let one = Message::call(PORTAL, PORTAL_PATH, SETTINGS, "ReadOne", args());
@@ -497,12 +497,12 @@ pub fn color_scheme(bus: &mut dyn Bus) -> Option<u32> {
     r.body.first().and_then(Value::as_u32)
 }
 
-/// The match rule for colour-scheme changes.
+/// The match rule for color-scheme changes.
 pub fn scheme_rule() -> String {
     format!("type='signal',interface='{SETTINGS}',member='SettingChanged',path='{PORTAL_PATH}',arg0='org.freedesktop.appearance'")
 }
 
-/// A `SettingChanged` of the colour scheme: its new value.
+/// A `SettingChanged` of the color scheme: its new value.
 pub fn scheme_change(m: &Message) -> Option<u32> {
     if m.kind != Kind::Signal || !m.is(SETTINGS, "SettingChanged") {
         return None;

@@ -13,6 +13,11 @@ mod dbus;
 mod editor;
 mod export;
 mod fonts;
+mod history;
+// The History window (board 10).
+mod history_ui;
+// The Edit window (board 11).
+mod edit_ui;
 mod hotkey;
 mod icon_path;
 mod imgur;
@@ -40,6 +45,7 @@ mod rec_ui;
 // URI parsing is tested everywhere.
 mod screenclip_win;
 mod settings_ui;
+mod scale;
 mod sha256;
 mod snap;
 #[cfg(any(target_os = "linux", test))]
@@ -88,6 +94,8 @@ enum Cmd {
     Daemon { after_update: bool },
     /// Check for a newer release and open its download page.
     Update,
+    /// Open the History window (in this process).
+    History,
     /// Open the Settings window (in the running daemon, if any).
     Settings,
     /// Handle an `ms-screenclip:` URI (Win+Shift+S, Print Screen): the
@@ -145,6 +153,7 @@ Commands:
             launching again while it runs triggers a capture)
   update    Check for a newer release and open its download page
   settings  Open the Settings window
+  history   Open the History window (captures kept, Edit)
   config    Show or validate the config file (--check)
   register-screenclip on|off
             (Windows) Offer Rustshot for Win+Shift+S and Print Screen, or undo it
@@ -230,6 +239,12 @@ fn parse_from(args: &[String]) -> Result<Parsed, String> {
                 return Err(format!("unexpected argument '{a}'"));
             }
             Some(Cmd::Update)
+        }
+        Some("history") => {
+            if let Some(a) = rest.first() {
+                return Err(format!("unexpected argument '{a}'"));
+            }
+            Some(Cmd::History)
         }
         Some("settings") => {
             if let Some(a) = rest.first() {
@@ -485,10 +500,28 @@ fn run_direct(cfg: &Config, args: &CaptureArgs, shot: Shot, region: Option<(i32,
         }
     }
     let mut code = if res.error { 1 } else { 0 };
-    if let Some(rx) = res.upload
-        && export::wait_upload(rx, cfg.copy_url_after_upload).is_none() {
-            code = 1;
+    // History keeps direct captures too (never the tests' ones).
+    let keeps = tasks.iter().any(|t| matches!(t, Task::Copy | Task::Save { .. } | Task::SaveDesktop | Task::Upload));
+    let root = history::find_root().unwrap_or_default();
+    let entry = (!cfg!(test) && keeps && !root.as_os_str().is_empty()).then(|| {
+        let saved = res.done.iter().rev().find_map(|d| match d {
+            export::Done::Saved(p) | export::Done::SavedDesktop(p) => Some(p.clone()),
+            _ => None,
+        });
+        let meta = history::Meta { captured: export::local_ymdhms(), scale: shot.scale, saved, ..Default::default() };
+        history::record(cfg, &root, history::ShotRec { original: img.clone(), objects: Vec::new(), meta })
+    });
+    if let Some(rx) = res.upload {
+        match export::wait_upload(rx, cfg.copy_url_after_upload) {
+            Some(url) => {
+                if let Some(id) = entry.flatten() {
+                    history::update(&root, &id, move |m| m.uploaded = Some(url));
+                }
+            }
+            None => code = 1,
         }
+    }
+    history::flush(Duration::from_secs(30));
     code
 }
 
@@ -502,6 +535,8 @@ fn editor_main(cfg: Config, kind: RunKind, pending: Pending) -> i32 {
     let exit_code = Arc::new(AtomicI32::new(0));
     let slot: UploadSlot = Arc::new(Mutex::new(None));
     let mut code = editor::run(cfg.clone(), kind, Some(pending), exit_code, slot.clone(), None);
+    // The history thread finishes writing before the process goes.
+    history::flush(Duration::from_secs(30));
     if let Some(rx) = slot.lock().unwrap().take()
         && export::wait_upload(rx, cfg.copy_url_after_upload).is_none() {
             code = 1;
@@ -646,6 +681,10 @@ fn run() -> Result<()> {
             Ok(())
         }
         Cmd::Screenclip(ref uri) => screenclip(uri),
+        Cmd::History => {
+            history_ui::run_here();
+            Ok(())
+        }
         Cmd::Settings => {
             // A running daemon opens it (and reloads after a save);
             // otherwise the window runs here.
@@ -705,6 +744,7 @@ fn run() -> Result<()> {
             let exit_code = Arc::new(AtomicI32::new(0));
             let slot: UploadSlot = Arc::new(Mutex::new(None));
             let mut code = editor::run(cfg.clone(), RunKind::Daemon, None, exit_code, slot.clone(), guard);
+            history::flush(Duration::from_secs(30));
             if let Some(rx) = slot.lock().unwrap().take()
                 && export::wait_upload(rx, cfg.copy_url_after_upload).is_none() {
                     code = 1;
@@ -869,6 +909,13 @@ mod cli_tests {
         assert!(matches!(cmd(&["settings"]), Cmd::Settings));
         assert!(p(&["settings", "--x"]).is_err());
         assert!(HELP.contains("settings  Open the Settings window"));
+    }
+
+    #[test]
+    fn history_command() {
+        assert!(matches!(cmd(&["history"]), Cmd::History));
+        assert!(p(&["history", "x"]).is_err());
+        assert!(HELP.contains("history   Open the History window"));
     }
 
     #[test]

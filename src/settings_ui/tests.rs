@@ -110,7 +110,7 @@ fn form_writes_what_changed() {
 }
 
 /// Accent: the swatches write their `ui_color` (Periwinkle: none), a
-/// custom colour is written only when it parses.
+/// custom color is written only when it parses.
 #[test]
 fn accent_swatches_and_custom_colour() {
     let cfg = Config::default();
@@ -334,7 +334,7 @@ fn ui_size_is_a_capture_setting() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// "Reset tool sizes & colours" removes just those lines (comments and
+/// "Reset tool sizes & colors" removes just those lines (comments and
 /// everything else stay) and makes the daemon reload; a broken file is
 /// never touched.
 #[test]
@@ -694,6 +694,26 @@ fn restore_clear_reset_and_links() {
     assert_eq!(s.on(Click::OpenConfig), vec![Act::OpenConfig]);
     assert_eq!(s.on(Click::CheckUpdates), vec![Act::CheckUpdates]);
     assert_eq!(s.on(Click::Link("https://powernapps.net")), vec![Act::Link("https://powernapps.net")]);
+}
+
+/// Capture › History and the History hotkey row write their keys; a
+/// value the choices do not have stays as it is.
+#[test]
+fn history_rows_write_their_keys() {
+    let cfg = Config::default();
+    let mut f = Form::new(&cfg, None);
+    assert!(f.history && HISTORY_DAYS[f.history_days].0 == 30 && HISTORY_MB[f.history_size].0 == 2048);
+    f.history = false;
+    f.history_days = 0;
+    f.history_size = 3;
+    *f.global_mut(7) = Chord::parse("Ctrl+Alt+H");
+    let c = f.apply(&cfg, &cfg);
+    assert_eq!((c.history, c.history_days, c.history_max_mb, c.history_hotkey.as_str()), (false, 7, 10240, "Ctrl+Alt+H"));
+    let odd = Config { history_days: 12, ..Config::default() };
+    let f = Form::new(&odd, None);
+    assert_eq!(f.history_days, usize::MAX);
+    assert_eq!(f.apply(&odd, &odd).history_days, 12);
+    assert!(GLOBALS.iter().any(|(l, s)| *l == "Open History" && *s == 7));
 }
 
 /// "Show icon in tray" off with no capture hotkey (or one that did not

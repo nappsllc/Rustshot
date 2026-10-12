@@ -998,7 +998,11 @@ fn dispatch(
                         driver.on_event(Ev::Wheel { delta, x, y });
                         true
                     }
-                    1..=3 => {
+                    2 => {
+                        driver.on_event(Ev::Middle { down: true, x, y });
+                        true
+                    }
+                    1 | 3 => {
                         if button == 1 {
                             // Capture like SetCapture: Up/Motion still arrive
                             // when the pointer leaves the overlay mid-drag.
@@ -1027,7 +1031,11 @@ fn dispatch(
                 let (x, y, button) = (ev.key.x, ev.key.y, ev.key.detail);
                 match button {
                     4 | 5 => false, // wheel is handled on press only
-                    1..=3 => {
+                    2 => {
+                        driver.on_event(Ev::Middle { down: false, x, y });
+                        true
+                    }
+                    1 | 3 => {
                         if button == 1 {
                             XUngrabPointer(dpy, CURRENT_TIME);
                         }

@@ -8,7 +8,7 @@
 //! ]}
 //! ```
 //!
-//! Points are `[x, y]`, rects `[x, y, w, h]` (image pixels), colours
+//! Points are `[x, y]`, rects `[x, y, w, h]` (image pixels), colors
 //! `#rrggbb` or `#rrggbbaa`. List order is z-order (first is bottom-most).
 //! Types: `pencil` (`pts`, `color`, `width`), `line` / `arrow` (`a`, `b`,
 //! `color`, `width`), `rect` / `ellipse` (`r`, `color`, `width`, `fill`),
@@ -56,7 +56,7 @@ fn rect(out: &mut String, r: FRect) {
     out.push(']');
 }
 
-fn string(out: &mut String, s: &str) {
+pub(crate) fn string(out: &mut String, s: &str) {
     out.push('"');
     for c in s.chars() {
         match c {
@@ -216,9 +216,9 @@ pub fn to_json(objs: &[Obj]) -> String {
     out
 }
 
-/// A parsed JSON value.
+/// A parsed JSON value (also read by the history store's `meta.json`).
 #[derive(Debug, Clone, PartialEq)]
-enum V {
+pub(crate) enum V {
     Null,
     Bool(bool),
     Num(f64),
@@ -397,7 +397,7 @@ impl P<'_> {
     }
 }
 
-fn parse(s: &str) -> Result<V> {
+pub(crate) fn parse(s: &str) -> Result<V> {
     let mut p = P { s: s.as_bytes(), i: 0, depth: 0 };
     let v = p.value()?;
     p.ws();
