@@ -25,6 +25,8 @@ const WM_TRAY_INIT: u32 = WM_APP + 2;
 const WM_TRAY_BALLOON: u32 = WM_APP + 3;
 /// Posted by [`refresh_state`]: the recording state changed (icon, tip).
 const WM_TRAY_STATE: u32 = WM_APP + 4;
+/// Posted by [`refresh_visible`]: add or remove the icon (`show_tray`).
+const WM_TRAY_VISIBLE: u32 = WM_APP + 5;
 /// Classic-callback balloon click (`NIN_BALLOONUSERCLICK`).
 const BALLOON_CLICK: u32 = WM_USER + 5;
 const ICON_ID: u32 = 1;
@@ -80,6 +82,12 @@ pub fn notify_saved(path: &std::path::Path, text: &str) {
     *SAVED.lock().unwrap() = path.parent().map(|p| p.to_path_buf());
     post_balloon(&format!("{text}
 Click to open the folder."));
+}
+
+/// `show_tray` changed: the tray window adds or removes the icon.
+#[cfg_attr(test, allow(dead_code))]
+pub fn refresh_visible() {
+    post_tray(WM_TRAY_VISIBLE);
 }
 
 /// The recording state changed: swap the icon (red dot) and the tip.
@@ -311,7 +319,13 @@ fn run(hwnd: HWND, item: MenuItem) {
 /// Window-procedure hook; `None` = not a tray message.
 pub fn handle(hwnd: HWND, m: u32, _w: WPARAM, l: LPARAM) -> Option<LRESULT> {
     match m {
-        WM_TRAY_INIT => add_icon(hwnd),
+        WM_TRAY_INIT if tray::is_visible() => add_icon(hwnd),
+        WM_TRAY_INIT => {}
+        WM_TRAY_VISIBLE if tray::is_visible() => {
+            remove(hwnd); // never two
+            add_icon(hwnd);
+        }
+        WM_TRAY_VISIBLE => remove(hwnd),
         WM_TRAY_BALLOON => {
             if let Some(text) = BALLOON.lock().unwrap().take() {
                 balloon(hwnd, &text);
@@ -353,7 +367,7 @@ pub fn handle(hwnd: HWND, m: u32, _w: WPARAM, l: LPARAM) -> Option<LRESULT> {
             _ => {}
         },
         // Explorer restarted: the notification area was recreated.
-        _ if m == taskbar_created() && TX.lock().unwrap().is_some() => add_icon(hwnd),
+        _ if m == taskbar_created() && TX.lock().unwrap().is_some() && tray::is_visible() => add_icon(hwnd),
         _ => return None,
     }
     Some(LRESULT(0))
@@ -388,7 +402,7 @@ mod tests {
         let Instance::Primary(g) = acquire_or_signal() else { panic!("a daemon is already running") };
         let (tx, _rx) = std::sync::mpsc::channel();
         g.listen(tx.clone());
-        spawn(tx);
+        crate::tray::spawn(tx, true);
         std::thread::sleep(std::time::Duration::from_millis(1500));
         assert!(icon_exists(), "icon should be present after spawn");
         drop(g);

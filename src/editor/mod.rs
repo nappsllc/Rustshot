@@ -65,6 +65,12 @@ pub struct Pending {
     /// Started by the record hotkey: the Record popover opens with the
     /// selection and Enter starts recording.
     pub record: bool,
+    /// Select the whole capture (the full-screen hotkey; with
+    /// `accept_on_select` it is saved at once).
+    pub select_all: bool,
+    /// Snap to windows for this capture even when `snap_windows` is off
+    /// (the capture-window hotkey).
+    pub pick_window: bool,
 }
 
 impl Pending {
@@ -76,7 +82,26 @@ impl Pending {
             accept_on_select: false,
             filename: None,
             record: false,
+            select_all: false,
+            pick_window: false,
         }
+    }
+
+    /// The full-screen hotkey: everything, saved straight away.
+    pub fn full() -> Self {
+        Self { select_all: true, accept_on_select: true, tasks: vec![Task::Save { path: None, ask: false }], ..Self::editor() }
+    }
+
+    /// The capture-window hotkey: the overlay outlines windows, a click
+    /// selects one.
+    pub fn window() -> Self {
+        Self { pick_window: true, ..Self::editor() }
+    }
+
+    /// Repeat last capture: `region` (global physical px) again on
+    /// `screen`, saved straight away.
+    pub fn repeat(region: (i32, i32, u32, u32), screen: Option<u32>) -> Self {
+        Self { region: Some(region), screen, accept_on_select: true, tasks: vec![Task::Save { path: None, ask: false }], ..Self::editor() }
     }
 
     /// Area selection in record mode (the record hotkey).
@@ -181,7 +206,7 @@ pub fn run(
     // A later launch of the daemon asks this one to capture; the guard lives until we return.
     if let (Some(g), Some(h)) = (&instance, &hot) {
         g.listen(h.sender());
-        crate::tray::spawn(h.sender());
+        crate::tray::spawn(h.sender(), cfg.show_tray);
     }
     if let Some(h) = &hot {
         // The update worker asks us to go idle (`RestartWhenIdle`), then to
@@ -217,6 +242,7 @@ pub fn run(
         focus_tries: 0,
         rec: None,
         rec_opts: None,
+        last_region: None,
         #[cfg(test)]
         rec_spec: None,
         #[cfg(test)]
@@ -282,6 +308,9 @@ struct App {
     rec: Option<rec_ui::Run>,
     /// The Record popover's last choices (until the config is reloaded).
     rec_opts: Option<RecOpts>,
+    /// The last exported capture's region (global physical px), for
+    /// Repeat last capture.
+    last_region: Option<(i32, i32, u32, u32)>,
     /// Tests: the spec the last recording started with.
     #[cfg(test)]
     rec_spec: Option<crate::rec::RecSpec>,
@@ -424,20 +453,56 @@ impl App {
                 }
             }
             HotEvent::StopRecording => {}
+            // A global hotkey: inside the overlay its chord is the
+            // overlay's key (Ctrl+Shift+S: Save As there), else its action.
+            // Quit always quits.
+            HotEvent::Pressed(i) if i != 1 && matches!(self.st, State::Edit(_)) => self.forward_hotkey(i),
+            HotEvent::Pressed(i) => return self.on_hot(crate::hotkey::slot_event(i)),
             // A capture would show the overlay in the recording.
-            HotEvent::Capture | HotEvent::Record if self.rec.is_some() => {
+            HotEvent::Capture | HotEvent::Record | HotEvent::CaptureFull | HotEvent::CaptureWindow | HotEvent::RepeatLast
+                if self.rec.is_some() =>
+            {
                 eprintln!("rustshot: a recording is running; capture ignored");
             }
             // No new capture while an update installs or restarts us.
-            HotEvent::Capture | HotEvent::Record if self.updating || self.restart_pending => {
+            HotEvent::Capture | HotEvent::Record | HotEvent::CaptureFull | HotEvent::CaptureWindow | HotEvent::RepeatLast
+                if self.updating || self.restart_pending =>
+            {
                 eprintln!("rustshot: an update is installing; capture ignored");
             }
-            HotEvent::Capture if matches!(self.st, State::Hidden) => self.pending = Some(Pending::editor()),
+            _ if !matches!(self.st, State::Hidden) => {} // a capture is open
+            HotEvent::Capture => self.pending = Some(Pending::editor()),
+            HotEvent::CaptureFull => self.pending = Some(Pending::full()),
+            HotEvent::CaptureWindow => self.pending = Some(Pending::window()),
+            HotEvent::RepeatLast => self.pending = Some(self.repeat_pending()),
             HotEvent::Record if !rec_ui::supported() => eprintln!("rustshot: recording is not supported on this platform yet"),
-            HotEvent::Record if matches!(self.st, State::Hidden) => self.pending = Some(Pending::record()),
-            HotEvent::Capture | HotEvent::Record => {}
+            HotEvent::Record => self.pending = Some(Pending::record()),
         }
         true
+    }
+
+    /// A global hotkey pressed while the overlay is open: its chord goes
+    /// to the overlay as a key press (the OS took it from the window).
+    fn forward_hotkey(&mut self, slot: usize) {
+        let spec = crate::hotkey::wanted(&self.cfg)[slot].clone();
+        let Some(c) = crate::keymap::Chord::parse(&spec) else { return };
+        if c.meta {
+            return; // the overlay has no Meta chords
+        }
+        self.key(c.vk, false, Mods { ctrl: c.ctrl, shift: c.shift, alt: c.alt });
+        self.repaint();
+    }
+
+    /// Repeat last capture: the last region again (on its monitor when the
+    /// monitors do not share one scale), or a plain capture when there was
+    /// none yet.
+    fn repeat_pending(&self) -> Pending {
+        let Some(r) = self.last_region else { return Pending::editor() };
+        #[cfg(not(test))]
+        let screen = capture::monitors().ok().and_then(|m| crate::actions::monitor_for_region(&m, r));
+        #[cfg(test)]
+        let screen = None;
+        Pending::repeat(r, screen)
     }
 
     /// The camera bubble follows the Record popover: up while it is open
@@ -577,6 +642,9 @@ impl App {
         }
         // The Record popover starts from the (new) defaults again.
         self.rec_opts = None;
+        if self.kind == RunKind::Daemon && cfg.show_tray != self.cfg.show_tray {
+            crate::tray::set_visible(cfg.show_tray);
+        }
         publish_ui_size(cfg.ui_scale);
         self.cfg = cfg;
     }
@@ -659,6 +727,9 @@ impl App {
         let region = pending.region.take();
         let tasks = std::mem::take(&mut pending.tasks);
         let accept_on_select = pending.accept_on_select;
+        if pending.pick_window {
+            cfg.snap_windows = true;
+        }
         let rec_opts = self.rec_opts.clone().unwrap_or_else(|| RecOpts::from_config(&cfg));
         let rec = RecPop::new(rec_opts, pending.record && rec_ui::supported());
 
@@ -688,6 +759,11 @@ impl App {
         // The capture is held once, as `base`; `shot` keeps only geometry.
         let mut shot = shot;
         let base = std::mem::take(&mut shot.image);
+        let initial_sel = if pending.select_all {
+            Some(FRect { x: 0.0, y: 0.0, w: shot.size.0 as f32, h: shot.size.1 as f32 })
+        } else {
+            initial_sel
+        };
         let sel = initial_sel.filter(|r| !r.is_trivial());
         let accept_now = accept_on_select && sel.is_some();
         let mut edit = Edit {
@@ -852,10 +928,19 @@ impl App {
             (sel.y.round() as i32) + edit.shot.origin.1,
         );
         wind::hide(self.hwnd);
+        self.last_region = Some((g.0, g.1, img.width(), img.height()));
+        let mut tasks = std::mem::take(&mut edit.tasks);
+        if self.kind == RunKind::Daemon {
+            // A capture from the overlay or a hotkey (never `gui --path`).
+            tasks = crate::actions::after_capture(tasks, &edit.cfg);
+        }
+        if edit.cfg.shutter_sound && !tasks.is_empty() {
+            crate::actions::shutter();
+        }
         self.st = State::Finish(Box::new(FinishJob {
             img,
             sel_global: g,
-            tasks: std::mem::take(&mut edit.tasks),
+            tasks,
             cfg: edit.cfg.clone(),
         }));
     }
@@ -1743,6 +1828,8 @@ fn act_of(a: Action) -> Option<Act> {
         Action::ToolCounter => Act::Tool(Tool::Counter),
         Action::ToolPixelate => Act::Tool(Tool::Pixelate),
         Action::ToolInvert => Act::Tool(Tool::Invert),
+        Action::SizeDown => Act::Size(-1),
+        Action::SizeUp => Act::Size(1),
         Action::Copy => Act::Copy,
         Action::Save => Act::Save,
         Action::SaveAs => Act::SaveAs,
@@ -3259,6 +3346,7 @@ mod tests {
             focus_tries: 0,
             rec: None,
             rec_opts: None,
+            last_region: None,
             rec_spec: None,
             rec_cam: None,
             rec_bubble: None,
@@ -3299,9 +3387,9 @@ mod tests {
         assert!(!e.done);
 
         let mut app = preview_app(theme::DARK, Some(sel));
-        assert_eq!(press(&mut app, 'D' as u32, Mods::default()).tool, Some(Tool::Line));
+        assert_eq!(press(&mut app, 'L' as u32, Mods::default()).tool, Some(Tool::Line));
         let mut app = preview_app(theme::DARK, Some(sel));
-        assert_eq!(press(&mut app, 'D' as u32, Mods { shift: true, ..Mods::default() }).tool, None);
+        assert_eq!(press(&mut app, 'L' as u32, Mods { shift: true, ..Mods::default() }).tool, None);
         let mut app = preview_app(theme::DARK, Some(sel));
         assert!(press(&mut app, wind::key::SPACE, Mods::default()).palette_open);
 

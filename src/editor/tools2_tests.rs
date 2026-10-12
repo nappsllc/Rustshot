@@ -189,7 +189,7 @@ fn modifier_keys_redraw_the_draft_without_a_move() {
     assert!(matches!(&ed(&mut a).draft, Some(Obj::Path { pts, .. }) if pts.len() == 3), "freehand again");
     up(&mut a, 420, 316);
     // A line: Ctrl snaps too.
-    key(&mut a, 'D' as u32);
+    key(&mut a, 'L' as u32);
     down(&mut a, 300, 500);
     mv(&mut a, 420, 512);
     key_m(&mut a, VK_CONTROL, CTRL);
@@ -321,7 +321,7 @@ fn tag_size_and_colour_are_remembered() {
 fn the_fill_toggle_draws_filled_shapes() {
     let mut a = app();
     a.kind = RunKind::Daemon;
-    key(&mut a, 'D' as u32);
+    key(&mut a, 'L' as u32);
     assert!(item(&mut a, |k| *k == toolbar::Kind::Btn(Act::Fill)).disabled, "a line has no fill");
     act(&mut a, Act::Fill);
     assert!(!ed(&mut a).mem.fill(Tool::Line) && ed(&mut a).pending.is_empty());
@@ -344,7 +344,7 @@ fn the_fill_toggle_draws_filled_shapes() {
         up(&mut a, 560, 500);
     }
     assert!(matches!(ed(&mut a).objects[1], Obj::RectFill { r: rr, .. } if rr == r(500.0, 300.0, 200.0, 200.0)), "a square");
-    key(&mut a, 'C' as u32);
+    key(&mut a, 'E' as u32);
     down(&mut a, 300, 500);
     mv(&mut a, 400, 560);
     up(&mut a, 400, 560);
@@ -387,7 +387,7 @@ fn the_fill_choice_is_written_to_the_config() {
     std::fs::write(&p, "# mine\ntheme = \"dark\"\n").unwrap();
     let mut a = app();
     ed(&mut a).cfg_path = Some(p.clone());
-    key(&mut a, 'C' as u32);
+    key(&mut a, 'E' as u32);
     act(&mut a, Act::Fill);
     close(&mut a);
     let text = std::fs::read_to_string(&p).unwrap();

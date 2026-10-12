@@ -362,10 +362,10 @@ fn cursor_follows_handles_selection_and_tool() {
 fn every_tool_drafts_then_commits_on_release() {
     let cases: [(char, Tool); 8] = [
         ('P', Tool::Path),
-        ('D', Tool::Line),
+        ('L', Tool::Line),
         ('A', Tool::Arrow),
         ('R', Tool::Rect),
-        ('C', Tool::Ellipse),
+        ('E', Tool::Ellipse),
         ('M', Tool::Marker),
         ('B', Tool::Pixelate),
         ('I', Tool::Invert),
@@ -430,7 +430,7 @@ fn tiny_strokes_are_dropped() {
 /// `wind::imp::tests::overlay_ignores_outside_moves_and_never_enters_move_size`).
 #[test]
 fn shift_shapes_keep_the_press_point_in_every_direction() {
-    for k in ['R', 'C', 'B', 'I'] {
+    for k in ['R', 'E', 'B', 'I'] {
         for (dx, dy) in [(60, 200), (-60, 200), (60, -200), (-60, -200), (200, 60), (-200, -60)] {
             let mut a = app(Some(r(100.0, 100.0, 800.0, 600.0)));
             key(&mut a, k as u32);
@@ -454,7 +454,7 @@ fn shift_shapes_keep_the_press_point_in_every_direction() {
 #[test]
 fn shift_constrains_lines_and_shapes() {
     let mut a = app(Some(r(0.0, 0.0, 1440.0, 900.0)));
-    key(&mut a, 'D' as u32);
+    key(&mut a, 'L' as u32);
     {
         let _m = hold(SHIFT);
         drag(&mut a, (200, 200), (300, 210));
@@ -492,7 +492,7 @@ fn tools_toggle_and_escape_steps_back() {
     key(&mut a, 'R' as u32);
     assert_eq!(ed(&mut a).tool, None, "same key twice: off");
     key(&mut a, 'R' as u32);
-    key(&mut a, 'C' as u32);
+    key(&mut a, 'E' as u32);
     assert_eq!(ed(&mut a).tool, Some(Tool::Ellipse), "another tool replaces it");
     // Esc mid-drag drops the draft and the tool, keeps the capture.
     down(&mut a, 150, 150);
@@ -626,7 +626,7 @@ fn undo_redo_across_tools() {
     let mut a = app(Some(r(0.0, 0.0, 1440.0, 900.0)));
     key(&mut a, 'R' as u32);
     stroke(&mut a, 100);
-    key(&mut a, 'C' as u32);
+    key(&mut a, 'E' as u32);
     stroke(&mut a, 200);
     key(&mut a, 'B' as u32);
     stroke(&mut a, 300);
@@ -706,7 +706,7 @@ fn wheel_and_size_acts_change_the_active_tool_size() {
     assert_eq!(ed(&mut a).size_label(), "");
     assert_eq!(ed(&mut a).mem.size(Tool::Pixelate), 12.0, "not the pixelate size");
     key(&mut a, 'I' as u32);
-    for (k, lo, hi) in [('R', 1.0, 50.0), ('M', 1.0, 50.0), ('B', 4.0, 100.0), ('T', 8.0, 96.0), ('D', 1.0, 50.0)] {
+    for (k, lo, hi) in [('R', 1.0, 50.0), ('M', 1.0, 50.0), ('B', 4.0, 100.0), ('T', 8.0, 96.0), ('L', 1.0, 50.0)] {
         key(&mut a, k as u32);
         for _ in 0..120 {
             wheel(&mut a, -120);
@@ -817,7 +817,8 @@ fn output_buttons_and_keys_set_the_tasks() {
     assert_eq!(action_of(Act::Exit), Some(Action::Cancel));
     assert_eq!(action_of(Act::Accept), Some(Action::Accept));
     assert_eq!(action_of(Act::Color(C4::rgb(1, 2, 3))), None);
-    assert_eq!(action_of(Act::Size(1)), None);
+    assert_eq!(action_of(Act::Size(1)), Some(Action::SizeUp));
+    assert_eq!(action_of(Act::Size(-1)), Some(Action::SizeDown));
     for a in [Action::SelectAll, Action::Accept, Action::Cancel] {
         assert_eq!(act_of(a), None);
     }
@@ -1739,4 +1740,100 @@ fn while_mp4_is_checked_the_popover_waits_then_takes_the_config() {
     assert!(p.poll_mp4());
     rec_ui::FAKE_MP4.with(|c| c.set(rec_ui::Mp4::Yes));
     assert_eq!((p.mp4, p.opts.format), (rec_ui::Mp4::No, crate::rec::RecFormat::Gif));
+}
+
+// ---- the redesign's global actions ------------------------------------------
+
+/// Capture full screen: everything, saved at once (the shutter clicks
+/// when it is on); Repeat last capture: that region again, saved; with
+/// nothing to repeat it is a plain capture.
+#[test]
+fn full_screen_and_repeat_last_save_at_once() {
+    let dir = TempDir::new("full");
+    let mut a = app(None);
+    a.st = State::Hidden;
+    a.kind = RunKind::Daemon;
+    a.cfg.save_path = dir.0.display().to_string();
+    a.cfg.save_subfolder = false;
+    a.cfg.shutter_sound = true;
+    crate::sound::take_played();
+    assert!(a.on_hot(HotEvent::RepeatLast));
+    assert!(a.pending.as_ref().is_some_and(|p| !p.accept_on_select && p.region.is_none()), "nothing to repeat yet");
+    a.pending = None;
+    assert!(a.on_hot(HotEvent::Pressed(3)), "the full-screen slot");
+    queue(Ok(synthetic_shot()));
+    a.on_event(Ev::Timer);
+    assert!(hidden(&a), "saved without the overlay staying up");
+    assert_eq!(a.last_region, Some((0, 0, 1440, 900)));
+    assert_eq!(crate::sound::take_played(), 1);
+    let saved: Vec<_> = std::fs::read_dir(&dir.0).unwrap().flatten().collect();
+    assert_eq!(saved.len(), 1, "{saved:?}");
+    // A region, then repeat it.
+    a.last_region = Some((100, 50, 320, 240));
+    a.cfg.shutter_sound = false;
+    a.on_hot(HotEvent::Pressed(5));
+    let p = a.pending.as_ref().unwrap();
+    assert_eq!((p.region, p.accept_on_select), (Some((100, 50, 320, 240)), true));
+    assert!(matches!(p.tasks[..], [Task::Save { path: None, ask: false }]));
+    queue(Ok(synthetic_shot()));
+    a.on_event(Ev::Timer);
+    assert!(hidden(&a));
+    assert_eq!(a.last_region, Some((100, 50, 320, 240)));
+    assert_eq!(crate::sound::take_played(), 0, "sound off");
+    assert_eq!(std::fs::read_dir(&dir.0).unwrap().count(), 2);
+}
+
+/// Capture window: snapping on for that capture even with
+/// `snap_windows` off.
+#[test]
+fn capture_window_forces_snapping() {
+    let mut a = app(None);
+    a.st = State::Hidden;
+    a.kind = RunKind::Daemon;
+    a.cfg.snap_windows = false;
+    a.on_hot(HotEvent::Pressed(4));
+    assert!(a.pending.as_ref().is_some_and(|p| p.pick_window));
+    queue(Ok(synthetic_shot()));
+    a.on_event(Ev::Timer);
+    assert!(ed(&mut a).cfg.snap_windows, "this capture snaps");
+    assert!(!a.cfg.snap_windows, "the setting is unchanged");
+}
+
+/// A global hotkey pressed in the overlay is the overlay's key: the
+/// default capture chord Ctrl+Shift+S is Save As there; Quit still quits.
+#[test]
+fn global_chords_reach_the_overlay() {
+    let mut a = app(Some(r(10.0, 10.0, 200.0, 100.0)));
+    a.kind = RunKind::Daemon;
+    assert_eq!(a.cfg.capture_hotkey, "Ctrl+Shift+S");
+    // A chord bound in the overlay ("]" = size up) does its overlay job.
+    ed(&mut a).tool = Some(Tool::Rect);
+    let before = ed(&mut a).mem.size(Tool::Rect);
+    a.cfg.capture_full_hotkey = "]".into();
+    a.on_hot(HotEvent::Pressed(3));
+    assert!(matches!(a.st, State::Edit(_)) && a.pending.is_none(), "no capture over the open one");
+    assert!(ed(&mut a).mem.size(Tool::Rect) > before, "the overlay got ]");
+    // Ctrl+Shift+S: Save As (a Save that asks).
+    a.on_hot(HotEvent::Pressed(0));
+    let State::Finish(job) = &a.st else { panic!("Save As ran") };
+    assert!(matches!(job.tasks[..], [Task::Save { path: None, ask: true }]), "{:?}", job.tasks);
+    let mut a = app(Some(r(10.0, 10.0, 200.0, 100.0)));
+    a.kind = RunKind::Daemon;
+    assert!(!a.on_hot(HotEvent::Pressed(1)), "Quit quits from the overlay too");
+}
+
+/// Copy to clipboard after capture: a daemon save also copies.
+#[test]
+fn copy_after_capture_joins_the_save() {
+    let mut a = app(Some(r(10.0, 10.0, 200.0, 100.0)));
+    a.kind = RunKind::Daemon;
+    ed(&mut a).cfg.copy_after_capture = true;
+    ed(&mut a).cfg.save_dialog = false;
+    // Stop before the export runs (it would write and copy).
+    let State::Edit(e) = std::mem::replace(&mut a.st, State::Hidden) else { unreachable!() };
+    let mut e = *e;
+    e.tasks = vec![Task::Save { path: None, ask: false }];
+    a.finish(&mut e, false);
+    let State::Finish(job) = &a.st else { panic!("finish job") };
+    assert_eq!(job.tasks, vec![Task::Save { path: None, ask: false }, Task::Copy]);
 }

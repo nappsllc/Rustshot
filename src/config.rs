@@ -42,6 +42,23 @@ pub struct Config {
     pub capture_hotkey: String,
     /// Global hotkey that quits the daemon.
     pub quit_hotkey: String,
+    /// Global hotkey that captures every monitor at once and saves it (no
+    /// overlay).
+    pub capture_full_hotkey: String,
+    /// Global hotkey that opens the overlay picking a window (a click on
+    /// the outlined window selects it).
+    pub capture_window_hotkey: String,
+    /// Global hotkey that captures the last capture's region again (same
+    /// monitor) and saves it.
+    pub repeat_hotkey: String,
+    /// Show the notification-area (tray) icon; off, the daemon runs
+    /// without one (hotkeys and a second launch still capture).
+    pub show_tray: bool,
+    /// Also copy the image to the clipboard when a capture is saved or
+    /// uploaded.
+    pub copy_after_capture: bool,
+    /// A short shutter sound when a capture is taken.
+    pub shutter_sound: bool,
     /// Palette shown in the color picker.
     pub user_colors: Vec<String>,
     /// Imgur client id used for uploads.
@@ -182,8 +199,14 @@ impl Default for Config {
             draw_pixelate_size: 12.0,
             draw_font_size: 16.0,
             undo_limit: 100,
-            capture_hotkey: "Shift+Meta+X".into(),
+            capture_hotkey: "Ctrl+Shift+S".into(),
             quit_hotkey: "Ctrl+Alt+Shift+Q".into(),
+            capture_full_hotkey: "Ctrl+Shift+F".into(),
+            capture_window_hotkey: "Ctrl+Shift+W".into(),
+            repeat_hotkey: String::new(),
+            show_tray: true,
+            copy_after_capture: false,
+            shutter_sound: false,
             user_colors: [
                 "#f04438", "#ff8a1f", "#ffc532", "#2dc06f", "#19b5d6", "#3b82f6", "#8b5cf6",
                 "#ec4899", "#ffffff", "#111318",
@@ -212,7 +235,7 @@ impl Default for Config {
             rec_camera_size: "m".into(),
             rec_camera_mirror: true,
             rec_countdown: true,
-            record_hotkey: "Meta+Shift+R".into(),
+            record_hotkey: "Ctrl+Shift+R".into(),
             rec_linux_encoder: "auto".into(),
             rec_camera_ring_color: String::new(),
             rec_camera_ring_width: RING_WIDTH_DEFAULT,
@@ -709,8 +732,15 @@ pub fn check() -> Result<()> {
 /// do not parse as a chord. Warnings rather than parse errors, so configs
 /// that load today keep loading; an empty value means unbound.
 pub fn hotkey_warnings(cfg: &Config) -> Vec<String> {
-    [("capture_hotkey", &cfg.capture_hotkey), ("quit_hotkey", &cfg.quit_hotkey), ("record_hotkey", &cfg.record_hotkey)]
-        .into_iter()
+    [
+        ("capture_hotkey", &cfg.capture_hotkey),
+        ("quit_hotkey", &cfg.quit_hotkey),
+        ("record_hotkey", &cfg.record_hotkey),
+        ("capture_full_hotkey", &cfg.capture_full_hotkey),
+        ("capture_window_hotkey", &cfg.capture_window_hotkey),
+        ("repeat_hotkey", &cfg.repeat_hotkey),
+    ]
+    .into_iter()
         .filter(|(_, v)| !v.trim().is_empty() && crate::keymap::Chord::parse(v).is_none())
         .map(|(k, v)| format!("{k} = {v:?} is not a valid hotkey; it will not be registered"))
         .collect()
@@ -787,6 +817,12 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
                 cfg.capture_hotkey = as_string(val).map_err(|e| bad("string", &e))?
             }
             "quit_hotkey" => cfg.quit_hotkey = as_string(val).map_err(|e| bad("string", &e))?,
+            "capture_full_hotkey" => cfg.capture_full_hotkey = as_string(val).map_err(|e| bad("string", &e))?,
+            "capture_window_hotkey" => cfg.capture_window_hotkey = as_string(val).map_err(|e| bad("string", &e))?,
+            "repeat_hotkey" => cfg.repeat_hotkey = as_string(val).map_err(|e| bad("string", &e))?,
+            "show_tray" => cfg.show_tray = as_bool(val).map_err(|e| bad("boolean", &e))?,
+            "copy_after_capture" => cfg.copy_after_capture = as_bool(val).map_err(|e| bad("boolean", &e))?,
+            "shutter_sound" => cfg.shutter_sound = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "upload_client_id" => {
                 cfg.upload_client_id = as_string(val).map_err(|e| bad("string", &e))?
             }
@@ -921,6 +957,12 @@ pub fn to_toml(c: &Config) -> String {
          undo_limit = {}\n\
          capture_hotkey = {}\n\
          quit_hotkey = {}\n\
+         capture_full_hotkey = {}\n\
+         capture_window_hotkey = {}\n\
+         repeat_hotkey = {}\n\
+         show_tray = {}\n\
+         copy_after_capture = {}\n\
+         shutter_sound = {}\n\
          user_colors = [{}]\n\
          upload_client_id = {}\n\
          copy_url_after_upload = {}\n\
@@ -967,6 +1009,12 @@ pub fn to_toml(c: &Config) -> String {
         c.undo_limit,
         q(&c.capture_hotkey),
         q(&c.quit_hotkey),
+        q(&c.capture_full_hotkey),
+        q(&c.capture_window_hotkey),
+        q(&c.repeat_hotkey),
+        c.show_tray,
+        c.copy_after_capture,
+        c.shutter_sound,
         colors.join(", "),
         q(&c.upload_client_id),
         c.copy_url_after_upload,
@@ -1493,6 +1541,37 @@ bogus = 1
         }
     }
 
+    /// The redesign's keys: the new global hotkeys (Ctrl+Shift+S/F/W/R as
+    /// on the boards, repeat unbound), the tray, copy-after-capture and the
+    /// shutter sound; a file without them gets the defaults, one with them
+    /// keeps its values.
+    #[test]
+    fn redesign_keys_defaults_and_roundtrip() {
+        let d = Config::default();
+        let hk = [d.capture_hotkey.as_str(), d.capture_full_hotkey.as_str(), d.capture_window_hotkey.as_str(), d.record_hotkey.as_str()];
+        assert_eq!(hk, ["Ctrl+Shift+S", "Ctrl+Shift+F", "Ctrl+Shift+W", "Ctrl+Shift+R"]);
+        assert_eq!(d.repeat_hotkey, "");
+        assert!(d.show_tray && !d.copy_after_capture && !d.shutter_sound);
+        let c = Config {
+            capture_full_hotkey: "Ctrl+Alt+F".into(),
+            capture_window_hotkey: "".into(),
+            repeat_hotkey: "Ctrl+Alt+Shift+P".into(),
+            show_tray: false,
+            copy_after_capture: true,
+            shutter_sound: true,
+            ..Config::default()
+        };
+        assert_eq!(parse_config(&to_toml(&c)).unwrap(), c);
+        assert!(!rewrite_loses(&to_toml(&c)));
+        // An older file (written before these keys) keeps its own hotkeys.
+        let old = parse_config("capture_hotkey = \"Shift+Meta+X\"\nrecord_hotkey = \"Meta+Shift+R\"\n").unwrap();
+        assert_eq!((old.capture_hotkey.as_str(), old.record_hotkey.as_str()), ("Shift+Meta+X", "Meta+Shift+R"));
+        assert_eq!(old.capture_full_hotkey, "Ctrl+Shift+F");
+        assert!(parse_config("show_tray = 1").is_err());
+        let w = hotkey_warnings(&Config { repeat_hotkey: "Nope+".into(), ..Config::default() });
+        assert!(w.len() == 1 && w[0].starts_with("repeat_hotkey"), "{w:?}");
+    }
+
     #[test]
     fn parses_comments_and_escapes() {
         let text = concat!(
@@ -1528,7 +1607,7 @@ bogus = 1
         assert!(!d.rec_camera && d.rec_camera_device.is_empty());
         assert_eq!((d.rec_camera_shape.as_str(), d.rec_camera_size.as_str()), ("circle", "m"));
         assert!(d.rec_camera_mirror && d.rec_countdown);
-        assert_eq!(d.record_hotkey, "Meta+Shift+R");
+        assert_eq!(d.record_hotkey, "Ctrl+Shift+R");
         assert!(crate::keymap::Chord::parse(&d.record_hotkey).is_some());
         assert_eq!(d.rec_linux_encoder, "auto");
         assert_eq!(parse_config(&to_toml(&d)).unwrap(), d);

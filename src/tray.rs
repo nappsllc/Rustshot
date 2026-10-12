@@ -86,12 +86,29 @@ pub fn saved_text(path: &std::path::Path, warnings: &[String]) -> String {
     t
 }
 
-/// Start the tray for the running daemon. `tx` receives Capture/Quit.
-pub fn spawn(tx: Sender<HotEvent>) {
+/// Start the tray for the running daemon. `tx` receives Capture/Quit;
+/// `visible` (`show_tray`) false: no icon until [`set_visible`].
+pub fn spawn(tx: Sender<HotEvent>, visible: bool) {
+    VISIBLE.store(visible, std::sync::atomic::Ordering::SeqCst);
     #[cfg(windows)]
     crate::tray_win::spawn(tx);
     #[cfg(not(windows))]
     let _ = tx; // macOS / Linux backends arrive in later tasks.
+}
+
+static VISIBLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Whether the icon is wanted (`show_tray`).
+pub fn is_visible() -> bool {
+    VISIBLE.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Show or hide the icon (Settings changed `show_tray`); the daemon,
+/// its hotkeys and a second launch work either way.
+pub fn set_visible(on: bool) {
+    VISIBLE.store(on, std::sync::atomic::Ordering::SeqCst);
+    #[cfg(all(windows, not(test)))]
+    crate::tray_win::refresh_visible();
 }
 
 /// Tell the user `text` outside any window: a tray balloon on Windows,
@@ -102,8 +119,13 @@ pub fn notify(text: &str) {
     {
         NOTES.with(|n| n.borrow_mut().push(text.to_string()));
     }
+    // No icon, no balloon: stderr instead.
     #[cfg(all(windows, not(test)))]
-    crate::tray_win::notify(text);
+    if is_visible() {
+        crate::tray_win::notify(text);
+    } else {
+        eprintln!("rustshot: {text}");
+    }
     #[cfg(not(windows))]
     eprintln!("rustshot: {text}");
 }

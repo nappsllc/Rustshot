@@ -20,13 +20,27 @@ pub enum HotEvent {
     /// The record hotkey: start a recording (area selection in record
     /// mode) when idle, stop the one in progress otherwise.
     Record,
+    /// Capture every monitor at once and save it (no overlay).
+    CaptureFull,
+    /// The overlay picking a window: a click selects the outlined one.
+    CaptureWindow,
+    /// The last capture's region again, saved like it.
+    RepeatLast,
+    /// A global hotkey was pressed: slot `i` ([`SLOT_KEYS`]). The daemon
+    /// runs [`slot_event`]`(i)`, or, with the overlay open, hands the chord
+    /// to the overlay as a key (Ctrl+Shift+S is Save As in there).
+    Pressed(usize),
     /// Stop the recording in progress (the tray).
     #[cfg_attr(not(windows), allow(dead_code))] // the Linux/macOS trays come later
     StopRecording,
 }
 
-/// Global hotkey slots: capture, quit, record.
-pub const SLOTS: usize = 3;
+/// Global hotkey slots: capture, quit, record, full screen, window, repeat.
+pub const SLOTS: usize = 6;
+
+/// The config key of each slot (`Failure::slot` indexes it).
+pub const SLOT_KEYS: [&str; SLOTS] =
+    ["capture_hotkey", "quit_hotkey", "record_hotkey", "capture_full_hotkey", "capture_window_hotkey", "repeat_hotkey"];
 
 /// Global hotkeys backed by Win32 `RegisterHotKey` (replaces the
 /// `global-hotkey` crate). Registration and the message loop run on a
@@ -40,7 +54,7 @@ pub struct Hotkeys {
     /// The startup registration's result, not read yet.
     #[cfg(not(target_os = "macos"))]
     started: Option<Receiver<Registered>>,
-    /// The specs registered now (capture, quit, record); "" where none is (or
+    /// The specs registered now (per slot); "" where none is (or
     /// where it is not known, so the next reload tries again).
     specs: [String; SLOTS],
     /// Failures already told to the user (once per run each).
@@ -63,7 +77,7 @@ pub enum Cause {
     Unknown,
 }
 
-/// Per slot (capture, quit, record): registered (or nothing to register), or why not.
+/// Per slot: registered (or nothing to register), or why not.
 #[cfg_attr(target_os = "macos", allow(dead_code))] // macOS: hotkeys apply after a restart
 pub type Registered = [Result<(), Cause>; SLOTS];
 
@@ -86,19 +100,41 @@ fn publish(f: &[Failure]) {
 #[cfg(not(target_os = "macos"))]
 const RESULT_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// Registration specs for `[capture, quit, record]`: ids 1, 2 and 3.
-fn specs_for(s: &[String; SLOTS]) -> [(i32, String, HotEvent); SLOTS] {
-    [(1, s[0].clone(), HotEvent::Capture), (2, s[1].clone(), HotEvent::Quit), (3, s[2].clone(), HotEvent::Record)]
+/// The event of each slot.
+pub fn slot_event(i: usize) -> HotEvent {
+    match i {
+        0 => HotEvent::Capture,
+        1 => HotEvent::Quit,
+        2 => HotEvent::Record,
+        3 => HotEvent::CaptureFull,
+        4 => HotEvent::CaptureWindow,
+        _ => HotEvent::RepeatLast,
+    }
 }
 
-fn wanted(cfg: &Config) -> [String; SLOTS] {
-    [cfg.capture_hotkey.trim().to_string(), cfg.quit_hotkey.trim().to_string(), cfg.record_hotkey.trim().to_string()]
+/// Registration specs per slot: ids 1..=SLOTS.
+fn specs_for(s: &[String; SLOTS]) -> [(i32, String, HotEvent); SLOTS] {
+    std::array::from_fn(|i| (i as i32 + 1, s[i].clone(), HotEvent::Pressed(i)))
+}
+
+/// The chord each slot wants (trimmed; "" = none), in slot order.
+pub fn wanted(cfg: &Config) -> [String; SLOTS] {
+    [
+        &cfg.capture_hotkey,
+        &cfg.quit_hotkey,
+        &cfg.record_hotkey,
+        &cfg.capture_full_hotkey,
+        &cfg.capture_window_hotkey,
+        &cfg.repeat_hotkey,
+    ]
+    .map(|s| s.trim().to_string())
 }
 
 /// A hotkey `reload` could not register.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Failure {
-    /// 0 = capture, 1 = quit, 2 = record.
+    /// Index into [`SLOT_KEYS`]: 0 = capture, 1 = quit, 2 = record, 3 =
+    /// full screen, 4 = window, 5 = repeat.
     pub slot: usize,
     pub wanted: String,
     pub cause: Cause,
@@ -406,6 +442,8 @@ fn key_vk(lower: &str) -> Option<u32> {
         "printscreen" | "prtsc" | "print" => key::PRINTSCREEN,
         "=" | "equals" | "plus" => key::EQUALS,
         "-" | "minus" => key::MINUS,
+        "[" | "bracketleft" => key::LBRACKET,
+        "]" | "bracketright" => key::RBRACKET,
         "numpadadd" => key::ADD,
         "numpadsubtract" => key::SUBTRACT,
         _ => {
@@ -444,6 +482,8 @@ pub fn key_name(vk: u32) -> Option<String> {
         key::PRINTSCREEN => "PrintScreen",
         key::EQUALS => "=",
         key::MINUS => "-",
+        key::LBRACKET => "[",
+        key::RBRACKET => "]",
         key::ADD => "NumpadAdd",
         key::SUBTRACT => "NumpadSubtract",
         k if (key::NUMPAD0..=key::NUMPAD0 + 9).contains(&k) => return Some(format!("Numpad{}", k - key::NUMPAD0)),
@@ -472,7 +512,20 @@ mod tests {
     }
 
     fn s2(a: &str, b: &str) -> [String; SLOTS] {
-        [a.to_string(), b.to_string(), String::new()]
+        std::array::from_fn(|i| match i {
+            0 => a.to_string(),
+            1 => b.to_string(),
+            _ => String::new(),
+        })
+    }
+
+    /// `r` for the first two slots, Ok for the rest.
+    fn r2(a: Result<(), Cause>, b: Result<(), Cause>) -> Registered {
+        std::array::from_fn(|i| match i {
+            0 => a,
+            1 => b,
+            _ => Ok(()),
+        })
     }
 
     /// A fake registrar: chords in `taken` belong to another app.
@@ -577,7 +630,7 @@ mod tests {
         let mut n = 0;
         let (now, f) = plan_reload(&old, &want, |s| {
             n += 1;
-            if n == 1 { [Err(Cause::InUse), Ok(()), Ok(())] } else { unanswered(s) }
+            if n == 1 { r2(Err(Cause::InUse), Ok(())) } else { unanswered(s) }
         });
         assert_eq!(now, s2("", ""));
         assert_eq!(f, [fail(0, "Ctrl+Alt+F9", Cause::InUse, None), fail(1, "Ctrl+Alt+F10", Cause::Unknown, None)]);
@@ -592,7 +645,7 @@ mod tests {
         assert_eq!(m(Cause::Unknown), "Couldn't confirm Ctrl+Alt+F9 was registered.");
         // An invalid chord is reported as such, left as written.
         let (_, f) = plan_reload(&s2("", ""), &s2("Hyper+X", ""), |s| {
-            [if s[0].is_empty() { Ok(()) } else { Err(Cause::Invalid) }, Ok(()), Ok(())]
+            r2(if s[0].is_empty() { Ok(()) } else { Err(Cause::Invalid) }, Ok(()))
         });
         assert_eq!(f[0].message(), "Couldn't register Hyper+X — it's not a hotkey Rustshot can register.");
     }
@@ -624,14 +677,35 @@ mod tests {
         assert_eq!(w[2], "Ctrl+Alt+R");
         let specs = specs_for(&w);
         assert_eq!(specs[2].0, 3);
-        assert!(matches!(specs[2].2, HotEvent::Record));
+        assert!(matches!(specs[2].2, HotEvent::Pressed(2)) && matches!(slot_event(2), HotEvent::Record));
         let mut calls = Vec::new();
         let old = s2("Shift+Meta+X", "");
-        let want = [w[0].clone(), w[1].clone(), w[2].clone()];
+        let want = w.clone();
         let (now, f) = plan_reload(&old, &want, registrar(&["Ctrl+Alt+R"], &mut calls));
         assert_eq!(now[2], "");
         assert_eq!(f.len(), 1);
         assert_eq!((f[0].slot, f[0].cause), (2, Cause::InUse));
+    }
+
+    /// The redesign's global actions are slots 3-5 with their own events
+    /// and config keys; a failure on one names it.
+    #[test]
+    fn new_global_actions_are_slots() {
+        let cfg = Config { repeat_hotkey: "Ctrl+Alt+P".into(), ..Config::default() };
+        let w = wanted(&cfg);
+        assert_eq!(w, ["Ctrl+Shift+S", "Ctrl+Alt+Shift+Q", "Ctrl+Shift+R", "Ctrl+Shift+F", "Ctrl+Shift+W", "Ctrl+Alt+P"]);
+        let specs = specs_for(&w);
+        for (i, (id, _, ev)) in specs.iter().enumerate() {
+            assert!(*id == i as i32 + 1 && matches!(ev, HotEvent::Pressed(j) if *j == i));
+        }
+        assert!(matches!(slot_event(3), HotEvent::CaptureFull));
+        assert!(matches!(slot_event(4), HotEvent::CaptureWindow));
+        assert!(matches!(slot_event(5), HotEvent::RepeatLast));
+        assert_eq!(SLOT_KEYS[5], "repeat_hotkey");
+        let mut calls = Vec::new();
+        let (now, f) = plan_reload(&s2("", ""), &w, registrar(&["Ctrl+Shift+W"], &mut calls));
+        assert_eq!(now[4], "");
+        assert_eq!((f.len(), f[0].slot, f[0].cause), (1, 4, Cause::InUse));
     }
 
     #[test]
@@ -640,7 +714,7 @@ mod tests {
             let n = key_name(vk).unwrap();
             assert_eq!(key_vk(&n.to_ascii_lowercase()), Some(vk), "{n}");
         }
-        for vk in [key::SPACE, key::RETURN, key::ESCAPE, key::DELETE, key::PRINTSCREEN, key::LEFT, key::EQUALS, key::MINUS, key::ADD, key::SUBTRACT, key::NUMPAD0, key::NUMPAD0 + 9] {
+        for vk in [key::SPACE, key::RETURN, key::ESCAPE, key::DELETE, key::PRINTSCREEN, key::LEFT, key::EQUALS, key::MINUS, key::LBRACKET, key::RBRACKET, key::ADD, key::SUBTRACT, key::NUMPAD0, key::NUMPAD0 + 9] {
             let n = key_name(vk).unwrap();
             assert_eq!(key_vk(&n.to_ascii_lowercase()), Some(vk), "{n}");
         }

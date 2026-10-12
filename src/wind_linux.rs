@@ -1143,6 +1143,8 @@ fn vk_of(ks: c_ulong) -> u32 {
         0x30..=0x39 => ks as u32,                       // 0..9
         0x3d | 0x2b => key::EQUALS,                     // = and + (one key on US layouts)
         0x2d | 0x5f => key::MINUS,                      // - and _
+        0x5b | 0x7b => key::LBRACKET,                   // [ and {
+        0x5d | 0x7d => key::RBRACKET,                   // ] and }
         0xffab => key::ADD,                             // KP_Add
         0xffad => key::SUBTRACT,                        // KP_Subtract
         0xffb0..=0xffb9 => key::NUMPAD0 + (ks - 0xffb0) as u32, // KP_0..KP_9

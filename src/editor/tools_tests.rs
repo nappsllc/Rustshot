@@ -145,7 +145,7 @@ fn tools_remember_size_and_colour_into_the_next_capture() {
     let mut a = app_big();
     a.kind = RunKind::Daemon;
     let green = C4::rgb(0, 200, 80);
-    key(&mut a, 'D' as u32); // Line
+    key(&mut a, 'L' as u32); // Line
     act(&mut a, Act::Size(1));
     act(&mut a, Act::Size(1));
     act(&mut a, Act::Color(green));
@@ -182,7 +182,7 @@ fn tools_remember_size_and_colour_into_the_next_capture() {
     assert_eq!(e.mem.size(Tool::Pixelate), 13.0);
     assert_eq!((e.mem.size(Tool::Arrow), e.mem.color(Tool::Arrow)), (3.0, C4::rgb(240, 68, 56)), "never changed: the defaults");
     // A line drawn now has the remembered width and colour.
-    key(&mut a, 'D' as u32);
+    key(&mut a, 'L' as u32);
     down(&mut a, (300, 300));
     mv(&mut a, (400, 350));
     up(&mut a, (400, 350));
@@ -200,7 +200,7 @@ fn remembered_settings_are_written_after_a_pause_and_on_close() {
     let file = Scratch::new("debounce", "# my settings\ntheme = \"dark\" # keep\n\n[shortcuts]\nsave = \"Ctrl+S\"\n");
     let mut a = app_big();
     ed(&mut a).cfg_path = Some(file.0.clone());
-    key(&mut a, 'D' as u32);
+    key(&mut a, 'L' as u32);
     for _ in 0..3 {
         act(&mut a, Act::Size(1));
     }
@@ -310,7 +310,7 @@ fn open_picker(a: &mut App) {
 #[test]
 fn picker_drags_live_esc_reverts_enter_keeps() {
     let mut a = app_big();
-    key(&mut a, 'D' as u32);
+    key(&mut a, 'L' as u32);
     let orig = ed(&mut a).color();
     open_picker(&mut a);
     let hue = item(&mut a, |k| *k == toolbar::Kind::PickHue);
@@ -359,7 +359,7 @@ fn picker_drags_live_esc_reverts_enter_keeps() {
 #[test]
 fn picker_keyboard_hex_and_opacity() {
     let mut a = app_big();
-    key(&mut a, 'D' as u32);
+    key(&mut a, 'L' as u32);
     open_picker(&mut a);
     // Typing goes to the hex field (it takes the focus, the text replaced).
     type_str(&mut a, "#00ff00");
@@ -431,7 +431,7 @@ fn picker_slider_and_recents_by_mouse() {
 #[test]
 fn eyedropper_samples_the_screenshot() {
     let mut a = app_big();
-    key(&mut a, 'D' as u32);
+    key(&mut a, 'L' as u32);
     open_picker(&mut a);
     let eye = item(&mut a, |k| *k == toolbar::Kind::Btn(Act::Eyedrop));
     click(&mut a, mid(eye));
@@ -499,7 +499,7 @@ fn loupe_uses_the_monitor_under_the_pointer() {
     shot.monitors = vec![c, left, right, above, below];
     let mut a = preview_app_with(theme::DARK, Some(r(560.0, 380.0, 300.0, 120.0)), shot);
     a.focus_tries = u8::MAX;
-    key(&mut a, 'D' as u32);
+    key(&mut a, 'L' as u32);
     open_picker(&mut a);
     let mon = |m: (i32, i32, u32, u32)| r(m.0 as f32, m.1 as f32, m.2 as f32, m.3 as f32);
     for (name, m, p) in [
@@ -534,7 +534,7 @@ fn dirty_rects_cover_the_new_chrome() {
     assert_dirty_covers(&mut a, "palette with the rainbow", |a| act(a, Act::Palette));
     snap_all(&mut a);
     assert_dirty_covers(&mut a, "picker opens", |a| {
-        key(a, 'D' as u32);
+        key(a, 'L' as u32);
         act(a, Act::Wheel);
     });
     snap_all(&mut a);
@@ -700,7 +700,7 @@ fn ring_picker_closed_unchanged_keeps_the_accent() {
 fn tool_picker_closed_unchanged_remembers_nothing() {
     let mut a = app_big();
     ed(&mut a).cfg.recent_colors = vec!["#00ff00".into(), "#123456".into()];
-    key(&mut a, 'D' as u32);
+    key(&mut a, 'L' as u32);
     ed(&mut a).pending.take();
     open_picker(&mut a);
     key(&mut a, wind::key::RETURN);
@@ -717,7 +717,7 @@ fn quitting_keeps_the_picked_colour_and_flushes() {
     let mut a = app_big();
     a.kind = RunKind::Daemon;
     ed(&mut a).cfg_path = Some(file.0.clone());
-    key(&mut a, 'D' as u32);
+    key(&mut a, 'L' as u32);
     open_picker(&mut a);
     type_str(&mut a, "#0a0b0c");
     assert!(!file.text().contains("tool_line_color"), "not yet");
@@ -743,7 +743,7 @@ fn no_palette_for_pixelate_and_invert() {
         act(&mut a, Act::Wheel);
         assert!(ed(&mut a).pick.is_none(), "{k}: no picker");
     }
-    key(&mut a, 'D' as u32);
+    key(&mut a, 'L' as u32);
     act(&mut a, Act::Palette);
     assert!(ed(&mut a).palette_open);
 }

@@ -63,3 +63,64 @@ pub fn toggle_autostart() -> Result<bool, String> {
     crate::autostart::set(on)?;
     Ok(on)
 }
+
+/// The tasks of a capture with `copy_after_capture` applied: one that
+/// saves or uploads also copies the image (once).
+pub fn after_capture(mut tasks: Vec<crate::export::Task>, cfg: &crate::config::Config) -> Vec<crate::export::Task> {
+    use crate::export::Task;
+    let keeps = tasks.iter().any(|t| matches!(t, Task::Save { .. } | Task::SaveDesktop | Task::Upload));
+    if cfg.copy_after_capture && keeps && !tasks.contains(&Task::Copy) {
+        tasks.push(Task::Copy);
+    }
+    tasks
+}
+
+/// The shutter sound (`shutter_sound`).
+pub fn shutter() {
+    crate::sound::shutter();
+}
+
+/// The monitor to capture for Repeat last capture: `None` (the overlay's
+/// usual span) when every monitor shares one scale, else the one holding
+/// the centre of `r` (global physical px).
+pub fn monitor_for_region(mons: &[crate::capture::MonInfo], r: (i32, i32, u32, u32)) -> Option<u32> {
+    if crate::capture::uniform_scale(mons).is_some() {
+        return None;
+    }
+    let (cx, cy) = (r.0 + r.2 as i32 / 2, r.1 + r.3 as i32 / 2);
+    mons.iter()
+        .position(|m| cx >= m.x && cy >= m.y && cx < m.x + m.w as i32 && cy < m.y + m.h as i32)
+        .map(|i| i as u32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::export::Task;
+
+    #[test]
+    fn copy_after_capture_adds_one_copy_to_saves_and_uploads() {
+        let on = Config { copy_after_capture: true, ..Config::default() };
+        let save = || vec![Task::Save { path: None, ask: false }];
+        assert_eq!(after_capture(save(), &Config::default()), save(), "off: unchanged");
+        assert_eq!(after_capture(save(), &on), vec![Task::Save { path: None, ask: false }, Task::Copy]);
+        assert_eq!(after_capture(vec![Task::SaveDesktop], &on), vec![Task::SaveDesktop, Task::Copy]);
+        assert_eq!(after_capture(vec![Task::Upload], &on), vec![Task::Upload, Task::Copy]);
+        assert_eq!(after_capture(vec![Task::Copy], &on), vec![Task::Copy], "a copy is not doubled");
+        assert_eq!(after_capture(vec![Task::Copy, Task::Upload], &on), vec![Task::Copy, Task::Upload]);
+        assert_eq!(after_capture(vec![], &on), vec![], "cancelled / recording: nothing");
+    }
+
+    #[test]
+    fn repeat_monitor_only_when_scales_differ() {
+        use crate::capture::MonInfo;
+        let m = |x, scale| MonInfo { x, y: 0, w: 1920, h: 1080, scale, primary: x == 0 };
+        let same = [m(0, 1.0), m(1920, 1.0)];
+        assert_eq!(monitor_for_region(&same, (2000, 100, 300, 200)), None);
+        let mixed = [m(0, 1.0), m(1920, 1.5)];
+        assert_eq!(monitor_for_region(&mixed, (2000, 100, 300, 200)), Some(1));
+        assert_eq!(monitor_for_region(&mixed, (10, 10, 30, 20)), Some(0));
+        assert_eq!(monitor_for_region(&mixed, (-900, 10, 30, 20)), None, "off every monitor");
+    }
+}

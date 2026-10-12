@@ -35,6 +35,7 @@ mod rec_ui;
 mod settings_ui;
 mod sha256;
 mod snap;
+mod sound;
 mod text;
 mod theme;
 mod tray;

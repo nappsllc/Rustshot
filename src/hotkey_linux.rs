@@ -293,6 +293,8 @@ fn keysym_of_vk(vk: u32) -> Option<c_ulong> {
         k if k == key::PRINTSCREEN => 0xff61,
         k if k == key::EQUALS => 0x3d,
         k if k == key::MINUS => 0x2d,
+        k if k == key::LBRACKET => 0x5b,
+        k if k == key::RBRACKET => 0x5d,
         k if k == key::ADD => 0xffab,
         k if k == key::SUBTRACT => 0xffad,
         k if (key::NUMPAD0..=key::NUMPAD0 + 9).contains(&k) => (0xffb0 + (k - key::NUMPAD0)) as c_ulong,

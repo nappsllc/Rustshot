@@ -21,6 +21,9 @@ pub enum Action {
     ToolCounter,
     ToolPixelate,
     ToolInvert,
+    /// The current tool's stroke size one step down / up (also the wheel).
+    SizeDown,
+    SizeUp,
     Copy,
     Save,
     SaveAs,
@@ -46,7 +49,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Action; 25] = [
+    pub const ALL: [Action; 27] = [
         Action::ToolPencil,
         Action::ToolLine,
         Action::ToolArrow,
@@ -57,6 +60,8 @@ impl Action {
         Action::ToolCounter,
         Action::ToolPixelate,
         Action::ToolInvert,
+        Action::SizeDown,
+        Action::SizeUp,
         Action::Copy,
         Action::Save,
         Action::SaveAs,
@@ -91,15 +96,18 @@ impl Action {
     fn info(self) -> (&'static str, &'static str, &'static [&'static str]) {
         match self {
             Action::ToolPencil => ("tool_pencil", "Pencil", &["P"]),
-            Action::ToolLine => ("tool_line", "Line", &["D"]),
+            Action::ToolLine => ("tool_line", "Line", &["L"]),
             Action::ToolArrow => ("tool_arrow", "Arrow", &["A"]),
             Action::ToolRectangle => ("tool_rectangle", "Rectangle", &["R"]),
-            Action::ToolCircle => ("tool_circle", "Circle", &["C"]),
+            Action::ToolCircle => ("tool_circle", "Ellipse", &["E"]),
             Action::ToolMarker => ("tool_marker", "Marker", &["M"]),
             Action::ToolText => ("tool_text", "Text", &["T"]),
             Action::ToolCounter => ("tool_counter", "Number", &["N"]),
-            Action::ToolPixelate => ("tool_pixelate", "Pixelate", &["B"]),
+            // X as on the design boards; B (blur) as before.
+            Action::ToolPixelate => ("tool_pixelate", "Pixelate", &["X", "B"]),
             Action::ToolInvert => ("tool_invert", "Invert", &["I"]),
+            Action::SizeDown => ("size_down", "Stroke size −", &["["]),
+            Action::SizeUp => ("size_up", "Stroke size +", &["]"]),
             Action::Copy => ("copy", "Copy", &["Ctrl+C"]),
             Action::Save => ("save", "Save", &["Ctrl+S"]),
             Action::SaveAs => ("save_as", "Save As", &["Ctrl+Shift+S"]),
@@ -291,17 +299,19 @@ mod tests {
     #[test]
     fn defaults_match_spec_table() {
         let km = Keymap::defaults();
-        let want: [(Action, &[&str]); 25] = [
+        let want: [(Action, &[&str]); 27] = [
             (Action::ToolPencil, &["P"]),
-            (Action::ToolLine, &["D"]),
+            (Action::ToolLine, &["L"]),
             (Action::ToolArrow, &["A"]),
             (Action::ToolRectangle, &["R"]),
-            (Action::ToolCircle, &["C"]),
+            (Action::ToolCircle, &["E"]),
             (Action::ToolMarker, &["M"]),
             (Action::ToolText, &["T"]),
             (Action::ToolCounter, &["N"]),
-            (Action::ToolPixelate, &["B"]),
+            (Action::ToolPixelate, &["X", "B"]),
             (Action::ToolInvert, &["I"]),
+            (Action::SizeDown, &["["]),
+            (Action::SizeUp, &["]"]),
             (Action::Copy, &["Ctrl+C"]),
             (Action::Save, &["Ctrl+S"]),
             (Action::SaveAs, &["Ctrl+Shift+S"]),
@@ -343,7 +353,7 @@ mod tests {
 
     #[test]
     fn parse_display_round_trip() {
-        for s in ["Ctrl+Shift+S", "Meta+X", "Del", "Space", "Q", "F5", "F12", "Ctrl+Alt+Shift+Meta+7", "Esc", "Enter", "Ctrl+=", "Ctrl+-", "Ctrl+NumpadAdd", "Ctrl+NumpadSubtract", "Ctrl+Numpad0", "Numpad9"] {
+        for s in ["Ctrl+Shift+S", "[", "]", "Ctrl+[", "Meta+X", "Del", "Space", "Q", "F5", "F12", "Ctrl+Alt+Shift+Meta+7", "Esc", "Enter", "Ctrl+=", "Ctrl+-", "Ctrl+NumpadAdd", "Ctrl+NumpadSubtract", "Ctrl+Numpad0", "Numpad9"] {
             let c = Chord::parse(s).unwrap_or_else(|| panic!("{s}"));
             assert_eq!(c.display(), s);
             assert_eq!(Chord::parse(&c.display()), Some(c));
@@ -424,7 +434,14 @@ mod tests {
         assert_eq!(km.resolve('S' as u32, m(true, true, false)), Some(Action::SaveAs));
         assert_eq!(km.resolve('S' as u32, m(true, true, true)), None);
         assert_eq!(km.resolve('D' as u32, m(true, false, false)), Some(Action::SaveDesktop));
-        assert_eq!(km.resolve('D' as u32, NONE), Some(Action::ToolLine));
+        assert_eq!(km.resolve('D' as u32, NONE), None, "D was Line before the redesign");
+        assert_eq!(km.resolve('L' as u32, NONE), Some(Action::ToolLine));
+        assert_eq!(km.resolve('E' as u32, NONE), Some(Action::ToolCircle));
+        assert_eq!(km.resolve('X' as u32, NONE), Some(Action::ToolPixelate));
+        assert_eq!(km.resolve('B' as u32, NONE), Some(Action::ToolPixelate));
+        assert_eq!(km.resolve(key::LBRACKET, NONE), Some(Action::SizeDown));
+        assert_eq!(km.resolve(key::RBRACKET, NONE), Some(Action::SizeUp));
+        assert_eq!(km.resolve('C' as u32, NONE), None);
         assert_eq!(km.resolve('N' as u32, NONE), Some(Action::ToolCounter));
         assert_eq!(km.resolve('Z' as u32, m(true, false, false)), Some(Action::Undo));
         assert_eq!(km.resolve('Z' as u32, m(true, true, false)), Some(Action::Redo));

@@ -266,6 +266,9 @@ pub mod key {
     pub const EQUALS: u32 = 0xBB;
     /// VK_OEM_MINUS: the -/_ key.
     pub const MINUS: u32 = 0xBD;
+    /// VK_OEM_4 / VK_OEM_6: the [ and ] keys (US layout).
+    pub const LBRACKET: u32 = 0xDB;
+    pub const RBRACKET: u32 = 0xDD;
 }
 
 #[cfg(windows)]
