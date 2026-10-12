@@ -107,6 +107,7 @@ rustshot gui --region 800x600+100+100 --upload
 rustshot full --raw > shot.png    # PNG bytes to stdout
 rustshot update                   # check for a newer release
 rustshot settings                 # open the Settings window
+rustshot history                  # open the History window (captures kept; Edit)
 rustshot register-screenclip on   # Windows: Win+Shift+S opens Rustshot (off undoes it)
 rustshot --help
 ```

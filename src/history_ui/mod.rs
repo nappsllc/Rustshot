@@ -463,6 +463,28 @@ static OPEN: Mutex<Option<Sender<Msg>>> = Mutex::new(None);
 /// The window [`show_clear`] opens starts with the question.
 static START_CLEAR: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// `rustshot history`: the window on this thread; returns once it and
+/// the Edit windows it opened are closed.
+pub fn run_here() {
+    #[cfg(target_os = "macos")]
+    show();
+    #[cfg(not(target_os = "macos"))]
+    {
+        let (tx, rx) = std::sync::mpsc::channel();
+        {
+            let mut open = lock(&OPEN);
+            if let Some(t) = open.as_ref()
+                && t.send(Msg::Raise).is_ok()
+            {
+                return;
+            }
+            *open = Some(tx);
+        }
+        run(rx);
+        crate::edit_ui::wait_all();
+    }
+}
+
 /// Open the History window (or raise it) asking "Clear history?".
 pub fn show_clear() {
     #[cfg(not(target_os = "macos"))]

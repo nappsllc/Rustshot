@@ -446,9 +446,13 @@ fn edit_window_smoke() {
         return;
     }
     let _guard = crate::wind::test_window_lock();
-    let (_r, mut w) = window("smoke", page(1180, 760), objects(), DARK, 1.0);
+    // RUSTSHOT_EDIT_SMOKE_4K=1: a 4K capture (with RUSTSHOT_PERFLOG, the
+    // paint lines say what presenting a frame costs).
+    let big = std::env::var_os("RUSTSHOT_EDIT_SMOKE_4K").is_some();
+    let img = if big { page(3840, 2160) } else { page(1180, 760) };
+    let (_r, mut w) = window("smoke", img, objects(), DARK, 1.0);
     w.scale = None;
-    let mut d = crate::wind::AutoClose::new(&mut w, 1000);
+    let mut d = crate::wind::AutoClose::new(&mut w, if big { 3000 } else { 1000 });
     let spec = crate::wind::WindowSpec { title: "Rustshot Edit".into(), w: W, h: H, resizable: true, min: MIN };
     crate::wind::run_window(spec, &mut d).expect("edit window");
     assert!(d.frames > 0, "drew a frame");

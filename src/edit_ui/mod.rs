@@ -246,6 +246,14 @@ pub fn open(id: &str) {
     }
 }
 
+/// Wait until every Edit window is closed (`rustshot history` before it
+/// exits).
+pub fn wait_all() {
+    while !lock(&OPEN).is_empty() {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
 /// The entry, waiting (a little) for the history thread to finish it: a
 /// thumbnail's Edit can come before the files are written.
 fn load(store: &Store, id: &str) -> Option<Entry> {
