@@ -35,7 +35,7 @@ renderer.
   opens the History window, and **Edit** reopens a capture in a zoomable
   window with the overlay's tools ([History](#history-and-the-edit-window)).
 - **Copy text from an area** (OCR): <kbd>O</kbd> in the overlay, or
-  <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> to pick an area and copy its
+  <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> to pick an area and copy its
   text at once ([Copy text](#copy-text-ocr)).
 - **Screen recording** of a region or a screen to MP4 or GIF, with system
   sound, the microphone and an on-screen camera bubble
@@ -329,9 +329,9 @@ snaps even then.
 | Capture region (the overlay) | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>X</kbd> | `capture_hotkey` |
 | Capture full screen (saved at once, no overlay) | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> | `capture_full_hotkey` |
 | Capture window (the overlay picking a window: a click selects it) | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd> | `capture_window_hotkey` |
-| Record video (again: stop) | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> | `record_hotkey` |
+| Record video (again: stop) | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>G</kbd> | `record_hotkey` |
 | Repeat last capture (the same region, saved at once) | none | `repeat_hotkey` |
-| Copy text from area (pick an area, its text is copied; no annotation) | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> | `capture_text_hotkey` |
+| Copy text from area (pick an area, its text is copied; no annotation) | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> | `capture_text_hotkey` |
 | Open History | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd> | `history_hotkey` |
 | Quit Rustshot | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>Q</kbd> | `quit_hotkey` |
 
@@ -354,7 +354,7 @@ the overlay.
 <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> in the overlay) recognizes the
 text in the selection and copies it as plain text; the overlay closes at
 once and the notice says *Copied text · 3 lines* (or *No text found*).
-<kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> (`capture_text_hotkey`) does
+<kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> (`capture_text_hotkey`) does
 the same straight from an area pick, with no annotation step. Lines come
 top to bottom, words joined with spaces; small areas are read at twice
 their size. Nothing is bundled or downloaded, and the image never leaves
@@ -491,7 +491,7 @@ Record is not offered.
 
 ### Recording
 
-Press the record hotkey (default <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd>),
+Press the record hotkey (default <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>G</kbd>),
 or switch the overlay to **Video** (the mode switch above the selection,
 or <kbd>2</kbd>; <kbd>1</kbd> goes back to Screenshot, **Close** or
 <kbd>Esc</kbd> cancels). Video mode draws nothing; its panel, centred
@@ -532,7 +532,7 @@ recording**) and on global chords that are registered only while it runs:
 
 | While recording | Default |
 |---|---|
-| Stop | the record hotkey (<kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd>) |
+| Stop | the record hotkey (<kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>G</kbd>) |
 | Pause / resume | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd> |
 | Mute the microphone | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> |
 | Hide / show the pill | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd> |
@@ -622,7 +622,7 @@ quit_hotkey = "Ctrl+Alt+Shift+Q"
 capture_full_hotkey = "Shift+Meta+F"    # every monitor, saved at once
 capture_window_hotkey = "Shift+Meta+E"  # the overlay picking a window
 repeat_hotkey = ""                # the last region again ("" = none)
-capture_text_hotkey = "Shift+Meta+T"  # pick an area, copy its text (OCR)
+capture_text_hotkey = "Shift+Meta+Z"  # pick an area, copy its text (OCR)
 show_tray = true                  # false = no tray icon (hotkeys still work)
 copy_after_capture = false        # a save or upload also copies the image
 shutter_sound = false             # a short click when a capture is taken
@@ -640,7 +640,7 @@ check_updates = true              # daemon checks GitHub once a day
 skip_version = ""                 # a version the daily check ignores ("Skip this version")
 renderer = "gdi"                  # Windows overlay: "gdi" (low memory) or "software"; ignored elsewhere
 upload_client_id = "313baf0c7b4d3ff"
-record_hotkey = "Shift+Meta+R"    # starts (video mode) and stops a recording
+record_hotkey = "Shift+Meta+G"    # starts (video mode) and stops a recording
 rec_format = "mp4"                # video mode's defaults: "mp4" or "gif"
 rec_fps = 30                      # MP4: 30 or 60
 rec_gif_fps = 15                  # GIF: 10, 15 or 24

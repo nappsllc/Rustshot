@@ -231,7 +231,7 @@ impl Default for Config {
             capture_full_hotkey: "Shift+Meta+F".into(),
             capture_window_hotkey: "Shift+Meta+E".into(),
             repeat_hotkey: String::new(),
-            capture_text_hotkey: "Shift+Meta+T".into(),
+            capture_text_hotkey: "Shift+Meta+Z".into(),
             show_tray: true,
             copy_after_capture: false,
             shutter_sound: false,
@@ -269,7 +269,7 @@ impl Default for Config {
             rec_camera_size: "m".into(),
             rec_camera_mirror: true,
             rec_countdown: true,
-            record_hotkey: "Shift+Meta+R".into(),
+            record_hotkey: "Shift+Meta+G".into(),
             rec_linux_encoder: "auto".into(),
             rec_camera_ring_color: String::new(),
             rec_camera_ring_width: RING_WIDTH_DEFAULT,
@@ -1622,13 +1622,13 @@ bogus = 1
     fn redesign_keys_defaults_and_roundtrip() {
         let d = Config::default();
         let hk = [d.capture_hotkey.as_str(), d.capture_full_hotkey.as_str(), d.capture_window_hotkey.as_str(), d.record_hotkey.as_str()];
-        assert_eq!(hk, ["Shift+Meta+X", "Shift+Meta+F", "Shift+Meta+E", "Shift+Meta+R"]);
+        assert_eq!(hk, ["Shift+Meta+X", "Shift+Meta+F", "Shift+Meta+E", "Shift+Meta+G"]);
         for h in hk {
             let c = crate::keymap::Chord::parse(h).unwrap();
             assert!(c.meta && c.shift && !c.ctrl && !c.alt, "{h}: Win+Shift");
         }
         assert_eq!(d.repeat_hotkey, "");
-        assert_eq!(d.capture_text_hotkey, "Shift+Meta+T", "Copy text: Win+Shift+T");
+        assert_eq!(d.capture_text_hotkey, "Shift+Meta+Z", "Copy text: Win+Shift+Z");
         assert!(d.show_tray && !d.copy_after_capture && !d.shutter_sound);
         let c = Config {
             capture_full_hotkey: "Ctrl+Alt+F".into(),
@@ -1654,6 +1654,13 @@ record_hotkey = \"Ctrl+Shift+R\"
         // Windows); a file with 0.1.2's default keeps it.
         let w = parse_config("capture_window_hotkey = \"Shift+Meta+W\"\n").unwrap();
         assert_eq!(w.capture_window_hotkey, "Shift+Meta+W", "a written key is kept");
+        // 0.2.0 moved Record to Win+Shift+G and Copy text to Win+Shift+Z
+        // (Win+Shift+R and T are taken on a clean Windows): a file with the
+        // old keys keeps them, a file without them gets the new ones.
+        let rt = parse_config("record_hotkey = \"Shift+Meta+R\"\ncapture_text_hotkey = \"Shift+Meta+T\"\n").unwrap();
+        assert_eq!((rt.record_hotkey.as_str(), rt.capture_text_hotkey.as_str()), ("Shift+Meta+R", "Shift+Meta+T"), "written keys are kept");
+        let none = parse_config("theme = \"dark\"\n").unwrap();
+        assert_eq!((none.record_hotkey.as_str(), none.capture_text_hotkey.as_str()), ("Shift+Meta+G", "Shift+Meta+Z"));
         assert!(parse_config("show_tray = 1").is_err());
         // The thumbnail after a capture: on by default, round-trips off.
         assert!(d.show_thumbnail);
@@ -1674,7 +1681,7 @@ record_hotkey = \"Ctrl+Shift+R\"
         assert!(w.len() == 1 && w[0].starts_with("repeat_hotkey"), "{w:?}");
         let w = hotkey_warnings(&Config { capture_text_hotkey: "Nope+".into(), ..Config::default() });
         assert!(w.len() == 1 && w[0].starts_with("capture_text_hotkey"), "{w:?}");
-        assert_eq!(old.capture_text_hotkey, "Shift+Meta+T", "an older file gets the default");
+        assert_eq!(old.capture_text_hotkey, "Shift+Meta+Z", "an older file gets the default");
     }
 
     #[test]
@@ -1712,7 +1719,7 @@ record_hotkey = \"Ctrl+Shift+R\"
         assert!(!d.rec_camera && d.rec_camera_device.is_empty());
         assert_eq!((d.rec_camera_shape.as_str(), d.rec_camera_size.as_str()), ("circle", "m"));
         assert!(d.rec_camera_mirror && d.rec_countdown);
-        assert_eq!(d.record_hotkey, "Shift+Meta+R");
+        assert_eq!(d.record_hotkey, "Shift+Meta+G");
         assert!(crate::keymap::Chord::parse(&d.record_hotkey).is_some());
         assert_eq!(d.rec_linux_encoder, "auto");
         assert_eq!(parse_config(&to_toml(&d)).unwrap(), d);
