@@ -372,10 +372,21 @@ fn stream_durations(st: &str) -> std::collections::HashMap<String, f64> {
 }
 
 /// Decode every frame of `path` with ffmpeg: its error output (empty
-/// when the file decodes cleanly).
+/// when the file decodes cleanly). `-enc_time_base -1` keeps the file's
+/// own 90 kHz times: by default ffmpeg re-stamps the decoded pictures in
+/// 1/fps (the average frame rate it guesses), so two pictures closer than
+/// one frame (a frame caught at a pause, a late tick) land on the same
+/// tick and the null muxer reports "non monotonically increasing dts",
+/// although the file's times are strictly increasing.
 fn decode_errors(path: &Path) -> String {
     let exe = ffmpeg::find().expect("ffmpeg is installed (to check the file)");
-    let o = Command::new(exe).args(["-v", "error", "-i"]).arg(path).args(["-f", "null", "-"]).stdin(Stdio::null()).output().unwrap();
+    let o = Command::new(exe)
+        .args(["-v", "error", "-i"])
+        .arg(path)
+        .args(["-enc_time_base", "-1", "-f", "null", "-"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
     assert!(o.status.success(), "ffmpeg could not decode {}: {}", path.display(), String::from_utf8_lossy(&o.stderr));
     String::from_utf8_lossy(&o.stderr).trim().to_string()
 }
@@ -435,6 +446,35 @@ fn live_oh264_one_second_of_frames_and_a_tone() {
     assert!((a - 1.0).abs() <= 0.1, "audio {a} s, want 1 ± 0.1");
     assert!(errors.is_empty(), "decode errors: {errors}");
     assert!(vol > -30.0, "the tone is in the recording (mean_volume {vol} dB)");
+}
+
+/// Pictures closer together than one frame, as a session delivers them
+/// around a pause (the frame being captured is stamped with the frozen
+/// time) or after a late tick: the MP4's times stay strictly increasing
+/// and the file decodes without errors (the flake in `live-oh264` was the
+/// check, not the file).
+#[test]
+#[ignore = "downloads OpenH264 from Cisco; needs ffmpeg (to check)"]
+fn live_oh264_pictures_closer_than_a_frame_decode_cleanly() {
+    let (lib, _) = openh264_and_opus();
+    let dir = out_dir("oh264-close");
+    let path = dir.join("close.mp4");
+    let mut enc = super::native::NativeEncoder::create(&path, 320, 240, 30, Quality::Low, lib, None).unwrap();
+    // 33 ms apart, with 10 ms and 1 µs steps and a repeated time in between.
+    let mut ms = vec![0.0, 33.3, 66.7, 76.7, 76.701, 76.701, 110.0];
+    ms.extend((4..30).map(|n| f64::from(n) * 1000.0 / 30.0 + 10.0));
+    for (n, t) in ms.iter().enumerate() {
+        enc.push_video(&bar_frame(320, 240, n as u32, Duration::from_secs_f64(t / 1000.0))).unwrap();
+    }
+    Box::new(enc).finish().unwrap();
+    let pk = ffprobe(&path, "packet=dts");
+    let dts: Vec<i64> = pk.lines().filter_map(|l| l.strip_prefix("dts=")?.parse().ok()).collect();
+    let errors = decode_errors(&path);
+    eprintln!("OH264 close pictures: {} packets, dts {dts:?}", dts.len());
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(dts.len(), ms.len() - 1, "the repeated time is left out");
+    assert!(dts.windows(2).all(|w| w[0] < w[1]), "strictly increasing: {dts:?}");
+    assert!(errors.is_empty(), "decode errors: {errors}");
 }
 
 /// The same encoder under a session: frames paced by the capture loop
