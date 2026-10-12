@@ -5,6 +5,8 @@
 
 pub mod callout;
 pub mod edit;
+// The History / Edit window reads and writes annotations.json next.
+#[allow(dead_code)]
 pub mod json;
 
 pub use callout::Style as CalloutStyle;

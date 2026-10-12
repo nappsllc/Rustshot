@@ -65,6 +65,9 @@ pub(super) struct CalloutEdit {
     pub fresh: bool,
 }
 
+/// The selection's square handles and its round ones.
+pub(super) type Handles = (Vec<(Handle, Pt)>, Vec<(OHandle, Pt)>);
+
 /// A handle of the selection.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(super) enum OHandle {
@@ -176,7 +179,7 @@ impl Edit {
 
     /// The selection's square and round handles (none while typing in a
     /// callout or dragging the selection).
-    pub(super) fn obj_handles(&self) -> (Vec<(Handle, Pt)>, Vec<(OHandle, Pt)>) {
+    pub(super) fn obj_handles(&self) -> Handles {
         if self.obj.sel.is_empty() || self.obj.cedit.is_some() || matches!(self.interact, Interact::ObjMove { moved: true, .. }) {
             return (Vec::new(), Vec::new());
         }

@@ -51,6 +51,9 @@ pub struct Config {
     /// Global hotkey that captures the last capture's region again (same
     /// monitor) and saves it.
     pub repeat_hotkey: String,
+    /// Global hotkey that picks an area and copies its text (OCR; no
+    /// annotation step).
+    pub capture_text_hotkey: String,
     /// Show the notification-area (tray) icon; off, the daemon runs
     /// without one (hotkeys and a second launch still capture).
     pub show_tray: bool,
@@ -208,6 +211,7 @@ impl Default for Config {
             capture_full_hotkey: "Shift+Meta+F".into(),
             capture_window_hotkey: "Shift+Meta+W".into(),
             repeat_hotkey: String::new(),
+            capture_text_hotkey: "Shift+Meta+T".into(),
             show_tray: true,
             copy_after_capture: false,
             shutter_sound: false,
@@ -744,6 +748,7 @@ pub fn hotkey_warnings(cfg: &Config) -> Vec<String> {
         ("capture_full_hotkey", &cfg.capture_full_hotkey),
         ("capture_window_hotkey", &cfg.capture_window_hotkey),
         ("repeat_hotkey", &cfg.repeat_hotkey),
+        ("capture_text_hotkey", &cfg.capture_text_hotkey),
     ]
     .into_iter()
         .filter(|(_, v)| !v.trim().is_empty() && crate::keymap::Chord::parse(v).is_none())
@@ -825,6 +830,7 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
             "capture_full_hotkey" => cfg.capture_full_hotkey = as_string(val).map_err(|e| bad("string", &e))?,
             "capture_window_hotkey" => cfg.capture_window_hotkey = as_string(val).map_err(|e| bad("string", &e))?,
             "repeat_hotkey" => cfg.repeat_hotkey = as_string(val).map_err(|e| bad("string", &e))?,
+            "capture_text_hotkey" => cfg.capture_text_hotkey = as_string(val).map_err(|e| bad("string", &e))?,
             "show_tray" => cfg.show_tray = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "copy_after_capture" => cfg.copy_after_capture = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "shutter_sound" => cfg.shutter_sound = as_bool(val).map_err(|e| bad("boolean", &e))?,
@@ -967,6 +973,7 @@ pub fn to_toml(c: &Config) -> String {
          capture_full_hotkey = {}\n\
          capture_window_hotkey = {}\n\
          repeat_hotkey = {}\n\
+         capture_text_hotkey = {}\n\
          show_tray = {}\n\
          copy_after_capture = {}\n\
          shutter_sound = {}\n\
@@ -1019,6 +1026,7 @@ pub fn to_toml(c: &Config) -> String {
         q(&c.capture_full_hotkey),
         q(&c.capture_window_hotkey),
         q(&c.repeat_hotkey),
+        q(&c.capture_text_hotkey),
         c.show_tray,
         c.copy_after_capture,
         c.shutter_sound,
@@ -1564,11 +1572,13 @@ bogus = 1
             assert!(c.meta && c.shift && !c.ctrl && !c.alt, "{h}: Win+Shift");
         }
         assert_eq!(d.repeat_hotkey, "");
+        assert_eq!(d.capture_text_hotkey, "Shift+Meta+T", "Copy text: Win+Shift+T");
         assert!(d.show_tray && !d.copy_after_capture && !d.shutter_sound);
         let c = Config {
             capture_full_hotkey: "Ctrl+Alt+F".into(),
             capture_window_hotkey: "".into(),
             repeat_hotkey: "Ctrl+Alt+Shift+P".into(),
+            capture_text_hotkey: "Ctrl+Alt+T".into(),
             show_tray: false,
             copy_after_capture: true,
             shutter_sound: true,
@@ -1587,6 +1597,9 @@ record_hotkey = \"Ctrl+Shift+R\"
         assert!(parse_config("show_tray = 1").is_err());
         let w = hotkey_warnings(&Config { repeat_hotkey: "Nope+".into(), ..Config::default() });
         assert!(w.len() == 1 && w[0].starts_with("repeat_hotkey"), "{w:?}");
+        let w = hotkey_warnings(&Config { capture_text_hotkey: "Nope+".into(), ..Config::default() });
+        assert!(w.len() == 1 && w[0].starts_with("capture_text_hotkey"), "{w:?}");
+        assert_eq!(old.capture_text_hotkey, "Shift+Meta+T", "an older file gets the default");
     }
 
     #[test]

@@ -500,7 +500,8 @@ fn in_place_rebake_matches_a_full_bake() {
         img
     };
     settled(&mut a);
-    let steps: Vec<Box<dyn Fn(&mut Vec<Obj>)>> = vec![
+    type Step = Box<dyn Fn(&mut Vec<Obj>)>;
+    let steps: Vec<Step> = vec![
         Box::new(|o| oe::translate(&mut o[0], 17.0, -9.0)),
         Box::new(|o| oe::translate(&mut o[2], 5.5, 40.25)),
         Box::new(|o| oe::translate(&mut o[3], -300.0, 20.0)),

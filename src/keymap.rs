@@ -31,6 +31,8 @@ pub enum Action {
     SizeDown,
     SizeUp,
     Copy,
+    /// Recognize the selection's text and copy it (OCR).
+    CopyText,
     Save,
     SaveAs,
     /// Save straight to the Desktop folder (no dialog, no daily folder).
@@ -68,7 +70,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Action; 38] = [
+    pub const ALL: [Action; 39] = [
         Action::ToolSelect,
         Action::ToolPencil,
         Action::ToolLine,
@@ -86,6 +88,7 @@ impl Action {
         Action::SizeDown,
         Action::SizeUp,
         Action::Copy,
+        Action::CopyText,
         Action::Save,
         Action::SaveAs,
         Action::SaveDesktop,
@@ -155,6 +158,7 @@ impl Action {
             Action::SizeDown => ("size_down", "Stroke size -", &["["]),
             Action::SizeUp => ("size_up", "Stroke size +", &["]"]),
             Action::Copy => ("copy", "Copy", &["Ctrl+C"]),
+            Action::CopyText => ("copy_text", "Copy text", &["O", "Ctrl+Shift+C"]),
             Action::Save => ("save", "Save", &["Ctrl+S"]),
             Action::SaveAs => ("save_as", "Save As", &["Ctrl+Shift+S"]),
             Action::SaveDesktop => ("save_desktop", "Save to Desktop", &["Ctrl+D"]),
@@ -373,7 +377,7 @@ mod tests {
     #[test]
     fn defaults_match_spec_table() {
         let km = Keymap::defaults();
-        let want: [(Action, &[&str]); 38] = [
+        let want: [(Action, &[&str]); 39] = [
             (Action::ToolSelect, &["V"]),
             (Action::ToolPencil, &["P"]),
             (Action::ToolLine, &["L"]),
@@ -391,6 +395,7 @@ mod tests {
             (Action::SizeDown, &["["]),
             (Action::SizeUp, &["]"]),
             (Action::Copy, &["Ctrl+C"]),
+            (Action::CopyText, &["O", "Ctrl+Shift+C"]),
             (Action::Save, &["Ctrl+S"]),
             (Action::SaveAs, &["Ctrl+Shift+S"]),
             (Action::SaveDesktop, &["Ctrl+D"]),
@@ -527,6 +532,9 @@ mod tests {
         assert_eq!(km.resolve(key::LBRACKET, NONE), Some(Action::SizeDown));
         assert_eq!(km.resolve(key::RBRACKET, NONE), Some(Action::SizeUp));
         assert_eq!(km.resolve('C' as u32, NONE), None);
+        assert_eq!(km.resolve('O' as u32, NONE), Some(Action::CopyText));
+        assert_eq!(km.resolve('C' as u32, m(true, true, false)), Some(Action::CopyText));
+        assert_eq!(km.resolve('C' as u32, m(true, false, false)), Some(Action::Copy));
         assert_eq!(km.resolve('N' as u32, NONE), Some(Action::ToolCounter));
         assert_eq!(km.resolve('Z' as u32, m(true, false, false)), Some(Action::Undo));
         assert_eq!(km.resolve('Z' as u32, m(true, true, false)), Some(Action::Redo));

@@ -99,6 +99,15 @@ pub const ICONS: &[(&str, &[Shape])] = &[
         Rect { x: 8.0, y: 8.0, w: 14.0, h: 14.0, r: 2.0 },
         Path("M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"),
     ]),
+    // Copy text (OCR): a T in a scan frame (Lucide scan corners + type).
+    ("ocr", &[
+        Path("M3 7V5a2 2 0 0 1 2-2h2"),
+        Path("M17 3h2a2 2 0 0 1 2 2v2"),
+        Path("M21 17v2a2 2 0 0 1-2 2h-2"),
+        Path("M7 21H5a2 2 0 0 1-2-2v-2"),
+        Path("M8 8h8"),
+        Path("M12 8v8"),
+    ]),
     ("save", &[ // download
         Path("M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"),
         Path("m7 10 5 5 5-5"),

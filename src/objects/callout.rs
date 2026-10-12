@@ -20,6 +20,8 @@ pub enum Style {
     Ellipse,
 }
 
+// `id` / `from_id`: the annotations.json names.
+#[allow(dead_code)]
 impl Style {
     pub const ALL: [Style; 3] = [Style::Rounded, Style::Cloud, Style::Ellipse];
 

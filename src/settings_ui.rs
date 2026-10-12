@@ -79,13 +79,15 @@ const DEFAULT_FILENAME: &str = "%F_%H-%M";
 pub const ACCENT_CUSTOM: usize = 3;
 
 /// The global hotkeys of Key bindings, in board order: (label, hotkey
-/// slot: 0 capture, 1 quit, 2 record, 3 full screen, 4 window, 5 repeat).
-pub const GLOBALS: [(&str, usize); 6] = [
+/// slot: 0 capture, 1 quit, 2 record, 3 full screen, 4 window, 5 repeat,
+/// 6 copy text).
+pub const GLOBALS: [(&str, usize); 7] = [
     ("Capture region", 0),
     ("Capture full screen", 3),
     ("Capture window", 4),
     ("Record video", 2),
     ("Repeat last capture", 5),
+    ("Copy text from area", 6),
     ("Quit Rustshot", 1),
 ];
 
@@ -210,6 +212,8 @@ pub struct Form {
     pub full: Option<Chord>,
     pub window: Option<Chord>,
     pub repeat: Option<Chord>,
+    /// Copy text from an area (OCR).
+    pub text: Option<Chord>,
     pub folder: TextState,
     pub subfolder: bool,
     pub subfolder_pattern: TextState,
@@ -245,6 +249,7 @@ impl Form {
             full: Chord::parse(&cfg.capture_full_hotkey),
             window: Chord::parse(&cfg.capture_window_hotkey),
             repeat: Chord::parse(&cfg.repeat_hotkey),
+            text: Chord::parse(&cfg.capture_text_hotkey),
             folder: TextState::new(&folder_text(cfg)),
             subfolder: cfg.save_subfolder,
             subfolder_pattern: TextState::new(&cfg.subfolder_pattern),
@@ -267,6 +272,7 @@ impl Form {
             2 => self.rec.hotkey,
             3 => self.full,
             4 => self.window,
+            6 => self.text,
             _ => self.repeat,
         }
     }
@@ -278,6 +284,7 @@ impl Form {
             2 => &mut self.rec.hotkey,
             3 => &mut self.full,
             4 => &mut self.window,
+            6 => &mut self.text,
             _ => &mut self.repeat,
         }
     }
@@ -335,6 +342,9 @@ impl Form {
         }
         if self.repeat != was.repeat {
             c.repeat_hotkey = chord_text(self.repeat);
+        }
+        if self.text != was.text {
+            c.capture_text_hotkey = chord_text(self.text);
         }
         if self.folder.text.trim() != was.folder.text.trim() {
             c.save_path = self.folder.text.trim().to_string();
