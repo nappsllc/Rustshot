@@ -635,19 +635,20 @@ const NO_OTHER_HOTKEYS: &str =
 
 /// Tab presses from the Settings rail to Accept's key cap in Key bindings:
 /// the eight global rows, then the overlay rows (`KEY_ROWS` in
-/// src/settings_ui/draw.rs): Tools (10 caps), Select · Callout ·
-/// Spotlight · Magnify (4), Selected objects (4), Stroke size (2), Copy ·
-/// Save · Upload (3), Copy text (1), then Accept.
-const ACCEPT_TABS: usize = 8 + 10 + 4 + 4 + 2 + 3 + 1 + 1;
-/// From Accept's cap to the footer's OK: the 16 overlay caps after it (the Edit window's zoom: 4),
+/// src/settings_ui/draw.rs): Tools (11 caps), Select · Callout ·
+/// Spotlight · Magnify (4), Selected objects (4), Stroke size (2), Typing
+/// bold · italic · underline (3), Copy · Save · Upload (3), Copy text ·
+/// Copy color (2), then Accept.
+const ACCEPT_TABS: usize = 8 + 11 + 4 + 4 + 2 + 3 + 3 + 2 + 1;
+/// From Accept's cap to the footer's OK: the 17 overlay caps after it (the Edit window's zoom: 4),
 /// the 3 While recording rows, the header's Reset to defaults, then Open
 /// config file, Apply, Cancel, OK.
-const ACCEPT_TO_OK: usize = 16 + 3 + 1 + 4;
+const ACCEPT_TO_OK: usize = 17 + 3 + 1 + 4;
 /// Tab presses from the rail to General's Save to field: Theme, the
 /// four accent swatches, Launch at login, Show icon in tray, Copy after
-/// capture, Play shutter sound, Show thumbnail after capture, Change…,
-/// then the field.
-const FOLDER_TABS: usize = 12;
+/// capture, Play shutter sound, Show thumbnail after capture, Show hints
+/// in the overlay, Change…, then the field.
+const FOLDER_TABS: usize = 13;
 
 /// Keys posted one by one with a short pause (each is its own frame).
 fn keys(hwnd: HWND, vks: &[u32]) {
