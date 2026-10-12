@@ -121,9 +121,15 @@ impl Line {
     fn new(s: &str, px: f32, face: &Face) -> Option<Self> {
         unsafe {
             let base = match face.family {
+                // Bold starts from each family's bold member (the bold trait
+                // on Helvetica Neue Medium barely added ink); the traits
+                // below then add italic.
+                Family::Sans if face.weight >= 700 => "Helvetica-Bold",
                 Family::Sans if face.weight >= 600 => "HelveticaNeue-Medium",
                 Family::Sans => "Helvetica",
+                Family::Serif if face.weight >= 700 => "Times-Bold",
                 Family::Serif => "Times-Roman",
+                Family::Mono if face.weight >= 700 => "Menlo-Bold",
                 Family::Mono => "Menlo-Regular",
             };
             let name = cfstr(base);
