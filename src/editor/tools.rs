@@ -1,5 +1,5 @@
-//! Per-tool size and colour: each drawing tool keeps its own (pencil,
-//! line, arrow, rectangle, ellipse, marker, text, number: size and colour;
+//! Per-tool size and color: each drawing tool keeps its own (pencil,
+//! line, arrow, rectangle, ellipse, marker, text, number: size and color;
 //! pixelate: size; invert: nothing), remembered across captures in
 //! `config.toml` (`tool_<id>_size`, `tool_<id>_color`; the rectangle and
 //! ellipse also `tool_<id>_fill`). A tool never set starts from the
@@ -53,7 +53,7 @@ pub fn has_size(t: Tool) -> bool {
     !matches!(t, Tool::Invert | Tool::Select | Tool::Spotlight)
 }
 
-/// The tool draws in a colour (not Pixelate or Invert).
+/// The tool draws in a color (not Pixelate or Invert).
 pub fn has_color(t: Tool) -> bool {
     !matches!(t, Tool::Pixelate | Tool::Invert | Tool::Select | Tool::Spotlight)
 }
@@ -83,7 +83,7 @@ pub fn hex(c: C4) -> String {
     }
 }
 
-/// A config colour (`#rgb`, `#rrggbb`, `#rrggbbaa`).
+/// A config color (`#rgb`, `#rrggbb`, `#rrggbbaa`).
 pub fn parse(s: &str) -> Option<C4> {
     config::parse_color(s).map(|(r, g, b, a)| C4::new(r, g, b, a))
 }
@@ -176,7 +176,7 @@ impl ToolMem {
         })
     }
 
-    /// Set `t`'s colour; true when it changed.
+    /// Set `t`'s color; true when it changed.
     pub fn set_color(&mut self, t: Tool, c: C4) -> bool {
         let v = &mut self.color[slot(t)];
         let changed = *v != c;
@@ -296,7 +296,7 @@ mod tests {
     }
 
     #[test]
-    fn colour_text_round_trips() {
+    fn color_text_round_trips() {
         for c in [C4::rgb(240, 68, 56), C4::new(1, 2, 3, 4), C4::new(255, 255, 255, 254)] {
             assert_eq!(parse(&hex(c)), Some(c), "{c:?}");
         }

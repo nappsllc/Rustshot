@@ -805,7 +805,7 @@ mod tests {
     /// Invert has no size, Pixelate and Invert no color: those controls
     /// are there but disabled (they consume the press).
     #[test]
-    fn size_and_colour_controls_follow_the_tool() {
+    fn size_and_color_controls_follow_the_tool() {
         let mut i = inp(r(100.0, 100.0, 1040.0, 300.0));
         i.sizes = false;
         i.colors = false;

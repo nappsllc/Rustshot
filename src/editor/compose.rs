@@ -105,7 +105,7 @@ impl PxRect {
 }
 
 /// What a backdrop rect shows: the capture as is, or blended toward the
-/// theme dim colour by `alpha`, `times` over (two only where the dim
+/// theme dim color by `alpha`, `times` over (two only where the dim
 /// rects of a fractional selection overlap).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Source {
@@ -120,10 +120,10 @@ pub trait Backdrop {
     fn fill(&self, r: PxRect, src: Source, out: &mut [u8], stride: usize, order: Order);
 }
 
-/// In-memory backdrop (Linux/macOS, tests): `composed` plus the dim colour.
+/// In-memory backdrop (Linux/macOS, tests): `composed` plus the dim color.
 pub struct PixBufBackdrop<'a> {
     pub img: &'a PixBuf,
-    /// Theme dim colour; its alpha is ignored (`Source` carries it).
+    /// Theme dim color; its alpha is ignored (`Source` carries it).
     pub dim: C4,
 }
 
@@ -255,7 +255,7 @@ pub struct ObjSelUi {
     pub hot: Option<(bool, usize)>,
 }
 
-/// The callout caret: its rect and colour.
+/// The callout caret: its rect and color.
 #[derive(Clone, PartialEq, Debug)]
 pub struct CaretUi {
     pub r: FRect,

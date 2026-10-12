@@ -1,6 +1,6 @@
 //! Drawing tools, round 2, driven the way the window drives the editor:
 //! the straight pencil and marker (Shift), numbered tags (numbering with
-//! undo/redo, moving, the tail, size and colour remembered), the fill
+//! undo/redo, moving, the tail, size and color remembered), the fill
 //! toggle (filled shapes, remembered), Save to Desktop (the export, the
 //! notice, the shortcut); plus their preview PNGs.
 
@@ -241,7 +241,7 @@ fn tags_number_in_order_through_undo_and_redo() {
     assert_eq!(ns(&mut a), [1, 2, 3], "redo brings tag 3 back");
     click(&mut a, 800, 300);
     assert_eq!(ns(&mut a), [1, 2, 3, 4]);
-    // The tag has the tool's size and colour.
+    // The tag has the tool's size and color.
     let e = ed(&mut a);
     assert!(matches!(e.objects.last(), Some(Obj::Counter { d, color, .. }) if *d == e.mem.size(Tool::Counter) && *color == e.mem.color(Tool::Counter)));
     assert_eq!(e.mem.size(Tool::Counter), tools::COUNTER_SIZE);
@@ -281,10 +281,10 @@ fn tags_move_with_a_drag_and_ctrl_draws_a_tail() {
     assert_eq!(counters(&mut a).len(), 3);
 }
 
-/// The tag's size (diameter) and colour are its own, remembered into the
+/// The tag's size (diameter) and color are its own, remembered into the
 /// next capture; the readout previews a mini tag.
 #[test]
-fn tag_size_and_colour_are_remembered() {
+fn tag_size_and_color_are_remembered() {
     let mut a = app();
     a.kind = RunKind::Daemon;
     key(&mut a, 'N' as u32);
@@ -296,7 +296,7 @@ fn tag_size_and_colour_are_remembered() {
     assert_eq!(ed(&mut a).size_label(), "36");
     assert_eq!(ed(&mut a).pending.get("tool_counter_size"), Some(&Some("36".to_string())));
     assert_eq!(ed(&mut a).pending.get("tool_counter_color"), Some(&Some("\"#3b82f6\"".to_string())));
-    // The preview: the tag's colour in the readout's box.
+    // The preview: the tag's color in the readout's box.
     let img = settled_frame(&mut a);
     let v = item(&mut a, |k| *k == toolbar::Kind::Value);
     let th = ed(&mut a).th;
@@ -501,7 +501,7 @@ fn shot2x() -> Shot {
 
 /// Preview PNGs under `RUSTSHOT_PREVIEW_DIR`: the toolbar with the new
 /// buttons (the number tool, the fill toggle off and on, its tooltip, Save
-/// to Desktop's and Save As's tooltips), tags at several sizes and colours, filled and
+/// to Desktop's and Save As's tooltips), tags at several sizes and colors, filled and
 /// translucent shapes, the straight marker, the size preview sheet.
 #[test]
 #[ignore = "writes preview PNGs; set RUSTSHOT_PREVIEW_DIR"]
@@ -560,7 +560,7 @@ fn render_tools2_previews() {
             let mut a = preview_app_with(th, Some(r(s(560.0), s(300.0), s(300.0), s(160.0))), shot());
             ed(&mut a).tool = Some(Tool::Rect);
             save(&settled_frame(&mut a), &name("toolbar-wrapped"));
-            // Tags: sizes across, colours down; with a tail; two-digit.
+            // Tags: sizes across, colors down; with a tail; two-digit.
             let mut a = fresh();
             let e = ed(&mut a);
             let mut n = 0;

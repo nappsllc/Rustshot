@@ -3,7 +3,7 @@
 //! Each frame is reduced to the bounding box of the pixels that changed
 //! since the previous frame; inside it, unchanged pixels use a transparent
 //! index (frames are not disposed, so the previous frame shows through).
-//! The box is quantised to at most 255 colours by median cut over a 5-6-5
+//! The box is quantised to at most 255 colors by median cut over a 5-6-5
 //! histogram (no dither) and compressed with variable-width LZW. A frame's
 //! delay is patched in once the next frame's timestamp is known
 //! (centiseconds, rounded on the running total so errors do not add up);
@@ -20,7 +20,7 @@ use std::time::Duration;
 
 /// Shortest delay written (many viewers treat 0-1 cs as 10 cs).
 const MIN_DELAY_CS: u64 = 2;
-/// Colours per frame; one more index is kept for transparency.
+/// Colors per frame; one more index is kept for transparency.
 const MAX_COLORS: usize = 255;
 
 pub struct GifEncoder<W: Write + Seek> {
@@ -61,7 +61,7 @@ impl<W: Write + Seek> GifEncoder<W> {
         w.write_all(b"GIF89a")?;
         w.write_all(&(width as u16).to_le_bytes())?;
         w.write_all(&(height as u16).to_le_bytes())?;
-        // No global colour table; 8-bit colour resolution; background 0; no aspect.
+        // No global color table; 8-bit color resolution; background 0; no aspect.
         w.write_all(&[0x70, 0, 0])?;
         // NETSCAPE2.0 application extension: loop forever.
         w.write_all(b"\x21\xFF\x0BNETSCAPE2.0\x03\x01\x00\x00\x00")?;
@@ -174,7 +174,7 @@ impl<W: Write + Seek> GifEncoder<W> {
         }
         let palette = self.quant.build(MAX_COLORS);
         let transparent = prev.is_some();
-        let tidx = palette.len() as u8; // < 256: at most 255 colours
+        let tidx = palette.len() as u8; // < 256: at most 255 colors
         let used = palette.len() + usize::from(transparent);
         let bits = (usize::BITS - (used - 1).max(1).leading_zeros()).max(1);
         self.indices.clear();
@@ -185,7 +185,7 @@ impl<W: Write + Seek> GifEncoder<W> {
         // Graphic control extension: do not dispose, delay patched later.
         self.delay_at = Some(self.write_gce(transparent.then_some(tidx))?);
         let out = &mut self.w;
-        // Image descriptor with a local colour table.
+        // Image descriptor with a local color table.
         out.write_all(&[0x2C])?;
         for v in [x0, y0, bw, bh] {
             out.write_all(&(v as u16).to_le_bytes())?;
@@ -319,7 +319,7 @@ impl Quantizer {
         s[2] += p[0] as u64;
     }
 
-    /// The palette (RGB, at most `max` colours) for the histogram; fills
+    /// The palette (RGB, at most `max` colors) for the histogram; fills
     /// the bin → index map used by [`Quantizer::index`].
     fn build(&mut self, max: usize) -> Vec<[u8; 3]> {
         struct Cut {

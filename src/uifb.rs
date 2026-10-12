@@ -194,7 +194,7 @@ impl<'a> Fb<'a> {
         let (top, bottom, left, right) = (band(y0), band(y1), band(x0), band(x1));
         let in_band = |v: i32, b: (i32, i32)| v >= b.0 && v < b.1;
         let qx_at = |x: i32| (x as f32 + 0.5 - x0 - w / 2.0).abs() - w / 2.0;
-        // The colour at (x, y), from the signed distance to the rectangle
+        // The color at (x, y), from the signed distance to the rectangle
         // (negative inside); alpha 0 = untouched.
         let at = |x: i32, y: i32| {
             let cy = y as f32 + 0.5;
@@ -212,7 +212,7 @@ impl<'a> Fb<'a> {
             let cols = if in_band(y, top) || in_band(y, bottom) || left.1 >= right.0 {
                 // Along a horizontal edge, where `qx` is at most `qy` (at
                 // most 0 outside the rectangle), `dx` is 0 and the
-                // distance is `qy`'s alone: one colour for the run (an
+                // distance is `qy`'s alone: one color for the run (an
                 // interval, `qx` being V-shaped in x), blended as a span.
                 let qy = (y as f32 + 0.5 - y0 - h / 2.0).abs() - h / 2.0;
                 let flat = |x: i32| qx_at(x) <= qy.min(0.0);

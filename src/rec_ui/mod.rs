@@ -194,7 +194,7 @@ fn linux_encoder(spec: &mut RecSpec) -> anyhow::Result<crate::rec::linux::native
     }
 }
 
-/// The recording border's colour (`border 2 px red`).
+/// The recording border's color (`border 2 px red`).
 pub const RED: C4 = C4::rgb(0xF0, 0x3E, 0x3E);
 /// The boards' recording red (`--rec`): the Start and Stop buttons, the
 /// timer's dot, a muted microphone or hidden camera.
@@ -260,7 +260,7 @@ pub struct RecOpts {
     pub cam_shape: Shape,
     pub cam_size: CamSize,
     pub cam_mirror: bool,
-    /// The bubble's ring colour; `None` = the theme's accent.
+    /// The bubble's ring color; `None` = the theme's accent.
     pub cam_ring: Option<crate::uifb::C4>,
     /// The ring's width in logical px (0 = no ring).
     pub cam_ring_w: u32,
@@ -809,7 +809,7 @@ pub fn centre_on(area: IRect, (w, h): (i32, i32)) -> (i32, i32) {
 /// Draw with `draw` into a `w`x`h` transparent layer: premultiplied BGRA
 /// (what `UpdateLayeredWindow` takes). The rasterizer blends onto an
 /// opaque target, so the layer is drawn over black and over white: the
-/// difference is the coverage, the black one the premultiplied colour.
+/// difference is the coverage, the black one the premultiplied color.
 pub fn render_layer(w: usize, h: usize, draw: impl Fn(&mut Fb)) -> Vec<u8> {
     let mut black = [0u8, 0, 0, 255].repeat(w * h);
     let mut white = [255u8, 255, 255, 255].repeat(w * h);
@@ -818,7 +818,7 @@ pub fn render_layer(w: usize, h: usize, draw: impl Fn(&mut Fb)) -> Vec<u8> {
     let mut out = vec![0u8; w * h * 4];
     for ((o, b), wh) in out.as_chunks_mut::<4>().0.iter_mut().zip(black.as_chunks::<4>().0).zip(white.as_chunks::<4>().0) {
         let a = 255 - (0..3).map(|i| wh[i].saturating_sub(b[i])).max().unwrap_or(0);
-        // Premultiplied colour never exceeds alpha.
+        // Premultiplied color never exceeds alpha.
         *o = [b[2].min(a), b[1].min(a), b[0].min(a), a];
     }
     out

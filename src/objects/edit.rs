@@ -1,6 +1,6 @@
 //! Editing objects as data: hit tests, selection boxes, moves, resizes
 //! (mapping one box onto another), the round handles (end points, tails,
-//! the loupe's two centres), and the colour / size / fill a mini-toolbar
+//! the loupe's two centres), and the color / size / fill a mini-toolbar
 //! changes.
 
 use super::{callout, FRect, Obj, Pt};
@@ -319,7 +319,7 @@ pub fn map_box(o: &mut Obj, from: FRect, to: FRect) {
     }
 }
 
-/// The colour `o` draws in (`None`: pixelate, invert, spotlight).
+/// The color `o` draws in (`None`: pixelate, invert, spotlight).
 pub fn color(o: &Obj) -> Option<C4> {
     match o {
         Obj::Line { color, .. }
@@ -339,7 +339,7 @@ pub fn color(o: &Obj) -> Option<C4> {
     }
 }
 
-/// Set the colour (the highlighter keeps its own translucency).
+/// Set the color (the highlighter keeps its own translucency).
 pub fn set_color(o: &mut Obj, c: C4) {
     match o {
         Obj::Marker { color, .. } | Obj::MarkerPath { color, .. } => *color = c.with_alpha(((c.a as u32 * 90 + 127) / 255) as u8),
@@ -409,7 +409,7 @@ pub fn fill(o: &Obj) -> Option<bool> {
 }
 
 /// Fill or outline the shape (a rectangle / ellipse becomes the other
-/// variant, keeping its geometry, colour and width).
+/// variant, keeping its geometry, color and width).
 pub fn set_fill(o: &mut Obj, on: bool) {
     let next = match &*o {
         Obj::Rect { r, color, width } if on => Obj::RectFill { r: *r, color: *color, width: *width },
@@ -428,7 +428,7 @@ pub fn set_fill(o: &mut Obj, on: bool) {
 }
 
 /// `o` at `k` of its opacity (the ghost left at a drag's origin); `None`
-/// for effects that have no colour of their own.
+/// for effects that have no color of their own.
 pub fn faded(o: &Obj, k: f32) -> Option<Obj> {
     let c = color(o)?;
     let mut g = o.clone();
@@ -515,7 +515,7 @@ mod tests {
     }
 
     #[test]
-    fn colour_size_points() {
+    fn color_size_points() {
         let mut m = Obj::Marker { a: Pt::new(0.0, 0.0), b: Pt::new(9.0, 9.0), color: C4::rgb(250, 220, 0).with_alpha(90), width: 12.0 };
         set_color(&mut m, C4::rgb(0, 0, 255));
         assert_eq!(color(&m), Some(C4::new(0, 0, 255, 90)), "the highlighter stays translucent");

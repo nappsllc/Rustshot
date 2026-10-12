@@ -112,7 +112,7 @@ fn form_writes_what_changed() {
 /// Accent: the swatches write their `ui_color` (Periwinkle: none), a
 /// custom color is written only when it parses.
 #[test]
-fn accent_swatches_and_custom_colour() {
+fn accent_swatches_and_custom_color() {
     let cfg = Config::default();
     assert_eq!(Form::new(&cfg, None).accent, 0);
     assert_eq!(Form::new(&Config { ui_color: "#5CC8C2".into(), ..cfg.clone() }, None).accent, 1);

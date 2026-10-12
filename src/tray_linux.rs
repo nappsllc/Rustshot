@@ -48,7 +48,7 @@ fn run(tx: Sender<HotEvent>) {
     }
 }
 
-/// The colour scheme's panel colour (the desktop from `XDG_CURRENT_DESKTOP`).
+/// The color scheme's panel color (the desktop from `XDG_CURRENT_DESKTOP`).
 fn light(scheme: Option<u32>) -> bool {
     sni::light_panel(&std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default(), scheme)
 }

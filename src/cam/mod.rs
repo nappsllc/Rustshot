@@ -277,7 +277,7 @@ pub struct Look {
     pub size: CamSize,
     /// Flip left-right (a mirror image, what people expect of themselves).
     pub mirror: bool,
-    /// The ring's colour (opaque); `None` = the theme's accent.
+    /// The ring's color (opaque); `None` = the theme's accent.
     pub ring: Option<C4>,
     /// The ring's width in logical px; 0 = no ring.
     pub ring_w: u8,
@@ -355,7 +355,7 @@ pub struct Template {
 }
 
 /// The template for `look` at `scale` in theme `th` (the ring in the
-/// look's colour, else the theme's accent).
+/// look's color, else the theme's accent).
 pub fn template(look: Look, scale: f32, th: &Theme) -> Template {
     let d = side(look.size, scale);
     let pad = pad(scale);
@@ -443,7 +443,7 @@ pub fn compose(t: &Template, frame: Option<&CamFrame>, mirror: bool, out: &mut V
                 let v = if c == 3 { 255 } else { src[c] as u32 };
                 // The picture by its coverage, the ring by its own, the
                 // shadow where the shape leaves room (rg + pm == m, so a
-                // colour never exceeds its alpha).
+                // color never exceeds its alpha).
                 px[c] = ((v * pm + rc[c] * rg + px[c] as u32 * (255 - m) + 127) / 255) as u8;
             }
         }

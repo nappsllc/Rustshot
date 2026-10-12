@@ -1,4 +1,4 @@
-//! Annotation objects: retained data (geometry, colour, size; z-order is
+//! Annotation objects: retained data (geometry, color, size; z-order is
 //! the list order), rendered from that data. [`json`] writes and reads
 //! them (`annotations.json`), [`edit`] hit-tests and transforms them for
 //! the select tool, [`callout`] lays out speech bubbles.
@@ -272,7 +272,7 @@ pub enum Obj {
         width: f32,
     },
     /// A filled rectangle: the outline's silhouette (`r` grown by half
-    /// the width, the same rounded corners), in the colour with its alpha.
+    /// the width, the same rounded corners), in the color with its alpha.
     RectFill {
         r: FRect,
         color: C4,
@@ -346,7 +346,7 @@ fn counter_tail(c: Pt, d: f32, tail: Option<Pt>) -> Option<[Pt; 3]> {
     Some([at(th - a), t, at(th + a)])
 }
 
-/// The tag's number colour: white, or black on a light colour (white
+/// The tag's number color: white, or black on a light color (white
 /// would read below 3:1 there, WCAG's large-text minimum).
 pub fn counter_ink(c: C4) -> C4 {
     let lin = |v: u8| {
@@ -957,7 +957,7 @@ mod tests {
     }
 
     /// The other objects that draw several primitives (text: glyphs and
-    /// lines) also blend once: overlapping glyphs of a translucent colour
+    /// lines) also blend once: overlapping glyphs of a translucent color
     /// are no darker than one glyph.
     #[test]
     fn translucent_text_is_one_alpha() {
@@ -983,7 +983,7 @@ mod tests {
         img
     }
 
-    /// The tag: a disc of the diameter in the colour, the number in the
+    /// The tag: a disc of the diameter in the color, the number in the
     /// ink that reads on it, centred; the bounds hold every pixel.
     #[test]
     fn counter_draws_a_numbered_disc() {

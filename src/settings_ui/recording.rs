@@ -29,7 +29,7 @@ const SHAPES: [(&str, &str); 3] = [("Circle", "circle"), ("Rounded", "rounded"),
 /// size it: S / M / L / XL.
 const SIZES: [(&str, &str); 4] = [("120", "s"), ("160", "m"), ("200", "l"), ("240", "xl")];
 pub const ENCODERS: [(&str, &str); 3] = [("Auto", "auto"), ("ffmpeg", "ffmpeg"), ("OpenH264", "openh264")];
-/// The ring colours on offer after "Accent" (the default drawing palette).
+/// The ring colors on offer after "Accent" (the default drawing palette).
 const RINGS: [(&str, &str); 10] = [
     ("Red", "#f04438"),
     ("Orange", "#ff8a1f"),
@@ -173,7 +173,7 @@ impl RecForm {
         self.format == 1
     }
 
-    /// The ring colour choices ("Accent", the palette, and the colour in
+    /// The ring color choices ("Accent", the palette, and the color in
     /// the file when it is none of them) and the current one's index.
     pub fn ring_items(&self) -> (Vec<String>, usize) {
         let mut items: Vec<String> = std::iter::once("Accent".to_string()).chain(RINGS.iter().map(|(l, _)| l.to_string())).collect();
@@ -193,7 +193,7 @@ impl RecForm {
         match i {
             0 => self.ring.clear(),
             i if i <= RINGS.len() => self.ring = RINGS[i - 1].1.into(),
-            _ => {} // the custom colour: kept
+            _ => {} // the custom color: kept
         }
     }
 }

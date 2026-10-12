@@ -9,6 +9,14 @@ Rustshot does not collect, store or transmit personal data or telemetry.
   A recording is uploaded only when you click **Copy link** on the notice
   after it (MP4s through imgur's video upload, which imgur then transcodes).
 - Settings are stored locally in `config.toml` in your user config folder.
+- History (on by default; off in Settings › Capture › History): each capture
+  is kept on this computer only, in `%LOCALAPPDATA%\rustshot\history`
+  (Linux: `$XDG_DATA_HOME/rustshot/history`, macOS:
+  `~/Library/Application Support/rustshot/history`) — the unannotated image,
+  its annotations, a thumbnail, and details such as the time, size, source
+  window title, saved path and upload link. Entries older than 30 days, or
+  past the 2 GB cap, are deleted automatically; **Clear history** deletes all
+  of them. Nothing in History is uploaded or synced.
 - Update check (direct downloads only; off with `check_updates = false` or in
   Settings): at most once a day, and when you choose *Check for updates*, the
   daemon sends one anonymous request to the GitHub Releases API

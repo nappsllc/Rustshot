@@ -105,7 +105,7 @@ pub struct Col<'a> {
     pub frac: f32,
 }
 
-/// A table row: one string per column; `error` paints it in the error colour.
+/// A table row: one string per column; `error` paints it in the error color.
 #[derive(Clone, Copy, Debug)]
 pub struct Row<'a> {
     pub cells: &'a [&'a str],
@@ -729,7 +729,7 @@ pub(super) fn is_modifier(vk: u32) -> bool {
     matches!(vk, 0x10..=0x12 | 0x5B | 0x5C | 0xA0..=0xA5 | 0x14)
 }
 
-/// Linear mix of two opaque colours (`t` of `b`).
+/// Linear mix of two opaque colors (`t` of `b`).
 pub(super) fn mix(a: C4, b: C4, t: f32) -> C4 {
     let l = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
     C4::new(l(a.r, b.r), l(a.g, b.g), l(a.b, b.b), a.a)
@@ -839,7 +839,7 @@ impl Ui<'_> {
     }
 
     /// [`Ui::text_view`] over source lines, each `(text, muted)`: muted
-    /// lines use the secondary text colour (body text under headings).
+    /// lines use the secondary text color (body text under headings).
     pub fn text_view_styled(&mut self, id: &str, src: &[(&str, bool)], scroll: &mut f32) {
         let r = self.alloc(None, 120.0);
         let id = id_of(id);

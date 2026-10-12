@@ -1,6 +1,6 @@
 //! Editable objects in the overlay: the select tool and Ctrl+click,
 //! moving with snapping and the ghost, handles, the marquee, Del / Ctrl+D /
-//! front / back / nudges, colour and size on the selection, undo; the
+//! front / back / nudges, color and size on the selection, undo; the
 //! callout (typing, wrapping, growing, the tail), the spotlight and the
 //! magnifier; in-place re-bakes equal to full ones, repaints that cover
 //! every changed pixel; and the preview PNGs.
@@ -273,7 +273,7 @@ fn ctrl_click_selects_with_any_tool_and_ctrl_drag_still_draws() {
 }
 
 #[test]
-fn colour_and_size_go_to_the_selection() {
+fn color_and_size_go_to_the_selection() {
     let mut a = with(vec![rect(300.0, 300.0, 200.0, 100.0)]);
     let tool_color = ed(&mut a).mem.color(Tool::Rect);
     key(&mut a, 'V' as u32);
@@ -291,7 +291,7 @@ fn colour_and_size_go_to_the_selection() {
     assert_eq!(e.mem.color(Tool::Rect), blue, "the tool remembers it");
     assert!(e.mem.fill(Tool::Rect), "and the fill");
     assert_eq!(e.hi, 4, "one step each");
-    // The mini-toolbar: colour, fill, size, front / back, duplicate, delete.
+    // The mini-toolbar: color, fill, size, front / back, duplicate, delete.
     e.prepare(None, (0, 0), Instant::now());
     let m = e.obj.mini.clone().expect("mini-toolbar");
     let acts: Vec<Act> = m.items.iter().filter_map(|i| if let toolbar::Kind::Btn(a) = i.kind { Some(a) } else { None }).collect();
@@ -749,7 +749,7 @@ fn a_drag_over_a_changed_list_ends() {
     assert_eq!(ed(&mut a).objects.len(), 1);
 }
 
-/// A bubble just placed takes shape, size, fill and colour from the
+/// A bubble just placed takes shape, size, fill and color from the
 /// mini-toolbar and the toolbar and stays (typing stays open); the shape
 /// is remembered; one undo step when typing ends.
 #[test]
@@ -776,7 +776,7 @@ fn a_new_callout_survives_restyling() {
     // The next bubble gets the shape.
     click(&mut a, 600, 600);
     assert!(matches!(ed(&mut a).objects[1], Obj::Callout { style: CalloutStyle::Ellipse, .. }));
-    // An empty new bubble given only a colour goes when typing ends, and
+    // An empty new bubble given only a color goes when typing ends, and
     // leaves no phantom step behind.
     ed(&mut a).color_selection(C4::rgb(9, 9, 9));
     key(&mut a, key::ESCAPE);
@@ -784,11 +784,11 @@ fn a_new_callout_survives_restyling() {
     assert_eq!(ed(&mut a).hi, 1);
 }
 
-/// The colour picker and its eyedropper over a selection: the objects
-/// show the colour as it changes, keeping it is one undo step, Esc puts
+/// The color picker and its eyedropper over a selection: the objects
+/// show the color as it changes, keeping it is one undo step, Esc puts
 /// them back; a kept color is also the tool's next one.
 #[test]
-fn the_picker_colours_the_selection() {
+fn the_picker_colors_the_selection() {
     let mut a = with(vec![rect(300.0, 300.0, 200.0, 100.0)]);
     let tool = ed(&mut a).mem.color(Tool::Rect);
     key(&mut a, 'V' as u32);

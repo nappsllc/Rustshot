@@ -135,7 +135,7 @@ impl Gpu {
                 vctx.VideoProcessorSetOutputColorSpace(&vp, &yuv);
             }
             vctx.VideoProcessorSetStreamFrameFormat(&vp, 0, D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE);
-            // No driver "enhancements" (denoise, edge, colour): screen content.
+            // No driver "enhancements" (denoise, edge, color): screen content.
             vctx.VideoProcessorSetStreamAutoProcessingMode(&vp, 0, false);
             let src = source_rect(aw, ah, ow, oh);
             let dst = RECT { left: 0, top: 0, right: ow as i32, bottom: oh as i32 };

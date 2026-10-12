@@ -132,7 +132,7 @@ fn ring_choices() {
     assert_eq!((f.ring.as_str(), f.ring_items().1), ("#f04438", 1));
     f.set_ring(0);
     assert_eq!(f.ring, "");
-    // A colour from the picker (not in the list) gets its own item, kept when picked.
+    // A color from the picker (not in the list) gets its own item, kept when picked.
     let mut f = RecForm::new(&Config { rec_camera_ring_color: "#ABCDEF".into(), ..Config::default() });
     let (items, sel) = f.ring_items();
     assert_eq!((items.len(), sel, items[11].as_str()), (12, 11, "Custom #abcdef"));

@@ -6,7 +6,7 @@
 //! and the image centre within 6 px, Alt: free; a 40 % ghost stays at the
 //! origin), resizes by its square handles, re-aims ends / tails / the
 //! loupe by its round handles, nudges with the arrows (Shift: 10 px), and
-//! takes Del, Ctrl+D, front / back, colour and size from the keys, the
+//! takes Del, Ctrl+D, front / back, color and size from the keys, the
 //! toolbar or its mini-toolbar. Every change is one undo step.
 //!
 //! Callouts: a drag (or a click) with the callout tool places a bubble
@@ -58,7 +58,7 @@ pub(super) struct ObjState {
     pub click_pick: Option<(usize, Pt)>,
     /// The last coalescing undo step: its kind and when.
     pub coalesce: Option<(&'static str, Instant)>,
-    /// The objects as they were when the colour picker opened over a
+    /// The objects as they were when the color picker opened over a
     /// selection (Esc puts them back).
     pub pick_backup: Option<Vec<Obj>>,
     /// Snap guides fading out after a drag, and since when.
@@ -569,7 +569,7 @@ impl Edit {
             self.cfg.callout_style = st.id().into();
             self.pending.set("tool_callout_style".into(), Some(crate::config::toml_str(st.id())), Instant::now());
         }
-        // Colour, fill, size and shape restyle a bubble being typed in
+        // Color, fill, size and shape restyle a bubble being typed in
         // (it stays open, a new one included); the others finish it first,
         // keeping a new bubble even when it is still empty.
         let restyle = matches!(act, Act::ObjStyle(_) | Act::ObjSize(_) | Act::ObjFill | Act::ObjColor);
@@ -707,7 +707,7 @@ impl Edit {
         true
     }
 
-    /// The colour picker over a selection: its colour shows on the
+    /// The color picker over a selection: its color shows on the
     /// objects as it changes (no undo step yet).
     pub(super) fn preview_color(&mut self, c: crate::uifb::C4) {
         if self.obj.pick_backup.is_none() {
@@ -721,7 +721,7 @@ impl Edit {
         self.dirty = true;
     }
 
-    /// The picker closed over a selection: `keep` its colour (one undo
+    /// The picker closed over a selection: `keep` its color (one undo
     /// step) or put the objects back.
     pub(super) fn end_preview_color(&mut self, keep: bool, c: crate::uifb::C4) {
         let backup = self.obj.pick_backup.take();
@@ -733,7 +733,7 @@ impl Edit {
         }
     }
 
-    /// The selection's colour: the first selected object with one.
+    /// The selection's color: the first selected object with one.
     pub(super) fn sel_color(&self) -> Option<crate::uifb::C4> {
         self.obj.sel.iter().filter_map(|&i| self.objects.get(i)).find_map(oe::color)
     }

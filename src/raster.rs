@@ -518,7 +518,7 @@ impl Mask {
         if w == 0 {
             return;
         }
-        // Fully covered by an opaque normal colour: the pixel is the colour
+        // Fully covered by an opaque normal color: the pixel is the color
         // (what `blend_px` computes then), written directly.
         let solid = (c.a == 255 && blend == Blend::Normal).then(|| {
             let mut px = [0u8, 0, 0, 255];

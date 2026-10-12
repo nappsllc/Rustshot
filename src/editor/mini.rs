@@ -2,7 +2,7 @@
 //! box, square handles (7 px, accent border, dark halo), round handles for
 //! end points, tails and the loupe, snap guides, the marquee, the callout
 //! caret, the ghost left at a drag's origin, and the 32 px mini-toolbar
-//! 8 px above the selection (below it when there is no room): colour,
+//! 8 px above the selection (below it when there is no room): color,
 //! fill, size, the callout's shape, front / back, duplicate, delete.
 
 use super::chrome::{self, Ui};
@@ -32,7 +32,7 @@ const DASH: (f32, f32) = (4.0, 3.0);
 /// What the mini-toolbar shows for the selection.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MiniIn {
-    /// The colour (`None`: no colour, or a mix without one).
+    /// The color (`None`: no color, or a mix without one).
     pub color: Option<C4>,
     pub fill: Option<bool>,
     /// The size readout (`None`: no size) and whether it is a text size.

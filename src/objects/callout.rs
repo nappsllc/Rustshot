@@ -3,7 +3,7 @@
 //! width it was drawn at; the text wraps to it and the bubble grows down
 //! to hold it ([`needed_h`]). The tail's base sits on the edge nearest the
 //! tip. Text goes through the OS text renderer ([`AnnotFont`]), in white or
-//! black (whichever reads on the fill), or in the colour on a white body
+//! black (whichever reads on the fill), or in the color on a white body
 //! when the callout is not filled.
 
 use super::{counter_ink, FRect, Pt};
@@ -481,13 +481,13 @@ pub fn render(sf: &mut Surf, r: FRect, tip: Pt, text: &str, color: C4, px: f32, 
         body.blend(sf, color, Blend::Normal);
         counter_ink(color)
     } else {
-        // A white body inside a ring of the colour.
+        // A white body inside a ring of the color.
         let mut inner = win(sf);
         silhouette(&mut inner, r, tip, style, px, -OUTLINE);
         inner.blend(sf, C4::rgb(255, 255, 255).with_alpha(color.a), Blend::Normal);
         body.cut(&inner);
         body.blend(sf, color, Blend::Normal);
-        // The colour on white, unless it is too light to read.
+        // The color on white, unless it is too light to read.
         if counter_ink(color.with_alpha(255)) == C4::rgb(255, 255, 255) { color } else { C4::rgb(0, 0, 0).with_alpha(color.a) }
     };
     let Some(font) = font else { return };

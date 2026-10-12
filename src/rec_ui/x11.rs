@@ -447,7 +447,7 @@ pub(crate) enum Kind {
 
 impl Win {
     /// `input`: gets pointer events (else click-through). `solid`: a
-    /// plain colour window (the border), drawn by the server.
+    /// plain color window (the border), drawn by the server.
     fn new(d: &Disp, input: bool, solid: Option<u32>) -> Result<Win> {
         Win::with_kind(d, input, solid, Kind::Overlay)
     }

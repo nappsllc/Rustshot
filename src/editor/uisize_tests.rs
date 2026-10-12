@@ -84,7 +84,7 @@ fn ctrl_keys_step_the_ui_size() {
     assert_eq!(ed(&mut a).cfg.ui_scale, UiSize::Auto);
 }
 
-/// The keys work while typing a text and with the colour picker open
+/// The keys work while typing a text and with the color picker open
 /// (both take every other key), and they can be remapped.
 #[test]
 fn ui_size_keys_work_in_every_mode_and_remap() {
@@ -233,7 +233,7 @@ fn same_rect(a: FRect, b: FRect) -> bool {
 
 /// A popover open while the size changes is anchored again at the new
 /// scale, exactly where a fresh layout at that scale puts it, and what it
-/// holds (the picker's colour, focus and hex text) stays.
+/// holds (the picker's color, focus and hex text) stays.
 #[test]
 fn an_open_popover_is_anchored_again_at_the_new_size() {
     type Setup = fn(&mut App);

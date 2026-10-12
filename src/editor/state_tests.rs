@@ -576,7 +576,7 @@ fn text_backspace_and_delete_repeat() {
 
 #[test]
 fn text_commit_cancel_and_click_outside() {
-    // Enter commits at the click point with the current colour and size.
+    // Enter commits at the click point with the current color and size.
     let mut a = typing("Hello  ");
     key(&mut a, key::RETURN);
     let e = ed(&mut a);
@@ -725,7 +725,7 @@ fn wheel_and_size_acts_change_the_active_tool_size() {
 }
 
 #[test]
-fn palette_opens_only_with_a_selection_and_picks_a_colour() {
+fn palette_opens_only_with_a_selection_and_picks_a_color() {
     let mut a = app(None);
     key(&mut a, key::SPACE);
     assert!(!ed(&mut a).palette_open, "no toolbar without a selection");

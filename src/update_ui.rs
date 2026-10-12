@@ -353,7 +353,7 @@ fn mb(b: u64) -> String {
     format!("{:.1} MB", b as f64 / 1_000_000.0)
 }
 
-/// Heading icon: the app glyph, or a Lucide status icon in a theme colour.
+/// Heading icon: the app glyph, or a Lucide status icon in a theme color.
 enum Mark {
     App,
     Icon(&'static str, C4),
@@ -507,7 +507,7 @@ fn paint(ui: &mut Ui, m: &Machine, v: &mut View) -> Option<Btn> {
         let src: Vec<(&str, bool)> = if notes.is_empty() {
             vec![("No release notes.", true)]
         } else {
-            // Headings in the primary text colour, the rest secondary.
+            // Headings in the primary text color, the rest secondary.
             notes.iter().map(|(l, heading)| (l.as_str(), !heading)).collect()
         };
         ui.place(r).text_view_styled("notes", &src, &mut scroll);

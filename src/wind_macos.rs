@@ -1520,7 +1520,7 @@ impl Layer {
         }
     }
 
-    /// A solid colour over (x, y, w, h) points.
+    /// A solid color over (x, y, w, h) points.
     pub fn fill(&mut self, (x, y, w, h): (f64, f64, f64, f64), rgb: [u8; 3]) {
         unsafe {
             let c = |v: u8| f64::from(v) / 255.0;

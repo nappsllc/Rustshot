@@ -508,7 +508,7 @@ mod tests {
     }
 
     #[test]
-    fn yuyv_pictures_convert_with_their_colour_space() {
+    fn yuyv_pictures_convert_with_their_color_space() {
         // One YUYV pair, white and black, BT.601 limited.
         let src = [235u8, 128, 16, 128];
         let mut out = Vec::new();

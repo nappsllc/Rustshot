@@ -35,7 +35,7 @@ fn visible(l: &Layer) -> bool {
 fn live_rec_border_and_bar_are_not_recorded() {
     crate::capture::enable_dpi_awareness();
     let win = TestWindow::open(300, 300, 360, 240, 1_000_000);
-    win.set_colour(3); // white
+    win.set_color(3); // white
     let area = win.rect();
     // The border hugs a smaller rect, so its strips lie inside the area;
     // with no room outside, the bar and the countdown go inside too.
@@ -53,7 +53,7 @@ fn live_rec_border_and_bar_are_not_recorded() {
     let (bx, by) = bar.spot.map(|s| (s.pos.0 - bar::MARGIN as i32, s.pos.1 - bar::MARGIN as i32)).unwrap();
     eprintln!("area {area:?}, bar window at {:?}", (bx, by));
 
-    // GIF: exact colours. No red (border, dot, stop) and almost no dark
+    // GIF: exact colors. No red (border, dot, stop) and almost no dark
     // pixels (the bar's surface; the pointer may be over the area).
     let dir = out_dir();
     let s = spec(RecFormat::Gif, 10, area, dir.join("frame.gif"));

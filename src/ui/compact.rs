@@ -2,7 +2,7 @@
 //! (docs/design/rustshot-ui/Settings.dc.html): the section rail, section
 //! headings, 32×18 toggles, segmented choices, accent swatches, 28 px
 //! buttons, links, and key-binding rows whose key caps record a new
-//! chord ("Press shortcut… Esc to cancel"). Colours are the board's
+//! chord ("Press shortcut… Esc to cancel"). Colors are the board's
 //! tokens ([`Tok`]), derived from the theme so the accent (and its
 //! override) follows.
 
@@ -16,7 +16,7 @@ use crate::theme::{rgba, Theme};
 use crate::uifb::C4;
 use crate::wind::key;
 
-/// The board's colour tokens for one theme.
+/// The board's color tokens for one theme.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Tok {
     /// Window, rail.
@@ -279,7 +279,7 @@ impl Ui<'_> {
         *sel != old
     }
 
-    /// A 20 px colour swatch; `on` draws the 2 px ring outside a 2 px gap.
+    /// A 20 px color swatch; `on` draws the 2 px ring outside a 2 px gap.
     /// `c = None` draws the custom swatch (a plus). Returns a click.
     pub fn swatch(&mut self, id: &str, c: Option<C4>, on: bool, tok: &Tok) -> bool {
         let r = self.alloc(Some(20.0), self.ctl_h);

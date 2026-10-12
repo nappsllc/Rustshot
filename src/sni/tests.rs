@@ -341,7 +341,7 @@ fn the_watcher_coming_and_going() {
 }
 
 #[test]
-fn panel_colour() {
+fn panel_color() {
     assert!(!light_panel("KDE", None), "no preference: dark");
     assert!(!light_panel("KDE", Some(1)));
     assert!(light_panel("KDE", Some(2)));

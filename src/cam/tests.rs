@@ -180,10 +180,10 @@ fn ring_hugs_the_edge_in_the_accent() {
     }
 }
 
-/// The ring takes the look's colour and width (logical px, scaled); at 0
+/// The ring takes the look's color and width (logical px, scaled); at 0
 /// there is none and the picture fills the shape.
 #[test]
-fn ring_colour_and_width_follow_the_look() {
+fn ring_color_and_width_follow_the_look() {
     let green = C4::rgb(0, 200, 80);
     let at = |t: &Template, out: &[u8], x: usize| {
         let (w, pad, d) = (t.w as usize, t.pad as usize, t.d as usize);
@@ -206,7 +206,7 @@ fn ring_colour_and_width_follow_the_look() {
     let mut out = Vec::new();
     compose(&t, Some(&halves(t.d)), false, &mut out);
     assert_eq!(at(&t, &out, 1), [255, 0, 0, 255]);
-    // A translucent colour is drawn opaque.
+    // A translucent color is drawn opaque.
     let t = template(Look { ring: Some(green.with_alpha(40)), ..LOOK }, 1.0, &DARK);
     let mut out = Vec::new();
     compose(&t, None, false, &mut out);
@@ -467,7 +467,7 @@ fn bottom_up_rows_are_flipped() {
 
 /// The picture shows only inside the ring: at the anti-aliased edge the
 /// ring and the shadow share the pixel and the picture has no part (no
-/// fringe of picture colour outside the ring).
+/// fringe of picture color outside the ring).
 #[test]
 fn no_picture_fringe_at_the_edge() {
     for shape in Shape::ALL {
@@ -477,7 +477,7 @@ fn no_picture_fringe_at_the_edge() {
             for i in 0..d * d {
                 assert_eq!(t.pic[i] as u32 + t.ring[i] as u32, t.mask[i] as u32, "{shape:?} {s}x pixel {i}");
             }
-            // Pictures that differ only in colour give the same pixels
+            // Pictures that differ only in color give the same pixels
             // wherever the picture has no coverage.
             let solid = |c: [u8; 4]| CamFrame { w: t.d, h: t.d, bgra: c.repeat(d * d) };
             let (mut a, mut b) = (Vec::new(), Vec::new());
@@ -688,7 +688,7 @@ fn live_cam_opens_and_reads() {
         if cam.read(&mut f).unwrap() {
             assert_eq!((f.w, f.h), (w, h));
             assert_eq!(f.bgra.len(), (w * h * 4) as usize);
-            // Mean colour only (no picture is kept): a wrong conversion
+            // Mean color only (no picture is kept): a wrong conversion
             // shows as all-black or strongly green.
             let n = (w * h) as u64;
             let mean: Vec<u64> = (0..3).map(|c| f.bgra.as_chunks::<4>().0.iter().map(|p| p[c] as u64).sum::<u64>() / n).collect();

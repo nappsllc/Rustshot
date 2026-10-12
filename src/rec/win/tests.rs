@@ -17,10 +17,10 @@ use windows::Win32::Media::MediaFoundation::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-/// Colours the test window cycles through, far apart in luma.
-pub(crate) const COLOURS: [(u8, u8, u8); 6] = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 255), (0, 0, 0), (255, 255, 0)];
+/// Colors the test window cycles through, far apart in luma.
+pub(crate) const COLORS: [(u8, u8, u8); 6] = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 255), (0, 0, 0), (255, 255, 0)];
 
-/// A top-most popup on its own thread, changing colour every `period`.
+/// A top-most popup on its own thread, changing color every `period`.
 pub(crate) struct TestWindow {
     hwnd: isize,
     thread: Option<std::thread::JoinHandle<()>>,
@@ -39,7 +39,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             WM_PAINT => {
                 let mut ps = PAINTSTRUCT::default();
                 let dc = BeginPaint(hwnd, &mut ps);
-                let (r, g, b) = COLOURS[GetWindowLongPtrW(hwnd, GWLP_USERDATA) as usize % COLOURS.len()];
+                let (r, g, b) = COLORS[GetWindowLongPtrW(hwnd, GWLP_USERDATA) as usize % COLORS.len()];
                 let brush = CreateSolidBrush(COLORREF(u32::from(r) | u32::from(g) << 8 | u32::from(b) << 16));
                 let mut rc = RECT::default();
                 let _ = GetClientRect(hwnd, &mut rc);
@@ -57,7 +57,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
     }
 }
 
-/// Paints [`COLOURS`] as vertical bars of equal width, left to right.
+/// Paints [`COLORS`] as vertical bars of equal width, left to right.
 unsafe extern "system" fn bars_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     unsafe {
         match msg {
@@ -67,8 +67,8 @@ unsafe extern "system" fn bars_wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
                 let dc = BeginPaint(hwnd, &mut ps);
                 let mut rc = RECT::default();
                 let _ = GetClientRect(hwnd, &mut rc);
-                let n = COLOURS.len() as i32;
-                for (i, &(r, g, b)) in COLOURS.iter().enumerate() {
+                let n = COLORS.len() as i32;
+                for (i, &(r, g, b)) in COLORS.iter().enumerate() {
                     let brush = CreateSolidBrush(COLORREF(u32::from(r) | u32::from(g) << 8 | u32::from(b) << 16));
                     let i = i as i32;
                     let bar = RECT { left: rc.right * i / n, top: 0, right: rc.right * (i + 1) / n, bottom: rc.bottom };
@@ -92,7 +92,7 @@ impl TestWindow {
         TestWindow::spawn(x, y, w, h, period_ms, false)
     }
 
-    /// A still window showing [`COLOURS`] as `w / 6` px wide vertical bars.
+    /// A still window showing [`COLORS`] as `w / 6` px wide vertical bars.
     pub(crate) fn bars(x: i32, y: i32, w: i32, h: i32) -> TestWindow {
         TestWindow::spawn(x, y, w, h, 1_000_000, true)
     }
@@ -136,9 +136,9 @@ impl TestWindow {
         TestWindow { hwnd, thread: Some(thread) }
     }
 
-    /// Show colour `i` of [`COLOURS`] from now on (a period that never
+    /// Show color `i` of [`COLORS`] from now on (a period that never
     /// elapses keeps it).
-    pub(crate) fn set_colour(&self, i: usize) {
+    pub(crate) fn set_color(&self, i: usize) {
         unsafe {
             let h = HWND(self.hwnd as *mut _);
             SetWindowLongPtrW(h, GWLP_USERDATA, i as isize);
@@ -338,9 +338,9 @@ fn live_rec_dxgi_failure_falls_back_to_gdi() {
     assert_eq!(src.size(), (160, 120));
     let f = src.next(Instant::now() + Duration::from_millis(100)).unwrap();
     assert_eq!((f.w, f.h, f.bgra.len()), (160, 120, 160 * 120 * 4));
-    // The window's colour fills the frame centre.
+    // The window's color fills the frame centre.
     let c = &f.bgra[(60 * 160 + 80) * 4..(60 * 160 + 80) * 4 + 3];
-    assert!(COLOURS.iter().any(|&(r, g, b)| c == [b, g, r]), "centre {c:?}");
+    assert!(COLORS.iter().any(|&(r, g, b)| c == [b, g, r]), "centre {c:?}");
     // And the real path works here too (unless the machine has no duplication).
     match open_source(win.rect(), None).unwrap().1 {
         SourceKind::Dxgi => {}
@@ -764,7 +764,7 @@ fn yuv_at(nv: &[u8], w: u32, h: u32, x: u32, y: u32) -> [u8; 3] {
     [nv[y * w + x], nv[c], nv[c + 1]]
 }
 
-/// NV12 Y, U, V of the solid colour `rgb`, by the CPU conversion.
+/// NV12 Y, U, V of the solid color `rgb`, by the CPU conversion.
 fn expect_yuv((r, g, b): (u8, u8, u8)) -> [u8; 3] {
     let nv = nv12::convert(&[b, g, r, 255].repeat(4), 2, 2, 2, 2);
     [nv[0], nv[4], nv[5]]
@@ -777,7 +777,7 @@ fn near(a: [u8; 3], b: [u8; 3], tol: u8) -> bool {
 /// Where the bar centres of a [`TestWindow::bars`] window at `win` land in
 /// the `out`-sized picture of `area`.
 fn bar_centres(win: crate::capture::IRect, area: crate::capture::IRect, out: (u32, u32)) -> Vec<(u32, u32)> {
-    let n = COLOURS.len() as i32;
+    let n = COLORS.len() as i32;
     let (ww, wh) = (win.2 as i32, win.3 as i32);
     (0..n)
         .map(|i| {
@@ -790,7 +790,7 @@ fn bar_centres(win: crate::capture::IRect, area: crate::capture::IRect, out: (u3
         .collect()
 }
 
-/// The colour-bar window, and the areas recorded around it: the window
+/// The color-bar window, and the areas recorded around it: the window
 /// itself (no scaling) and a 4608×432 area (scaled to 4096×384).
 fn bar_areas(win: &TestWindow) -> [crate::capture::IRect; 2] {
     let r = win.rect();
@@ -798,7 +798,7 @@ fn bar_areas(win: &TestWindow) -> [crate::capture::IRect; 2] {
 }
 
 /// The GPU's NV12 (scaled or not) matches the CPU conversion of the same
-/// desktop image, and the colours are the BT.709 limited-range values.
+/// desktop image, and the colors are the BT.709 limited-range values.
 #[test]
 #[ignore = "records the real desktop"]
 fn live_rec_gpu_nv12_matches_the_cpu_conversion() {
@@ -822,7 +822,7 @@ fn live_rec_gpu_nv12_matches_the_cpu_conversion() {
         assert_eq!((g.w, g.h, g.data.len()), (out.0, out.1, nv12::size(out.0, out.1)));
         let cn = nv12::convert(&c.bgra, c.w, c.h, out.0, out.1);
         for (k, &(x, y)) in bar_centres(win.rect(), area, out).iter().enumerate() {
-            let (a, b, want) = (yuv_at(&g.data, out.0, out.1, x, y), yuv_at(&cn, out.0, out.1, x, y), expect_yuv(COLOURS[k]));
+            let (a, b, want) = (yuv_at(&g.data, out.0, out.1, x, y), yuv_at(&cn, out.0, out.1, x, y), expect_yuv(COLORS[k]));
             eprintln!("{area:?} -> {out:?}: bar {k} at ({x}, {y}): GPU {a:?}, CPU {b:?}, expected {want:?}");
             assert!(near(a, want, 2), "GPU {a:?}, expected {want:?}");
             assert!(near(b, want, 1), "CPU {b:?}, expected {want:?}");
@@ -873,10 +873,10 @@ fn live_rec_gpu_pointer_is_composited() {
     }
 }
 
-/// MP4s made through the GPU path, scaled and not, decode to the colours.
+/// MP4s made through the GPU path, scaled and not, decode to the colors.
 #[test]
 #[ignore = "records the real desktop"]
-fn live_rec_mp4_colour_bars_decode() {
+fn live_rec_mp4_color_bars_decode() {
     crate::capture::enable_dpi_awareness();
     if skip_without_mf(false) {
         return;
@@ -902,7 +902,7 @@ fn live_rec_mp4_colour_bars_decode() {
         assert!(p.frames >= 25, "{} frames", p.frames);
         let last = p.luma_at.last().unwrap();
         for (k, &y) in last.iter().enumerate() {
-            let want = expect_yuv(COLOURS[k])[0];
+            let want = expect_yuv(COLORS[k])[0];
             assert!(y.abs_diff(want) <= 4, "bar {k}: luma {y}, expected {want}");
         }
     }
@@ -1000,7 +1000,7 @@ fn live_rec_gpu_conversion_falls_back_to_the_cpu() {
     assert_eq!(p.frames, 30);
     for (i, row) in p.luma_at.iter().enumerate() {
         for (k, &y) in row.iter().enumerate() {
-            let want = expect_yuv(COLOURS[k])[0];
+            let want = expect_yuv(COLORS[k])[0];
             assert!(y.abs_diff(want) <= 4, "frame {i}, bar {k}: luma {y}, expected {want}");
         }
     }

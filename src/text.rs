@@ -5,7 +5,7 @@
 //! ascent-to-descent height, as before.
 //!
 //! Lines are split on `\n`, stacked `line_height` apart from `top`, and each
-//! line starts at `top.x`. Coverage is blended with the object colour by
+//! line starts at `top.x`. Coverage is blended with the object color by
 //! [`Surf::blend_px`] once per pixel through one [`Mask`] for the whole
 //! text; the backend only produces grayscale coverage.
 
@@ -120,7 +120,7 @@ impl AnnotFont {
     pub fn render(&self, sf: &mut Surf, text: &str, px: f32, top: Pt, color: C4) {
         let (w, h, m) = self.measure(text, px);
         // One mask for every glyph of every line (max coverage), blended
-        // once: touching or overlapping glyphs of a translucent colour do
+        // once: touching or overlapping glyphs of a translucent color do
         // not darken where they meet. The pad covers overhang past the
         // advance box (as the backends' own pad does).
         let pad = (px / 3.0).ceil() + 3.0;

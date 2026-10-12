@@ -209,7 +209,7 @@ mod tests {
     }
 
     #[test]
-    fn known_colours_bt709_limited_range() {
+    fn known_colors_bt709_limited_range() {
         assert_eq!(yuv_of([0, 0, 0]), (16, 128, 128));
         assert_eq!(yuv_of([255, 255, 255]), (235, 128, 128));
         assert_eq!(yuv_of([255, 0, 0]), (63, 102, 240));

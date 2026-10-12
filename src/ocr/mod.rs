@@ -296,12 +296,12 @@ mod tests {
     }
 
     #[test]
-    fn upscale_is_bilinear_and_keeps_flat_colour() {
+    fn upscale_is_bilinear_and_keeps_flat_color() {
         let flat = PixBuf::from_pixel(3, 2, [10, 200, 30, 255]);
         let big = upscale2(&flat);
         assert_eq!(big.dimensions(), (6, 4));
         assert!(big.as_raw().as_chunks::<4>().0.iter().all(|p| *p == [10, 200, 30, 255]));
-        // Black | white: the edges keep their colour, the middle blends.
+        // Black | white: the edges keep their color, the middle blends.
         let mut two = PixBuf::from_pixel(2, 1, [0, 0, 0, 255]);
         two.as_raw_mut()[4..8].copy_from_slice(&[255, 255, 255, 255]);
         let big = upscale2(&two);

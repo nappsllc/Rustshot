@@ -1,7 +1,7 @@
 use super::*;
 use std::io::Cursor;
 
-/// A decoded frame: where it went, its colour table and the composited
+/// A decoded frame: where it went, its color table and the composited
 /// picture after it (RGB).
 pub(crate) struct DFrame {
     delay: u16,
@@ -226,8 +226,8 @@ fn lzw_round_trip() {
 }
 
 #[test]
-fn many_colours_fit_one_palette() {
-    // 64×64 gradient: 4096 distinct colours.
+fn many_colors_fit_one_palette() {
+    // 64×64 gradient: 4096 distinct colors.
     let f = frame(64, 64, 0, |x, y| [(x * 4) as u8, (y * 4) as u8, ((x + y) * 2) as u8]);
     let (_, d) = round_trip(64, 64, 15, std::slice::from_ref(&f));
     assert_eq!((d.w, d.h, d.frames.len()), (64, 64, 1));

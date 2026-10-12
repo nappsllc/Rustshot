@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-/// Pictures of a solid colour, about 100 a second; says when it is dropped
+/// Pictures of a solid color, about 100 a second; says when it is dropped
 /// (the camera released).
 struct Fake {
     dropped: Arc<AtomicBool>,

@@ -513,7 +513,7 @@ impl DxgiSource {
         f
     }
 
-    /// The frame for now with a colour pointer of `w`×`h` BGRA `px` at
+    /// The frame for now with a color pointer of `w`×`h` BGRA `px` at
     /// `pos` (virtual-screen px) in place of the real one; nothing polled.
     #[cfg(test)]
     pub(crate) fn frame_with_pointer(&mut self, pos: (i32, i32), w: u32, h: u32, px: &[u8]) -> Frame {
@@ -662,7 +662,7 @@ mod tests {
     }
 
     #[test]
-    fn colour_pointer_is_alpha_blended_and_clipped() {
+    fn color_pointer_is_alpha_blended_and_clipped() {
         // 2×1 shape: opaque red, half-transparent white; area at (10, 20) 2×2.
         let p = ptr(DXGI_OUTDUPL_POINTER_SHAPE_TYPE_COLOR, 2, 1, 8, vec![0, 0, 255, 255, 255, 255, 255, 128]);
         let mut px = vec![0u8; 2 * 2 * 4];
@@ -673,7 +673,7 @@ mod tests {
     }
 
     #[test]
-    fn masked_colour_pointer_replaces_or_xors() {
+    fn masked_color_pointer_replaces_or_xors() {
         let p = ptr(DXGI_OUTDUPL_POINTER_SHAPE_TYPE_MASKED_COLOR, 2, 1, 8, vec![1, 2, 3, 0, 0xFF, 0x0F, 0, 0xFF]);
         let mut px = vec![0x55u8; 3 * 2 * 4];
         draw_pointer(&mut px, (10, 20, 3, 2), &p);

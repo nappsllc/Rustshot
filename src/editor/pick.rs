@@ -1,11 +1,11 @@
-//! The colour picker popover's model: hue ring + saturation/value square,
+//! The color picker popover's model: hue ring + saturation/value square,
 //! a hex field (`#rgb`, `#rrggbb`, `rgb(r, g, b)`), opacity, the
-//! eyedropper and the recent colours. The picker edits a colour live (the
+//! eyedropper and the recent colors. The picker edits a color live (the
 //! tool or the camera ring shows it as it changes); Enter, or a click
 //! outside, keeps it, Esc puts the old one back.
 //!
 //! Also the editor's side of it (`impl Edit` below): opening and closing
-//! the picker, its pointer and keyboard input, the recent colours, and the
+//! the picker, its pointer and keyboard input, the recent colors, and the
 //! eyedropper's loupe and sampling.
 
 use super::{chrome, compose, config, toolbar, tools, wind, Edit, Interact};
@@ -16,7 +16,7 @@ use crate::wind::Mods;
 use compose::PixBufBackdrop;
 use std::time::Instant;
 
-/// What the picker colours.
+/// What the picker colors.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Target {
     /// The current drawing tool.
@@ -99,7 +99,7 @@ pub fn parse_input(s: &str) -> Option<(u8, u8, u8)> {
     }
 }
 
-/// The field's text for a colour: `#RRGGBB`.
+/// The field's text for a color: `#RRGGBB`.
 pub fn hex_text(c: C4) -> String {
     format!("#{:02X}{:02X}{:02X}", c.r, c.g, c.b)
 }
@@ -115,7 +115,7 @@ pub struct Picker {
     pub v: f32,
     /// Opacity, 0..=255 (the tool target only; the ring is opaque).
     pub a: u8,
-    /// The hex field's text, and whether it reads as a colour.
+    /// The hex field's text, and whether it reads as a color.
     pub hex: String,
     pub hex_ok: bool,
     /// The field was just focused: the first key typed replaces it.
@@ -123,10 +123,10 @@ pub struct Picker {
     pub focus: Option<Part>,
     /// The eyedropper is on: the next click on the screenshot picks.
     pub eyedrop: bool,
-    /// The colour when the picker opened (Esc puts it back); `None` for a
+    /// The color when the picker opened (Esc puts it back); `None` for a
     /// ring that was the theme's accent.
     pub orig: Option<C4>,
-    /// The colour shown when it opened (the accent for such a ring):
+    /// The color shown when it opened (the accent for such a ring):
     /// closing on it changes nothing.
     pub start: C4,
 }
@@ -153,7 +153,7 @@ impl Picker {
         p
     }
 
-    /// The colour picked (the ring's is opaque).
+    /// The color picked (the ring's is opaque).
     pub fn color(&self) -> C4 {
         let (r, g, b) = hsv_to_rgb(self.h, self.s, self.v);
         C4::new(r, g, b, if self.target == Target::Ring { 255 } else { self.a })
@@ -177,7 +177,7 @@ impl Picker {
         self.sync_hex();
     }
 
-    /// The field shows the colour again.
+    /// The field shows the color again.
     pub fn sync_hex(&mut self) {
         self.hex = hex_text(self.color());
         self.hex_ok = true;
@@ -208,7 +208,7 @@ impl Picker {
         self.a = ((pct.clamp(0, 100) as u32 * 255 + 50) / 100) as u8;
     }
 
-    /// Typed into the hex field; the colour follows while the text reads
+    /// Typed into the hex field; the color follows while the text reads
     /// as one.
     pub fn type_char(&mut self, ch: char) {
         if self.hex_fresh {
@@ -245,7 +245,7 @@ impl Picker {
         }
     }
 
-    /// The parts Tab visits, in order (`recents` colours listed).
+    /// The parts Tab visits, in order (`recents` colors listed).
     pub fn parts(&self, recents: usize) -> Vec<Part> {
         let mut v = vec![Part::Hue, Part::Sv, Part::Hex];
         if self.has_alpha() {
@@ -272,7 +272,7 @@ impl Picker {
     }
 
     /// An arrow key on the focused part: `dx`/`dy` -1, 0 or 1 (screen
-    /// directions), `big` (Shift) for ten steps. True when the colour
+    /// directions), `big` (Shift) for ten steps. True when the color
     /// changed.
     pub fn nudge(&mut self, dx: i32, dy: i32, big: bool, recents: usize) -> bool {
         let k = if big { 10.0 } else { 1.0 };
@@ -303,12 +303,12 @@ impl Picker {
 // ---- the editor's side ------------------------------------------------------
 
 impl Edit {
-    /// The picker's recent colours, newest first.
+    /// The picker's recent colors, newest first.
     pub(super) fn recents(&self) -> Vec<C4> {
         self.cfg.recent_colors.iter().filter_map(|s| tools::parse(s)).take(config::RECENT_MAX).collect()
     }
 
-    /// `c` heads the recent colours (once; at most [`config::RECENT_MAX`]).
+    /// `c` heads the recent colors (once; at most [`config::RECENT_MAX`]).
     pub(super) fn add_recent(&mut self, c: C4, now: Instant) {
         let mut v = self.recents();
         v.retain(|x| *x != c);
@@ -319,10 +319,10 @@ impl Edit {
         self.cfg.recent_colors = list;
     }
 
-    /// Open the colour picker for `target` at its colour.
+    /// Open the color picker for `target` at its color.
     pub(super) fn open_picker(&mut self, target: Target) {
         let p = match target {
-            // Over a selection: its colour.
+            // Over a selection: its color.
             Target::Tool => {
                 let c = self.sel_color().unwrap_or(self.color());
                 Picker::new(target, c, Some(c))
@@ -337,7 +337,7 @@ impl Edit {
         self.loupe = None;
     }
 
-    /// The picker's colour shows on its target as it changes.
+    /// The picker's color shows on its target as it changes.
     pub(super) fn pick_changed(&mut self) {
         let Some(p) = &self.pick else { return };
         let c = p.color();
@@ -351,7 +351,7 @@ impl Edit {
         }
     }
 
-    /// Close the picker: `keep` its colour (remembered, and a recent one
+    /// Close the picker: `keep` its color (remembered, and a recent one
     /// when it changed), or put the old one back.
     pub(super) fn close_picker(&mut self, keep: bool) {
         let Some(p) = self.pick.take() else { return };
@@ -366,7 +366,7 @@ impl Edit {
         // followed the accent keeps following it.
         let keep = keep && c != p.start;
         if p.target == Target::Tool && (!self.obj.sel.is_empty() || self.obj.pick_backup.is_some()) {
-            // A selection's colour: one undo step, or the objects back.
+            // A selection's color: one undo step, or the objects back.
             self.end_preview_color(keep, c);
             if keep {
                 self.add_recent(c, now);
@@ -468,7 +468,7 @@ impl Edit {
                         self.close_picker(true);
                     }
                 }
-                // Enter keeps the colour (not while the field reads as none).
+                // Enter keeps the color (not while the field reads as none).
                 _ if v == k && (pk.hex_ok || pk.focus != Some(Part::Hex)) => self.close_picker(true),
                 _ => {}
             },
@@ -547,7 +547,7 @@ impl Edit {
         out
     }
 
-    /// The colour of the pixel at `p` (the eyedropper).
+    /// The color of the pixel at `p` (the eyedropper).
     pub(super) fn sample(&self, p: Pt) -> C4 {
         let n = chrome::LOUPE_N;
         self.loupe_pixels(p)[n * n / 2]
@@ -569,7 +569,7 @@ mod tests {
                 }
             }
         }
-        // And HSV -> RGB -> HSV for saturated colours.
+        // And HSV -> RGB -> HSV for saturated colors.
         for h in (0..360).step_by(15) {
             let (r, g, b) = hsv_to_rgb(h as f32, 1.0, 1.0);
             let (h2, s2, v2) = rgb_to_hsv(r, g, b);

@@ -86,7 +86,7 @@ impl PixBuf {
         Ok(out)
     }
 
-    /// Decode a PNG (any 8/16-bit colour type) into RGBA.
+    /// Decode a PNG (any 8/16-bit color type) into RGBA.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))] // the Screenshot portal's file
     pub fn from_png(bytes: &[u8]) -> Result<PixBuf> {
         let mut dec = png::Decoder::new(std::io::Cursor::new(bytes));

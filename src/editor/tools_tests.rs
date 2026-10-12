@@ -1,7 +1,7 @@
 //! The drawing-tools features: the size readout's preview, per-tool size
-//! and colour memory (restored by the next capture, written to the config
-//! after a pause or when the overlay closes), the colour picker (hue ring,
-//! square, hex field, opacity, eyedropper, recent colours) and the camera
+//! and color memory (restored by the next capture, written to the config
+//! after a pause or when the overlay closes), the color picker (hue ring,
+//! square, hex field, opacity, eyedropper, recent colors) and the camera
 //! ring's controls; plus their preview PNGs.
 
 use super::tests::{annotated, assert_dirty_covers, edit_of, preview_app, preview_app_with, settled, settled_frame, snap_all, synthetic_shot};
@@ -138,10 +138,10 @@ fn translucent_arrow_through_the_export() {
 
 // ---- per-tool memory ---------------------------------------------------------
 
-/// Each tool keeps its own size and colour; the next capture starts from
+/// Each tool keeps its own size and color; the next capture starts from
 /// them (and from the defaults for tools never changed).
 #[test]
-fn tools_remember_size_and_colour_into_the_next_capture() {
+fn tools_remember_size_and_color_into_the_next_capture() {
     let mut a = app_big();
     a.kind = RunKind::Daemon;
     let green = C4::rgb(0, 200, 80);
@@ -152,11 +152,11 @@ fn tools_remember_size_and_colour_into_the_next_capture() {
     key(&mut a, 'R' as u32); // Rectangle: its own
     assert_eq!((ed(&mut a).mem.size(Tool::Rect), ed(&mut a).color()), (3.0, C4::rgb(240, 68, 56)));
     act(&mut a, Act::Size(-1));
-    // The marker is translucent on top of a translucent colour.
+    // The marker is translucent on top of a translucent color.
     key(&mut a, 'M' as u32);
     act(&mut a, Act::Color(C4::new(250, 220, 0, 128)));
     assert_eq!(super::marker_color(ed(&mut a).color()).a, 45);
-    // Pixelate: a size, no colour (its palette button is off).
+    // Pixelate: a size, no color (its palette button is off).
     key(&mut a, 'B' as u32);
     act(&mut a, Act::Size(1));
     let before = ed(&mut a).mem.clone();
@@ -181,7 +181,7 @@ fn tools_remember_size_and_colour_into_the_next_capture() {
     assert_eq!(e.mem.color(Tool::Marker), C4::new(250, 220, 0, 128));
     assert_eq!(e.mem.size(Tool::Pixelate), 13.0);
     assert_eq!((e.mem.size(Tool::Arrow), e.mem.color(Tool::Arrow)), (3.0, C4::rgb(240, 68, 56)), "never changed: the defaults");
-    // A line drawn now has the remembered width and colour.
+    // A line drawn now has the remembered width and color.
     key(&mut a, 'L' as u32);
     down(&mut a, (300, 300));
     mv(&mut a, (400, 350));
@@ -240,7 +240,7 @@ fn a_broken_config_is_left_alone() {
 }
 
 /// The readout and its preview follow the tool; Invert has neither a
-/// size nor a colour, Pixelate no colour.
+/// size nor a color, Pixelate no color.
 #[test]
 fn readout_follows_the_tool() {
     let mut a = app_big();
@@ -298,7 +298,7 @@ fn size_preview_geometry() {
     assert_eq!(edges, 6, "40 px of 6 px blocks: seven blocks, six edges");
 }
 
-// ---- the colour picker -------------------------------------------------------
+// ---- the color picker -------------------------------------------------------
 
 fn open_picker(a: &mut App) {
     act(a, Act::Palette);
@@ -343,7 +343,7 @@ fn picker_drags_live_esc_reverts_enter_keeps() {
     assert_eq!(ed(&mut a).color(), c);
     assert_eq!(ed(&mut a).recents(), [c], "a recent color");
     assert!(ed(&mut a).pending.get("tool_line_color").is_some() && ed(&mut a).pending.get("recent_colors").is_some());
-    // A click outside closes it, keeping the colour, and does nothing else.
+    // A click outside closes it, keeping the color, and does nothing else.
     open_picker(&mut a);
     let objs = ed(&mut a).objects.len();
     click(&mut a, (400, 300));
@@ -427,7 +427,7 @@ fn picker_slider_and_recents_by_mouse() {
 }
 
 /// The eyedropper: the loupe follows the pointer, a click takes the
-/// pixel's colour (the capture's, not dimmed), Esc stops it first.
+/// pixel's color (the capture's, not dimmed), Esc stops it first.
 #[test]
 fn eyedropper_samples_the_screenshot() {
     let mut a = app_big();
@@ -600,7 +600,7 @@ fn ring_controls_change_the_bubble() {
     };
     assert_eq!((look(&mut a).ring, look(&mut a).ring_w), (None, 2), "the accent, 2 px");
     // The ring's swatch in the Camera row opens its palette: the width
-    // and the colours.
+    // and the colors.
     let sw = item(&mut a, |k| matches!(k, toolbar::Kind::Swatch { act: Act::RingPalette, .. }));
     click(&mut a, mid(sw));
     assert!(ed(&mut a).rec.ring_pal);
@@ -628,7 +628,7 @@ fn ring_controls_change_the_bubble() {
     assert_eq!(ed(&mut a).cfg.rec_camera_ring_color, "#2dc06f");
     assert_eq!(ed(&mut a).pending.get("rec_camera_ring_width"), Some(&Some("1".to_string())));
     // The picker for the ring sits where the popover was; Esc puts the
-    // colour back and the popover returns.
+    // color back and the popover returns.
     click(&mut a, mid(sw));
     let rb = item(&mut a, |k| *k == toolbar::Kind::Rainbow(Act::RingWheel));
     click(&mut a, mid(rb));
@@ -656,7 +656,7 @@ fn ring_controls_change_the_bubble() {
 }
 
 /// The ring's picker dismissed without a change keeps the ring on the
-/// accent (`None`, not the accent's colour) and adds no recent colour.
+/// accent (`None`, not the accent's color) and adds no recent color.
 #[cfg(any(windows, target_os = "linux"))]
 #[test]
 fn ring_picker_closed_unchanged_keeps_the_accent() {
@@ -697,8 +697,8 @@ fn ring_picker_closed_unchanged_keeps_the_accent() {
     assert_eq!(e.cfg.recent_colors, ["#00ff00", "#123456"]);
 }
 
-/// The tool's picker closed on the colour it opened with remembers
-/// nothing and adds no recent colour.
+/// The tool's picker closed on the color it opened with remembers
+/// nothing and adds no recent color.
 #[test]
 fn tool_picker_closed_unchanged_remembers_nothing() {
     let mut a = app_big();
@@ -712,10 +712,10 @@ fn tool_picker_closed_unchanged_remembers_nothing() {
     assert!(e.pending.is_empty(), "nothing remembered");
 }
 
-/// Quitting the daemon under an open picker keeps the picked colour (as
+/// Quitting the daemon under an open picker keeps the picked color (as
 /// closing the overlay does) and writes it before the process goes.
 #[test]
-fn quitting_keeps_the_picked_colour_and_flushes() {
+fn quitting_keeps_the_picked_color_and_flushes() {
     let file = Scratch::new("quit", "theme = \"dark\"\n");
     let mut a = app_big();
     a.kind = RunKind::Daemon;
@@ -734,7 +734,7 @@ fn quitting_keeps_the_picked_colour_and_flushes() {
 }
 
 /// Space (the palette's key) and the wheel do nothing for the tools
-/// without a colour.
+/// without a color.
 #[test]
 fn no_palette_for_pixelate_and_invert() {
     let mut a = app_big();
@@ -872,7 +872,7 @@ fn render_tools_previews() {
             ed(&mut a).hover = i;
             ed(&mut a).hover_at = Instant::now() - Duration::from_secs(2);
             save(&settled_frame(&mut a), &name("palette-rainbow"));
-            // The picker: fresh; typing a colour that does not read; with
+            // The picker: fresh; typing a color that does not read; with
             // recents and 60 % opacity, the slider focused; the eyedropper.
             let recents: Vec<String> = ["#f04438", "#3b82f6cc", "#2dc06f", "#111318", "#ffffff", "#ec489966"].iter().map(|s| s.to_string()).collect();
             for (what, setup) in [
