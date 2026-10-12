@@ -39,6 +39,7 @@ pub enum OcrError {
 }
 
 /// One recognized word and its box (image px, top-left origin).
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))] // tesseract gives plain text
 #[derive(Clone, Debug, PartialEq)]
 pub struct Word {
     pub text: String,
@@ -49,11 +50,13 @@ pub struct Word {
 }
 
 /// One line as the engine returned it: its words in reading order.
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))] // tesseract gives plain text
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Line {
     pub words: Vec<Word>,
 }
 
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))] // tesseract gives plain text
 impl Line {
     /// The line's top and left edge (its words' smallest y and x).
     fn top_left(&self) -> (f32, f32) {
@@ -66,6 +69,7 @@ impl Line {
 /// The text of `lines`: top to bottom (then left to right where two lines
 /// start at the same height), words joined with single spaces in the
 /// engine's order, one line per row; lines without text are left out.
+#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))] // tesseract gives plain text
 pub fn join_lines(mut lines: Vec<Line>) -> String {
     lines.retain(|l| l.words.iter().any(|w| !w.text.trim().is_empty()));
     lines.sort_by(|a, b| {
