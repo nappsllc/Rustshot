@@ -329,7 +329,8 @@ fn root_longs(d: &Disp, name: &str, max: c_long) -> Vec<c_long> {
 fn net_workarea(d: &Disp) -> Option<IRect> {
     let areas = root_longs(d, "_NET_WORKAREA", 4 * 64);
     let cur = root_longs(d, "_NET_CURRENT_DESKTOP", 1).first().copied().unwrap_or(0).max(0) as usize;
-    let a = areas.chunks_exact(4).nth(cur).or_else(|| areas.chunks_exact(4).next())?;
+    let (desks, _) = areas.as_chunks::<4>();
+    let a = desks.get(cur).or_else(|| desks.first())?;
     (a[2] > 0 && a[3] > 0).then(|| (a[0] as i32, a[1] as i32, a[2] as u32, a[3] as u32))
 }
 
