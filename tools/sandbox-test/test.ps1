@@ -69,12 +69,23 @@ function KillAll { Get-Process rustshot -ErrorAction SilentlyContinue | Stop-Pro
 . "$T\uninst.ps1"
 # History (0.2.0): HistoryChecks, run on the portable exe below.
 . "$T\history.ps1"
+# 0.3.0 (launcher, delayed capture, accept on select, Open with, new keys): Checks030.
+. "$T\v030.ps1"
 HotkeyProbe $log
 if (Test-Path "$T\probe-only") { Add-Content $log 'DONE'; return }
 function PortableExe {
     $p = Get-ChildItem "$T\in" -Recurse -Filter '*-windows-x86_64.exe' | Select-Object -First 1
     if (-not $p) { $p = Get-ChildItem "$T\in\rustshot-windows-x86_64" -Filter '*.exe' | Select-Object -First 1 }
     $p
+}
+# <T>\v030-only: just the 0.3.0 checks.
+if (Test-Path "$T\v030-only") {
+    $portable = PortableExe
+    Copy-Item $portable.FullName "$env:TEMP\rustshot.exe"
+    Add-Content $log "      portable exe: $($portable.FullName) $((Get-Item $portable.FullName).Length) B"
+    Checks030 "$env:TEMP\rustshot.exe"
+    Add-Content $log 'DONE'
+    return
 }
 # <T>\rec-only: just the recording checks.
 if (Test-Path "$T\rec-only") {
@@ -306,6 +317,7 @@ if ($portable) {
     Check 'portable: closing it ends that process (exit 0)' ((WaitFor { $s.HasExited } 5) -and $s.ExitCode -eq 0) "exit=$($s.ExitCode)"
     Add-Content $log "SKIP  portable: self-update from a local fixture (the release exe has no test hook: RUSTSHOT_UPDATE_FEED is debug-only, and the sandbox has no network; covered on the host by update_install::tests::live_portable_update)"
     HistoryChecks "$env:TEMP\rustshot.exe"
+    Checks030 "$env:TEMP\rustshot.exe"
     RecordingChecks "$env:TEMP\rustshot.exe"
     Start-Process "$env:TEMP\rustshot.exe"
     Check 'portable: daemon started for visual tray check' (WaitFor { [W]::TrayWindow() })
