@@ -1,7 +1,7 @@
-//! Settings → **Recording**: the defaults the Record popover starts from
-//! (format, frame rate, MP4 quality, system sound and microphone with its
-//! device, the camera bubble's device, shape, size, mirror and ring), the
-//! 3-2-1 countdown and, on Linux, the MP4 encoder with a line saying what
+//! Settings → **Recording**: the defaults video mode's panel starts from
+//! (format, frame rate, MP4 quality, a GIF's max length, system sound and
+//! microphone with its device, the camera bubble's device, shape, size,
+//! mirror and ring), the 3-2-1 countdown and, on Linux, the MP4 encoder with a line saying what
 //! is installed (the record hotkey is in Key bindings).
 //!
 //! [`RecForm`] is the part of the settings form this tab edits (every
@@ -20,10 +20,14 @@ use std::sync::mpsc::Receiver;
 /// (label, config value) tables.
 const FORMATS: [(&str, &str); 2] = [("MP4", "mp4"), ("GIF", "gif")];
 const MP4_FPS: [(&str, u32); 2] = [("30 fps", 30), ("60 fps", 60)];
-const GIF_FPS: [(&str, u32); 2] = [("10 fps", 10), ("15 fps", 15)];
+const GIF_FPS: [(&str, u32); 3] = [("10 fps", 10), ("15 fps", 15), ("24 fps", 24)];
+/// A GIF stops by itself at its max length (`rec_gif_max`, seconds).
+const GIF_MAX: [(&str, u32); 3] = [("15 s", 15), ("30 s", 30), ("60 s", 60)];
 const QUALITIES: [(&str, &str); 3] = [("Low", "low"), ("Medium", "medium"), ("High", "high")];
 const SHAPES: [(&str, &str); 3] = [("Circle", "circle"), ("Rounded", "rounded"), ("Square", "square")];
-const SIZES: [(&str, &str); 3] = [("Small", "s"), ("Medium", "m"), ("Large", "l")];
+/// The bubble's side (logical px), as video mode's panel and the wheel
+/// size it: S / M / L / XL.
+const SIZES: [(&str, &str); 4] = [("120", "s"), ("160", "m"), ("200", "l"), ("240", "xl")];
 pub const ENCODERS: [(&str, &str); 3] = [("Auto", "auto"), ("ffmpeg", "ffmpeg"), ("OpenH264", "openh264")];
 /// The ring colours on offer after "Accent" (the default drawing palette).
 const RINGS: [(&str, &str); 10] = [
@@ -58,6 +62,8 @@ pub struct RecForm {
     /// MP4 frame rate ([`MP4_FPS`] index) and GIF frame rate ([`GIF_FPS`]).
     pub fps: usize,
     pub gif_fps: usize,
+    /// A GIF's max length ([`GIF_MAX`] index).
+    pub gif_max: usize,
     /// [`QUALITIES`] index.
     pub quality: usize,
     pub system: bool,
@@ -86,6 +92,7 @@ impl RecForm {
             format: index_str(&FORMATS, &cfg.rec_format),
             fps: index_of(&MP4_FPS, cfg.rec_fps),
             gif_fps: index_of(&GIF_FPS, cfg.rec_gif_fps),
+            gif_max: GIF_MAX.iter().position(|(_, x)| *x == cfg.rec_gif_max).unwrap_or(1),
             quality: index_str(&QUALITIES, &cfg.rec_quality),
             system: cfg.rec_system_audio,
             mic: cfg.rec_mic,
@@ -114,6 +121,9 @@ impl RecForm {
         }
         if self.gif_fps != was.gif_fps {
             c.rec_gif_fps = GIF_FPS[self.gif_fps].1;
+        }
+        if self.gif_max != was.gif_max {
+            c.rec_gif_max = GIF_MAX[self.gif_max].1;
         }
         if self.quality != was.quality {
             c.rec_quality = QUALITIES[self.quality].1.into();
@@ -348,6 +358,10 @@ pub fn section(ui: &mut Ui, s: &mut super::Settings, tok: &Tok) {
     srow(ui, tok, "Quality", gif.then_some("MP4 only"), |ui| {
         ui.seg("rec_quality", &labels(&QUALITIES), &mut f.quality, tok);
     });
+    ui.enabled = on && gif;
+    srow(ui, tok, "Max length", (!gif).then_some("GIF only: it stops by itself"), |ui| {
+        ui.seg("rec_gif_max", &labels(&GIF_MAX), &mut f.gif_max, tok);
+    });
     ui.enabled = on;
     srow(ui, tok, "Countdown", Some("3, 2, 1 before the first frame"), |ui| {
         ui.switch("rec_countdown", &mut f.countdown, tok);
@@ -384,7 +398,7 @@ pub fn section(ui: &mut Ui, s: &mut super::Settings, tok: &Tok) {
     srow(ui, tok, "Shape", None, |ui| {
         ui.seg("rec_camera_shape", &labels(&SHAPES), &mut f.shape, tok);
     });
-    srow(ui, tok, "Size", None, |ui| {
+    srow(ui, tok, "Size", Some("Bubble size in px"), |ui| {
         ui.seg("rec_camera_size", &labels(&SIZES), &mut f.size, tok);
     });
     srow(ui, tok, "Mirror", Some("Like a mirror, as most video calls show you"), |ui| {

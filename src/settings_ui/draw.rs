@@ -9,6 +9,9 @@ use crate::ui::compact::{Slot, Tok, CSS};
 use crate::ui::controls::wrap;
 use crate::uifb::C4;
 
+/// The product name in the rail and on About (capital R, though the
+/// boards write it in lowercase).
+pub const NAME: &str = "Rustshot";
 /// Layout of the window (logical px).
 pub const RAIL_W: f32 = 188.0;
 pub const HDR_H: f32 = 48.0;
@@ -190,7 +193,7 @@ pub fn paint(ui: &mut Ui, s: &mut Settings) -> Option<Click> {
     line(ui, RAIL_W - 1.0, 0.0, 1.0, h, tok.sep);
     mark(ui, 18.0, 18.0, 20.0);
     let (tx, ty) = (ui.px(46.0), ui.px(28.0));
-    ui.text_at(13.0, "rustshot", tx, ty, tok.tx, true);
+    ui.text_at(13.0, NAME, tx, ty, tok.tx, true);
     let before = s.section;
     let rail = FRect { x: 10.0, y: 52.0, w: RAIL_W - 20.0, h: h - 14.0 - 52.0 };
     ui.rail("rail", &SECTIONS, ABOUT, rail, &mut s.section, &tok);
@@ -667,7 +670,7 @@ fn about(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) {
     let block = 24.0 + 4.0 + 16.0 + 4.0 + 18.0 * lines.len() as f32;
     let top = y + 18.0 + (72.0 - block).max(0.0) / 2.0;
     let (px, py) = (ui.px(tx), ui.px(top + 12.0));
-    ui.text_at(20.0, "rustshot", px, py, tok.tx, true);
+    ui.text_at(20.0, NAME, px, py, tok.tx, true);
     let ver = format!("Version {} \u{b7} ", env!("CARGO_PKG_VERSION"));
     let vy = top + 24.0 + 4.0;
     ui.text_at(12.0, &ver, px, ui.px(vy + 8.0), tok.tx2, false);

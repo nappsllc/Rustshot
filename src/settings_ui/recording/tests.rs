@@ -17,7 +17,8 @@ fn custom() -> Config {
     Config {
         rec_format: "gif".into(),
         rec_fps: 60,
-        rec_gif_fps: 10,
+        rec_gif_fps: 24,
+        rec_gif_max: 60,
         rec_quality: "high".into(),
         rec_system_audio: false,
         rec_mic: true,
@@ -25,7 +26,7 @@ fn custom() -> Config {
         rec_camera: true,
         rec_camera_device: "{cam-2}".into(),
         rec_camera_shape: "rounded".into(),
-        rec_camera_size: "l".into(),
+        rec_camera_size: "xl".into(),
         rec_camera_mirror: false,
         rec_countdown: false,
         record_hotkey: "Ctrl+Alt+R".into(),
@@ -65,7 +66,8 @@ fn form_writes_each_recording_key() {
     let edits: Vec<(&str, Edit)> = vec![
         ("rec_format", Box::new(|f| f.format = 1)),
         ("rec_fps", Box::new(|f| f.fps = 1)),
-        ("rec_gif_fps", Box::new(|f| f.gif_fps = 0)),
+        ("rec_gif_fps", Box::new(|f| f.gif_fps = 2)),
+        ("rec_gif_max", Box::new(|f| f.gif_max = 2)),
         ("rec_quality", Box::new(|f| f.quality = 2)),
         ("rec_system_audio", Box::new(|f| f.system = false)),
         ("rec_mic", Box::new(|f| f.mic = true)),
@@ -73,7 +75,7 @@ fn form_writes_each_recording_key() {
         ("rec_camera", Box::new(|f| f.camera = true)),
         ("rec_camera_device", Box::new(|f| f.cam_dev = "{cam-2}".into())),
         ("rec_camera_shape", Box::new(|f| f.shape = 1)),
-        ("rec_camera_size", Box::new(|f| f.size = 2)),
+        ("rec_camera_size", Box::new(|f| f.size = 3)),
         ("rec_camera_mirror", Box::new(|f| f.mirror = false)),
         ("rec_countdown", Box::new(|f| f.countdown = false)),
         ("record_hotkey", Box::new(|f| f.hotkey = Chord::parse("Ctrl+Alt+R"))),
@@ -104,6 +106,21 @@ fn form_writes_each_recording_key() {
     let f = Form::new(&d, None);
     let onto = Config { rec_camera_ring_width: 9, ..d.clone() };
     assert_eq!(f.apply(&d, &onto).rec_camera_ring_width, 9);
+}
+
+/// The redesign's choices: GIF at 24 fps, a GIF's max length (15 / 30 /
+/// 60 s, 30 by default), the XL bubble, a 2 px ring by default.
+#[test]
+fn redesign_recording_choices() {
+    let f = RecForm::new(&Config::default());
+    assert_eq!((GIF_MAX[f.gif_max].1, SIZES[f.size].1, f.ring_w), (30, "m", 2));
+    assert_eq!(labels(&SIZES), ["120", "160", "200", "240"]);
+    let f = RecForm::new(&Config { rec_gif_fps: 24, rec_gif_max: 15, rec_camera_size: "xl".into(), ..Config::default() });
+    assert_eq!((GIF_FPS[f.gif_fps].1, GIF_MAX[f.gif_max].1, SIZES[f.size].1), (24, 15, "xl"));
+    for (n, _) in GIF_MAX {
+        let c = Config { rec_gif_max: n.trim_end_matches(" s").parse().unwrap(), ..Config::default() };
+        assert_eq!(config::parse_config(&config::to_toml(&c)).unwrap().rec_gif_max, c.rec_gif_max);
+    }
 }
 
 #[test]
