@@ -105,12 +105,15 @@ impl FontDc {
     }
 }
 
+/// The DC cache key: pixel size, weight, style bits.
+type DcKey = (i32, i32, i32);
+
 /// Run `f` with a DC holding `face` at `px`: the last few are kept
 /// (creating a font and a DC per measure cost tens of microseconds, and a
 /// wrap measures many times). A nested call gets a fresh one.
 fn with_dc<R>(px: f32, face: &Face, f: impl FnOnce(&FontDc) -> R) -> Option<R> {
     thread_local! {
-        static DCS: std::cell::RefCell<Vec<((i32, i32, i32), FontDc)>> = const { std::cell::RefCell::new(Vec::new()) };
+        static DCS: std::cell::RefCell<Vec<(DcKey, FontDc)>> = const { std::cell::RefCell::new(Vec::new()) };
     }
     let key = (px.round().max(1.0) as i32, face.weight, face.bits());
     DCS.with(|c| match c.try_borrow_mut() {

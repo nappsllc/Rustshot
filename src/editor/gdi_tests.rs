@@ -423,9 +423,14 @@ fn object_set(font: bool) -> Vec<Obj> {
         Obj::Pixelate { r: FRect { x: 300.0, y: 450.0, w: 100.0, h: 300.0 }, cell: 7.0 },
         Obj::Ellipse { r: FRect { x: 1350.0, y: 820.0, w: 200.0, h: 150.0 }, color: red, width: 4.0 },
         Obj::Path { pts: vec![Pt::new(600.0, 300.0), Pt::new(640.0, 340.0), Pt::new(700.0, 310.0)], color: red, width: 3.0 },
+        // A blur across the selection's edge, one over a pixelate.
+        Obj::Blur { r: FRect { x: 180.0, y: 120.0, w: 260.5, h: 140.0 }, sigma: 8.0 },
+        Obj::Blur { r: FRect { x: 320.0, y: 420.0, w: 120.0, h: 200.0 }, sigma: 14.0 },
     ];
     if font {
         v.push(Obj::Text { fmt: Default::default(), pos: Pt::new(1180.0, 200.0), text: "Note\nhere".into(), color: red, size: 24.0 });
+        let fmt = crate::text::TextFmt { bold: true, italic: true, underline: true, strike: true, align: crate::text::Align::Center, family: crate::text::Family::Serif };
+        v.push(Obj::Text { fmt, pos: Pt::new(800.0, 160.0), text: "Styled\ncentre".into(), color: red, size: 28.0 });
     }
     v
 }
@@ -633,6 +638,15 @@ fn gdi_layer_matches_software_through_object_edits() {
             oe::translate(&mut o[n], 120.0, 60.0)
         })),
         ("resize", Box::new(|o| oe::map_box(&mut o[4], FRect { x: 1100.0, y: 100.0, w: 200.0, h: 150.0 }, FRect { x: 1000.0, y: 90.0, w: 300.0, h: 260.0 }))),
+        ("move blur", Box::new(|o| oe::translate(&mut o[8], 30.0, -20.0))),
+        ("blur strength", Box::new(|o| oe::set_size(&mut o[9], 20.0))),
+        ("blur resize", Box::new(|o| oe::map_box(&mut o[9], FRect { x: 320.0, y: 420.0, w: 120.0, h: 200.0 }, FRect { x: 300.0, y: 380.0, w: 210.0, h: 150.0 }))),
+        ("text style", Box::new(|o| {
+            if let Some(t) = o.iter_mut().rfind(|t| matches!(t, Obj::Text { .. })) {
+                let f = oe::fmt(t).unwrap_or_default();
+                oe::set_fmt(t, crate::text::TextFmt { bold: !f.bold, align: crate::text::Align::Right, family: crate::text::Family::Mono, ..f });
+            }
+        })),
         ("to the back", Box::new(|o| {
             let x = o.remove(3);
             o.insert(0, x);

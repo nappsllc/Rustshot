@@ -106,8 +106,10 @@ pub struct Face {
 }
 
 /// Faces found so far, by family and style.
-fn cache() -> &'static Mutex<HashMap<(Family, usize), Option<(FontArc, bool)>>> {
-    static C: OnceLock<Mutex<HashMap<(Family, usize), Option<(FontArc, bool)>>>> = OnceLock::new();
+type Found = Mutex<HashMap<(Family, usize), Option<(FontArc, bool)>>>;
+
+fn cache() -> &'static Found {
+    static C: OnceLock<Found> = OnceLock::new();
     C.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -180,7 +182,8 @@ impl Face {
             let gid = self.font.glyph_id(ch);
             if self.synth_bold || self.synth_italic {
                 // The outline sheared (italic) and drawn twice (bold).
-                for off in if self.synth_bold { [0.0, dx].as_slice() } else { [0.0].as_slice() } {
+                let offs = [0.0, dx];
+                for off in &offs[..if self.synth_bold { 2 } else { 1 }] {
                     self.draw_synth(gid, sf.scale_factor().horizontal, Pt::new(x + off, y), &mut put);
                 }
             } else {
