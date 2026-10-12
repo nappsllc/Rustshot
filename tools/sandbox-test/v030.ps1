@@ -15,6 +15,18 @@ public static class V3 {
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll")] public static extern void mouse_event(uint f, int x, int y, uint d, IntPtr e);
   [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+  [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
+  [DllImport("user32.dll")] public static extern bool ScreenToClient(IntPtr h, ref POINT p);
+  [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
+  [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h, out RECT r);
+  // A left click posted to the window at client point (x, y), as tests/e2e.rs does.
+  public static void PostClientClick(IntPtr h, int x, int y) {
+    var l = (IntPtr)((y << 16) | (x & 0xFFFF));
+    PostMessage(h, 0x200, IntPtr.Zero, l); System.Threading.Thread.Sleep(150);
+    PostMessage(h, 0x201, (IntPtr)1, l); System.Threading.Thread.Sleep(80);
+    PostMessage(h, 0x202, IntPtr.Zero, l);
+  }
+  public static void PostKey(IntPtr h, uint vk) { PostMessage(h, 0x100, (IntPtr)vk, IntPtr.Zero); System.Threading.Thread.Sleep(60); PostMessage(h, 0x101, (IntPtr)vk, IntPtr.Zero); }
   [DllImport("user32.dll", SetLastError=true)] public static extern bool RegisterHotKey(IntPtr h, int id, uint mods, uint vk);
   [DllImport("user32.dll")] public static extern bool UnregisterHotKey(IntPtr h, int id);
   public static void Click(int x, int y) { SetCursorPos(x, y); mouse_event(2, 0, 0, 0, IntPtr.Zero); mouse_event(4, 0, 0, 0, IntPtr.Zero); }
@@ -118,7 +130,8 @@ function Checks030($exe) {
     $f = Get-ChildItem $save -Recurse -Filter *.png | Sort-Object LastWriteTime | Select-Object -Last 1
     $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
     Check 'v030 launcher: Screen / 3 s / Save saves the screen after >= 3 s' ($saved -and $ms -ge 2900 -and $ms -le 12000) "took=$ms ms file=$(if ($f) { $f.Name }) size=$(if ($f) { PngSize $f.FullName }) screen=$($b.Width)x$($b.Height)"
-    Check 'v030 launcher: the daemon keeps running, the pill is gone' ((WaitFor { -not (NoticeVisible) } 5) -and -not $dm.HasExited)
+    # (the "Saved" notice that follows uses the same window class)
+    Check 'v030 launcher: the daemon keeps running, the pill (and the Saved notice) go' ((WaitFor { -not (NoticeVisible) } 15) -and -not $dm.HasExited)
     $cfg = Get-Content $cfgPath -Raw
     Check 'v030 launcher: the choice is remembered (launcher_* in config.toml)' ($cfg -match '(?m)^launcher_source = "screen"' -and $cfg -match '(?m)^launcher_delay = 3\b' -and $cfg -match '(?m)^launcher_after = "save"')
     Stop-Process -Id $dm.Id -Force -ErrorAction SilentlyContinue   # the PID started above
@@ -139,9 +152,11 @@ function Checks030($exe) {
     if (Test-Path $ow) {
         $acl = Get-Acl $ow
         $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-        $open = @($acl.Access | Where-Object { $_.AccessControlType -eq 'Allow' -and "$($_.IdentityReference)" -match '^(Everyone|BUILTIN\\Users|NT AUTHORITY\\Authenticated Users|NT AUTHORITY\\INTERACTIVE|BUILTIN\\Guests)$' })
+        # Only the user, SYSTEM and Administrators (the owner when the user is an admin).
+        $ok = @($me, 'NT AUTHORITY\SYSTEM', 'BUILTIN\Administrators')
+        $open = @($acl.Access | Where-Object { $_.AccessControlType -eq 'Allow' -and $ok -notcontains "$($_.IdentityReference)" })
         $ids = ($acl.Access | ForEach-Object { "$($_.IdentityReference):$($_.FileSystemRights)" }) -join '; '
-        Check 'v030 open with: the folder is private (owner is the user; no Everyone/Users/Authenticated Users access)' ($open.Count -eq 0 -and $acl.Owner -eq $me) "owner=$($acl.Owner) me=$me acl=[$ids]"
+        Check 'v030 open with: the folder is private (access only for the user, SYSTEM, Administrators)' ($open.Count -eq 0 -and $ok -contains $acl.Owner) "owner=$($acl.Owner) me=$me acl=[$ids]"
     }
     Stop-Process -Id $g.Id -Force -ErrorAction SilentlyContinue   # the PID started above (the chooser is in it)
     $null = WaitFor { $g.HasExited } 5
@@ -158,32 +173,38 @@ launcher_source = "window"
 launcher_delay = 7
 launcher_after = "pin"
 "@
-    $s = WithEnv $vars { Start-Process $exe -ArgumentList 'settings' -PassThru }
+    # In an isolated daemon (as the tray's Settings...), with posted clicks
+    # as tests/e2e.rs does. A click also focuses the toggle (Enter would
+    # flip it back), so OK is clicked too. Client points at 100 % (680 px
+    # wide): General > Behavior > Play shutter sound (641, 332), OK (461, 497).
+    $dm = WithEnv $vars { Start-Process $exe -ArgumentList 'daemon' -PassThru }
+    $null = WaitFor { [W]::FindWindow('rustshot_tray_sbx-030', [NullString]::Value) -ne [IntPtr]::Zero } 10
+    Start-Sleep 1
+    $s = WithEnv $vars { Start-Process $exe -ArgumentList 'settings' -PassThru -Wait }
     $up = WaitFor { [W]::Settings() -ne [IntPtr]::Zero } 10
     Start-Sleep 2
     $h = [W]::Settings()
     if ($up) {
-        $r = New-Object V3+RECT
-        [void][V3]::GetWindowRect($h, [ref]$r)
-        [void][W]::SetForegroundWindow($h); Start-Sleep -Milliseconds 300
-        # General > Behavior > Play shutter sound: the toggle at the right edge
-        # (680 px window at 100 %: 40 px in from the right, 363 px down).
-        $sc = ($r.R - $r.L) / 680.0
-        [V3]::Click([int]($r.R - 40 * $sc), [int]($r.T + 363 * $sc))
+        $c = New-Object V3+RECT
+        [void][V3]::GetClientRect($h, [ref]$c)
+        $sc = $c.R / 680.0
+        [V3]::PostClientClick($h, [int](641 * $sc), [int](332 * $sc))
         Start-Sleep -Milliseconds 500
         Shot 'v030-settings-toggled'
-        KeyPress 0x0D   # Enter: OK
-        if (-not (WaitFor { $s.HasExited } 3)) { Shot 'v030-settings-modal'; KeyPress 0x0D }   # the rewrite question's Save
+        [V3]::PostClientClick($h, [int](461 * $sc), [int](497 * $sc))   # OK
+        if (-not (WaitFor { [W]::Settings() -eq [IntPtr]::Zero } 3)) { Shot 'v030-settings-modal'; [V3]::PostKey($h, 0x0D) }   # the rewrite question's Save
     }
-    $closed = WaitFor { $s.HasExited } 6
+    $closed = WaitFor { [W]::Settings() -eq [IntPtr]::Zero } 6
     $cfg = Get-Content $cfgPath -Raw
     Copy-Item $cfgPath "$out\v030-config-after-settings.toml"
     $want = @('magnifier = false', 'magnifier_square = true', 'accept_on_select = "save"', 'overlay_hints = false', 'launcher_source = "window"', 'launcher_delay = 7', 'launcher_after = "pin"')
     $miss = @($want | Where-Object { $cfg -notmatch ('(?m)^' + [regex]::Escape($_) + '\s*$') })
     $rewritten = $cfg -match '(?m)^shutter_sound = true' -and $cfg -match '(?m)^theme = '
-    Check 'v030 config: Settings OK rewrote the file (shutter_sound = true, every key written)' ($up -and $closed -and $rewritten) "window=$up closed=$closed"
+    Check 'v030 config: Settings OK rewrote the file (shutter_sound = true, every key written)' ($s.ExitCode -eq 0 -and $up -and $closed -and $rewritten) "window=$up closed=$closed"
     Check 'v030 config: magnifier, magnifier_square, accept_on_select, overlay_hints and launcher_* survive the Settings save' ($rewritten -and $miss.Count -eq 0) "missing: $($miss -join ' | ')"
-    if (-not $s.HasExited) { Stop-Process -Id $s.Id -Force -ErrorAction SilentlyContinue }
+    Check 'v030 config: the daemon keeps running after the save' (-not $dm.HasExited)
+    Stop-Process -Id $dm.Id -Force -ErrorAction SilentlyContinue   # the PID started above
+    $null = WaitFor { $dm.HasExited } 5
     $err = Get-Content "$out\v030-daemon-stderr.txt", "$out\v030-openwith-stderr.txt" -ErrorAction SilentlyContinue
     if ($err) { Add-Content $log ("      stderr: " + (($err | Select-Object -First 6) -join ' | ')) }
 }
