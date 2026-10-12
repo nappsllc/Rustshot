@@ -454,6 +454,7 @@ impl Window {
             Act::SaveToFolder(ids) => {
                 let tx = self.picked.0.clone();
                 let start = crate::export::default_save_dir(&cfg);
+                #[allow(clippy::unnecessary_cast)] // a pointer, a u64 or a usize
                 let owner = self.hwnd.0 as usize;
                 std::thread::spawn(move || {
                     #[cfg(windows)]

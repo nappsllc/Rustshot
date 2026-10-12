@@ -5,6 +5,7 @@
 
 /// A friendlier name for a program's file name ("chrome" is "Chrome",
 /// "Code" is "VS Code"); others get a capital first letter.
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
 pub fn app_name(exe_stem: &str) -> String {
     let s = exe_stem.trim();
     let known: &[(&str, &str)] = &[

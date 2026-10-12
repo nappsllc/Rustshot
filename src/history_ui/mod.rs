@@ -27,7 +27,9 @@ use crate::ui::TextState;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::sync::mpsc::{Receiver, Sender};
+#[cfg(not(target_os = "macos"))]
+use std::sync::mpsc::Receiver;
+use std::sync::mpsc::Sender;
 
 pub mod draw;
 

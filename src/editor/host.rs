@@ -125,6 +125,7 @@ pub struct Canvas {
 impl Canvas {
     /// The editor over `img` with `objects`, Select chosen, at Fit once a
     /// rect is set.
+    #[cfg_attr(target_os = "macos", allow(dead_code))] // no Edit window there yet
     pub fn new(img: PixBuf, objects: Vec<Obj>, cfg: Config, th: Theme) -> Canvas {
         let size = img.dimensions();
         let shot = Shot { origin: (0, 0), size, scale: 1.0, image: PixBuf::default(), monitors: vec![(0, 0, size.0, size.1)] };
