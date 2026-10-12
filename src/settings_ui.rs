@@ -476,13 +476,18 @@ impl Form {
 
     /// The overlay actions bound to more than one action's chord.
     pub fn conflicting(&self) -> Vec<Action> {
-        self.keys.conflicts().into_iter().flat_map(|(_, v)| v).collect()
+        let mut v: Vec<Action> = self.keys.conflicts().into_iter().flat_map(|(_, v)| v).collect();
+        v.extend(self.keys.plain_typing());
+        v
     }
 
     /// The message under an overlay action in a conflict: "Already used
     /// by Pencil. Choose another." (the other action's name); None
     /// otherwise.
     pub fn conflict_note(&self, a: Action) -> Option<String> {
+        if self.keys.plain_typing().contains(&a) {
+            return Some("Needs Ctrl or Alt: a plain key would type. Choose another.".into());
+        }
         let all = self.keys.conflicts();
         let (_, acts) = all.iter().find(|(c, acts)| acts.contains(&a) && self.keys.chords(a).first() == Some(c))?;
         let other = acts.iter().find(|x| **x != a)?;

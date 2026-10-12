@@ -1,12 +1,15 @@
 //! Per-tool size and color: each drawing tool keeps its own (pencil,
 //! line, arrow, rectangle, ellipse, marker, text, number: size and color;
-//! pixelate: size; invert: nothing), remembered across captures in
+//! pixelate, blur: size; invert: nothing), remembered across captures in
 //! `config.toml` (`tool_<id>_size`, `tool_<id>_color`; the rectangle and
-//! ellipse also `tool_<id>_fill`). A tool never set starts from the
-//! `draw_*` defaults (the number tag: [`COUNTER_SIZE`]).
+//! ellipse also `tool_<id>_fill`; the text and the callout their text
+//! style: `tool_<id>_font`, `tool_text_style` / `tool_callout_text_style`,
+//! `tool_text_align`). A tool never set starts from the `draw_*` defaults
+//! (the number tag: [`COUNTER_SIZE`]).
 
 use super::Tool;
 use crate::config::{self, Config};
+use crate::text::{Align, Family, TextFmt};
 use crate::uifb::C4;
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
@@ -15,9 +18,17 @@ use std::time::{Duration, Instant};
 /// coalesce); an overlay that closes first writes at once.
 pub const SAVE_DELAY: Duration = Duration::from_millis(300);
 
-/// Every tool, in the toolbar's order.
-pub const ALL: [Tool; N] = super::toolbar::TOOL_ORDER;
-const N: usize = super::toolbar::TOOL_ORDER.len();
+/// Every tool: the toolbar's, then Invert (a key only).
+pub const ALL: [Tool; N] = {
+    let mut v = [Tool::Invert; N];
+    let mut i = 0;
+    while i < super::toolbar::TOOL_ORDER.len() {
+        v[i] = super::toolbar::TOOL_ORDER[i];
+        i += 1;
+    }
+    v
+};
+const N: usize = super::toolbar::TOOL_ORDER.len() + 1;
 
 /// The number tag's diameter until one is chosen.
 pub const COUNTER_SIZE: f32 = 32.0;
@@ -25,6 +36,9 @@ pub const COUNTER_SIZE: f32 = 32.0;
 pub const CALLOUT_SIZE: f32 = 17.0;
 /// The magnifier's loupe radius until one is chosen.
 pub const MAGNIFY_SIZE: f32 = 60.0;
+/// The blur's strength (the Gaussian's standard deviation, px) until one
+/// is chosen.
+pub const BLUR_SIZE: f32 = 10.0;
 
 fn slot(t: Tool) -> usize {
     ALL.iter().position(|x| *x == t).expect("every tool has a slot")
@@ -44,8 +58,15 @@ pub fn id(t: Tool) -> Option<&'static str> {
         Tool::Pixelate => "pixelate",
         Tool::Callout => "callout",
         Tool::Magnify => "magnify",
+        Tool::Blur => "blur",
         Tool::Invert | Tool::Select | Tool::Spotlight => return None,
     })
+}
+
+/// The tool types text with a style ([`TextFmt`]: font, bold, italic,
+/// underline, strikethrough; the text tool also an alignment).
+pub fn has_fmt(t: Tool) -> bool {
+    matches!(t, Tool::Text | Tool::Callout)
 }
 
 /// The tool has a size (all but Invert).
@@ -53,9 +74,9 @@ pub fn has_size(t: Tool) -> bool {
     !matches!(t, Tool::Invert | Tool::Select | Tool::Spotlight)
 }
 
-/// The tool draws in a color (not Pixelate or Invert).
+/// The tool draws in a color (not Pixelate, Blur or Invert).
 pub fn has_color(t: Tool) -> bool {
-    !matches!(t, Tool::Pixelate | Tool::Invert | Tool::Select | Tool::Spotlight)
+    !matches!(t, Tool::Pixelate | Tool::Blur | Tool::Invert | Tool::Select | Tool::Spotlight)
 }
 
 /// The tool draws filled or outlined (the rectangle and the ellipse).
@@ -67,6 +88,7 @@ pub fn has_fill(t: Tool) -> bool {
 pub fn range(t: Tool) -> (f32, f32) {
     match t {
         Tool::Pixelate | Tool::Invert | Tool::Select | Tool::Spotlight => (4.0, 100.0),
+        Tool::Blur => (2.0, 50.0),
         Tool::Text | Tool::Callout => (8.0, 96.0),
         Tool::Magnify => (20.0, 300.0),
         Tool::Counter => (12.0, 120.0),
@@ -93,24 +115,49 @@ pub struct ToolMem {
     size: [f32; N],
     color: [C4; N],
     fill: [bool; N],
+    fmt: [TextFmt; N],
+}
+
+/// The style `cfg` remembers for tool id `id` (`tool_<id>_font`, the
+/// style words, the text's `tool_text_align`).
+pub fn fmt_of(cfg: &Config, id: &str) -> TextFmt {
+    let mut f = TextFmt::default();
+    if let Some(fam) = cfg.tool_fonts.get(id).and_then(|s| Family::from_id(s)) {
+        f.family = fam;
+    }
+    if let Some(s) = cfg.tool_text_styles.get(id) {
+        f = f.with_style(s);
+    }
+    if id == "text"
+        && let Some(a) = cfg.tool_aligns.get(id).and_then(|s| Align::from_id(s))
+    {
+        f.align = a;
+    }
+    f
 }
 
 impl ToolMem {
     /// The tools as `cfg` remembers them, the defaults for the rest.
     pub fn from_cfg(cfg: &Config) -> ToolMem {
         let base = parse(&cfg.draw_color).map(|c| c.with_alpha(255)).unwrap_or(C4::rgb(255, 0, 0));
-        let mut m = ToolMem { size: [0.0; N], color: [base; N], fill: [false; N] };
+        let mut m = ToolMem { size: [0.0; N], color: [base; N], fill: [false; N], fmt: [TextFmt::default(); N] };
         for t in ALL {
             let (lo, hi) = range(t);
             let default = match t {
                 Tool::Marker => cfg.draw_marker_size,
                 Tool::Pixelate | Tool::Invert | Tool::Select | Tool::Spotlight => cfg.draw_pixelate_size,
+                Tool::Blur => BLUR_SIZE,
                 Tool::Text => cfg.draw_font_size,
                 Tool::Counter => COUNTER_SIZE,
                 Tool::Callout => CALLOUT_SIZE,
                 Tool::Magnify => MAGNIFY_SIZE,
                 _ => cfg.draw_thickness,
             };
+            if has_fmt(t)
+                && let Some(i) = id(t)
+            {
+                m.fmt[slot(t)] = fmt_of(cfg, i);
+            }
             let id = id(t);
             let size = id.and_then(|i| cfg.tool_sizes.get(i).copied()).filter(|v| v.is_finite()).unwrap_or(default);
             m.size[slot(t)] = size.clamp(lo, hi);
@@ -140,6 +187,24 @@ impl ToolMem {
 
     pub fn size(&self, t: Tool) -> f32 {
         self.size[slot(t)]
+    }
+
+    /// `t`'s text style (plain for a tool without text).
+    pub fn fmt(&self, t: Tool) -> TextFmt {
+        self.fmt[slot(t)]
+    }
+
+    /// Set `t`'s text style; true when it changed (false for a tool
+    /// without text). A callout keeps no alignment.
+    pub fn set_fmt(&mut self, t: Tool, f: TextFmt) -> bool {
+        if !has_fmt(t) {
+            return false;
+        }
+        let f = if t == Tool::Callout { TextFmt { align: Align::Left, ..f } } else { f };
+        let v = &mut self.fmt[slot(t)];
+        let changed = *v != f;
+        *v = f;
+        changed
     }
 
     pub fn color(&self, t: Tool) -> C4 {

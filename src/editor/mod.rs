@@ -1805,8 +1805,9 @@ fn video_key(edit: &Edit, vk: u32, mods: Mods) -> Option<Act> {
 /// Esc: close a device list or the ring's palette, drop the current
 /// tool / draft / palette, or cancel the capture (video mode's Close).
 fn cancel_key(edit: &mut Edit) {
-    if edit.save_menu {
+    if edit.save_menu || edit.slot_menu {
         edit.save_menu = false;
+        edit.slot_menu = false;
         return;
     }
     if edit.obj.cedit.is_some() {
@@ -1882,6 +1883,10 @@ fn act_of(a: Action) -> Option<Act> {
         Action::ToolCallout => Act::Tool(Tool::Callout),
         Action::ToolSpotlight => Act::Tool(Tool::Spotlight),
         Action::ToolMagnify => Act::Tool(Tool::Magnify),
+        Action::ToolBlur => Act::Tool(Tool::Blur),
+        Action::TextBold => Act::ObjBold,
+        Action::TextItalic => Act::ObjItalic,
+        Action::TextUnderline => Act::ObjUnderline,
         Action::DeleteObject => Act::ObjDelete,
         Action::Duplicate => Act::ObjDup,
         Action::BringFront => Act::ObjFront,
@@ -1937,6 +1942,8 @@ enum Tool {
     Spotlight,
     /// A 2x loupe with a connector to its source (Z).
     Magnify,
+    /// A Gaussian-like blur of a rect (B).
+    Blur,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -2468,6 +2475,10 @@ struct Edit {
     palette_open: bool,
     /// The Save split button's menu is open.
     save_menu: bool,
+    /// The Blur / Invert button's menu is open; the button held since
+    /// (a long press opens it, a click picks Blur).
+    slot_menu: bool,
+    slot_hold: Option<Instant>,
     rec: RecPop,
     done: bool,
     cancelled: bool,
@@ -2556,6 +2567,8 @@ impl Edit {
             toolbar: None,
             palette_open: false,
             save_menu: false,
+            slot_menu: false,
+            slot_hold: None,
             rec,
             done: false,
             cancelled: false,
@@ -2783,6 +2796,11 @@ impl Edit {
         self.cfg.tool_colors.insert(id.into(), v);
     }
 
+    /// The annotation font in the text tool's style (the draft's).
+    fn text_font(&self) -> Option<AnnotFont> {
+        self.font.as_ref().map(|f| f.styled(self.mem.fmt(Tool::Text)))
+    }
+
     fn make_draft(&self, tool: Tool, a: Pt, b: Pt) -> Option<Obj> {
         let c = self.mem.color(tool);
         let w = self.mem.size(tool);
@@ -2821,17 +2839,20 @@ impl Edit {
                 r: FRect::from_pts(a, b),
             },
             Tool::Spotlight => Obj::Spotlight { r: FRect::from_pts(a, b) },
+            Tool::Blur => Obj::Blur { r: FRect::from_pts(a, b), sigma: w },
             Tool::Callout => {
                 let fill = self.mem.fill(tool);
+                let fmt = self.mem.fmt(tool);
                 let (style, text) = (self.obj.style, String::new());
                 let mut r = FRect::from_pts(a, b);
                 if r.w < crate::objects::callout::MIN_W && r.h < crate::objects::callout::MIN_W {
                     // A click: the default bubble at the press point.
                     r = FRect { x: a.x, y: a.y, w: crate::objects::callout::DEFAULT_W, h: 0.0 };
                 }
-                r.h = r.h.max(crate::objects::callout::needed_h(self.font.as_ref(), r, &text, w, style));
+                let font = self.font.as_ref().map(|f| f.styled(fmt));
+                r.h = r.h.max(crate::objects::callout::needed_h(font.as_ref(), r, &text, w, style));
                 let tail = Pt::new(r.x + r.w * 0.25, r.y1() + (r.h * 0.5).clamp(24.0, 60.0));
-                Obj::Callout { r, tail, text, color: c, size: w, style, fill }
+                Obj::Callout { r, tail, text, color: c, size: w, style, fill, fmt }
             }
             Tool::Magnify => {
                 // A click: the loupe up and to the right of its source.
@@ -2854,6 +2875,7 @@ impl Edit {
             | Some(Obj::RectFill { r, .. })
             | Some(Obj::EllipseFill { r, .. })
             | Some(Obj::Pixelate { r, .. })
+            | Some(Obj::Blur { r, .. })
             | Some(Obj::Spotlight { r })
             | Some(Obj::Invert { r }) => !r.is_trivial(),
             Some(Obj::Callout { .. }) | Some(Obj::Magnify { .. }) => true,
@@ -3297,9 +3319,11 @@ fn resize_rect(
 /// itself is drawn at `td.pos`, exactly where the committed object renders.
 fn text_box_rect(win_w: f32, td: &TextDraft, font_px: f32, font: Option<&AnnotFont>, s: f32) -> FRect {
     let pad = 4.0 * s;
-    let tw = font.map(|f| f.line_width(&td.text, font_px)).unwrap_or(0.0);
+    let (tw, lines) = font.map(|f| (f.measure(&td.text, font_px).0, f.metrics(font_px).line_height)).unwrap_or((0.0, 0.0));
+    // One line is the caret's height; each line more a line height.
+    let more = td.text.matches('\n').count() as f32 * lines;
     let w = (tw + 2.0 * pad + 2.0 * s).max(24.0 * s);
-    let h = (font_px * 1.15 + 2.0 * pad).max(28.0 * s);
+    let h = (font_px * 1.15 + more + 2.0 * pad).max(28.0 * s);
     let x = (td.pos.x - pad).min((win_w - w).max(0.0));
     FRect { x, y: td.pos.y - pad, w, h }
 }
@@ -3335,7 +3359,7 @@ fn animating(edit: &Edit, app_notice: Option<&Toast>, now: Instant) -> bool {
     let tip_pending = edit.hover.is_some() && now.saturating_duration_since(edit.hover_at) < Duration::from_millis(500);
     let toast_moving = edit.notice.as_ref().or(app_notice).is_some_and(|t| t.animating(now));
     // The Camera row says "Looking for cameras…" until the list comes.
-    edit.mo.active(now) || tip_pending || toast_moving || edit.rec.cams_looking() || edit.guides_fading(now) || edit.assist.hint_due(now)
+    edit.mo.active(now) || tip_pending || toast_moving || edit.rec.cams_looking() || edit.guides_fading(now) || edit.assist.hint_due(now) || edit.slot_hold.is_some()
 }
 
 /// The last frame no longer matches: something animates (or did when it
@@ -4074,6 +4098,7 @@ mod tests {
         let mut app = annotated(theme::LIGHT, big);
         let e = edit_of(&mut app);
         e.objects.push(Obj::Text {
+            fmt: Default::default(),
             pos: Pt::new(300.0, 420.0),
             text: "Annotation text\nПривет, мир · مرحبا · 你好".into(),
             color: C4::rgb(240, 68, 56),
@@ -4587,6 +4612,7 @@ mod tests {
         // Drafts straddling the selection edge; pixelate needs its whole rect.
         for (name, d) in [
             ("draft pixelate", Obj::Pixelate { r: FRect { x: 180.0, y: 100.0, w: 300.5, h: 210.0 }, cell: 13.0 }),
+            ("draft blur", Obj::Blur { r: FRect { x: 180.0, y: 100.0, w: 300.5, h: 210.0 }, sigma: 9.0 }),
             ("draft invert", Obj::Invert { r: FRect { x: 1100.0, y: 600.0, w: 200.0, h: 150.0 } }),
             ("draft arrow", Obj::Arrow { a: Pt::new(150.0, 120.0), b: Pt::new(700.0, 420.0), color: C4::rgb(20, 200, 90), width: 9.0 }),
             ("draft arrow translucent", Obj::Arrow { a: Pt::new(150.0, 620.0), b: Pt::new(700.0, 420.0), color: C4::new(20, 200, 90, 128), width: 12.0 }),
@@ -4672,6 +4698,20 @@ mod tests {
         e.objects.push(Obj::RectFill { r: FRect { x: 500.0, y: 450.0, w: 300.0, h: 80.0 }, color: C4::new(250, 220, 0, 120), width: 3.0 });
         e.tool = Some(Tool::Counter);
         v.push(("counters", app));
+        // Blurs (one across the selection's edge, one over a pixelate),
+        // styled texts, the text draft styled with its bar and font list.
+        let mut app = annotated(theme::DARK, big);
+        let e = edit_of(&mut app);
+        e.objects.push(Obj::Pixelate { r: FRect { x: 600.0, y: 300.0, w: 200.0, h: 120.0 }, cell: 10.0 });
+        e.objects.push(Obj::Blur { r: FRect { x: 200.0, y: 120.0, w: 300.0, h: 160.0 }, sigma: 10.0 });
+        e.objects.push(Obj::Blur { r: FRect { x: 650.0, y: 330.0, w: 250.0, h: 200.0 }, sigma: 4.0 });
+        let all = crate::text::TextFmt { bold: true, italic: true, underline: true, strike: true, family: crate::text::Family::Serif, align: crate::text::Align::Right };
+        e.objects.push(Obj::Text { pos: Pt::new(300.0, 500.0), text: "Styled\nright".into(), color: C4::rgb(240, 68, 56), size: 30.0, fmt: all });
+        e.mem.set_fmt(Tool::Text, crate::text::TextFmt { family: crate::text::Family::Mono, underline: true, align: crate::text::Align::Center, ..Default::default() });
+        e.tool = Some(Tool::Text);
+        e.obj.font_menu = true;
+        e.text = Some(TextDraft { pos: Pt::new(900.0, 560.0), caret: 3, text: "Two\nlines".into(), at: Instant::now() });
+        v.push(("blur and styled text", app));
         let mut app = annotated(theme::LIGHT, big);
         let e = edit_of(&mut app);
         e.tool = Some(Tool::Ellipse);
@@ -4767,6 +4807,54 @@ mod tests {
         settled(&mut neg);
         assert_dirty_covers(&mut neg, "offscreen start", |a| set(a, FRect { x: -30.5, y: -20.0, w: 300.0, h: 200.0 }, 9.0));
         assert_dirty_covers(&mut neg, "offscreen grow", |a| set(a, FRect { x: -30.5, y: -20.0, w: 340.0, h: 230.0 }, 9.0));
+    }
+
+    /// A blur draft and committed blurs: every changed pixel lies in the
+    /// dirty rects (a corner drag, the anchor moving, the strength, past
+    /// the image edge; a committed blur moved, resized, restrengthened,
+    /// an object under it moved, a text's style changed).
+    #[test]
+    fn dirty_rects_cover_blur_edits() {
+        use crate::objects::edit as oe;
+        let big = FRect { x: 240.0, y: 140.0, w: 960.0, h: 540.0 };
+        let mut app = annotated(theme::DARK, big);
+        settled(&mut app);
+        let set = |app: &mut App, r: FRect, sigma: f32| {
+            let e = edit_of(app);
+            e.interact = Interact::Drawing { start: Pt::new(r.x, r.y) };
+            e.draft = Some(Obj::Blur { r, sigma });
+        };
+        let r0 = FRect { x: 180.0, y: 100.0, w: 500.0, h: 300.0 };
+        assert_dirty_covers(&mut app, "start", |a| set(a, r0, 10.0));
+        assert_dirty_covers(&mut app, "grow", |a| set(a, FRect { w: 506.0, h: 303.0, ..r0 }, 10.0));
+        assert_dirty_covers(&mut app, "shrink", |a| set(a, FRect { w: 450.5, h: 270.25, ..r0 }, 10.0));
+        assert_dirty_covers(&mut app, "anchor moves", |a| set(a, FRect { x: 150.0, y: 90.0, w: 530.0, h: 310.0 }, 10.0));
+        assert_dirty_covers(&mut app, "stronger", |a| set(a, FRect { x: 150.0, y: 90.0, w: 530.0, h: 310.0 }, 16.0));
+        assert_dirty_covers(&mut app, "past the edge", |a| set(a, FRect { x: 1200.0, y: 700.0, w: 900.0, h: 600.0 }, 16.0));
+        let mut app = annotated(theme::DARK, big);
+        let e = edit_of(&mut app);
+        e.objects.push(Obj::Rect { r: FRect { x: 400.0, y: 300.0, w: 100.0, h: 80.0 }, color: C4::rgb(240, 68, 56), width: 6.0 });
+        e.objects.push(Obj::Blur { r: FRect { x: 350.0, y: 250.0, w: 300.0, h: 200.0 }, sigma: 8.0 });
+        e.objects.push(Obj::Text { pos: Pt::new(700.0, 500.0), text: "Plain".into(), color: C4::rgb(240, 68, 56), size: 24.0, fmt: Default::default() });
+        e.dirty = true;
+        settled(&mut app);
+        let n = edit_of(&mut app).objects.len();
+        type F = Box<dyn Fn(&mut Vec<Obj>)>;
+        let edits: Vec<(&str, F)> = vec![
+            ("move blur", Box::new(move |o| oe::translate(&mut o[n - 2], 7.0, 3.0))),
+            ("resize blur", Box::new(move |o| oe::map_box(&mut o[n - 2], FRect { x: 357.0, y: 253.0, w: 300.0, h: 200.0 }, FRect { x: 340.0, y: 240.0, w: 260.0, h: 260.0 }))),
+            ("blur strength", Box::new(move |o| oe::set_size(&mut o[n - 2], 20.0))),
+            ("under the blur", Box::new(move |o| oe::translate(&mut o[n - 3], 30.0, 10.0))),
+            ("bold italic", Box::new(move |o| oe::set_fmt(&mut o[n - 1], crate::text::TextFmt { bold: true, italic: true, ..Default::default() }))),
+            ("serif underline", Box::new(move |o| oe::set_fmt(&mut o[n - 1], crate::text::TextFmt { family: crate::text::Family::Serif, underline: true, ..Default::default() }))),
+        ];
+        for (name, f) in edits {
+            assert_dirty_covers(&mut app, name, move |app: &mut App| {
+                let e = edit_of(app);
+                f(&mut e.objects);
+                e.dirty = true;
+            });
+        }
     }
 
     /// Selection resizes repaint the moving edges and the ends of the

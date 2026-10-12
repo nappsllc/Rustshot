@@ -401,6 +401,7 @@ mod tests {
             fills: true,
             pick: None,
             save_menu: None,
+            slot_menu: None,
         }
     }
 

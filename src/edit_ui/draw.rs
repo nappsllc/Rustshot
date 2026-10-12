@@ -166,6 +166,7 @@ pub fn obj_icon(o: &Obj) -> &'static str {
         Obj::Callout { .. } => "callout",
         Obj::Spotlight { .. } => "spotlight",
         Obj::Magnify { .. } => "magnify",
+        Obj::Blur { .. } => "blur",
     }
 }
 

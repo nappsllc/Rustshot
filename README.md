@@ -22,8 +22,9 @@ renderer.
   size; a click selects exactly that window (or menu, or tooltip), and
   <kbd>Tab</kbd> steps into its parts (panels, toolbars, fields).
 - **Annotation tools:** pencil, line, arrow, rectangle, ellipse, highlighter,
-  text, pixelate and invert, with Shift constraints (squares, circles, 45°
-  lines) and unlimited undo/redo.
+  text (a font family, bold, italic, underline, strikethrough, aligned
+  lines), pixelate, blur and invert, with Shift constraints (squares,
+  circles, 45° lines) and unlimited undo/redo.
 - **Export:** copy to the clipboard, save as PNG, JPEG or BMP straight into
   a dated folder (or through the native save dialog), or upload to imgur
   with the link copied for you.
@@ -479,7 +480,9 @@ recording starts video mode, and a delay waits that long.
 |---|---|
 | Pencil / Line / Arrow | <kbd>P</kbd> / <kbd>L</kbd> / <kbd>A</kbd> |
 | Rectangle / Ellipse / Marker | <kbd>R</kbd> / <kbd>E</kbd> / <kbd>M</kbd> |
-| Text / Number / Pixelate / Invert | <kbd>T</kbd> / <kbd>N</kbd> / <kbd>X</kbd> (or <kbd>B</kbd>) / <kbd>I</kbd> |
+| Text / Number / Pixelate / Blur / Invert | <kbd>T</kbd> / <kbd>N</kbd> / <kbd>X</kbd> / <kbd>B</kbd> / <kbd>I</kbd> |
+| While typing: bold / italic / underline | <kbd>Ctrl</kbd>+<kbd>B</kbd> / <kbd>Ctrl</kbd>+<kbd>I</kbd> / <kbd>Ctrl</kbd>+<kbd>U</kbd> |
+| New line in a text | <kbd>Shift</kbd>+<kbd>Enter</kbd> |
 | Select objects / Callout / Spotlight / Magnify | <kbd>V</kbd> / <kbd>K</kbd> / <kbd>S</kbd> / <kbd>Z</kbd> |
 | Pick an object with any tool | <kbd>Ctrl</kbd>+click (<kbd>Shift</kbd>+click adds or removes; drag on empty space with the select tool for a marquee) |
 | Delete / duplicate the selected objects | <kbd>Del</kbd> (or <kbd>Backspace</kbd>) / <kbd>Ctrl</kbd>+<kbd>D</kbd> |
@@ -521,8 +524,17 @@ bubble keeps its width and grows down, <kbd>Esc</kbd> or a click outside
 finishes; click a selected callout to type in it again. Spotlights keep
 their rectangles bright and dim the rest of the selection to half (what
 is below them: annotations drawn after a spotlight stay bright); the
-magnifier shows the area under its source twice as large. Save As, Save
-to Desktop and Open with… are in the menu of the Save button's chevron. Object actions
+magnifier shows the area under its source twice as large. The blur
+(<kbd>B</kbd>) blurs its rectangle's own pixels, its size the strength;
+move and resize it like a pixelate. It shares a toolbar button with
+Invert (<kbd>I</kbd>): a click picks Blur, the button shows Invert while
+Invert is the tool, and holding it down opens a menu with both. A text or callout has
+one style: its mini-toolbar (and the text tool's, over the text being
+typed) has a font list (the OS UI font, a serif, a monospace), bold,
+italic, underline and strikethrough, and for a text left / center / right
+alignment of its lines; the text and callout tools remember their style
+like their size and color. Save As, Save to Desktop and Open with… are in
+the menu of the Save button's chevron. Object actions
 (<kbd>Del</kbd>, <kbd>Ctrl</kbd>+<kbd>D</kbd>, …) win over the other keys
 while objects are selected.
 
@@ -531,7 +543,7 @@ hold-while-drawing modifiers) can be remapped in Settings › Key bindings:
 click its key cap, press the new keys (<kbd>Esc</kbd> cancels,
 <kbd>Backspace</kbd> unbinds it), and **Reset to defaults** goes back to the
 defaults. Rebinding sets a single chord; an action with two (Redo's
-<kbd>Ctrl</kbd>+<kbd>Y</kbd>, Pixelate's <kbd>B</kbd>) gets its second one
+<kbd>Ctrl</kbd>+<kbd>Y</kbd>, Copy text's <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd>) gets its second one
 back with **Reset to defaults**, or list several in `config.toml`. Keys
 bound to two actions are shown in red with a note;
 the first action in the list wins. In `config.toml` the same lives in a
@@ -543,7 +555,8 @@ bound twice):
 [shortcuts]
 tool_pencil = "P"         # tool_line, tool_arrow, tool_rectangle, tool_circle,
                           # tool_marker, tool_text, tool_counter, tool_pixelate,
-                          # tool_invert, size_down, size_up, save_desktop, pin
+                          # tool_invert, tool_blur, size_down, size_up, save_desktop, pin,
+                          # text_bold, text_italic, text_underline (while typing)
 save_as = "Ctrl+Shift+S"  # copy, copy_text, copy_color, save, upload, undo, select_all, toggle_palette,
 redo = "Ctrl+Shift+Z, Ctrl+Y"  # accept (Enter), cancel (Esc),
 ui_bigger = "Ctrl+=, Ctrl+Shift+=, Ctrl+NumpadAdd"  # ui_smaller, ui_reset
@@ -692,6 +705,11 @@ draw_thickness = 3.0
 draw_marker_size = 15.0
 draw_pixelate_size = 12.0
 draw_font_size = 16.0
+# The editor remembers each tool's last settings itself: tool_<id>_size,
+# tool_<id>_color, tool_<id>_fill, and the text styles tool_text_font
+# ("sans", "serif", "mono"), tool_text_style ("bold,italic,underline,strike",
+# those on), tool_text_align ("left", "center", "right"), tool_callout_font,
+# tool_callout_text_style (Settings › "Reset tool sizes & colors" clears them).
 undo_limit = 100
 user_colors = ["#f04438", "#ff8a1f", "#ffc532", "#2dc06f", "#19b5d6",
                "#3b82f6", "#8b5cf6", "#ec4899", "#ffffff", "#111318"]

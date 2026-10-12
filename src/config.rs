@@ -162,6 +162,14 @@ pub struct Config {
     /// The callout shape new bubbles get (`tool_callout_style`: rounded,
     /// cloud or ellipse; empty: rounded).
     pub callout_style: String,
+    /// The text and callout tools' font family (`tool_<id>_font`: sans,
+    /// serif or mono; ids in [`FMT_IDS`]).
+    pub tool_fonts: BTreeMap<String, String>,
+    /// Their style words (`tool_text_style`, `tool_callout_text_style`:
+    /// "bold,italic,underline,strike", those on; "" for none).
+    pub tool_text_styles: BTreeMap<String, String>,
+    /// The text tool's alignment (`tool_text_align`: left, center, right).
+    pub tool_aligns: BTreeMap<String, String>,
     /// Editor shortcut overrides from the `[shortcuts]` table
     /// (`action id -> "Ctrl+Shift+S"`; see `keymap`).
     pub shortcuts: BTreeMap<String, String>,
@@ -179,17 +187,55 @@ pub struct Config {
 
 /// The drawing tools whose size and color are remembered
 /// (`tool_<id>_size`, `tool_<id>_color`).
-pub const TOOL_IDS: [&str; 11] = ["pencil", "line", "arrow", "rect", "ellipse", "marker", "text", "counter", "pixelate", "callout", "magnify"];
+pub const TOOL_IDS: [&str; 12] = ["pencil", "line", "arrow", "rect", "ellipse", "marker", "text", "counter", "pixelate", "callout", "magnify", "blur"];
 
 /// The tools that draw filled or outlined (`tool_<id>_fill`).
 pub const FILL_IDS: [&str; 3] = ["rect", "ellipse", "callout"];
 
-/// Every remembered tool key (`tool_<id>_size`, `_color`, `_fill`): what
-/// Settings' "Reset tool sizes & colors" removes.
+/// The tools that type styled text (`tool_<id>_font` and their style).
+pub const FMT_IDS: [&str; 2] = ["text", "callout"];
+
+/// What a remembered text-style key holds.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FmtKey {
+    Font,
+    Style,
+    Align,
+}
+
+/// The config key of a text style part of tool `id` (`tool_text_font`,
+/// `tool_text_style`, `tool_text_align`, `tool_callout_font`,
+/// `tool_callout_text_style`: the callout's `tool_callout_style` is its
+/// bubble shape).
+pub fn fmt_key_name(id: &str, what: FmtKey) -> String {
+    match (id, what) {
+        (id, FmtKey::Font) => format!("tool_{id}_font"),
+        ("callout", FmtKey::Style) => "tool_callout_text_style".into(),
+        (id, FmtKey::Style) => format!("tool_{id}_style"),
+        (id, FmtKey::Align) => format!("tool_{id}_align"),
+    }
+}
+
+/// A text-style key split into (id, what).
+fn fmt_key(key: &str) -> Option<(&'static str, FmtKey)> {
+    FMT_IDS
+        .iter()
+        .flat_map(|id| [(*id, FmtKey::Font), (*id, FmtKey::Style), (*id, FmtKey::Align)])
+        .filter(|(id, w)| *w != FmtKey::Align || *id == "text")
+        .find(|(id, w)| fmt_key_name(id, *w) == key)
+}
+
+/// Every remembered tool key (`tool_<id>_size`, `_color`, `_fill`, the
+/// text styles): what Settings' "Reset tool sizes & colors" removes.
 pub fn tool_key_names() -> Vec<String> {
     let mut v: Vec<String> = TOOL_IDS.iter().flat_map(|id| [format!("tool_{id}_size"), format!("tool_{id}_color")]).collect();
     v.extend(FILL_IDS.iter().map(|id| format!("tool_{id}_fill")));
     v.push("tool_callout_style".into());
+    for id in FMT_IDS {
+        v.push(fmt_key_name(id, FmtKey::Font));
+        v.push(fmt_key_name(id, FmtKey::Style));
+    }
+    v.push(fmt_key_name("text", FmtKey::Align));
     v
 }
 
@@ -302,6 +348,9 @@ impl Default for Config {
             tool_colors: BTreeMap::new(),
             tool_fills: BTreeMap::new(),
             callout_style: String::new(),
+            tool_fonts: BTreeMap::new(),
+            tool_text_styles: BTreeMap::new(),
+            tool_aligns: BTreeMap::new(),
             shortcuts: BTreeMap::new(),
         }
     }
@@ -596,6 +645,22 @@ pub fn copy_key(from: &Config, to: &mut Config, key: &str) {
         "ui_scale" => to.ui_scale = from.ui_scale,
         "snap_tab_hint" => to.snap_tab_hint = from.snap_tab_hint,
         "tool_callout_style" => to.callout_style = from.callout_style.clone(),
+        k if fmt_key(k).is_some() => {
+            let (id, what) = fmt_key(k).expect("a style key");
+            let (src, dst) = match what {
+                FmtKey::Font => (&from.tool_fonts, &mut to.tool_fonts),
+                FmtKey::Style => (&from.tool_text_styles, &mut to.tool_text_styles),
+                FmtKey::Align => (&from.tool_aligns, &mut to.tool_aligns),
+            };
+            match src.get(id) {
+                Some(v) => {
+                    dst.insert(id.into(), v.clone());
+                }
+                None => {
+                    dst.remove(id);
+                }
+            }
+        }
         k => match tool_key(k) {
             Some((id, ToolKey::Fill)) => match from.tool_fills.get(id) {
                 Some(v) => {
@@ -1008,6 +1073,20 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
             "tool_callout_style" => {
                 cfg.callout_style = one_of(val, &["rounded", "cloud", "ellipse"]).map_err(|e| bad("value", &e))?
             }
+            k if fmt_key(k).is_some() => {
+                let (id, what) = fmt_key(k).expect("a style key");
+                match what {
+                    FmtKey::Font => {
+                        cfg.tool_fonts.insert(id.into(), one_of(val, &["sans", "serif", "mono"]).map_err(|e| bad("value", &e))?);
+                    }
+                    FmtKey::Style => {
+                        cfg.tool_text_styles.insert(id.into(), as_string(val).map_err(|e| bad("string", &e))?);
+                    }
+                    FmtKey::Align => {
+                        cfg.tool_aligns.insert(id.into(), one_of(val, &["left", "center", "right"]).map_err(|e| bad("value", &e))?);
+                    }
+                }
+            }
             k => match tool_key(k) {
                 Some((id, ToolKey::Fill)) => {
                     cfg.tool_fills.insert(id.to_string(), as_bool(val).map_err(|e| bad("boolean", &e))?);
@@ -1177,6 +1256,13 @@ pub fn to_toml(c: &Config) -> String {
     }
     if !c.callout_style.is_empty() {
         out.push_str(&format!("tool_callout_style = {}\n", q(&c.callout_style)));
+    }
+    for id in FMT_IDS {
+        for (map, what) in [(&c.tool_fonts, FmtKey::Font), (&c.tool_text_styles, FmtKey::Style), (&c.tool_aligns, FmtKey::Align)] {
+            if let Some(v) = map.get(id) {
+                out.push_str(&format!("{} = {}\n", fmt_key_name(id, what), q(v)));
+            }
+        }
     }
     if !c.shortcuts.is_empty() {
         out.push_str("
@@ -1904,7 +1990,36 @@ record_hotkey = \"Ctrl+Shift+R\"
         assert!(to.tool_fills.is_empty(), "a removed key goes");
         let names = tool_key_names();
         assert!(names.contains(&"tool_rect_fill".to_string()) && names.contains(&"tool_counter_size".to_string()));
-        assert!(names.iter().all(|k| tool_key(k).is_some() || k == "tool_callout_style"), "{names:?}");
+        assert!(names.iter().all(|k| tool_key(k).is_some() || fmt_key(k).is_some() || k == "tool_callout_style"), "{names:?}");
+    }
+
+    /// The text tools' style keys: parsed, written back, copied, reset.
+    #[test]
+    fn text_style_keys_parse_roundtrip_and_copy() {
+        let text = "tool_text_font = \"serif\"\ntool_text_style = \"bold,underline\"\ntool_text_align = \"center\"\ntool_callout_font = \"MONO\"\ntool_callout_text_style = \"italic\"\ntool_callout_style = \"cloud\"\n";
+        let c = parse_config(text).unwrap();
+        assert_eq!(c.tool_fonts.get("text").map(String::as_str), Some("serif"));
+        assert_eq!(c.tool_fonts.get("callout").map(String::as_str), Some("mono"), "case-insensitive");
+        assert_eq!(c.tool_text_styles.get("text").map(String::as_str), Some("bold,underline"));
+        assert_eq!(c.tool_text_styles.get("callout").map(String::as_str), Some("italic"));
+        assert_eq!(c.tool_aligns.get("text").map(String::as_str), Some("center"));
+        assert_eq!(c.callout_style, "cloud", "the bubble's shape is apart");
+        assert_eq!(parse_config(&to_toml(&c)).unwrap(), c);
+        assert!(parse_config("tool_text_font = \"fantasy\"").expect_err("not a family").contains("'tool_text_font'"));
+        assert!(parse_config("tool_text_align = \"justify\"").is_err());
+        assert!(parse_config("tool_callout_align = \"left\"").unwrap().tool_aligns.is_empty(), "a callout has no alignment key");
+        let mut to = Config::default();
+        for k in ["tool_text_font", "tool_text_style", "tool_text_align", "tool_callout_text_style"] {
+            copy_key(&c, &mut to, k);
+        }
+        assert_eq!((to.tool_fonts.get("text"), to.tool_aligns.get("text")), (Some(&"serif".to_string()), Some(&"center".to_string())));
+        assert_eq!(to.tool_text_styles, c.tool_text_styles);
+        copy_key(&Config::default(), &mut to, "tool_text_font");
+        assert!(!to.tool_fonts.contains_key("text"), "a removed key goes");
+        let names = tool_key_names();
+        for k in ["tool_text_font", "tool_text_style", "tool_text_align", "tool_callout_font", "tool_callout_text_style", "tool_blur_size"] {
+            assert!(names.iter().any(|n| n == k), "{k} is reset with the tools");
+        }
     }
 
     #[test]

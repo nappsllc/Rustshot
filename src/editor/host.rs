@@ -350,9 +350,10 @@ impl Canvas {
         }
         // An open popover or picker closes on a press outside it.
         if !self.on_canvas(p) {
-            if self.e.palette_open || self.e.save_menu || self.e.pick.is_some() {
+            if self.e.palette_open || self.e.save_menu || self.e.slot_menu || self.e.pick.is_some() {
                 self.e.palette_open = false;
                 self.e.save_menu = false;
+                self.e.slot_menu = false;
                 self.e.close_picker(true);
                 return true;
             }
@@ -363,6 +364,7 @@ impl Canvas {
             return true;
         }
         self.e.save_menu = false;
+        self.e.slot_menu = false;
         self.e.canvas_press(self.view.to_img(p));
         self.after_input();
         true
@@ -577,11 +579,13 @@ impl Canvas {
     /// Lay out the docked toolbar (and its popovers) for this frame.
     fn layout_bar(&mut self, now: Instant) {
         let e = &mut self.e;
+        e.slot_long_press(now);
         let colors = palette_colors(&e.cfg);
         let cur = e.cur_tool();
         let recents = e.recents();
         let pv = e.pick.as_ref().map(|p| toolbar::PickView { ring: false, alpha: p.has_alpha(), recents: &recents });
         let save_keys = [Act::SaveAs, Act::SaveDesktop, Act::OpenWith].map(|a| chrome::act_tip(a, &e.keys).1.join("+"));
+        let slot_keys = toolbar::SLOT_MENU.map(|(a, _)| chrome::act_tip(a, &e.keys).1.join("+"));
         let inp = toolbar::Input {
             sel: e.sel.unwrap_or(FRect { x: 0.0, y: 0.0, w: 1.0, h: 1.0 }),
             area: self.win,
@@ -599,10 +603,11 @@ impl Canvas {
             fills: tools::has_fill(cur),
             pick: pv.as_ref(),
             save_menu: e.save_menu.then_some(&save_keys),
+            slot_menu: e.slot_menu.then_some(&slot_keys),
         };
         e.toolbar = Some(toolbar::layout_docked(&inp, self.bar));
         e.mo.bar.snap(1.0);
-        if e.palette_open || e.pick.is_some() || e.save_menu {
+        if e.palette_open || e.pick.is_some() || e.save_menu || e.slot_menu {
             e.mo.pop.set(1.0, 100, now);
         } else {
             e.mo.pop.snap(0.0);
@@ -630,6 +635,7 @@ impl Canvas {
             fills: true,
             pick: None,
             save_menu: None,
+            slot_menu: None,
         };
         toolbar::docked_width(&inp)
     }
@@ -846,23 +852,30 @@ impl Canvas {
         }
         let e = &self.e;
         let font = e.font.as_ref();
+        let src = e.composed.as_ref().unwrap_or(&e.base);
+        let area = self.area;
         let mut sf = f.surf();
+        // A blur is computed on the image (as export does), then scaled.
+        let draw = |sf: &mut crate::raster::Surf, o: &Obj| match o {
+            Obj::Blur { r, sigma } => paint_blur(sf, src, *r, *sigma, &v, area),
+            o => view_obj(o, &v).render_into(sf, font),
+        };
         if !drawn {
             if let Some((orig, _)) = &moving {
                 for g in orig.iter().filter_map(|o| crate::objects::edit::faded(o, select::GHOST)) {
-                    view_obj(&g, &v).render_into(&mut sf, font);
+                    draw(&mut sf, &g);
                 }
             }
             // What the drag holds (left out of the bake).
             for &i in &self.bake_excl {
                 if let Some(o) = e.objects.get(i) {
-                    view_obj(o, &v).render_into(&mut sf, font);
+                    draw(&mut sf, o);
                 }
             }
         }
         match &e.draft {
             Some(Obj::Spotlight { .. }) | None => {}
-            Some(d) => view_obj(d, &v).render_into(&mut sf, font),
+            Some(d) => draw(&mut sf, d),
         }
     }
 
@@ -898,15 +911,17 @@ impl Canvas {
         }
         // The text tool's draft: its dashed box and the text as it will be.
         if let Some(td) = &e.text {
-            let boxr = text_box_rect(e.shot.size.0 as f32, td, e.mem.size(Tool::Text), e.font.as_ref(), s_img);
+            let tfont = e.text_font();
+            let boxr = text_box_rect(e.shot.size.0 as f32, td, e.mem.size(Tool::Text), tfont.as_ref(), s_img);
             let (px, color) = (e.mem.size(Tool::Text) * v.z, e.mem.color(Tool::Text));
             f.stroke_dashed_rect(v.rect(boxr), 4.0 * k, 3.0 * k, k.round().max(1.0), e.th.accent);
-            if let Some(font) = e.font.as_ref() {
+            if let Some(font) = tfont.as_ref() {
                 let pos = v.to_win(td.pos);
                 font.render(&mut f.surf(), &td.text, px, pos, color);
                 if caret_on(td) {
-                    let cx = pos.x + font.caret_x(&td.text, td.caret, px);
-                    f.fill_rect(cx.round() as i32, pos.y.round() as i32, (2.0 * k).round() as i32, (px * 1.15).round() as i32, color);
+                    let at = font.caret_at(&td.text, td.caret, px);
+                    let (cx, cy) = (pos.x + at.x, pos.y + at.y);
+                    f.fill_rect(cx.round() as i32, cy.round() as i32, (2.0 * k).round() as i32, (px * 1.15).round() as i32, color);
                 }
             }
         }
@@ -966,7 +981,7 @@ impl Canvas {
             && let Some(it) = e.hover.and_then(|i| tb.items.get(i))
             && let toolbar::Kind::Btn(act) | toolbar::Kind::Rainbow(act) = it.kind
         {
-            let (label, keys) = chrome::act_tip(act, &e.keys);
+            let (label, keys) = chrome::act_tip(toolbar::slot_act(act, e.tool), &e.keys);
             let in_pop = tb.pop.is_some_and(|p| toolbar::hit(p, Pt::new(it.r.x + 1.0, it.r.y + 1.0)));
             let at = chrome::TipAt { anchor: it.r, area: self.win, below: !in_pop };
             chrome::tooltip(f, &ui, at, label, &keys, anim::ease_out(shown_ms / 80.0));
@@ -974,9 +989,50 @@ impl Canvas {
     }
 }
 
+/// A blur drawn in the window while drafted or dragged: computed on the
+/// image `src` (the capture as baked below it) over its whole rect at its
+/// real strength, exactly as the export bakes it, then drawn scaled into
+/// the window (nearest pixel) inside `clip`. Not from the pixels in view:
+/// the same at any zoom and while panning.
+fn paint_blur(sf: &mut crate::raster::Surf, src: &crate::pixbuf::PixBuf, r: FRect, sigma: f32, v: &View, clip: FRect) {
+    let (iw, ih) = (src.width() as i32, src.height() as i32);
+    let (x0, y0, x1, y1) = crate::objects::blur::px_rect(r);
+    let (x1, y1) = (x1.min(iw), y1.min(ih));
+    if x1 <= x0 || y1 <= y0 {
+        return;
+    }
+    let (w, h) = ((x1 - x0) as usize, (y1 - y0) as usize);
+    let raw = src.as_raw();
+    let mut block = Vec::with_capacity(w * h * 4);
+    for y in y0..y1 {
+        let i = (y as usize * iw as usize + x0 as usize) * 4;
+        block.extend_from_slice(&raw[i..i + w * 4]);
+    }
+    crate::objects::blur::blur_block(&mut block, w, h, sigma, &mut Vec::new(), &mut Vec::new());
+    let wr = v.rect(FRect { x: x0 as f32, y: y0 as f32, w: w as f32, h: h as f32 });
+    let (wx0, wy0) = (wr.x.max(clip.x).floor() as i32, wr.y.max(clip.y).floor() as i32);
+    let (wx1, wy1) = (wr.x1().min(clip.x1()).ceil() as i32, wr.y1().min(clip.y1()).ceil() as i32);
+    let ch = sf.order().rgb_idx();
+    for wy in wy0..wy1 {
+        for wx in wx0..wx1 {
+            let p = v.to_img(Pt::new(wx as f32 + 0.5, wy as f32 + 0.5));
+            let (bx, by) = (p.x.floor() as i32 - x0, p.y.floor() as i32 - y0);
+            if bx < 0 || by < 0 || bx >= w as i32 || by >= h as i32 {
+                continue;
+            }
+            let q = &block[(by as usize * w + bx as usize) * 4..][..4];
+            let mut px = [0, 0, 0, q[3]];
+            for (c, &k) in ch.iter().enumerate() {
+                px[k] = q[c];
+            }
+            sf.mix_raw(wx, wy, px, 1.0);
+        }
+    }
+}
+
 /// An object that reads the pixels below it (it cannot be drawn apart).
 fn reads_below(o: &Obj) -> bool {
-    matches!(o, Obj::Pixelate { .. } | Obj::Invert { .. } | Obj::Magnify { .. } | Obj::Spotlight { .. })
+    matches!(o, Obj::Pixelate { .. } | Obj::Blur { .. } | Obj::Invert { .. } | Obj::Magnify { .. } | Obj::Spotlight { .. })
 }
 
 /// Objects rendered once over transparency (premultiplied RGBA: the
@@ -1070,13 +1126,14 @@ pub fn view_obj(o: &Obj, v: &View) -> Obj {
         Obj::EllipseFill { r: q, color, width } => Obj::EllipseFill { r: r(q), color: *color, width: width * z },
         Obj::Path { pts, color, width } => Obj::Path { pts: pts.iter().map(p).collect(), color: *color, width: width * z },
         Obj::MarkerPath { pts, color, width } => Obj::MarkerPath { pts: pts.iter().map(p).collect(), color: *color, width: width * z },
-        Obj::Text { pos, text, color, size } => Obj::Text { pos: p(pos), text: text.clone(), color: *color, size: size * z },
+        Obj::Text { pos, text, color, size, fmt } => Obj::Text { pos: p(pos), text: text.clone(), color: *color, size: size * z, fmt: *fmt },
         Obj::Pixelate { r: q, cell } => Obj::Pixelate { r: r(q), cell: (cell * z).max(1.0) },
+        Obj::Blur { r: q, sigma } => Obj::Blur { r: r(q), sigma: sigma * z },
         Obj::Invert { r: q } => Obj::Invert { r: r(q) },
         Obj::Spotlight { r: q } => Obj::Spotlight { r: r(q) },
         Obj::Counter { c, n, color, d, tail } => Obj::Counter { c: p(c), n: *n, color: *color, d: d * z, tail: tail.as_ref().map(p) },
-        Obj::Callout { r: q, tail, text, color, size, style, fill } => {
-            Obj::Callout { r: r(q), tail: p(tail), text: text.clone(), color: *color, size: size * z, style: *style, fill: *fill }
+        Obj::Callout { r: q, tail, text, color, size, style, fill, fmt } => {
+            Obj::Callout { r: r(q), tail: p(tail), text: text.clone(), color: *color, size: size * z, style: *style, fill: *fill, fmt: *fmt }
         }
         Obj::Magnify { src, dst, radius, zoom, color, width } => {
             Obj::Magnify { src: p(src), dst: p(dst), radius: radius * z, zoom: *zoom, color: *color, width: width * z }
@@ -1099,7 +1156,7 @@ fn map_mini(m: &MiniUi, v: &View) -> MiniUi {
         let w = v.rect(q);
         FRect { x: w.x.round(), y: w.y.round(), w: w.w.round(), h: w.h.round() }
     };
-    MiniUi { r: r(m.r), items: m.items.iter().map(|it| toolbar::Item { r: r(it.r), ..*it }).collect(), inp: m.inp.clone(), hover: m.hover }
+    MiniUi { r: r(m.r), items: m.items.iter().map(|it| toolbar::Item { r: r(it.r), ..*it }).collect(), inp: m.inp.clone(), hover: m.hover, pop: m.pop.map(r) }
 }
 
 /// Helpers for the Edit window's tests.
@@ -1115,5 +1172,51 @@ impl Canvas {
     pub fn button(&self, icon: &str) -> Option<FRect> {
         let t = self.e.toolbar.as_ref()?;
         t.items.iter().find(|i| matches!(i.kind, toolbar::Kind::Btn(a) if chrome::act_icon(a) == icon)).map(|i| i.r)
+    }
+}
+
+#[cfg(test)]
+mod blur_view_tests {
+    use super::*;
+
+    /// A drafted blur in the window is the image's blur scaled: at 2x
+    /// every window pixel is its image pixel of the export's bake, and a
+    /// part in view draws what the whole does there.
+    #[test]
+    fn a_blur_in_the_window_is_the_exports() {
+        let (w, h) = (120u32, 90u32);
+        let mut src = crate::pixbuf::PixBuf::new(w, h);
+        for (i, p) in src.as_raw_mut().as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            *p = [(i * 37 % 251) as u8, (i * 11 % 241) as u8, (i % 7 * 30) as u8, 255];
+        }
+        let r = FRect { x: 10.0, y: 8.0, w: 80.0, h: 60.0 };
+        let mut baked = src.clone();
+        Obj::Blur { r, sigma: 30.0 }.render(&mut baked, None);
+        let v = View { z: 2.0, ox: -20.0, oy: -10.0 };
+        let (ww, wh) = (200u32, 150u32);
+        let paint = |clip: FRect| {
+            let mut d = vec![0u8; (ww * wh * 4) as usize];
+            paint_blur(&mut crate::raster::Surf::with_origin(&mut d, ww, wh, 0, 0, crate::raster::Order::Bgra), &src, r, 30.0, &v, clip);
+            d
+        };
+        let full = paint(FRect { x: 0.0, y: 0.0, w: ww as f32, h: wh as f32 });
+        let part = paint(FRect { x: 60.0, y: 40.0, w: 50.0, h: 50.0 });
+        let mut n = 0;
+        for y in 0..wh as i32 {
+            for x in 0..ww as i32 {
+                let p = v.to_img(Pt::new(x as f32 + 0.5, y as f32 + 0.5));
+                let (ix, iy) = (p.x.floor() as i32, p.y.floor() as i32);
+                let i = ((y * ww as i32 + x) * 4) as usize;
+                if (10..90).contains(&ix) && (8..68).contains(&iy) {
+                    let want = baked.get_pixel(ix as u32, iy as u32);
+                    assert_eq!([full[i + 2], full[i + 1], full[i], full[i + 3]], want, "({x}, {y})");
+                    n += 1;
+                }
+                if (60..110).contains(&x) && (40..90).contains(&y) {
+                    assert_eq!(part[i..i + 4], full[i..i + 4], "({x}, {y}) in view");
+                }
+            }
+        }
+        assert!(n > 1000);
     }
 }

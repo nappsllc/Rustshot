@@ -187,6 +187,8 @@ pub struct TextUi {
     pub color: C4,
     /// Byte index of the caret while the blink phase shows it.
     pub caret: Option<usize>,
+    /// The text tool's style.
+    pub fmt: crate::text::TextFmt,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -584,6 +586,7 @@ impl Edit {
     /// draft; the result is `self.scene`. Also records what is drawn for
     /// `stale()` and rebuilds `composed` when objects changed.
     pub(super) fn prepare(&mut self, app_notice: Option<&Toast>, mouse: (i32, i32), now: Instant) {
+        self.slot_long_press(now);
         if self.dirty || self.spots_stale() {
             let _p = crate::perf::span(crate::perf::K::Bake);
             self.rebuild();
@@ -631,6 +634,7 @@ impl Edit {
         });
         let busy = !self.tasks.is_empty();
         let save_keys = [Act::SaveAs, Act::SaveDesktop, Act::OpenWith].map(|a| chrome::act_tip(a, &self.keys).1.join("+"));
+        let slot_keys = toolbar::SLOT_MENU.map(|(a, _)| chrome::act_tip(a, &self.keys).1.join("+"));
         if self.pick.is_none() {
             self.assist.pick_at = None;
         }
@@ -660,6 +664,7 @@ impl Edit {
                 fills: tools::has_fill(cur),
                 pick: pv.as_ref(),
                 save_menu: self.save_menu.then_some(&save_keys),
+                slot_menu: self.slot_menu.then_some(&slot_keys),
             })
         }).or(standalone);
 
@@ -669,7 +674,7 @@ impl Edit {
         } else {
             self.mo.bar.snap(0.0);
         }
-        if self.palette_open || self.pick.is_some() || self.save_menu {
+        if self.palette_open || self.pick.is_some() || self.save_menu || self.slot_menu {
             self.mo.pop.set(1.0, 100, now);
         } else {
             self.mo.pop.snap(0.0);
@@ -698,13 +703,15 @@ impl Edit {
             let avoid = if lead.is_some() { close } else { avoid };
             LabelUi { sr, show_pos: !interacting, area, avoid, lead }
         });
+        let tfont = self.text_font();
         let text = self.text.as_ref().map(|td| TextUi {
-            boxr: text_box_rect(ww, td, self.mem.size(Tool::Text), self.font.as_ref(), s),
+            boxr: text_box_rect(ww, td, self.mem.size(Tool::Text), tfont.as_ref(), s),
             pos: td.pos,
             text: td.text.clone(),
             px: self.mem.size(Tool::Text),
             color: self.mem.color(Tool::Text),
             caret: caret_on(td).then_some(td.caret),
+            fmt: self.mem.fmt(Tool::Text),
         });
         let toast = self.notice.as_ref().or(app_notice).map(|t| ToastUi {
             text: t.text.clone(),
@@ -742,7 +749,7 @@ impl Edit {
                 let pop_below = tb.pop.is_some_and(|p| toolbar::hit(p, c) && p.y >= tb.bar.y1() - 0.5);
                 match it.kind {
                     toolbar::Kind::Btn(act) | toolbar::Kind::Rainbow(act) | toolbar::Kind::Swatch { act: act @ toolbar::Act::RingPalette, .. } => {
-                        let (label, keys) = chrome::act_tip(act, &self.keys);
+                        let (label, keys) = chrome::act_tip(toolbar::slot_act(act, self.tool), &self.keys);
                         tip = Some(TipUi { anchor: it.r, act, label, keys, area, below: pop_below, k });
                     }
                     // Why the Camera row does nothing: below its switch,
@@ -857,7 +864,7 @@ impl Edit {
             bounds: Default::default(),
         };
         sc.bounds = ELS.map(|e| self.el_bounds(&sc, e));
-        if !matches!(sc.draft, Some(Obj::Pixelate { .. })) && self.draft_buf.borrow().capacity() > 0 {
+        if !matches!(sc.draft, Some(Obj::Pixelate { .. } | Obj::Blur { .. })) && self.draft_buf.borrow().capacity() > 0 {
             // The drag ended: release the pixelate scratch.
             *self.draft_buf.borrow_mut() = Vec::new();
         }
@@ -899,9 +906,12 @@ impl Edit {
                 let lw = sc.s.round().max(1.0);
                 let m = lw / 2.0 + 2.0;
                 let b = FRect { x: t.boxr.x - m, y: t.boxr.y - m, w: t.boxr.w + 2.0 * m, h: t.boxr.h + 2.0 * m };
-                let tw = self.font.as_ref().map_or(0.0, |f| f.line_width(&t.text, t.px));
+                let (tw, th) = self.font.as_ref().map_or((0.0, 0.0), |f| {
+                    let (w, h, _) = f.styled(t.fmt).measure(&t.text, t.px);
+                    (w, h)
+                });
                 let g = t.px + 2.0;
-                let txt = FRect { x: t.pos.x - g, y: t.pos.y - g, w: tw + 2.0 * g + 2.0 * sc.s, h: t.px * 1.15 + 2.0 * g };
+                let txt = FRect { x: t.pos.x - g, y: t.pos.y - g, w: tw + 2.0 * g + 2.0 * sc.s, h: th.max(t.px * 1.15) + 2.0 * g };
                 vec![px_bounds(b), px_bounds(txt)]
             }),
             El::Toast => sc.toast.as_ref().map_or(Vec::new(), |t| one(chrome::toast_bounds(&ui, &t.text, t.area, t.k))),
@@ -1035,12 +1045,14 @@ impl Edit {
             f.stroke_dashed_rect(t.boxr, 4.0 * s, 3.0 * s, s.round().max(1.0), sc.th.accent);
             if let Some(font) = self.font.as_ref() {
                 // Drawn exactly as the committed text object renders.
+                let font = font.styled(t.fmt);
                 font.render(&mut f.surf(), &t.text, t.px, t.pos, t.color);
                 if let Some(caret) = t.caret {
-                    let cx = t.pos.x + font.caret_x(&t.text, caret, t.px);
+                    let at = font.caret_at(&t.text, caret, t.px);
+                    let cx = t.pos.x + at.x;
                     f.fill_rect(
                         cx.round() as i32,
-                        t.pos.y.round() as i32,
+                        (t.pos.y + at.y).round() as i32,
                         (2.0 * s).round() as i32,
                         (t.px * 1.15).round() as i32,
                         t.color,

@@ -464,13 +464,63 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     res
 }
 
-/// Rename `from` over `to` (replacing it), on the same volume.
+/// Rename `from` over `to` with POSIX semantics
+/// (`SetFileInformationByHandle(FileRenameInfoEx)`, `REPLACE_IF_EXISTS |
+/// POSIX_SEMANTICS`, Windows 10 1809+ on NTFS): it replaces `to` even
+/// while readers hold it open with FILE_SHARE_DELETE (std's `File::open`
+/// does), they keep reading the old file. An error where it is not
+/// supported (older Windows, FAT, network shares).
+#[cfg(windows)]
+fn posix_rename(from: &[u16], to: &[u16]) -> std::io::Result<()> {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::Storage::FileSystem::{
+        CreateFileW, FileRenameInfoEx, SetFileInformationByHandle, DELETE, FILE_ATTRIBUTE_NORMAL, FILE_RENAME_INFO,
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING, SYNCHRONIZE,
+    };
+    const FILE_RENAME_FLAG_REPLACE_IF_EXISTS: u32 = 0x1;
+    const FILE_RENAME_FLAG_POSIX_SEMANTICS: u32 = 0x2;
+    let err = |e: windows::core::Error| std::io::Error::from_raw_os_error(e.code().0 & 0xFFFF);
+    // `to` without its NUL, in bytes.
+    let name = &to[..to.len().saturating_sub(1)];
+    let head = std::mem::offset_of!(FILE_RENAME_INFO, FileName);
+    let size = head + std::mem::size_of_val(name);
+    // u64s: the struct's alignment (a HANDLE inside).
+    let mut buf = vec![0u64; size.div_ceil(8) + 1];
+    // SAFETY: `from` is NUL-terminated; `buf` holds the struct and the
+    // name after it (`size` bytes, 8-byte aligned); the handle is closed.
+    unsafe {
+        let h = CreateFileW(
+            windows::core::PCWSTR(from.as_ptr()),
+            (DELETE | SYNCHRONIZE).0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            None,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            None,
+        )
+        .map_err(err)?;
+        let info = buf.as_mut_ptr() as *mut FILE_RENAME_INFO;
+        (*info).Anonymous.Flags = FILE_RENAME_FLAG_REPLACE_IF_EXISTS | FILE_RENAME_FLAG_POSIX_SEMANTICS;
+        (*info).FileNameLength = std::mem::size_of_val(name) as u32;
+        std::ptr::copy_nonoverlapping(name.as_ptr(), (buf.as_mut_ptr() as *mut u8).add(head) as *mut u16, name.len());
+        let r = SetFileInformationByHandle(h, FileRenameInfoEx, info as *const _, size as u32).map_err(err);
+        let _ = CloseHandle(h);
+        r
+    }
+}
+
+/// Rename `from` over `to` (replacing it), on the same volume: with POSIX
+/// semantics where the volume has them ([`posix_rename`]: open readers do
+/// not block it), else `MoveFileExW`, waiting a little for readers.
 #[cfg(windows)]
 fn replace_file(from: &Path, to: &Path) -> std::io::Result<()> {
     use std::os::windows::ffi::OsStrExt;
     use windows::Win32::Storage::FileSystem::{MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW};
     let w = |p: &Path| p.as_os_str().encode_wide().chain(Some(0)).collect::<Vec<u16>>();
     let (f, t) = (w(from), w(to));
+    if !to.is_dir() && posix_rename(&f, &t).is_ok() {
+        return Ok(());
+    }
     // A file someone has open (another thread or process reading it, a
     // virus scanner, the search indexer) cannot be replaced: Access is
     // denied (5) or a sharing violation (32) until they close it, which
@@ -1084,6 +1134,31 @@ mod tests {
         assert!(sub.is_dir());
         let left = std::fs::read_dir(&dir).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().ends_with(TMP_SUFFIX)).count();
         assert_eq!(left, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Windows (NTFS): a reader holding the file open the way std opens
+    /// it (FILE_SHARE_DELETE) does not hold a save up at all: the POSIX
+    /// rename replaces it at once, the reader goes on with the old bytes,
+    /// a new open sees the new ones.
+    #[cfg(windows)]
+    #[test]
+    fn a_save_replaces_a_file_held_open_at_once() {
+        use std::io::Read;
+        let dir = std::env::temp_dir().join(format!("rustshot_test_atomic_posix_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("meta.json");
+        std::fs::write(&f, b"old").unwrap();
+        let mut held = std::fs::File::open(&f).unwrap();
+        let t0 = std::time::Instant::now();
+        write_atomic(&f, b"new bytes").unwrap();
+        assert!(t0.elapsed() < std::time::Duration::from_millis(500), "no waiting: {:?}", t0.elapsed());
+        let mut old = String::new();
+        held.read_to_string(&mut old).unwrap();
+        assert_eq!(old, "old");
+        assert_eq!(std::fs::read(&f).unwrap(), b"new bytes");
+        drop(held);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -635,7 +635,7 @@ fn wayland() -> bool {
 }
 
 /// The overlay rows of Key bindings: (label, actions).
-pub const KEY_ROWS: [(&str, &[Action]); 14] = [
+pub const KEY_ROWS: [(&str, &[Action]); 15] = [
     (
         "Tools",
         &[
@@ -648,6 +648,7 @@ pub const KEY_ROWS: [(&str, &[Action]); 14] = [
             Action::ToolText,
             Action::ToolCounter,
             Action::ToolPixelate,
+            Action::ToolBlur,
             Action::ToolInvert,
         ],
     ),
@@ -660,6 +661,7 @@ pub const KEY_ROWS: [(&str, &[Action]); 14] = [
         &[Action::DeleteObject, Action::Duplicate, Action::BringFront, Action::SendBack],
     ),
     ("Stroke size - / +", &[Action::SizeDown, Action::SizeUp]),
+    ("Typing: bold \u{b7} italic \u{b7} underline", &[Action::TextBold, Action::TextItalic, Action::TextUnderline]),
     ("Copy \u{b7} Save \u{b7} Upload", &[Action::Copy, Action::Save, Action::Upload]),
     ("Copy text \u{b7} Copy color", &[Action::CopyText, Action::CopyColor]),
     ("Accept \u{b7} Cancel", &[Action::Accept, Action::Cancel]),

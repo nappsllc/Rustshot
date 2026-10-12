@@ -356,8 +356,12 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 pub fn open(id: &str) {
     #[cfg(target_os = "macos")]
     {
-        if let Some(e) = Store::open_default().get(id) {
-            crate::actions::open_path(&e.original());
+        // The picture with its annotations (never the bare original).
+        let store = Store::open_default();
+        if let Some(e) = store.get(id)
+            && let Ok(f) = crate::history_ui::file_of(&store, &e)
+        {
+            crate::actions::open_path(&f);
         }
     }
     #[cfg(not(target_os = "macos"))]

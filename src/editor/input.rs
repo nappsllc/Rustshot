@@ -57,6 +57,17 @@ impl Edit {
             return;
         }
 
+        // Typing: Ctrl+B / I / U style the text (before the other keys,
+        // Ctrl+U included).
+        if (self.text.is_some() || self.obj.cedit.is_some())
+            && (mods.ctrl || mods.alt)
+            && let Some(a) = self.keys.resolve_typing(vk, mods)
+            && let Some(act) = act_of(a)
+        {
+            self.apply_act(act, mouse);
+            return;
+        }
+
         // Text editing mode consumes keys.
         if self.text.is_some() {
             if escape {
@@ -68,7 +79,15 @@ impl Edit {
                 return;
             }
             let td = self.text.as_mut().expect("text draft");
-            if left {
+            if enter {
+                // Shift+Enter: a new line.
+                let mut idx = td.caret.min(td.text.len());
+                while idx > 0 && !td.text.is_char_boundary(idx) {
+                    idx -= 1;
+                }
+                td.text.insert(idx, '\n');
+                td.caret = idx + 1;
+            } else if left {
                 td.caret = prev_boundary(&td.text, td.caret);
             } else if right {
                 td.caret = next_boundary(&td.text, td.caret);
@@ -308,6 +327,17 @@ impl Edit {
                 .filter(|tb| tb.contains(p))
                 .map(|tb| (tb.act_at(p), tb.index_at(p)));
             let Some((act, idx)) = on_bar else { return false };
+            // The Blur / Invert button: a click picks Blur (on release),
+            // a long press opens the menu with both.
+            let slot = idx
+                .and_then(|i| self.toolbar.as_ref().and_then(|tb| tb.items.get(i)))
+                .is_some_and(|it| it.kind == toolbar::Kind::Btn(Act::Tool(Tool::Blur)));
+            if slot && !self.rec.open {
+                self.pressed = idx;
+                self.slot_menu = false;
+                self.slot_hold = Some(Instant::now());
+                return true;
+            }
             {
                 self.pressed = idx;
                 if self.text.is_some() {
@@ -364,6 +394,20 @@ impl Edit {
                 }
                 return;
             }
+            // The text draft's mini-toolbar (its style) takes presses on
+            // it; the font list open closes on a press anywhere else.
+            if self.text.is_some()
+                && let Some(act) = self.obj.mini.as_ref().filter(|m| m.contains(p)).map(|m| m.act_at(p))
+            {
+                if let Some(act) = act {
+                    self.apply_act(act, p);
+                }
+                return;
+            }
+            if self.obj.font_menu && !self.obj.mini.as_ref().is_some_and(|m| m.contains(p)) {
+                self.obj.font_menu = false;
+                return;
+            }
             // Text draft: a click outside commits it.
             if self.text.is_some() {
                 let td = self.text.as_ref().expect("text draft");
@@ -371,7 +415,7 @@ impl Edit {
                     self.shot.size.0 as f32,
                     td,
                     self.mem.size(Tool::Text),
-                    self.font.as_ref(),
+                    self.text_font().as_ref(),
                     self.ui_scale(),
                 );
                 if !hit(r, p) {
@@ -385,6 +429,9 @@ impl Edit {
                 return; // already dragging
             }
             self.save_menu = false;
+            if std::mem::take(&mut self.slot_menu) {
+                return; // a press outside the Blur / Invert menu closes it
+            }
             // The mini-toolbar over the selected objects.
             if let Some(act) = self.obj.mini.as_ref().filter(|m| m.contains(p)).map(|m| m.act_at(p)) {
                 if let Some(act) = act {
@@ -557,7 +604,26 @@ impl Edit {
     pub(super) fn pointer_up(&mut self) {
         {
             self.pressed = None;
+            // The Blur / Invert button let go before the menu opened: a
+            // click, Blur.
+            if self.slot_hold.take().is_some() {
+                self.apply_act(Act::Tool(Tool::Blur), Pt::new(0.0, 0.0));
+            }
             end_interaction(self);
+        }
+    }
+
+    /// How long a press on the Blur / Invert button opens its menu.
+    pub(super) const SLOT_HOLD: Duration = Duration::from_millis(400);
+
+    /// The Blur / Invert button held long enough: its menu opens (the
+    /// release then picks nothing).
+    pub(super) fn slot_long_press(&mut self, now: Instant) {
+        if self.slot_hold.is_some_and(|t| now.saturating_duration_since(t) >= Self::SLOT_HOLD) {
+            self.slot_hold = None;
+            self.slot_menu = true;
+            self.palette_open = false;
+            self.save_menu = false;
         }
     }
 
@@ -576,6 +642,7 @@ impl Edit {
             text,
             color: self.mem.color(Tool::Text),
             size: self.mem.size(Tool::Text),
+            fmt: self.mem.fmt(Tool::Text),
         });
     }
 
@@ -583,9 +650,12 @@ impl Edit {
         if act != Act::SaveMenu {
             self.save_menu = false;
         }
+        // A pick from the Blur / Invert menu picks (never toggles off).
+        let from_menu = std::mem::take(&mut self.slot_menu);
         match act {
             // Video mode draws nothing (the recording is live).
             Act::Tool(_) if self.rec.open => {}
+            Act::Tool(t) if from_menu && self.tool == Some(t) => {}
             Act::Tool(t) => {
                 self.finish_callout_edit();
                 // The Edit window always has a tool: off again is Select.
@@ -633,6 +703,9 @@ impl Edit {
             }
             Act::ObjColor | Act::ObjFill | Act::ObjSize(_) | Act::ObjStyle(_) | Act::ObjFront | Act::ObjBack | Act::ObjDup | Act::ObjDelete => {
                 self.obj_act(act);
+            }
+            Act::ObjBold | Act::ObjItalic | Act::ObjUnderline | Act::ObjStrike | Act::ObjAlign(_) | Act::ObjFontMenu | Act::ObjFont(_) => {
+                self.fmt_act(act);
             }
             // Pixelate and Invert have no color: no palette (Space included).
             Act::Palette if !self.palette_open && !tools::has_color(self.cur_tool()) && self.sel_color().is_none() => {}

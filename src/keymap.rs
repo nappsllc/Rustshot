@@ -27,6 +27,8 @@ pub enum Action {
     ToolInvert,
     ToolSpotlight,
     ToolMagnify,
+    /// A Gaussian-like blur of a rect.
+    ToolBlur,
     /// The current tool's stroke size one step down / up (also the wheel).
     SizeDown,
     SizeUp,
@@ -79,10 +81,15 @@ pub enum Action {
     ZoomOut,
     ZoomFit,
     ZoomActual,
+    /// While typing a text or a callout (checked apart from the others:
+    /// Ctrl+U is Upload otherwise): bold, italic, underline on / off.
+    TextBold,
+    TextItalic,
+    TextUnderline,
 }
 
 impl Action {
-    pub const ALL: [Action; 46] = [
+    pub const ALL: [Action; 50] = [
         Action::ToolSelect,
         Action::ToolPencil,
         Action::ToolLine,
@@ -97,6 +104,7 @@ impl Action {
         Action::ToolInvert,
         Action::ToolSpotlight,
         Action::ToolMagnify,
+        Action::ToolBlur,
         Action::SizeDown,
         Action::SizeUp,
         Action::Copy,
@@ -129,6 +137,9 @@ impl Action {
         Action::ZoomOut,
         Action::ZoomFit,
         Action::ZoomActual,
+        Action::TextBold,
+        Action::TextItalic,
+        Action::TextUnderline,
     ];
 
     /// A while-recording chord: global (Meta allowed), not an overlay key.
@@ -146,6 +157,12 @@ impl Action {
     /// An Edit window key (its zoom): asked there before the editor's.
     pub fn edit_window(self) -> bool {
         matches!(self, Action::ZoomIn | Action::ZoomOut | Action::ZoomFit | Action::ZoomActual)
+    }
+
+    /// A typing key (the text style): active only while a text or a
+    /// callout is typed in, and then before every other action.
+    pub fn while_typing(self) -> bool {
+        matches!(self, Action::TextBold | Action::TextItalic | Action::TextUnderline)
     }
 
     /// Config key in the `[shortcuts]` table.
@@ -174,11 +191,12 @@ impl Action {
             Action::ToolText => ("tool_text", "Text", &["T"]),
             Action::ToolCallout => ("tool_callout", "Callout", &["K"]),
             Action::ToolCounter => ("tool_counter", "Number", &["N"]),
-            // X as on the design boards; B (blur) as before.
-            Action::ToolPixelate => ("tool_pixelate", "Pixelate", &["X", "B"]),
+            // X as on the design boards (B is the blur now).
+            Action::ToolPixelate => ("tool_pixelate", "Pixelate", &["X"]),
             Action::ToolInvert => ("tool_invert", "Invert", &["I"]),
             Action::ToolSpotlight => ("tool_spotlight", "Spotlight", &["S"]),
             Action::ToolMagnify => ("tool_magnify", "Magnify", &["Z"]),
+            Action::ToolBlur => ("tool_blur", "Blur", &["B"]),
             Action::SizeDown => ("size_down", "Stroke size -", &["["]),
             Action::SizeUp => ("size_up", "Stroke size +", &["]"]),
             Action::Copy => ("copy", "Copy", &["Ctrl+C"]),
@@ -212,6 +230,9 @@ impl Action {
             Action::ZoomOut => ("zoom_out", "Zoom out", &["Ctrl+-", "Ctrl+NumpadSubtract"]),
             Action::ZoomFit => ("zoom_fit", "Zoom to fit", &["Ctrl+0", "Ctrl+Numpad0"]),
             Action::ZoomActual => ("zoom_actual", "Actual size", &["Ctrl+1"]),
+            Action::TextBold => ("text_bold", "Bold (while typing)", &["Ctrl+B"]),
+            Action::TextItalic => ("text_italic", "Italic (while typing)", &["Ctrl+I"]),
+            Action::TextUnderline => ("text_underline", "Underline (while typing)", &["Ctrl+U"]),
         }
     }
 
@@ -222,6 +243,11 @@ impl Action {
     fn index(self) -> usize {
         self as usize
     }
+}
+
+/// A chord a typing key may have: with Ctrl or Alt (else it would type).
+pub fn typing_ok(c: &Chord) -> bool {
+    c.ctrl || c.alt
 }
 
 /// What the Meta modifier is called here: the Windows key, Super on
@@ -323,6 +349,14 @@ impl Keymap {
             if !a.while_recording() && good.iter().any(|c| c.meta) {
                 warn.push(format!("[shortcuts] {k}: Meta chords do not reach the editor"));
             }
+            // A typing key without Ctrl or Alt would eat what is typed.
+            let (good, plain): (Vec<Chord>, Vec<Chord>) = good.into_iter().partition(|c| !a.while_typing() || typing_ok(c));
+            if !plain.is_empty() {
+                warn.push(format!("[shortcuts] {k}: a key used while typing needs Ctrl or Alt (ignored)"));
+                if good.is_empty() {
+                    continue; // keep the default
+                }
+            }
             km.chords[a.index()] = good;
         }
         (km, warn)
@@ -333,8 +367,14 @@ impl Keymap {
     pub fn resolve(&self, vk: u32, mods: Mods) -> Option<Action> {
         Action::ALL
             .into_iter()
-            .filter(|a| !a.while_recording() && !a.on_objects() && !a.edit_window())
+            .filter(|a| !a.while_recording() && !a.on_objects() && !a.edit_window() && !a.while_typing())
             .find(|a| self.chords(*a).iter().any(|c| c.matches(vk, mods)))
+    }
+
+    /// The typing key bound to `vk` with these modifiers (asked while a
+    /// text or a callout is typed in).
+    pub fn resolve_typing(&self, vk: u32, mods: Mods) -> Option<Action> {
+        Action::ALL.into_iter().filter(|a| a.while_typing()).find(|a| self.chords(*a).iter().any(|c| c.matches(vk, mods)))
     }
 
     /// The object action bound to `vk` with these modifiers (asked first
@@ -361,12 +401,39 @@ impl Keymap {
         out.extend(self.conflicts_in(1));
         out.extend(self.conflicts_in(2));
         out.extend(self.conflicts_in(3));
+        out.extend(self.conflicts_in(4));
+        // The Edit window asks its zoom keys first, typing or not.
+        for a in Action::ALL.into_iter().filter(|a| a.while_typing()) {
+            for c in self.chords(a) {
+                if let Some(z) = Action::ALL.into_iter().find(|z| z.edit_window() && self.chords(*z).contains(c)) {
+                    out.push((*c, vec![z, a]));
+                }
+            }
+        }
         out
+    }
+
+    /// Typing keys bound without Ctrl or Alt (they would eat what is
+    /// typed; [`Keymap::from_config`] drops them, Settings shows them).
+    pub fn plain_typing(&self) -> Vec<Action> {
+        Action::ALL.into_iter().filter(|a| a.while_typing() && self.chords(*a).iter().any(|c| !typing_ok(c))).collect()
     }
 
     fn conflicts_in(&self, group: u8) -> Vec<(Chord, Vec<Action>)> {
         let mut by: BTreeMap<Chord, Vec<Action>> = BTreeMap::new();
-        let of = |a: &Action| if a.while_recording() { 1 } else if a.on_objects() { 2 } else if a.edit_window() { 3 } else { 0 };
+        let of = |a: &Action| {
+            if a.while_recording() {
+                1
+            } else if a.on_objects() {
+                2
+            } else if a.edit_window() {
+                3
+            } else if a.while_typing() {
+                4
+            } else {
+                0
+            }
+        };
         for a in Action::ALL.into_iter().filter(|a| of(a) == group) {
             for c in self.chords(a) {
                 let v = by.entry(*c).or_default();
@@ -411,10 +478,31 @@ mod tests {
         km.chords(a).iter().map(Chord::display).collect()
     }
 
+    /// Typing keys need Ctrl or Alt (a plain key, Shift+key or F-key is
+    /// dropped with a warning, the default kept), and one shared with the
+    /// Edit window's zoom is a conflict (the zoom wins there).
+    #[test]
+    fn typing_keys_need_a_modifier_and_dodge_the_zoom() {
+        let cfg = |pairs: &[(&str, &str)]| pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<BTreeMap<_, _>>();
+        for bad in ["B", "Shift+B", "F5"] {
+            let (km, warn) = Keymap::from_config(&cfg(&[("text_bold", bad)]));
+            assert_eq!(shown(&km, Action::TextBold), ["Ctrl+B"], "{bad}: the default stays");
+            assert!(warn.iter().any(|w| w.contains("needs Ctrl or Alt")), "{bad}: {warn:?}");
+        }
+        let (km, warn) = Keymap::from_config(&cfg(&[("text_bold", "Alt+B, F6")]));
+        assert_eq!((shown(&km, Action::TextBold), warn.len()), (vec!["Alt+B".to_string()], 1));
+        let (km, _) = Keymap::from_config(&cfg(&[("text_italic", "Ctrl+0")]));
+        assert!(km.conflicts().iter().any(|(_, v)| v[..] == [Action::ZoomFit, Action::TextItalic]), "{:?}", km.conflicts());
+        let mut km = Keymap::defaults();
+        km.set(Action::TextUnderline, vec![Chord::parse("U").unwrap()]);
+        assert_eq!(km.plain_typing(), [Action::TextUnderline]);
+        assert!(Keymap::defaults().plain_typing().is_empty() && Keymap::defaults().conflicts().is_empty());
+    }
+
     #[test]
     fn defaults_match_spec_table() {
         let km = Keymap::defaults();
-        let want: [(Action, &[&str]); 46] = [
+        let want: [(Action, &[&str]); 50] = [
             (Action::ToolSelect, &["V"]),
             (Action::ToolPencil, &["P"]),
             (Action::ToolLine, &["L"]),
@@ -425,10 +513,11 @@ mod tests {
             (Action::ToolText, &["T"]),
             (Action::ToolCallout, &["K"]),
             (Action::ToolCounter, &["N"]),
-            (Action::ToolPixelate, &["X", "B"]),
+            (Action::ToolPixelate, &["X"]),
             (Action::ToolInvert, &["I"]),
             (Action::ToolSpotlight, &["S"]),
             (Action::ToolMagnify, &["Z"]),
+            (Action::ToolBlur, &["B"]),
             (Action::SizeDown, &["["]),
             (Action::SizeUp, &["]"]),
             (Action::Copy, &["Ctrl+C"]),
@@ -461,6 +550,9 @@ mod tests {
             (Action::ZoomOut, &["Ctrl+-", "Ctrl+NumpadSubtract"]),
             (Action::ZoomFit, &["Ctrl+0", "Ctrl+Numpad0"]),
             (Action::ZoomActual, &["Ctrl+1"]),
+            (Action::TextBold, &["Ctrl+B"]),
+            (Action::TextItalic, &["Ctrl+I"]),
+            (Action::TextUnderline, &["Ctrl+U"]),
         ];
         for (a, keys) in want {
             assert_eq!(shown(&km, a), keys, "{a:?}");
@@ -573,7 +665,7 @@ mod tests {
         assert_eq!(km.resolve('L' as u32, NONE), Some(Action::ToolLine));
         assert_eq!(km.resolve('E' as u32, NONE), Some(Action::ToolCircle));
         assert_eq!(km.resolve('X' as u32, NONE), Some(Action::ToolPixelate));
-        assert_eq!(km.resolve('B' as u32, NONE), Some(Action::ToolPixelate));
+        assert_eq!(km.resolve('B' as u32, NONE), Some(Action::ToolBlur));
         assert_eq!(km.resolve(key::LBRACKET, NONE), Some(Action::SizeDown));
         assert_eq!(km.resolve(key::RBRACKET, NONE), Some(Action::SizeUp));
         assert_eq!(km.resolve('C' as u32, NONE), None);
