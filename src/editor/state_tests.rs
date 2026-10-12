@@ -1351,6 +1351,8 @@ fn mode_switch_keys_and_close() {
 
 /// The source: F the monitor, W a window picked like window snapping (a
 /// click takes it), R keeps the region.
+/// Video mode needs recording (`rec_ui::supported`: not on macOS in tests).
+#[cfg(any(windows, target_os = "linux"))]
 #[test]
 fn source_keys_pick_screen_window_region() {
     let mut a = app(Some(r(300.0, 200.0, 400.0, 300.0)));
@@ -1447,6 +1449,8 @@ fn gif_mode_rows_frame_rate_and_max_length() {
 /// The microphone is metered only while the panel shows it on: opened
 /// with the panel, its level drawn as bars (amber at the top when it
 /// clips), released when the microphone, MP4 or video mode goes.
+/// Video mode needs recording (`rec_ui::supported`: not on macOS in tests).
+#[cfg(any(windows, target_os = "linux"))]
 #[test]
 fn mic_meter_opens_with_the_panel_only() {
     let mut a = app(Some(r(100.0, 100.0, 600.0, 300.0)));

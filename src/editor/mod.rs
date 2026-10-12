@@ -4687,6 +4687,8 @@ mod tests {
 
     /// The estimate toast never sits on the panel: it moves to the top of
     /// the monitor when the panel is at the bottom.
+    /// Video mode needs recording (`rec_ui::supported`: not on macOS in tests).
+    #[cfg(any(windows, target_os = "linux"))]
     #[test]
     fn estimate_toast_keeps_off_the_panel() {
         for sel in [FRect { x: 240.0, y: 110.0, w: 960.0, h: 420.0 }, FRect { x: 0.0, y: 0.0, w: 1440.0, h: 900.0 }, FRect { x: 300.0, y: 200.0, w: 400.0, h: 200.0 }] {
