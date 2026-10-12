@@ -65,6 +65,8 @@ pub(super) struct ObjState {
     pub fading: Option<(Vec<(Pt, Pt)>, Instant)>,
     /// A typed character's UTF-16 high half, waiting for its low one.
     pub high: Option<u16>,
+    /// The mini-toolbar's font list is open.
+    pub font_menu: bool,
 }
 
 /// Typing in a callout.
@@ -113,6 +115,7 @@ fn tool_of(o: &Obj) -> Tool {
         Obj::Callout { .. } => Tool::Callout,
         Obj::Spotlight { .. } => Tool::Spotlight,
         Obj::Magnify { .. } => Tool::Magnify,
+        Obj::Blur { .. } => Tool::Blur,
     }
 }
 
@@ -419,6 +422,16 @@ impl Edit {
     }
 
     /// A callout keeps its text inside: at least the height it needs.
+    /// The annotation font in callout `idx`'s text style (the plain font
+    /// for another object).
+    pub(super) fn callout_font(&self, idx: usize) -> Option<crate::text::AnnotFont> {
+        let f = self.font.as_ref()?;
+        Some(match self.objects.get(idx).and_then(oe::fmt) {
+            Some(fmt) => f.styled(fmt),
+            None => f.clone(),
+        })
+    }
+
     pub(super) fn refit_callout(&mut self, idx: usize) {
         self.fit_callout(idx, false, true);
     }
@@ -428,7 +441,7 @@ impl Edit {
     /// from its tail (`away`; else down, as while a handle drags it), so
     /// the tail stays as drawn.
     pub(super) fn fit_callout(&mut self, idx: usize, shrink: bool, away: bool) {
-        let font = self.font.clone();
+        let font = self.callout_font(idx);
         if let Some(Obj::Callout { r, tail, text, size, style, .. }) = self.objects.get_mut(idx) {
             let need = callout::needed_h(font.as_ref(), *r, text, *size, *style);
             let h = if shrink { need } else { need.max(r.h) };
@@ -664,6 +677,94 @@ impl Edit {
         true
     }
 
+    /// A text style act (B / I / U / S, the alignment, the font list, a
+    /// font): on the text draft and the text tool, else on the selected
+    /// texts and callouts (the callout being typed in included), and the
+    /// tools remember it. A toggle follows the first one (all on, or all
+    /// off). False when there is nothing to style.
+    pub(super) fn fmt_act(&mut self, act: Act) -> bool {
+        use crate::text::TextFmt;
+        if act == Act::ObjFontMenu {
+            self.obj.font_menu = !self.obj.font_menu;
+            return true;
+        }
+        let set = |f: TextFmt, first: TextFmt| -> TextFmt {
+            match act {
+                Act::ObjBold => TextFmt { bold: !first.bold, ..f },
+                Act::ObjItalic => TextFmt { italic: !first.italic, ..f },
+                Act::ObjUnderline => TextFmt { underline: !first.underline, ..f },
+                Act::ObjStrike => TextFmt { strike: !first.strike, ..f },
+                Act::ObjAlign(a) => TextFmt { align: a, ..f },
+                Act::ObjFont(fam) => TextFmt { family: fam, ..f },
+                _ => f,
+            }
+        };
+        if !matches!(act, Act::ObjBold | Act::ObjItalic | Act::ObjUnderline | Act::ObjStrike | Act::ObjAlign(_) | Act::ObjFont(_)) {
+            return false;
+        }
+        if matches!(act, Act::ObjFont(_)) {
+            self.obj.font_menu = false;
+        }
+        let now = Instant::now();
+        let sel: Vec<usize> = self.obj.sel.iter().copied().filter(|&i| self.objects.get(i).and_then(oe::fmt).is_some()).collect();
+        if self.text.is_some() || sel.is_empty() {
+            // The text draft, or the text / callout tool with nothing
+            // selected: the tool's own style.
+            let t = match self.tool {
+                Some(Tool::Callout) if self.text.is_none() => Tool::Callout,
+                Some(Tool::Text) | Some(Tool::Callout) => Tool::Text,
+                _ if self.text.is_some() => Tool::Text,
+                _ => return false,
+            };
+            let f = self.mem.fmt(t);
+            if self.mem.set_fmt(t, set(f, f)) {
+                self.remember_fmt(t, now);
+            }
+            if let Some(td) = self.text.as_mut() {
+                td.at = now;
+            }
+            return true;
+        }
+        let first = oe::fmt(&self.objects[sel[0]]).unwrap_or_default();
+        for &i in &sel {
+            let o = &mut self.objects[i];
+            let f = oe::fmt(o).unwrap_or_default();
+            oe::set_fmt(o, set(f, first));
+            if matches!(o, Obj::Callout { .. }) {
+                self.fit_callout(i, true, true);
+            }
+        }
+        for &i in &sel {
+            let (t, f) = (tool_of(&self.objects[i]), oe::fmt(&self.objects[i]).unwrap_or_default());
+            if self.mem.set_fmt(t, f) {
+                self.remember_fmt(t, now);
+            }
+        }
+        if let Some(ce) = self.obj.cedit.as_mut() {
+            ce.at = now;
+        }
+        self.dirty = true;
+        self.commit_edits();
+        true
+    }
+
+    /// Queue `t`'s text style for the config (`tool_<id>_font`, its style
+    /// words, the text's alignment).
+    fn remember_fmt(&mut self, t: Tool, now: Instant) {
+        use crate::config::{fmt_key_name, toml_str, FmtKey};
+        let Some(id) = tools::id(t).filter(|_| tools::has_fmt(t)) else { return };
+        let f = self.mem.fmt(t);
+        let words = f.style_id();
+        self.cfg.tool_fonts.insert(id.into(), f.family.id().into());
+        self.cfg.tool_text_styles.insert(id.into(), words.clone());
+        self.pending.set(fmt_key_name(id, FmtKey::Font), Some(toml_str(f.family.id())), now);
+        self.pending.set(fmt_key_name(id, FmtKey::Style), Some(toml_str(&words)), now);
+        if t == Tool::Text {
+            self.cfg.tool_aligns.insert(id.into(), f.align.id().into());
+            self.pending.set(fmt_key_name(id, FmtKey::Align), Some(toml_str(f.align.id())), now);
+        }
+    }
+
     /// The selection's size, color and fill become what its tools draw
     /// next (remembered, as when set with the tool itself).
     fn remember_sel(&mut self) {
@@ -753,8 +854,9 @@ impl Edit {
     /// Start typing in callout `idx`: the caret at `at` (a click), else at
     /// the end. `fresh`: the bubble was just placed.
     pub(super) fn begin_callout_edit(&mut self, idx: usize, at: Option<Pt>, fresh: bool) {
+        let font = self.callout_font(idx);
         let Some(Obj::Callout { r, text, size, style, .. }) = self.objects.get(idx) else { return };
-        let caret = match (at, self.font.as_ref()) {
+        let caret = match (at, font.as_ref()) {
             (Some(p), Some(f)) => callout::caret_near(f, &callout::layout(f, *r, text, *size, *style), text, p, *size),
             _ => text.len(),
         };
@@ -819,7 +921,7 @@ impl Edit {
             self.callout_char('\n');
             return;
         }
-        let font = self.font.clone();
+        let font = self.obj.cedit.as_ref().and_then(|ce| self.callout_font(ce.idx));
         let Some(ce) = self.obj.cedit.as_ref() else { return };
         let idx = ce.idx;
         let lay = match (&font, self.objects.get(idx)) {
@@ -863,7 +965,7 @@ impl Edit {
 
     /// Move the caret to a click in the callout being typed in.
     pub(super) fn cedit_click(&mut self, p: Pt) {
-        let font = self.font.clone();
+        let font = self.obj.cedit.as_ref().and_then(|ce| self.callout_font(ce.idx));
         let Some(ce) = self.obj.cedit.as_mut() else { return };
         if let (Some(f), Some(Obj::Callout { r, text, size, style, .. })) = (&font, self.objects.get(ce.idx)) {
             ce.caret = callout::caret_near(f, &callout::layout(f, *r, text, *size, *style), text, p, *size);
@@ -880,8 +982,6 @@ impl Edit {
     /// chrome, guides, marquee, caret and mini-toolbar.
     #[allow(clippy::type_complexity)]
     pub(super) fn obj_scene(&mut self, area: FRect, s: f32) -> (Vec<Obj>, Option<ObjSelUi>, Option<FRect>, Option<CaretUi>, Option<MiniUi>) {
-        let font = self.font.clone();
-        let font = font.as_ref();
         let ghost = match &self.interact {
             Interact::ObjMove { moved: true, orig, .. } => orig.iter().filter_map(|o| oe::faded(o, GHOST)).collect(),
             _ => Vec::new(),
@@ -904,7 +1004,7 @@ impl Edit {
             u
         });
         let caret = self.obj.cedit.as_ref().filter(|c| super::blink_on(c.at)).and_then(|ce| {
-            let f = font?;
+            let f = &self.callout_font(ce.idx)?;
             let Some(Obj::Callout { r, text, size, style, color, fill, .. }) = self.objects.get(ce.idx) else { return None };
             let lay = callout::layout(f, *r, text, *size, *style);
             let at = callout::caret_at(f, &lay, text, ce.caret, *size);
@@ -912,6 +1012,7 @@ impl Edit {
             Some(CaretUi { r: FRect { x: at.x, y: at.y, w: (2.0 * s).round().max(1.0), h: lay.line_h.round() }, color: ink.with_alpha(255) })
         });
         let idle = matches!(self.interact, Interact::None);
+        let font_open = self.obj.font_menu;
         let mini = (idle && !self.obj.sel.is_empty()).then(|| self.osel_frame()).flatten().map(|b| {
             let sel = &self.obj.sel;
             let one = (sel.len() == 1).then(|| &self.objects[sel[0]]);
@@ -925,11 +1026,39 @@ impl Edit {
                     _ => None,
                 }),
                 count: sel.len(),
+                fmt: one.and_then(oe::fmt),
+                align: one.is_some_and(|o| matches!(o, Obj::Text { .. })),
+                draft: false,
+                font_open,
             };
             let mut m = mini::layout(&inp, b, area, s);
             m.hover = self.obj.mini_hover.filter(|i| *i < m.items.len());
             m
         });
+        // The text draft's bar: its style, over its box.
+        let mini = mini.or_else(|| {
+            let td = self.text.as_ref()?;
+            let tf = self.text_font();
+            let b = super::text_box_rect(self.shot.size.0 as f32, td, self.mem.size(Tool::Text), tf.as_ref(), s);
+            let inp = MiniIn {
+                color: None,
+                fill: None,
+                size: None,
+                text: true,
+                style: None,
+                count: 1,
+                fmt: Some(self.mem.fmt(Tool::Text)),
+                align: true,
+                draft: true,
+                font_open,
+            };
+            let mut m = mini::layout(&inp, b, area, s);
+            m.hover = self.obj.mini_hover.filter(|i| *i < m.items.len());
+            Some(m)
+        });
+        if mini.as_ref().is_none_or(|m| m.inp.fmt.is_none()) {
+            self.obj.font_menu = false;
+        }
         self.obj.mini = mini.clone();
         (ghost, osel, marquee, caret, mini)
     }

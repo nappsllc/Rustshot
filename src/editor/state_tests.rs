@@ -360,14 +360,15 @@ fn cursor_follows_handles_selection_and_tool() {
 
 #[test]
 fn every_tool_drafts_then_commits_on_release() {
-    let cases: [(char, Tool); 8] = [
+    let cases: [(char, Tool); 9] = [
         ('P', Tool::Path),
         ('L', Tool::Line),
         ('A', Tool::Arrow),
         ('R', Tool::Rect),
         ('E', Tool::Ellipse),
         ('M', Tool::Marker),
-        ('B', Tool::Pixelate),
+        ('X', Tool::Pixelate),
+        ('B', Tool::Blur),
         ('I', Tool::Invert),
     ];
     for (k, tool) in cases {
@@ -395,6 +396,7 @@ fn every_tool_drafts_then_commits_on_release() {
             (Tool::Rect, Obj::Rect { r: rr, .. })
             | (Tool::Ellipse, Obj::Ellipse { r: rr, .. })
             | (Tool::Pixelate, Obj::Pixelate { r: rr, .. })
+            | (Tool::Blur, Obj::Blur { r: rr, .. })
             | (Tool::Invert, Obj::Invert { r: rr }) => *rr == r(200.0, 200.0, 100.0, 60.0),
             _ => false,
         };
@@ -409,7 +411,7 @@ fn every_tool_drafts_then_commits_on_release() {
 
 #[test]
 fn tiny_strokes_are_dropped() {
-    for k in ['D', 'A', 'M', 'R', 'C', 'B', 'I'] {
+    for k in ['D', 'A', 'M', 'R', 'C', 'X', 'B', 'I'] {
         let mut a = app(Some(r(100.0, 100.0, 800.0, 600.0)));
         key(&mut a, k as u32);
         down(&mut a, 200, 200);
@@ -430,7 +432,7 @@ fn tiny_strokes_are_dropped() {
 /// `wind::imp::tests::overlay_ignores_outside_moves_and_never_enters_move_size`).
 #[test]
 fn shift_shapes_keep_the_press_point_in_every_direction() {
-    for k in ['R', 'E', 'B', 'I'] {
+    for k in ['R', 'E', 'X', 'B', 'I'] {
         for (dx, dy) in [(60, 200), (-60, 200), (60, -200), (-60, -200), (200, 60), (-200, -60)] {
             let mut a = app(Some(r(100.0, 100.0, 800.0, 600.0)));
             key(&mut a, k as u32);
@@ -439,7 +441,7 @@ fn shift_shapes_keep_the_press_point_in_every_direction() {
                 drag(&mut a, (500, 400), (500 + dx, 400 + dy));
             }
             let rr = match ed(&mut a).objects[..] {
-                [Obj::Rect { r, .. } | Obj::Ellipse { r, .. } | Obj::Pixelate { r, .. } | Obj::Invert { r }] => r,
+                [Obj::Rect { r, .. } | Obj::Ellipse { r, .. } | Obj::Pixelate { r, .. } | Obj::Blur { r, .. } | Obj::Invert { r }] => r,
                 ref o => panic!("{k}: {o:?}"),
             };
             let side = dx.abs().max(dy.abs()) as f32;
@@ -583,11 +585,13 @@ fn text_commit_cancel_and_click_outside() {
     assert!(e.text.is_none() && !e.done, "Enter commits the draft, not the capture");
     assert_eq!(
         e.objects,
-        vec![Obj::Text { pos: Pt::new(300.0, 300.0), text: "Hello  ".into(), color: e.mem.color(Tool::Text), size: e.mem.size(Tool::Text) }]
+        vec![Obj::Text { fmt: Default::default(), pos: Pt::new(300.0, 300.0), text: "Hello  ".into(), color: e.mem.color(Tool::Text), size: e.mem.size(Tool::Text) }]
     );
-    // Shift+Enter neither commits nor inserts (single-line drafts).
+    // Shift+Enter starts a new line (it does not commit).
     let mut a = typing("x");
     key_m(&mut a, key::RETURN, SHIFT);
+    assert_eq!(draft(&mut a), ("x\n".to_string(), 2));
+    key(&mut a, key::BACK);
     assert_eq!(draft(&mut a).0, "x");
     // Esc drops the draft, keeps the tool.
     key(&mut a, key::ESCAPE);
@@ -706,7 +710,7 @@ fn wheel_and_size_acts_change_the_active_tool_size() {
     assert_eq!(ed(&mut a).size_label(), "");
     assert_eq!(ed(&mut a).mem.size(Tool::Pixelate), 12.0, "not the pixelate size");
     key(&mut a, 'I' as u32);
-    for (k, lo, hi) in [('R', 1.0, 50.0), ('M', 1.0, 50.0), ('B', 4.0, 100.0), ('T', 8.0, 96.0), ('L', 1.0, 50.0)] {
+    for (k, lo, hi) in [('R', 1.0, 50.0), ('M', 1.0, 50.0), ('X', 4.0, 100.0), ('B', 2.0, 50.0), ('T', 8.0, 96.0), ('L', 1.0, 50.0)] {
         key(&mut a, k as u32);
         for _ in 0..120 {
             wheel(&mut a, -120);

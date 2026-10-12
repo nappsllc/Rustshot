@@ -3,6 +3,7 @@
 //! them (`annotations.json`), [`edit`] hit-tests and transforms them for
 //! the select tool, [`callout`] lays out speech bubbles.
 
+pub mod blur;
 pub mod callout;
 pub mod edit;
 // The History / Edit window reads and writes annotations.json next.
@@ -14,6 +15,7 @@ pub use callout::Style as CalloutStyle;
 pub use json::{from_json, to_json};
 
 use crate::text::AnnotFont;
+pub use crate::text::TextFmt;
 use crate::pixbuf::PixBuf;
 use crate::raster::{Blend, Mask, Surf};
 use crate::uifb::C4;
@@ -257,6 +259,8 @@ pub enum Obj {
         text: String,
         color: C4,
         size: f32,
+        /// Family, bold / italic / underline / strike, alignment.
+        fmt: TextFmt,
     },
     Pixelate {
         r: FRect,
@@ -305,6 +309,8 @@ pub enum Obj {
         size: f32,
         style: CalloutStyle,
         fill: bool,
+        /// The text's family and styles (its alignment is unused).
+        fmt: TextFmt,
     },
     /// Keeps `r` bright and dims everything else in the selection (all
     /// spotlights together: their union stays bright). Draws no pixels of
@@ -322,6 +328,13 @@ pub enum Obj {
         zoom: f32,
         color: C4,
         width: f32,
+    },
+    /// A Gaussian-like blur of the pixels in `r` (three box passes each
+    /// way approximating a Gaussian of standard deviation `sigma`; the
+    /// rect's own pixels only, its edges clamped).
+    Blur {
+        r: FRect,
+        sigma: f32,
     },
 }
 
@@ -556,7 +569,7 @@ impl Obj {
             },
             Obj::Path { pts, width, .. } => (pts.len() >= 2).then(|| bbox(pts, m(*width))).flatten(),
             Obj::Rect { r, width, .. } | Obj::Ellipse { r, width, .. } => Some(grow(r, m(*width))),
-            Obj::Pixelate { r, .. } | Obj::Invert { r } => Some(grow(r, 1.0)),
+            Obj::Pixelate { r, .. } | Obj::Invert { r } | Obj::Blur { r, .. } => Some(grow(r, 1.0)),
             Obj::MarkerPath { pts, width, .. } => (pts.len() >= 2).then(|| bbox(pts, m(*width))).flatten(),
             Obj::RectFill { r, width, .. } | Obj::EllipseFill { r, width, .. } => Some(grow(r, m(*width))),
             Obj::Counter { c, d, tail, .. } => {
@@ -575,8 +588,8 @@ impl Obj {
                 let (x0, y0) = (a.x.min(b.x), a.y.min(b.y));
                 Some(FRect { x: x0, y: y0, w: a.x1().max(b.x1()) - x0, h: a.y1().max(b.y1()) - y0 })
             }
-            Obj::Text { pos, text, size, .. } => {
-                let (w, h, _) = font?.measure(text, *size);
+            Obj::Text { pos, text, size, fmt, .. } => {
+                let (w, h, _) = font?.styled(*fmt).measure(text, *size);
                 // Overhang, rounding to whole pixels and AA bleed.
                 let m = size + 2.0;
                 Some(FRect { x: pos.x - m, y: pos.y - m, w: w + 2.0 * m, h: h + 2.0 * m })
@@ -589,15 +602,25 @@ impl Obj {
     /// not yet clipped to the image) and the cell size, cells anchored at
     /// (`x0`, `y0`). A window whose edges inside that area fall on cell
     /// edges renders those pixels exactly as the whole image does.
+    ///
+    /// A blur reads its whole rect for any of its pixels: its grid is one
+    /// cell as big as the rect, so every window that cuts it grows to all
+    /// of it ([`blur::px_rect`]).
     pub fn pixel_grid(&self) -> Option<CellGrid> {
-        let Obj::Pixelate { r, cell } = self else { return None };
-        Some(CellGrid {
-            x0: r.x.max(0.0).floor() as i32,
-            y0: r.y.max(0.0).floor() as i32,
-            x1: r.x1().ceil() as i32,
-            y1: r.y1().ceil() as i32,
-            c: cell.max(2.0).round() as i32,
-        })
+        match self {
+            Obj::Pixelate { r, cell } => Some(CellGrid {
+                x0: r.x.max(0.0).floor() as i32,
+                y0: r.y.max(0.0).floor() as i32,
+                x1: r.x1().ceil() as i32,
+                y1: r.y1().ceil() as i32,
+                c: cell.max(2.0).round() as i32,
+            }),
+            Obj::Blur { r, .. } => {
+                let (x0, y0, x1, y1) = blur::px_rect(*r);
+                Some(CellGrid { x0, y0, x1, y1, c: (x1 - x0).max(y1 - y0).max(1) })
+            }
+            _ => None,
+        }
     }
 
     /// Bake this object into the image.
@@ -642,17 +665,13 @@ impl Obj {
                 }
                 sf.stroke_polyline(pts, *width, *color, Blend::Normal);
             }
-            Obj::Text {
-                pos,
-                text,
-                color,
-                size,
-            } => {
+            Obj::Text { pos, text, color, size, fmt } => {
                 if let Some(font) = font {
-                    font.render(sf, text, *size, *pos, *color);
+                    font.styled(*fmt).render(sf, text, *size, *pos, *color);
                 }
             }
             Obj::Pixelate { r, cell } => pixelate(sf, *r, *cell),
+            Obj::Blur { r, sigma } => blur::render(sf, *r, *sigma),
             Obj::Invert { r } => invert(sf, *r),
             Obj::MarkerPath { pts, color, width } => {
                 if pts.len() >= 2 {
@@ -675,8 +694,9 @@ impl Obj {
                 m.blend(sf, *color, Blend::Normal);
             }
             Obj::Counter { c, n, color, d, tail } => counter(sf, *c, *n, *color, *d, *tail),
-            Obj::Callout { r, tail, text, color, size, style, fill } => {
-                callout::render(sf, *r, *tail, text, *color, *size, *style, *fill, font);
+            Obj::Callout { r, tail, text, color, size, style, fill, fmt } => {
+                let font = font.map(|f| f.styled(*fmt));
+                callout::render(sf, *r, *tail, text, *color, *size, *style, *fill, font.as_ref());
             }
             // The dim is the spotlight pass over the finished image.
             Obj::Spotlight { .. } => {}
@@ -848,7 +868,7 @@ mod tests {
     #[test]
     fn text_render_does_not_panic_without_font() {
         let mut img = PixBuf::new(10, 10);
-        Obj::Text {
+        Obj::Text { fmt: Default::default(),
             pos: Pt::new(1.0, 1.0),
             text: "hi".into(),
             color: C4::rgb(255, 255, 255),
@@ -888,7 +908,7 @@ mod tests {
             check(&format!("obj {n}"), |s| o.render_into(s, None));
         }
         if let Some(font) = AnnotFont::load() {
-            let t = Obj::Text {
+            let t = Obj::Text { fmt: Default::default(),
                 pos: Pt::new(22.0, 16.0),
                 text: "Hello\nWorld wy".into(),
                 color: c,
@@ -968,7 +988,7 @@ mod tests {
         }
         // "ll" squeezed: at 40 px the stems are wide; "WW" overlap in most
         // fonts' AA edges. Every pixel is at least half of white.
-        Obj::Text { pos: Pt::new(6.0, 6.0), text: "WWAVffll\nWW".into(), color: C4::new(0, 0, 0, 128), size: 30.0 }
+        Obj::Text { fmt: Default::default(), pos: Pt::new(6.0, 6.0), text: "WWAVffll\nWW".into(), color: C4::new(0, 0, 0, 128), size: 30.0 }
             .render(&mut img, Some(&font));
         let darkest = img.as_raw().as_chunks::<4>().0.iter().map(|p| p[0]).min().unwrap();
         assert!(darkest >= 126, "a pixel blended twice: {darkest}");

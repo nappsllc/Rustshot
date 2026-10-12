@@ -394,7 +394,7 @@ fn callout_tail_handle_and_re_edit() {
 
 #[test]
 fn callout_styles_from_the_mini_toolbar() {
-    let mut a = with(vec![Obj::Callout {
+    let mut a = with(vec![Obj::Callout { fmt: Default::default(),
         r: FRect { x: 300.0, y: 200.0, w: 240.0, h: 80.0 },
         tail: Pt::new(320.0, 330.0),
         text: "Hi".into(),
@@ -596,7 +596,7 @@ fn render_object_previews() {
         let png = settled(a).to_png().unwrap();
         std::fs::write(dir.join(name), png).unwrap();
     };
-    let callout = |x: f32, y: f32, style: CalloutStyle, fill: bool, text: &str| Obj::Callout {
+    let callout = |x: f32, y: f32, style: CalloutStyle, fill: bool, text: &str| Obj::Callout { fmt: Default::default(),
         r: FRect { x, y, w: 260.0, h: 60.0 },
         tail: Pt::new(x + 50.0, y + 150.0),
         text: text.into(),
@@ -973,7 +973,7 @@ fn every_edit_undoes_and_redoes() {
     let start = vec![
         rect(300.0, 300.0, 200.0, 100.0),
         Obj::Arrow { a: Pt::new(600.0, 600.0), b: Pt::new(800.0, 500.0), color: RED, width: 4.0 },
-        Obj::Callout { r: FRect { x: 900.0, y: 200.0, w: 200.0, h: 80.0 }, tail: Pt::new(920.0, 330.0), text: "x".into(), color: RED, size: 17.0, style: CalloutStyle::Rounded, fill: true },
+        Obj::Callout { fmt: Default::default(), r: FRect { x: 900.0, y: 200.0, w: 200.0, h: 80.0 }, tail: Pt::new(920.0, 330.0), text: "x".into(), color: RED, size: 17.0, style: CalloutStyle::Rounded, fill: true },
     ];
     let mut a = with(start.clone());
     key(&mut a, 'V' as u32);
@@ -1081,7 +1081,7 @@ fn a_callouts_style_is_remembered() {
 fn callout_size_and_resize_keep_the_tail() {
     let tip = Pt::new(420.0, 520.0);
     let r0 = FRect { x: 300.0, y: 300.0, w: 260.0, h: 60.0 };
-    let c = Obj::Callout { r: r0, tail: tip, text: "Two words and then some more so it wraps".into(), color: RED, size: 17.0, style: CalloutStyle::Rounded, fill: true };
+    let c = Obj::Callout { fmt: Default::default(), r: r0, tail: tip, text: "Two words and then some more so it wraps".into(), color: RED, size: 17.0, style: CalloutStyle::Rounded, fill: true };
     let mut a = with(vec![c.clone()]);
     ed(&mut a).tool = Some(Tool::Select);
     ed(&mut a).obj.sel = vec![0];

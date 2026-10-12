@@ -186,6 +186,8 @@ pub struct TextUi {
     pub color: C4,
     /// Byte index of the caret while the blink phase shows it.
     pub caret: Option<usize>,
+    /// The text tool's style.
+    pub fmt: crate::text::TextFmt,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -672,13 +674,15 @@ impl Edit {
             let avoid = if lead.is_some() { close } else { avoid };
             LabelUi { sr, show_pos: !interacting, area, avoid, lead }
         });
+        let tfont = self.text_font();
         let text = self.text.as_ref().map(|td| TextUi {
-            boxr: text_box_rect(ww, td, self.mem.size(Tool::Text), self.font.as_ref(), s),
+            boxr: text_box_rect(ww, td, self.mem.size(Tool::Text), tfont.as_ref(), s),
             pos: td.pos,
             text: td.text.clone(),
             px: self.mem.size(Tool::Text),
             color: self.mem.color(Tool::Text),
             caret: caret_on(td).then_some(td.caret),
+            fmt: self.mem.fmt(Tool::Text),
         });
         let toast = self.notice.as_ref().or(app_notice).map(|t| ToastUi {
             text: t.text.clone(),
@@ -812,7 +816,7 @@ impl Edit {
             bounds: Default::default(),
         };
         sc.bounds = ELS.map(|e| self.el_bounds(&sc, e));
-        if !matches!(sc.draft, Some(Obj::Pixelate { .. })) && self.draft_buf.borrow().capacity() > 0 {
+        if !matches!(sc.draft, Some(Obj::Pixelate { .. } | Obj::Blur { .. })) && self.draft_buf.borrow().capacity() > 0 {
             // The drag ended: release the pixelate scratch.
             *self.draft_buf.borrow_mut() = Vec::new();
         }
@@ -854,9 +858,12 @@ impl Edit {
                 let lw = sc.s.round().max(1.0);
                 let m = lw / 2.0 + 2.0;
                 let b = FRect { x: t.boxr.x - m, y: t.boxr.y - m, w: t.boxr.w + 2.0 * m, h: t.boxr.h + 2.0 * m };
-                let tw = self.font.as_ref().map_or(0.0, |f| f.line_width(&t.text, t.px));
+                let (tw, th) = self.font.as_ref().map_or((0.0, 0.0), |f| {
+                    let (w, h, _) = f.styled(t.fmt).measure(&t.text, t.px);
+                    (w, h)
+                });
                 let g = t.px + 2.0;
-                let txt = FRect { x: t.pos.x - g, y: t.pos.y - g, w: tw + 2.0 * g + 2.0 * sc.s, h: t.px * 1.15 + 2.0 * g };
+                let txt = FRect { x: t.pos.x - g, y: t.pos.y - g, w: tw + 2.0 * g + 2.0 * sc.s, h: th.max(t.px * 1.15) + 2.0 * g };
                 vec![px_bounds(b), px_bounds(txt)]
             }),
             El::Toast => sc.toast.as_ref().map_or(Vec::new(), |t| one(chrome::toast_bounds(&ui, &t.text, t.area, t.k))),
@@ -982,12 +989,14 @@ impl Edit {
             f.stroke_dashed_rect(t.boxr, 4.0 * s, 3.0 * s, s.round().max(1.0), sc.th.accent);
             if let Some(font) = self.font.as_ref() {
                 // Drawn exactly as the committed text object renders.
+                let font = font.styled(t.fmt);
                 font.render(&mut f.surf(), &t.text, t.px, t.pos, t.color);
                 if let Some(caret) = t.caret {
-                    let cx = t.pos.x + font.caret_x(&t.text, caret, t.px);
+                    let at = font.caret_at(&t.text, caret, t.px);
+                    let cx = t.pos.x + at.x;
                     f.fill_rect(
                         cx.round() as i32,
-                        t.pos.y.round() as i32,
+                        (t.pos.y + at.y).round() as i32,
                         (2.0 * s).round() as i32,
                         (t.px * 1.15).round() as i32,
                         t.color,

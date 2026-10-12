@@ -3,12 +3,15 @@
 //! end points, tails and the loupe, snap guides, the marquee, the callout
 //! caret, the ghost left at a drag's origin, and the 32 px mini-toolbar
 //! 8 px above the selection (below it when there is no room): color,
-//! fill, size, the callout's shape, front / back, duplicate, delete.
+//! fill, size, the text style (the font list, B / I / U / S, the text's
+//! alignment), the callout's shape, front / back, duplicate, delete. The
+//! text draft gets one too: its style only.
 
 use super::chrome::{self, Ui};
 use super::compose::{CaretUi, ObjSelUi};
 use super::toolbar::{Act, Item, Kind};
 use crate::objects::{CalloutStyle, FRect, Pt};
+use crate::text::{Align, Family, TextFmt};
 use crate::uifb::{Fb, C4};
 
 const H: f32 = 32.0;
@@ -18,6 +21,14 @@ const GAP: f32 = 2.0;
 const SEP_GAP: f32 = 2.0;
 const SEP_LEN: f32 = 14.0;
 const VALUE_W: f32 = 46.0;
+/// The font box: the family's name and a chevron.
+const FONT_W: f32 = 88.0;
+/// The font list under (over) the bar: rows of 28 px in a 4 px padded
+/// panel.
+const MENU_W: f32 = 160.0;
+const MENU_ROW: f32 = 28.0;
+const MENU_PAD: f32 = 4.0;
+const MENU_GAP: f32 = 4.0;
 /// Above the selection by this much.
 const ABOVE: f32 = 8.0;
 const MARGIN: f32 = 8.0;
@@ -41,6 +52,14 @@ pub struct MiniIn {
     pub style: Option<CalloutStyle>,
     /// More than one object.
     pub count: usize,
+    /// The text style (a text or a callout alone, or the text draft).
+    pub fmt: Option<TextFmt>,
+    /// The alignment buttons (a text, not a callout).
+    pub align: bool,
+    /// The text draft's bar: its style only (no object buttons).
+    pub draft: bool,
+    /// The font list is open.
+    pub font_open: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -49,6 +68,8 @@ pub struct MiniUi {
     pub items: Vec<Item>,
     pub inp: MiniIn,
     pub hover: Option<usize>,
+    /// The open font list's panel (its rows are items).
+    pub pop: Option<FRect>,
 }
 
 impl MiniUi {
@@ -64,7 +85,20 @@ impl MiniUi {
     }
 
     pub fn contains(&self, p: Pt) -> bool {
-        super::toolbar::hit(self.r, p)
+        super::toolbar::hit(self.r, p) || self.pop.is_some_and(|r| super::toolbar::hit(r, p))
+    }
+}
+
+/// Whether `act` shows as on for style `f`.
+fn fmt_on(act: Act, f: Option<TextFmt>) -> bool {
+    let Some(f) = f else { return false };
+    match act {
+        Act::ObjBold => f.bold,
+        Act::ObjItalic => f.italic,
+        Act::ObjUnderline => f.underline,
+        Act::ObjStrike => f.strike,
+        Act::ObjAlign(a) => f.align == a,
+        _ => false,
     }
 }
 
@@ -84,11 +118,21 @@ pub fn layout(inp: &MiniIn, sel: FRect, area: FRect, s: f32) -> MiniUi {
     if inp.size.is_some() && inp.count == 1 {
         groups.push(vec![(Kind::Btn(Act::ObjSize(-1)), BTN), (Kind::Value, VALUE_W), (Kind::Btn(Act::ObjSize(1)), BTN)]);
     }
+    if inp.fmt.is_some() {
+        let mut g = vec![(Kind::Btn(Act::ObjFontMenu), FONT_W)];
+        g.extend([Act::ObjBold, Act::ObjItalic, Act::ObjUnderline, Act::ObjStrike].map(|a| (Kind::Btn(a), BTN)));
+        groups.push(g);
+        if inp.align {
+            groups.push(Align::ALL.iter().map(|a| (Kind::Btn(Act::ObjAlign(*a)), BTN)).collect());
+        }
+    }
     if inp.style.is_some() && inp.count == 1 {
         groups.push(CalloutStyle::ALL.iter().map(|st| (Kind::Btn(Act::ObjStyle(*st)), BTN)).collect());
     }
-    groups.push(vec![(Kind::Btn(Act::ObjFront), BTN), (Kind::Btn(Act::ObjBack), BTN)]);
-    groups.push(vec![(Kind::Btn(Act::ObjDup), BTN), (Kind::Btn(Act::ObjDelete), BTN)]);
+    if !inp.draft {
+        groups.push(vec![(Kind::Btn(Act::ObjFront), BTN), (Kind::Btn(Act::ObjBack), BTN)]);
+        groups.push(vec![(Kind::Btn(Act::ObjDup), BTN), (Kind::Btn(Act::ObjDelete), BTN)]);
+    }
     // Logical px from the bar's left, then placed and scaled.
     let mut items = Vec::new();
     let mut x = PAD;
@@ -114,20 +158,64 @@ pub fn layout(inp: &MiniIn, sel: FRect, area: FRect, s: f32) -> MiniUi {
     for it in &mut items {
         it.r = FRect { x: bx + it.r.x * s, y: by + it.r.y * s, w: it.r.w * s, h: it.r.h * s };
     }
-    MiniUi { r: FRect { x: bx, y: by, w: bw, h: bh }, items, inp: inp.clone(), hover: None }
+    let r = FRect { x: bx, y: by, w: bw, h: bh };
+    // The font list: under the font box (over it when the bar is below
+    // the selection and there is no room under), kept in the area.
+    let pop = inp.font_open.then(|| items.iter().find(|i| i.kind == Kind::Btn(Act::ObjFontMenu)).map(|i| i.r)).flatten().map(|fb| {
+        let (pw, ph) = (MENU_W * s, (Family::ALL.len() as f32 * MENU_ROW + 2.0 * MENU_PAD) * s);
+        let px = fb.x.clamp(area.x + m, (area.x1() - m - pw).max(area.x + m));
+        let down = r.y1() + MENU_GAP * s;
+        let py = if down + ph <= area.y1() - m { down } else { r.y - MENU_GAP * s - ph };
+        for (i, fam) in Family::ALL.iter().enumerate() {
+            let row = FRect { x: px + MENU_PAD * s, y: py + (MENU_PAD + i as f32 * MENU_ROW) * s, w: pw - 2.0 * MENU_PAD * s, h: MENU_ROW * s };
+            items.push(Item { kind: Kind::Btn(Act::ObjFont(*fam)), r: row, disabled: false });
+        }
+        FRect { x: px, y: py, w: pw, h: ph }
+    });
+    MiniUi { r, items, inp: inp.clone(), hover: None, pop }
 }
 
 pub fn bounds(ui: &Ui, m: &MiniUi) -> FRect {
-    chrome::surface_bounds(ui, m.r)
+    let b = chrome::surface_bounds(ui, m.r);
+    match m.pop {
+        Some(p) => {
+            let q = chrome::surface_bounds(ui, p);
+            let (x0, y0) = (b.x.min(q.x), b.y.min(q.y));
+            FRect { x: x0, y: y0, w: b.x1().max(q.x1()) - x0, h: b.y1().max(q.y1()) - y0 }
+        }
+        None => b,
+    }
 }
 
 /// Draw the mini-toolbar.
 pub fn draw(f: &mut Fb, ui: &Ui, m: &MiniUi) {
     let th = ui.th;
     chrome::surface(f, ui, m.r, 9.0, &[0, 1, 2], 1.0);
+    if let Some(p) = m.pop {
+        chrome::panel(f, ui, chrome::round(p), 8.0, &chrome::SMALL_LAYERS, th.surface.with_alpha(255), th.border, 1.0);
+    }
     for (i, it) in m.items.iter().enumerate() {
         let r = chrome::round(it.r);
         let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+        let hovered = m.hover == Some(i);
+        match it.kind {
+            Kind::Btn(Act::ObjFontMenu) => {
+                // The family's name and a chevron, as the panel's device box.
+                let fam = m.inp.fmt.unwrap_or_default().family;
+                if hovered || m.inp.font_open {
+                    chrome::fill(f, r, ui.px(6.0), th.bg_hover);
+                }
+                let inner = FRect { x: r.x + ui.px(8.0), w: r.w - ui.px(12.0), ..r };
+                chrome::dev_box(f, ui, inner, fam.label(), true, 1.0);
+                continue;
+            }
+            Kind::Btn(Act::ObjFont(fam)) => {
+                let on = m.inp.fmt.is_some_and(|x| x.family == fam);
+                chrome::dev_item(f, ui, r, fam.label(), on, hovered, 1.0);
+                continue;
+            }
+            _ => {}
+        }
         match it.kind {
             Kind::SepV => chrome::fill(f, r, 0.0, th.separator),
             Kind::Value => {
@@ -152,9 +240,8 @@ pub fn draw(f: &mut Fb, ui: &Ui, m: &MiniUi) {
                 let on = match act {
                     Act::ObjFill => m.inp.fill == Some(true),
                     Act::ObjStyle(st) => m.inp.style == Some(st),
-                    _ => false,
+                    a => fmt_on(a, m.inp.fmt),
                 };
-                let hovered = m.hover == Some(i);
                 let rad = ui.px(6.0);
                 if on {
                     chrome::fill(f, r, rad, if hovered { th.accent_bg_hover } else { th.accent_bg });

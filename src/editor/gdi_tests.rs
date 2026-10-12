@@ -238,7 +238,7 @@ fn gdi_export_matches_crop() {
     let half = C4::new(20, 200, 90, 128);
     e.objects.push(Obj::Arrow { a: Pt::new(300.0, 700.0), b: Pt::new(900.0, 300.0), color: half, width: 12.0 });
     e.objects.push(Obj::Rect { r: FRect { x: 500.0, y: 200.0, w: 300.0, h: 200.0 }, color: half, width: 9.0 });
-    e.objects.push(Obj::Text { pos: Pt::new(400.0, 500.0), text: "Half WW".into(), color: half, size: 40.0 });
+    e.objects.push(Obj::Text { fmt: Default::default(), pos: Pt::new(400.0, 500.0), text: "Half WW".into(), color: half, size: 40.0 });
     cases.push(("translucent", app, BIG));
     // Numbered tags (one cut by the selection edge, one with a tail), the
     // freehand marker, filled shapes (one translucent).
@@ -425,7 +425,7 @@ fn object_set(font: bool) -> Vec<Obj> {
         Obj::Path { pts: vec![Pt::new(600.0, 300.0), Pt::new(640.0, 340.0), Pt::new(700.0, 310.0)], color: red, width: 3.0 },
     ];
     if font {
-        v.push(Obj::Text { pos: Pt::new(1180.0, 200.0), text: "Note\nhere".into(), color: red, size: 24.0 });
+        v.push(Obj::Text { fmt: Default::default(), pos: Pt::new(1180.0, 200.0), text: "Note\nhere".into(), color: red, size: 24.0 });
     }
     v
 }
@@ -685,7 +685,7 @@ fn perf_gdi_object_drag() {
             _ => Obj::Counter { c: Pt::new(x + 40.0, y + 40.0), n: i, color: red, d: 40.0, tail: None },
         });
     }
-    objs.push(Obj::Callout {
+    objs.push(Obj::Callout { fmt: Default::default(),
         r: FRect { x: 1500.0, y: 1700.0, w: 420.0, h: 120.0 },
         tail: Pt::new(1520.0, 1900.0),
         text: "Move this to the top, above the summary, so people see it first".into(),

@@ -896,15 +896,17 @@ impl Canvas {
         }
         // The text tool's draft: its dashed box and the text as it will be.
         if let Some(td) = &e.text {
-            let boxr = text_box_rect(e.shot.size.0 as f32, td, e.mem.size(Tool::Text), e.font.as_ref(), s_img);
+            let tfont = e.text_font();
+            let boxr = text_box_rect(e.shot.size.0 as f32, td, e.mem.size(Tool::Text), tfont.as_ref(), s_img);
             let (px, color) = (e.mem.size(Tool::Text) * v.z, e.mem.color(Tool::Text));
             f.stroke_dashed_rect(v.rect(boxr), 4.0 * k, 3.0 * k, k.round().max(1.0), e.th.accent);
-            if let Some(font) = e.font.as_ref() {
+            if let Some(font) = tfont.as_ref() {
                 let pos = v.to_win(td.pos);
                 font.render(&mut f.surf(), &td.text, px, pos, color);
                 if caret_on(td) {
-                    let cx = pos.x + font.caret_x(&td.text, td.caret, px);
-                    f.fill_rect(cx.round() as i32, pos.y.round() as i32, (2.0 * k).round() as i32, (px * 1.15).round() as i32, color);
+                    let at = font.caret_at(&td.text, td.caret, px);
+                    let (cx, cy) = (pos.x + at.x, pos.y + at.y);
+                    f.fill_rect(cx.round() as i32, cy.round() as i32, (2.0 * k).round() as i32, (px * 1.15).round() as i32, color);
                 }
             }
         }
@@ -974,7 +976,7 @@ impl Canvas {
 
 /// An object that reads the pixels below it (it cannot be drawn apart).
 fn reads_below(o: &Obj) -> bool {
-    matches!(o, Obj::Pixelate { .. } | Obj::Invert { .. } | Obj::Magnify { .. } | Obj::Spotlight { .. })
+    matches!(o, Obj::Pixelate { .. } | Obj::Blur { .. } | Obj::Invert { .. } | Obj::Magnify { .. } | Obj::Spotlight { .. })
 }
 
 /// Objects rendered once over transparency (premultiplied RGBA: the
@@ -1068,13 +1070,14 @@ pub fn view_obj(o: &Obj, v: &View) -> Obj {
         Obj::EllipseFill { r: q, color, width } => Obj::EllipseFill { r: r(q), color: *color, width: width * z },
         Obj::Path { pts, color, width } => Obj::Path { pts: pts.iter().map(p).collect(), color: *color, width: width * z },
         Obj::MarkerPath { pts, color, width } => Obj::MarkerPath { pts: pts.iter().map(p).collect(), color: *color, width: width * z },
-        Obj::Text { pos, text, color, size } => Obj::Text { pos: p(pos), text: text.clone(), color: *color, size: size * z },
+        Obj::Text { pos, text, color, size, fmt } => Obj::Text { pos: p(pos), text: text.clone(), color: *color, size: size * z, fmt: *fmt },
         Obj::Pixelate { r: q, cell } => Obj::Pixelate { r: r(q), cell: (cell * z).max(1.0) },
+        Obj::Blur { r: q, sigma } => Obj::Blur { r: r(q), sigma: sigma * z },
         Obj::Invert { r: q } => Obj::Invert { r: r(q) },
         Obj::Spotlight { r: q } => Obj::Spotlight { r: r(q) },
         Obj::Counter { c, n, color, d, tail } => Obj::Counter { c: p(c), n: *n, color: *color, d: d * z, tail: tail.as_ref().map(p) },
-        Obj::Callout { r: q, tail, text, color, size, style, fill } => {
-            Obj::Callout { r: r(q), tail: p(tail), text: text.clone(), color: *color, size: size * z, style: *style, fill: *fill }
+        Obj::Callout { r: q, tail, text, color, size, style, fill, fmt } => {
+            Obj::Callout { r: r(q), tail: p(tail), text: text.clone(), color: *color, size: size * z, style: *style, fill: *fill, fmt: *fmt }
         }
         Obj::Magnify { src, dst, radius, zoom, color, width } => {
             Obj::Magnify { src: p(src), dst: p(dst), radius: radius * z, zoom: *zoom, color: *color, width: width * z }
@@ -1097,7 +1100,7 @@ fn map_mini(m: &MiniUi, v: &View) -> MiniUi {
         let w = v.rect(q);
         FRect { x: w.x.round(), y: w.y.round(), w: w.w.round(), h: w.h.round() }
     };
-    MiniUi { r: r(m.r), items: m.items.iter().map(|it| toolbar::Item { r: r(it.r), ..*it }).collect(), inp: m.inp.clone(), hover: m.hover }
+    MiniUi { r: r(m.r), items: m.items.iter().map(|it| toolbar::Item { r: r(it.r), ..*it }).collect(), inp: m.inp.clone(), hover: m.hover, pop: m.pop.map(r) }
 }
 
 /// Helpers for the Edit window's tests.

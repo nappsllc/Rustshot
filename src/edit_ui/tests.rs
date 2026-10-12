@@ -233,7 +233,7 @@ fn objects() -> Vec<Obj> {
         Obj::Arrow { a: Pt::new(417.0, 653.0), b: Pt::new(615.0, 530.0), color: red(), width: 4.0 },
         Obj::Counter { c: Pt::new(275.0, 103.0), n: 1, color: red(), d: 32.0, tail: None },
         Obj::Counter { c: Pt::new(275.0, 292.0), n: 2, color: red(), d: 32.0, tail: None },
-        Obj::Callout {
+        Obj::Callout { fmt: Default::default(),
             r: FRect { x: 724.0, y: 120.0, w: 320.0, h: 92.0 },
             tail: Pt::new(780.0, 250.0),
             text: "Move this to the top, above the summary".into(),

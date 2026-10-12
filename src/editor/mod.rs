@@ -1770,6 +1770,10 @@ fn act_of(a: Action) -> Option<Act> {
         Action::ToolCallout => Act::Tool(Tool::Callout),
         Action::ToolSpotlight => Act::Tool(Tool::Spotlight),
         Action::ToolMagnify => Act::Tool(Tool::Magnify),
+        Action::ToolBlur => Act::Tool(Tool::Blur),
+        Action::TextBold => Act::ObjBold,
+        Action::TextItalic => Act::ObjItalic,
+        Action::TextUnderline => Act::ObjUnderline,
         Action::DeleteObject => Act::ObjDelete,
         Action::Duplicate => Act::ObjDup,
         Action::BringFront => Act::ObjFront,
@@ -1824,6 +1828,8 @@ enum Tool {
     Spotlight,
     /// A 2x loupe with a connector to its source (Z).
     Magnify,
+    /// A Gaussian-like blur of a rect (B).
+    Blur,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -2665,6 +2671,11 @@ impl Edit {
         self.cfg.tool_colors.insert(id.into(), v);
     }
 
+    /// The annotation font in the text tool's style (the draft's).
+    fn text_font(&self) -> Option<AnnotFont> {
+        self.font.as_ref().map(|f| f.styled(self.mem.fmt(Tool::Text)))
+    }
+
     fn make_draft(&self, tool: Tool, a: Pt, b: Pt) -> Option<Obj> {
         let c = self.mem.color(tool);
         let w = self.mem.size(tool);
@@ -2703,17 +2714,20 @@ impl Edit {
                 r: FRect::from_pts(a, b),
             },
             Tool::Spotlight => Obj::Spotlight { r: FRect::from_pts(a, b) },
+            Tool::Blur => Obj::Blur { r: FRect::from_pts(a, b), sigma: w },
             Tool::Callout => {
                 let fill = self.mem.fill(tool);
+                let fmt = self.mem.fmt(tool);
                 let (style, text) = (self.obj.style, String::new());
                 let mut r = FRect::from_pts(a, b);
                 if r.w < crate::objects::callout::MIN_W && r.h < crate::objects::callout::MIN_W {
                     // A click: the default bubble at the press point.
                     r = FRect { x: a.x, y: a.y, w: crate::objects::callout::DEFAULT_W, h: 0.0 };
                 }
-                r.h = r.h.max(crate::objects::callout::needed_h(self.font.as_ref(), r, &text, w, style));
+                let font = self.font.as_ref().map(|f| f.styled(fmt));
+                r.h = r.h.max(crate::objects::callout::needed_h(font.as_ref(), r, &text, w, style));
                 let tail = Pt::new(r.x + r.w * 0.25, r.y1() + (r.h * 0.5).clamp(24.0, 60.0));
-                Obj::Callout { r, tail, text, color: c, size: w, style, fill }
+                Obj::Callout { r, tail, text, color: c, size: w, style, fill, fmt }
             }
             Tool::Magnify => {
                 // A click: the loupe up and to the right of its source.
@@ -2736,6 +2750,7 @@ impl Edit {
             | Some(Obj::RectFill { r, .. })
             | Some(Obj::EllipseFill { r, .. })
             | Some(Obj::Pixelate { r, .. })
+            | Some(Obj::Blur { r, .. })
             | Some(Obj::Spotlight { r })
             | Some(Obj::Invert { r }) => !r.is_trivial(),
             Some(Obj::Callout { .. }) | Some(Obj::Magnify { .. }) => true,
@@ -3171,9 +3186,11 @@ fn resize_rect(
 /// itself is drawn at `td.pos`, exactly where the committed object renders.
 fn text_box_rect(win_w: f32, td: &TextDraft, font_px: f32, font: Option<&AnnotFont>, s: f32) -> FRect {
     let pad = 4.0 * s;
-    let tw = font.map(|f| f.line_width(&td.text, font_px)).unwrap_or(0.0);
+    let (tw, lines) = font.map(|f| (f.measure(&td.text, font_px).0, f.metrics(font_px).line_height)).unwrap_or((0.0, 0.0));
+    // One line is the caret's height; each line more a line height.
+    let more = td.text.matches('\n').count() as f32 * lines;
     let w = (tw + 2.0 * pad + 2.0 * s).max(24.0 * s);
-    let h = (font_px * 1.15 + 2.0 * pad).max(28.0 * s);
+    let h = (font_px * 1.15 + more + 2.0 * pad).max(28.0 * s);
     let x = (td.pos.x - pad).min((win_w - w).max(0.0));
     FRect { x, y: td.pos.y - pad, w, h }
 }
@@ -3945,7 +3962,7 @@ mod tests {
 
         let mut app = annotated(theme::LIGHT, big);
         let e = edit_of(&mut app);
-        e.objects.push(Obj::Text {
+        e.objects.push(Obj::Text { fmt: Default::default(),
             pos: Pt::new(300.0, 420.0),
             text: "Annotation text\nПривет, мир · مرحبا · 你好".into(),
             color: C4::rgb(240, 68, 56),

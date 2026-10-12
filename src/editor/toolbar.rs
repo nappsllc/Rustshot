@@ -40,6 +40,9 @@ const LABEL_H: f32 = 22.0;
 const LABEL_GAP: f32 = 8.0;
 const LABEL_MIN_ROOM: f32 = 30.0;
 
+/// The tool buttons. Blur took Invert's slot (the bar keeps its width):
+/// Invert is its key (I), and the slot shows it while it is the tool
+/// ([`slot_act`]).
 pub const TOOL_ORDER: [Tool; 14] = [
     Tool::Select,
     Tool::Path,
@@ -52,10 +55,19 @@ pub const TOOL_ORDER: [Tool; 14] = [
     Tool::Callout,
     Tool::Counter,
     Tool::Pixelate,
-    Tool::Invert,
+    Tool::Blur,
     Tool::Spotlight,
     Tool::Magnify,
 ];
+
+/// What a toolbar button shows and names with `tool` current: the Blur
+/// slot is Invert while Invert is the tool (a press on it picks Blur).
+pub fn slot_act(act: Act, tool: Option<Tool>) -> Act {
+    match act {
+        Act::Tool(Tool::Blur) if tool == Some(Tool::Invert) => Act::Tool(Tool::Invert),
+        a => a,
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Act {
@@ -81,6 +93,17 @@ pub enum Act {
     ObjBack,
     ObjDup,
     ObjDelete,
+    /// The text style (the mini-toolbar over a text, a callout or the
+    /// text draft; Ctrl+B / I / U while typing): bold, italic, underline,
+    /// strikethrough on / off, the alignment, the font list open / closed,
+    /// a font from it.
+    ObjBold,
+    ObjItalic,
+    ObjUnderline,
+    ObjStrike,
+    ObjAlign(crate::text::Align),
+    ObjFontMenu,
+    ObjFont(crate::text::Family),
     Save,
     /// The Save As dialog (always asks where).
     SaveAs,

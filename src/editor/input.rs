@@ -49,6 +49,17 @@ impl Edit {
             return;
         }
 
+        // Typing: Ctrl+B / I / U style the text (before the other keys,
+        // Ctrl+U included).
+        if (self.text.is_some() || self.obj.cedit.is_some())
+            && (mods.ctrl || mods.alt)
+            && let Some(a) = self.keys.resolve_typing(vk, mods)
+            && let Some(act) = act_of(a)
+        {
+            self.apply_act(act, mouse);
+            return;
+        }
+
         // Text editing mode consumes keys.
         if self.text.is_some() {
             if escape {
@@ -60,7 +71,15 @@ impl Edit {
                 return;
             }
             let td = self.text.as_mut().expect("text draft");
-            if left {
+            if enter {
+                // Shift+Enter: a new line.
+                let mut idx = td.caret.min(td.text.len());
+                while idx > 0 && !td.text.is_char_boundary(idx) {
+                    idx -= 1;
+                }
+                td.text.insert(idx, '\n');
+                td.caret = idx + 1;
+            } else if left {
                 td.caret = prev_boundary(&td.text, td.caret);
             } else if right {
                 td.caret = next_boundary(&td.text, td.caret);
@@ -350,6 +369,20 @@ impl Edit {
                 }
                 return;
             }
+            // The text draft's mini-toolbar (its style) takes presses on
+            // it; the font list open closes on a press anywhere else.
+            if self.text.is_some()
+                && let Some(act) = self.obj.mini.as_ref().filter(|m| m.contains(p)).map(|m| m.act_at(p))
+            {
+                if let Some(act) = act {
+                    self.apply_act(act, p);
+                }
+                return;
+            }
+            if self.obj.font_menu {
+                self.obj.font_menu = false;
+                return;
+            }
             // Text draft: a click outside commits it.
             if self.text.is_some() {
                 let td = self.text.as_ref().expect("text draft");
@@ -357,7 +390,7 @@ impl Edit {
                     self.shot.size.0 as f32,
                     td,
                     self.mem.size(Tool::Text),
-                    self.font.as_ref(),
+                    self.text_font().as_ref(),
                     self.ui_scale(),
                 );
                 if !hit(r, p) {
@@ -562,6 +595,7 @@ impl Edit {
             text,
             color: self.mem.color(Tool::Text),
             size: self.mem.size(Tool::Text),
+            fmt: self.mem.fmt(Tool::Text),
         });
     }
 
@@ -619,6 +653,9 @@ impl Edit {
             }
             Act::ObjColor | Act::ObjFill | Act::ObjSize(_) | Act::ObjStyle(_) | Act::ObjFront | Act::ObjBack | Act::ObjDup | Act::ObjDelete => {
                 self.obj_act(act);
+            }
+            Act::ObjBold | Act::ObjItalic | Act::ObjUnderline | Act::ObjStrike | Act::ObjAlign(_) | Act::ObjFontMenu | Act::ObjFont(_) => {
+                self.fmt_act(act);
             }
             // Pixelate and Invert have no color: no palette (Space included).
             Act::Palette if !self.palette_open && !tools::has_color(self.cur_tool()) && self.sel_color().is_none() => {}

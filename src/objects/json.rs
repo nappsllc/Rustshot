@@ -18,14 +18,34 @@
 //! (`r`, `tail`, `text`, `color`, `size`, `style`, `fill`), `spotlight`
 //! (`r`), `magnify` (`src`, `dst`, `radius`, `zoom`, `color`, `width`).
 //! A reader skips types it does not know; a newer `version` is an error.
+//!
+//! Version 2 adds `blur` (`r`, `sigma`) and the text style of `text` and
+//! `callout`: `font` (`sans`, `serif`, `mono`), `bold`, `italic`,
+//! `underline`, `strike` and (text) `align` (`left`, `center`, `right`),
+//! each written only when not the default (sans, off, left). A document
+//! is written as version 1 when it uses none of that, so older builds
+//! still read it; one with a blur says 2, so an older build refuses it
+//! instead of dropping the blur (and showing what it hid).
 
-use super::{CalloutStyle, FRect, Obj, Pt};
+use super::{CalloutStyle, FRect, Obj, Pt, TextFmt};
+use crate::text::{Align, Family};
 use crate::uifb::C4;
 use anyhow::{anyhow, bail, Result};
 use std::fmt::Write;
 
-/// The format version this build writes (and the newest it reads).
-pub const VERSION: u32 = 1;
+/// The newest format version this build writes and reads.
+pub const VERSION: u32 = 2;
+
+/// The version a document of `objs` needs: 2 with a blur or a styled
+/// text, else 1.
+pub fn version_of(objs: &[Obj]) -> u32 {
+    let v2 = objs.iter().any(|o| match o {
+        Obj::Blur { .. } => true,
+        Obj::Text { fmt, .. } | Obj::Callout { fmt, .. } => !fmt.is_plain(),
+        _ => false,
+    });
+    if v2 { 2 } else { 1 }
+}
 /// What a document may hold: objects, points of a stroke, characters of a
 /// text (more is an error).
 pub const MAX_OBJECTS: usize = 10_000;
@@ -111,6 +131,21 @@ impl W<'_> {
     fn bool(&mut self, k: &str, b: bool) {
         self.key(k).push_str(if b { "true" } else { "false" });
     }
+    /// The text style's fields that are not the default (`align`: only
+    /// for a text).
+    fn fmt(&mut self, f: &TextFmt, align: bool) {
+        if f.family != Family::Sans {
+            self.str("font", f.family.id());
+        }
+        for (on, k) in [(f.bold, "bold"), (f.italic, "italic"), (f.underline, "underline"), (f.strike, "strike")] {
+            if on {
+                self.bool(k, true);
+            }
+        }
+        if align && f.align != Align::Left {
+            self.str("align", f.align.id());
+        }
+    }
     fn pts(&mut self, k: &str, ps: &[Pt]) {
         let out = self.key(k);
         out.push('[');
@@ -127,7 +162,7 @@ impl W<'_> {
 /// The objects as an `annotations.json` document (one object per line).
 pub fn to_json(objs: &[Obj]) -> String {
     let mut out = String::new();
-    let _ = write!(out, "{{\"version\":{VERSION},\"objects\":[");
+    let _ = write!(out, "{{\"version\":{},\"objects\":[", version_of(objs));
     for (i, o) in objs.iter().enumerate() {
         out.push_str(if i == 0 { "\n " } else { ",\n " });
         let ty = match o {
@@ -144,6 +179,7 @@ pub fn to_json(objs: &[Obj]) -> String {
             Obj::Callout { .. } => "callout",
             Obj::Spotlight { .. } => "spotlight",
             Obj::Magnify { .. } => "magnify",
+            Obj::Blur { .. } => "blur",
         };
         out.push_str("{\"type\":");
         string(&mut out, ty);
@@ -172,15 +208,20 @@ pub fn to_json(objs: &[Obj]) -> String {
                 w.num("width", *width);
                 w.bool("fill", true);
             }
-            Obj::Text { pos, text, color, size } => {
+            Obj::Text { pos, text, color, size, fmt } => {
                 w.pt("pos", *pos);
                 w.str("text", text);
                 w.color("color", *color);
                 w.num("size", *size);
+                w.fmt(fmt, true);
             }
             Obj::Pixelate { r, cell } => {
                 w.rect("r", *r);
                 w.num("cell", *cell);
+            }
+            Obj::Blur { r, sigma } => {
+                w.rect("r", *r);
+                w.num("sigma", *sigma);
             }
             Obj::Invert { r } | Obj::Spotlight { r } => w.rect("r", *r),
             Obj::Counter { c, n, color, d, tail } => {
@@ -192,7 +233,7 @@ pub fn to_json(objs: &[Obj]) -> String {
                     w.pt("tail", *t);
                 }
             }
-            Obj::Callout { r, tail, text, color, size, style, fill } => {
+            Obj::Callout { r, tail, text, color, size, style, fill, fmt } => {
                 w.rect("r", *r);
                 w.pt("tail", *tail);
                 w.str("text", text);
@@ -200,6 +241,7 @@ pub fn to_json(objs: &[Obj]) -> String {
                 w.num("size", *size);
                 w.str("style", style.id());
                 w.bool("fill", *fill);
+                w.fmt(fmt, false);
             }
             Obj::Magnify { src, dst, radius, zoom, color, width } => {
                 w.pt("src", *src);
@@ -469,6 +511,20 @@ impl F<'_> {
             Some(_) => bail!("annotations.json: {}.{k}: not true/false", self.ty),
         }
     }
+    /// The text style (each field optional: a missing one is the
+    /// default; an unknown font or alignment name too, from a newer
+    /// build).
+    fn fmt(&self, align: bool) -> Result<TextFmt> {
+        let name = |k: &str| -> Result<Option<&str>> { if self.get(k).is_some() { self.str(k).map(Some) } else { Ok(None) } };
+        Ok(TextFmt {
+            family: name("font")?.and_then(Family::from_id).unwrap_or_default(),
+            bold: self.bool_or("bold", false)?,
+            italic: self.bool_or("italic", false)?,
+            underline: self.bool_or("underline", false)?,
+            strike: self.bool_or("strike", false)?,
+            align: if align { name("align")?.and_then(Align::from_id).unwrap_or_default() } else { Align::Left },
+        })
+    }
     fn color(&self, k: &str) -> Result<C4> {
         let s = self.str(k)?;
         let (r, g, b, a) = crate::config::parse_color(s).ok_or_else(|| anyhow!("annotations.json: {}.{k}: bad color {s:?}", self.ty))?;
@@ -533,8 +589,15 @@ pub fn from_json(s: &str) -> Result<Vec<Obj>> {
             }
             "marker" if f.get("pts").is_some() => Obj::MarkerPath { pts: f.pts("pts")?, color: f.color("color")?, width: f.num("width")? },
             "marker" => Obj::Marker { a: f.pt("a")?, b: f.pt("b")?, color: f.color("color")?, width: f.num("width")? },
-            "text" => Obj::Text { pos: f.pt("pos")?, text: f.str("text")?.to_string(), color: f.color("color")?, size: f.num("size")? },
+            "text" => Obj::Text {
+                pos: f.pt("pos")?,
+                text: f.str("text")?.to_string(),
+                color: f.color("color")?,
+                size: f.num("size")?,
+                fmt: f.fmt(true)?,
+            },
             "pixelate" => Obj::Pixelate { r: f.rect("r")?, cell: f.num("cell")? },
+            "blur" => Obj::Blur { r: f.rect("r")?, sigma: f.num("sigma")? },
             "invert" => Obj::Invert { r: f.rect("r")? },
             "spotlight" => Obj::Spotlight { r: f.rect("r")? },
             "number" => Obj::Counter {
@@ -555,6 +618,7 @@ pub fn from_json(s: &str) -> Result<Vec<Obj>> {
                 size: f.num("size")?,
                 style: CalloutStyle::from_id(f.str("style")?).unwrap_or_default(),
                 fill: f.bool_or("fill", true)?,
+                fmt: f.fmt(false)?,
             },
             "magnify" => Obj::Magnify {
                 src: f.pt("src")?,
@@ -591,7 +655,13 @@ mod tests {
             Obj::EllipseFill { r, color: c, width: 2.0 },
             Obj::Marker { a: Pt::new(1.0, 1.0), b: Pt::new(2.0, 2.0), color: t, width: 15.0 },
             Obj::MarkerPath { pts: vec![Pt::new(1.0, 1.0), Pt::new(9.0, 3.0)], color: t, width: 15.0 },
-            Obj::Text { pos: Pt::new(4.0, 5.0), text: "Quote \" back\\slash\nnew line\ttab · Привет 你好 \u{1F600} \u{1}".into(), color: c, size: 16.0 },
+            Obj::Text {
+                pos: Pt::new(4.0, 5.0),
+                text: "Quote \" back\\slash\nnew line\ttab · Привет 你好 \u{1F600} \u{1}".into(),
+                color: c,
+                size: 16.0,
+                fmt: TextFmt::default(),
+            },
             Obj::Pixelate { r, cell: 12.0 },
             Obj::Invert { r },
             Obj::Counter { c: Pt::new(9.0, 9.0), n: 3, color: c, d: 32.0, tail: None },
@@ -604,9 +674,33 @@ mod tests {
                 size: 17.0,
                 style: CalloutStyle::Cloud,
                 fill: false,
+                fmt: TextFmt::default(),
             },
             Obj::Spotlight { r: FRect { x: 1.0, y: 2.0, w: 3.0, h: 4.0 } },
             Obj::Magnify { src: Pt::new(100.0, 100.0), dst: Pt::new(250.0, 40.0), radius: 60.0, zoom: 2.0, color: C4::rgb(255, 255, 255), width: 3.0 },
+        ]
+    }
+
+    /// Every kind of version 2: a blur, styled texts and callouts.
+    pub(crate) fn every_v2_kind() -> Vec<Obj> {
+        let c = C4::rgb(59, 130, 246);
+        let all = TextFmt { family: Family::Serif, bold: true, italic: true, underline: true, strike: true, align: Align::Center };
+        vec![
+            Obj::Blur { r: FRect { x: 10.5, y: 20.0, w: 300.0, h: 120.0 }, sigma: 12.0 },
+            Obj::Text { pos: Pt::new(4.0, 5.0), text: "Bold\nall".into(), color: c, size: 20.0, fmt: all },
+            Obj::Text { pos: Pt::new(4.0, 5.0), text: "mono right".into(), color: c, size: 20.0, fmt: TextFmt { family: Family::Mono, align: Align::Right, ..Default::default() } },
+            Obj::Text { pos: Pt::new(4.0, 5.0), text: "italic".into(), color: c, size: 20.0, fmt: TextFmt { italic: true, ..Default::default() } },
+            Obj::Callout {
+                r: FRect { x: 300.0, y: 40.0, w: 240.0, h: 96.0 },
+                tail: Pt::new(320.0, 180.0),
+                text: "Struck".into(),
+                color: c,
+                size: 17.0,
+                style: CalloutStyle::Rounded,
+                fill: true,
+                // A callout has no alignment.
+                fmt: TextFmt { align: Align::Left, ..all },
+            },
         ]
     }
 
@@ -614,11 +708,46 @@ mod tests {
     fn round_trips_every_kind() {
         let objs = every_kind();
         let s = to_json(&objs);
-        assert!(s.starts_with("{\"version\":1,"), "{s}");
+        assert!(s.starts_with("{\"version\":1,"), "plain objects stay version 1: {s}");
         let back = from_json(&s).expect("parses");
         assert_eq!(back, objs);
         assert_eq!(to_json(&back), s, "stable");
         assert_eq!(from_json(&to_json(&[])).unwrap(), Vec::<Obj>::new());
+        for o in every_v2_kind() {
+            let one = vec![o];
+            let s = to_json(&one);
+            assert!(s.starts_with("{\"version\":2,"), "{s}");
+            assert_eq!(from_json(&s).expect("parses"), one, "{s}");
+        }
+        let mut all = every_kind();
+        all.extend(every_v2_kind());
+        let s = to_json(&all);
+        assert_eq!(from_json(&s).unwrap(), all);
+        assert_eq!(to_json(&from_json(&s).unwrap()), s, "stable");
+        assert!(s.contains("\"font\":\"serif\",\"bold\":true,\"italic\":true,\"underline\":true,\"strike\":true,\"align\":\"center\""), "{s}");
+        assert!(s.contains("{\"type\":\"blur\",\"r\":[10.5,20,300,120],\"sigma\":12}"), "{s}");
+        assert!(!to_json(&every_kind()).contains("\"bold\""), "defaults are not written");
+    }
+
+    /// What v0.2.0 wrote (version 1, texts without style fields) reads
+    /// as plain text; style fields with unknown names fall back.
+    #[test]
+    fn reads_version_1_files() {
+        let v1 = r##"{"version":1,"objects":[
+ {"type":"text","pos":[40,30],"text":"Hello","color":"#f04438","size":16},
+ {"type":"callout","r":[300,40,240,96],"tail":[320,180],"text":"Hi","color":"#f04438","size":17,"style":"rounded","fill":true},
+ {"type":"pixelate","r":[10,20,30,40],"cell":12}
+]}
+"##;
+        let v = from_json(v1).unwrap();
+        assert_eq!(v.len(), 3);
+        assert!(matches!(&v[0], Obj::Text { fmt, .. } if fmt.is_plain()));
+        assert!(matches!(&v[1], Obj::Callout { fmt, .. } if fmt.is_plain()));
+        assert_eq!(to_json(&v), v1, "written back the same, still version 1");
+        let odd = r##"{"version":2,"objects":[{"type":"text","pos":[0,0],"text":"x","color":"#000","size":12,"font":"fantasy","align":"justify","bold":true}]}"##;
+        assert!(matches!(&from_json(odd).unwrap()[0], Obj::Text { fmt, .. } if *fmt == TextFmt { bold: true, ..Default::default() }));
+        assert!(from_json(r##"{"version":2,"objects":[{"type":"text","pos":[0,0],"text":"x","color":"#000","size":12,"bold":1}]}"##).is_err());
+        assert!(from_json("{\"version\":3,\"objects\":[]}").is_err(), "newer than this build");
     }
 
     #[test]
@@ -638,7 +767,7 @@ mod tests {
             "",
             "[]",
             "{\"objects\":[]}",
-            "{\"version\":2,\"objects\":[]}",
+            "{\"version\":3,\"objects\":[]}",
             "{\"version\":1}",
             "{\"version\":1,\"objects\":[{\"type\":\"line\",\"a\":[1,2]}]}",
             "{\"version\":1,\"objects\":[{\"type\":\"line\",\"a\":[1],\"b\":[1,2],\"color\":\"#000\",\"width\":1}]}",

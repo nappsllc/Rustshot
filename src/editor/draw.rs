@@ -29,7 +29,7 @@ impl Edit {
         let tool = self.tool.unwrap_or(Tool::Line);
         let cur = match tool {
             Tool::Line | Tool::Arrow if mods.shift || mods.ctrl => self.snap_point(start, p, true),
-            Tool::Rect | Tool::Ellipse | Tool::Pixelate | Tool::Invert if mods.shift => constrain_square(start, p),
+            Tool::Rect | Tool::Ellipse | Tool::Pixelate | Tool::Blur | Tool::Invert if mods.shift => constrain_square(start, p),
             _ => p,
         };
         match tool {

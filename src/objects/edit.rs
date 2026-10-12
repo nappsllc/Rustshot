@@ -25,6 +25,7 @@ pub fn size_range(o: &Obj) -> (f32, f32) {
         Obj::Text { .. } | Obj::Callout { .. } => (8.0, 96.0),
         Obj::Counter { .. } => (12.0, 120.0),
         Obj::Pixelate { .. } => (4.0, 100.0),
+        Obj::Blur { .. } => (2.0, 50.0),
         Obj::Magnify { .. } => (20.0, 300.0),
         _ => (1.0, 50.0),
     }
@@ -63,6 +64,7 @@ pub fn sanitize(o: &mut Obj) {
         | Obj::RectFill { r, .. }
         | Obj::EllipseFill { r, .. }
         | Obj::Pixelate { r, .. }
+        | Obj::Blur { r, .. }
         | Obj::Invert { r }
         | Obj::Spotlight { r } => cr(r),
         Obj::Text { pos, .. } => cp(pos),
@@ -132,12 +134,13 @@ pub fn sel_box(o: &Obj, font: Option<&AnnotFont>) -> Option<FRect> {
         | Obj::RectFill { r, .. }
         | Obj::EllipseFill { r, .. }
         | Obj::Pixelate { r, .. }
+        | Obj::Blur { r, .. }
         | Obj::Invert { r }
         | Obj::Spotlight { r }
         | Obj::Callout { r, .. } => Some(*r),
-        Obj::Text { pos, text, size, .. } => {
+        Obj::Text { pos, text, size, fmt, .. } => {
             let (w, h) = font.map_or((size * text.len() as f32 * 0.5, size * 1.2), |f| {
-                let (w, h, _) = f.measure(text, *size);
+                let (w, h, _) = f.styled(*fmt).measure(text, *size);
                 (w, h)
             });
             Some(FRect { x: pos.x, y: pos.y, w: w.max(1.0), h: h.max(1.0) })
@@ -174,7 +177,7 @@ pub fn hit(o: &Obj, p: Pt, tol: f32, font: Option<&AnnotFont>) -> bool {
             ((p.x - r.x - r.w / 2.0) / rx.max(0.5)).powi(2) + ((p.y - r.y - r.h / 2.0) / ry.max(0.5)).powi(2) <= 1.0
         }
         Obj::RectFill { r, width, .. } => inside(*r, p, width / 2.0 + tol),
-        Obj::Pixelate { r, .. } | Obj::Invert { r } => inside(*r, p, tol),
+        Obj::Pixelate { r, .. } | Obj::Invert { r } | Obj::Blur { r, .. } => inside(*r, p, tol),
         // On its edge only: what it keeps bright stays pickable.
         Obj::Spotlight { r } => {
             let m = tol + 2.0;
@@ -242,6 +245,7 @@ pub fn translate(o: &mut Obj, dx: f32, dy: f32) {
         | Obj::RectFill { r, .. }
         | Obj::EllipseFill { r, .. }
         | Obj::Pixelate { r, .. }
+        | Obj::Blur { r, .. }
         | Obj::Invert { r }
         | Obj::Spotlight { r } => {
             r.x += dx;
@@ -295,6 +299,7 @@ pub fn map_box(o: &mut Obj, from: FRect, to: FRect) {
         | Obj::RectFill { r, .. }
         | Obj::EllipseFill { r, .. }
         | Obj::Pixelate { r, .. }
+        | Obj::Blur { r, .. }
         | Obj::Invert { r }
         | Obj::Spotlight { r } => mr(r),
         Obj::Text { pos, size, .. } => {
@@ -335,7 +340,7 @@ pub fn color(o: &Obj) -> Option<C4> {
         | Obj::Counter { color, .. }
         | Obj::Callout { color, .. }
         | Obj::Magnify { color, .. } => Some(*color),
-        Obj::Pixelate { .. } | Obj::Invert { .. } | Obj::Spotlight { .. } => None,
+        Obj::Pixelate { .. } | Obj::Invert { .. } | Obj::Spotlight { .. } | Obj::Blur { .. } => None,
     }
 }
 
@@ -354,7 +359,7 @@ pub fn set_color(o: &mut Obj, c: C4) {
         | Obj::Counter { color, .. }
         | Obj::Callout { color, .. }
         | Obj::Magnify { color, .. } => *color = c,
-        Obj::Pixelate { .. } | Obj::Invert { .. } | Obj::Spotlight { .. } => {}
+        Obj::Pixelate { .. } | Obj::Invert { .. } | Obj::Spotlight { .. } | Obj::Blur { .. } => {}
     }
 }
 
@@ -374,6 +379,7 @@ pub fn size(o: &Obj) -> Option<f32> {
         Obj::Text { size, .. } | Obj::Callout { size, .. } => Some(*size),
         Obj::Counter { d, .. } => Some(*d),
         Obj::Pixelate { cell, .. } => Some(*cell),
+        Obj::Blur { sigma, .. } => Some(*sigma),
         Obj::Magnify { radius, .. } => Some(*radius),
         Obj::Invert { .. } | Obj::Spotlight { .. } => None,
     }
@@ -393,6 +399,7 @@ pub fn set_size(o: &mut Obj, v: f32) {
         Obj::Text { size, .. } | Obj::Callout { size, .. } => *size = v,
         Obj::Counter { d, .. } => *d = v,
         Obj::Pixelate { cell, .. } => *cell = v,
+        Obj::Blur { sigma, .. } => *sigma = v,
         Obj::Magnify { radius, .. } => *radius = v,
         Obj::Invert { .. } | Obj::Spotlight { .. } => {}
     }
@@ -425,6 +432,23 @@ pub fn set_fill(o: &mut Obj, on: bool) {
         _ => return,
     };
     *o = next;
+}
+
+/// The text style of a text or callout (`None`: no text).
+pub fn fmt(o: &Obj) -> Option<super::TextFmt> {
+    match o {
+        Obj::Text { fmt, .. } | Obj::Callout { fmt, .. } => Some(*fmt),
+        _ => None,
+    }
+}
+
+/// Set the text style (a callout keeps no alignment).
+pub fn set_fmt(o: &mut Obj, f: super::TextFmt) {
+    match o {
+        Obj::Text { fmt, .. } => *fmt = f,
+        Obj::Callout { fmt, .. } => *fmt = super::TextFmt { align: Default::default(), ..f },
+        _ => {}
+    }
 }
 
 /// `o` at `k` of its opacity (the ghost left at a drag's origin); `None`
@@ -493,7 +517,7 @@ mod tests {
 
     #[test]
     fn move_and_resize_map_geometry() {
-        let mut o = Obj::Callout {
+        let mut o = Obj::Callout { fmt: Default::default(),
             r: FRect { x: 10.0, y: 10.0, w: 100.0, h: 50.0 },
             tail: Pt::new(30.0, 90.0),
             text: "hi".into(),
@@ -509,7 +533,7 @@ mod tests {
         let Obj::Callout { r, tail, size: px, .. } = &o else { unreachable!() };
         assert_eq!((r.w, *px), (200.0, 16.0), "wider, same text size");
         assert_eq!(*tail, Pt::new(15.0 + 20.0, 85.0), "the tip stays");
-        let mut t = Obj::Text { pos: Pt::new(0.0, 0.0), text: "x".into(), color: red(), size: 20.0 };
+        let mut t = Obj::Text { fmt: Default::default(), pos: Pt::new(0.0, 0.0), text: "x".into(), color: red(), size: 20.0 };
         map_box(&mut t, FRect { x: 0.0, y: 0.0, w: 10.0, h: 10.0 }, FRect { x: 0.0, y: 0.0, w: 20.0, h: 20.0 });
         assert_eq!(size(&t), Some(40.0));
     }

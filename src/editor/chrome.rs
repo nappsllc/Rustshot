@@ -54,7 +54,7 @@ pub(crate) fn ring(f: &mut Fb, ui: &Ui, r: FRect, radius: f32, c: C4) {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn panel(f: &mut Fb, ui: &Ui, r: FRect, radius: f32, layers: &[usize], bg: C4, border: C4, k: f32) {
+pub(super) fn panel(f: &mut Fb, ui: &Ui, r: FRect, radius: f32, layers: &[usize], bg: C4, border: C4, k: f32) {
     let r = round(r);
     let rad = ui.px(radius);
     for &i in layers.iter().rev() {
@@ -100,6 +100,7 @@ pub fn act_icon(a: Act) -> &'static str {
             Tool::Callout => "callout",
             Tool::Spotlight => "spotlight",
             Tool::Magnify => "magnify",
+            Tool::Blur => "blur",
         },
         Act::SaveMenu => "chevron",
         Act::ObjFront => "front",
@@ -113,6 +114,15 @@ pub fn act_icon(a: Act) -> &'static str {
         Act::ObjStyle(crate::objects::CalloutStyle::Ellipse) => "ellipse",
         Act::ObjFill => "fill",
         Act::ObjColor => "",
+        Act::ObjBold => "bold",
+        Act::ObjItalic => "italic",
+        Act::ObjUnderline => "underline",
+        Act::ObjStrike => "strike",
+        Act::ObjAlign(crate::text::Align::Left) => "align-left",
+        Act::ObjAlign(crate::text::Align::Center) => "align-center",
+        Act::ObjAlign(crate::text::Align::Right) => "align-right",
+        Act::ObjFontMenu => "chevron",
+        Act::ObjFont(_) => "",
         Act::Undo => "undo",
         Act::Redo => "redo",
         Act::Size(d) if d < 0 => "minus",
@@ -676,7 +686,7 @@ fn grip(f: &mut Fb, ui: &Ui, r: FRect, k: f32) {
 
 /// A row's device: the chosen name (muted, cut to fit) and a chevron
 /// right after it; brighter while hovered or open.
-fn dev_box(f: &mut Fb, ui: &Ui, r: FRect, name: &str, hot: bool, k: f32) {
+pub(super) fn dev_box(f: &mut Fb, ui: &Ui, r: FRect, name: &str, hot: bool, k: f32) {
     let th = ui.th;
     let r = round(r);
     let isz = ui.px(14.0);
@@ -688,7 +698,7 @@ fn dev_box(f: &mut Fb, ui: &Ui, r: FRect, name: &str, hot: bool, k: f32) {
 }
 
 /// A microphone in the open list: tinted when hovered, checked when chosen.
-fn dev_item(f: &mut Fb, ui: &Ui, r: FRect, name: &str, on: bool, hovered: bool, k: f32) {
+pub(super) fn dev_item(f: &mut Fb, ui: &Ui, r: FRect, name: &str, on: bool, hovered: bool, k: f32) {
     let th = ui.th;
     let r = round(r);
     if hovered {
@@ -735,6 +745,8 @@ fn start_button(f: &mut Fb, ui: &Ui, r: FRect, label: &str, (hovered, pressed): 
 
 fn button(f: &mut Fb, ui: &Ui, it: &Item, act: Act, (hovered, pressed): (bool, bool), st: &BarState, k: f32) {
     let th = ui.th;
+    // The Blur slot shows Invert while it is the tool (key I).
+    let act = super::toolbar::slot_act(act, st.tool);
     let r = round(it.r);
     let active = matches!(act, Act::Tool(t) if st.tool == Some(t))
         || (act == Act::Eyedrop && st.pick.is_some_and(|p| p.eyedrop))
@@ -883,6 +895,15 @@ pub fn size_preview(f: &mut Fb, ui: &Ui, b: FRect, tool: Tool, size: f32, c: C4,
             // The loupe's ring, its diameter capped to the box.
             let r = (size / 4.0).clamp(3.0, cap / 2.0 - 1.0);
             f.stroke_circle(b.x + b.w / 2.0, cy, r, ui.px(2.0), c.fade(k));
+        }
+        Tool::Blur => {
+            // A soft dot: rings fading out to the blur's reach (capped).
+            let r = (size / 2.0 + 2.0).clamp(3.0, cap / 2.0);
+            let (x, y) = (b.x + b.w / 2.0, cy);
+            for i in 0..4 {
+                let t = i as f32 / 4.0;
+                f.fill_circle(x, y, r * (1.0 - t * 0.7), ui.th.text.fade((0.12 + 0.12 * i as f32) * k));
+            }
         }
         Tool::Invert | Tool::Select | Tool::Spotlight => {}
     }
@@ -1107,6 +1128,7 @@ pub fn act_tip(a: Act, km: &Keymap) -> (&'static str, Vec<String>) {
         Act::Tool(Tool::Callout) => "Callout",
         Act::Tool(Tool::Spotlight) => "Spotlight",
         Act::Tool(Tool::Magnify) => "Magnify",
+        Act::Tool(Tool::Blur) => "Blur",
         Act::ObjColor => "Color",
         Act::ObjFill => "Fill",
         Act::ObjSize(d) if d < 0 => "Smaller",
@@ -1119,6 +1141,14 @@ pub fn act_tip(a: Act, km: &Keymap) -> (&'static str, Vec<String>) {
         Act::ObjBack => "Send to back",
         Act::ObjDup => "Duplicate",
         Act::ObjDelete => "Delete",
+        Act::ObjBold => "Bold",
+        Act::ObjItalic => "Italic",
+        Act::ObjUnderline => "Underline",
+        Act::ObjStrike => "Strikethrough",
+        Act::ObjAlign(crate::text::Align::Left) => "Align left",
+        Act::ObjAlign(crate::text::Align::Center) => "Align center",
+        Act::ObjAlign(crate::text::Align::Right) => "Align right",
+        Act::ObjFontMenu | Act::ObjFont(_) => "Font",
         Act::Undo => "Undo",
         Act::Redo => "Redo",
         Act::Size(d) if d < 0 => "Smaller",
