@@ -379,7 +379,7 @@ impl Edit {
                 }
                 return;
             }
-            if self.obj.font_menu {
+            if self.obj.font_menu && !self.obj.mini.as_ref().is_some_and(|m| m.contains(p)) {
                 self.obj.font_menu = false;
                 return;
             }

@@ -174,7 +174,7 @@ impl Edit {
     fn frame_of(&self, o: &Obj) -> Option<FRect> {
         let b = oe::sel_box(o, self.font.as_ref())?;
         let stroke = match o {
-            Obj::Text { .. } | Obj::Counter { .. } | Obj::Callout { .. } | Obj::Pixelate { .. } | Obj::Magnify { .. } => 0.0,
+            Obj::Text { .. } | Obj::Counter { .. } | Obj::Callout { .. } | Obj::Pixelate { .. } | Obj::Blur { .. } | Obj::Magnify { .. } => 0.0,
             o => oe::size(o).unwrap_or(0.0),
         };
         let m = stroke / 2.0 + FRAME_PX * self.ui_scale();

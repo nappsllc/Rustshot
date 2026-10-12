@@ -666,7 +666,149 @@ fn render_object_previews() {
         ed(&mut a).tool = Some(Tool::Select);
         ed(&mut a).obj.sel = vec![2];
         save(&mut a, &format!("{tn}-magnify-selected.png"));
+
+        // Blurs (a weak and a strong one, one selected), the toolbar's
+        // Blur slot.
+        let mut a = base(th);
+        for o in [
+            Obj::Blur { r: FRect { x: 300.0, y: 200.0, w: 380.0, h: 200.0 }, sigma: 4.0 },
+            Obj::Blur { r: FRect { x: 720.0, y: 200.0, w: 380.0, h: 200.0 }, sigma: 18.0 },
+        ] {
+            ed(&mut a).commit_object(o);
+        }
+        ed(&mut a).tool = Some(Tool::Blur);
+        save(&mut a, &format!("{tn}-blur.png"));
+        ed(&mut a).tool = Some(Tool::Select);
+        ed(&mut a).obj.sel = vec![1];
+        save(&mut a, &format!("{tn}-blur-selected.png"));
+        ed(&mut a).tool = Some(Tool::Invert);
+        ed(&mut a).obj.sel = vec![];
+        save(&mut a, &format!("{tn}-blur-slot-invert.png"));
+
+        // Text styles: each family, B / I / U / S, aligned; one selected
+        // with its mini-toolbar and the font list open; the text draft's
+        // bar; a styled callout.
+        use crate::text::{Align, Family, TextFmt};
+        let mut a = base(th);
+        let styles = [
+            ("Sans plain", TextFmt::default()),
+            ("Serif bold", TextFmt { family: Family::Serif, bold: true, ..Default::default() }),
+            ("Mono italic", TextFmt { family: Family::Mono, italic: true, ..Default::default() }),
+            ("Underlined", TextFmt { underline: true, ..Default::default() }),
+            ("Struck out", TextFmt { strike: true, ..Default::default() }),
+            ("Centred\ntwo lines", TextFmt { align: Align::Center, bold: true, ..Default::default() }),
+        ];
+        for (i, (t, f)) in styles.iter().enumerate() {
+            let (x, y) = (300.0 + (i % 3) as f32 * 300.0, 200.0 + (i / 3) as f32 * 150.0);
+            ed(&mut a).commit_object(Obj::Text { pos: Pt::new(x, y), text: (*t).into(), color: RED, size: 28.0, fmt: *f });
+        }
+        let mut c = callout(300.0, 520.0, CalloutStyle::Rounded, true, "A bold italic serif bubble");
+        oe::set_fmt(&mut c, TextFmt { family: Family::Serif, bold: true, italic: true, ..Default::default() });
+        ed(&mut a).commit_object(c);
+        let n = ed(&mut a).objects.len() - 1;
+        ed(&mut a).refit_callout(n);
+        save(&mut a, &format!("{tn}-text-styles.png"));
+        ed(&mut a).tool = Some(Tool::Select);
+        ed(&mut a).obj.sel = vec![5];
+        save(&mut a, &format!("{tn}-text-selected.png"));
+        ed(&mut a).obj.font_menu = true;
+        save(&mut a, &format!("{tn}-text-font-list.png"));
+        ed(&mut a).obj.font_menu = false;
+        ed(&mut a).obj.sel = vec![n];
+        save(&mut a, &format!("{tn}-callout-styled-selected.png"));
+        ed(&mut a).obj.sel = vec![];
+        ed(&mut a).tool = Some(Tool::Text);
+        ed(&mut a).mem.set_fmt(Tool::Text, TextFmt { underline: true, align: Align::Right, ..Default::default() });
+        click(&mut a, 700, 660);
+        type_str(&mut a, "Typing");
+        key_m(&mut a, key::RETURN, SHIFT);
+        type_str(&mut a, "here");
+        save(&mut a, &format!("{tn}-text-draft-bar.png"));
     }
+}
+
+/// The text style: the mini-toolbar of a text has the font box, B / I /
+/// U / S and the alignment (a callout no alignment); its acts style the
+/// selection (one undo step) and the tool remembers them; the font list
+/// opens, picks, closes; Ctrl+B / I / U style the draft while typing
+/// (Ctrl+U does not upload), and the committed text keeps the style.
+#[test]
+fn text_styles_from_the_mini_toolbar_and_the_keys() {
+    use crate::text::{Align, Family, TextFmt};
+    let text = Obj::Text { pos: Pt::new(400.0, 300.0), text: "Hello".into(), color: RED, size: 24.0, fmt: TextFmt::default() };
+    let mut a = with(vec![text, Obj::Callout {
+        fmt: TextFmt::default(),
+        r: FRect { x: 300.0, y: 500.0, w: 240.0, h: 80.0 },
+        tail: Pt::new(320.0, 630.0),
+        text: "Bubble".into(),
+        color: RED,
+        size: 17.0,
+        style: CalloutStyle::Rounded,
+        fill: true,
+    }]);
+    key(&mut a, 'V' as u32);
+    click(&mut a, 410, 310);
+    assert_eq!(ed(&mut a).obj.sel, vec![0]);
+    ed(&mut a).prepare(None, (0, 0), Instant::now());
+    let m = ed(&mut a).obj.mini.clone().unwrap();
+    let has = |m: &mini::MiniUi, act: Act| m.items.iter().any(|i| i.kind == toolbar::Kind::Btn(act));
+    for act in [Act::ObjFontMenu, Act::ObjBold, Act::ObjItalic, Act::ObjUnderline, Act::ObjStrike, Act::ObjAlign(Align::Center)] {
+        assert!(has(&m, act), "{act:?}");
+    }
+    // A press on B, through the mini-toolbar.
+    let b = m.items.iter().find(|i| i.kind == toolbar::Kind::Btn(Act::ObjBold)).unwrap().r;
+    let hist = ed(&mut a).hist.len();
+    click(&mut a, (b.x + b.w / 2.0) as i32, (b.y + b.h / 2.0) as i32);
+    assert!(matches!(&ed(&mut a).objects[0], Obj::Text { fmt, .. } if fmt.bold));
+    assert_eq!(ed(&mut a).hist.len(), hist + 1, "one undo step");
+    assert!(ed(&mut a).mem.fmt(Tool::Text).bold, "the tool remembers it");
+    // The font list: open, pick Mono (it closes).
+    let e = ed(&mut a);
+    e.fmt_act(Act::ObjFontMenu);
+    e.prepare(None, (0, 0), Instant::now());
+    let m = e.obj.mini.clone().unwrap();
+    assert!(m.pop.is_some() && has(&m, Act::ObjFont(Family::Mono)));
+    let row = m.items.iter().find(|i| i.kind == toolbar::Kind::Btn(Act::ObjFont(Family::Mono))).unwrap().r;
+    click(&mut a, (row.x + row.w / 2.0) as i32, (row.y + row.h / 2.0) as i32);
+    assert!(matches!(&ed(&mut a).objects[0], Obj::Text { fmt, .. } if fmt.family == Family::Mono && fmt.bold));
+    assert!(!ed(&mut a).obj.font_menu);
+    ed(&mut a).fmt_act(Act::ObjAlign(Align::Right));
+    assert!(matches!(&ed(&mut a).objects[0], Obj::Text { fmt, .. } if fmt.align == Align::Right));
+    ed(&mut a).undo();
+    assert!(matches!(&ed(&mut a).objects[0], Obj::Text { fmt, .. } if fmt.align == Align::Left && fmt.family == Family::Mono));
+    // A callout: the style, no alignment buttons.
+    let e = ed(&mut a);
+    e.obj.sel = vec![1];
+    e.prepare(None, (0, 0), Instant::now());
+    let m = e.obj.mini.clone().unwrap();
+    assert!(has(&m, Act::ObjItalic) && !has(&m, Act::ObjAlign(Align::Left)));
+    e.fmt_act(Act::ObjItalic);
+    assert!(matches!(&e.objects[1], Obj::Callout { fmt, .. } if fmt.italic));
+    assert!(e.mem.fmt(Tool::Callout).italic && !e.mem.fmt(Tool::Text).italic, "each tool its own");
+    // Typing: Ctrl+B / I / U style the draft; Ctrl+U is not Upload.
+    let mut a = app();
+    key(&mut a, 'T' as u32);
+    click(&mut a, 500, 400);
+    type_str(&mut a, "Hi");
+    key_m(&mut a, 'B' as u32, CTRL);
+    key_m(&mut a, 'I' as u32, CTRL);
+    key_m(&mut a, 'U' as u32, CTRL);
+    key_m(&mut a, 'U' as u32, CTRL);
+    assert!(ed(&mut a).tasks.is_empty() && !ed(&mut a).done, "no upload");
+    assert_eq!(ed(&mut a).text.as_ref().unwrap().text, "Hi", "the keys type nothing");
+    ed(&mut a).prepare(None, (0, 0), Instant::now());
+    let m = ed(&mut a).obj.mini.clone().expect("the draft's bar");
+    assert!(m.inp.draft && has(&m, Act::ObjStrike) && !has(&m, Act::ObjDelete));
+    key(&mut a, key::RETURN);
+    let want = TextFmt { bold: true, italic: true, ..Default::default() };
+    assert!(matches!(&ed(&mut a).objects[..], [Obj::Text { fmt, .. }] if *fmt == want), "{:?}", ed(&mut a).objects);
+    // Typing in a callout: Ctrl+B bolds it.
+    let mut a = app();
+    key(&mut a, 'K' as u32);
+    drag(&mut a, (300, 300), (560, 360));
+    type_str(&mut a, "Note");
+    key_m(&mut a, 'B' as u32, CTRL);
+    assert!(matches!(&ed(&mut a).objects[..], [Obj::Callout { fmt, text, .. }] if fmt.bold && text == "Note"));
 }
 
 // ---- review fixes ------------------------------------------------------
