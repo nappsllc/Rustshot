@@ -105,6 +105,12 @@ impl Pending {
         Self { region: Some(region), screen, accept_on_select: true, tasks: vec![Task::Save { path: None, ask: false }], ..Self::editor() }
     }
 
+    /// The copy-text hotkey: pick an area, then its text is recognized
+    /// and copied (no annotation step).
+    pub fn text() -> Self {
+        Self { accept_on_select: true, tasks: vec![Task::Text], ..Self::editor() }
+    }
+
     /// Area selection in record mode (the record hotkey).
     pub fn record() -> Self {
         Self { record: true, ..Self::editor() }
@@ -243,6 +249,7 @@ pub fn run(
         st: State::Hidden,
         exit_code,
         upload_slot,
+        ocr: Vec::new(),
         updates,
         update_pending: None,
         restart_pending: false,
@@ -285,6 +292,14 @@ enum State {
     Finish(Box<FinishJob>),
 }
 
+/// Text recognition running on its worker (Copy text): where its
+/// notice goes and in which theme.
+struct OcrJob {
+    rx: Receiver<Result<String, crate::ocr::OcrError>>,
+    at: (i32, i32),
+    th: Theme,
+}
+
 /// Work to do after the overlay has been hidden again.
 struct FinishJob {
     img: PixBuf,
@@ -301,6 +316,8 @@ struct App {
     st: State,
     exit_code: Arc<AtomicI32>,
     upload_slot: UploadSlot,
+    /// Copy text: the recognitions in flight (each delivers its result).
+    ocr: Vec<OcrJob>,
     /// Results from the background update checker (daemon only).
     updates: Option<Receiver<crate::update::Release>>,
     /// A newer release found; shown in the update dialog once no capture is up.
@@ -369,6 +386,7 @@ impl App {
             }
         }
         self.poll_upload();
+        self.poll_ocr();
         if let Some(rx) = &self.updates {
             while let Ok(r) = rx.try_recv() {
                 // macOS has no dialog (windows need the main thread): the
@@ -491,13 +509,13 @@ impl App {
             HotEvent::Pressed(i) if i != 1 && matches!(self.st, State::Edit(_)) => self.forward_hotkey(i),
             HotEvent::Pressed(i) => return self.on_hot(crate::hotkey::slot_event(i)),
             // A capture would show the overlay in the recording.
-            HotEvent::Capture | HotEvent::Record | HotEvent::CaptureFull | HotEvent::CaptureWindow | HotEvent::RepeatLast
+            HotEvent::Capture | HotEvent::Record | HotEvent::CaptureFull | HotEvent::CaptureWindow | HotEvent::RepeatLast | HotEvent::CaptureText
                 if self.rec.is_some() =>
             {
                 eprintln!("rustshot: a recording is running; capture ignored");
             }
             // No new capture while an update installs or restarts us.
-            HotEvent::Capture | HotEvent::Record | HotEvent::CaptureFull | HotEvent::CaptureWindow | HotEvent::RepeatLast
+            HotEvent::Capture | HotEvent::Record | HotEvent::CaptureFull | HotEvent::CaptureWindow | HotEvent::RepeatLast | HotEvent::CaptureText
                 if self.updating || self.restart_pending =>
             {
                 eprintln!("rustshot: an update is installing; capture ignored");
@@ -507,6 +525,7 @@ impl App {
             HotEvent::CaptureFull => self.pending = Some(Pending::full()),
             HotEvent::CaptureWindow => self.pending = Some(Pending::window()),
             HotEvent::RepeatLast => self.pending = Some(self.repeat_pending()),
+            HotEvent::CaptureText => self.pending = Some(Pending::text()),
             HotEvent::Record if !rec_ui::supported() => eprintln!("rustshot: recording is not supported on this platform yet"),
             HotEvent::Record => self.pending = Some(Pending::record()),
         }
@@ -778,6 +797,7 @@ impl App {
             && self.pending.is_none()
             && self.rec.is_none()
             && self.upload_slot.lock().unwrap_or_else(|e| e.into_inner()).is_none()
+            && self.ocr.is_empty()
     }
 
     /// Answer a waiting update worker once we are idle. Captures stay
@@ -1069,7 +1089,8 @@ impl App {
             // A capture from the overlay or a hotkey (never `gui --path`).
             tasks = crate::actions::after_capture(tasks, &edit.cfg);
         }
-        if edit.cfg.shutter_sound && !tasks.is_empty() {
+        // Copying text is not a picture: no shutter.
+        if edit.cfg.shutter_sound && !tasks.is_empty() && tasks != [Task::Text] {
             crate::actions::shutter();
         }
         self.st = State::Finish(Box::new(FinishJob {
@@ -1097,10 +1118,56 @@ impl App {
             crate::notice::show(note, at, theme::resolve(&job.cfg));
         }
         *self.upload_slot.lock().unwrap() = res.upload;
+        if job.tasks.contains(&Task::Text) {
+            let at = (job.sel_global.0 + job.img.width() as i32 / 2, job.sel_global.1 + job.img.height() as i32 / 2);
+            let th = theme::resolve(&job.cfg);
+            match self.kind {
+                // Off the UI thread; `poll_ocr` copies and says so.
+                RunKind::Daemon => self.ocr.push(OcrJob { rx: crate::ocr::spawn(job.img), at, th }),
+                // The overlay is gone and nothing else runs: wait here.
+                RunKind::OneShot => {
+                    let res = crate::ocr::recognize(&job.img);
+                    let note = crate::ocr::finish(&res);
+                    println!("{}", note.text);
+                    if note.kind == ToastKind::Error {
+                        self.exit_code.store(1, Ordering::SeqCst);
+                    }
+                }
+            }
+        }
         wind::hide(self.hwnd);
         match self.kind {
             RunKind::Daemon => self.st = State::Hidden,
             RunKind::OneShot => wind::close(self.hwnd),
+        }
+    }
+
+    /// Copy text finished: copy what was found and say so (the notice,
+    /// or a tray balloon where there is none).
+    /// Every job in flight delivers its own result, in the order they end.
+    fn poll_ocr(&mut self) {
+        let mut done = Vec::new();
+        self.ocr.retain(|job| {
+            let res = match job.rx.try_recv() {
+                Ok(res) => res,
+                Err(std::sync::mpsc::TryRecvError::Empty) => return true,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(crate::ocr::OcrError::Failed("the recognizer stopped".into())),
+            };
+            done.push((res, job.at, job.th));
+            false
+        });
+        for (res, at, th) in done {
+            if let Err(e) = &res {
+                eprintln!("rustshot: text recognition: {e:?}");
+            }
+            let note = crate::ocr::finish(&res);
+            let text = note.text.clone();
+            if matches!(self.st, State::Edit(_)) {
+                // A newer capture is up: its own toast.
+                self.notice = Some(Toast::new(text, note.kind));
+            } else if !crate::notice::show(note, at, th) {
+                crate::tray::notify(&text);
+            }
         }
     }
 
@@ -1654,6 +1721,10 @@ impl App {
                 edit.tasks = vec![Task::Copy];
                 edit.done = true;
             }
+            Act::CopyText => {
+                edit.tasks = vec![Task::Text];
+                edit.done = true;
+            }
             Act::Save => {
                 edit.tasks = vec![Task::Save { path: None, ask: edit.cfg.save_dialog }];
                 edit.done = true;
@@ -1988,6 +2059,7 @@ fn act_of(a: Action) -> Option<Act> {
         Action::SizeDown => Act::Size(-1),
         Action::SizeUp => Act::Size(1),
         Action::Copy => Act::Copy,
+        Action::CopyText => Act::CopyText,
         Action::Save => Act::Save,
         Action::SaveAs => Act::SaveAs,
         Action::SaveDesktop => Act::SaveDesktop,
@@ -3354,6 +3426,8 @@ mod tools2_tests;
 mod uisize_tests;
 #[cfg(test)]
 mod snap_tests;
+#[cfg(test)]
+mod ocr_tests;
 
 #[cfg(test)]
 mod tests {
@@ -3589,6 +3663,7 @@ mod tests {
             st: State::Edit(Box::new(edit)),
             exit_code: Arc::new(AtomicI32::new(0)),
             upload_slot: Arc::new(Mutex::new(None)),
+            ocr: Vec::new(),
             updates: None,
             update_pending: None,
             restart_pending: false,

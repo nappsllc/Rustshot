@@ -24,6 +24,7 @@ mod keymap;
 mod macos_objc;
 mod notice;
 mod objects;
+mod ocr;
 mod perf;
 mod pixbuf;
 #[cfg(windows)]
