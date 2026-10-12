@@ -93,7 +93,9 @@ pub(crate) struct XPointerEvent {
     pub(crate) y: c_int,
     pub(crate) x_root: c_int,
     pub(crate) y_root: c_int,
-    state: c_uint,
+    /// Modifier and button masks (pins: Ctrl+wheel, a drag).
+    pub(crate) state: c_uint,
+    /// The button; a `KeyPress` (same head) has its keycode here.
     pub(crate) button: c_uint,
 }
 

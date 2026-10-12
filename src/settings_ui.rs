@@ -205,6 +205,8 @@ pub struct Form {
     pub show_tray: bool,
     pub copy_after: bool,
     pub shutter: bool,
+    /// "Show thumbnail after capture" (`show_thumbnail`).
+    pub thumbnail: bool,
     pub capture: Option<Chord>,
     pub quit: Option<Chord>,
     pub full: Option<Chord>,
@@ -240,6 +242,7 @@ impl Form {
             show_tray: cfg.show_tray,
             copy_after: cfg.copy_after_capture,
             shutter: cfg.shutter_sound,
+            thumbnail: cfg.show_thumbnail,
             capture: Chord::parse(&cfg.capture_hotkey),
             quit: Chord::parse(&cfg.quit_hotkey),
             full: Chord::parse(&cfg.capture_full_hotkey),
@@ -320,6 +323,9 @@ impl Form {
         }
         if self.shutter != was.shutter {
             c.shutter_sound = self.shutter;
+        }
+        if self.thumbnail != was.thumbnail {
+            c.show_thumbnail = self.thumbnail;
         }
         if self.capture != was.capture {
             c.capture_hotkey = chord_text(self.capture);

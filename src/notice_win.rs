@@ -1,10 +1,12 @@
 //! Windows: the notice in a layered, top-most tool window that never
 //! activates and is excluded from capture. A note without buttons lets
 //! clicks through (`WS_EX_TRANSPARENT`); one with buttons (after a
-//! recording) takes them, and holds while the pointer is on it. It lives
-//! on the UI thread and fades on its own timer.
+//! recording, the thumbnail card) takes them, and holds while the pointer
+//! is on it. Dragging the thumbnail out drops its file (`SHDoDragDrop`
+//! with the shell's data object for it: `CF_HDROP` and the shell's own
+//! formats). It lives on the UI thread and fades on its own timer.
 
-use super::{act_at, act_layout, note_size, opacity, place, render_note, ActLayout, Note, NoteAct, FADE_IN};
+use super::{act_at, act_layout, hold, note_size, opacity, place_note, render_note, ActLayout, Next, Note, NoteAct, FADE_IN};
 use crate::objects::Pt;
 use crate::rec_ui::Dib;
 use crate::theme::Theme;
@@ -23,6 +25,8 @@ const CLASS: PCWSTR = w!("rustshot_notice");
 const TIMER: usize = 1;
 const TICK_MS: u32 = 16;
 const WM_MOUSELEAVE: u32 = 0x02A3;
+/// `WM_MOUSEMOVE`'s wParam: the left button is down.
+const MK_LBUTTON: usize = 0x0001;
 /// An action finished on another thread (an upload): its note is in [`LATER`].
 const WM_LATER: u32 = WM_APP + 1;
 
@@ -39,6 +43,9 @@ struct Up {
     hover: Option<NoteAct>,
     /// The hover changed since the last frame.
     dirty: bool,
+    /// The left button went down here (window px): a click, or a drag
+    /// out of a thumbnail once it moves.
+    press: Option<Pt>,
 }
 
 struct Win {
@@ -74,11 +81,24 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
             WM_NCHITTEST if !clickable() => LRESULT(HTTRANSPARENT as isize),
             WM_MOUSEMOVE | WM_MOUSELEAVE => {
-                hover(hwnd, (msg == WM_MOUSEMOVE).then(|| lp_pt(lp)));
+                let p = (msg == WM_MOUSEMOVE).then(|| lp_pt(lp));
+                hover(hwnd, p);
+                if let Some(p) = p
+                    && wp.0 & MK_LBUTTON != 0
+                {
+                    drag_out(hwnd, p);
+                }
+                LRESULT(0)
+            }
+            WM_LBUTTONDOWN => {
+                set_press(Some(lp_pt(lp)));
                 LRESULT(0)
             }
             WM_LBUTTONUP => {
-                click(lp_pt(lp));
+                // A click only after a press here (not the end of a drag).
+                if set_press(None).is_some() {
+                    click(lp_pt(lp));
+                }
                 LRESULT(0)
             }
             WM_LATER => {
@@ -124,19 +144,70 @@ fn click(p: Pt) {
         let w = w.borrow();
         let up = w.as_ref()?.up.as_ref()?;
         let a = act_at(up.layout.as_ref()?, p)?;
-        Some((a, up.note.file.clone()?, w.as_ref()?.hwnd.0 as isize))
+        Some((a, up.note.clone(), up.th, w.as_ref()?.hwnd.0 as isize))
     });
-    let Some((a, file, hwnd)) = job else { return };
-    let next = super::run_action(a, &file, move |n| {
+    let Some((a, note, th, hwnd)) = job else { return };
+    let next = super::run_note_action(&note, a, th, move |n| {
         *LATER.lock().unwrap_or_else(|e| e.into_inner()) = Some(n);
         let _ = unsafe { PostMessageW(Some(HWND(hwnd as *mut _)), WM_LATER, WPARAM(0), LPARAM(0)) };
     });
     match next {
-        Some(n) => {
+        Next::Keep => {}
+        Next::Show(n) => {
             replace(n);
         }
-        // Open / Show in folder: done with the note.
-        None => hide(),
+        // Open / Show in folder, Pin, Close: done with the note.
+        Next::Hide => hide(),
+    }
+}
+
+/// Set (or clear) the press on the note; the one before.
+fn set_press(p: Option<Pt>) -> Option<Pt> {
+    WIN.with(|w| {
+        let mut w = w.borrow_mut();
+        let up = w.as_mut()?.up.as_mut()?;
+        std::mem::replace(&mut up.press, p)
+    })
+}
+
+/// The pointer moved to `p` with the left button down: once it is past
+/// the system's drag distance from a press on a thumbnail (not on a
+/// button), the file is dragged out; the card goes once it is dropped.
+fn drag_out(hwnd: HWND, p: Pt) {
+    let (dx, dy) = unsafe { (GetSystemMetrics(SM_CXDRAG).max(1) as f32, GetSystemMetrics(SM_CYDRAG).max(1) as f32) };
+    let note = WIN.with(|w| {
+        let w = w.borrow();
+        let up = w.as_ref()?.up.as_ref()?;
+        let press = up.press?;
+        up.note.thumb.as_ref()?;
+        let on = act_at(up.layout.as_ref()?, press)?;
+        (on == NoteAct::Card && ((p.x - press.x).abs() > dx || (p.y - press.y).abs() > dy)).then(|| up.note.clone())
+    });
+    let Some(note) = note else { return };
+    set_press(None);
+    let Some(file) = super::drag_file(&note) else { return };
+    match drag_file_out(hwnd, &file) {
+        Ok(true) => hide(),
+        Ok(false) => {}
+        Err(e) => eprintln!("rustshot: drag {}: {e}", file.display()),
+    }
+}
+
+/// Drag `file` out (a modal loop until it is dropped or called off):
+/// true when something took it.
+fn drag_file_out(hwnd: HWND, file: &std::path::Path) -> windows::core::Result<bool> {
+    use windows::Win32::System::Com::IDataObject;
+    use windows::Win32::System::Ole::{OleInitialize, DROPEFFECT_COPY, DROPEFFECT_NONE};
+    use windows::Win32::UI::Shell::{IShellItem, SHCreateItemFromParsingName, SHDoDragDrop, BHID_DataObject};
+    let path: Vec<u16> = file.as_os_str().to_string_lossy().encode_utf16().chain(Some(0)).collect();
+    unsafe {
+        // Drag and drop needs OLE on this thread (S_FALSE: it was already).
+        let _ = OleInitialize(None);
+        let item: IShellItem = SHCreateItemFromParsingName(PCWSTR(path.as_ptr()), None)?;
+        let data: IDataObject = item.BindToHandler(None, &BHID_DataObject)?;
+        // No drop source of ours: the shell's default one.
+        let effect = SHDoDragDrop(Some(hwnd), &data, None, DROPEFFECT_COPY)?;
+        Ok(effect != DROPEFFECT_NONE)
     }
 }
 
@@ -197,12 +268,12 @@ fn monitor_at(at: (i32, i32)) -> (crate::capture::IRect, f32) {
 
 fn up_for(note: Note, th: Theme, s: f32, pos: (i32, i32), since: Instant) -> Up {
     let layout = (!note.actions.is_empty()).then(|| act_layout(&note, s));
-    Up { note, th, s, pos, since, k: None, layout, hover: None, dirty: false }
+    Up { note, th, s, pos, since, k: None, layout, hover: None, dirty: false, press: None }
 }
 
 pub fn show(note: Note, at: (i32, i32), th: Theme) -> bool {
     let (work, s) = monitor_at(at);
-    let pos = place(work, note_size(&note, s));
+    let pos = place_note(work, &note, note_size(&note, s));
     let shown = WIN.with(|w| {
         let mut w = w.borrow_mut();
         if w.is_none() {
@@ -229,7 +300,7 @@ pub fn replace(note: Note) -> bool {
         let Some(up) = win.up.as_ref() else { return false };
         let (work, s) = monitor_at(up.pos);
         let now = Instant::now();
-        let pos = place(work, note_size(&note, s));
+        let pos = place_note(work, &note, note_size(&note, s));
         set_click_through(win.hwnd, note.actions.is_empty());
         // On screen already: no second fade-in.
         win.up = Some(up_for(note, up.th, s, pos, now.checked_sub(FADE_IN).unwrap_or(now)));
@@ -266,11 +337,9 @@ fn tick() {
         let Ok(mut w) = w.try_borrow_mut() else { return };
         let Some(win) = w.as_mut() else { return };
         let Some(up) = win.up.as_mut() else { return };
-        // Held while the pointer is on its buttons.
-        if up.hover.is_some() {
-            let now = Instant::now();
-            up.since = now.checked_sub(FADE_IN).unwrap_or(now);
-        }
+        // Held while the pointer is on its buttons (or the card), or it
+        // is pressed.
+        up.since = hold(up.since, Instant::now(), up.note.ttl, up.hover.is_some() || up.press.is_some());
         let Some(k) = opacity(up.since.elapsed(), up.note.ttl) else {
             take_down(win);
             return;

@@ -11,7 +11,7 @@
 //! the screen's density, the UI size on top.
 #![cfg_attr(test, allow(dead_code))] // tests record notes instead (`notice::take_shown`)
 
-use super::{act_at, act_layout, opacity, place, render_note, work_area, ActLayout, Note, NoteAct, FADE_IN};
+use super::{act_at, act_layout, opacity, place_note, render_note, work_area, ActLayout, Next, Note, NoteAct, FADE_IN};
 use crate::capture::{CGRect, IRect};
 use crate::objects::Pt;
 use crate::theme::Theme;
@@ -171,17 +171,18 @@ fn click(p: Pt) {
     let job = UP.with(|u| {
         let u = u.borrow();
         let up = u.as_ref()?;
-        Some((act_at(up.layout.as_ref()?, p)?, up.note.file.clone()?))
+        Some((act_at(up.layout.as_ref()?, p)?, up.note.clone(), up.th))
     });
-    let Some((a, file)): Option<(NoteAct, _)> = job else { return };
-    let next = super::run_action(a, &file, |n| {
+    let Some((a, note, th)): Option<(NoteAct, Note, Theme)> = job else { return };
+    let next = super::run_note_action(&note, a, th, |n| {
         *LATER.lock().unwrap_or_else(|e| e.into_inner()) = Some(n);
     });
     match next {
-        Some(n) => {
+        Next::Keep => {}
+        Next::Show(n) => {
             replace(n);
         }
-        None => hide(),
+        Next::Hide => hide(),
     }
 }
 
@@ -208,9 +209,12 @@ pub fn tick() -> bool {
             return Some(Some(None)); // holding: no new frame
         }
         up.k = Some(k);
-        let (w, h, px) = render_note(&up.note, &up.th, up.s, k, None);
+        // No hover here (the panel reports presses only): a thumbnail
+        // shows its buttons all along.
+        let hover = up.note.thumb.as_ref().map(|_| NoteAct::Card);
+        let (w, h, px) = render_note(&up.note, &up.th, up.s, k, hover);
         let pts = ((w as f32 / up.px).round() as u32, (h as f32 / up.px).round() as u32);
-        let (x, y) = place(up.work, pts);
+        let (x, y) = place_note(up.work, &up.note, pts);
         Some(Some(Some((x, y, w, h, px, up.px))))
     });
     match frame {

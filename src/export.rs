@@ -19,6 +19,9 @@ pub enum Task {
     /// Print raw PNG bytes to stdout.
     Raw,
     Upload,
+    /// Pin the image to the screen where it was captured (the editor opens
+    /// the pin window; nothing to export).
+    Pin,
 }
 
 /// Day of year (1-366) for a civil date.
@@ -543,6 +546,8 @@ pub fn run_export(
                 };
                 upload = Some(spawn_upload(bytes, cfg.upload_client_id.clone()));
             }
+            // The editor opens the pin (`App::run_finish`).
+            Task::Pin => {}
         }
     }
     ExportResult {

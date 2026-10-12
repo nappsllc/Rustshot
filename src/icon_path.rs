@@ -76,6 +76,11 @@ pub const ICONS: &[(&str, &[Shape])] = &[
         Path("M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"),
         Path("m8 17 4-4 4 4"),
     ]),
+    // Pin to screen (History board's pin): Lucide pin.
+    ("pin", &[
+        Path("M12 17v5"),
+        Path("M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"),
+    ]),
     ("x", &[Path("M18 6 6 18"), Path("m6 6 12 12")]),
     ("check", &[Path("M20 6 9 17l-5-5")]),
     ("chevron", &[Path("m6 9 6 6 6-6")]), // chevron-down

@@ -259,6 +259,13 @@ impl Dib {
     /// Put `bgra` (`w`x`h`, premultiplied BGRA) on layered window `hwnd`
     /// at (x, y).
     pub(crate) fn put(&mut self, hwnd: HWND, x: i32, y: i32, w: u32, h: u32, bgra: &[u8]) {
+        self.put_alpha(hwnd, x, y, w, h, bgra, 255);
+    }
+
+    /// [`Dib::put`] with the whole layer at constant alpha `alpha` (a
+    /// pin's opacity).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn put_alpha(&mut self, hwnd: HWND, x: i32, y: i32, w: u32, h: u32, bgra: &[u8], alpha: u8) {
         if w == 0 || h == 0 || bgra.len() < (w * h * 4) as usize {
             return;
         }
@@ -269,7 +276,7 @@ impl Dib {
             let blend = BLENDFUNCTION {
                 BlendOp: AC_SRC_OVER as u8,
                 BlendFlags: 0,
-                SourceConstantAlpha: 255,
+                SourceConstantAlpha: alpha,
                 AlphaFormat: AC_SRC_ALPHA as u8,
             };
             let (pos, size, src) = (POINT { x, y }, SIZE { cx: w as i32, cy: h as i32 }, POINT::default());
