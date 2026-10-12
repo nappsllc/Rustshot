@@ -109,19 +109,19 @@ pub fn xdg_folder(f: Folder, p: &Probe) -> Option<PathBuf> {
 }
 
 /// [`windows_folder`] for the Desktop.
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg(test)]
 pub fn windows_dir(p: &Probe) -> Option<PathBuf> {
     windows_folder(Folder::Desktop, p)
 }
 
 /// [`mac_folder`] for the Desktop.
-#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[cfg(test)]
 pub fn mac_dir(p: &Probe) -> Option<PathBuf> {
     mac_folder(Folder::Desktop, p)
 }
 
 /// [`xdg_folder`] for the Desktop.
-#[cfg_attr(any(windows, target_os = "macos"), allow(dead_code))]
+#[cfg(test)]
 pub fn xdg_dir(p: &Probe) -> Option<PathBuf> {
     xdg_folder(Folder::Desktop, p)
 }
