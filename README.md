@@ -97,6 +97,7 @@ rustshot gui --region 800x600+100+100 --upload
 rustshot full --raw > shot.png    # PNG bytes to stdout
 rustshot update                   # check for a newer release
 rustshot settings                 # open the Settings window
+rustshot register-screenclip on   # Windows: Win+Shift+S opens Rustshot (off undoes it)
 rustshot --help
 ```
 
@@ -111,7 +112,9 @@ section:
 - **General:** theme (System follows the OS, Dark, Light) and accent
   (Periwinkle, Teal, Amber or any `#rrggbb`: the custom swatch; the window
   previews it before **Apply**), *Launch at login* (hidden for store
-  installs), *Show icon in tray* (Windows; off, the daemon runs without an
+  installs), *Use Win+Shift+S and Print Screen* (Windows: see
+  [Win+Shift+S and Print Screen](#winshifts-and-print-screen-windows)),
+  *Show icon in tray* (Windows; off, the daemon runs without an
   icon: the hotkeys and a second `rustshot` launch still capture, and the
   row warns when no capture hotkey is set), *Copy to clipboard after
   capture* (a save or upload also copies the image), *Play shutter
@@ -237,6 +240,36 @@ capture hotkey set to <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> is
 Save As there), only Quit always quits. Repeat last capture remembers the
 region for as long as the daemon runs; before the first capture it opens
 the overlay.
+
+### Win+Shift+S and Print Screen (Windows)
+
+Windows opens the Snipping Tool for <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd>
+(and for <kbd>Print Screen</kbd> when *Settings › Accessibility › Keyboard ›
+Use the Print screen key to open screen capture* is on) by launching the
+`ms-screenclip:` link. **Settings › General › Use Win+Shift+S and Print
+Screen** (or `rustshot register-screenclip on`) offers Rustshot as that
+link's handler, so these keys open Rustshot's capture even when Rustshot
+is not running: a running daemon captures, otherwise a one-shot capture
+starts (like `rustshot gui`) and exits. The link's mode is followed:
+window mode picks a window, full screen saves the whole screen, a
+recording starts video mode, and a delay waits that long.
+
+- No administrator rights: everything is written for your user only
+  (`HKCU\Software\Classes\Rustshot.ScreenClip`,
+  `HKCU\Software\Rustshot\Capabilities` and a `Rustshot` value under
+  `HKCU\Software\RegisteredApplications`).
+- Windows keeps the choice of app itself and lets no app make it: the
+  next <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> asks which app to use;
+  choose **Rustshot** and **Always**. (Or *Settings › Apps › Default apps ›
+  Choose defaults by link type › MS-SCREENCLIP*.)
+- To undo it, turn the option off (or run `rustshot register-screenclip
+  off`): Rustshot's keys go and, when Rustshot was the chosen app, the
+  choice too, so the Snipping Tool opens again. Uninstalling does the same.
+  By hand: pick the Snipping Tool for MS-SCREENCLIP under Default apps.
+- A portable `rustshot.exe` that moved is followed: the daemon re-points
+  the handler at its new place when the old one is gone.
+- Not offered in the Microsoft Store (MSIX) build: a packaged app's
+  registry writes stay inside its package.
 
 ### Editor shortcuts
 

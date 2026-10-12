@@ -32,6 +32,9 @@ mod raster;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod rec;
 mod rec_ui;
+// Win+Shift+S / Print Screen as `ms-screenclip:` handler (Windows); the
+// URI parsing is tested everywhere.
+mod screenclip_win;
 mod settings_ui;
 mod sha256;
 mod snap;
@@ -77,6 +80,11 @@ enum Cmd {
     Update,
     /// Open the Settings window (in the running daemon, if any).
     Settings,
+    /// Handle an `ms-screenclip:` URI (Win+Shift+S, Print Screen): the
+    /// running daemon captures, or a one-shot capture runs here.
+    Screenclip(String),
+    /// Offer Rustshot as the `ms-screenclip:` handler (or undo it).
+    RegisterScreenclip(bool),
     /// Show or validate the config file.
     Config {
         /// Validate the config file and exit non-zero on errors.
@@ -128,6 +136,10 @@ Commands:
   update    Check for a newer release and open its download page
   settings  Open the Settings window
   config    Show or validate the config file (--check)
+  register-screenclip on|off
+            (Windows) Offer Rustshot for Win+Shift+S and Print Screen, or undo it
+  screenclip <URI>
+            (Windows) Handle an ms-screenclip: URI (what Win+Shift+S launches)
   help      Print this help
 
 Options (gui/full/screen):
@@ -175,6 +187,13 @@ fn parse_from(args: &[String]) -> Result<Parsed, String> {
         )));
     }
 
+    // Windows may hand the URI over as the only argument.
+    if let Some(a) = args.first()
+        && screenclip_win::is_screenclip_uri(a)
+    {
+        return Ok(Parsed::Cmd(Some(Cmd::Screenclip(a.clone()))));
+    }
+
     let (name, rest) = match args.first() {
         Some(a) if !a.starts_with('-') => (Some(a.as_str()), &args[1..]),
         Some(a) => return Err(format!("unexpected argument '{a}'")),
@@ -208,6 +227,18 @@ fn parse_from(args: &[String]) -> Result<Parsed, String> {
             }
             Some(Cmd::Settings)
         }
+        Some("screenclip") => match rest {
+            [uri] => Some(Cmd::Screenclip(uri.clone())),
+            [] => return Err("missing URI for screenclip".into()),
+            [_, a, ..] => return Err(format!("unexpected argument '{a}'")),
+        },
+        Some("register-screenclip") => match rest {
+            [v] if v == "on" => Some(Cmd::RegisterScreenclip(true)),
+            [v] if v == "off" => Some(Cmd::RegisterScreenclip(false)),
+            [v] => return Err(format!("expected on or off, got '{v}'")),
+            [] => return Err("missing on|off for register-screenclip".into()),
+            [_, a, ..] => return Err(format!("unexpected argument '{a}'")),
+        },
         Some("config") => {
             let mut check = false;
             for a in rest {
@@ -589,6 +620,22 @@ fn run() -> Result<()> {
             }
             Ok(())
         }
+        Cmd::RegisterScreenclip(on) => {
+            if !screenclip_win::available() {
+                return Err(anyhow!("registering the Win+Shift+S handler needs the Windows desktop build (not MSIX)"));
+            }
+            screenclip_win::set(on).map_err(|e| anyhow!(e))?;
+            println!(
+                "{}",
+                if on {
+                    "Rustshot is offered for Win+Shift+S and Print Screen; choose it when Windows asks (Always)."
+                } else {
+                    "Win+Shift+S and Print Screen open the Snipping Tool again."
+                }
+            );
+            Ok(())
+        }
+        Cmd::Screenclip(ref uri) => screenclip(uri),
         Cmd::Settings => {
             // A running daemon opens it (and reloads after a save);
             // otherwise the window runs here.
@@ -642,6 +689,7 @@ fn run() -> Result<()> {
                 }
             };
             update_install::cleanup_previous();
+            screenclip_win::repoint_on_start();
             rec_ui::warm_mp4();
             let cfg = config::load();
             let exit_code = Arc::new(AtomicI32::new(0));
@@ -670,6 +718,32 @@ fn run() -> Result<()> {
             }
         }
     }
+}
+
+/// `rustshot screenclip <uri>`: wait the URI's delay, then have the
+/// running daemon capture in the mode it asks for, or capture here.
+#[cfg(windows)]
+fn screenclip(uri: &str) -> Result<()> {
+    use screenclip_win::Mode;
+    let req = screenclip_win::parse_uri(uri);
+    let Some(mode) = req.mode else { return Ok(()) };
+    delayed(req.delay_s * 1000);
+    if instance::signal_capture(mode.slot()) {
+        return Ok(());
+    }
+    let pending = match mode {
+        Mode::Region => Pending::editor(),
+        Mode::Window => Pending::window(),
+        Mode::Full => Pending::full(),
+        Mode::Record if rec_ui::supported() => Pending::record(),
+        Mode::Record => Pending::editor(),
+    };
+    exit(editor_main(config::load(), RunKind::OneShot, pending))
+}
+
+#[cfg(not(windows))]
+fn screenclip(_uri: &str) -> Result<()> {
+    Err(anyhow!("screenclip is only for Windows"))
 }
 
 #[cfg(test)]
@@ -744,6 +818,23 @@ mod cli_tests {
             Cmd::Screen { number, .. } => assert_eq!(number, 0),
             _ => panic!("expected screen"),
         }
+    }
+
+    #[test]
+    fn screenclip_commands() {
+        let uri = "ms-screenclip:?source=HotKey&clippingMode=Window";
+        assert!(matches!(cmd(&["screenclip", uri]), Cmd::Screenclip(u) if u == uri));
+        // The URI alone (as Windows may pass it).
+        assert!(matches!(cmd(&[uri]), Cmd::Screenclip(u) if u == uri));
+        assert!(matches!(cmd(&["MS-SCREENCLIP:"]), Cmd::Screenclip(_)));
+        assert!(p(&["screenclip"]).is_err());
+        assert!(p(&["screenclip", uri, "x"]).is_err());
+        assert!(matches!(cmd(&["register-screenclip", "on"]), Cmd::RegisterScreenclip(true)));
+        assert!(matches!(cmd(&["register-screenclip", "off"]), Cmd::RegisterScreenclip(false)));
+        assert!(p(&["register-screenclip"]).is_err());
+        assert!(p(&["register-screenclip", "yes"]).is_err());
+        assert!(p(&["register-screenclip", "on", "off"]).is_err());
+        assert!(HELP.contains("register-screenclip on|off"));
     }
 
     #[test]

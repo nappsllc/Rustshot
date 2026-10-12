@@ -120,6 +120,12 @@ Function .onInstSuccess
 FunctionEnd
 
 Section "Uninstall"
+  ; Win+Shift+S back to the Snipping Tool (also drops the user's choice of
+  ; Rustshot and restores a RegisteredApplications value it replaced); our
+  ; ProgID again in case the exe could not run (Software\rustshot, with
+  ; the Capabilities, goes below).
+  ExecWait '"$INSTDIR\${PRODUCT_EXE}" register-screenclip off'
+  DeleteRegKey HKCU "Software\Classes\Rustshot.ScreenClip"
   Delete "$INSTDIR\${PRODUCT_EXE}"
   Delete "$INSTDIR\${PRODUCT_EXE}.old"
   Delete "$INSTDIR\uninstall.exe"

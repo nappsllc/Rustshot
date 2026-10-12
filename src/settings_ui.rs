@@ -198,6 +198,9 @@ pub struct Form {
     pub snap: bool,
     /// Start at login; `None` hides it (store installs).
     pub autostart: Option<bool>,
+    /// Win+Shift+S and Print Screen open Rustshot (the `ms-screenclip:`
+    /// handler, Windows); `None` hides it (other systems, MSIX).
+    pub screenclip: Option<bool>,
     pub check_updates: bool,
     pub show_tray: bool,
     pub copy_after: bool,
@@ -232,6 +235,7 @@ impl Form {
             renderer: !cfg.use_gdi() as usize,
             snap: cfg.snap_windows,
             autostart,
+            screenclip: None,
             check_updates: cfg.check_updates,
             show_tray: cfg.show_tray,
             copy_after: cfg.copy_after_capture,
@@ -597,6 +601,11 @@ pub struct Settings {
     loaded: Config,
     /// Start at login as it is now (`None`: hidden).
     autostart: Option<bool>,
+    /// The Win+Shift+S handler as registered now (`None`: hidden).
+    screenclip: Option<bool>,
+    /// Registered, but Windows still opens the Snipping Tool: a note says
+    /// to pick Rustshot when Windows asks.
+    pub screenclip_wait: bool,
     pub form: Form,
     /// The rail's section ([`SECTIONS`] index).
     pub section: usize,
@@ -630,6 +639,7 @@ pub struct Settings {
     /// The Recording section's device lists and encoder status.
     rec_lists: recording::Lists,
     set_autostart: fn(bool) -> Result<(), String>,
+    set_screenclip: fn(bool) -> Result<(), String>,
 }
 
 impl Settings {
@@ -638,6 +648,8 @@ impl Settings {
             form: Form::new(&cfg, autostart),
             loaded: cfg,
             autostart,
+            screenclip: None,
+            screenclip_wait: false,
             section: GENERAL,
             scroll: [0.0; SECTIONS.len()],
             content_h: [0.0; SECTIONS.len()],
@@ -654,7 +666,22 @@ impl Settings {
             tools_reset: false,
             rec_lists: recording::Lists::default(),
             set_autostart: crate::autostart::set,
+            set_screenclip: crate::screenclip_win::set,
         }
+    }
+
+    /// Show the Win+Shift+S toggle at `state` (as the registry has it;
+    /// `None` hides it); `waiting`: Windows has not been told to use us.
+    pub fn with_screenclip(mut self, state: Option<bool>, waiting: bool) -> Settings {
+        self.screenclip = state;
+        self.form.screenclip = state;
+        self.screenclip_wait = waiting;
+        self
+    }
+
+    /// The form for `cfg`, keeping the toggles that are not in the file.
+    fn form_for(&self, cfg: &Config) -> Form {
+        Form { screenclip: self.form.screenclip, ..Form::new(cfg, self.form.autostart) }
     }
 
     /// The window for the config file at `path` as it is now. A file that
@@ -692,7 +719,7 @@ impl Settings {
             Ok(cfg) => {
                 if self.stale {
                     let cfg = cfg.unwrap_or_default();
-                    self.form = Form::new(&cfg, self.form.autostart);
+                    self.form = self.form_for(&cfg);
                     self.loaded = cfg;
                     self.stale = false;
                 }
@@ -791,7 +818,9 @@ impl Settings {
     /// Something differs from what is saved.
     pub fn dirty(&self) -> bool {
         let now = self.form.apply(&self.loaded, &self.loaded);
-        config::to_toml(&now) != config::to_toml(&self.loaded) || self.form.autostart != self.autostart
+        config::to_toml(&now) != config::to_toml(&self.loaded)
+            || self.form.autostart != self.autostart
+            || self.form.screenclip != self.screenclip
     }
 
     /// The file has content a rewrite would drop and nobody said yes yet.
@@ -897,13 +926,25 @@ impl Settings {
         self.confirmed = true; // the file is ours now
         self.loaded = cfg.clone();
         // The form shows what was saved (merged with the file, trimmed).
-        self.form = Form::new(&cfg, self.form.autostart);
+        self.form = self.form_for(&cfg);
         let mut acts = vec![Act::Saved(Box::new(cfg))];
         if let (Some(on), true) = (self.form.autostart, self.form.autostart != self.autostart) {
             match (self.set_autostart)(on) {
                 Ok(()) => self.autostart = Some(on),
                 Err(e) => {
                     self.modal = Some(Modal::Error(format!("Could not change Launch at login: {e}")));
+                    return acts;
+                }
+            }
+        }
+        if let (Some(on), true) = (self.form.screenclip, self.form.screenclip != self.screenclip) {
+            match (self.set_screenclip)(on) {
+                Ok(()) => {
+                    self.screenclip = Some(on);
+                    self.screenclip_wait = on;
+                }
+                Err(e) => {
+                    self.modal = Some(Modal::Error(format!("Could not change Win+Shift+S: {e}")));
                     return acts;
                 }
             }
@@ -975,7 +1016,7 @@ impl Settings {
         self.modal = None;
         self.confirmed = true;
         self.stale = false;
-        self.form = Form::new(&cfg, self.form.autostart);
+        self.form = self.form_for(&cfg);
         self.loaded = cfg.clone();
         self.show_pending();
         vec![Act::Saved(Box::new(cfg))]
@@ -1056,7 +1097,8 @@ fn claim() -> Option<Receiver<Msg>> {
 
 fn run(rx: Receiver<Msg>) {
     let autostart = crate::update::managed_install().is_none().then(crate::autostart::is_enabled);
-    let mut s = Settings::open(config::config_path(), autostart);
+    let mut s = Settings::open(config::config_path(), autostart)
+        .with_screenclip(crate::screenclip_win::state(), crate::screenclip_win::awaiting_choice());
     s.hotkey_failures = hotkey::outstanding();
     let th = crate::theme::resolve(&s.loaded);
     // Opened without a daemon (`rustshot settings`): the file's UI size.

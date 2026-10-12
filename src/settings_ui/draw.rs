@@ -24,6 +24,9 @@ pub const BODY_BOTTOM: f32 = 12.0;
 /// A row's height and its controls' height.
 pub const ROW_H: f32 = 36.0;
 pub const CTL: f32 = 28.0;
+/// The Win+Shift+S row's helper line, and its note until Windows uses us.
+pub const SCREENCLIP_HELP: &str = "Replaces the Snipping Tool; works even when Rustshot isn't running";
+pub const SCREENCLIP_WAIT: &str = "Windows asks at the next Win+Shift+S: choose Rustshot, Always";
 /// The field width of Save to and the like.
 pub const FIELD_W: f32 = 228.0;
 
@@ -384,6 +387,7 @@ fn general(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) 
     let example = example_name(s);
     let tray_row = s.tray_row;
     let warn = s.tray_warning();
+    let screenclip_wait = s.screenclip_wait || s.screenclip != Some(true);
     let f = &mut s.form;
     ui.sec("Appearance", tok);
     srow(ui, tok, "Theme", None, |ui| {
@@ -419,6 +423,14 @@ fn general(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) 
         srow(ui, tok, "Launch at login", None, |ui| {
             ui.switch("autostart", on, tok);
         });
+    }
+    if let Some(on) = f.screenclip.as_mut() {
+        srow_ex(ui, tok, "Use Win+Shift+S and Print Screen", Some(SCREENCLIP_HELP), false, ROW_H, |ui| {
+            ui.switch("screenclip", on, tok);
+        });
+        if *on && screenclip_wait {
+            note_line(ui, tok, SCREENCLIP_WAIT, false, None);
+        }
     }
     if tray_row {
         let help = warn.then_some("No capture hotkey: start Rustshot again to capture");
