@@ -181,6 +181,24 @@ pub(crate) fn mp4_size(spec: &RecSpec) -> Option<(u32, u32)> {
 }
 
 /// Record `secs` with `enc` built on the spec's `.part` path.
+/// Fresh DXGI frames so far (all sources): see [`no_fresh_frames`].
+fn fresh_frames() -> u64 {
+    dxgi::FRESH_FRAMES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// A DXGI recording during which the duplication delivered no fresh frame
+/// (`since` = [`fresh_frames`] before it): the display is asleep or the
+/// session locked, so there is nothing to check. Prints a `SKIP:` line.
+fn no_fresh_frames(kind: SourceKind, since: u64) -> bool {
+    let n = fresh_frames() - since;
+    eprintln!("DXGI fresh frames: {n}");
+    if kind == SourceKind::Dxgi && n == 0 {
+        eprintln!("SKIP: DXGI delivered no fresh frames (display asleep or locked)");
+        return true;
+    }
+    false
+}
+
 pub(crate) fn record(
     spec: RecSpec,
     audio: Vec<Box<dyn AudioSource>>,
@@ -234,6 +252,7 @@ fn live_rec_mp4_of_a_changing_window() {
     let win = TestWindow::open(200, 200, 320, 240, 100);
     let dir = out_dir();
     let spec = spec(RecFormat::Mp4, 30, win.rect(), dir.join("window.mp4"));
+    let fresh = fresh_frames();
     let (path, kind) = record(spec, vec![], 2.0, |p, w, h| {
         let t = Instant::now();
         let e = MfEncoder::create(p, w, h, 30, Quality::Medium, false).unwrap();
@@ -244,6 +263,9 @@ fn live_rec_mp4_of_a_changing_window() {
     let p = mf::probe(&path).unwrap();
     eprintln!("source {kind:?}; {p:?}");
     let _ = std::fs::remove_dir_all(&dir);
+    if no_fresh_frames(kind, fresh) {
+        return;
+    }
     assert_eq!(p.size, (320, 240));
     assert!((1.8..=2.2).contains(&p.duration.as_secs_f64()), "duration {:?}", p.duration);
     assert!((54..=66).contains(&p.frames), "{} frames", p.frames);
@@ -290,12 +312,16 @@ fn live_rec_gif_of_a_changing_window() {
     let win = TestWindow::open(240, 240, 200, 150, 100);
     let dir = out_dir();
     let spec = spec(RecFormat::Gif, 15, win.rect(), dir.join("window.gif"));
-    let (path, _) = record(spec, vec![], 2.0, |p, w, h| Box::new(GifEncoder::create(p, w, h, 15).unwrap()));
+    let fresh = fresh_frames();
+    let (path, kind) = record(spec, vec![], 2.0, |p, w, h| Box::new(GifEncoder::create(p, w, h, 15).unwrap()));
     drop(win);
     let b = std::fs::read(&path).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
     let n = gif_frames(&b);
     eprintln!("GIF: {} bytes, {n} frames", b.len());
+    if no_fresh_frames(kind, fresh) {
+        return;
+    }
     assert!(n >= 15, "{n} frames");
 }
 

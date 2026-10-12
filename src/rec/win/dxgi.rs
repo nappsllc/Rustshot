@@ -35,6 +35,12 @@ use windows::Win32::Graphics::Dxgi::Common::{
 };
 use windows::Win32::Graphics::Dxgi::*;
 
+/// Fresh desktop images the duplications delivered (any source, any
+/// output): the live tests tell "the display presented nothing" (asleep,
+/// locked) from a broken recording.
+#[cfg(test)]
+pub(crate) static FRESH_FRAMES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 #[cfg(test)]
 thread_local! {
     /// Tests force [`DxgiSource::open`] to fail (on their own thread only)
@@ -410,6 +416,10 @@ impl DxgiSource {
         // output whose device was re-created (device removed) cannot.
         let gpu = self.gpu.as_ref().filter(|g| g.device.as_raw() == o.device.as_raw());
         let gpu_lost = self.gpu.is_some() && gpu.is_none();
+        #[cfg(test)]
+        if info.LastPresentTime != 0 {
+            FRESH_FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         if info.LastPresentTime != 0
             && o.isect.2 > 0
             && o.isect.3 > 0
