@@ -644,7 +644,7 @@ impl Obj {
             }
             // The dim is the spotlight pass over the finished image.
             Obj::Spotlight { .. } => {}
-            Obj::Magnify { src, dst, radius, zoom, color, width } => magnify(sf, *src, *dst, *radius, *zoom, *color, *width),
+            Obj::Magnify { src, dst, radius, zoom, color, width } => magnify(sf, None, *src, *dst, *radius, *zoom, *color, *width),
         }
     }
 
@@ -659,12 +659,35 @@ impl Obj {
     pub fn reads_far(&self) -> bool {
         matches!(self, Obj::Magnify { .. })
     }
+
+    /// The magnifier: the area it reads (the source, a pixel round) and
+    /// the loupe it draws them into.
+    pub fn loupe_parts(&self) -> Option<(FRect, FRect)> {
+        let Obj::Magnify { src, dst, radius, zoom, width, .. } = self else { return None };
+        let rs = radius / zoom.max(1.0) + 2.0;
+        let rl = radius + width.max(1.0) + 2.0;
+        Some((
+            FRect { x: src.x - rs, y: src.y - rs, w: 2.0 * rs, h: 2.0 * rs },
+            FRect { x: dst.x - rl, y: dst.y - rl, w: 2.0 * rl, h: 2.0 * rl },
+        ))
+    }
+
+    /// Render a magnifier reading its source from `source` (a surface
+    /// holding the image as drawn below it, around the source) instead
+    /// of from `sf`; anything else renders as usual.
+    pub fn render_with_source(&self, sf: &mut Surf, source: &Surf, font: Option<&AnnotFont>) {
+        match self {
+            Obj::Magnify { src, dst, radius, zoom, color, width } => magnify(sf, Some(source), *src, *dst, *radius, *zoom, *color, *width),
+            o => o.render_into(sf, font),
+        }
+    }
 }
 
-/// The loupe: the pixels around `src` (already in the surface, which must
-/// hold them) scaled `zoom` x into a disc at `dst`, then one mask for the
-/// rings and the connector.
-fn magnify(sf: &mut Surf, src: Pt, dst: Pt, radius: f32, zoom: f32, color: C4, width: f32) {
+/// The loupe: the pixels around `src` (in `ext`, else already in the
+/// surface, which must hold them) scaled `zoom` x into a disc at `dst`,
+/// then one mask for the rings and the connector.
+#[allow(clippy::too_many_arguments)]
+fn magnify(sf: &mut Surf, ext: Option<&Surf>, src: Pt, dst: Pt, radius: f32, zoom: f32, color: C4, width: f32) {
     let zoom = zoom.max(1.0);
     let rs = radius / zoom;
     if radius < 2.0 {
@@ -677,7 +700,10 @@ fn magnify(sf: &mut Surf, src: Pt, dst: Pt, radius: f32, zoom: f32, color: C4, w
     let mut tmp = vec![None; sw * (sy1 - sy0).max(0) as usize];
     for y in sy0..sy1 {
         for x in sx0..sx1 {
-            tmp[(y - sy0) as usize * sw + (x - sx0) as usize] = sf.get_raw(x, y);
+            tmp[(y - sy0) as usize * sw + (x - sx0) as usize] = match ext {
+                Some(e) => e.get_raw(x, y),
+                None => sf.get_raw(x, y),
+            };
         }
     }
     let mut m = Mask::new(sf, (dst.x - radius).floor() as i32 - 1, (dst.y - radius).floor() as i32 - 1, (dst.x + radius).ceil() as i32 + 1, (dst.y + radius).ceil() as i32 + 1);

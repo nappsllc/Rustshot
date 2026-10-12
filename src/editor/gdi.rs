@@ -418,12 +418,16 @@ impl GdiScreen {
         let Some(mut l) = self.layer.take() else { return };
         let mut tmp = Vec::new();
         let lw = l.rect.w() as usize;
+        let img = PxRect::image(self.size);
+        let bg = |r: PxRect, out: &mut [u8]| {
+            self.read(self.plain.dc, r, out, r.w() as usize, true);
+        };
         for w in rects.iter().map(|w| w.intersect(&l.rect)).filter(|w| !w.is_empty()) {
             let (ww, wh) = (w.w() as usize, w.h() as usize);
             tmp.clear();
             tmp.resize(ww * wh * 4, 0);
             self.read(self.plain.dc, w, &mut tmp, ww, true);
-            compose::render_window(&mut tmp, w, Order::Bgra, objects, font);
+            compose::render_window(&mut tmp, w, img, Order::Bgra, objects, font, &bg);
             for (i, y) in (w.y0..w.y1).enumerate() {
                 let o = ((y - l.rect.y0) as usize * lw + (w.x0 - l.rect.x0) as usize) * 4;
                 l.px[o..][..ww * 4].copy_from_slice(&tmp[i * ww * 4..][..ww * 4]);

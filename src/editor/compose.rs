@@ -1207,7 +1207,8 @@ pub fn dirty_rects(prev: Option<&Scene>, now: &Scene, font: Option<&crate::text:
         out.extend_from_slice(now.rects(e));
     }
     if !Arc::ptr_eq(&prev.objects, &now.objects) {
-        match object_damage(&prev.objects, &now.objects, font, now.size, true) {
+        // (Spotlights draw nothing: their dim is the `spots` below.)
+        match object_damage(&prev.objects, &now.objects, font, now.size, false) {
             Some(v) => out.extend(v),
             None => return whole,
         }
@@ -1218,6 +1219,13 @@ pub fn dirty_rects(prev: Option<&Scene>, now: &Scene, font: Option<&crate::text:
             let inner = |s: Option<FRect>| s.map_or(img, PxRect::outer).intersect(&img);
             out.push(inner(prev.sel));
             out.push(inner(now.sel));
+        } else if prev.spots.len() == now.spots.len() {
+            // A spotlight moved or resized: only where it was or is now,
+            // not both, can a pixel change.
+            for (a, b) in prev.spots.iter().zip(&now.spots).filter(|(a, b)| a != b) {
+                out.extend(a.minus_iter(b));
+                out.extend(b.minus_iter(a));
+            }
         } else {
             out.extend(prev.spots.iter().filter(|r| !now.spots.contains(r)));
             out.extend(now.spots.iter().filter(|r| !prev.spots.contains(r)));
@@ -1266,8 +1274,11 @@ pub fn object_damage(prev: &[Obj], now: &[Obj], font: Option<&crate::text::Annot
         if hits.is_empty() {
             continue;
         }
-        if o.reads_far() {
-            d.push(b);
+        if let Some((s, l)) = o.loupe_parts() {
+            // A loupe shows its source: changed there, changed here.
+            if d.iter().any(|r| r.intersects(&px_bounds(s))) {
+                d.push(px_bounds(l).intersect(&img));
+            }
         } else if let Some(g) = o.pixel_grid() {
             d.extend(hits.into_iter().map(|h| cell_align(h, &g, size)));
         }
@@ -1282,9 +1293,8 @@ pub fn object_damage(prev: &[Obj], now: &[Obj], font: Option<&crate::text::Annot
                 if !w.intersects(&b) {
                     continue;
                 }
-                let n = if o.reads_far() {
-                    w.union(&b)
-                } else if let Some(g) = o.pixel_grid() {
+                // (A loupe reads its source beside the window: `render_window`.)
+                let n = if let Some(g) = o.pixel_grid() {
                     cell_align(*w, &g, size)
                 } else {
                     *w
@@ -1317,7 +1327,13 @@ pub fn rebake(out: &mut PixBuf, base: &PixBuf, objs: &[Obj], font: Option<&crate
         for y in w.y0..w.y1 {
             tmp.extend_from_slice(&base.as_raw()[(y as usize * iw + w.x0 as usize) * 4..][..ww * 4]);
         }
-        render_window(&mut tmp, *w, Order::Rgba, objs, font);
+        let bg = |r: PxRect, out: &mut [u8]| {
+            let n = r.w() as usize * 4;
+            for (i, y) in (r.y0..r.y1).enumerate() {
+                out[i * n..][..n].copy_from_slice(&base.as_raw()[(y as usize * iw + r.x0 as usize) * 4..][..n]);
+            }
+        };
+        render_window(&mut tmp, *w, PxRect::image(base.dimensions()), Order::Rgba, objs, font, &bg);
         let raw = out.as_raw_mut();
         for (i, y) in (w.y0..w.y1).enumerate() {
             raw[(y as usize * iw + w.x0 as usize) * 4..][..ww * 4].copy_from_slice(&tmp[i * ww * 4..][..ww * 4]);
@@ -1326,12 +1342,37 @@ pub fn rebake(out: &mut PixBuf, base: &PixBuf, objs: &[Obj], font: Option<&crate
 }
 
 /// Every object over window `w` rendered into `buf` (its pixels, in
-/// `order`, already the background).
-pub fn render_window(buf: &mut [u8], w: PxRect, order: Order, objs: &[Obj], font: Option<&crate::text::AnnotFont>) {
+/// `order`, already the background). A loupe whose source lies outside
+/// the window reads it from a window of its own, rendered from `bg`
+/// (the background of any rect) with the objects below the loupe.
+#[allow(clippy::too_many_arguments)]
+pub fn render_window(buf: &mut [u8], w: PxRect, img: PxRect, order: Order, objs: &[Obj], font: Option<&crate::text::AnnotFont>, bg: &dyn Fn(PxRect, &mut [u8])) {
+    let img_w = w;
     let mut sf = Surf::with_origin(buf, w.w() as u32, w.h() as u32, w.x0, w.y0, order);
-    for o in objs.iter().filter(|o| !o.is_spot()) {
-        if o.bounds(font).is_some_and(|b| px_bounds(b).intersects(&w)) {
-            o.render_into(&mut sf, font);
+    for (j, o) in objs.iter().enumerate().filter(|(_, o)| !o.is_spot()) {
+        if !o.bounds(font).is_some_and(|b| px_bounds(b).intersects(&w)) {
+            continue;
         }
+        if let Some((s, l)) = o.loupe_parts() {
+            let mut s = px_bounds(s).intersect(&img);
+            if px_bounds(l).intersects(&w) && !s.is_empty() && !img_w.contains(&s) {
+                // Whole cells of the pixelates below (it renders them).
+                let size = (img.x1 as u32, img.y1 as u32);
+                for _ in 0..4 {
+                    let n = objs[..j].iter().filter_map(Obj::pixel_grid).fold(s, |s, g| cell_align(s, &g, size));
+                    if n == s {
+                        break;
+                    }
+                    s = n;
+                }
+                let mut sb = vec![0u8; s.w() as usize * s.h() as usize * 4];
+                bg(s, &mut sb);
+                render_window(&mut sb, s, img, order, &objs[..j], font, bg);
+                let src = Surf::with_origin(&mut sb, s.w() as u32, s.h() as u32, s.x0, s.y0, order);
+                o.render_with_source(&mut sf, &src, font);
+                continue;
+            }
+        }
+        o.render_into(&mut sf, font);
     }
 }

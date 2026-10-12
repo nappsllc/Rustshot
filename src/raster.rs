@@ -393,10 +393,28 @@ impl Mask {
             (r.y1() + 1.0).ceil() as i32,
             (self.x0, self.y0, self.x1, self.y1),
         );
+        let full = |qx: f32, qy: f32| qx <= 0.0 && qy <= 0.0 && qx.max(qy) - rad <= -0.5;
+        let w = (self.x1 - self.x0) as usize;
         for y in y0..y1 {
             let qy = (y as f32 + 0.5 - cy).abs() - hy;
             for x in x0..x1 {
                 let qx = (x as f32 + 0.5 - cx).abs() - hx;
+                if full(qx, qy) {
+                    // Inside by half a pixel or more: covered (the SDF's 1),
+                    // and so is the run up to the mirror pixel.
+                    let mut e = x;
+                    while e < x1 && full((e as f32 + 0.5 - cx).abs() - hx, qy) {
+                        e += 1;
+                    }
+                    let row = (y - self.y0) as usize * w;
+                    self.a[row + (x - self.x0) as usize..row + (e - self.x0) as usize].fill(255);
+                    for xx in e..x1 {
+                        let qx = (xx as f32 + 0.5 - cx).abs() - hx;
+                        let d = qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - rad;
+                        self.put(xx, y, (0.5 - d).clamp(0.0, 1.0));
+                    }
+                    break;
+                }
                 let d = qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - rad;
                 self.put(x, y, (0.5 - d).clamp(0.0, 1.0));
             }
@@ -500,10 +518,29 @@ impl Mask {
         if w == 0 {
             return;
         }
+        // Fully covered by an opaque normal colour: the pixel is the colour
+        // (what `blend_px` computes then), written directly.
+        let solid = (c.a == 255 && blend == Blend::Normal).then(|| {
+            let mut px = [0u8, 0, 0, 255];
+            for (v, i) in [c.r, c.g, c.b].into_iter().zip(sf.order.rgb_idx()) {
+                px[i] = v;
+            }
+            px
+        });
+        let (ox, oy, sw) = (sf.ox, sf.oy, sf.w as usize);
         for (r, row) in self.a.chunks_exact(w).enumerate() {
+            let y = self.y0 + r as i32;
             for (i, &v) in row.iter().enumerate() {
-                if v > 0 {
-                    sf.blend_px(self.x0 + i as i32, self.y0 + r as i32, c, v as f32 / 255.0, blend);
+                if v == 255
+                    && let Some(px) = solid
+                {
+                    // The mask lies inside the surface window.
+                    let at = ((y - oy) as usize * sw + (self.x0 + i as i32 - ox) as usize) * 4;
+                    if let Some(d) = sf.data.get_mut(at..at + 4) {
+                        d.copy_from_slice(&px);
+                    }
+                } else if v > 0 {
+                    sf.blend_px(self.x0 + i as i32, y, c, v as f32 / 255.0, blend);
                 }
             }
         }

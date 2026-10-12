@@ -80,6 +80,28 @@ pub fn text_area(r: FRect, style: Style, px: f32) -> FRect {
 /// break keeps the spaces at the end of the line before it). A word wider
 /// than the line is broken between characters.
 pub fn wrap(font: &AnnotFont, text: &str, px: f32, max_w: f32) -> Vec<(usize, usize)> {
+    // A drag re-wraps the same text a few times a frame (the fit, the
+    // bake of each window): the last few wraps are kept.
+    type Entry = (String, u32, u32, Vec<(usize, usize)>);
+    thread_local! {
+        static CACHE: std::cell::RefCell<Vec<Entry>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    let key = (px.to_bits(), max_w.to_bits());
+    if let Some(v) = CACHE.with(|c| c.borrow().iter().find(|e| (e.1, e.2) == key && e.0 == text).map(|e| e.3.clone())) {
+        return v;
+    }
+    let v = wrap_uncached(font, text, px, max_w);
+    CACHE.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.len() >= 8 {
+            c.remove(0);
+        }
+        c.push((text.to_string(), key.0, key.1, v.clone()));
+    });
+    v
+}
+
+fn wrap_uncached(font: &AnnotFont, text: &str, px: f32, max_w: f32) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
     let mut start = 0;
     for para in text.split('\n') {

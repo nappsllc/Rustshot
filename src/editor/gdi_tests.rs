@@ -733,6 +733,9 @@ fn perf_gdi_object_drag() {
             let _ = t.pixels();
             tt.push(t0.elapsed().as_secs_f64() * 1000.0);
             area.push(rects.iter().map(|r| r.w() as f64 * r.h() as f64).sum::<f64>());
+            if k == 50 && std::env::var_os("RUSTSHOT_BENCH_RECTS").is_some() {
+                println!("  rects at move 50: {rects:?}");
+            }
         }
         app.pointer_up();
         println!(

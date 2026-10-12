@@ -103,7 +103,12 @@ pub fn hit(o: &Obj, p: Pt, tol: f32, font: Option<&AnnotFont>) -> bool {
             ((p.x - r.x - r.w / 2.0) / rx.max(0.5)).powi(2) + ((p.y - r.y - r.h / 2.0) / ry.max(0.5)).powi(2) <= 1.0
         }
         Obj::RectFill { r, width, .. } => inside(*r, p, width / 2.0 + tol),
-        Obj::Pixelate { r, .. } | Obj::Invert { r } | Obj::Spotlight { r } => inside(*r, p, tol),
+        Obj::Pixelate { r, .. } | Obj::Invert { r } => inside(*r, p, tol),
+        // On its edge only: what it keeps bright stays pickable.
+        Obj::Spotlight { r } => {
+            let m = tol + 2.0;
+            inside(*r, p, m) && !inside(FRect { x: r.x + m, y: r.y + m, w: r.w - 2.0 * m, h: r.h - 2.0 * m }, p, 0.0)
+        }
         Obj::Text { .. } => sel_box(o, font).is_some_and(|b| inside(b, p, tol)),
         Obj::Counter { c, d, tail, .. } => {
             (p.x - c.x).hypot(p.y - c.y) <= d / 2.0 + tol || tail.is_some_and(|t| dist_seg(p, *c, t) <= tol + 2.0)
