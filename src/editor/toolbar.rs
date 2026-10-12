@@ -211,6 +211,9 @@ pub struct Input<'a> {
     pub rec: Option<&'a RecView<'a>>,
     /// The camera bubble on screen (image px): the grip hint goes under it.
     pub grip: Option<FRect>,
+    /// The mode switch (and Close) above the selection; not while the
+    /// selection is dragged (it would repaint on every move).
+    pub top: bool,
     /// The current tool has a size (else `– N +` is disabled) and a
     /// colour (else the palette button is).
     pub sizes: bool,
@@ -408,7 +411,7 @@ pub fn layout(inp: &Input) -> Toolbar {
     };
     // The mode switch above the selection (recording works here).
     let mut extra = Vec::new();
-    let mode = inp.record.then(|| {
+    let mode = (inp.record && inp.top).then(|| {
         let up = above.then(|| pop.map_or(bar, |p| union(bar, p))).filter(|b| b.y1() <= sel.y + 0.5);
         super::panel::place_top(sel, area, s, false, up, &mut items, &mut extra)
     });
@@ -669,6 +672,7 @@ mod tests {
             record: false,
             rec: None,
             grip: None,
+            top: true,
             sizes: true,
             colors: true,
             fills: true,

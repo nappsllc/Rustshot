@@ -4244,6 +4244,35 @@ mod tests {
         e.rec.opts.camera = true;
         e.rec.ring_pal = true;
         v.push(("ring palette", app));
+        // Video mode: the panel (the meter clipping, the grip hint, a
+        // hovered row), GIF in light, the microphone list, the panel above
+        // a low selection (the estimate toast moved off it).
+        let mut app = annotated(theme::DARK, big);
+        let e = edit_of(&mut app);
+        e.set_video(true);
+        e.rec.opts.mic = true;
+        e.rec.opts.camera = true;
+        e.rec.meter = Some(rec_ui::meter::MicMeter::open(""));
+        e.rec.bars = (7, true);
+        e.rec.grip = Some(FRect { x: 264.0, y: 496.0, w: 160.0, h: 160.0 });
+        e.hover = Some(12);
+        e.hover_at = Instant::now() - Duration::from_secs(2);
+        v.push(("video panel", app));
+        let mut app = annotated(theme::LIGHT, big);
+        let e = edit_of(&mut app);
+        e.set_video(true);
+        e.rec.opts.format = crate::rec::RecFormat::Gif;
+        v.push(("video gif", app));
+        let mut app = annotated(theme::DARK, big);
+        let e = edit_of(&mut app);
+        e.set_video(true);
+        e.rec.opts.mic = true;
+        e.rec.load_devs();
+        e.rec.dev_open = Some(Dev::Mic);
+        v.push(("video mic list", app));
+        let mut app = annotated(theme::LIGHT, FRect { x: 240.0, y: 600.0, w: 960.0, h: 260.0 });
+        edit_of(&mut app).set_video(true);
+        v.push(("video above", app));
         // Numbered tags (one across the selection edge), a filled shape,
         // the number tool's bar and the fill toggle on.
         let mut app = annotated(theme::DARK, big);
@@ -4524,6 +4553,62 @@ mod tests {
         });
         small(f, "sel grows");
         assert_dirty_covers(&mut app, "dim fade", |app| edit_of(app).mo.dim = mid(1.0));
+    }
+
+    /// Video mode: on and off, a source, the meter's bars, a row hovered,
+    /// the format, the list, the grip hint: every changed pixel lies in
+    /// the dirty rects, and a meter tick repaints only a little.
+    #[test]
+    fn dirty_rects_cover_video_mode() {
+        let big = FRect { x: 240.0, y: 140.0, w: 960.0, h: 540.0 };
+        let mut app = annotated(theme::DARK, big);
+        settled(&mut app);
+        assert_dirty_covers(&mut app, "video on", |a| edit_of(a).set_video(true));
+        snap_all(&mut app);
+        assert_dirty_covers(&mut app, "settled", snap_all);
+        assert_dirty_covers(&mut app, "mic on", |a| {
+            let e = edit_of(a);
+            e.rec.opts.mic = true;
+            e.rec.meter = Some(rec_ui::meter::MicMeter::open(""));
+        });
+        let f = assert_dirty_covers(&mut app, "meter tick", |a| edit_of(a).rec.bars = (5, false));
+        assert!(f < 0.25, "a meter tick repaints the panel, not the screen: {f}");
+        assert_dirty_covers(&mut app, "clipping", |a| edit_of(a).rec.bars = (7, true));
+        assert_dirty_covers(&mut app, "row hover", |a| {
+            let e = edit_of(a);
+            e.hover = Some(14);
+            e.hover_at = Instant::now() - Duration::from_secs(2);
+        });
+        assert_dirty_covers(&mut app, "source", |a| edit_of(a).rec.source = rec_ui::RecSource::Screen);
+        assert_dirty_covers(&mut app, "gif", |a| edit_of(a).rec.opts.format = crate::rec::RecFormat::Gif);
+        assert_dirty_covers(&mut app, "list", |a| {
+            let e = edit_of(a);
+            e.rec.opts.format = crate::rec::RecFormat::Mp4;
+            e.rec.load_devs();
+            e.rec.dev_open = Some(Dev::Mic);
+        });
+        assert_dirty_covers(&mut app, "grip", |a| edit_of(a).rec.grip = Some(FRect { x: 264.0, y: 496.0, w: 160.0, h: 160.0 }));
+        assert_dirty_covers(&mut app, "grip moves", |a| edit_of(a).rec.grip = Some(FRect { x: 1016.0, y: 496.0, w: 160.0, h: 160.0 }));
+        assert_dirty_covers(&mut app, "selection moves", |a| edit_of(a).sel = Some(FRect { x: 250.0, y: 150.0, ..big }));
+        assert_dirty_covers(&mut app, "video off", |a| edit_of(a).set_video(false));
+    }
+
+    /// The estimate toast never sits on the panel: it moves to the top of
+    /// the monitor when the panel is at the bottom.
+    #[test]
+    fn estimate_toast_keeps_off_the_panel() {
+        for sel in [FRect { x: 240.0, y: 110.0, w: 960.0, h: 420.0 }, FRect { x: 0.0, y: 0.0, w: 1440.0, h: 900.0 }, FRect { x: 300.0, y: 200.0, w: 400.0, h: 200.0 }] {
+            let mut app = preview_app(theme::DARK, Some(sel));
+            edit_of(&mut app).set_video(true);
+            settled(&mut app);
+            let e = edit_of(&mut app);
+            let sc = e.scene.as_ref().unwrap();
+            let t = sc.toast.as_ref().expect("the estimate");
+            let ui = chrome::Ui { th: &sc.th, s: sc.s, font: e.ui_font };
+            let r = chrome::toast_panel(&ui, &t.text, t.area, 1.0);
+            let p = e.toolbar.as_ref().unwrap().bar;
+            assert!(!(r.x < p.x1() && p.x < r.x1() && r.y < p.y1() && p.y < r.y1()), "{sel:?}: toast {r:?} on the panel {p:?}");
+        }
     }
 
     /// Every pixel the chrome and draft change over the bare backdrop lies

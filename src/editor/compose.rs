@@ -565,6 +565,8 @@ impl Edit {
                 record: crate::rec_ui::supported() && !busy,
                 rec: (rp.open && crate::rec_ui::supported() && !busy).then_some(&rv),
                 grip: rp.grip.filter(|_| rp.open),
+                // Not while the selection is dragged (it would repaint every move).
+                top: !matches!(self.interact, Interact::MoveSel { .. } | Interact::Resize { .. } | Interact::NewSel { .. }),
                 sizes: tools::has_size(cur),
                 colors: tools::has_color(cur),
                 fills: tools::has_fill(cur),
@@ -624,6 +626,11 @@ impl Edit {
             let sel = self.sel.filter(|_| self.rec.open && crate::rec_ui::supported() && self.tasks.is_empty())?;
             let q = crate::rec::Quality::from_config(&self.cfg.rec_quality);
             let text = self.rec.opts.estimate((sel.w.round().max(2.0) as u32, sel.h.round().max(2.0) as u32), q);
+            // Over the panel it goes to the top of the monitor instead.
+            let ui = Ui { th: &self.th, s, font: self.ui_font };
+            let r = chrome::toast_panel(&ui, &text, area, 1.0);
+            let clash = self.toolbar.as_ref().is_some_and(|t| r.x < t.bar.x1() && t.bar.x < r.x1() && r.y < t.bar.y1() && t.bar.y < r.y1());
+            let area = if clash { FRect { h: (12.0 + 36.0 + 28.0) * s, ..area } } else { area };
             Some(ToastUi { text, kind: ToastKind::Info, area, k: 1.0 })
         });
         let mut tip = None;

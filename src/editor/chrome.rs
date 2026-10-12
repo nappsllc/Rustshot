@@ -167,6 +167,8 @@ pub fn toolbar(f: &mut Fb, ui: &Ui, tb: &Toolbar, st: &BarState, k: f32) {
         let pressed = st.pressed == Some(i) && !it.disabled;
         // Popover items fade with the popover.
         let in_pop = tb.pop.is_some_and(|p| it.r.x >= p.x && it.r.y >= p.y && it.r.x1() <= p.x1() + 0.5 && it.r.y1() <= p.y1() + 0.5);
+        // Video mode's panel is the bar: its items fade with it.
+        let kp = if tb.video && !in_pop { k } else { kp };
         match it.kind {
             Kind::Btn(act) => {
                 button(f, ui, it, act, (hovered, pressed), st, if in_pop { kp } else { k });
@@ -968,6 +970,11 @@ fn toast_rect(ui: &Ui, msg: &str, area: FRect, k: f32) -> FRect {
     FRect { x: area.x + (area.w - w) / 2.0, y: area.y1() - ui.px(28.0) - h + rise, w, h }
 }
 
+/// Where the toast's panel is for `msg` in `area` at opacity `k`.
+pub fn toast_panel(ui: &Ui, msg: &str, area: FRect, k: f32) -> FRect {
+    toast_rect(ui, msg, area, k)
+}
+
 /// The toast panel's (w, h) for `msg`, uncapped (the post-capture notice
 /// window is sized to it).
 pub fn toast_size(ui: &Ui, msg: &str) -> (f32, f32) {
@@ -1417,6 +1424,7 @@ mod tests {
             record: true,
             rec: None,
             grip: None,
+            top: true,
             sizes: true,
             colors: true,
             fills: true,

@@ -228,6 +228,7 @@ pub enum CamSize {
 }
 
 impl CamSize {
+    #[cfg_attr(target_os = "macos", allow(dead_code))] // the wheel resizes (no scroll events on macOS yet)
     pub const ALL: [CamSize; 4] = [CamSize::S, CamSize::M, CamSize::L, CamSize::Xl];
 
     /// `rec_camera_size`: "s" | "m" | "l" | "xl".
@@ -262,6 +263,7 @@ impl CamSize {
 
     /// One size up (`dir` > 0: the wheel turned away from the user) or
     /// down, stopping at the ends.
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub fn step(self, dir: i32) -> CamSize {
         let i = CamSize::ALL.iter().position(|z| *z == self).unwrap_or(1) as i32;
         CamSize::ALL[(i + dir.signum()).clamp(0, 3) as usize]
@@ -501,6 +503,7 @@ thread_local! {
 
 /// The bubble was resized with the wheel (the overlay's Record panel
 /// follows it: [`take_resized`]).
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn note_resized(z: CamSize) {
     #[cfg(not(test))]
     {
@@ -524,6 +527,7 @@ pub fn take_resized() -> Option<CamSize> {
 
 /// The look after one wheel notch over the bubble (`delta` > 0: away from
 /// the user, bigger); `None` at either end.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 pub fn wheel_look(look: Look, delta: i32) -> Option<Look> {
     let size = look.size.step(delta);
     (delta != 0 && size != look.size).then_some(Look { size, ..look })

@@ -1006,7 +1006,7 @@ impl Geom {
     }
 }
 
-//// A recording from the Start button to the saved file: the state
+/// A recording from the Start button to the saved file: the state
 /// machine, the pipeline worker and the windows around the area.
 pub struct Run {
     m: Machine,

@@ -614,7 +614,7 @@ impl BarWin {
             let gap = (8.0 * s).round() as i32;
             super::place_bar_away(geom.area, &geom.rects(), panel(s, v), gap, gap).is_none()
         });
-        let v = &BarView { compact, ..v.clone() };
+        let v = &BarView { compact: compact || v.compact, ..v.clone() };
         let spot = super::spot_bar_with(geom, self.spot, |s| panel(s, v), |area, rects, sz, gap| {
             let away = (!compact).then(|| super::place_bar_away(area, rects, sz, gap, gap)).flatten();
             away.unwrap_or_else(|| super::corner_pill(area, sz, gap))

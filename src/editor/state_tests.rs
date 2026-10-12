@@ -1242,7 +1242,7 @@ fn rec_phase(a: &App) -> Option<rec_ui::Phase> {
     a.rec.as_ref().map(|r| r.phase())
 }
 
-//// The Record button (or the mode switch, or 2) turns video mode on: the
+/// The Record button (or the mode switch, or 2) turns video mode on: the
 /// setup panel replaces the toolbar, centred under the selection; its
 /// choices start a recording of the selection (physical px).
 #[cfg(windows)]

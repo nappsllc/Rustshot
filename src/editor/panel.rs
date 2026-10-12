@@ -165,11 +165,19 @@ pub fn layout(inp: &Input, rv: &RecView) -> Toolbar {
     let mp4 = rv.format == RecFormat::Mp4;
     let row_r = |y: f32| FRect { x: x0, y, w: inner, h: ROW_H };
     let mut list = None;
+    let ring_c = rv.ring.unwrap_or(rv.accent);
     let mut row = |local: &mut Vec<Item>, y: f32, act: Act, icon: &'static str, label: &'static str, value: Option<&'static str>, dev: Option<Dev>, on: bool, disabled: bool, meter: bool| {
         let r = row_r(y);
         local.push(Item { kind: Kind::Row { act, icon, label, value, dim: !on }, r, disabled });
         let tx = r.x1() - 6.0 - 32.0;
         let mut vx1 = tx - 10.0;
+        // The camera on: its ring's swatch before the toggle (the ring's
+        // palette and width).
+        if act == Act::RecCamera && on {
+            let sr = FRect { x: vx1 - RING_BTN, y: r.y + (ROW_H - RING_BTN) / 2.0, w: RING_BTN, h: RING_BTN };
+            local.push(Item { kind: Kind::Swatch { act: Act::RingPalette, c: ring_c, on: rv.ring_pal }, r: sr, disabled: false });
+            vx1 = sr.x - 8.0;
+        }
         if meter {
             let mr = FRect { x: vx1 - METER_W, y: r.y + (ROW_H - 12.0) / 2.0, w: METER_W, h: 12.0 };
             let (lit, clip) = rv.meter.unwrap_or((0, false));
@@ -192,6 +200,7 @@ pub fn layout(inp: &Input, rv: &RecView) -> Toolbar {
     let cam_label = if rv.cams_looking { LOOKING_CAMS } else { "Camera" };
     let cam_value = if rv.cams_looking { Some("") } else if rv.cams { None } else { Some(crate::cam::NO_CAMERA) };
     row(&mut local, y, Act::RecCamera, "video", cam_label, cam_value, rv.cams.then_some(Dev::Cam), cam_on, !rv.cams, false);
+    let cam_row = row_r(y);
     y += ROW_H + GAP;
     // Microphone (MP4 only): the device and its level, on/off.
     let mic_on = mp4 && rv.mic;
@@ -246,31 +255,15 @@ pub fn layout(inp: &Input, rv: &RecView) -> Toolbar {
         seg(&mut local, r.x1() - 6.0 - sw, y + (SMALL_ROW_H - 26.0) / 2.0, sw, 26.0, 2.0, &segs);
         y += SMALL_ROW_H + GAP;
     }
-    // The camera's ring (with the camera on): thinner, width, thicker, colour.
-    let mut ring_pal = None;
-    if cam_on {
-        let r = FRect { x: x0, y, w: inner, h: SMALL_ROW_H };
-        local.push(Item { kind: Kind::Row { act: Act::RingPalette, icon: "", label: "Camera ring", value: None, dim: false }, r, disabled: true });
-        let ring_c = rv.ring.unwrap_or(rv.accent);
-        let by = y + (SMALL_ROW_H - RING_BTN) / 2.0;
-        let sx = r.x1() - 6.0 - RING_BTN;
-        let px = sx - 8.0 - RING_BTN;
-        let vx = px - 2.0 - RING_VALUE_W;
-        let mx = vx - 2.0 - RING_BTN;
-        local.push(Item { kind: Kind::Btn(Act::RingSize(-1)), r: FRect { x: mx, y: by, w: RING_BTN, h: RING_BTN }, disabled: rv.ring_w == 0 });
-        local.push(Item { kind: Kind::RingValue { w: rv.ring_w, c: ring_c }, r: FRect { x: vx, y: by, w: RING_VALUE_W, h: RING_BTN }, disabled: false });
-        local.push(Item { kind: Kind::Btn(Act::RingSize(1)), r: FRect { x: px, y: by, w: RING_BTN, h: RING_BTN }, disabled: rv.ring_w >= crate::config::RING_WIDTH_MAX });
-        local.push(Item { kind: Kind::Swatch { act: Act::RingPalette, c: ring_c, on: rv.ring_pal }, r: FRect { x: sx, y: by, w: RING_BTN, h: RING_BTN }, disabled: false });
-        if rv.ring_pal {
-            // The accent, the palette, the rainbow: rows of six above the row.
-            let n = rv.ring_colors.len() + 2;
-            let rows = n.div_ceil(RING_PAL_COLS);
-            let pw = RING_PAL_COLS as f32 * DOT_BTN + (RING_PAL_COLS - 1) as f32 * DOT_GAP + 12.0;
-            let ph = rows as f32 * DOT_BTN + (rows - 1) as f32 * DOT_GAP + 12.0;
-            ring_pal = Some((FRect { x: x0 + inner - pw, y: y - 4.0 - ph, w: pw, h: ph }, ring_c));
-        }
-        y += SMALL_ROW_H + GAP;
-    }
+    // The camera ring's palette, below the camera row: thinner, the
+    // width, thicker; the accent, the palette's colours, the rainbow.
+    let ring_pal = (cam_on && rv.ring_pal).then(|| {
+        let n = rv.ring_colors.len() + 2;
+        let rows = n.div_ceil(RING_PAL_COLS);
+        let pw = RING_PAL_COLS as f32 * DOT_BTN + (RING_PAL_COLS - 1) as f32 * DOT_GAP + 12.0;
+        let ph = RING_BTN + 8.0 + rows as f32 * DOT_BTN + (rows - 1) as f32 * DOT_GAP + 12.0;
+        FRect { x: cam_row.x1() - 6.0 - pw, y: cam_row.y1() + 2.0, w: pw, h: ph }
+    });
     local.push(Item { kind: Kind::Primary { act: Act::RecStart, label: "Start recording" }, r: FRect { x: x0, y, w: inner, h: START_H }, disabled: false });
     y += START_H + PAD;
     let mut h = y;
@@ -288,11 +281,21 @@ pub fn layout(inp: &Input, rv: &RecView) -> Toolbar {
             local.push(Item { kind: Kind::DevItem { dev, i, on: i == rv.dev_sel }, r, disabled: false });
         }
     }
-    if let Some((pr, cur)) = ring_pal {
+    if let Some(pr) = ring_pal {
+        let cur = ring_c;
+        h = h.max(pr.y1() + PAD);
         local.push(Item { kind: Kind::DevList, r: pr, disabled: false });
+        let by = pr.y + 6.0;
+        let mx = pr.x + 6.0;
+        let vx = mx + RING_BTN + 2.0;
+        let px = vx + RING_VALUE_W + 2.0;
+        local.push(Item { kind: Kind::Btn(Act::RingSize(-1)), r: FRect { x: mx, y: by, w: RING_BTN, h: RING_BTN }, disabled: rv.ring_w == 0 });
+        local.push(Item { kind: Kind::RingValue { w: rv.ring_w, c: ring_c }, r: FRect { x: vx, y: by, w: RING_VALUE_W, h: RING_BTN }, disabled: false });
+        local.push(Item { kind: Kind::Btn(Act::RingSize(1)), r: FRect { x: px, y: by, w: RING_BTN, h: RING_BTN }, disabled: rv.ring_w >= crate::config::RING_WIDTH_MAX });
+        let top = by + RING_BTN + 8.0;
         let at = |i: usize| FRect {
             x: pr.x + 6.0 + (i % RING_PAL_COLS) as f32 * (DOT_BTN + DOT_GAP),
-            y: pr.y + 6.0 + (i / RING_PAL_COLS) as f32 * (DOT_BTN + DOT_GAP),
+            y: top + (i / RING_PAL_COLS) as f32 * (DOT_BTN + DOT_GAP),
             w: DOT_BTN,
             h: DOT_BTN,
         };
@@ -309,7 +312,7 @@ pub fn layout(inp: &Input, rv: &RecView) -> Toolbar {
     let mut extra = Vec::new();
     let bar = FRect { x: px, y: py, w: pw, h: ph };
     let avoid = above.then_some(bar).filter(|b| b.y1() <= inp.sel.y + 0.5);
-    let mode = place_top(inp.sel, inp.area, s, true, avoid, &mut items, &mut extra);
+    let mode = inp.top.then(|| place_top(inp.sel, inp.area, s, true, avoid, &mut items, &mut extra));
     for it in local {
         let r = FRect { x: px + it.r.x * s, y: py + it.r.y * s, w: it.r.w * s, h: it.r.h * s };
         items.push(Item { r, ..it });
@@ -324,7 +327,7 @@ pub fn layout(inp: &Input, rv: &RecView) -> Toolbar {
     // The camera ring's colour picker, by the panel.
     let pop = inp.pick.map(|pv| super::toolbar::place_picker(pv, bar, above, &mut items, inp));
     debug_assert!(texts.len() >= LIST_TEXT);
-    Toolbar { bar, pop, items, wrapped: false, above, texts, extra, mode: Some(mode), video: true }
+    Toolbar { bar, pop, items, wrapped: false, above, texts, extra, mode, video: true }
 }
 
 /// The panel's items (not the top row or grip) lie inside it (tests).
@@ -392,6 +395,7 @@ mod tests {
             record: true,
             rec: Some(v),
             grip: None,
+            top: true,
             sizes: true,
             colors: true,
             fills: true,
@@ -431,6 +435,13 @@ mod tests {
         assert_eq!(tb.act_at(centre(video.r)), Some(Act::Mode(true)));
         let shot = find(&tb, |k| matches!(k, Kind::Mode { video: false, .. }));
         assert_eq!(tb.act_at(centre(shot.r)), Some(Act::Mode(false)));
+        // While the selection is dragged: no top row (nothing to repaint).
+        let mut i = input(r(240.0, 110.0, 960.0, 420.0), &v);
+        i.top = false;
+        let tb = layout(&i);
+        assert!(tb.mode.is_none() && !tb.items.iter().any(|it| matches!(it.kind, Kind::ModeTrack | Kind::Close)) && tb.extra.is_empty());
+        i.rec = None;
+        assert!(layout(&i).mode.is_none(), "the toolbar's switch too");
     }
 
     /// No room below: above (centred); none above either: inside the
@@ -548,12 +559,22 @@ mod tests {
         assert!(on(Act::RecShape(crate::cam::Shape::Rounded)) && !on(Act::RecShape(crate::cam::Shape::Circle)));
         let first = tb.items.iter().position(|i| i.kind == Kind::SegTrack).unwrap();
         assert!(matches!(tb.items[first + 1].kind, Kind::Seg { label: "Screen", icon: "monitor", .. }), "Screen first");
-        // The camera on: the ring row (its width, colour) above Start.
+        // The camera on: the ring's swatch in its row; its palette (the
+        // width, the colours) below the row, the panel no taller.
+        let h = tb.bar.h;
         v.camera = true;
         let tb = panel(r(240.0, 110.0, 960.0, 420.0), &v);
+        assert_eq!(tb.bar.h, h, "the board's height");
+        let sw = find(&tb, |k| matches!(k, Kind::Swatch { act: Act::RingPalette, .. }));
+        let cam = find(&tb, |k| matches!(k, Kind::Row { act: Act::RecCamera, .. }));
+        assert!(sw.r.y >= cam.r.y && sw.r.y1() <= cam.r.y1() && tb.act_at(centre(sw.r)) == Some(Act::RingPalette));
+        assert!(!tb.items.iter().any(|i| i.kind == Kind::Btn(Act::RingSize(1))), "closed");
+        v.ring_pal = true;
+        let tb = panel(r(240.0, 110.0, 960.0, 420.0), &v);
         let plus = find(&tb, |k| *k == Kind::Btn(Act::RingSize(1)));
-        let start = find(&tb, |k| matches!(k, Kind::Primary { .. }));
-        assert!(plus.r.y1() < start.r.y && tb.act_at(centre(plus.r)) == Some(Act::RingSize(1)));
+        assert!(plus.r.y > cam.r.y1() && tb.act_at(centre(plus.r)) == Some(Act::RingSize(1)));
+        let acc = find(&tb, |k| matches!(k, Kind::Swatch { act: Act::RingColor(None), .. }));
+        assert!(acc.r.y > plus.r.y1() && tb.act_at(centre(acc.r)) == Some(Act::RingColor(None)));
         assert!(inside_panel(&tb));
     }
 
