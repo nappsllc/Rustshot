@@ -2929,13 +2929,23 @@ fn end_interaction(edit: &mut Edit) {
                 // (window snapping), else everything (Flameshot-ish).
                 let all = FRect { x: 0.0, y: 0.0, w: edit.shot.size.0 as f32, h: edit.shot.size.1 as f32 };
                 edit.sel = Some(edit.snap_rect().unwrap_or(all));
+            } else {
+                // A dragged area is a region, whatever the Record panel's
+                // source was (Window, Screen).
+                edit.rec.source = rec_ui::RecSource::Region;
             }
             if edit.accept_on_select {
                 edit.done = true;
                 edit.cancelled = false;
             }
         }
-        Interact::MoveSel { .. } | Interact::Resize { .. } | Interact::Pick(_) | Interact::None => {}
+        // A window's or a monitor's area moved or resized: a region now.
+        Interact::MoveSel { orig, .. } | Interact::Resize { orig, .. } => {
+            if edit.sel != Some(orig) {
+                edit.rec.source = rec_ui::RecSource::Region;
+            }
+        }
+        Interact::Pick(_) | Interact::None => {}
     }
 }
 
