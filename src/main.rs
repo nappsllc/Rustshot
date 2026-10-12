@@ -14,6 +14,8 @@ mod editor;
 mod export;
 mod fonts;
 mod history;
+// The History window (board 10).
+mod history_ui;
 mod hotkey;
 mod icon_path;
 mod imgur;

@@ -301,8 +301,8 @@ fn group_labels() {
     // Across a month and a year.
     assert_eq!(day_header((2026, 9, 30), (2026, 10, 1), 1).0, "Yesterday");
     assert_eq!(day_header((2025, 12, 31), (2026, 1, 1), 1).0, "Yesterday");
-    assert_eq!(results_header(3, " stripe "), "3 results for \u{201c}stripe\u{201d}");
-    assert_eq!(results_header(1, "x"), "1 result for \u{201c}x\u{201d}");
+    assert_eq!(results_header(3, " stripe "), "3 results for \"stripe\"");
+    assert_eq!(results_header(1, "x"), "1 result for \"x\"");
     let t = (2026, 10, 8, 16, 40, 5);
     assert_eq!(time_text(&t, today, false), "16:40");
     assert_eq!(time_text(&t, today, true), "Thu 8 Oct 16:40");

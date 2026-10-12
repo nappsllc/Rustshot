@@ -220,6 +220,40 @@ pub const ICONS: &[(&str, &[Shape])] = &[
         Path("M16 16a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h2"),
         Path("m2 2 20 20"),
     ]),
+    // The History and Edit windows.
+    ("search", &[Circle(11.0, 11.0, 8.0), Path("m21 21-4.3-4.3")]),
+    ("grid", &[ // layout-grid
+        Rect { x: 3.0, y: 3.0, w: 7.0, h: 7.0, r: 1.0 },
+        Rect { x: 14.0, y: 3.0, w: 7.0, h: 7.0, r: 1.0 },
+        Rect { x: 14.0, y: 14.0, w: 7.0, h: 7.0, r: 1.0 },
+        Rect { x: 3.0, y: 14.0, w: 7.0, h: 7.0, r: 1.0 },
+    ]),
+    ("list", &[Path("M3 12h.01"), Path("M3 18h.01"), Path("M3 6h.01"), Path("M8 12h13"), Path("M8 18h13"), Path("M8 6h13")]),
+    ("more", &[Circle(12.0, 12.0, 1.0), Circle(19.0, 12.0, 1.0), Circle(5.0, 12.0, 1.0)]), // ellipsis
+    ("folder", &[Path("M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z")]),
+    ("link", &[
+        Path("M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"),
+        Path("M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"),
+    ]),
+    ("panel", &[Rect { x: 3.0, y: 3.0, w: 18.0, h: 18.0, r: 2.0 }, Path("M15 3v18")]), // panel-right
+    ("history", &[Path("M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"), Path("M3 3v5h5"), Path("M12 7v5l4 2")]),
+    ("history-off", &[Path("M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"), Path("M3 3v5h5"), Path("m2 2 20 20")]),
+    ("fit", &[Path("M8 3H5a2 2 0 0 0-2 2v3"), Path("M21 8V5a2 2 0 0 0-2-2h-3"), Path("M3 16v3a2 2 0 0 0 2 2h3"), Path("M16 21h3a2 2 0 0 0 2-2v-3")]),
+    ("collapse", &[Path("m11 17-5-5 5-5"), Path("m18 17-5-5 5-5")]), // chevrons-left
+    ("expand", &[Path("m6 17 5-5-5-5"), Path("m13 17 5-5-5-5")]), // chevrons-right
+    ("grip", &[
+        Circle(9.0, 7.0, 0.6),
+        Circle(15.0, 7.0, 0.6),
+        Circle(9.0, 12.0, 0.6),
+        Circle(15.0, 12.0, 0.6),
+        Circle(9.0, 17.0, 0.6),
+        Circle(15.0, 17.0, 0.6),
+    ]),
+    ("layers", &[
+        Path("M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z"),
+        Path("M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12"),
+        Path("M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"),
+    ]),
 ];
 
 /// The Settings window's rail and row icons (Lucide, as on the Settings

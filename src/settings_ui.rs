@@ -1063,10 +1063,14 @@ enum Msg {
     Raise,
     /// Show this to the user ([`notify`]).
     Note(String),
+    /// Go to this section ([`show_at`]).
+    Section(usize),
 }
 
 /// The open window's inbox, if any.
 static OPEN: Mutex<Option<Sender<Msg>>> = Mutex::new(None);
+/// The section a window opened by [`show_at`] starts in.
+static START_SECTION: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(GENERAL);
 /// The daemon's event sender: told to reload after a save.
 static DAEMON: Mutex<Option<Sender<HotEvent>>> = Mutex::new(None);
 
@@ -1084,6 +1088,30 @@ fn reload_daemon() {
     if let Some(d) = lock(&DAEMON).as_ref() {
         let _ = d.send(HotEvent::ReloadConfig);
     }
+}
+
+/// Another window changed `config.toml` (History's "Keep a history of
+/// captures", the Edit window's "Don't ask again"): the daemon reloads.
+pub fn tell_daemon_reload() {
+    reload_daemon();
+}
+
+/// Open the window at `section` (History's "History settings" link goes
+/// to Capture), or bring the open one there.
+pub fn show_at(section: usize) {
+    #[cfg(not(target_os = "macos"))]
+    {
+        let open = lock(&OPEN);
+        if let Some(tx) = open.as_ref()
+            && tx.send(Msg::Section(section)).is_ok()
+        {
+            let _ = tx.send(Msg::Raise);
+            return;
+        }
+        START_SECTION.store(section, std::sync::atomic::Ordering::SeqCst);
+    }
+    let _ = section;
+    show();
 }
 
 /// Show `text` in the open Settings window (over the form, with OK);
@@ -1132,6 +1160,7 @@ fn run(rx: Receiver<Msg>) {
     let mut s = Settings::open(config::config_path(), autostart)
         .with_screenclip(crate::screenclip_win::state(), crate::screenclip_win::awaiting_choice());
     s.hotkey_failures = hotkey::outstanding();
+    s.section = START_SECTION.swap(GENERAL, std::sync::atomic::Ordering::SeqCst).min(SECTIONS.len() - 1);
     let th = crate::theme::resolve(&s.loaded);
     // Opened without a daemon (`rustshot settings`): the file's UI size.
     // In the daemon an overlay may have set it and still have the write
@@ -1151,6 +1180,7 @@ fn run(rx: Receiver<Msg>) {
         match m {
             Msg::Raise => late = true,
             Msg::Note(t) => notes.push(t),
+            Msg::Section(_) => late = true,
         }
     }
     *open = None;
@@ -1338,6 +1368,10 @@ impl Driver for Window {
                 while let Ok(m) = self.rx.try_recv() {
                     match m {
                         Msg::Raise => raise = true,
+                        Msg::Section(n) => {
+                            self.s.section = n.min(SECTIONS.len() - 1);
+                            changed = true;
+                        }
                         Msg::Note(t) => {
                             self.s.notify(t);
                             changed = true;

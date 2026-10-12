@@ -262,7 +262,8 @@ pub fn day_header(day: (i32, u32, u32), today: (i32, u32, u32), count: usize) ->
 
 /// "3 results for "stripe"".
 pub fn results_header(n: usize, q: &str) -> String {
-    format!("{n} result{} for \u{201c}{}\u{201d}", if n == 1 { "" } else { "s" }, q.trim())
+    // Straight quotes: the baked UI font has no curly ones.
+    format!("{n} result{} for \"{}\"", if n == 1 { "" } else { "s" }, q.trim())
 }
 
 /// "14:32", or with the day when the group does not say it ("Today 11:48",
