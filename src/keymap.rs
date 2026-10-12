@@ -82,7 +82,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Action; 45] = [
+    pub const ALL: [Action; 46] = [
         Action::ToolSelect,
         Action::ToolPencil,
         Action::ToolLine,
@@ -414,7 +414,7 @@ mod tests {
     #[test]
     fn defaults_match_spec_table() {
         let km = Keymap::defaults();
-        let want: [(Action, &[&str]); 45] = [
+        let want: [(Action, &[&str]); 46] = [
             (Action::ToolSelect, &["V"]),
             (Action::ToolPencil, &["P"]),
             (Action::ToolLine, &["L"]),
@@ -437,6 +437,7 @@ mod tests {
             (Action::Save, &["Ctrl+S"]),
             (Action::SaveAs, &["Ctrl+Shift+S"]),
             (Action::SaveDesktop, &["Ctrl+D"]),
+            (Action::OpenWith, &["Ctrl+O"]),
             (Action::Upload, &["Ctrl+U"]),
             (Action::Pin, &["Ctrl+P"]),
             (Action::Undo, &["Ctrl+Z"]),

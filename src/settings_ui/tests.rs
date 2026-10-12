@@ -459,6 +459,32 @@ fn reset_of_a_fixed_file_writes_nothing() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The overlay helpers' settings reach the file: Apply writes them, a
+/// fresh read gets them back, and a later save asks no rewrite question.
+#[test]
+fn overlay_helper_settings_are_saved() {
+    let dir = scratch("overlay-helpers");
+    let p = dir.join("config.toml");
+    config::save_at(&p, &Config::default()).unwrap();
+    let mut s = settings_at(&p);
+    s.form.magnifier = false;
+    s.form.magnifier_square = true;
+    s.form.accept = 1;
+    s.form.hints = false;
+    assert!(matches!(&s.on(Click::Apply)[..], [Act::Saved(_)]));
+    let text = std::fs::read_to_string(&p).unwrap();
+    let back = config::parse_config(&text).unwrap();
+    assert!(!back.magnifier && back.magnifier_square && back.accept_on_select == "copy" && !back.overlay_hints, "{text}");
+    assert!(!config::rewrite_loses(&text), "nothing the writer drops");
+    let hand = format!("{text}");
+    assert!(hand.contains("accept_on_select = \"copy\""));
+    let mut s = settings_at(&p);
+    assert_eq!((s.form.magnifier, s.form.magnifier_square, s.form.accept, s.form.hints), (false, true, 1, false));
+    s.form.accept = 2;
+    assert!(matches!(&s.on(Click::Apply)[..], [Act::Saved(c)] if c.accept_on_select == "save"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The file breaks while the window is open: Save refuses to write
 /// (never merges onto the defaults) and shows the error; the edits stay
 /// and save once the file is fixed.

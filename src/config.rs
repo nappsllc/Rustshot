@@ -1144,6 +1144,13 @@ pub fn to_toml(c: &Config) -> String {
 ", c.rec_gif_max));
     out.push_str(&format!("show_thumbnail = {}\n", c.show_thumbnail));
     out.push_str(&format!(
+        "magnifier = {}\nmagnifier_square = {}\naccept_on_select = {}\noverlay_hints = {}\n",
+        c.magnifier,
+        c.magnifier_square,
+        q(&c.accept_on_select),
+        c.overlay_hints
+    ));
+    out.push_str(&format!(
         "launcher_source = {}\nlauncher_delay = {}\nlauncher_after = {}\n",
         q(&c.launcher_source),
         c.launcher_delay,
@@ -1662,6 +1669,19 @@ bogus = 1
     /// the boards' Ctrl+Shift chords are common app keys —, repeat unbound), the tray, copy-after-capture and the
     /// shutter sound; a file without them gets the defaults, one with them
     /// keeps its values.
+    #[test]
+    fn overlay_helper_keys_roundtrip() {
+        let d = Config::default();
+        assert!(d.magnifier && !d.magnifier_square && d.accept_on_select == "off" && d.overlay_hints);
+        let c = Config { magnifier: false, magnifier_square: true, accept_on_select: "save".into(), overlay_hints: false, ..Config::default() };
+        let text = to_toml(&c);
+        assert!(text.contains("magnifier = false\n") && text.contains("accept_on_select = \"save\"\n"), "{text}");
+        assert_eq!(parse_config(&text).unwrap(), c);
+        assert!(!rewrite_loses(&text));
+        assert!(!rewrite_loses("accept_on_select = \"copy\"\nmagnifier_square = true\n"), "hand-written keys survive");
+        assert!(parse_config("accept_on_select = \"maybe\"").is_err());
+    }
+
     #[test]
     fn redesign_keys_defaults_and_roundtrip() {
         let d = Config::default();
