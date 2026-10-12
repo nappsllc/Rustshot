@@ -167,7 +167,9 @@ fn bmp_bytes(img: &PixBuf) -> Result<Vec<u8>> {
 
 /// Make one path component safe on every OS: `<>:"/\|?*` and control
 /// characters become `-`, `.`/`..` components are dropped, trailing dots
-/// and spaces are trimmed. May return an empty string.
+/// and spaces are trimmed, and a name Windows reserves for a device
+/// (`CON`, `NUL`, `COM1`, `LPT1.png`, ...) gets a `_` after its stem. May
+/// return an empty string.
 pub fn sanitize_component(s: &str) -> String {
     let parts: Vec<String> = s
         .split(['/', '\\'])
@@ -176,11 +178,36 @@ pub fn sanitize_component(s: &str) -> String {
                 .chars()
                 .map(|c| if c.is_control() || "<>:\"|?*".contains(c) { '-' } else { c })
                 .collect();
-            p.trim_end_matches(['.', ' ']).to_string()
+            unreserve(p.trim_end_matches(['.', ' ']))
         })
         .filter(|p| !p.is_empty())
         .collect();
     parts.join("-")
+}
+
+/// Windows' device names (any case, with any extension: `nul.png` too;
+/// `COM¹`-`COM³` and `LPT¹`-`LPT³` included).
+fn is_reserved(stem: &str) -> bool {
+    let s = stem.trim_end_matches(' ').to_ascii_uppercase();
+    if matches!(s.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$") {
+        return true;
+    }
+    let mut c = s.chars();
+    let head: String = c.by_ref().take(3).collect();
+    let tail: Vec<char> = c.collect();
+    (head == "COM" || head == "LPT") && tail.len() == 1 && matches!(tail[0], '1'..='9' | '\u{b9}' | '\u{b2}' | '\u{b3}')
+}
+
+/// `p` with a `_` after its stem when that is a reserved device name.
+fn unreserve(p: &str) -> String {
+    let (stem, rest) = p.split_once('.').map_or((p, None), |(a, b)| (a, Some(b)));
+    if !is_reserved(stem) {
+        return p.to_string();
+    }
+    match rest {
+        Some(r) => format!("{stem}_.{r}"),
+        None => format!("{stem}_"),
+    }
 }
 
 /// Expanded, sanitised file stem (never empty).
@@ -768,6 +795,29 @@ mod tests {
         assert_eq!(sanitize_component("."), "");
         assert_eq!(sanitize_component("name. . "), "name");
         assert_eq!(sanitize_component("v1.2 final"), "v1.2 final");
+    }
+
+    /// Windows cannot make a file or folder named after a device.
+    #[test]
+    fn windows_device_names_get_an_underscore() {
+        for (from, to) in [
+            ("CON", "CON_"),
+            ("nul", "nul_"),
+            ("Aux.png", "Aux_.png"),
+            ("com1", "com1_"),
+            ("LPT9.tar.gz", "LPT9_.tar.gz"),
+            ("COM\u{b9}", "COM\u{b9}_"),
+            ("conout$", "conout$_"),
+            ("prn.", "prn_"),
+            ("a/con/b", "a-con_-b"),
+        ] {
+            assert_eq!(sanitize_component(from), to, "{from}");
+        }
+        for keep in ["CONSOLE", "com10", "COM0", "lpt", "nul-2026", "my con", "com1x"] {
+            assert_eq!(sanitize_component(keep), keep);
+        }
+        let cfg = Config { save_path: "/s".into(), filename_pattern: "nul".into(), save_subfolder: false, ..Config::default() };
+        assert_eq!(auto_save_path(&cfg, NOW).file_name().unwrap(), "nul_.png");
     }
 
     #[test]
