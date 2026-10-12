@@ -44,13 +44,34 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 /// One captured frame: BGRA, top-down rows of `w * 4` bytes, stamped with
-/// the recording [`Clock`] (paused time excluded).
+/// the recording [`Clock`] (paused time excluded). A source that converts
+/// on the GPU (Windows, Desktop Duplication for MP4) hands out the picture
+/// as [`Nv12`] instead, already at the encoder's size; `bgra` is then empty
+/// and `w`×`h` is still the area's size.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Frame {
     pub w: u32,
     pub h: u32,
     pub bgra: Vec<u8>,
     pub ts: Duration,
+    pub nv12: Option<Nv12>,
+}
+
+/// An NV12 picture (BT.709, limited range): `w`×`h` (even) Y bytes, then
+/// the interleaved U/V plane at half resolution; rows are tight. Shared:
+/// a source that saw no change hands out the same picture again.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Nv12 {
+    pub w: u32,
+    pub h: u32,
+    pub data: Arc<Vec<u8>>,
+}
+
+impl Frame {
+    /// A BGRA frame of `w`×`h`, stamped `ts`.
+    pub fn bgra(w: u32, h: u32, bgra: Vec<u8>, ts: Duration) -> Frame {
+        Frame { w, h, bgra, ts, nv12: None }
+    }
 }
 
 /// The recording's monotonic clock: time since its start minus the

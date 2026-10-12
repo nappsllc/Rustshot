@@ -52,6 +52,12 @@ AudioSource(s) ──► Mixer (48 kHz stereo f32, 10 ms blocks) ─────
   (SWAR) or by the MFT's colour converter.
 - Areas wider than 4096 px (or taller than 2304) are scaled to fit for MP4
   (box filter during NV12 conversion); GIF keeps full size.
+- Windows, Desktop Duplication: for MP4 the area's image stays on the GPU
+  and the D3D11 video processor scales and converts it to NV12 (BT.709,
+  limited range); one NV12 readback per frame goes to the encoder. The
+  pointer is composited first (the pixels under it are read back, drawn on
+  and written back). CPU conversion remains the fallback (GDI capture,
+  outputs on several adapters, no video processor, GPU errors).
 - Our recording border and control bar use `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)`;
   the camera bubble does not.
 

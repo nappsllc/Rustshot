@@ -169,7 +169,7 @@ fn frame(w: u32, h: u32, ms: u64, color: impl Fn(usize, usize) -> [u8; 3]) -> Fr
             bgra.extend_from_slice(&[b, g, r, 255]);
         }
     }
-    Frame { w, h, bgra, ts: Duration::from_millis(ms) }
+    Frame::bgra(w, h, bgra, Duration::from_millis(ms))
 }
 
 fn rgb_of(f: &Frame) -> Vec<[u8; 3]> {

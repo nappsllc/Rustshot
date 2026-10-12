@@ -2,7 +2,7 @@ use super::*;
 use std::sync::atomic::AtomicUsize;
 
 fn f(ms: u64) -> Frame {
-    Frame { w: 1, h: 1, bgra: vec![0, 0, 0, 255], ts: Duration::from_millis(ms) }
+    Frame::bgra(1, 1, vec![0, 0, 0, 255], Duration::from_millis(ms))
 }
 
 #[test]
@@ -166,7 +166,7 @@ impl FrameSource for StepSource {
     fn next(&mut self, deadline: Instant) -> Option<Frame> {
         self.steps.recv_timeout(deadline.saturating_duration_since(Instant::now())).ok()?;
         let n = self.made.fetch_add(1, Ordering::SeqCst);
-        Some(Frame { w: 4, h: 4, bgra: vec![n as u8; 64], ts: Duration::MAX })
+        Some(Frame::bgra(4, 4, vec![n as u8; 64], Duration::MAX))
     }
     fn size(&self) -> (u32, u32) {
         (4, 4)
@@ -571,7 +571,7 @@ impl FrameSource for EndingSource {
             return None;
         }
         self.given += 1;
-        Some(Frame { w: 4, h: 4, bgra: vec![1; 64], ts: Duration::ZERO })
+        Some(Frame::bgra(4, 4, vec![1; 64], Duration::ZERO))
     }
     fn size(&self) -> (u32, u32) {
         (4, 4)
