@@ -24,8 +24,12 @@ apps:
     # Wayland, Screenshot, the camera portal); camera: the camera bubble
     # (V4L2); audio-record + pulseaudio: system sound and the microphone
     # while recording. No screencast-legacy: it is a privileged interface
-    # and the portals need none (docs/STORES.md).
-    plugs: [x11, network, home, desktop, camera, audio-record, pulseaudio]
+    # and the portals need none (docs/STORES.md). unity7: the tray icon
+    # (StatusNotifierItem): owning org.kde.StatusNotifierItem-<pid>-1,
+    # registering with org.kde.StatusNotifierWatcher and serving
+    # /StatusNotifierItem and the /MenuBar dbusmenu; desktop alone does
+    # not allow those.
+    plugs: [x11, network, home, desktop, unity7, camera, audio-record, pulseaudio]
     environment:
       # The staged libraries (dlopen'ed: libpulse-simple, libopus,
       # libpipewire and its modules) rather than the base snap's.
