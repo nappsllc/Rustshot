@@ -64,7 +64,13 @@
       "w": 1484,
       "x": 0,
       "y": 4540
-    }
+    },
+    "History.dc.html": { "h": 860, "title": "10 · History · dark", "w": 1440, "x": 0, "y": 6980 },
+    "HistoryLight.dc.html": { "h": 860, "title": "10 · History · light", "w": 1440, "x": 1520, "y": 6980 },
+    "HistoryStates.dc.html": { "h": 1080, "title": "10 · History · states", "w": 2960, "x": 0, "y": 7960 },
+    "Edit.dc.html": { "h": 940, "title": "11 · Edit · dark · callout selected", "w": 1440, "x": 0, "y": 9160 },
+    "EditLight.dc.html": { "h": 940, "title": "11 · Edit · light · nothing selected", "w": 1440, "x": 1520, "y": 9160 },
+    "EditStates.dc.html": { "h": 1180, "title": "11 · Edit · object states, save flow, entry points", "w": 2960, "x": 0, "y": 10220 }
   },
   "createdOnFiles": {
     "at": "2026-10-09T18:40:00Z",
@@ -93,7 +99,13 @@
     "Icon.dc.html",
     "Video.dc.html",
     "Recording.dc.html",
-    "Settings.dc.html"
+    "Settings.dc.html",
+    "History.dc.html",
+    "HistoryLight.dc.html",
+    "HistoryStates.dc.html",
+    "Edit.dc.html",
+    "EditLight.dc.html",
+    "EditStates.dc.html"
   ],
   "pages": [],
   "title": "rustshot UI"

@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>rustshot edit window, light, nothing selected</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;font-family:'Inter',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+.dk{--win:#FAFAFC;--rail:#F2F3F6;--cv:#E4E6EC;--bd:rgba(0,0,0,.08);--sep:rgba(0,0,0,.08);--ic:#5F6473;--ich:#15171E;--hv:rgba(0,0,0,.06);--sf2:rgba(0,0,0,.04);--ac:#5B63F5;--acbg:rgba(91,99,245,.12);--acrg:rgba(91,99,245,.32);--acfg:#4047D6;--tx:#15171E;--tx2:#5F6473;--tx3:#8A8F9C;--er:#C62828;--chk1:#D4D7DF;--chk2:#DEE1E8;--s1:rgba(0,0,0,.14);--s2:rgba(0,0,0,.09);--s3:rgba(0,0,0,.05);--s4:rgba(0,0,0,.025);--rim:rgba(0,0,0,.18);--pgbg:#F6F7F9;--pgside:#EEF0F4;--pgline:#DADEE6;--pgcard:#fff}
+.img{box-shadow:0 0 0 1px rgba(0,0,0,.14),0 3px 0 2px rgba(0,0,0,.05),0 7px 0 5px rgba(0,0,0,.03)}
+.win{position:relative;box-sizing:border-box;width:1200px;height:800px;border-radius:12px;background:var(--win);display:flex;flex-direction:column;overflow:hidden;box-shadow:inset 0 0 0 1px var(--bd),0 1px 0 0 var(--s1),0 3px 0 2px var(--s2),0 7px 0 5px var(--s3),0 12px 0 9px var(--s4)}
+.ic{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;display:block;flex:none}
+.ic16{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;display:block;flex:none}
+.ic14{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;display:block;flex:none}
+.tb{height:44px;display:flex;align-items:center;gap:6px;padding:0 8px;border-bottom:1px solid var(--sep);flex:none}
+.g{display:flex;align-items:center;gap:2px}
+.sp{width:1px;height:16px;background:var(--sep);flex:none;margin:0 2px}
+.bt{box-sizing:border-box;width:32px;height:32px;border:0;padding:0;background:transparent;border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--ic);cursor:pointer;flex:none}
+.bt.on{background:var(--acbg);color:var(--acfg);box-shadow:inset 0 0 0 1px var(--acrg)}
+.bt.d{opacity:.34}
+.bt.w{width:auto;padding:0 10px;gap:6px;font:inherit;font-size:12px;font-weight:500}
+.val{width:56px;height:32px;display:flex;align-items:center;justify-content:center;gap:4px;flex:none}
+.ln{width:22px;border-radius:99px;display:block;flex:none}
+.v{font-size:12px;font-weight:600;color:var(--tx);font-variant-numeric:tabular-nums}
+.sw{width:18px;height:18px;border-radius:50%;box-shadow:inset 0 0 0 1px var(--rim);display:block}
+.zoom{display:flex;align-items:center;gap:2px;height:32px;padding:0 2px;border-radius:8px;background:var(--sf2);box-shadow:inset 0 0 0 1px var(--bd)}
+.zoom .bt{width:28px;height:28px}
+.zoom .v{width:44px;text-align:center}
+.body{flex:1;display:flex;min-height:0}
+.rail{box-sizing:border-box;width:200px;background:var(--rail);border-right:1px solid var(--sep);display:flex;flex-direction:column;flex:none}
+.rail .rh{height:36px;display:flex;align-items:center;justify-content:space-between;padding:0 6px 0 12px;font-size:10.5px;font-weight:600;color:var(--tx3);letter-spacing:.07em;text-transform:uppercase;border-bottom:1px solid var(--sep)}
+.lay{display:flex;align-items:center;gap:8px;height:32px;padding:0 6px 0 10px;font-size:12px;font-weight:500;color:var(--tx);border-radius:7px;margin:2px 6px 0}
+.lay.on{background:var(--acbg);color:var(--acfg)}
+.lay .n{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lay .b{width:22px;height:22px;border:0;border-radius:5px;background:transparent;color:var(--tx3);display:flex;align-items:center;justify-content:center;padding:0;cursor:pointer}
+.lay .b.on{color:var(--ic)}
+.lay .sw{width:10px;height:10px;box-shadow:none}
+.cv{flex:1;min-width:0;position:relative;background:var(--cv);overflow:hidden}
+.img{position:absolute;box-shadow:inset 0 0 0 1px var(--bd);background:conic-gradient(var(--chk2) 25%,var(--chk1) 0 50%,var(--chk2) 0 75%,var(--chk1) 0) 0 0/16px 16px}
+.pg{position:absolute;left:0;top:0;right:0;bottom:0;background:var(--pgbg);overflow:hidden}
+.pg i{position:absolute;display:block;border-radius:4px;background:var(--pgline)}
+.pg .side{left:0;top:0;width:150px;bottom:0;background:var(--pgside);border-radius:0}
+.pg .crd{background:var(--pgcard);box-shadow:inset 0 0 0 1px #E4E7EC;border-radius:6px}
+.status{height:28px;border-top:1px solid var(--sep);display:flex;align-items:center;gap:14px;padding:0 14px;font-size:11px;color:var(--tx2);font-variant-numeric:tabular-nums;flex:none}
+.status .dot{width:7px;height:7px;border-radius:50%;background:#FFB454;display:inline-block;margin-right:6px}
+.mini{position:absolute;height:32px;padding:0 4px;border-radius:9px;background:rgba(27,28,32,.98);display:flex;align-items:center;gap:2px;box-shadow:inset 0 0 0 1px var(--bd),0 1px 0 0 var(--s1),0 3px 0 2px var(--s2),0 7px 0 5px var(--s3)}
+.mini .bt{width:26px;height:26px;border-radius:6px}
+.mini .bt.on{box-shadow:inset 0 0 0 1px var(--acrg)}
+.mini .sp{height:14px;margin:0 2px}
+.mini .val{width:46px;height:26px;gap:3px}
+.hd{position:absolute;width:7px;height:7px;border-radius:2px;background:#fff;border:1.5px solid var(--ac);box-shadow:0 0 0 1px rgba(0,0,0,.45);box-sizing:content-box}
+.hd.r{border-radius:50%;width:8px;height:8px}
+.tip{position:absolute;height:24px;padding:0 8px;border-radius:6px;background:rgba(14,15,18,.97);color:#F2F3F6;font-size:11.5px;font-weight:500;display:flex;align-items:center;gap:6px;white-space:nowrap;box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)}
+.tip .k{height:16px;min-width:16px;padding:0 4px;border-radius:3px;background:rgba(255,255,255,.14);color:#C4C7D0;font-size:10px;font-weight:600;display:inline-flex;align-items:center;justify-content:center}
+.h2{font-size:13px;font-weight:600;color:#15171E}
+.cap{font-size:11px;font-weight:500;color:#5F6473;line-height:1.5}
+</style>
+</helmet>
+<div class="dk" style="position:relative;width:1440px;height:940px;box-sizing:border-box;background:#DADDE4;padding:40px 120px;display:flex;flex-direction:column;gap:14px;font-family:'Inter',system-ui,sans-serif">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<symbol id="e-pencil" viewBox="0 0 24 24"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"></path><path d="m15 5 4 4"></path></symbol>
+<symbol id="e-line" viewBox="0 0 24 24"><path d="M20 4 4 20"></path></symbol>
+<symbol id="e-arrow" viewBox="0 0 24 24"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></symbol>
+<symbol id="e-rect" viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="5" rx="2"></rect></symbol>
+<symbol id="e-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle></symbol>
+<symbol id="e-marker" viewBox="0 0 24 24"><path d="m9 11-6 6v3h9l3-3"></path><path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"></path></symbol>
+<symbol id="e-text" viewBox="0 0 24 24"><path d="M4 7V4h16v3"></path><path d="M9 20h6"></path><path d="M12 4v16"></path></symbol>
+<symbol id="e-callout" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></symbol>
+<symbol id="e-num" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><path d="M10.5 9.5 12 8.5v7"></path></symbol>
+<symbol id="e-pixel" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"></rect><path d="M3 9h18"></path><path d="M3 15h18"></path><path d="M9 3v18"></path><path d="M15 3v18"></path></symbol>
+<symbol id="e-blur" viewBox="0 0 24 24"><path d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7z"></path></symbol>
+<symbol id="e-invert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><path d="M12 18a6 6 0 0 0 0-12v12z"></path></symbol>
+<symbol id="e-undo" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"></path><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5a5.5 5.5 0 0 1-5.5 5.5H11"></path></symbol>
+<symbol id="e-redo" viewBox="0 0 24 24"><path d="m15 14 5-5-5-5"></path><path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5A5.5 5.5 0 0 0 9.5 20H13"></path></symbol>
+<symbol id="e-minus" viewBox="0 0 24 24"><path d="M5 12h14"></path></symbol>
+<symbol id="e-plus" viewBox="0 0 24 24"><path d="M5 12h14"></path><path d="M12 5v14"></path></symbol>
+<symbol id="e-fill" viewBox="0 0 24 24"><path d="m19 11-8-8-8.6 8.6a2 2 0 0 0 0 2.8l5.2 5.2c.8.8 2 .8 2.8 0L19 11Z"></path><path d="m5 2 5 5"></path><path d="M2 13h15"></path><path d="M22 20a2 2 0 1 1-4 0c0-1.6 1.7-2.4 2-4 .3 1.6 2 2.4 2 4Z"></path></symbol>
+<symbol id="e-save" viewBox="0 0 24 24"><path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"></path><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"></path><path d="M7 3v4a1 1 0 0 0 1 1h7"></path></symbol>
+<symbol id="e-saveas" viewBox="0 0 24 24"><path d="M15 3h2.5a2 2 0 0 1 1.4.6l2.5 2.5A2 2 0 0 1 22 7.5V19a2 2 0 0 1-2 2h-2"></path><path d="M3 21V5a2 2 0 0 1 2-2h7"></path><path d="M3 15h8"></path><path d="M7 11v8"></path></symbol>
+<symbol id="e-desk" viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="3" rx="2"></rect><path d="M8 21h8"></path><path d="M12 17v4"></path><path d="M12 7v6"></path><path d="m9 10 3 3 3-3"></path></symbol>
+<symbol id="e-copy" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></symbol>
+<symbol id="e-cloud" viewBox="0 0 24 24"><path d="M12 13v8"></path><path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"></path><path d="m8 17 4-4 4 4"></path></symbol>
+<symbol id="e-fit" viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3"></path><path d="M21 8V5a2 2 0 0 0-2-2h-3"></path><path d="M3 16v3a2 2 0 0 0 2 2h3"></path><path d="M16 21h3a2 2 0 0 0 2-2v-3"></path></symbol>
+<symbol id="e-layers" viewBox="0 0 24 24"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z"></path><path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12"></path><path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"></path></symbol>
+<symbol id="e-eye" viewBox="0 0 24 24"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"></path><circle cx="12" cy="12" r="3"></circle></symbol>
+<symbol id="e-lock" viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></symbol>
+<symbol id="e-unlock" viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 9.9-1"></path></symbol>
+<symbol id="e-grip" viewBox="0 0 24 24"><circle cx="9" cy="7" r="1.2" fill="currentColor"></circle><circle cx="15" cy="7" r="1.2" fill="currentColor"></circle><circle cx="9" cy="12" r="1.2" fill="currentColor"></circle><circle cx="15" cy="12" r="1.2" fill="currentColor"></circle><circle cx="9" cy="17" r="1.2" fill="currentColor"></circle><circle cx="15" cy="17" r="1.2" fill="currentColor"></circle></symbol>
+<symbol id="e-collapse" viewBox="0 0 24 24"><path d="m11 17-5-5 5-5"></path><path d="m18 17-5-5 5-5"></path></symbol>
+<symbol id="e-trash" viewBox="0 0 24 24"><path d="M3 6h18"></path><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path></symbol>
+<symbol id="e-dup" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path><path d="M15 12v6"></path><path d="M12 15h6"></path></symbol>
+<symbol id="e-cloudshape" viewBox="0 0 24 24"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"></path></symbol>
+<symbol id="e-ellipse" viewBox="0 0 24 24"><ellipse cx="12" cy="12" rx="10" ry="7"></ellipse></symbol>
+</defs></svg>
+
+<div style="display:flex;flex-direction:column;gap:4px">
+  <div class="h2">Edit window · light · 1200 × 800 · state 1: nothing selected, objects rail collapsed to 44 px</div>
+  <div class="cap">Canvas backdrop goes to #E4E6EC with the image lifted by a soft shadow instead of a 1 px border, so a light screenshot still separates from the backdrop. The collapsed rail shows one icon per object (tooltip on hover); clicking an icon selects that object, double-click expands the list.</div>
+</div>
+
+<div class="win">
+  <!-- Toolbar -->
+  <div class="tb">
+    <div class="g">
+      <button class="bt" aria-label="Pencil · P"><svg class="ic"><use href="#e-pencil"></use></svg></button>
+      <button class="bt" aria-label="Line · L"><svg class="ic"><use href="#e-line"></use></svg></button>
+      <button class="bt" aria-label="Arrow · A"><svg class="ic"><use href="#e-arrow"></use></svg></button>
+      <button class="bt" aria-label="Rectangle · R"><svg class="ic"><use href="#e-rect"></use></svg></button>
+      <button class="bt" aria-label="Ellipse · E"><svg class="ic"><use href="#e-circle"></use></svg></button>
+      <button class="bt" aria-label="Marker · M"><svg class="ic"><use href="#e-marker"></use></svg></button>
+      <button class="bt" aria-label="Text · T"><svg class="ic"><use href="#e-text"></use></svg></button>
+      <button class="bt" aria-label="Callout · C"><svg class="ic"><use href="#e-callout"></use></svg></button>
+      <button class="bt" aria-label="Number · N"><svg class="ic"><use href="#e-num"></use></svg></button>
+      <button class="bt" aria-label="Pixelate · X"><svg class="ic"><use href="#e-pixel"></use></svg></button>
+      <button class="bt" aria-label="Blur · B"><svg class="ic"><use href="#e-blur"></use></svg></button>
+      <button class="bt" aria-label="Invert · I"><svg class="ic"><use href="#e-invert"></use></svg></button>
+    </div>
+    <div class="sp"></div>
+    <div class="g">
+      <button class="bt" aria-label="Undo · Ctrl+Z"><svg class="ic"><use href="#e-undo"></use></svg></button>
+      <button class="bt d" aria-label="Redo · Ctrl+Shift+Z"><svg class="ic"><use href="#e-redo"></use></svg></button>
+    </div>
+    <div class="sp"></div>
+    <div class="g">
+      <button class="bt" aria-label="Smaller · ["><svg class="ic"><use href="#e-minus"></use></svg></button>
+      <div class="val"><span class="ln" style="height:3px;background:#F04438"></span><span class="v">3</span></div>
+      <button class="bt" aria-label="Larger · ]"><svg class="ic"><use href="#e-plus"></use></svg></button>
+      <button class="bt on" aria-label="Fill · F"><svg class="ic"><use href="#e-fill"></use></svg></button>
+      <button class="bt" aria-label="Colour · K"><span class="sw" style="background:#F04438"></span></button>
+    </div>
+    <div class="sp"></div>
+    <div class="g">
+      <button class="bt" aria-label="Save · Ctrl+S"><svg class="ic"><use href="#e-save"></use></svg></button>
+      <button class="bt" aria-label="Save As… · Ctrl+Shift+S"><svg class="ic"><use href="#e-saveas"></use></svg></button>
+      <button class="bt" aria-label="Save to Desktop · Ctrl+D"><svg class="ic"><use href="#e-desk"></use></svg></button>
+      <button class="bt" aria-label="Copy · Ctrl+C"><svg class="ic"><use href="#e-copy"></use></svg></button>
+      <button class="bt" aria-label="Upload · Ctrl+U"><svg class="ic"><use href="#e-cloud"></use></svg></button>
+    </div>
+    <div style="flex:1"></div>
+    <div class="zoom" role="group" aria-label="Zoom">
+      <button class="bt" aria-label="Zoom out · Ctrl+−"><svg class="ic16"><use href="#e-minus"></use></svg></button>
+      <span class="v">72%</span>
+      <button class="bt" aria-label="Zoom in · Ctrl++"><svg class="ic16"><use href="#e-plus"></use></svg></button>
+      <div class="sp"></div>
+      <button class="bt on" aria-label="Zoom to fit · Ctrl+0"><svg class="ic16"><use href="#e-fit"></use></svg></button>
+      <button class="bt w" style="height:28px;font-size:11.5px;font-weight:600" aria-label="Actual size · Ctrl+1">1:1</button>
+    </div>
+  </div>
+
+  <div class="body">
+    <!-- Objects rail (expanded) -->
+    <aside class="rail" aria-label="Objects" style="width:44px;align-items:center;padding-top:6px;gap:2px">
+      <button class="bt" aria-label="Expand objects list"><svg class="ic16"><use href="#e-layers"></use></svg></button>
+      <div class="sp" style="width:16px;height:1px;margin:4px 0"></div>
+      <button class="bt" aria-label="Callout"><svg class="ic16"><use href="#e-callout"></use></svg></button>
+      <button class="bt" aria-label="Number 2"><svg class="ic16"><use href="#e-num"></use></svg></button>
+      <button class="bt" aria-label="Number 1"><svg class="ic16"><use href="#e-num"></use></svg></button>
+      <button class="bt" aria-label="Arrow (locked)"><svg class="ic16"><use href="#e-arrow"></use></svg></button>
+    </aside>
+
+    <!-- Canvas -->
+    <div class="cv">
+      <!-- image 1180×760 at 72% = 850×547, centered in 999×727 -->
+      <div class="img" style="left:152px;top:90px;width:850px;height:547px">
+        <div class="pg">
+          <i class="side"></i>
+          <i style="left:12px;top:14px;width:90px;height:10px;background:#C9CFDB"></i>
+          <i style="left:12px;top:36px;width:110px;height:8px;background:#D5D9E3"></i><i style="left:12px;top:52px;width:96px;height:8px;background:#D5D9E3"></i><i style="left:12px;top:68px;width:118px;height:8px;background:#D5D9E3"></i><i style="left:12px;top:84px;width:80px;height:8px;background:#D5D9E3"></i>
+          <i style="left:170px;top:16px;width:160px;height:12px;background:#C9CFDB"></i>
+          <i class="crd" style="left:170px;top:44px;width:660px;height:120px"></i>
+          <i style="left:186px;top:60px;width:28px;height:28px;border-radius:7px;background:#8E96E8"></i><i style="left:224px;top:62px;width:120px;height:9px"></i><i style="left:224px;top:80px;width:560px;height:8px;background:#E6E8EE"></i><i style="left:224px;top:96px;width:480px;height:8px;background:#E6E8EE"></i><i style="left:224px;top:112px;width:520px;height:8px;background:#E6E8EE"></i><i style="left:224px;top:128px;width:300px;height:8px;background:#E6E8EE"></i>
+          <i class="crd" style="left:170px;top:180px;width:660px;height:92px"></i>
+          <i style="left:186px;top:196px;width:28px;height:28px;border-radius:7px;background:#F0846B"></i><i style="left:224px;top:198px;width:90px;height:9px"></i><i style="left:224px;top:216px;width:500px;height:8px;background:#E6E8EE"></i><i style="left:224px;top:232px;width:420px;height:8px;background:#E6E8EE"></i>
+          <i class="crd" style="left:170px;top:288px;width:660px;height:230px"></i>
+          <i style="left:186px;top:304px;width:28px;height:28px;border-radius:7px;background:#7DD3A8"></i><i style="left:224px;top:306px;width:140px;height:9px"></i><i style="left:224px;top:324px;width:560px;height:8px;background:#E6E8EE"></i>
+          <i style="left:224px;top:346px;width:380px;height:150px;border-radius:8px;background:#DCE6F5"></i>
+        </div>
+        <!-- Annotations (image coordinates × 0.72) -->
+        <svg width="850" height="547" style="position:absolute;left:0;top:0" aria-hidden="true">
+          <!-- arrow -->
+          <path d="M300 470L430 390" stroke="#F04438" stroke-width="3" stroke-linecap="round" fill="none"></path>
+          <path d="M444 382L430 398L424 384Z" fill="#F04438"></path>
+          <!-- numbers -->
+          <circle cx="198" cy="74" r="12" fill="#F04438"></circle><text x="198" y="78.5" text-anchor="middle" font-family="Inter,system-ui,sans-serif" font-size="12" font-weight="600" fill="#fff">1</text>
+          <circle cx="198" cy="210" r="12" fill="#F04438"></circle><text x="198" y="214.5" text-anchor="middle" font-family="Inter,system-ui,sans-serif" font-size="12" font-weight="600" fill="#fff">2</text>
+          <!-- callout bubble with tail -->
+          <path d="M520 86h206a8 8 0 0 1 8 8v48a8 8 0 0 1-8 8H596l-34 30 6-30h-48a8 8 0 0 1-8-8V94a8 8 0 0 1 8-8z" fill="#F04438"></path>
+          <text x="536" y="112" font-family="Inter,system-ui,sans-serif" font-size="13" font-weight="600" fill="#fff">Move this to the top,</text>
+          <text x="536" y="130" font-family="Inter,system-ui,sans-serif" font-size="13" font-weight="600" fill="#fff">above the summary</text>
+        </svg>
+      </div>
+    </div>
+  </div>
+
+  <div class="status">
+    <span style="color:var(--tx)">1180 × 760</span><span style="color:var(--tx3)">·</span><span>72%</span><span style="color:var(--tx3)">·</span><span><span class="dot"></span>Edited · unsaved changes</span>
+    <div style="flex:1"></div><span>x 612, y 388</span>
+  </div>
+</div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":940}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>rustshot history window, dark</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;font-family:'Inter',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+.dk{--win:#1B1C20;--rail:#181A1F;--bd:rgba(255,255,255,.09);--sep:rgba(255,255,255,.08);--ic:#A3A7B3;--ich:#ECEEF3;--hv:rgba(255,255,255,.06);--sf2:rgba(255,255,255,.05);--ac:#8B93FF;--acbg:rgba(139,147,255,.18);--acrg:rgba(139,147,255,.30);--acfg:#B7BCFF;--tx:#ECEEF3;--tx2:#9296A3;--tx3:#6C7080;--er:#FF7A7A;--card:#20222A;--chk1:#262830;--chk2:#2C2E37;--s1:rgba(0,0,0,.26);--s2:rgba(0,0,0,.15);--s3:rgba(0,0,0,.08);--s4:rgba(0,0,0,.04)}
+.win{box-sizing:border-box;border-radius:12px;background:var(--win);display:flex;flex-direction:column;overflow:hidden;box-shadow:inset 0 0 0 1px var(--bd),0 1px 0 0 var(--s1),0 3px 0 2px var(--s2),0 7px 0 5px var(--s3),0 12px 0 9px var(--s4)}
+.hdr{height:48px;display:flex;align-items:center;gap:10px;padding:0 14px 0 18px;border-bottom:1px solid var(--sep);flex:none}
+.hdr .t{font-size:14px;font-weight:600;color:var(--tx);margin-right:6px}
+.ic16{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;display:block;flex:none}
+.ic14{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;display:block;flex:none}
+.fld{box-sizing:border-box;height:28px;padding:0 10px;border-radius:7px;background:var(--sf2);box-shadow:inset 0 0 0 1px var(--bd);color:var(--tx3);font-size:12px;display:flex;align-items:center;gap:8px}
+.seg{display:flex;gap:2px;padding:3px;border-radius:8px;background:var(--sf2);box-shadow:inset 0 0 0 1px var(--bd);flex:none}
+.seg button{height:22px;padding:0 9px;border:0;border-radius:5px;background:transparent;color:var(--ic);font:inherit;font-size:11.5px;font-weight:500;cursor:pointer;display:flex;align-items:center;gap:5px}
+.seg button.on{background:var(--acbg);color:var(--acfg);box-shadow:inset 0 0 0 1px var(--acrg)}
+.ib{width:28px;height:28px;border:0;border-radius:7px;background:transparent;color:var(--ic);display:flex;align-items:center;justify-content:center;cursor:pointer;flex:none;padding:0}
+.ib.h{background:var(--hv);color:var(--ich)}
+.sl{display:flex;align-items:center;gap:8px;color:var(--ic)}
+.sl .tr{width:80px;height:3px;border-radius:2px;background:rgba(255,255,255,.14);position:relative}
+.sl .tr i{position:absolute;left:0;top:0;height:3px;width:46px;border-radius:2px;background:var(--ac)}
+.sl .tr b{position:absolute;left:40px;top:-5px;width:13px;height:13px;border-radius:50%;background:#fff;box-shadow:0 0 0 1px rgba(0,0,0,.4)}
+.body{flex:1;display:flex;min-height:0}
+.grid{flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden}
+.day{position:relative;height:30px;display:flex;align-items:center;gap:8px;padding:0 24px;font-size:10.5px;font-weight:600;color:var(--tx3);letter-spacing:.07em;text-transform:uppercase;background:var(--win)}
+.day small{font-weight:500;letter-spacing:0;text-transform:none;color:var(--tx3);font-size:11px}
+.cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;padding:4px 24px 18px}
+.card{position:relative;display:flex;flex-direction:column;gap:7px;border-radius:10px}
+.th{position:relative;box-sizing:border-box;height:140px;border-radius:10px;overflow:hidden;background:conic-gradient(var(--chk2) 25%,var(--chk1) 0 50%,var(--chk2) 0 75%,var(--chk1) 0) 0 0/12px 12px;box-shadow:inset 0 0 0 1px var(--bd)}
+.card.h .th{box-shadow:inset 0 0 0 1px var(--bd),0 1px 0 0 var(--s1),0 3px 0 2px var(--s2),0 7px 0 5px var(--s3)}
+.card.on .th{box-shadow:inset 0 0 0 1px var(--bd),0 0 0 2px var(--win),0 0 0 4px var(--ac)}
+.bd{position:absolute;left:8px;top:8px;height:20px;padding:0 6px;border-radius:5px;background:rgba(14,15,18,.82);color:#ECEEF3;font-size:10.5px;font-weight:600;display:flex;align-items:center;gap:4px;font-variant-numeric:tabular-nums}
+.ed{position:absolute;right:8px;top:8px;height:20px;padding:0 7px;border-radius:5px;background:var(--acbg);color:var(--acfg);font-size:10.5px;font-weight:600;display:flex;align-items:center;box-shadow:inset 0 0 0 1px var(--acrg)}
+.dur{position:absolute;right:8px;bottom:8px;height:20px;padding:0 6px;border-radius:5px;background:rgba(14,15,18,.82);color:#ECEEF3;font-size:10.5px;font-weight:600;display:flex;align-items:center;font-variant-numeric:tabular-nums}
+.qa{position:absolute;left:0;right:0;bottom:0;height:36px;background:rgba(14,15,18,.86);display:flex;align-items:center;gap:2px;padding:0 6px}
+.qa button{height:26px;border:0;border-radius:6px;background:transparent;color:#D4D7DF;display:flex;align-items:center;justify-content:center;gap:5px;cursor:pointer;padding:0 7px;font:inherit;font-size:11.5px;font-weight:600}
+.qa button.pri{background:var(--acbg);color:var(--acfg);box-shadow:inset 0 0 0 1px var(--acrg)}
+.qa .sp{flex:1}
+.meta .n{font-size:12px;font-weight:500;color:var(--tx);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.meta .m{font-size:11px;color:var(--tx2);font-variant-numeric:tabular-nums;margin-top:2px}
+.img{position:absolute;left:0;right:0;top:0;bottom:0}
+.img .w{position:absolute;background:#F4F5F8;border-radius:4px;overflow:hidden}
+.img .w i{position:absolute;display:block;border-radius:3px;background:#DADEE6}
+.panel{box-sizing:border-box;width:320px;border-left:1px solid var(--sep);background:var(--rail);display:flex;flex-direction:column;flex:none}
+.panel .ph{height:40px;display:flex;align-items:center;justify-content:space-between;padding:0 10px 0 16px;font-size:12.5px;font-weight:600;color:var(--tx);border-bottom:1px solid var(--sep)}
+.pv{margin:14px 16px 10px;height:160px;border-radius:8px;position:relative;overflow:hidden;background:conic-gradient(var(--chk2) 25%,var(--chk1) 0 50%,var(--chk2) 0 75%,var(--chk1) 0) 0 0/12px 12px;box-shadow:inset 0 0 0 1px var(--bd)}
+.kv{display:flex;gap:10px;padding:5px 16px;font-size:11.5px}
+.kv .k{width:88px;flex:none;color:var(--tx3)}
+.kv .v{flex:1;min-width:0;color:var(--tx);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+.kv .v.lnk{color:var(--acfg);display:flex;align-items:center;gap:6px}
+.sec{font-size:10.5px;font-weight:600;color:var(--tx3);letter-spacing:.07em;text-transform:uppercase;padding:12px 16px 4px}
+.chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:6px;background:var(--sf2);box-shadow:inset 0 0 0 1px var(--bd);font-size:11px;color:var(--tx);font-weight:500}
+.btn{height:28px;padding:0 12px;border:0;border-radius:7px;background:var(--hv);color:var(--tx);font:inherit;font-size:12px;font-weight:500;cursor:pointer;box-shadow:inset 0 0 0 1px var(--bd);display:flex;align-items:center;gap:6px;justify-content:center}
+.btn.pri{background:var(--acbg);color:var(--acfg);box-shadow:inset 0 0 0 1px var(--acrg)}
+.btn.dg{color:var(--er)}
+.foot{height:28px;border-top:1px solid var(--sep);display:flex;align-items:center;gap:10px;padding:0 18px;font-size:11px;color:var(--tx2);flex:none;font-variant-numeric:tabular-nums}
+.foot .bar{width:120px;height:3px;border-radius:2px;background:rgba(255,255,255,.12);position:relative}
+.foot .bar i{position:absolute;left:0;top:0;height:3px;width:72px;border-radius:2px;background:var(--ac)}
+.tip{position:absolute;height:24px;padding:0 8px;border-radius:6px;background:rgba(14,15,18,.97);color:#F2F3F6;font-size:11.5px;font-weight:500;display:flex;align-items:center;gap:6px;white-space:nowrap;box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)}
+.tip .k{height:16px;min-width:16px;padding:0 4px;border-radius:3px;background:rgba(255,255,255,.14);color:#C4C7D0;font-size:10px;font-weight:600;display:inline-flex;align-items:center;justify-content:center}
+.h2{font-size:13px;font-weight:600;color:#ECEEF3}
+.cap{font-size:11px;font-weight:500;color:#8A8F9C;line-height:1.5}
+</style>
+</helmet>
+<div class="dk" style="position:relative;width:1440px;height:860px;box-sizing:border-box;background:#15161B;padding:40px 80px;display:flex;flex-direction:column;gap:14px;font-family:'Inter',system-ui,sans-serif">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<symbol id="h-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></symbol>
+<symbol id="h-grid" viewBox="0 0 24 24"><rect width="7" height="7" x="3" y="3" rx="1"></rect><rect width="7" height="7" x="14" y="3" rx="1"></rect><rect width="7" height="7" x="14" y="14" rx="1"></rect><rect width="7" height="7" x="3" y="14" rx="1"></rect></symbol>
+<symbol id="h-list" viewBox="0 0 24 24"><path d="M3 12h.01"></path><path d="M3 18h.01"></path><path d="M3 6h.01"></path><path d="M8 12h13"></path><path d="M8 18h13"></path><path d="M8 6h13"></path></symbol>
+<symbol id="h-more" viewBox="0 0 24 24"><circle cx="12" cy="12" r="1" fill="currentColor"></circle><circle cx="19" cy="12" r="1" fill="currentColor"></circle><circle cx="5" cy="12" r="1" fill="currentColor"></circle></symbol>
+<symbol id="h-cam" viewBox="0 0 24 24"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"></path><circle cx="12" cy="13" r="3"></circle></symbol>
+<symbol id="h-video" viewBox="0 0 24 24"><path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5"></path><rect x="2" y="6" width="14" height="12" rx="2"></rect></symbol>
+<symbol id="h-pencil" viewBox="0 0 24 24"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"></path><path d="m15 5 4 4"></path></symbol>
+<symbol id="h-copy" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></symbol>
+<symbol id="h-save" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><path d="m7 10 5 5 5-5"></path><path d="M12 15V3"></path></symbol>
+<symbol id="h-cloud" viewBox="0 0 24 24"><path d="M12 13v8"></path><path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"></path><path d="m8 17 4-4 4 4"></path></symbol>
+<symbol id="h-pin" viewBox="0 0 24 24"><path d="M12 17v5"></path><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"></path></symbol>
+<symbol id="h-trash" viewBox="0 0 24 24"><path d="M3 6h18"></path><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path></symbol>
+<symbol id="h-folder" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path></symbol>
+<symbol id="h-x" viewBox="0 0 24 24"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></symbol>
+<symbol id="h-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></symbol>
+<symbol id="h-chev" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"></path></symbol>
+<symbol id="h-panel" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"></rect><path d="M15 3v18"></path></symbol>
+</defs></svg>
+
+<div style="display:flex;flex-direction:column;gap:4px">
+  <div class="h2">History window · dark · shown at 1280 × 720 (default 960 × 640, min 720 × 480; the detail panel opens on selection and collapses below 900 px)</div>
+  <div class="cap">Grid view, four thumbnails per row at the 200 × 140 size, day groups with sticky headers. Third card is hovered (lifted, quick-action strip), fourth is selected (accent ring) with its details open on the right.</div>
+</div>
+
+<div class="win" style="width:1280px;height:720px;position:relative">
+  <!-- Header -->
+  <div class="hdr">
+    <div class="t">History</div>
+    <div class="fld" style="width:280px"><svg class="ic16" style="color:var(--ic)"><use href="#h-search"></use></svg>Search by window or date…</div>
+    <div class="seg" role="group" aria-label="Filter"><button class="on">All</button><button>Screenshots</button><button>Recordings</button></div>
+    <div class="seg" role="group" aria-label="View"><button class="on" aria-label="Grid view"><svg class="ic14"><use href="#h-grid"></use></svg></button><button aria-label="List view"><svg class="ic14"><use href="#h-list"></use></svg></button></div>
+    <div style="flex:1"></div>
+    <div class="sl" aria-label="Thumbnail size"><svg class="ic14"><use href="#h-grid"></use></svg><div class="tr"><i></i><b></b></div></div>
+    <button class="ib" aria-label="Toggle details panel"><svg class="ic16"><use href="#h-panel"></use></svg></button>
+    <button class="ib" aria-label="More: Clear history, Open history folder, Settings"><svg class="ic16"><use href="#h-more"></use></svg></button>
+  </div>
+
+  <div class="body">
+    <div class="grid">
+      <div class="day">Today <small>· 4 captures</small></div>
+      <div class="cards">
+        <div class="card"><div class="th"><div class="img"><div class="w" style="left:10px;top:10px;right:10px;bottom:0"><i style="left:0;top:0;right:0;height:18px;background:#fff"></i><i style="left:12px;top:30px;width:90px;height:8px"></i><i style="left:12px;top:46px;right:12px;height:58px;background:#E8EAF1"></i></div></div><div class="bd"><svg class="ic14"><use href="#h-cam"></use></svg></div></div><div class="meta"><div class="n">Figma — Landing page</div><div class="m">1440 × 900 · 14:32</div></div></div>
+        <div class="card"><div class="th"><div class="img"><div class="w" style="left:0;top:0;right:0;bottom:0;border-radius:0;background:#1E2230"><i style="left:16px;top:16px;width:120px;height:10px;background:#3A4052"></i><i style="left:16px;top:34px;width:80px;height:10px;background:#3A4052"></i><i style="left:16px;top:52px;width:150px;height:10px;background:#3A4052"></i><i style="left:16px;top:70px;width:60px;height:10px;background:#4A6CF7"></i></div></div><div class="bd"><svg class="ic14"><use href="#h-video"></use></svg></div><div class="dur">00:42</div></div><div class="meta"><div class="n">VS Code — rustshot/src/overlay.rs</div><div class="m">1920 × 1080 · 13:05 · MP4</div></div></div>
+        <div class="card h"><div class="th"><div class="img"><div class="w" style="left:24px;top:14px;right:24px;bottom:0"><i style="left:0;top:0;right:0;height:16px;background:#fff"></i><i style="left:10px;top:26px;right:10px;height:70px;background:#DCE6F5"></i></div></div><div class="bd"><svg class="ic14"><use href="#h-cam"></use></svg></div><div class="ed">Edited</div>
+          <div class="qa"><button class="pri"><svg class="ic14"><use href="#h-pencil"></use></svg>Edit</button><button aria-label="Copy · Ctrl+C"><svg class="ic14"><use href="#h-copy"></use></svg></button><button aria-label="Save · Ctrl+S"><svg class="ic14"><use href="#h-save"></use></svg></button><button aria-label="Upload · Ctrl+U"><svg class="ic14"><use href="#h-cloud"></use></svg></button><button aria-label="Pin to screen · P"><svg class="ic14"><use href="#h-pin"></use></svg></button><span class="sp"></span><button aria-label="More: Save As, Show in folder, Copy file path, Delete"><svg class="ic14"><use href="#h-more"></use></svg></button></div>
+          <div class="tip" style="left:4px;top:-30px">Edit <span class="k">E</span></div>
+        </div><div class="meta"><div class="n">Chrome — Stripe Dashboard</div><div class="m">1280 × 720 · 11:48</div></div></div>
+        <div class="card on"><div class="th"><div class="img"><div class="w" style="left:0;top:0;right:0;bottom:0;border-radius:0;background:#F6F7F9"><i style="left:0;top:0;width:44px;bottom:0;background:#EEF0F4;border-radius:0"></i><i style="left:56px;top:14px;width:100px;height:12px"></i><i style="left:56px;top:36px;right:14px;height:50px;background:#fff"></i><i style="left:56px;top:96px;right:14px;height:34px;background:#fff"></i></div></div><div class="bd"><svg class="ic14"><use href="#h-cam"></use></svg></div><div class="ed">Edited</div></div><div class="meta"><div class="n">Slack — #design-review</div><div class="m">1180 × 760 · 09:14</div></div></div>
+      </div>
+
+      <div class="day">Yesterday <small>· Sun 11 Oct</small></div>
+      <div class="cards">
+        <div class="card"><div class="th"><div class="img"><div class="w" style="left:30px;top:20px;right:30px;bottom:20px;background:#fff"><i style="left:14px;top:14px;right:14px;height:10px"></i><i style="left:14px;top:32px;right:40px;height:10px"></i><i style="left:14px;top:50px;right:20px;height:10px"></i></div></div><div class="bd"><svg class="ic14"><use href="#h-cam"></use></svg></div></div><div class="meta"><div class="n">Preview — invoice-0042.pdf</div><div class="m">820 × 540 · 19:50</div></div></div>
+        <div class="card"><div class="th"><div class="img"><div class="w" style="left:0;top:0;right:0;bottom:0;border-radius:0;background:#2B2D36"><i style="left:20px;top:24px;width:160px;height:92px;background:#3B82F6;opacity:.5"></i></div></div><div class="bd">GIF</div><div class="dur">00:08</div></div><div class="meta"><div class="n">Terminal — cargo run</div><div class="m">960 × 540 · 17:21 · GIF</div></div></div>
+        <div class="card"><div class="th"><div class="img"><div class="w" style="left:10px;top:10px;right:10px;bottom:0"><i style="left:0;top:0;right:0;height:18px;background:#fff"></i><i style="left:12px;top:30px;right:12px;height:90px;background:#F2E8D8"></i></div></div><div class="bd"><svg class="ic14"><use href="#h-cam"></use></svg></div></div><div class="meta"><div class="n">Notion — Q4 roadmap</div><div class="m">1440 × 900 · 16:02</div></div></div>
+        <div class="card"><div class="th"><div class="img"><div class="w" style="left:0;top:0;right:0;bottom:0;border-radius:0;background:#F4F5F8"><i style="left:16px;top:16px;width:168px;height:108px;background:#DCE6F5"></i></div></div><div class="bd"><svg class="ic14"><use href="#h-video"></use></svg></div><div class="dur">03:17</div></div><div class="meta"><div class="n">Zoom — Weekly sync</div><div class="m">1920 × 1080 · 10:30 · MP4</div></div></div>
+      </div>
+
+      <div class="day">Fri 9 Oct</div>
+      <div class="cards" style="padding-bottom:0">
+        <div class="card"><div class="th" style="height:60px"><div class="img"><div class="w" style="left:10px;top:10px;right:10px;bottom:-40px"><i style="left:0;top:0;right:0;height:18px;background:#fff"></i></div></div><div class="bd"><svg class="ic14"><use href="#h-cam"></use></svg></div></div></div>
+        <div class="card"><div class="th" style="height:60px"><div class="img"><div class="w" style="left:0;top:0;right:0;bottom:-40px;border-radius:0;background:#1E2230"></div></div><div class="bd"><svg class="ic14"><use href="#h-cam"></use></svg></div></div></div>
+      </div>
+    </div>
+
+    <!-- Detail panel -->
+    <aside class="panel" aria-label="Capture details">
+      <div class="ph">Details<button class="ib" aria-label="Close panel"><svg class="ic16"><use href="#h-x"></use></svg></button></div>
+      <div class="pv"><div class="img"><div class="w" style="left:0;top:0;right:0;bottom:0;border-radius:0;background:#F6F7F9"><i style="left:0;top:0;width:60px;bottom:0;background:#EEF0F4;border-radius:0"></i><i style="left:76px;top:18px;width:120px;height:12px"></i><i style="left:76px;top:44px;right:18px;height:56px;background:#fff"></i><i style="left:76px;top:110px;right:18px;height:36px;background:#fff"></i></div></div>
+        <svg width="288" height="160" style="position:absolute;left:0;top:0" aria-hidden="true"><path d="M110 120L176 72" stroke="#F04438" stroke-width="3" stroke-linecap="round"></path><path d="M184 66L174 80L168 70Z" fill="#F04438"></path><rect x="190" y="44" width="80" height="40" rx="8" fill="#F04438" fill-opacity=".92"></rect><circle cx="92" cy="60" r="10" fill="#F04438"></circle><circle cx="92" cy="128" r="10" fill="#F04438"></circle></svg>
+      </div>
+      <div class="kv"><div class="k">Captured</div><div class="v">Today, 09:14:07</div></div>
+      <div class="kv"><div class="k">Size</div><div class="v">1180 × 760 · 486 KB · PNG</div></div>
+      <div class="kv"><div class="k">Monitor</div><div class="v">Built-in Display (2×)</div></div>
+      <div class="kv"><div class="k">Source</div><div class="v">Slack — #design-review</div></div>
+      <div class="kv"><div class="k">Saved to</div><div class="v">~/Pictures/rustshot/2026-10-12_09-14.png</div></div>
+      <div class="kv"><div class="k">Uploaded</div><div class="v lnk"><span style="overflow:hidden;text-overflow:ellipsis">rs.sh/a8Kq2</span><button class="ib" style="width:22px;height:22px" aria-label="Copy link"><svg class="ic14"><use href="#h-copy"></use></svg></button></div></div>
+      <div class="sec">Annotations · 4 objects</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;padding:0 16px"><span class="chip">Arrow</span><span class="chip">Callout</span><span class="chip">Number ×2</span></div>
+      <div style="flex:1"></div>
+      <div style="display:flex;gap:8px;padding:14px 16px;border-top:1px solid var(--sep)">
+        <button class="btn pri" style="flex:1"><svg class="ic14"><use href="#h-pencil"></use></svg>Edit</button>
+        <button class="btn" style="flex:1"><svg class="ic14"><use href="#h-folder"></use></svg>Open file</button>
+        <button class="btn dg" aria-label="Delete · Del"><svg class="ic14"><use href="#h-trash"></use></svg></button>
+      </div>
+    </aside>
+  </div>
+
+  <div class="foot">Keeping 30 days<span style="color:var(--tx3)">·</span><div class="bar"><i></i></div>1.2 GB of 2 GB<div style="flex:1"></div>112 captures</div>
+</div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":860}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

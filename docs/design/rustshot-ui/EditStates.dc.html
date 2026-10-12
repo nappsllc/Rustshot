@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>rustshot edit window: object editing states, dialogs, entry points</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;font-family:'Inter',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+.dk{--win:#1B1C20;--cv:#141519;--bd:rgba(255,255,255,.09);--sep:rgba(255,255,255,.08);--ic:#A3A7B3;--ich:#ECEEF3;--hv:rgba(255,255,255,.06);--sf2:rgba(255,255,255,.05);--ac:#8B93FF;--acbg:rgba(139,147,255,.18);--acrg:rgba(139,147,255,.30);--acfg:#B7BCFF;--tx:#ECEEF3;--tx2:#9296A3;--tx3:#6C7080;--er:#FF7A7A;--erbg:rgba(255,107,107,.16);--s1:rgba(0,0,0,.26);--s2:rgba(0,0,0,.15);--s3:rgba(0,0,0,.08);--s4:rgba(0,0,0,.04);--rim:rgba(255,255,255,.22)}
+.ic16{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;display:block;flex:none}
+.ic14{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;display:block;flex:none}
+.crop{position:relative;box-sizing:border-box;width:896px;height:300px;border-radius:12px;background:var(--cv);overflow:hidden;box-shadow:inset 0 0 0 1px var(--bd)}
+.pg{position:absolute;left:48px;top:30px;width:800px;height:300px;background:#F6F7F9;box-shadow:0 0 0 1px var(--bd)}
+.pg i{position:absolute;display:block;border-radius:4px;background:#DADEE6}
+.pg .crd{background:#fff;box-shadow:inset 0 0 0 1px #E4E7EC;border-radius:6px}
+.hd{position:absolute;width:7px;height:7px;border-radius:2px;background:#fff;border:1.5px solid var(--ac);box-shadow:0 0 0 1px rgba(0,0,0,.45);box-sizing:content-box}
+.hd.r{border-radius:50%;width:8px;height:8px}
+.mini{position:absolute;height:32px;padding:0 4px;border-radius:9px;background:rgba(27,28,32,.98);display:flex;align-items:center;gap:2px;box-shadow:inset 0 0 0 1px var(--bd),0 1px 0 0 var(--s1),0 3px 0 2px var(--s2),0 7px 0 5px var(--s3)}
+.bt{box-sizing:border-box;width:26px;height:26px;border:0;padding:0;background:transparent;border-radius:6px;display:flex;align-items:center;justify-content:center;color:var(--ic);cursor:pointer;flex:none}
+.bt.on{background:var(--acbg);color:var(--acfg);box-shadow:inset 0 0 0 1px var(--acrg)}
+.sp{width:1px;height:14px;background:var(--sep);flex:none;margin:0 2px}
+.sw{width:16px;height:16px;border-radius:50%;box-shadow:inset 0 0 0 1px var(--rim);display:block}
+.val{width:46px;height:26px;display:flex;align-items:center;justify-content:center;gap:3px;flex:none}
+.ln{width:22px;border-radius:99px;display:block;flex:none}
+.v{font-size:12px;font-weight:600;color:var(--tx);font-variant-numeric:tabular-nums}
+.lbl{position:absolute;height:20px;padding:0 6px;border-radius:5px;background:rgba(14,15,18,.9);color:#ECEEF3;font-size:10.5px;font-weight:600;display:flex;align-items:center;font-variant-numeric:tabular-nums;box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)}
+.dlg{box-sizing:border-box;width:420px;padding:20px;border-radius:12px;background:var(--win);display:flex;flex-direction:column;gap:10px;box-shadow:inset 0 0 0 1px var(--bd),0 1px 0 0 var(--s1),0 3px 0 2px var(--s2),0 7px 0 5px var(--s3),0 12px 0 9px var(--s4)}
+.dlg .t{font-size:14px;font-weight:600;color:var(--tx)}
+.dlg .p{font-size:12px;color:var(--tx2);line-height:1.5}
+.btn{height:28px;padding:0 12px;border:0;border-radius:7px;background:var(--hv);color:var(--tx);font:inherit;font-size:12px;font-weight:500;cursor:pointer;box-shadow:inset 0 0 0 1px var(--bd);display:flex;align-items:center;gap:6px;justify-content:center;flex:none}
+.btn.pri{background:var(--acbg);color:var(--acfg);box-shadow:inset 0 0 0 1px var(--acrg)}
+.btn.dg{background:var(--erbg);color:var(--er);box-shadow:inset 0 0 0 1px rgba(255,107,107,.3)}
+.btn.f{box-shadow:inset 0 0 0 1px var(--acrg),0 0 0 2px var(--ac)}
+.opt{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;background:var(--sf2);box-shadow:inset 0 0 0 1px var(--bd)}
+.opt.on{background:var(--acbg);box-shadow:inset 0 0 0 1px var(--acrg)}
+.opt .rd{width:16px;height:16px;border-radius:50%;box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.3);flex:none}
+.opt.on .rd{background:var(--ac);box-shadow:inset 0 0 0 4px var(--win),inset 0 0 0 5.5px var(--ac)}
+.opt .l{font-size:12.5px;font-weight:500;color:var(--tx)}
+.opt .l small{display:block;font-size:11px;color:var(--tx2);font-weight:400;margin-top:1px;font-family:ui-monospace,Menlo,Consolas,monospace}
+.ts{box-sizing:border-box;height:36px;padding:0 6px 0 10px;border-radius:12px;background:rgba(27,28,32,.96);color:var(--tx);display:flex;align-items:center;gap:8px;font-size:12px;font-weight:500;box-shadow:inset 0 0 0 1px var(--bd),0 1px 0 0 var(--s1),0 3px 0 2px var(--s2),0 7px 0 5px var(--s3)}
+.ts .a{height:24px;padding:0 10px;border:0;border-radius:6px;background:var(--acbg);color:var(--acfg);font:inherit;font-size:11.5px;font-weight:600;cursor:pointer;box-shadow:inset 0 0 0 1px var(--acrg);display:flex;align-items:center;gap:5px}
+.ts .b{height:24px;padding:0 10px;border:0;border-radius:6px;background:var(--hv);color:var(--tx);font:inherit;font-size:11.5px;font-weight:500;cursor:pointer}
+.menu{box-sizing:border-box;width:240px;padding:6px;border-radius:10px;background:rgba(27,28,32,.98);display:flex;flex-direction:column;gap:1px;box-shadow:inset 0 0 0 1px var(--bd),0 1px 0 0 var(--s1),0 3px 0 2px var(--s2),0 7px 0 5px var(--s3),0 12px 0 9px var(--s4)}
+.mi{display:flex;align-items:center;gap:10px;height:30px;padding:0 10px;border-radius:6px;font-size:12.5px;font-weight:500;color:var(--tx)}
+.mi.h{background:var(--acbg);color:var(--acfg)}
+.mi .k{margin-left:auto;font-size:11px;color:var(--tx3);font-variant-numeric:tabular-nums}
+.mi.h .k{color:var(--acfg)}
+.msep{height:1px;background:var(--sep);margin:4px 6px}
+.h2{font-size:13px;font-weight:600;color:#ECEEF3}
+.h3{font-size:12px;font-weight:600;color:#ECEEF3}
+.cap{font-size:11px;font-weight:500;color:#8A8F9C;line-height:1.5}
+.cell{display:flex;flex-direction:column;gap:10px}
+</style>
+</helmet>
+<div class="dk" style="position:relative;width:2960px;height:1180px;box-sizing:border-box;background:#15161B;padding:40px 80px;display:flex;flex-direction:column;gap:26px;font-family:'Inter',system-ui,sans-serif">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<symbol id="e-fill" viewBox="0 0 24 24"><path d="m19 11-8-8-8.6 8.6a2 2 0 0 0 0 2.8l5.2 5.2c.8.8 2 .8 2.8 0L19 11Z"></path><path d="m5 2 5 5"></path><path d="M2 13h15"></path><path d="M22 20a2 2 0 1 1-4 0c0-1.6 1.7-2.4 2-4 .3 1.6 2 2.4 2 4Z"></path></symbol>
+<symbol id="e-minus" viewBox="0 0 24 24"><path d="M5 12h14"></path></symbol>
+<symbol id="e-plus" viewBox="0 0 24 24"><path d="M5 12h14"></path><path d="M12 5v14"></path></symbol>
+<symbol id="e-trash" viewBox="0 0 24 24"><path d="M3 6h18"></path><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path></symbol>
+<symbol id="e-dup" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path><path d="M15 12v6"></path><path d="M12 15h6"></path></symbol>
+<symbol id="e-al" viewBox="0 0 24 24"><path d="M3 3v18"></path><rect x="7" y="6" width="12" height="4" rx="1"></rect><rect x="7" y="14" width="8" height="4" rx="1"></rect></symbol>
+<symbol id="e-ac" viewBox="0 0 24 24"><path d="M12 3v18"></path><rect x="5" y="6" width="14" height="4" rx="1"></rect><rect x="8" y="14" width="8" height="4" rx="1"></rect></symbol>
+<symbol id="e-ar" viewBox="0 0 24 24"><path d="M21 3v18"></path><rect x="5" y="6" width="12" height="4" rx="1"></rect><rect x="9" y="14" width="8" height="4" rx="1"></rect></symbol>
+<symbol id="e-head" viewBox="0 0 24 24"><path d="M7 7h10v10"></path><path d="M7 17 17 7"></path></symbol>
+<symbol id="e-pencil" viewBox="0 0 24 24"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"></path><path d="m15 5 4 4"></path></symbol>
+<symbol id="e-okc" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><path d="m9 12 2 2 4-4"></path></symbol>
+<symbol id="e-cam" viewBox="0 0 24 24"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"></path><circle cx="12" cy="13" r="3"></circle></symbol>
+<symbol id="e-video" viewBox="0 0 24 24"><path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5"></path><rect x="2" y="6" width="14" height="12" rx="2"></rect></symbol>
+<symbol id="e-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M12 7v5l4 2"></path></symbol>
+<symbol id="e-sliders" viewBox="0 0 24 24"><path d="M4 21v-7"></path><path d="M4 10V3"></path><path d="M12 21v-9"></path><path d="M12 8V3"></path><path d="M20 21v-5"></path><path d="M20 12V3"></path><path d="M2 14h4"></path><path d="M10 8h4"></path><path d="M18 16h4"></path></symbol>
+<symbol id="e-window" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="M10 4v4"></path><path d="M2 8h20"></path><path d="M6 4v4"></path></symbol>
+<symbol id="e-monitor" viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="3" rx="2"></rect><path d="M8 21h8"></path><path d="M12 17v4"></path></symbol>
+<symbol id="e-power" viewBox="0 0 24 24"><path d="M12 2v10"></path><path d="M18.4 6.6a9 9 0 1 1-12.77.04"></path></symbol>
+<symbol id="e-mark" viewBox="0 0 24 24"><rect width="24" height="24" rx="5.4" fill="#1B1C20" stroke="none"></rect><path d="M5 10V7a2 2 0 0 1 2-2h3M14 5h3a2 2 0 0 1 2 2v3M19 14v3a2 2 0 0 1-2 2h-3M10 19H7a2 2 0 0 1-2-2v-3" fill="none" stroke="#ECEEF3" stroke-width="2" stroke-linecap="round"></path><circle cx="12" cy="12" r="3.5" fill="#8B93FF" stroke="none"></circle></symbol>
+</defs></svg>
+
+<div style="display:flex;flex-direction:column;gap:4px">
+  <div class="h2">Edit window · object editing states, save flow, entry points</div>
+  <div class="cap">Crops of the canvas at 100% zoom. Selection chrome is always accent: 1 px dashed box, 7 px square handles with a dark halo, round handles for end-points and the callout tail. Mini-toolbars are 32 px tall, 26 px buttons, and sit 8 px above the selection (below it when there's no room).</div>
+</div>
+
+<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:30px 56px">
+
+  <!-- 3 Text editing -->
+  <div class="cell">
+    <div class="h3">3 · Callout text editing — caret, wrapping, bubble grows as you type</div>
+    <div class="crop">
+      <div class="pg"><i class="crd" style="left:40px;top:40px;width:700px;height:200px"></i><i style="left:60px;top:60px;width:160px;height:10px"></i><i style="left:60px;top:84px;right:60px;height:8px;background:#E6E8EE"></i><i style="left:60px;top:100px;right:120px;height:8px;background:#E6E8EE"></i><i style="left:60px;top:116px;right:90px;height:8px;background:#E6E8EE"></i></div>
+      <svg width="896" height="300" style="position:absolute;left:0;top:0" aria-hidden="true">
+        <path d="M330 70h290a10 10 0 0 1 10 10v88a10 10 0 0 1-10 10H440l-48 44 10-44h-72a10 10 0 0 1-10-10V80a10 10 0 0 1 10-10z" fill="#F04438"></path>
+        <text x="350" y="104" font-family="Inter,system-ui,sans-serif" font-size="17" font-weight="600" fill="#fff">Move this to the top,</text>
+        <text x="350" y="128" font-family="Inter,system-ui,sans-serif" font-size="17" font-weight="600" fill="#fff">above the summary, so</text>
+        <text x="350" y="152" font-family="Inter,system-ui,sans-serif" font-size="17" font-weight="600" fill="#fff">people see it fir</text>
+        <rect x="479" y="138" width="2" height="19" fill="#fff"></rect>
+        <rect x="320.5" y="60.5" width="319" height="137" fill="none" stroke="#8B93FF" stroke-width="1" stroke-dasharray="4 3"></rect>
+        <text x="330" y="222" font-family="Inter,system-ui,sans-serif" font-size="11" font-weight="500" fill="#9296A3">Enter · new line  ·  Esc or click outside · done  ·  bubble keeps its width, grows down; drag a side handle to re-wrap</text>
+      </svg>
+      <div class="mini" style="left:320px;top:20px"><button class="bt" aria-label="Colour"><span class="sw" style="background:#F04438"></span></button><button class="bt on" aria-label="Fill"><svg class="ic16"><use href="#e-fill"></use></svg></button><div class="sp"></div><button class="bt" aria-label="Smaller text"><svg class="ic16"><use href="#e-minus"></use></svg></button><div class="val"><span class="v">17</span><span style="font-size:10.5px;color:var(--tx2)">px</span></div><button class="bt" aria-label="Larger text"><svg class="ic16"><use href="#e-plus"></use></svg></button></div>
+    </div>
+  </div>
+
+  <!-- 4 Arrow selected -->
+  <div class="cell">
+    <div class="h3">4 · Arrow selected — handles at both ends only; drag an end to re-aim, drag the shaft to move</div>
+    <div class="crop">
+      <div class="pg"><i class="crd" style="left:40px;top:40px;width:700px;height:200px"></i><i style="left:60px;top:60px;width:160px;height:10px"></i><i style="left:60px;top:90px;width:300px;height:120px;border-radius:8px;background:#DCE6F5"></i><i style="left:400px;top:90px;width:300px;height:120px;border-radius:8px;background:#F2E8D8"></i></div>
+      <svg width="896" height="300" style="position:absolute;left:0;top:0" aria-hidden="true">
+        <path d="M250 230L470 130" stroke="#F04438" stroke-width="4" stroke-linecap="round" fill="none"></path>
+        <path d="M488 122L470 142L462 124Z" fill="#F04438"></path>
+        <path d="M250 230L470 130" stroke="#8B93FF" stroke-width="1" stroke-dasharray="4 3" fill="none" opacity=".7"></path>
+      </svg>
+      <div class="hd r" style="left:245px;top:225px"></div><div class="hd r" style="left:480px;top:117px"></div>
+      <div class="lbl" style="left:500px;top:100px">242 px · −24°</div>
+      <div class="mini" style="left:300px;top:76px"><button class="bt" aria-label="Colour"><span class="sw" style="background:#F04438"></span></button><div class="sp"></div><button class="bt" aria-label="Thinner"><svg class="ic16"><use href="#e-minus"></use></svg></button><div class="val"><span class="ln" style="height:4px;background:#F04438"></span><span class="v">4</span></div><button class="bt" aria-label="Thicker"><svg class="ic16"><use href="#e-plus"></use></svg></button><div class="sp"></div><button class="bt on" aria-label="Head at end"><svg class="ic16"><use href="#e-head"></use></svg></button><button class="bt" aria-label="Heads at both ends"><svg class="ic16" style="transform:rotate(180deg)"><use href="#e-head"></use></svg></button><div class="sp"></div><button class="bt" aria-label="Duplicate"><svg class="ic16"><use href="#e-dup"></use></svg></button><button class="bt" aria-label="Delete · Del"><svg class="ic16"><use href="#e-trash"></use></svg></button></div>
+    </div>
+  </div>
+
+  <!-- 5 Multi selection -->
+  <div class="cell">
+    <div class="h3">5 · Multiple selection (marquee) — shared box, group mini-toolbar: colour, align, delete</div>
+    <div class="crop">
+      <div class="pg"><i class="crd" style="left:40px;top:40px;width:700px;height:200px"></i><i style="left:60px;top:60px;width:160px;height:10px"></i><i style="left:60px;top:84px;right:60px;height:8px;background:#E6E8EE"></i><i style="left:60px;top:100px;right:120px;height:8px;background:#E6E8EE"></i><i style="left:60px;top:140px;right:60px;height:8px;background:#E6E8EE"></i><i style="left:60px;top:156px;right:140px;height:8px;background:#E6E8EE"></i><i style="left:60px;top:196px;right:60px;height:8px;background:#E6E8EE"></i></div>
+      <svg width="896" height="300" style="position:absolute;left:0;top:0" aria-hidden="true">
+        <rect x="150" y="60" width="520" height="180" fill="#8B93FF" fill-opacity=".10" stroke="#8B93FF" stroke-width="1" stroke-dasharray="4 3"></rect>
+        <circle cx="94" cy="90" r="14" fill="#F04438"></circle><text x="94" y="95" text-anchor="middle" font-family="Inter,system-ui,sans-serif" font-size="13" font-weight="600" fill="#fff">1</text>
+        <circle cx="94" cy="147" r="14" fill="#F04438"></circle><text x="94" y="152" text-anchor="middle" font-family="Inter,system-ui,sans-serif" font-size="13" font-weight="600" fill="#fff">2</text>
+        <circle cx="94" cy="203" r="14" fill="#F04438"></circle><text x="94" y="208" text-anchor="middle" font-family="Inter,system-ui,sans-serif" font-size="13" font-weight="600" fill="#fff">3</text>
+        <rect x="130" y="76" width="2" height="12" fill="#F04438"></rect>
+        <path d="M200 160L380 100" stroke="#F04438" stroke-width="3" stroke-linecap="round" fill="none"></path><path d="M394 95L380 110L374 97Z" fill="#F04438"></path>
+        <rect x="420" y="80" width="200" height="60" rx="4" fill="none" stroke="#F04438" stroke-width="3"></rect>
+        <text x="150" y="262" font-family="Inter,system-ui,sans-serif" font-size="11" font-weight="500" fill="#9296A3">Marquee fill: accent at 10%. Group box has 4 corner handles only. Shift-click adds/removes. Align acts on the selected objects' bounds.</text>
+      </svg>
+      <div class="hd" style="left:145px;top:55px"></div><div class="hd" style="left:665px;top:55px"></div><div class="hd" style="left:145px;top:235px"></div><div class="hd" style="left:665px;top:235px"></div>
+      <div class="mini" style="left:150px;top:20px"><button class="bt" aria-label="Colour for all"><span class="sw" style="background:#F04438"></span></button><div class="sp"></div><button class="bt" aria-label="Align left"><svg class="ic16"><use href="#e-al"></use></svg></button><button class="bt" aria-label="Align centre"><svg class="ic16"><use href="#e-ac"></use></svg></button><button class="bt" aria-label="Align right"><svg class="ic16"><use href="#e-ar"></use></svg></button><div class="sp"></div><button class="bt" aria-label="Duplicate"><svg class="ic16"><use href="#e-dup"></use></svg></button><button class="bt" aria-label="Delete 4 objects · Del"><svg class="ic16"><use href="#e-trash"></use></svg></button></div>
+      <div class="lbl" style="left:420px;top:26px">4 objects</div>
+    </div>
+  </div>
+
+  <!-- 6 Dragging + snapping -->
+  <div class="cell">
+    <div class="h3">6 · Dragging — 40% ghost at the origin, 1 px accent snap guides to object edges and the image centre</div>
+    <div class="crop">
+      <div class="pg"><i class="crd" style="left:40px;top:40px;width:700px;height:200px"></i><i style="left:60px;top:60px;width:160px;height:10px"></i><i style="left:60px;top:84px;right:60px;height:8px;background:#E6E8EE"></i><i style="left:60px;top:100px;right:120px;height:8px;background:#E6E8EE"></i></div>
+      <svg width="896" height="300" style="position:absolute;left:0;top:0" aria-hidden="true">
+        <!-- image centre guide -->
+        <path d="M448 30V330" stroke="#8B93FF" stroke-width="1" stroke-dasharray="2 4" opacity=".55"></path>
+        <!-- existing rect, its right edge is a snap target -->
+        <rect x="140" y="90" width="180" height="90" rx="4" fill="none" stroke="#F04438" stroke-width="3"></rect>
+        <!-- ghost -->
+        <g opacity=".4"><circle cx="560" cy="110" r="14" fill="#F04438"></circle><text x="560" y="115" text-anchor="middle" font-family="Inter,system-ui,sans-serif" font-size="13" font-weight="600" fill="#fff">2</text></g>
+        <!-- dragged object snapped: centre x = 448 (image centre), top = 90 (rect top) -->
+        <circle cx="448" cy="104" r="14" fill="#F04438"></circle><text x="448" y="109" text-anchor="middle" font-family="Inter,system-ui,sans-serif" font-size="13" font-weight="600" fill="#fff">2</text>
+        <path d="M140 90H462" stroke="#8B93FF" stroke-width="1"></path>
+        <path d="M448 30V200" stroke="#8B93FF" stroke-width="1"></path>
+        <text x="470" y="200" font-family="Inter,system-ui,sans-serif" font-size="11" font-weight="500" fill="#9296A3">Snaps within 6 px (logical). Guides fade out 100 ms after release. Hold Alt to drag without snapping; arrow keys nudge 1 px, Shift+arrow 10 px.</text>
+      </svg>
+      <div class="lbl" style="left:470px;top:60px">Δ −112, −6</div>
+    </div>
+  </div>
+
+  <!-- Save flow -->
+  <div class="cell">
+    <div class="h3">Save flow — closing with unsaved changes, then the overwrite choice</div>
+    <div style="display:flex;gap:16px;align-items:flex-start">
+      <div class="dlg" role="dialog" aria-labelledby="sv-t">
+        <div class="t" id="sv-t">Save changes to this capture?</div>
+        <div class="p">You edited <span style="color:var(--tx)">2026-10-05_14-32.png</span>. Unsaved annotations will be lost if you discard.</div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;padding-top:6px;flex-wrap:wrap"><button class="btn dg">Discard</button><div style="flex:1"></div><button class="btn">Cancel</button><button class="btn">Save as copy</button><button class="btn pri f">Save</button></div>
+      </div>
+      <div class="dlg" role="dialog" aria-labelledby="ov-t">
+        <div class="t" id="ov-t">Save</div>
+        <div class="opt on"><span class="rd"></span><div class="l">Overwrite the original<small>2026-10-05_14-32.png · keeps the History entry</small></div></div>
+        <div class="opt"><span class="rd"></span><div class="l">Save as new file<small>2026-10-05_14-32-edited.png</small></div></div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--tx2);padding-top:2px"><i style="width:16px;height:16px;border-radius:4px;box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.3);display:block"></i>Don't ask again</label>
+        <div style="display:flex;gap:8px;justify-content:flex-end;padding-top:6px"><button class="btn">Cancel</button><button class="btn pri">Save</button></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Entry points -->
+  <div class="cell">
+    <div class="h3">Entry points — post-capture toast gains "Edit"; tray menu gains "History…"</div>
+    <div style="display:flex;gap:28px;align-items:flex-start">
+      <div style="display:flex;flex-direction:column;gap:14px">
+        <div class="ts"><svg class="ic16" style="color:#4ADE9A" aria-hidden="true"><use href="#e-okc"></use></svg>Copied to clipboard · 1280 × 720<button class="a"><svg class="ic14"><use href="#e-pencil"></use></svg>Edit</button><button class="b">Save</button><button class="b">Upload</button></div>
+        <div class="cap" style="max-width:420px">The toast gets an accent "Edit" first, since it's the new primary follow-up; Save/Upload stay as quiet buttons. Clicking Edit opens the Edit window on this capture; the toast closes.</div>
+        <div class="cap" style="max-width:420px">Tray menu order: capture actions, then History, then Settings. "History…" shows the count of today's captures when it's non-zero. Ctrl+Shift+H opens it globally.</div>
+      </div>
+      <div class="menu" role="menu">
+        <div class="mi"><svg class="ic16"><use href="#e-cam"></use></svg>Capture region<span class="k">Ctrl ⇧ S</span></div>
+        <div class="mi"><svg class="ic16"><use href="#e-monitor"></use></svg>Capture screen<span class="k">Ctrl ⇧ F</span></div>
+        <div class="mi"><svg class="ic16"><use href="#e-window"></use></svg>Capture window<span class="k">Ctrl ⇧ W</span></div>
+        <div class="mi"><svg class="ic16"><use href="#e-video"></use></svg>Record video<span class="k">Ctrl ⇧ R</span></div>
+        <div class="msep"></div>
+        <div class="mi h"><svg class="ic16"><use href="#e-history"></use></svg>History… <span style="font-size:11px;opacity:.75;margin-left:-4px">4 today</span><span class="k">Ctrl ⇧ H</span></div>
+        <div class="mi"><svg class="ic16"><use href="#e-sliders"></use></svg>Settings…<span class="k">Ctrl ,</span></div>
+        <div class="msep"></div>
+        <div class="mi" style="color:var(--tx2)"><svg class="ic16"><use href="#e-power"></use></svg>Quit rustshot</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":2960,"height":1180}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

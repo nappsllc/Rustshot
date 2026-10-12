@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>rustshot history window states</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;font-family:'Inter',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+.dk{--win:#1B1C20;--rail:#181A1F;--bd:rgba(255,255,255,.09);--sep:rgba(255,255,255,.08);--ic:#A3A7B3;--ich:#ECEEF3;--hv:rgba(255,255,255,.06);--sf2:rgba(255,255,255,.05);--ac:#8B93FF;--acbg:rgba(139,147,255,.18);--acrg:rgba(139,147,255,.30);--acfg:#B7BCFF;--tx:#ECEEF3;--tx2:#9296A3;--tx3:#6C7080;--er:#FF7A7A;--erbg:rgba(255,107,107,.16);--chk1:#262830;--chk2:#2C2E37;--s1:rgba(0,0,0,.26);--s2:rgba(0,0,0,.15);--s3:rgba(0,0,0,.08);--s4:rgba(0,0,0,.04)}
+.win{position:relative;box-sizing:border-box;width:896px;height:400px;border-radius:12px;background:var(--win);display:flex;flex-direction:column;overflow:hidden;box-shadow:inset 0 0 0 1px var(--bd),0 1px 0 0 var(--s1),0 3px 0 2px var(--s2),0 7px 0 5px var(--s3),0 12px 0 9px var(--s4)}
+.hdr{height:48px;display:flex;align-items:center;gap:10px;padding:0 14px 0 18px;border-bottom:1px solid var(--sep);flex:none}
+.hdr .t{font-size:14px;font-weight:600;color:var(--tx);margin-right:6px}
+.ic16{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;display:block;flex:none}
+.ic14{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;display:block;flex:none}
+.fld{box-sizing:border-box;height:28px;padding:0 10px;border-radius:7px;background:var(--sf2);box-shadow:inset 0 0 0 1px var(--bd);color:var(--tx3);font-size:12px;display:flex;align-items:center;gap:8px}
+.fld.f{box-shadow:inset 0 0 0 1px var(--bd),0 0 0 2px var(--ac);color:var(--tx)}
+.seg{display:flex;gap:2px;padding:3px;border-radius:8px;background:var(--sf2);box-shadow:inset 0 0 0 1px var(--bd);flex:none}
+.seg button{height:22px;padding:0 9px;border:0;border-radius:5px;background:transparent;color:var(--ic);font:inherit;font-size:11.5px;font-weight:500;cursor:pointer;display:flex;align-items:center;gap:5px}
+.seg button.on{background:var(--acbg);color:var(--acfg);box-shadow:inset 0 0 0 1px var(--acrg)}
+.ib{width:28px;height:28px;border:0;border-radius:7px;background:transparent;color:var(--ic);display:flex;align-items:center;justify-content:center;cursor:pointer;flex:none;padding:0}
+.day{height:30px;display:flex;align-items:center;gap:8px;padding:0 24px;font-size:10.5px;font-weight:600;color:var(--tx3);letter-spacing:.07em;text-transform:uppercase}
+.row{display:flex;align-items:center;gap:14px;height:56px;padding:0 14px 0 24px;border-bottom:1px solid var(--sep)}
+.row.h{background:var(--hv)}
+.row.on{background:var(--acbg)}
+.row .th{width:72px;height:48px;border-radius:6px;background:conic-gradient(var(--chk2) 25%,var(--chk1) 0 50%,var(--chk2) 0 75%,var(--chk1) 0) 0 0/8px 8px;box-shadow:inset 0 0 0 1px var(--bd);position:relative;overflow:hidden;flex:none}
+.row .th i{position:absolute;left:6px;top:6px;right:6px;bottom:0;background:#F4F5F8;border-radius:3px 3px 0 0;display:block}
+.row .n{flex:1;min-width:0;font-size:12.5px;font-weight:500;color:var(--tx);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .n mark{background:rgba(255,197,50,.28);color:var(--tx);border-radius:3px;padding:0 1px}
+.row .c{font-size:11.5px;color:var(--tx2);font-variant-numeric:tabular-nums;flex:none;text-align:right}
+.row .ty{display:flex;align-items:center;gap:5px;width:70px;color:var(--tx2);font-size:11.5px;flex:none}
+.row .act{display:flex;gap:2px;flex:none;width:118px;justify-content:flex-end}
+.row .act button{width:26px;height:26px;border:0;border-radius:6px;background:transparent;color:var(--ic);display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0}
+.cards{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;padding:4px 24px 0}
+.card{display:flex;flex-direction:column;gap:7px;position:relative}
+.th2{position:relative;height:118px;border-radius:10px;overflow:hidden;background:conic-gradient(var(--chk2) 25%,var(--chk1) 0 50%,var(--chk2) 0 75%,var(--chk1) 0) 0 0/12px 12px;box-shadow:inset 0 0 0 1px var(--bd)}
+.th2 i{position:absolute;left:10px;top:10px;right:10px;bottom:0;background:#F4F5F8;border-radius:4px 4px 0 0;display:block}
+.card.on .th2{box-shadow:inset 0 0 0 1px var(--bd),0 0 0 2px var(--win),0 0 0 4px var(--ac)}
+.ck{position:absolute;left:8px;top:8px;width:20px;height:20px;border-radius:6px;background:var(--ac);display:flex;align-items:center;justify-content:center;color:#0E1020;box-shadow:0 0 0 1px rgba(0,0,0,.35)}
+.ck.off{background:rgba(14,15,18,.6);color:transparent;box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.7)}
+.meta .n{font-size:12px;font-weight:500;color:var(--tx);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.meta .m{font-size:11px;color:var(--tx2);font-variant-numeric:tabular-nums;margin-top:2px}
+.abar{position:absolute;left:50%;bottom:16px;transform:translateX(-50%);height:40px;padding:0 6px 0 14px;border-radius:12px;background:rgba(27,28,32,.98);display:flex;align-items:center;gap:8px;box-shadow:inset 0 0 0 1px var(--bd),0 1px 0 0 var(--s1),0 3px 0 2px var(--s2),0 7px 0 5px var(--s3)}
+.abar .n{font-size:12.5px;font-weight:600;color:var(--tx);margin-right:4px}
+.btn{height:28px;padding:0 12px;border:0;border-radius:7px;background:var(--hv);color:var(--tx);font:inherit;font-size:12px;font-weight:500;cursor:pointer;box-shadow:inset 0 0 0 1px var(--bd);display:flex;align-items:center;gap:6px;justify-content:center;flex:none}
+.btn.pri{background:var(--acbg);color:var(--acfg);box-shadow:inset 0 0 0 1px var(--acrg)}
+.btn.dg{background:var(--erbg);color:var(--er);box-shadow:inset 0 0 0 1px rgba(255,107,107,.3)}
+.btn.solid{background:#E5484D;color:#fff;box-shadow:none}
+.empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;text-align:center}
+.empty .big{width:56px;height:56px;color:var(--tx3);stroke-width:1.5}
+.empty .t{font-size:14px;font-weight:600;color:var(--tx)}
+.empty .s{font-size:12px;color:var(--tx2);display:flex;align-items:center;gap:5px}
+.empty a{font-size:12px;color:var(--acfg);text-decoration:none;font-weight:500}
+.k{height:18px;min-width:18px;padding:0 5px;border-radius:4px;background:rgba(255,255,255,.12);color:#D4D7DF;font-size:10.5px;font-weight:600;display:inline-flex;align-items:center;justify-content:center}
+.tg{box-sizing:border-box;width:32px;height:18px;border-radius:9px;background:rgba(255,255,255,.14);position:relative;flex:none;border:0;padding:0;cursor:pointer}
+.tg i{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;display:block;box-shadow:0 1px 2px rgba(0,0,0,.35)}
+.dlg{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:400px;box-sizing:border-box;padding:20px;border-radius:12px;background:var(--win);display:flex;flex-direction:column;gap:10px;box-shadow:inset 0 0 0 1px var(--bd),0 1px 0 0 var(--s1),0 3px 0 2px var(--s2),0 7px 0 5px var(--s3),0 12px 0 9px var(--s4)}
+.dlg .t{font-size:14px;font-weight:600;color:var(--tx)}
+.dlg .p{font-size:12px;color:var(--tx2);line-height:1.5}
+.cb{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--tx)}
+.cb i{width:16px;height:16px;border-radius:4px;box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.3);display:block}
+.foot{height:28px;border-top:1px solid var(--sep);display:flex;align-items:center;gap:10px;padding:0 18px;font-size:11px;color:var(--tx2);flex:none;font-variant-numeric:tabular-nums}
+.h2{font-size:13px;font-weight:600;color:#ECEEF3}
+.cap{font-size:11px;font-weight:500;color:#8A8F9C;line-height:1.5}
+.cell{display:flex;flex-direction:column;gap:10px}
+</style>
+</helmet>
+<div class="dk" style="position:relative;width:2960px;height:1080px;box-sizing:border-box;background:#15161B;padding:40px 80px;display:flex;flex-direction:column;gap:28px;font-family:'Inter',system-ui,sans-serif">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<symbol id="h-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></symbol>
+<symbol id="h-grid" viewBox="0 0 24 24"><rect width="7" height="7" x="3" y="3" rx="1"></rect><rect width="7" height="7" x="14" y="3" rx="1"></rect><rect width="7" height="7" x="14" y="14" rx="1"></rect><rect width="7" height="7" x="3" y="14" rx="1"></rect></symbol>
+<symbol id="h-list" viewBox="0 0 24 24"><path d="M3 12h.01"></path><path d="M3 18h.01"></path><path d="M3 6h.01"></path><path d="M8 12h13"></path><path d="M8 18h13"></path><path d="M8 6h13"></path></symbol>
+<symbol id="h-more" viewBox="0 0 24 24"><circle cx="12" cy="12" r="1" fill="currentColor"></circle><circle cx="19" cy="12" r="1" fill="currentColor"></circle><circle cx="5" cy="12" r="1" fill="currentColor"></circle></symbol>
+<symbol id="h-cam" viewBox="0 0 24 24"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"></path><circle cx="12" cy="13" r="3"></circle></symbol>
+<symbol id="h-video" viewBox="0 0 24 24"><path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5"></path><rect x="2" y="6" width="14" height="12" rx="2"></rect></symbol>
+<symbol id="h-pencil" viewBox="0 0 24 24"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"></path><path d="m15 5 4 4"></path></symbol>
+<symbol id="h-copy" viewBox="0 0 24 24"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></symbol>
+<symbol id="h-save" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><path d="m7 10 5 5 5-5"></path><path d="M12 15V3"></path></symbol>
+<symbol id="h-trash" viewBox="0 0 24 24"><path d="M3 6h18"></path><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path></symbol>
+<symbol id="h-x" viewBox="0 0 24 24"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></symbol>
+<symbol id="h-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"></path></symbol>
+<symbol id="h-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="M12 7v5l4 2"></path></symbol>
+<symbol id="h-hist-off" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path><path d="m2 2 20 20"></path></symbol>
+<symbol id="h-folder" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path></symbol>
+</defs></svg>
+
+<div style="display:flex;flex-direction:column;gap:4px">
+  <div class="h2">History window · states (cropped to 896 × 400 for the sheet; the real window keeps 960 × 640)</div>
+  <div class="cap">List view · search · multi-select · empty · history off · clear-history confirm. Same header in every state so the controls never move.</div>
+</div>
+
+<div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:40px 56px">
+
+  <!-- 1 List view -->
+  <div class="cell">
+    <div class="h2" style="font-size:12px">List view · rows 56 px: thumb 72 × 48, title, dimensions, time, type, actions on hover</div>
+    <div class="win">
+      <div class="hdr"><div class="t">History</div><div class="fld" style="width:240px"><svg class="ic16" style="color:var(--ic)"><use href="#h-search"></use></svg>Search by window or date…</div><div class="seg"><button class="on">All</button><button>Screenshots</button><button>Recordings</button></div><div class="seg"><button aria-label="Grid"><svg class="ic14"><use href="#h-grid"></use></svg></button><button class="on" aria-label="List"><svg class="ic14"><use href="#h-list"></use></svg></button></div><div style="flex:1"></div><button class="ib"><svg class="ic16"><use href="#h-more"></use></svg></button></div>
+      <div class="day">Today</div>
+      <div class="row"><div class="th"><i></i></div><div class="n">Figma — Landing page</div><div class="ty"><svg class="ic14"><use href="#h-cam"></use></svg>PNG</div><div class="c" style="width:90px">1440 × 900</div><div class="c" style="width:44px">14:32</div><div class="act"></div></div>
+      <div class="row h"><div class="th"><i style="background:#1E2230"></i></div><div class="n">VS Code — rustshot/src/overlay.rs</div><div class="ty"><svg class="ic14"><use href="#h-video"></use></svg>MP4 · 00:42</div><div class="c" style="width:90px">1920 × 1080</div><div class="c" style="width:44px">13:05</div><div class="act"><button aria-label="Edit · E"><svg class="ic14"><use href="#h-pencil"></use></svg></button><button aria-label="Copy · Ctrl+C"><svg class="ic14"><use href="#h-copy"></use></svg></button><button aria-label="Save · Ctrl+S"><svg class="ic14"><use href="#h-save"></use></svg></button><button aria-label="More"><svg class="ic14"><use href="#h-more"></use></svg></button></div></div>
+      <div class="row"><div class="th"><i></i></div><div class="n">Chrome — Stripe Dashboard <span style="color:var(--acfg);font-size:10.5px;font-weight:600;margin-left:6px">Edited</span></div><div class="ty"><svg class="ic14"><use href="#h-cam"></use></svg>PNG</div><div class="c" style="width:90px">1280 × 720</div><div class="c" style="width:44px">11:48</div><div class="act"></div></div>
+      <div class="row"><div class="th"><i style="background:#F6F7F9"></i></div><div class="n">Slack — #design-review <span style="color:var(--acfg);font-size:10.5px;font-weight:600;margin-left:6px">Edited</span></div><div class="ty"><svg class="ic14"><use href="#h-cam"></use></svg>PNG</div><div class="c" style="width:90px">1180 × 760</div><div class="c" style="width:44px">09:14</div><div class="act"></div></div>
+      <div class="day">Yesterday</div>
+      <div class="row" style="border:0"><div class="th"><i></i></div><div class="n">Preview — invoice-0042.pdf</div><div class="ty"><svg class="ic14"><use href="#h-cam"></use></svg>PNG</div><div class="c" style="width:90px">820 × 540</div><div class="c" style="width:44px">19:50</div><div class="act"></div></div>
+    </div>
+  </div>
+
+  <!-- 2 Search -->
+  <div class="cell">
+    <div class="h2" style="font-size:12px">Search · matches highlighted; day groups collapse to a single "Results" group, Esc clears</div>
+    <div class="win">
+      <div class="hdr"><div class="t">History</div><div class="fld f" style="width:240px"><svg class="ic16" style="color:var(--ic)"><use href="#h-search"></use></svg>stripe<span style="flex:1"></span><svg class="ic14" style="color:var(--ic)"><use href="#h-x"></use></svg></div><div class="seg"><button class="on">All</button><button>Screenshots</button><button>Recordings</button></div><div class="seg"><button aria-label="Grid"><svg class="ic14"><use href="#h-grid"></use></svg></button><button class="on" aria-label="List"><svg class="ic14"><use href="#h-list"></use></svg></button></div><div style="flex:1"></div><button class="ib"><svg class="ic16"><use href="#h-more"></use></svg></button></div>
+      <div class="day">3 results for "stripe"</div>
+      <div class="row"><div class="th"><i></i></div><div class="n">Chrome — <mark>Stripe</mark> Dashboard</div><div class="ty"><svg class="ic14"><use href="#h-cam"></use></svg>PNG</div><div class="c" style="width:90px">1280 × 720</div><div class="c" style="width:110px">Today 11:48</div><div class="act"></div></div>
+      <div class="row"><div class="th"><i></i></div><div class="n">Chrome — <mark>Stripe</mark> · Payments · pi_3Q8…</div><div class="ty"><svg class="ic14"><use href="#h-video"></use></svg>MP4 · 01:12</div><div class="c" style="width:90px">1440 × 900</div><div class="c" style="width:110px">Thu 8 Oct 16:40</div><div class="act"></div></div>
+      <div class="row" style="border:0"><div class="th"><i></i></div><div class="n">VS Code — billing/<mark>stripe</mark>_webhook.rs</div><div class="ty"><svg class="ic14"><use href="#h-cam"></use></svg>PNG</div><div class="c" style="width:90px">1920 × 1080</div><div class="c" style="width:110px">Tue 6 Oct 10:02</div><div class="act"></div></div>
+      <div style="padding:14px 24px;font-size:11.5px;color:var(--tx3)">Searches window title, app name, file name and date. Text found by OCR will be included later and shown as a snippet under the title.</div>
+    </div>
+  </div>
+
+  <!-- 3 Multi-select -->
+  <div class="cell">
+    <div class="h2" style="font-size:12px">Multi-select · Ctrl/Shift-click or marquee; checkboxes appear on all cards, bottom action bar</div>
+    <div class="win">
+      <div class="hdr"><div class="t">History</div><div class="fld" style="width:240px"><svg class="ic16" style="color:var(--ic)"><use href="#h-search"></use></svg>Search by window or date…</div><div class="seg"><button class="on">All</button><button>Screenshots</button><button>Recordings</button></div><div class="seg"><button class="on" aria-label="Grid"><svg class="ic14"><use href="#h-grid"></use></svg></button><button aria-label="List"><svg class="ic14"><use href="#h-list"></use></svg></button></div><div style="flex:1"></div><button class="ib"><svg class="ic16"><use href="#h-more"></use></svg></button></div>
+      <div class="day">Today</div>
+      <div class="cards">
+        <div class="card on"><div class="th2"><i></i><div class="ck"><svg class="ic14"><use href="#h-check"></use></svg></div></div><div class="meta"><div class="n">Figma — Landing page</div><div class="m">1440 × 900 · 14:32</div></div></div>
+        <div class="card on"><div class="th2"><i style="background:#1E2230"></i><div class="ck"><svg class="ic14"><use href="#h-check"></use></svg></div></div><div class="meta"><div class="n">VS Code — overlay.rs</div><div class="m">1920 × 1080 · 13:05</div></div></div>
+        <div class="card"><div class="th2"><i></i><div class="ck off"><svg class="ic14"><use href="#h-check"></use></svg></div></div><div class="meta"><div class="n">Chrome — Stripe Dashboard</div><div class="m">1280 × 720 · 11:48</div></div></div>
+        <div class="card on"><div class="th2"><i style="background:#F6F7F9"></i><div class="ck"><svg class="ic14"><use href="#h-check"></use></svg></div></div><div class="meta"><div class="n">Slack — #design-review</div><div class="m">1180 × 760 · 09:14</div></div></div>
+      </div>
+      <div class="abar"><span class="n">3 selected</span><button class="btn"><svg class="ic14"><use href="#h-copy"></use></svg>Copy</button><button class="btn"><svg class="ic14"><use href="#h-folder"></use></svg>Save to folder…</button><button class="btn dg"><svg class="ic14"><use href="#h-trash"></use></svg>Delete</button><button class="ib" aria-label="Clear selection · Esc"><svg class="ic16"><use href="#h-x"></use></svg></button></div>
+    </div>
+  </div>
+
+  <!-- 4 Empty -->
+  <div class="cell">
+    <div class="h2" style="font-size:12px">Empty state · first run</div>
+    <div class="win">
+      <div class="hdr"><div class="t">History</div><div class="fld" style="width:240px;opacity:.5"><svg class="ic16" style="color:var(--ic)"><use href="#h-search"></use></svg>Search by window or date…</div><div class="seg" style="opacity:.5"><button class="on">All</button><button>Screenshots</button><button>Recordings</button></div><div style="flex:1"></div><button class="ib"><svg class="ic16"><use href="#h-more"></use></svg></button></div>
+      <div class="empty">
+        <svg class="ic16 big"><use href="#h-history"></use></svg>
+        <div class="t">No captures yet</div>
+        <div class="s">Press <span class="k">Win</span><span class="k">Shift</span><span class="k">X</span> to take your first screenshot</div>
+        <a href="#settings">History settings</a>
+      </div>
+      <div class="foot">Keeping 30 days · 0 B of 2 GB</div>
+    </div>
+  </div>
+
+  <!-- 5 History off -->
+  <div class="cell">
+    <div class="h2" style="font-size:12px">History turned off</div>
+    <div class="win">
+      <div class="hdr"><div class="t">History</div><div style="flex:1"></div><button class="ib"><svg class="ic16"><use href="#h-more"></use></svg></button></div>
+      <div class="empty">
+        <svg class="ic16 big"><use href="#h-hist-off"></use></svg>
+        <div class="t">History is off</div>
+        <div style="display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--tx)"><button class="tg" aria-label="Keep history"><i></i></button>Keep a history of captures</div>
+        <div class="s" style="color:var(--tx3)">Captures aren't kept after you close them. Saved and uploaded files are not affected.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 6 Clear dialog -->
+  <div class="cell">
+    <div class="h2" style="font-size:12px">"Clear history?" · modal over the dimmed window; destructive action is the only solid-red button in the app</div>
+    <div class="win">
+      <div class="hdr" style="opacity:.5"><div class="t">History</div><div class="fld" style="width:240px"><svg class="ic16" style="color:var(--ic)"><use href="#h-search"></use></svg>Search by window or date…</div><div class="seg"><button class="on">All</button><button>Screenshots</button><button>Recordings</button></div><div style="flex:1"></div><button class="ib"><svg class="ic16"><use href="#h-more"></use></svg></button></div>
+      <div class="day" style="opacity:.5">Today</div>
+      <div class="cards" style="opacity:.5"><div class="card"><div class="th2"><i></i></div></div><div class="card"><div class="th2"><i style="background:#1E2230"></i></div></div><div class="card"><div class="th2"><i></i></div></div><div class="card"><div class="th2"><i style="background:#F6F7F9"></i></div></div></div>
+      <div style="position:absolute;left:0;top:0;right:0;bottom:0;background:rgba(7,8,11,.45)"></div>
+      <div class="dlg" role="dialog" aria-labelledby="cl-t">
+        <div class="t" id="cl-t">Clear history?</div>
+        <div class="p">Removes all 112 captures from History. This can't be undone.</div>
+        <label class="cb"><i></i>Also delete saved files (1.2 GB in ~/Pictures/rustshot)</label>
+        <div style="display:flex;gap:8px;justify-content:flex-end;padding-top:6px"><button class="btn">Cancel</button><button class="btn solid">Clear history</button></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":2960,"height":1080}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>
