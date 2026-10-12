@@ -10,7 +10,7 @@ Rustshot does not collect, store or transmit personal data or telemetry.
   after it (MP4s through imgur's video upload, which imgur then transcodes).
 - Settings are stored locally in `config.toml` in your user config folder.
 - History (on by default; off in Settings › Capture › History): each capture
-  is kept on this computer only, in `%LOCALAPPDATA%\rustshot\history`
+  is kept on this computer only, in `%LOCALAPPDATA%\rustshot-data\history`
   (Linux: `$XDG_DATA_HOME/rustshot/history`, macOS:
   `~/Library/Application Support/rustshot/history`) — the unannotated image,
   its annotations, a thumbnail, and details such as the time, size, source

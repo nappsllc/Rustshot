@@ -534,3 +534,40 @@ fn civil_dates_round_trip() {
     assert_eq!(short_date(2026, 10, 12, 2026), "Mon 12 Oct");
 }
 
+
+#[test]
+fn the_root_is_outside_the_program_folder() {
+    let base = Path::new(if cfg!(windows) { r"C:\Users\u\AppData\Local" } else { "/home/u/.local/share" });
+    let root = root_in(base);
+    assert!(root.ends_with("history"));
+    if cfg!(windows) {
+        // %LOCALAPPDATA%\rustshot is where the installer puts rustshot.exe.
+        assert_eq!(root, base.join("rustshot-data").join("history"));
+        assert!(!root.starts_with(base.join("rustshot")));
+    } else {
+        assert_eq!(root, base.join("rustshot").join("history"));
+    }
+}
+
+#[test]
+fn list_lines_name_the_capture_and_its_file() {
+    let shot = Entry {
+        id: "2026-10-12/091407".into(),
+        dir: PathBuf::from("h").join("2026-10-12").join("091407"),
+        meta: Meta {
+            captured: (2026, 10, 12, 9, 14, 7),
+            w: 400,
+            h: 300,
+            bytes: 12_345,
+            saved: Some(PathBuf::from("shot.png")),
+            ..Meta::default()
+        },
+        size: 0,
+    };
+    assert_eq!(list_line(&shot), "2026-10-12 09:14:07\tscreenshot\t400x300\t12345\tshot.png");
+    // Never saved: its original.png; a recording: its file.
+    let plain = Entry { meta: Meta { saved: None, ..shot.meta.clone() }, ..shot.clone() };
+    assert!(list_line(&plain).ends_with(&format!("\t{}", shot.dir.join("original.png").display())));
+    let rec = Entry { meta: Meta { kind: Kind::Mp4, saved: None, file: Some(PathBuf::from("rec.mp4")), ..shot.meta.clone() }, ..shot.clone() };
+    assert!(list_line(&rec).contains("\tmp4\t") && list_line(&rec).ends_with("\trec.mp4"));
+}
