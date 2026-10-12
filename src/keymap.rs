@@ -32,6 +32,8 @@ pub enum Action {
     /// Save straight to the Desktop folder (no dialog, no daily folder).
     SaveDesktop,
     Upload,
+    /// Pin the selection to the screen (an always-on-top window).
+    Pin,
     Undo,
     Redo,
     SelectAll,
@@ -57,7 +59,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Action; 31] = [
+    pub const ALL: [Action; 32] = [
         Action::ToolPencil,
         Action::ToolLine,
         Action::ToolArrow,
@@ -76,6 +78,7 @@ impl Action {
         Action::SaveAs,
         Action::SaveDesktop,
         Action::Upload,
+        Action::Pin,
         Action::Undo,
         Action::Redo,
         Action::SelectAll,
@@ -131,6 +134,7 @@ impl Action {
             Action::SaveAs => ("save_as", "Save As", &["Ctrl+Shift+S"]),
             Action::SaveDesktop => ("save_desktop", "Save to Desktop", &["Ctrl+D"]),
             Action::Upload => ("upload", "Upload", &["Ctrl+U"]),
+            Action::Pin => ("pin", "Pin to screen", &["Ctrl+P"]),
             Action::Undo => ("undo", "Undo", &["Ctrl+Z"]),
             Action::Redo => ("redo", "Redo", &["Ctrl+Shift+Z", "Ctrl+Y"]),
             Action::SelectAll => ("select_all", "Select whole screen", &["Ctrl+A"]),
@@ -330,7 +334,7 @@ mod tests {
     #[test]
     fn defaults_match_spec_table() {
         let km = Keymap::defaults();
-        let want: [(Action, &[&str]); 31] = [
+        let want: [(Action, &[&str]); 32] = [
             (Action::ToolPencil, &["P"]),
             (Action::ToolLine, &["L"]),
             (Action::ToolArrow, &["A"]),
@@ -349,6 +353,7 @@ mod tests {
             (Action::SaveAs, &["Ctrl+Shift+S"]),
             (Action::SaveDesktop, &["Ctrl+D"]),
             (Action::Upload, &["Ctrl+U"]),
+            (Action::Pin, &["Ctrl+P"]),
             (Action::Undo, &["Ctrl+Z"]),
             (Action::Redo, &["Ctrl+Shift+Z", "Ctrl+Y"]),
             (Action::SelectAll, &["Ctrl+A"]),
@@ -463,7 +468,8 @@ mod tests {
         let km = Keymap::defaults();
         assert_eq!(km.resolve('P' as u32, NONE), Some(Action::ToolPencil));
         assert_eq!(km.resolve('P' as u32, m(false, true, false)), None);
-        assert_eq!(km.resolve('P' as u32, m(true, false, false)), None);
+        assert_eq!(km.resolve('P' as u32, m(true, false, false)), Some(Action::Pin), "Ctrl+P pins, P is the pencil");
+        assert_eq!(km.resolve('P' as u32, m(true, true, false)), None);
         assert_eq!(km.resolve('P' as u32, m(false, false, true)), None);
         assert_eq!(km.resolve('S' as u32, m(true, false, false)), Some(Action::Save));
         assert_eq!(km.resolve('S' as u32, m(true, true, false)), Some(Action::SaveAs));

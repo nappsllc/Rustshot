@@ -44,6 +44,8 @@ pub enum HotEvent {
     RecCamera,
     RecPill,
     RecDiscard,
+    /// Close every pin (the tray's "Close all pins").
+    ClosePins,
 }
 
 /// The chords registered only while a recording runs (Settings → Key

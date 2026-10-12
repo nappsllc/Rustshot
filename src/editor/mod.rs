@@ -265,6 +265,7 @@ pub fn run(
         rec_opts: None,
         last_region: None,
         rec_area: None,
+        wait_pins: false,
         #[cfg(test)]
         rec_spec: None,
         #[cfg(test)]
@@ -345,6 +346,8 @@ struct App {
     last_region: Option<(i32, i32, u32, u32)>,
     /// The recorded area (physical px): the toast after it goes there.
     rec_area: Option<capture::IRect>,
+    /// A one-shot run that pinned: it closes once its pins are gone.
+    wait_pins: bool,
     /// Tests: the spec the last recording started with.
     #[cfg(test)]
     rec_spec: Option<crate::rec::RecSpec>,
@@ -452,6 +455,11 @@ impl App {
                 }
             }
         }
+        // A one-shot run with pins: done once the last one is closed.
+        if self.wait_pins && crate::pin::count() == 0 {
+            self.wait_pins = false;
+            wind::close(self.hwnd);
+        }
         // An update waits for us to go idle before it installs.
         self.idle_gate();
         // An update is restarting us: quit as soon as no capture is open
@@ -489,6 +497,7 @@ impl App {
                 }
             }
             HotEvent::StopRecording => {}
+            HotEvent::ClosePins => crate::pin::close_all(),
             // The pill's buttons from the tray or a while-recording chord.
             HotEvent::RecPause | HotEvent::RecMute | HotEvent::RecCamera | HotEvent::RecPill | HotEvent::RecDiscard => {
                 let now = Instant::now();
@@ -834,6 +843,8 @@ impl App {
         if let Some(r) = &self.rec {
             wind::set_fast_timer(self.hwnd, r.counting());
         }
+        // macOS: the pins' input is handled on these ticks.
+        crate::pin::tick();
         // macOS: the notice fades on these ticks (fast while it is up).
         if let Some(fast) = crate::notice::tick()
             && self.rec.is_none()
@@ -1109,24 +1120,39 @@ impl App {
         if res.error {
             self.exit_code.store(1, Ordering::SeqCst);
         }
+        let at = (job.sel_global.0 + job.img.width() as i32 / 2, job.sel_global.1 + job.img.height() as i32 / 2);
+        let th = theme::resolve(&job.cfg);
+        let img = Arc::new(job.img);
+        // Pin to screen: the image where it was captured.
+        if job.tasks.contains(&Task::Pin) && !crate::pin::open(img.clone(), job.sel_global, th) {
+            eprintln!("rustshot: pin to screen is not available here");
+            if self.kind == RunKind::Daemon {
+                crate::tray::notify("Pin to screen is not available here");
+            }
+        }
         // The overlay is gone: a notice says what happened (the daemon's
-        // only window left; a one-shot run says it on stdout).
-        if self.kind == RunKind::Daemon
-            && let Some(note) = crate::notice::compose(&res.done, res.upload.is_some())
-        {
-            let at = (job.sel_global.0 + job.img.width() as i32 / 2, job.sel_global.1 + job.img.height() as i32 / 2);
-            crate::notice::show(note, at, theme::resolve(&job.cfg));
+        // only window left; a one-shot run says it on stdout). A copied or
+        // saved screenshot gets the thumbnail card instead (when on).
+        if self.kind == RunKind::Daemon {
+            let up = res.upload.is_some();
+            let note = job
+                .cfg
+                .show_thumbnail
+                .then(|| crate::notice::thumbnail(&res.done, up, img.clone(), job.sel_global))
+                .flatten()
+                .or_else(|| crate::notice::compose(&res.done, up));
+            if let Some(note) = note {
+                crate::notice::show(note, at, th);
+            }
         }
         *self.upload_slot.lock().unwrap() = res.upload;
         if job.tasks.contains(&Task::Text) {
-            let at = (job.sel_global.0 + job.img.width() as i32 / 2, job.sel_global.1 + job.img.height() as i32 / 2);
-            let th = theme::resolve(&job.cfg);
             match self.kind {
                 // Off the UI thread; `poll_ocr` copies and says so.
-                RunKind::Daemon => self.ocr.push(OcrJob { rx: crate::ocr::spawn(job.img), at, th }),
+                RunKind::Daemon => self.ocr.push(OcrJob { rx: crate::ocr::spawn(Arc::unwrap_or_clone(img)), at, th }),
                 // The overlay is gone and nothing else runs: wait here.
                 RunKind::OneShot => {
-                    let res = crate::ocr::recognize(&job.img);
+                    let res = crate::ocr::recognize(&img);
                     let note = crate::ocr::finish(&res);
                     println!("{}", note.text);
                     if note.kind == ToastKind::Error {
@@ -1138,6 +1164,11 @@ impl App {
         wind::hide(self.hwnd);
         match self.kind {
             RunKind::Daemon => self.st = State::Hidden,
+            // A one-shot run lives on while its pins are up.
+            RunKind::OneShot if crate::pin::count() > 0 => {
+                self.st = State::Hidden;
+                self.wait_pins = true;
+            }
             RunKind::OneShot => wind::close(self.hwnd),
         }
     }
@@ -1742,6 +1773,10 @@ impl App {
                 edit.tasks = vec![Task::Upload];
                 edit.done = true;
             }
+            Act::Pin => {
+                edit.tasks = vec![Task::Pin];
+                edit.done = true;
+            }
             Act::Exit => {
                 edit.cancelled = true;
                 edit.done = true;
@@ -2064,6 +2099,7 @@ fn act_of(a: Action) -> Option<Act> {
         Action::SaveAs => Act::SaveAs,
         Action::SaveDesktop => Act::SaveDesktop,
         Action::Upload => Act::Upload,
+        Action::Pin => Act::Pin,
         Action::Undo => Act::Undo,
         Action::Redo => Act::Redo,
         Action::TogglePalette => Act::Palette,
@@ -3428,6 +3464,8 @@ mod uisize_tests;
 mod snap_tests;
 #[cfg(test)]
 mod ocr_tests;
+#[cfg(test)]
+mod pin_tests;
 
 #[cfg(test)]
 mod tests {
@@ -3679,6 +3717,7 @@ mod tests {
             rec_opts: None,
             last_region: None,
             rec_area: None,
+            wait_pins: false,
             rec_spec: None,
             rec_cam: None,
             rec_bubble: None,

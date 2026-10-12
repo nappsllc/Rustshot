@@ -21,6 +21,8 @@ pub enum MenuItem {
     /// Stop and throw the recording away.
     Discard,
     Capture,
+    /// Close every pin (shown while there are any).
+    ClosePins,
     Settings,
     CheckUpdates,
     /// Start at login; payload = currently enabled.
@@ -41,6 +43,7 @@ impl MenuItem {
             MenuItem::HidePill(_) => "Hide recording controls",
             MenuItem::Discard => "Discard recording",
             MenuItem::Capture => "Capture",
+            MenuItem::ClosePins => "Close all pins",
             MenuItem::Settings => "Settings…",
             MenuItem::CheckUpdates => "Check for updates",
             MenuItem::Autostart(_) => "Start at login",
@@ -74,6 +77,7 @@ impl MenuItem {
             MenuItem::CheckUpdates => 12,
             MenuItem::Autostart(_) => 13,
             MenuItem::Quit => 14,
+            MenuItem::ClosePins => 15,
             MenuItem::Separator => SEPARATOR_IDS,
         }
     }
@@ -115,7 +119,13 @@ pub struct RecMenu {
 /// installs). While a recording runs (`rec`) its items come first: Stop,
 /// Pause/Resume, Mute microphone (when recorded), Hide camera (with a
 /// bubble), Hide recording controls, Discard.
+#[cfg_attr(not(test), allow(dead_code))] // the tray and dbusmenu tests
 pub fn menu(autostart: Option<bool>, rec: Option<RecMenu>) -> Vec<MenuItem> {
+    menu_with(autostart, rec, false)
+}
+
+/// [`menu`]; with `pins` (a pin is up) "Close all pins" follows Capture.
+pub fn menu_with(autostart: Option<bool>, rec: Option<RecMenu>, pins: bool) -> Vec<MenuItem> {
     let mut v = Vec::new();
     if let Some(r) = rec {
         v.extend([MenuItem::StopRecording, MenuItem::Pause(r.paused)]);
@@ -127,7 +137,11 @@ pub fn menu(autostart: Option<bool>, rec: Option<RecMenu>) -> Vec<MenuItem> {
         }
         v.extend([MenuItem::HidePill(r.pill_hidden), MenuItem::Discard, MenuItem::Separator]);
     }
-    v.extend([MenuItem::Capture, MenuItem::Settings, MenuItem::CheckUpdates]);
+    v.push(MenuItem::Capture);
+    if pins {
+        v.push(MenuItem::ClosePins);
+    }
+    v.extend([MenuItem::Settings, MenuItem::CheckUpdates]);
     if let Some(on) = autostart {
         v.push(MenuItem::Autostart(on));
     }
@@ -138,7 +152,7 @@ pub fn menu(autostart: Option<bool>, rec: Option<RecMenu>) -> Vec<MenuItem> {
 /// Current menu for this install.
 pub fn current_menu() -> Vec<MenuItem> {
     let auto = crate::update::managed_install().is_none().then(crate::autostart::is_enabled);
-    menu(auto, rec_menu())
+    menu_with(auto, rec_menu(), crate::pin::count() > 0)
 }
 
 /// The daemon event of a menu item (None: the item does its work here,
@@ -152,6 +166,7 @@ pub fn item_event(item: MenuItem) -> Option<HotEvent> {
         MenuItem::HidePill(_) => HotEvent::RecPill,
         MenuItem::Discard => HotEvent::RecDiscard,
         MenuItem::Capture => HotEvent::Capture,
+        MenuItem::ClosePins => HotEvent::ClosePins,
         MenuItem::Quit => HotEvent::Quit,
         MenuItem::Settings | MenuItem::CheckUpdates | MenuItem::Autostart(_) | MenuItem::Separator => return None,
     })
@@ -221,6 +236,14 @@ pub fn set_rec_menu(m: RecMenu) -> bool {
     drop(cur);
     bump();
     true
+}
+
+/// Pins came or went: the menu gains or loses "Close all pins" (Windows
+/// builds it when it opens).
+pub fn pins_changed() {
+    bump();
+    #[cfg(all(target_os = "macos", not(test)))]
+    crate::tray_macos::refresh();
 }
 
 /// Bumped whenever what the tray shows changes (the Linux tray polls it).
@@ -480,6 +503,26 @@ mod tests {
         assert!(!menu(None, None).iter().any(|m| matches!(m, MenuItem::Autostart(_))));
         assert_eq!(*menu(None, None).last().unwrap(), MenuItem::Quit);
         assert!(!menu(Some(false), None).contains(&MenuItem::StopRecording));
+        assert!(!menu(Some(true), None).contains(&MenuItem::ClosePins), "no pins: no Close all pins");
+    }
+
+    /// With pins up, "Close all pins" follows Capture (recording or not)
+    /// and tells the daemon to close them.
+    #[test]
+    fn menu_with_pins() {
+        let m = menu_with(None, None, true);
+        assert_eq!(m[..3], [MenuItem::Capture, MenuItem::ClosePins, MenuItem::Settings]);
+        let r = menu_with(None, Some(RecMenu::default()), true);
+        let i = r.iter().position(|m| *m == MenuItem::Capture).unwrap();
+        assert_eq!(r[i + 1], MenuItem::ClosePins);
+        assert_eq!(MenuItem::ClosePins.label(), "Close all pins");
+        assert_eq!(MenuItem::ClosePins.checked(), None);
+        assert_eq!(format!("{:?}", item_event(MenuItem::ClosePins)), "Some(ClosePins)");
+        let ids = with_ids(&menu_with(Some(true), Some(RecMenu { mic: Some(false), cam: Some(true), ..RecMenu::default() }), true));
+        let mut seen: Vec<i32> = ids.iter().map(|(i, _)| *i).collect();
+        seen.sort();
+        seen.dedup();
+        assert_eq!(seen.len(), ids.len(), "ids stay unique");
     }
 
     /// While recording, the recording's items come first: what the pill
