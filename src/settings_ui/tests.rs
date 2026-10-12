@@ -850,8 +850,9 @@ fn preview_settings_pngs() {
 }
 
 /// Every section fits the window's width and keeps its rows under the
-/// header: General shows whole without scrolling at the defaults, the
-/// long ones scroll, and the end of every one can be reached.
+/// header: Upload and About show whole without scrolling at the defaults,
+/// the long ones scroll (General too, since "Show thumbnail after
+/// capture"), and the end of every one can be reached.
 #[test]
 fn sections_fit_or_scroll() {
     let vp = viewport();
@@ -861,7 +862,7 @@ fn sections_fit_or_scroll() {
             s.section = i;
             render(&mut s, &DARK, k, &Input::default(), &mut FocusState::default());
             assert!(s.content_h[i] > 100.0, "section {i}: {}", s.content_h[i]);
-            if i == GENERAL || i == UPLOAD || i == ABOUT {
+            if i == UPLOAD || i == ABOUT {
                 assert!(s.content_h[i] <= vp.h, "section {i} needs no scroll: {} > {}", s.content_h[i], vp.h);
             }
             s.scroll[i] = 1e6;
@@ -961,7 +962,14 @@ fn general_controls_click() {
     render(&mut s, &DARK, 1.0, &input, &mut focus);
     assert_eq!(s.form.theme, 2, "Light");
     assert!(s.dirty());
-    // The PNG / JPG choice in General.
+    // Show thumbnail after capture: on by default, a click turns it off.
+    assert!(s.form.thumbnail);
+    click(&mut s, &mut focus, "show_thumbnail", 1.0);
+    assert!(!s.form.thumbnail);
+    assert!(!s.form.apply(&s.loaded, &s.loaded).show_thumbnail, "written as show_thumbnail = false");
+    // The PNG / JPG choice in General (below the fold).
+    s.scroll[GENERAL] = 1e6;
+    render(&mut s, &DARK, 1.0, &Input::default(), &mut focus);
     let r = focus.rect_of("format").unwrap();
     let (x, y) = ((r.x1() - 12.0) as i32, (r.y + r.h / 2.0) as i32);
     let mut input = Input::default();

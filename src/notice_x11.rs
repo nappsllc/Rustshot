@@ -15,7 +15,7 @@
 //! centred), cannot be click-through, and is focused when mapped, which a
 //! toast must never be.
 
-use super::{act_at, act_layout, note_size, opacity, place, render_note, work_area, ActLayout, Note, NoteAct, FADE_IN};
+use super::{act_at, act_layout, hold, note_size, opacity, place_note, render_note, work_area, ActLayout, Next, Note, NoteAct, FADE_IN};
 use crate::capture::IRect;
 use crate::objects::Pt;
 use crate::rec_ui::x11::{self as x, Disp, Kind, Win};
@@ -105,6 +105,8 @@ struct Up {
     layout: Option<ActLayout>,
     hover: Option<NoteAct>,
     dirty: bool,
+    /// Its age while held (see [`hold`]).
+    frozen: Option<Duration>,
 }
 
 struct State {
@@ -185,14 +187,14 @@ impl State {
 
     fn put_up(&mut self, note: Note, th: Theme, s: f32, work: IRect, since: Instant) {
         let size = note_size(&note, s);
-        let pos = place(work, size);
+        let pos = place_note(work, &note, size);
         let layout = (!note.actions.is_empty()).then(|| act_layout(&note, s));
         // Clicks through a plain note; the whole window takes them with buttons.
         match &layout {
             Some(_) => self.win.set_input(&[(0, 0, size.0.min(u16::MAX as u32) as u16, size.1.min(u16::MAX as u32) as u16)]),
             None => self.win.set_input(&[]),
         }
-        self.up = Some(Up { note, th, s, work, pos, since, k: None, layout, hover: None, dirty: false });
+        self.up = Some(Up { note, th, s, work, pos, since, k: None, layout, hover: None, dirty: false, frozen: None });
     }
 
     fn replace(&mut self, note: Note) -> bool {
@@ -206,6 +208,7 @@ impl State {
 
     fn take_down(&mut self) {
         self.up = None;
+        super::forget_picture();
         self.win.hide();
         x::flush(&self.d);
     }
@@ -247,27 +250,25 @@ impl State {
     fn click(&mut self, p: Pt) {
         let Some(up) = self.up.as_ref() else { return };
         let Some(a) = up.layout.as_ref().and_then(|l| act_at(l, p)) else { return };
-        let Some(file) = up.note.file.clone() else { return };
+        let (note, th) = (up.note.clone(), up.th);
         let tx = self.tx.clone();
-        match super::run_action(a, &file, move |n| {
+        match super::run_note_action(&note, a, th, move |n| {
             let _ = tx.send(Cmd::Later(n));
         }) {
-            Some(n) => {
+            Next::Keep => {}
+            Next::Show(n) => {
                 self.replace(n);
             }
-            // Open / Show in folder: done with the note.
-            None => self.take_down(),
+            // Open / Show in folder, Pin, Close: done with the note.
+            Next::Hide => self.take_down(),
         }
     }
 
     /// Draw the next frame of the fade, or take the note down once it is over.
     fn tick(&mut self) {
         let Some(up) = self.up.as_mut() else { return };
-        // Held while the pointer is on its buttons.
-        if up.hover.is_some() {
-            let now = Instant::now();
-            up.since = now.checked_sub(FADE_IN).unwrap_or(now);
-        }
+        // Held while the pointer is on its buttons (or the card).
+        up.since = hold(up.since, Instant::now(), up.note.ttl, up.hover.is_some(), &mut up.frozen);
         let Some(k) = opacity(up.since.elapsed(), up.note.ttl) else {
             self.take_down();
             return;

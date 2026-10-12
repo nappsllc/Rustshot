@@ -62,6 +62,9 @@ pub struct Config {
     pub copy_after_capture: bool,
     /// A short shutter sound when a capture is taken.
     pub shutter_sound: bool,
+    /// After a screenshot is copied or saved, a thumbnail card bottom-right
+    /// (Copy, Save, Pin; drag it out for the file) instead of the toast.
+    pub show_thumbnail: bool,
     /// Palette shown in the color picker.
     pub user_colors: Vec<String>,
     /// Imgur client id used for uploads.
@@ -215,6 +218,7 @@ impl Default for Config {
             show_tray: true,
             copy_after_capture: false,
             shutter_sound: false,
+            show_thumbnail: true,
             user_colors: [
                 "#f04438", "#ff8a1f", "#ffc532", "#2dc06f", "#19b5d6", "#3b82f6", "#8b5cf6",
                 "#ec4899", "#ffffff", "#111318",
@@ -834,6 +838,7 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
             "show_tray" => cfg.show_tray = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "copy_after_capture" => cfg.copy_after_capture = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "shutter_sound" => cfg.shutter_sound = as_bool(val).map_err(|e| bad("boolean", &e))?,
+            "show_thumbnail" => cfg.show_thumbnail = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "upload_client_id" => {
                 cfg.upload_client_id = as_string(val).map_err(|e| bad("string", &e))?
             }
@@ -1060,6 +1065,7 @@ pub fn to_toml(c: &Config) -> String {
     );
     out.push_str(&format!("rec_gif_max = {}
 ", c.rec_gif_max));
+    out.push_str(&format!("show_thumbnail = {}\n", c.show_thumbnail));
     for id in TOOL_IDS {
         if let Some(v) = c.tool_sizes.get(id) {
             out.push_str(&format!("tool_{id}_size = {v}\n"));
@@ -1595,6 +1601,12 @@ record_hotkey = \"Ctrl+Shift+R\"
 ").unwrap();
         assert_eq!((older.capture_hotkey.as_str(), older.record_hotkey.as_str()), ("Ctrl+Shift+S", "Ctrl+Shift+R"), "custom keys kept");
         assert!(parse_config("show_tray = 1").is_err());
+        // The thumbnail after a capture: on by default, round-trips off.
+        assert!(d.show_thumbnail);
+        let off = Config { show_thumbnail: false, ..Config::default() };
+        assert_eq!(parse_config(&to_toml(&off)).unwrap(), off);
+        assert!(!parse_config("show_thumbnail = false").unwrap().show_thumbnail);
+        assert!(parse_config("show_thumbnail = \"no\"").is_err());
         let w = hotkey_warnings(&Config { repeat_hotkey: "Nope+".into(), ..Config::default() });
         assert!(w.len() == 1 && w[0].starts_with("repeat_hotkey"), "{w:?}");
         let w = hotkey_warnings(&Config { capture_text_hotkey: "Nope+".into(), ..Config::default() });

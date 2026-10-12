@@ -26,6 +26,8 @@ mod notice;
 mod objects;
 mod ocr;
 mod perf;
+// Pin to screen: the selection as an always-on-top window.
+mod pin;
 mod pixbuf;
 #[cfg(windows)]
 mod proc_win;

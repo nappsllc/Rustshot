@@ -22,6 +22,9 @@ pub enum Task {
     /// Recognize the text in the selection and copy it (OCR, [`crate::ocr`]):
     /// the editor runs it on a worker thread after the export.
     Text,
+    /// Pin the image to the screen where it was captured (the editor opens
+    /// the pin window; nothing to export).
+    Pin,
 }
 
 /// Day of year (1-366) for a civil date.
@@ -547,6 +550,8 @@ pub fn run_export(
                 upload = Some(spawn_upload(bytes, cfg.upload_client_id.clone()));
             }
             Task::Text => {} // the caller's (it runs off the UI thread)
+            // The editor opens the pin (`App::run_finish`).
+            Task::Pin => {}
         }
     }
     ExportResult {

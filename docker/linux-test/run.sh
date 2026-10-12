@@ -373,8 +373,9 @@ EOF
     sleep 1
     shot_x 04-selection
     xdotool key ctrl+s
-    # The notice ("Saved · <file>"): override-redirect, typed NOTIFICATION,
-    # bottom-centre of the screen (Xvfb has no panels), up ~2 s.
+    # The notice: a saved screenshot gets the thumbnail card ("Saved ·
+    # <file>" under the picture): override-redirect, typed NOTIFICATION,
+    # bottom-right of the screen (Xvfb has no panels), up ~6 s.
     if wait_for 3 notice_id; then
         local nid; nid="$(notice_id)"
         shot_x 04c-notice
@@ -386,16 +387,16 @@ EOF
         ny="$(echo "$ninfo" | awk '/Absolute upper-left Y/ {print $4}')"
         nw="$(echo "$ninfo" | awk '/Width:/ {print $2}')"
         nh="$(echo "$ninfo" | awk '/Height:/ {print $2}')"
-        local cx=$((nx + nw / 2)) by=$((ny + nh))
-        if echo "$ninfo" | grep -q 'Override Redirect State: yes'             && xprop -id "$nid" _NET_WM_WINDOW_TYPE | grep -q NOTIFICATION             && [ $((cx - 960)) -le 2 ] && [ $((960 - cx)) -le 2 ] && [ "$by" -eq 1080 ]; then
+        local rx=$((nx + nw)) by=$((ny + nh))
+        if echo "$ninfo" | grep -q 'Override Redirect State: yes'             && xprop -id "$nid" _NET_WM_WINDOW_TYPE | grep -q NOTIFICATION             && [ "$rx" -eq 1920 ] && [ "$by" -eq 1080 ]; then
             result notice-window pass "${nw}x${nh}+${nx}+${ny}"
         else
             result notice-window fail "${nw}x${nh}+${nx}+${ny}; see logs/notice-xwininfo.txt"
         fi
-        if wait_for 5 notice_gone "$nid"; then
+        if wait_for 9 notice_gone "$nid"; then
             result notice-fades pass "unmapped after its time"
         else
-            result notice-fades fail "still up after 5 s"
+            result notice-fades fail "still up after 9 s"
         fi
     else
         shot_x 04c-notice-missing

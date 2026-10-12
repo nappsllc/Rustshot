@@ -439,6 +439,9 @@ fn general(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) 
     srow(ui, tok, "Play shutter sound", None, |ui| {
         ui.switch("shutter_sound", &mut f.shutter, tok);
     });
+    srow(ui, tok, "Show thumbnail after capture", None, |ui| {
+        ui.switch("show_thumbnail", &mut f.thumbnail, tok);
+    });
     ui.sec("Saving", tok);
     srow(ui, tok, "Save to", None, |ui| {
         if ui.cbutton("browse", "Change\u{2026}", None, false, tok) {
@@ -597,7 +600,7 @@ fn wayland() -> bool {
 }
 
 /// The overlay rows of Key bindings: (label, actions).
-pub const KEY_ROWS: [(&str, &[Action]); 12] = [
+pub const KEY_ROWS: [(&str, &[Action]); 13] = [
     (
         "Tools",
         &[
@@ -629,6 +632,7 @@ pub const KEY_ROWS: [(&str, &[Action]); 12] = [
     ("Undo \u{b7} Redo", &[Action::Undo, Action::Redo]),
     ("Select all \u{b7} Palette", &[Action::SelectAll, Action::TogglePalette]),
     ("Record", &[Action::Record]),
+    ("Pin to screen", &[Action::Pin]),
     ("UI size + \u{b7} - \u{b7} Auto", &[Action::UiBigger, Action::UiSmaller, Action::UiReset]),
 ];
 

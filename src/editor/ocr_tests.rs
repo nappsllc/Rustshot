@@ -147,11 +147,16 @@ fn copy_text_hotkey_picks_an_area_then_recognizes() {
 /// deliver (copied and announced), none is dropped.
 #[test]
 fn two_copy_texts_in_flight_both_deliver() {
+    // The first job waits for this gate (no wall-clock race): it is opened
+    // once the second has been delivered.
+    static GATE: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
+    static OPEN: std::sync::Condvar = std::sync::Condvar::new();
+    *GATE.lock().unwrap() = false;
     let (a, copied, shown) = daemon_ocr(
         |img| {
             if img.height() == 200 {
-                // The first one is slow: the second starts meanwhile.
-                std::thread::sleep(Duration::from_millis(300));
+                let g = GATE.lock().unwrap();
+                let _ = OPEN.wait_timeout_while(g, Duration::from_secs(20), |open| !*open).unwrap();
             }
             Ok(format!("{}x{}", img.width(), img.height()))
         },
@@ -167,6 +172,17 @@ fn two_copy_texts_in_flight_both_deliver() {
             a.on_event(Ev::Move { x: 400, y: 270 });
             a.on_event(Ev::Up { x: 400, y: 270 });
             assert_eq!(a.ocr.len(), 2, "both in flight");
+            // The second one is delivered while the first still waits...
+            let t0 = Instant::now();
+            while crate::ocr::COPIED.with(|c| c.borrow().is_empty()) {
+                assert!(t0.elapsed() < Duration::from_secs(10), "the second never finished");
+                std::thread::sleep(Duration::from_millis(2));
+                a.on_event(Ev::Timer);
+            }
+            assert_eq!(a.ocr.len(), 1, "the first still in flight");
+            // ...then the first may finish.
+            *GATE.lock().unwrap() = true;
+            OPEN.notify_all();
         },
     );
     assert!(a.ocr.is_empty());
