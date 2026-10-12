@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>rustshot settings: general, key bindings, about</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;font-family:'Inter',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+.dk{--win:#1B1C20;--side:#181A1F;--bd:rgba(255,255,255,.09);--sep:rgba(255,255,255,.08);--ic:#A3A7B3;--ich:#ECEEF3;--hv:rgba(255,255,255,.06);--sf2:rgba(255,255,255,.05);--ac:#8B93FF;--acbg:rgba(139,147,255,.18);--acrg:rgba(139,147,255,.30);--acfg:#B7BCFF;--tx:#ECEEF3;--tx2:#9296A3;--tx3:#6C7080;--er:#FF7A7A}
+.win{box-sizing:border-box;width:680px;height:520px;border-radius:12px;background:var(--win);display:flex;overflow:hidden;box-shadow:inset 0 0 0 1px var(--bd),0 1px 0 0 rgba(0,0,0,.26),0 3px 0 2px rgba(0,0,0,.15),0 7px 0 5px rgba(0,0,0,.08),0 12px 0 9px rgba(0,0,0,.04)}
+.side{box-sizing:border-box;width:188px;background:var(--side);border-right:1px solid var(--sep);padding:14px 10px;display:flex;flex-direction:column;gap:2px;flex:none}
+.side .ttl{display:flex;align-items:center;gap:8px;padding:4px 8px 12px;font-size:13px;font-weight:600;color:var(--tx)}
+.nav{display:flex;align-items:center;gap:10px;height:32px;padding:0 10px;border-radius:8px;font-size:12.5px;font-weight:500;color:var(--ic);border:0;background:transparent;font-family:inherit;cursor:pointer;text-align:left;width:100%}
+.nav.on{background:var(--acbg);color:var(--acfg);box-shadow:inset 0 0 0 1px var(--acrg)}
+.nav .ic16{color:currentColor}
+.main{flex:1;min-width:0;display:flex;flex-direction:column}
+.hdr{height:48px;display:flex;align-items:center;padding:0 22px;font-size:14px;font-weight:600;color:var(--tx);border-bottom:1px solid var(--sep);flex:none}
+.body{padding:8px 22px 18px;overflow:hidden;display:flex;flex-direction:column;gap:2px}
+.sec{font-size:10.5px;font-weight:600;color:var(--tx3);letter-spacing:.07em;text-transform:uppercase;padding:14px 0 6px}
+.r{display:flex;align-items:center;gap:12px;min-height:36px;padding:0 2px}
+.r .l{flex:1;min-width:0;font-size:12.5px;font-weight:500;color:var(--tx)}
+.r .l small{display:block;font-size:11px;font-weight:400;color:var(--tx2);margin-top:1px}
+.ic16{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;display:block;flex:none}
+.tg{box-sizing:border-box;width:32px;height:18px;border-radius:9px;background:rgba(255,255,255,.14);position:relative;flex:none;border:0;padding:0;cursor:pointer}
+.tg i{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;display:block;box-shadow:0 1px 2px rgba(0,0,0,.35)}
+.tg.on{background:var(--ac)}.tg.on i{left:16px}
+.seg{display:flex;gap:2px;padding:3px;border-radius:8px;background:var(--sf2);box-shadow:inset 0 0 0 1px var(--bd);flex:none}
+.seg button{height:24px;padding:0 10px;border:0;border-radius:5px;background:transparent;color:var(--ic);font:inherit;font-size:11.5px;font-weight:500;cursor:pointer}
+.seg button.on{background:var(--acbg);color:var(--acfg);box-shadow:inset 0 0 0 1px var(--acrg)}
+.fld{box-sizing:border-box;height:28px;padding:0 10px;border-radius:7px;background:var(--sf2);box-shadow:inset 0 0 0 1px var(--bd);color:var(--tx);font-size:12px;display:flex;align-items:center;gap:8px;font-variant-numeric:tabular-nums}
+.fld.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px}
+.btn{height:28px;padding:0 12px;border:0;border-radius:7px;background:var(--hv);color:var(--tx);font:inherit;font-size:12px;font-weight:500;cursor:pointer;box-shadow:inset 0 0 0 1px var(--bd);flex:none}
+.btn.pri{background:var(--acbg);color:var(--acfg);box-shadow:inset 0 0 0 1px var(--acrg)}
+.sw{width:20px;height:20px;border-radius:50%;display:block;box-shadow:inset 0 0 0 1px rgba(255,255,255,.22);cursor:pointer;border:0;padding:0}
+.sw.on{box-shadow:inset 0 0 0 1px rgba(255,255,255,.22),0 0 0 2px var(--win),0 0 0 4px var(--ac)}
+.kb{display:flex;gap:4px;flex:none}
+.k{height:22px;min-width:22px;padding:0 7px;border-radius:5px;background:rgba(255,255,255,.12);color:#D4D7DF;font-size:11px;font-weight:600;display:inline-flex;align-items:center;justify-content:center;font-variant-numeric:tabular-nums;box-shadow:inset 0 -1px 0 rgba(0,0,0,.35)}
+.k.rec{background:var(--acbg);color:var(--acfg);box-shadow:inset 0 0 0 1px var(--acrg);min-width:110px;font-weight:500}
+.k.err{background:rgba(255,122,122,.14);color:var(--er)}
+.krow{display:flex;align-items:center;gap:12px;height:34px;padding:0 8px;border-radius:7px}
+.krow:hover{background:var(--hv)}
+.krow.on{background:var(--acbg)}
+.krow .l{flex:1;font-size:12.5px;font-weight:500;color:var(--tx)}
+.krow .g{font-size:11px;color:var(--tx3);flex:none;width:52px}
+.lnk{font-size:12.5px;font-weight:500;color:var(--acfg);display:inline-flex;align-items:center;gap:6px;text-decoration:none}
+.tile{box-sizing:border-box;flex:1;height:84px;border-radius:10px;background:var(--sf2);box-shadow:inset 0 0 0 1px var(--bd);padding:12px;display:flex;flex-direction:column;gap:6px;text-decoration:none;color:inherit}
+.tile i{width:28px;height:28px;border-radius:8px;display:block}
+.tile b{font-size:12px;font-weight:600;color:var(--tx)}
+.tile span{font-size:11px;color:var(--tx2);line-height:1.35}
+.h2{font-size:13px;font-weight:600;color:#ECEEF3}
+.cap{font-size:11px;font-weight:500;color:#8A8F9C;line-height:1.5}
+</style>
+</helmet>
+<div class="dk" style="position:relative;width:2300px;height:680px;box-sizing:border-box;background:#15161B;padding:48px;display:flex;flex-direction:column;gap:20px;font-family:'Inter',system-ui,sans-serif">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<symbol id="s-sliders" viewBox="0 0 24 24"><path d="M4 21v-7"></path><path d="M4 10V3"></path><path d="M12 21v-9"></path><path d="M12 8V3"></path><path d="M20 21v-5"></path><path d="M20 12V3"></path><path d="M2 14h4"></path><path d="M10 8h4"></path><path d="M18 16h4"></path></symbol>
+<symbol id="s-cam" viewBox="0 0 24 24"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"></path><circle cx="12" cy="13" r="3"></circle></symbol>
+<symbol id="s-video" viewBox="0 0 24 24"><path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5"></path><rect x="2" y="6" width="14" height="12" rx="2"></rect></symbol>
+<symbol id="s-key" viewBox="0 0 24 24"><rect width="20" height="16" x="2" y="4" rx="2"></rect><path d="M6 8h.01"></path><path d="M10 8h.01"></path><path d="M14 8h.01"></path><path d="M18 8h.01"></path><path d="M8 12h.01"></path><path d="M12 12h.01"></path><path d="M16 12h.01"></path><path d="M7 16h10"></path></symbol>
+<symbol id="s-cloud" viewBox="0 0 24 24"><path d="M12 13v8"></path><path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"></path><path d="m8 17 4-4 4 4"></path></symbol>
+<symbol id="s-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path></symbol>
+<symbol id="s-ext" viewBox="0 0 24 24"><path d="M15 3h6v6"></path><path d="M10 14 21 3"></path><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path></symbol>
+<symbol id="s-folder" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path></symbol>
+<symbol id="s-rotate" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path d="M3 3v5h5"></path></symbol>
+<symbol id="s-mark" viewBox="0 0 24 24"><rect width="24" height="24" rx="5.4" fill="#1B1C20" stroke="none"></rect><rect x=".5" y=".5" width="23" height="23" rx="5" fill="none" stroke="#FFFFFF" stroke-opacity=".10" stroke-width="1"></rect><path d="M5 10V7a2 2 0 0 1 2-2h3M14 5h3a2 2 0 0 1 2 2v3M19 14v3a2 2 0 0 1-2 2h-3M10 19H7a2 2 0 0 1-2-2v-3" fill="none" stroke="#ECEEF3" stroke-width="2" stroke-linecap="round"></path><circle cx="12" cy="12" r="3.5" fill="#8B93FF" stroke="none"></circle></symbol>
+</defs></svg>
+
+<div style="display:flex;flex-direction:column;gap:4px">
+  <div class="h2">Settings window · 680 × 520, OS-neutral (the OS draws the title bar; everything inside is ours)</div>
+  <div class="cap">Left rail with five sections, 188px. Content column uses the same tokens as the overlay: 12.5/500 labels, 11/400 helper text, 32px toggles, 28px fields and buttons, 8px radii. Same dark/light theming as the overlay.</div>
+</div>
+
+<div style="display:flex;gap:80px;align-items:flex-start">
+
+  <!-- ===== General ===== -->
+  <div class="win">
+    <nav class="side" aria-label="Settings sections">
+      <div class="ttl"><svg width="20" height="20" aria-hidden="true"><use href="#s-mark"></use></svg>rustshot</div>
+      <button class="nav on"><svg class="ic16"><use href="#s-sliders"></use></svg>General</button>
+      <button class="nav"><svg class="ic16"><use href="#s-cam"></use></svg>Capture</button>
+      <button class="nav"><svg class="ic16"><use href="#s-video"></use></svg>Recording</button>
+      <button class="nav"><svg class="ic16"><use href="#s-key"></use></svg>Key bindings</button>
+      <button class="nav"><svg class="ic16"><use href="#s-cloud"></use></svg>Upload</button>
+      <div style="flex:1"></div>
+      <button class="nav"><svg class="ic16"><use href="#s-info"></use></svg>About</button>
+    </nav>
+    <div class="main">
+      <div class="hdr">General</div>
+      <div class="body">
+        <div class="sec">Appearance</div>
+        <div class="r"><div class="l">Theme</div><div class="seg"><button class="on">System</button><button>Dark</button><button>Light</button></div></div>
+        <div class="r"><div class="l">Accent<small>Used for the active tool, selection and handles</small></div><div style="display:flex;gap:10px;align-items:center"><button class="sw on" style="background:#8B93FF" aria-label="Periwinkle"></button><button class="sw" style="background:#5CC8C2" aria-label="Teal"></button><button class="sw" style="background:#F2A65A" aria-label="Amber"></button></div></div>
+        <div class="sec">Behavior</div>
+        <div class="r"><div class="l">Launch at login</div><button class="tg on" aria-label="Launch at login on"><i></i></button></div>
+        <div class="r"><div class="l">Show icon in tray / menu bar</div><button class="tg on" aria-label="Tray icon on"><i></i></button></div>
+        <div class="r"><div class="l">Copy to clipboard after capture<small>Also when saving or uploading</small></div><button class="tg on" aria-label="Copy after capture on"><i></i></button></div>
+        <div class="r"><div class="l">Play shutter sound</div><button class="tg" aria-label="Shutter sound off"><i></i></button></div>
+        <div class="sec">Saving</div>
+        <div class="r"><div class="l">Save to</div><div class="fld mono" style="width:228px"><svg class="ic16" style="color:var(--ic)"><use href="#s-folder"></use></svg><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">~/Pictures/rustshot</span></div><button class="btn">Change…</button></div>
+        <div class="r"><div class="l">File name<small>rustshot-2026-10-10-2131.png</small></div><div class="fld mono" style="width:228px">rustshot-%Y-%m-%d-%H%M</div><div class="seg"><button class="on">PNG</button><button>JPG</button></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Key bindings ===== -->
+  <div class="win">
+    <nav class="side" aria-label="Settings sections">
+      <div class="ttl"><svg width="20" height="20" aria-hidden="true"><use href="#s-mark"></use></svg>rustshot</div>
+      <button class="nav"><svg class="ic16"><use href="#s-sliders"></use></svg>General</button>
+      <button class="nav"><svg class="ic16"><use href="#s-cam"></use></svg>Capture</button>
+      <button class="nav"><svg class="ic16"><use href="#s-video"></use></svg>Recording</button>
+      <button class="nav on"><svg class="ic16"><use href="#s-key"></use></svg>Key bindings</button>
+      <button class="nav"><svg class="ic16"><use href="#s-cloud"></use></svg>Upload</button>
+      <div style="flex:1"></div>
+      <button class="nav"><svg class="ic16"><use href="#s-info"></use></svg>About</button>
+    </nav>
+    <div class="main">
+      <div class="hdr" style="justify-content:space-between">Key bindings<button class="btn" style="font-weight:500;display:flex;align-items:center;gap:6px"><svg class="ic16"><use href="#s-rotate"></use></svg>Reset to defaults</button></div>
+      <div class="body" style="padding-left:14px;padding-right:14px">
+        <div class="sec" style="padding-left:8px">Global · work anywhere</div>
+        <div class="krow"><div class="l">Capture region</div><div class="kb"><span class="k">Ctrl</span><span class="k">Shift</span><span class="k">S</span></div></div>
+        <div class="krow on"><div class="l">Capture full screen</div><div class="kb"><span class="k rec">Press shortcut… <span style="opacity:.6;font-weight:400">Esc to cancel</span></span></div></div>
+        <div class="krow"><div class="l">Capture window</div><div class="kb"><span class="k">Ctrl</span><span class="k">Shift</span><span class="k">W</span></div></div>
+        <div class="krow"><div class="l">Record video</div><div class="kb"><span class="k">Ctrl</span><span class="k">Shift</span><span class="k">R</span></div></div>
+        <div class="krow"><div class="l">Repeat last capture</div><div class="kb"><span class="k err">Ctrl</span><span class="k err">Shift</span><span class="k err">P</span></div></div>
+        <div style="display:flex;align-items:center;gap:6px;padding:0 8px 4px;font-size:11px;color:var(--er)"><svg class="ic16" style="width:13px;height:13px"><use href="#s-info"></use></svg>Already used by the system (Print). Choose another.</div>
+        <div class="sec" style="padding-left:8px">In the overlay · single keys</div>
+        <div class="krow" style="height:30px"><div class="l" style="font-size:12px">Tools</div><div class="g">P L A R E M T X B I</div><div class="kb"><span class="k">P</span><span class="k">L</span><span class="k">A</span><span class="k">R</span><span class="k">E</span><span class="k">M</span><span class="k">T</span><span class="k">X</span><span class="k">B</span><span class="k">I</span></div></div>
+        <div class="krow" style="height:30px"><div class="l" style="font-size:12px">Stroke size − / +</div><div class="kb"><span class="k">[</span><span class="k">]</span></div></div>
+        <div class="krow" style="height:30px"><div class="l" style="font-size:12px">Copy · Save · Upload</div><div class="kb"><span class="k">Ctrl C</span><span class="k">Ctrl S</span><span class="k">Ctrl U</span></div></div>
+        <div class="krow" style="height:30px"><div class="l" style="font-size:12px">Accept · Cancel</div><div class="kb"><span class="k">Enter</span><span class="k">Esc</span></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== About ===== -->
+  <div class="win">
+    <nav class="side" aria-label="Settings sections">
+      <div class="ttl"><svg width="20" height="20" aria-hidden="true"><use href="#s-mark"></use></svg>rustshot</div>
+      <button class="nav"><svg class="ic16"><use href="#s-sliders"></use></svg>General</button>
+      <button class="nav"><svg class="ic16"><use href="#s-cam"></use></svg>Capture</button>
+      <button class="nav"><svg class="ic16"><use href="#s-video"></use></svg>Recording</button>
+      <button class="nav"><svg class="ic16"><use href="#s-key"></use></svg>Key bindings</button>
+      <button class="nav"><svg class="ic16"><use href="#s-cloud"></use></svg>Upload</button>
+      <div style="flex:1"></div>
+      <button class="nav on"><svg class="ic16"><use href="#s-info"></use></svg>About</button>
+    </nav>
+    <div class="main">
+      <div class="hdr">About</div>
+      <div class="body" style="gap:0">
+        <div style="display:flex;gap:18px;align-items:center;padding:18px 0 14px">
+          <svg width="72" height="72" role="img" aria-label="rustshot icon"><use href="#s-mark"></use></svg>
+          <div style="display:flex;flex-direction:column;gap:4px">
+            <div style="font-size:20px;font-weight:600;color:var(--tx);letter-spacing:-.01em">rustshot</div>
+            <div style="font-size:12px;color:var(--tx2);font-variant-numeric:tabular-nums">Version 1.0.0 · <span style="color:var(--acfg)">Check for updates</span></div>
+            <div style="font-size:12px;color:var(--tx2);line-height:1.5;max-width:380px">A fast, tiny screenshot and screen-recording tool. Draws its own pixels, runs on Windows, macOS and Linux, and never asks you to sign in.</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:18px;flex-wrap:wrap;padding:2px 0 12px;border-bottom:1px solid var(--sep)">
+          <a class="lnk" href="https://powernapps.net">Website<svg class="ic16" style="width:13px;height:13px"><use href="#s-ext"></use></svg></a>
+          <a class="lnk" href="https://powernapps.net">Source on GitHub<svg class="ic16" style="width:13px;height:13px"><use href="#s-ext"></use></svg></a>
+          <a class="lnk" href="https://powernapps.net">Report an issue<svg class="ic16" style="width:13px;height:13px"><use href="#s-ext"></use></svg></a>
+          <a class="lnk" href="https://powernapps.net">What's new</a>
+          <a class="lnk" href="https://powernapps.net">Licenses</a>
+        </div>
+        <div class="sec" style="display:flex;justify-content:space-between;align-items:center;padding-top:16px">More from PowerNapps<a class="lnk" style="font-size:11.5px;text-transform:none;letter-spacing:0" href="https://powernapps.net">powernapps.net<svg class="ic16" style="width:13px;height:13px"><use href="#s-ext"></use></svg></a></div>
+        <div style="display:flex;gap:10px;padding-top:4px">
+          <a class="tile" href="https://powernapps.net"><i style="background:#5CC8C2"></i><b>[App name]</b><span>[One-line tagline]</span></a>
+          <a class="tile" href="https://powernapps.net"><i style="background:#F2A65A"></i><b>[App name]</b><span>[One-line tagline]</span></a>
+          <a class="tile" href="https://powernapps.net"><i style="background:#E07A4F"></i><b>[App name]</b><span>[One-line tagline]</span></a>
+        </div>
+        <div style="font-size:11px;color:var(--tx3);padding-top:14px">© 2026 PowerNapps · Made in Los Angeles · MIT License</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":2300,"height":680}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

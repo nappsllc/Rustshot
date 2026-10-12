@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>rustshot video capture, setup</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;font-family:'Inter',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+.dk{--sf:rgba(27,28,32,.96);--sf2:rgba(255,255,255,.05);--bd:rgba(255,255,255,.09);--sep:rgba(255,255,255,.10);--ic:#A3A7B3;--ich:#ECEEF3;--hv:rgba(255,255,255,.06);--ac:#8B93FF;--acbg:rgba(139,147,255,.18);--acrg:rgba(139,147,255,.30);--acfg:#B7BCFF;--tx:#ECEEF3;--tx2:#9296A3;--rec:#FF5A5A;--dim:rgba(7,8,11,.58);--s1:rgba(0,0,0,.26);--s2:rgba(0,0,0,.15);--s3:rgba(0,0,0,.08);--s4:rgba(0,0,0,.04);--rim:rgba(255,255,255,.22)}
+.ic{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;display:block}
+.ic16{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;display:block}
+.sh{box-shadow:inset 0 0 0 1px var(--bd),0 1px 0 0 var(--s1),0 3px 0 2px var(--s2),0 7px 0 5px var(--s3),0 12px 0 9px var(--s4)}
+.pn{box-sizing:border-box;width:380px;padding:10px;border-radius:14px;background:var(--sf);color:var(--tx);display:flex;flex-direction:column;gap:8px}
+.seg{display:flex;gap:2px;padding:3px;border-radius:9px;background:var(--sf2);box-shadow:inset 0 0 0 1px var(--bd)}
+.seg button{flex:1;height:28px;border:0;border-radius:6px;background:transparent;color:var(--ic);font:inherit;font-size:12px;font-weight:500;display:flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;padding:0 8px}
+.seg button.on{background:var(--acbg);color:var(--acfg);box-shadow:inset 0 0 0 1px var(--acrg)}
+.row{display:flex;align-items:center;gap:10px;height:40px;padding:0 6px 0 8px;border-radius:9px}
+.row:hover{background:var(--hv)}
+.row .nm{font-size:12px;font-weight:500;color:var(--tx);width:92px;flex:none}
+.row .dv{flex:1;min-width:0;font-size:12px;color:var(--tx2);display:flex;align-items:center;gap:4px;white-space:nowrap;overflow:hidden}
+.row .dv span{overflow:hidden;text-overflow:ellipsis}
+.row.off .nm,.row.off .dv{color:var(--tx2)}
+.row.off .ri{color:var(--tx2)}
+.ri{color:var(--ic);flex:none}
+.tg{box-sizing:border-box;width:32px;height:18px;border-radius:9px;background:rgba(255,255,255,.14);position:relative;flex:none;border:0;padding:0;cursor:pointer}
+.tg i{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;display:block;box-shadow:0 1px 2px rgba(0,0,0,.35)}
+.tg.on{background:var(--ac)}
+.tg.on i{left:16px}
+.lv{display:flex;gap:2px;align-items:center;height:12px;flex:none}
+.lv i{width:3px;border-radius:1.5px;background:var(--ac);display:block}
+.lv i.q{background:rgba(255,255,255,.14)}
+.hr{height:1px;background:var(--sep);margin:0 4px}
+.lab{font-size:10.5px;font-weight:600;color:var(--tx2);letter-spacing:.06em;text-transform:uppercase;padding:4px 8px 0}
+.two{display:flex;gap:8px}
+.two>div{flex:1;display:flex;flex-direction:column;gap:5px}
+.sm{font-size:11px;font-weight:500;color:var(--tx2);padding:0 2px}
+.recbtn{height:40px;border:0;border-radius:10px;background:var(--rec);color:#1A0A0A;font:inherit;font-size:13px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:10px;cursor:pointer;box-shadow:inset 0 0 0 1px rgba(255,255,255,.18)}
+.recbtn b{width:10px;height:10px;border-radius:50%;background:#1A0A0A;display:block}
+.kbd{height:18px;min-width:18px;padding:0 5px;border-radius:4px;background:rgba(0,0,0,.18);color:#1A0A0A;font-size:10.5px;font-weight:600;display:inline-flex;align-items:center;justify-content:center}
+.lb{box-sizing:border-box;height:22px;padding:0 8px;border-radius:6px;background:var(--sf);color:var(--tx);display:flex;align-items:center;gap:8px;box-shadow:inset 0 0 0 1px var(--bd),0 1px 0 0 var(--s1),0 3px 0 2px var(--s3)}
+.v{font-size:12px;font-weight:600;color:var(--tx);font-variant-numeric:tabular-nums}
+.u{font-size:11px;font-weight:500;color:var(--tx2)}
+.mode{box-sizing:border-box;height:28px;padding:3px;border-radius:9px;background:var(--sf);display:flex;gap:2px}
+.mode button{height:22px;padding:0 10px;border:0;border-radius:6px;background:transparent;color:var(--ic);font:inherit;font-size:11.5px;font-weight:500;display:flex;align-items:center;gap:6px;cursor:pointer}
+.mode button.on{background:var(--acbg);color:var(--acfg);box-shadow:inset 0 0 0 1px var(--acrg)}
+.sb{position:absolute;left:-1px;top:-1px;right:-1px;bottom:-1px;border:1px solid var(--ac);box-shadow:0 0 0 1px rgba(0,0,0,.40),inset 0 0 0 1px rgba(0,0,0,.28);pointer-events:none}
+.hd{position:absolute;box-sizing:content-box;width:6px;height:6px;border-radius:50%;background:#fff;border:2px solid var(--ac);box-shadow:0 0 0 1px rgba(0,0,0,.45)}
+.ts{box-sizing:border-box;height:36px;padding:0 14px 0 10px;border-radius:12px;background:var(--sf);color:var(--tx);display:flex;align-items:center;gap:8px;font-size:12px;font-weight:500}
+.nv{height:34px;border-radius:8px;display:flex;align-items:center;gap:10px;padding:0 10px;font-size:12px;font-weight:500;color:#5A6070}
+.nv i{width:16px;height:16px;border-radius:5px;background:#BFC5D4;display:block}
+.nv.a{background:#E1E3F7;color:#2B2F45}
+.nv.a i{background:#8E96E8}
+.cd{position:absolute;box-sizing:border-box;background:#fff;border:1px solid #E4E7EC;border-radius:10px}
+.cam{position:absolute;box-sizing:border-box;width:160px;height:160px;border-radius:50%;background:#2A2F3B;overflow:hidden;box-shadow:0 0 0 2px var(--ac),0 0 0 3px rgba(0,0,0,.45),0 6px 0 4px rgba(0,0,0,.14),0 14px 0 10px rgba(0,0,0,.06)}
+.cam .hdr{position:absolute;left:50%;top:38px;width:56px;height:56px;border-radius:50%;background:#8A93A8;transform:translateX(-50%)}
+.cam .sho{position:absolute;left:50%;top:104px;width:120px;height:90px;border-radius:60px 60px 0 0;background:#8A93A8;transform:translateX(-50%)}
+.grip{position:absolute;box-sizing:border-box;height:22px;padding:0 8px;border-radius:11px;background:var(--sf);color:var(--tx);display:flex;align-items:center;gap:6px;font-size:11px;font-weight:500;box-shadow:inset 0 0 0 1px var(--bd),0 1px 0 0 var(--s1),0 3px 0 2px var(--s3)}
+</style>
+</helmet>
+<div class="dk" style="position:relative;width:1440px;height:900px;overflow:hidden;font-family:'Inter',system-ui,sans-serif">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<symbol id="v-video" viewBox="0 0 24 24"><path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5"></path><rect x="2" y="6" width="14" height="12" rx="2"></rect></symbol>
+<symbol id="v-mic" viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><path d="M12 19v3"></path></symbol>
+<symbol id="v-vol" viewBox="0 0 24 24"><path d="M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z"></path><path d="M16 9a5 5 0 0 1 0 6"></path><path d="M19.364 18.364a9 9 0 0 0 0-12.728"></path></symbol>
+<symbol id="v-monitor" viewBox="0 0 24 24"><rect width="20" height="14" x="2" y="3" rx="2"></rect><path d="M8 21h8"></path><path d="M12 17v4"></path></symbol>
+<symbol id="v-window" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="M10 4v4"></path><path d="M2 8h20"></path><path d="M6 4v4"></path></symbol>
+<symbol id="v-region" viewBox="0 0 24 24"><path d="M5 3a2 2 0 0 0-2 2"></path><path d="M19 3a2 2 0 0 1 2 2"></path><path d="M21 19a2 2 0 0 1-2 2"></path><path d="M5 21a2 2 0 0 1-2-2"></path><path d="M9 3h1"></path><path d="M9 21h1"></path><path d="M14 3h1"></path><path d="M14 21h1"></path><path d="M3 9v1"></path><path d="M21 9v1"></path><path d="M3 14v1"></path><path d="M21 14v1"></path></symbol>
+<symbol id="v-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle></symbol>
+<symbol id="v-square" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="4"></rect></symbol>
+<symbol id="v-chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"></path></symbol>
+<symbol id="v-film" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"></rect><path d="M7 3v18"></path><path d="M3 7.5h4"></path><path d="M3 12h18"></path><path d="M3 16.5h4"></path><path d="M17 3v18"></path><path d="M17 7.5h4"></path><path d="M17 16.5h4"></path></symbol>
+<symbol id="v-gif" viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="2"></rect><path d="M8.5 10.5a1.75 1.75 0 1 0 0 3h.75v-1.5"></path><path d="M12.5 10v4"></path><path d="M15.5 14v-4h2.5"></path><path d="M15.5 12h2"></path></symbol>
+<symbol id="v-cam" viewBox="0 0 24 24"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"></path><circle cx="12" cy="13" r="3"></circle></symbol>
+<symbol id="v-timer" viewBox="0 0 24 24"><path d="M10 2h4"></path><path d="M12 14l3-3"></path><circle cx="12" cy="14" r="8"></circle></symbol>
+<symbol id="v-grip" viewBox="0 0 24 24"><circle cx="9" cy="7" r="1.2" fill="currentColor"></circle><circle cx="15" cy="7" r="1.2" fill="currentColor"></circle><circle cx="9" cy="12" r="1.2" fill="currentColor"></circle><circle cx="15" cy="12" r="1.2" fill="currentColor"></circle><circle cx="9" cy="17" r="1.2" fill="currentColor"></circle><circle cx="15" cy="17" r="1.2" fill="currentColor"></circle></symbol>
+<symbol id="v-x" viewBox="0 0 24 24"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></symbol>
+<symbol id="v-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path></symbol>
+</defs></svg>
+
+<!-- Captured screen (sample) -->
+<div style="position:absolute;left:0;top:0;width:1440px;height:900px;background:linear-gradient(135deg,#1F3B63 0%,#5A3E8A 100%)"></div>
+<div style="position:absolute;left:120px;top:70px;width:1200px;height:720px;border-radius:12px;background:#F6F7F9;overflow:hidden;box-shadow:0 24px 60px rgba(0,0,0,.35)">
+  <div style="position:absolute;left:0;top:0;width:1200px;height:40px;background:#fff;border-bottom:1px solid #E6E8ED;box-sizing:border-box"><div style="position:absolute;left:16px;top:12px;font-size:12px;font-weight:500;color:#4A4F5C">Dashboard</div></div>
+  <div style="position:absolute;left:0;top:40px;width:200px;height:680px;background:#EEF0F4;border-right:1px solid #E1E4EA;box-sizing:border-box;padding:20px 14px;display:flex;flex-direction:column;gap:6px">
+    <div class="nv a"><i></i>Overview</div><div class="nv"><i></i>Reports</div><div class="nv"><i></i>Audience</div><div class="nv"><i></i>Campaigns</div><div class="nv"><i></i>Billing</div><div class="nv"><i></i>Settings</div>
+  </div>
+  <div style="position:absolute;left:232px;top:62px;font-size:20px;font-weight:600;color:#1B1E27">Overview</div>
+  <div style="position:absolute;left:232px;top:94px;width:300px;height:9px;border-radius:5px;background:#DADEE6"></div>
+  <div class="cd" style="left:232px;top:130px;width:300px;height:96px"><div style="position:absolute;left:18px;top:16px;font-size:11px;font-weight:500;color:#7A8090">Revenue</div><div style="position:absolute;left:18px;top:42px;width:130px;height:22px;border-radius:6px;background:#1F2330"></div></div>
+  <div class="cd" style="left:556px;top:130px;width:300px;height:96px"><div style="position:absolute;left:18px;top:16px;font-size:11px;font-weight:500;color:#7A8090">Sessions</div><div style="position:absolute;left:18px;top:42px;width:110px;height:22px;border-radius:6px;background:#1F2330"></div></div>
+  <div class="cd" style="left:880px;top:130px;width:300px;height:96px"><div style="position:absolute;left:18px;top:16px;font-size:11px;font-weight:500;color:#7A8090">Conversion</div><div style="position:absolute;left:18px;top:42px;width:90px;height:22px;border-radius:6px;background:#1F2330"></div></div>
+  <div class="cd" style="left:232px;top:250px;width:948px;height:440px">
+    <div style="position:absolute;left:24px;top:20px;font-size:13px;font-weight:600;color:#1B1E27">Weekly trend</div>
+    <svg width="948" height="440" style="position:absolute;left:0;top:0" aria-hidden="true">
+      <path d="M40 90H908M40 150H908M40 210H908M40 270H908M40 330H908M40 390H908" stroke="#EEF0F4" stroke-width="1" fill="none"></path>
+      <path d="M40 300L140 260L240 285L340 215L440 235L540 150L640 185L740 110L840 165L908 135L908 390L40 390Z" fill="#3B6CF6" fill-opacity=".10"></path>
+      <path d="M40 300L140 260L240 285L340 215L440 235L540 150L640 185L740 110L840 165L908 135" stroke="#3B6CF6" stroke-width="3" fill="none" stroke-linejoin="round" stroke-linecap="round"></path>
+    </svg>
+  </div>
+</div>
+
+<!-- Dim + selection -->
+<div style="position:absolute;left:240px;top:110px;width:960px;height:420px;box-shadow:0 0 0 2000px var(--dim)">
+  <div class="sb"></div>
+  <div class="hd" style="left:-5px;top:-5px"></div><div class="hd" style="left:475px;top:-5px"></div><div class="hd" style="left:955px;top:-5px"></div>
+  <div class="hd" style="left:-5px;top:205px"></div><div class="hd" style="left:955px;top:205px"></div>
+  <div class="hd" style="left:-5px;top:415px"></div><div class="hd" style="left:475px;top:415px"></div><div class="hd" style="left:955px;top:415px"></div>
+
+  <!-- Camera bubble, draggable, bottom-left of region -->
+  <div class="cam" style="left:24px;top:236px"><div class="hdr"></div><div class="sho"></div></div>
+  <div class="grip" style="left:52px;top:408px"><svg class="ic16" style="width:14px;height:14px;color:var(--ic)" aria-hidden="true"><use href="#v-grip"></use></svg>Drag · scroll to resize</div>
+</div>
+
+<!-- Mode switch + size label above the selection -->
+<div style="position:absolute;left:240px;top:72px;display:flex;align-items:center;gap:10px">
+  <div class="mode sh">
+    <button aria-label="Screenshot mode (1)"><svg class="ic16" style="width:14px;height:14px"><use href="#v-cam"></use></svg>Screenshot</button>
+    <button class="on" aria-label="Video mode (2)"><svg class="ic16" style="width:14px;height:14px"><use href="#v-video"></use></svg>Video</button>
+  </div>
+  <div class="lb"><span class="v">960 × 420</span><span class="u">240, 110</span></div>
+</div>
+
+<!-- Settings panel, below selection, right-aligned -->
+<div class="pn sh" style="position:absolute;right:240px;top:538px">
+  <div class="seg" role="group" aria-label="Capture source">
+    <button aria-label="Full screen (F)"><svg class="ic16"><use href="#v-monitor"></use></svg>Screen</button>
+    <button aria-label="Window (W)"><svg class="ic16"><use href="#v-window"></use></svg>Window</button>
+    <button class="on" aria-label="Region (R)"><svg class="ic16"><use href="#v-region"></use></svg>Region</button>
+  </div>
+
+  <div class="row">
+    <svg class="ic ri"><use href="#v-video"></use></svg>
+    <div class="nm">Camera</div>
+    <div class="dv"><span>FaceTime HD Camera</span><svg class="ic16" style="width:14px;height:14px;flex:none"><use href="#v-chev"></use></svg></div>
+    <button class="tg on" aria-label="Camera on"><i></i></button>
+  </div>
+  <div class="row">
+    <svg class="ic ri"><use href="#v-mic"></use></svg>
+    <div class="nm">Microphone</div>
+    <div class="dv"><span>MacBook Pro Microphone</span><svg class="ic16" style="width:14px;height:14px;flex:none"><use href="#v-chev"></use></svg></div>
+    <div class="lv"><i style="height:5px"></i><i style="height:9px"></i><i style="height:12px"></i><i style="height:8px"></i><i style="height:4px"></i><i class="q" style="height:6px"></i><i class="q" style="height:6px"></i></div>
+    <button class="tg on" aria-label="Microphone on"><i></i></button>
+  </div>
+  <div class="row off">
+    <svg class="ic ri"><use href="#v-vol"></use></svg>
+    <div class="nm">System audio</div>
+    <div class="dv"><span>Off</span></div>
+    <button class="tg" aria-label="System audio off"><i></i></button>
+  </div>
+
+  <div class="hr"></div>
+
+  <div class="two">
+    <div>
+      <div class="sm">Camera shape</div>
+      <div class="seg" role="group" aria-label="Camera shape">
+        <button class="on" aria-label="Round bubble"><svg class="ic16"><use href="#v-circle"></use></svg></button>
+        <button aria-label="Square bubble"><svg class="ic16"><use href="#v-square"></use></svg></button>
+      </div>
+    </div>
+    <div>
+      <div class="sm">Output</div>
+      <div class="seg" role="group" aria-label="Output format">
+        <button class="on" aria-label="MP4 video"><svg class="ic16"><use href="#v-film"></use></svg>MP4</button>
+        <button aria-label="Animated GIF"><svg class="ic16"><use href="#v-gif"></use></svg>GIF</button>
+      </div>
+    </div>
+    <div style="flex:0 0 92px">
+      <div class="sm">Countdown</div>
+      <div class="seg" role="group" aria-label="Countdown">
+        <button aria-label="No countdown">0</button>
+        <button class="on" aria-label="3 second countdown">3s</button>
+      </div>
+    </div>
+  </div>
+
+  <button class="recbtn" aria-label="Start recording (Enter)"><b></b>Start recording<span class="kbd">⏎</span></button>
+</div>
+
+<!-- Close -->
+<button style="position:absolute;right:240px;top:72px;width:28px;height:28px;border:0;border-radius:8px;background:var(--sf);color:var(--ic);display:flex;align-items:center;justify-content:center;cursor:pointer" class="sh" aria-label="Cancel (Esc)"><svg class="ic16"><use href="#v-x"></use></svg></button>
+
+<!-- Toast -->
+<div style="position:absolute;left:0;right:0;top:836px;display:flex;justify-content:center">
+  <div class="ts sh"><svg class="ic16" style="color:var(--ac)" aria-hidden="true"><use href="#v-info"></use></svg>1080p · 30 fps · est. 2.1 MB / min &nbsp;·&nbsp; panel is 290px tall: below the region when it fits, else above, else inside at the bottom-right</div>
+</div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>rustshot video capture, recording state and panel close-ups</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0;font-family:'Inter',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+.dk{--sf:rgba(27,28,32,.96);--sf2:rgba(255,255,255,.05);--bd:rgba(255,255,255,.09);--sep:rgba(255,255,255,.10);--ic:#A3A7B3;--ich:#ECEEF3;--hv:rgba(255,255,255,.06);--ac:#8B93FF;--acbg:rgba(139,147,255,.18);--acrg:rgba(139,147,255,.30);--acfg:#B7BCFF;--tx:#ECEEF3;--tx2:#9296A3;--rec:#FF5A5A;--dim:rgba(7,8,11,.58);--s1:rgba(0,0,0,.26);--s2:rgba(0,0,0,.15);--s3:rgba(0,0,0,.08);--s4:rgba(0,0,0,.04);--rim:rgba(255,255,255,.22)}
+.ic{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;display:block}
+.ic16{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;display:block}
+.sh{box-shadow:inset 0 0 0 1px var(--bd),0 1px 0 0 var(--s1),0 3px 0 2px var(--s2),0 7px 0 5px var(--s3),0 12px 0 9px var(--s4)}
+.bt{box-sizing:border-box;width:32px;height:32px;border:0;padding:0;margin:0;background:transparent;border-radius:8px;display:flex;align-items:center;justify-content:center;color:var(--ic);cursor:pointer;flex:none}
+.bt.h{background:var(--hv);color:var(--ich)}
+.bt.on{background:var(--acbg);color:var(--acfg);box-shadow:inset 0 0 0 1px var(--acrg)}
+.bt.off{color:var(--rec);background:rgba(255,90,90,.14)}
+.bt.d{opacity:.34}
+.tb{box-sizing:border-box;display:flex;align-items:center;gap:6px;padding:6px;background:var(--sf);border-radius:12px;color:var(--tx)}
+.g{display:flex;align-items:center;gap:2px}
+.sp{width:1px;height:16px;background:var(--sep);flex:none}
+.tm{display:flex;align-items:center;gap:8px;height:32px;padding:0 10px 0 8px}
+.tm b{width:10px;height:10px;border-radius:50%;background:var(--rec);display:block;box-shadow:0 0 0 3px rgba(255,90,90,.22)}
+.tm span{font-size:13px;font-weight:600;color:var(--tx);font-variant-numeric:tabular-nums;letter-spacing:.01em}
+.stop{box-sizing:border-box;height:32px;padding:0 12px 0 10px;border:0;border-radius:8px;background:var(--rec);color:#1A0A0A;font:inherit;font-size:12px;font-weight:600;display:flex;align-items:center;gap:8px;cursor:pointer}
+.stop i{width:10px;height:10px;border-radius:2px;background:#1A0A0A;display:block}
+.pn{box-sizing:border-box;width:380px;padding:10px;border-radius:14px;background:var(--sf);color:var(--tx);display:flex;flex-direction:column;gap:8px}
+.seg{display:flex;gap:2px;padding:3px;border-radius:9px;background:var(--sf2);box-shadow:inset 0 0 0 1px var(--bd)}
+.seg button{flex:1;height:28px;border:0;border-radius:6px;background:transparent;color:var(--ic);font:inherit;font-size:12px;font-weight:500;display:flex;align-items:center;justify-content:center;gap:6px;cursor:pointer;padding:0 8px}
+.seg button.on{background:var(--acbg);color:var(--acfg);box-shadow:inset 0 0 0 1px var(--acrg)}
+.seg button.h{background:var(--hv);color:var(--ich)}
+.row{display:flex;align-items:center;gap:10px;height:40px;padding:0 6px 0 8px;border-radius:9px}
+.row.hv{background:var(--hv)}
+.row .nm{font-size:12px;font-weight:500;color:var(--tx);width:92px;flex:none}
+.row .dv{flex:1;min-width:0;font-size:12px;color:var(--tx2);display:flex;align-items:center;gap:4px;white-space:nowrap;overflow:hidden}
+.row .dv span{overflow:hidden;text-overflow:ellipsis}
+.row.off .nm,.row.off .dv,.row.off .ri{color:var(--tx2)}
+.row.dis{opacity:.4}
+.ri{color:var(--ic);flex:none}
+.tg{box-sizing:border-box;width:32px;height:18px;border-radius:9px;background:rgba(255,255,255,.14);position:relative;flex:none;border:0;padding:0;cursor:pointer}
+.tg i{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;display:block;box-shadow:0 1px 2px rgba(0,0,0,.35)}
+.tg.on{background:var(--ac)}.tg.on i{left:16px}
+.lv{display:flex;gap:2px;align-items:center;height:12px;flex:none}
+.lv i{width:3px;border-radius:1.5px;background:var(--ac);display:block}
+.lv i.q{background:rgba(255,255,255,.14)}
+.lv i.c{background:#FFB454}
+.hr{height:1px;background:var(--sep);margin:0 4px}
+.two{display:flex;gap:8px}
+.two>div{flex:1;display:flex;flex-direction:column;gap:5px}
+.sm{font-size:11px;font-weight:500;color:var(--tx2);padding:0 2px}
+.recbtn{height:40px;border:0;border-radius:10px;background:var(--rec);color:#1A0A0A;font:inherit;font-size:13px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:10px;cursor:pointer;box-shadow:inset 0 0 0 1px rgba(255,255,255,.18)}
+.recbtn b{width:10px;height:10px;border-radius:50%;background:#1A0A0A;display:block}
+.kbd{height:18px;min-width:18px;padding:0 5px;border-radius:4px;background:rgba(255,255,255,.14);color:#C4C7D0;font-size:10.5px;font-weight:600;display:inline-flex;align-items:center;justify-content:center}
+.ts{box-sizing:border-box;height:36px;padding:0 6px 0 10px;border-radius:12px;background:var(--sf);color:var(--tx);display:flex;align-items:center;gap:8px;font-size:12px;font-weight:500}
+.ts .a{height:24px;padding:0 10px;border:0;border-radius:6px;background:var(--acbg);color:var(--acfg);font:inherit;font-size:11.5px;font-weight:600;cursor:pointer;box-shadow:inset 0 0 0 1px var(--acrg)}
+.ts .b{height:24px;padding:0 10px;border:0;border-radius:6px;background:var(--hv);color:var(--tx);font:inherit;font-size:11.5px;font-weight:500;cursor:pointer}
+.nv{height:34px;border-radius:8px;display:flex;align-items:center;gap:10px;padding:0 10px;font-size:12px;font-weight:500;color:#5A6070}
+.nv i{width:16px;height:16px;border-radius:5px;background:#BFC5D4;display:block}
+.nv.a{background:#E1E3F7;color:#2B2F45}.nv.a i{background:#8E96E8}
+.cd{position:absolute;box-sizing:border-box;background:#fff;border:1px solid #E4E7EC;border-radius:10px}
+.cam{position:absolute;box-sizing:border-box;width:200px;height:200px;border-radius:16px;background:#2A2F3B;overflow:hidden;box-shadow:0 0 0 2px var(--ac),0 0 0 3px rgba(0,0,0,.45),0 6px 0 4px rgba(0,0,0,.14),0 14px 0 10px rgba(0,0,0,.06)}
+.cam .hdr{position:absolute;left:50%;top:46px;width:70px;height:70px;border-radius:50%;background:#8A93A8;transform:translateX(-50%)}
+.cam .sho{position:absolute;left:50%;top:130px;width:150px;height:110px;border-radius:75px 75px 0 0;background:#8A93A8;transform:translateX(-50%)}
+.card{box-sizing:border-box;border-radius:14px;padding:22px 24px;display:flex;flex-direction:column;gap:12px;background:#1E2027;box-shadow:inset 0 0 0 1px rgba(255,255,255,.06)}
+.h2{font-size:13px;font-weight:600;color:#ECEEF3}
+.cap{font-size:11px;font-weight:500;color:#8A8F9C;line-height:1.5}
+</style>
+</helmet>
+<div class="dk" style="position:relative;width:1440px;height:1520px;background:#15161B;font-family:'Inter',system-ui,sans-serif">
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<symbol id="v-video" viewBox="0 0 24 24"><path d="m16 13 5.223 3.482a.5.5 0 0 0 .777-.416V7.87a.5.5 0 0 0-.752-.432L16 10.5"></path><rect x="2" y="6" width="14" height="12" rx="2"></rect></symbol>
+<symbol id="v-video-off" viewBox="0 0 24 24"><path d="M10.66 6H14a2 2 0 0 1 2 2v2.5l5.248-3.062A.5.5 0 0 1 22 7.87v8.196"></path><path d="M16 16a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h2"></path><path d="m2 2 20 20"></path></symbol>
+<symbol id="v-mic" viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><path d="M12 19v3"></path></symbol>
+<symbol id="v-mic-off" viewBox="0 0 24 24"><path d="m2 2 20 20"></path><path d="M18.89 13.23A7.12 7.12 0 0 0 19 12v-2"></path><path d="M5 10v2a7 7 0 0 0 12 5"></path><path d="M15 9.34V5a3 3 0 0 0-5.68-1.33"></path><path d="M9 9v3a3 3 0 0 0 5.12 2.12"></path><path d="M12 19v3"></path></symbol>
+<symbol id="v-vol" viewBox="0 0 24 24"><path d="M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z"></path><path d="M16 9a5 5 0 0 1 0 6"></path><path d="M19.364 18.364a9 9 0 0 0 0-12.728"></path></symbol>
+<symbol id="v-pause" viewBox="0 0 24 24"><rect x="14" y="4" width="4" height="16" rx="1"></rect><rect x="6" y="4" width="4" height="16" rx="1"></rect></symbol>
+<symbol id="v-pencil" viewBox="0 0 24 24"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"></path><path d="m15 5 4 4"></path></symbol>
+<symbol id="v-x" viewBox="0 0 24 24"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></symbol>
+<symbol id="v-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle></symbol>
+<symbol id="v-square" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="4"></rect></symbol>
+<symbol id="v-chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"></path></symbol>
+<symbol id="v-film" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"></rect><path d="M7 3v18"></path><path d="M3 7.5h4"></path><path d="M3 12h18"></path><path d="M3 16.5h4"></path><path d="M17 3v18"></path><path d="M17 7.5h4"></path><path d="M17 16.5h4"></path></symbol>
+<symbol id="v-gif" viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="2"></rect><path d="M8.5 10.5a1.75 1.75 0 1 0 0 3h.75v-1.5"></path><path d="M12.5 10v4"></path><path d="M15.5 14v-4h2.5"></path><path d="M15.5 12h2"></path></symbol>
+<symbol id="v-okc" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><path d="m9 12 2 2 4-4"></path></symbol>
+<symbol id="v-cursor" viewBox="0 0 24 24"><path d="M12.586 12.586 19 19"></path><path d="M3.688 3.037a.497.497 0 0 0-.651.651l6.5 15.999a.501.501 0 0 0 .947-.062l1.569-6.083a2 2 0 0 1 1.448-1.479l6.124-1.579a.5.5 0 0 0 .063-.947z"></path></symbol>
+</defs></svg>
+
+<!-- ===== Recording state, full screen ===== -->
+<div style="position:absolute;left:0;top:0;width:1440px;height:900px;overflow:hidden">
+  <div style="position:absolute;left:0;top:0;width:1440px;height:900px;background:linear-gradient(135deg,#1F3B63 0%,#5A3E8A 100%)"></div>
+  <div style="position:absolute;left:120px;top:70px;width:1200px;height:720px;border-radius:12px;background:#F6F7F9;overflow:hidden;box-shadow:0 24px 60px rgba(0,0,0,.35)">
+    <div style="position:absolute;left:0;top:0;width:1200px;height:40px;background:#fff;border-bottom:1px solid #E6E8ED;box-sizing:border-box"><div style="position:absolute;left:16px;top:12px;font-size:12px;font-weight:500;color:#4A4F5C">Dashboard</div></div>
+    <div style="position:absolute;left:0;top:40px;width:200px;height:680px;background:#EEF0F4;border-right:1px solid #E1E4EA;box-sizing:border-box;padding:20px 14px;display:flex;flex-direction:column;gap:6px">
+      <div class="nv a"><i></i>Overview</div><div class="nv"><i></i>Reports</div><div class="nv"><i></i>Audience</div><div class="nv"><i></i>Campaigns</div><div class="nv"><i></i>Billing</div><div class="nv"><i></i>Settings</div>
+    </div>
+    <div style="position:absolute;left:232px;top:62px;font-size:20px;font-weight:600;color:#1B1E27">Overview</div>
+    <div style="position:absolute;left:232px;top:94px;width:300px;height:9px;border-radius:5px;background:#DADEE6"></div>
+    <div class="cd" style="left:232px;top:130px;width:300px;height:96px"><div style="position:absolute;left:18px;top:16px;font-size:11px;font-weight:500;color:#7A8090">Revenue</div><div style="position:absolute;left:18px;top:42px;width:130px;height:22px;border-radius:6px;background:#1F2330"></div></div>
+    <div class="cd" style="left:556px;top:130px;width:300px;height:96px"><div style="position:absolute;left:18px;top:16px;font-size:11px;font-weight:500;color:#7A8090">Sessions</div><div style="position:absolute;left:18px;top:42px;width:110px;height:22px;border-radius:6px;background:#1F2330"></div></div>
+    <div class="cd" style="left:880px;top:130px;width:300px;height:96px"><div style="position:absolute;left:18px;top:16px;font-size:11px;font-weight:500;color:#7A8090">Conversion</div><div style="position:absolute;left:18px;top:42px;width:90px;height:22px;border-radius:6px;background:#1F2330"></div></div>
+    <div class="cd" style="left:232px;top:250px;width:948px;height:440px">
+      <div style="position:absolute;left:24px;top:20px;font-size:13px;font-weight:600;color:#1B1E27">Weekly trend</div>
+      <svg width="948" height="440" style="position:absolute;left:0;top:0" aria-hidden="true">
+        <path d="M40 90H908M40 150H908M40 210H908M40 270H908M40 330H908M40 390H908" stroke="#EEF0F4" stroke-width="1" fill="none"></path>
+        <path d="M40 300L140 260L240 285L340 215L440 235L540 150L640 185L740 110L840 165L908 135L908 390L40 390Z" fill="#3B6CF6" fill-opacity=".10"></path>
+        <path d="M40 300L140 260L240 285L340 215L440 235L540 150L640 185L740 110L840 165L908 135" stroke="#3B6CF6" stroke-width="3" fill="none" stroke-linejoin="round" stroke-linecap="round"></path>
+      </svg>
+    </div>
+  </div>
+
+  <!-- Recording: no dim. 2px red frame just outside the region, with a dark halo so it reads on light pixels -->
+  <div style="position:absolute;left:238px;top:108px;width:964px;height:544px;border:2px solid var(--rec);border-radius:2px;box-shadow:0 0 0 1px rgba(0,0,0,.35),inset 0 0 0 1px rgba(0,0,0,.25);pointer-events:none"></div>
+
+  <!-- Camera bubble, square variant, bottom-right this time (user dragged it) -->
+  <div class="cam" style="left:976px;top:426px"><div class="hdr"></div><div class="sho"></div></div>
+
+  <!-- Click highlight (optional setting): soft accent ring at the cursor -->
+  <div style="position:absolute;left:560px;top:386px;width:36px;height:36px;border-radius:50%;background:rgba(139,147,255,.22);box-shadow:inset 0 0 0 2px rgba(139,147,255,.55)"></div>
+  <svg class="ic" style="position:absolute;left:574px;top:400px;color:#15161B;stroke:#fff;stroke-width:1.5;fill:#15161B" aria-hidden="true"><use href="#v-cursor"></use></svg>
+
+  <!-- Recording control pill, bottom-center of the region, 8px below it -->
+  <div class="tb sh" style="position:absolute;left:467px;top:662px">
+    <div class="tm"><b></b><span>00:42</span></div>
+    <div class="sp"></div>
+    <div class="g">
+      <button class="bt" aria-label="Pause (Space)"><svg class="ic"><use href="#v-pause"></use></svg></button>
+      <button class="stop" aria-label="Stop and save (Enter)"><i></i>Stop</button>
+    </div>
+    <div class="sp"></div>
+    <div class="g">
+      <button class="bt" aria-label="Mute microphone (M)"><svg class="ic"><use href="#v-mic"></use></svg></button>
+      <button class="bt" aria-label="Hide camera (V)"><svg class="ic"><use href="#v-video"></use></svg></button>
+      <button class="bt d" aria-label="System audio off"><svg class="ic"><use href="#v-vol"></use></svg></button>
+    </div>
+    <div class="sp"></div>
+    <div class="g">
+      <button class="bt" aria-label="Draw on screen (D)"><svg class="ic"><use href="#v-pencil"></use></svg></button>
+      <button class="bt" aria-label="Discard recording (Esc)"><svg class="ic"><use href="#v-x"></use></svg></button>
+    </div>
+  </div>
+
+  <!-- Elapsed in tray, too: shown as a note -->
+  <div style="position:absolute;left:0;right:0;top:836px;display:flex;justify-content:center">
+    <div class="ts sh" style="padding-right:14px"><b style="width:8px;height:8px;border-radius:50%;background:var(--rec);display:block"></b>Recording · the tray icon shows the same red dot and elapsed time, so the pill can be hidden with H</div>
+  </div>
+</div>
+
+<!-- ===== Close-ups ===== -->
+<div style="position:absolute;left:48px;top:940px;width:1344px;display:flex;flex-direction:column;gap:20px">
+  <div style="display:flex;gap:20px;align-items:flex-start">
+
+    <!-- GIF mode panel -->
+    <div class="card" style="width:428px">
+      <div class="h2">Panel · GIF mode</div>
+      <div class="cap">Choosing GIF disables the audio rows (GIF has no sound), swaps Countdown for frame rate, and adds a length cap. The Record button and shortcuts don't change.</div>
+      <div class="pn" style="width:380px;box-shadow:inset 0 0 0 1px var(--bd)">
+        <div class="seg"><button>Screen</button><button>Window</button><button class="on">Region</button></div>
+        <div class="row"><svg class="ic ri"><use href="#v-video"></use></svg><div class="nm">Camera</div><div class="dv"><span>FaceTime HD Camera</span><svg class="ic16" style="width:14px;height:14px;flex:none"><use href="#v-chev"></use></svg></div><button class="tg on" aria-label="Camera on"><i></i></button></div>
+        <div class="row off dis"><svg class="ic ri"><use href="#v-mic-off"></use></svg><div class="nm">Microphone</div><div class="dv"><span>Not recorded in GIF</span></div><button class="tg" aria-label="Microphone unavailable"><i></i></button></div>
+        <div class="row off dis"><svg class="ic ri"><use href="#v-vol"></use></svg><div class="nm">System audio</div><div class="dv"><span>Not recorded in GIF</span></div><button class="tg" aria-label="System audio unavailable"><i></i></button></div>
+        <div class="hr"></div>
+        <div class="two">
+          <div><div class="sm">Camera shape</div><div class="seg"><button class="on"><svg class="ic16"><use href="#v-circle"></use></svg></button><button><svg class="ic16"><use href="#v-square"></use></svg></button></div></div>
+          <div><div class="sm">Output</div><div class="seg"><button><svg class="ic16"><use href="#v-film"></use></svg>MP4</button><button class="on"><svg class="ic16"><use href="#v-gif"></use></svg>GIF</button></div></div>
+          <div style="flex:0 0 112px"><div class="sm">Frame rate</div><div class="seg"><button>10</button><button class="on">15</button><button>24</button></div></div>
+        </div>
+        <div class="row" style="height:32px"><div class="nm" style="width:auto">Max length</div><div class="dv"><span>30 s · then auto-stop</span></div><div class="seg" style="padding:2px"><button style="height:22px;padding:0 8px;font-size:11px">15</button><button class="on" style="height:22px;padding:0 8px;font-size:11px">30</button><button style="height:22px;padding:0 8px;font-size:11px">60</button></div></div>
+        <button class="recbtn"><b></b>Start recording<span class="kbd" style="background:rgba(0,0,0,.18);color:#1A0A0A">⏎</span></button>
+      </div>
+    </div>
+
+    <!-- Right column: control states -->
+    <div style="flex:1;display:flex;flex-direction:column;gap:20px">
+      <div class="card">
+        <div class="h2">Recording pill · states</div>
+        <div style="display:flex;flex-direction:column;gap:12px;align-items:flex-start">
+          <div class="tb" style="box-shadow:inset 0 0 0 1px var(--bd)">
+            <div class="tm"><b style="box-shadow:none;background:#FFB454"></b><span>00:42</span></div><div class="sp"></div>
+            <div class="g"><button class="bt on" aria-label="Resume"><svg class="ic"><use href="#v-pause"></use></svg></button><button class="stop"><i></i>Stop</button></div><div class="sp"></div>
+            <div class="g"><button class="bt off" aria-label="Unmute"><svg class="ic"><use href="#v-mic-off"></use></svg></button><button class="bt off" aria-label="Show camera"><svg class="ic"><use href="#v-video-off"></use></svg></button><button class="bt d"><svg class="ic"><use href="#v-vol"></use></svg></button></div><div class="sp"></div>
+            <div class="g"><button class="bt"><svg class="ic"><use href="#v-pencil"></use></svg></button><button class="bt"><svg class="ic"><use href="#v-x"></use></svg></button></div>
+          </div>
+          <div class="cap">Paused: the dot turns amber and stops pulsing, Pause becomes the active (accent) Resume. Mic muted and camera hidden show the slashed glyph on a red 14% tint, so a "you're muted" state is unmistakable in the corner of the eye.</div>
+          <div style="display:flex;gap:20px;align-items:center">
+            <div class="tb" style="box-shadow:inset 0 0 0 1px var(--bd)"><div class="tm"><b></b><span>12:07</span></div><div class="sp"></div><div class="g"><button class="stop"><i></i>Stop</button></div></div>
+            <div class="cap" style="max-width:420px">Compact pill, shown when the region is narrower than 520px or after pressing H: timer + Stop only. Everything else stays on shortcuts and in the tray menu.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="h2">Mic level · camera shape · countdown</div>
+        <div style="display:flex;gap:28px;align-items:flex-start;flex-wrap:wrap">
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <div style="display:flex;gap:16px;align-items:center">
+              <div class="lv"><i class="q" style="height:5px"></i><i class="q" style="height:9px"></i><i class="q" style="height:12px"></i><i class="q" style="height:8px"></i><i class="q" style="height:4px"></i><i class="q" style="height:6px"></i><i class="q" style="height:6px"></i></div>
+              <div class="lv"><i style="height:5px"></i><i style="height:9px"></i><i style="height:12px"></i><i style="height:8px"></i><i class="q" style="height:4px"></i><i class="q" style="height:6px"></i><i class="q" style="height:6px"></i></div>
+              <div class="lv"><i style="height:5px"></i><i style="height:9px"></i><i style="height:12px"></i><i style="height:8px"></i><i style="height:4px"></i><i class="c" style="height:6px"></i><i class="c" style="height:6px"></i></div>
+            </div>
+            <div class="cap" style="max-width:260px">7 bars × 3px, 2px gaps, heights fixed; bars fill left→right with input level, polled at 20 Hz. Top two bars go amber when clipping. Silent for 5 s while recording → toast "No mic input".</div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-start">
+            <div style="display:flex;gap:12px;align-items:center">
+              <div style="width:56px;height:56px;border-radius:50%;background:#2A2F3B;box-shadow:0 0 0 2px var(--ac),0 0 0 3px rgba(0,0,0,.45)"></div>
+              <div style="width:56px;height:56px;border-radius:10px;background:#2A2F3B;box-shadow:0 0 0 2px var(--ac),0 0 0 3px rgba(0,0,0,.45)"></div>
+              <div style="width:56px;height:56px;border-radius:50%;background:#2A2F3B;box-shadow:0 0 0 2px var(--ac),0 0 0 3px rgba(0,0,0,.45);opacity:.4"></div>
+            </div>
+            <div class="cap" style="max-width:260px">Bubble: 2px accent ring + 1px dark halo. Round or 16px-radius square (8% of side). Sizes 120 / 160 / 200 / 240 by scroll; snaps to the four region corners at 24px inset; 40% opacity while dragging so what's under it stays visible.</div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-start">
+            <div style="width:96px;height:96px;border-radius:50%;background:var(--sf);display:flex;align-items:center;justify-content:center;box-shadow:inset 0 0 0 1px var(--bd),0 0 0 4px rgba(139,147,255,.35)"><span style="font-size:44px;font-weight:600;color:var(--tx);letter-spacing:-.02em">3</span></div>
+            <div class="cap" style="max-width:200px">Countdown: 96px disc at region center, number 44/600; the accent ring is a 4px arc that drains over each second. Panel fades out as it appears.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- After recording -->
+  <div class="card">
+    <div class="h2">After stopping</div>
+    <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
+      <div class="ts sh"><svg class="ic16" style="color:#4ADE9A" aria-hidden="true"><use href="#v-okc"></use></svg>Saved rustshot-2026-10-10-2131.mp4 · 00:42 · 1.4 MB<button class="a">Copy link</button><button class="b">Open</button><button class="b">Show in folder</button></div>
+    </div>
+    <div class="cap">Same toast component with actions appended (24px buttons, 6px radius). It stays 6 s instead of 1.6 s because it has buttons. "Copy link" appears only when upload is configured; for GIF the name ends .gif and "Copy" copies the file itself.</div>
+  </div>
+</div>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1520}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {};
+  }
+}
+</script>
+</body>
+</html>
