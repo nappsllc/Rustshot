@@ -870,7 +870,7 @@ pub fn act_tip(a: Act, km: &Keymap) -> (&'static str, Vec<String>) {
         Act::Size(d) if d < 0 => "Smaller",
         Act::Size(_) => "Larger",
         Act::Palette => "Color",
-        Act::Fill => "Fill",
+        Act::Fill => "Fill shape",
         Act::Color(_) => "Use color",
         Act::Copy => "Copy",
         Act::Save => "Save",

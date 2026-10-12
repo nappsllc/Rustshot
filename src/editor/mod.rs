@@ -2911,6 +2911,8 @@ mod state_tests;
 #[cfg(test)]
 mod tools_tests;
 #[cfg(test)]
+mod tools2_tests;
+#[cfg(test)]
 mod uisize_tests;
 
 #[cfg(test)]
