@@ -67,6 +67,8 @@ pub(super) struct ObjState {
     pub high: Option<u16>,
     /// The mini-toolbar's font list is open.
     pub font_menu: bool,
+    /// The selection the font list was opened over.
+    pub font_menu_sel: Vec<usize>,
 }
 
 /// Typing in a callout.
@@ -686,6 +688,7 @@ impl Edit {
         use crate::text::TextFmt;
         if act == Act::ObjFontMenu {
             self.obj.font_menu = !self.obj.font_menu;
+            self.obj.font_menu_sel = self.obj.sel.clone();
             return true;
         }
         let set = |f: TextFmt, first: TextFmt| -> TextFmt {
@@ -1012,6 +1015,11 @@ impl Edit {
             Some(CaretUi { r: FRect { x: at.x, y: at.y, w: (2.0 * s).round().max(1.0), h: lay.line_h.round() }, color: ink.with_alpha(255) })
         });
         let idle = matches!(self.interact, Interact::None);
+        // The font list belongs to what it was opened over: another
+        // selection (Ctrl+click to the next text) closes it.
+        if self.obj.font_menu && self.obj.font_menu_sel != self.obj.sel {
+            self.obj.font_menu = false;
+        }
         let font_open = self.obj.font_menu;
         let mini = (idle && !self.obj.sel.is_empty()).then(|| self.osel_frame()).flatten().map(|b| {
             let sel = &self.obj.sel;

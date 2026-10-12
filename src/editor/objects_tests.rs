@@ -712,6 +712,7 @@ fn render_object_previews() {
         ed(&mut a).obj.sel = vec![5];
         save(&mut a, &format!("{tn}-text-selected.png"));
         ed(&mut a).obj.font_menu = true;
+        ed(&mut a).obj.font_menu_sel = vec![5];
         save(&mut a, &format!("{tn}-text-font-list.png"));
         ed(&mut a).obj.font_menu = false;
         ed(&mut a).obj.sel = vec![n];
@@ -805,6 +806,13 @@ fn text_styles_from_the_mini_toolbar_and_the_keys() {
     click(&mut a, (row.x + row.w / 2.0) as i32, (row.y + row.h / 2.0) as i32);
     assert!(matches!(&ed(&mut a).objects[0], Obj::Text { fmt, .. } if fmt.family == Family::Mono && fmt.bold));
     assert!(!ed(&mut a).obj.font_menu);
+    // Open over the text, then another selection: it closes.
+    let e = ed(&mut a);
+    e.fmt_act(Act::ObjFontMenu);
+    e.obj.sel = vec![1];
+    e.prepare(None, (0, 0), Instant::now());
+    assert!(!e.obj.font_menu && e.obj.mini.as_ref().is_some_and(|m| m.pop.is_none()), "closed on the next object");
+    e.obj.sel = vec![0];
     ed(&mut a).fmt_act(Act::ObjAlign(Align::Right));
     assert!(matches!(&ed(&mut a).objects[0], Obj::Text { fmt, .. } if fmt.align == Align::Right));
     ed(&mut a).undo();

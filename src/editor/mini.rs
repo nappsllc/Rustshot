@@ -133,25 +133,34 @@ pub fn layout(inp: &MiniIn, sel: FRect, area: FRect, s: f32) -> MiniUi {
         groups.push(vec![(Kind::Btn(Act::ObjFront), BTN), (Kind::Btn(Act::ObjBack), BTN)]);
         groups.push(vec![(Kind::Btn(Act::ObjDup), BTN), (Kind::Btn(Act::ObjDelete), BTN)]);
     }
-    // Logical px from the bar's left, then placed and scaled.
+    // Logical px from the bar's left, then placed and scaled. Wider than
+    // the area (a long bar at a big UI size): the groups go on rows.
+    let m = MARGIN * s;
+    let room = ((area.w - 2.0 * m) / s).max(2.0 * BTN);
+    let group_w = |g: &[(Kind, f32)]| g.iter().map(|e| e.1).sum::<f32>() + GAP * g.len().saturating_sub(1) as f32;
     let mut items = Vec::new();
-    let mut x = PAD;
+    let (mut x, mut row, mut widest) = (PAD, 0usize, 0.0f32);
     for (gi, g) in groups.iter().enumerate() {
         if gi > 0 {
-            x += SEP_GAP;
-            items.push(Item { kind: Kind::SepV, r: FRect { x, y: (H - SEP_LEN) / 2.0, w: 1.0, h: SEP_LEN }, disabled: false });
-            x += 1.0 + SEP_GAP;
+            if x + 2.0 * SEP_GAP + 1.0 + group_w(g) + PAD > room {
+                widest = widest.max(x);
+                (x, row) = (PAD, row + 1);
+            } else {
+                x += SEP_GAP;
+                let y = row as f32 * H + (H - SEP_LEN) / 2.0;
+                items.push(Item { kind: Kind::SepV, r: FRect { x, y, w: 1.0, h: SEP_LEN }, disabled: false });
+                x += 1.0 + SEP_GAP;
+            }
         }
         for (j, (k, w)) in g.iter().enumerate() {
             if j > 0 {
                 x += GAP;
             }
-            items.push(Item { kind: *k, r: FRect { x, y: (H - BTN) / 2.0, w: *w, h: BTN }, disabled: false });
+            items.push(Item { kind: *k, r: FRect { x, y: row as f32 * H + (H - BTN) / 2.0, w: *w, h: BTN }, disabled: false });
             x += w;
         }
     }
-    let (bw, bh) = ((x + PAD) * s, H * s);
-    let m = MARGIN * s;
+    let (bw, bh) = ((x.max(widest) + PAD) * s, (row + 1) as f32 * H * s);
     let bx = sel.x.clamp(area.x + m, (area.x1() - m - bw).max(area.x + m));
     let above = sel.y - ABOVE * s - bh;
     let by = if above >= area.y + m { above } else { (sel.y1() + ABOVE * s).min(area.y1() - m - bh) };
@@ -398,4 +407,38 @@ pub fn caret(f: &mut Fb, c: &CaretUi) {
 pub fn caret_bounds(c: &CaretUi) -> FRect {
     let r = chrome::round(c.r);
     FRect { x: r.x - 1.0, y: r.y - 1.0, w: r.w + 2.0, h: r.h + 2.0 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A callout's bar (the longest) at 200 % on a 1000 px area: on
+    /// rows, inside the area, every button inside the bar; at 100 % one row.
+    #[test]
+    fn a_long_bar_wraps_to_fit_the_screen() {
+        let inp = MiniIn {
+            color: Some(C4::rgb(240, 68, 56)),
+            fill: Some(true),
+            size: Some(17.0),
+            text: true,
+            style: Some(CalloutStyle::Rounded),
+            count: 1,
+            fmt: Some(TextFmt::default()),
+            align: false,
+            draft: false,
+            font_open: true,
+        };
+        let area = FRect { x: 0.0, y: 0.0, w: 1000.0, h: 800.0 };
+        let sel = FRect { x: 900.0, y: 300.0, w: 200.0, h: 80.0 };
+        let one = layout(&inp, sel, area, 1.0);
+        assert_eq!(one.r.h, H, "one row at 100 %");
+        let m = layout(&inp, sel, area, 2.0);
+        assert!(m.r.h >= 2.0 * H * 2.0 && m.r.x >= area.x && m.r.x1() <= area.x1(), "{:?}", m.r);
+        for it in m.items.iter().filter(|i| !matches!(i.kind, Kind::Btn(Act::ObjFont(_)))) {
+            assert!(it.r.x >= m.r.x && it.r.x1() <= m.r.x1() + 0.5 && it.r.y >= m.r.y && it.r.y1() <= m.r.y1() + 0.5, "{it:?} outside {:?}", m.r);
+        }
+        let p = m.pop.expect("the font list");
+        assert!(p.x >= area.x && p.x1() <= area.x1());
+    }
 }
