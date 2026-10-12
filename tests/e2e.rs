@@ -391,11 +391,112 @@ fn screen_pixels(x: i32, y: i32, w: i32, h: i32) -> Vec<u8> {
     }
 }
 
+/// A still backdrop for the screen: a top-most window of one colour over
+/// the primary monitor, on its own thread (with a message loop), taken
+/// down on drop. The overlay captures it, so both renderers show the same
+/// picture whatever the desktop does between the runs.
+struct Backdrop {
+    thread: u32,
+    join: Option<std::thread::JoinHandle<()>>,
+}
+
+unsafe extern "system" fn backdrop_proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> windows::Win32::Foundation::LRESULT {
+    unsafe { windows::Win32::UI::WindowsAndMessaging::DefWindowProcW(h, m, w, l) }
+}
+
+impl Backdrop {
+    fn new(rgb: u32) -> Backdrop {
+        use windows::core::w;
+        use windows::Win32::Graphics::Gdi::CreateSolidBrush;
+        use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+        use windows::Win32::System::Threading::GetCurrentThreadId;
+        use windows::Win32::UI::WindowsAndMessaging::*;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let join = std::thread::spawn(move || unsafe {
+            let inst = GetModuleHandleW(None).unwrap();
+            let wc = WNDCLASSW {
+                lpfnWndProc: Some(backdrop_proc),
+                hInstance: inst.into(),
+                lpszClassName: w!("rustshot_e2e_backdrop"),
+                hbrBackground: CreateSolidBrush(windows::Win32::Foundation::COLORREF(rgb)),
+                ..Default::default()
+            };
+            RegisterClassW(&wc);
+            let (sw, sh) = (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
+            let hwnd = CreateWindowExW(
+                WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+                w!("rustshot_e2e_backdrop"),
+                w!("rustshot e2e backdrop"),
+                WS_POPUP | WS_VISIBLE,
+                0,
+                0,
+                sw,
+                sh,
+                None,
+                None,
+                Some(inst.into()),
+                None,
+            )
+            .expect("backdrop window");
+            let _ = tx.send(GetCurrentThreadId());
+            let mut msg = MSG::default();
+            while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+                let _ = TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+            let _ = DestroyWindow(hwnd);
+        });
+        let thread = rx.recv().expect("backdrop up");
+        // Painted (its class brush) before the overlay takes its shot.
+        std::thread::sleep(Duration::from_millis(500));
+        Backdrop { thread, join: Some(join) }
+    }
+}
+
+impl Drop for Backdrop {
+    fn drop(&mut self) {
+        use windows::Win32::UI::WindowsAndMessaging::{PostThreadMessageW, WM_QUIT};
+        let _ = unsafe { PostThreadMessageW(self.thread, WM_QUIT, WPARAM(0), LPARAM(0)) };
+        if let Some(j) = self.join.take() {
+            let _ = j.join();
+        }
+    }
+}
+
+/// The screen once it shows something other than `before` (the overlay
+/// is drawn: a window can be visible a while before its first frame) and
+/// then holds still for a whole second (reads every 150 ms: the fade-in
+/// and any late re-layout are over); at most `ms`.
+fn settled_pixels(x: i32, y: i32, w: i32, h: i32, before: &[u8], ms: u64) -> Vec<u8> {
+    let deadline = Instant::now() + Duration::from_millis(ms);
+    let mut last = screen_pixels(x, y, w, h);
+    while last == before && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+        last = screen_pixels(x, y, w, h);
+    }
+    let mut since = Instant::now();
+    loop {
+        std::thread::sleep(Duration::from_millis(150));
+        let now = screen_pixels(x, y, w, h);
+        if now != last {
+            since = Instant::now();
+            last = now;
+        } else if since.elapsed() >= Duration::from_secs(1) || Instant::now() >= deadline {
+            return now;
+        }
+        if Instant::now() >= deadline {
+            return last;
+        }
+    }
+}
+
 /// The overlay as shown on screen is the same with either renderer:
-/// open it, read the screen back, compare. Run against a release build
-/// (`RUSTSHOT_E2E_BIN`): a debug build composes a 5K frame in ~100 ms and
-/// sometimes shows a stale fade-in frame (also before the GDI renderer).
-/// Writes both captures as PNGs to `RUSTSHOT_E2E_OUT` when set.
+/// open it, read the screen back, compare. The desktop behind is a still
+/// backdrop of one colour (so each run's screenshot is the same), and each
+/// read waits for the screen to settle (no fade-in frame), so the two
+/// differ only where the renderers do. Run against a release build
+/// (`RUSTSHOT_E2E_BIN`) for speed. Writes both captures as PNGs to
+/// `RUSTSHOT_E2E_OUT` when set.
 #[test]
 #[ignore = "live display access"]
 fn renderers_show_the_same_overlay() {
@@ -403,9 +504,11 @@ fn renderers_show_the_same_overlay() {
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     }
+    let backdrop = Backdrop::new(0x0080_6040);
     let (x, y, w, h) = (0, 0, 1400, 900);
     let mut shots = Vec::new();
     for renderer in ["software", "gdi"] {
+        let before = screen_pixels(x, y, w, h);
         let root = config_root(&format!("same-{renderer}"), renderer);
         let mut child = rustshot(&root)
             .args(["gui", "--region", "800x600+200+150", "--clip"])
@@ -414,14 +517,16 @@ fn renderers_show_the_same_overlay() {
             .spawn()
             .expect("spawn rustshot");
         let hwnd = wait_window(&child, 8000).expect("editor window");
-        std::thread::sleep(Duration::from_millis(1500));
         mouse_move(hwnd, 600, 450);
-        std::thread::sleep(Duration::from_millis(1000));
-        shots.push(screen_pixels(x, y, w, h));
+        let shot = settled_pixels(x, y, w, h, &before, 10_000);
+        assert!(shot != before, "{renderer}: the overlay never showed");
+        shots.push(shot);
         key(hwnd, 0x1B);
         assert_eq!(wait_exit(&mut child, 5000), Some(2));
+        // The overlay gone: the backdrop alone again before the next shot.
         std::thread::sleep(Duration::from_millis(300));
     }
+    drop(backdrop);
     if let Some(dir) = std::env::var_os("RUSTSHOT_E2E_OUT") {
         for (name, px) in ["software", "gdi"].iter().zip(&shots) {
             let mut rgba = px.clone();
@@ -436,28 +541,21 @@ fn renderers_show_the_same_overlay() {
             enc.write_header().unwrap().write_image_data(&rgba).unwrap();
         }
     }
-    // Each run captures the live desktop anew, so changing windows behind
-    // the overlay (a terminal printing) differ; the chrome must not. The
-    // toolbar sits below the selection: 800x600 at (200, 150).
     let (a, b) = (&shots[0], &shots[1]);
-    let mut n = 0;
-    let (mut bar_max, mut bar_at) = (0u8, (0, 0));
+    let (mut n, mut max, mut at) = (0usize, 0u8, (0, 0));
     for i in 0..(w * h) as usize {
         let d = (0..3).map(|c| a[i * 4 + c].abs_diff(b[i * 4 + c])).max().unwrap();
-        if d > 0 {
+        if d > 2 {
             n += 1;
         }
-        let (px, py) = ((i % w as usize) as i32, (i / w as usize) as i32);
-        if (290..990).contains(&px) && (762..798).contains(&py) && d > bar_max {
-            bar_max = d;
-            bar_at = (px, py);
+        if d > max {
+            max = d;
+            at = ((i % w as usize) as i32, (i / w as usize) as i32);
         }
     }
-    println!("differing pixels: {n} of {}, toolbar max diff {bar_max} at {bar_at:?}", w * h);
-    // The toolbar surface is 96% opaque: a changed window behind it shows
-    // through by up to ~10 levels.
-    assert!(bar_max <= 12, "toolbar differs by {bar_max}");
-    assert!((n as f64) < 0.1 * (w * h) as f64, "overlays differ in {n} pixels");
+    println!("pixels differing by more than 2 levels: {n} of {}, max {max} at {at:?}", w * h);
+    // Rounding in the two blend paths: a level or two at most.
+    assert!(n == 0, "overlays differ in {n} pixels (max {max} at {at:?})");
 }
 
 /// Whether this process can register `mods`+`vk` as a global hotkey now
