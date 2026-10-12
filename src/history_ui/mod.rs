@@ -74,6 +74,10 @@ pub enum Act {
     ShowInFolder(String),
     CopyPath(String),
     CopyLink(String),
+    /// Open the capture with an app the user picks.
+    OpenWith(String),
+    /// Delete the upload from Imgur (after "Delete from Imgur?").
+    DeleteUpload(String),
     Delete(Vec<String>),
     SaveToFolder(Vec<String>),
     /// "Clear history" (and the saved files with it).
@@ -132,6 +136,8 @@ pub struct History {
     pub thumb_clock: u64,
     /// "Delete N captures?" (more than one selected) asks first.
     pub ask_delete: Option<Vec<String>>,
+    /// "Delete from Imgur?" (the entry whose upload goes).
+    pub ask_unupload: Option<String>,
     /// The pointer between frames (press, marquee, double-click).
     pub ptr: window::Pointer,
     /// The search field has the keyboard (keys are its); focus it next frame.
@@ -166,6 +172,7 @@ impl History {
             thumbs: HashMap::new(),
             thumb_clock: 0,
             ask_delete: None,
+            ask_unupload: None,
             ptr: Default::default(),
             search_focused: false,
             focus_search: false,
@@ -241,7 +248,7 @@ impl History {
         self.entries
             .iter()
             .enumerate()
-            .filter(|(_, e)| self.filter.keeps(e.meta.kind))
+            .filter(|(_, e)| self.filter.keeps_meta(&e.meta))
             .filter_map(|(i, e)| history::search(&e.meta, q, self.today).map(|h| (i, h)))
             .collect()
     }
@@ -260,7 +267,7 @@ impl History {
             let d = self.entries[i].day();
             if day != Some(d) {
                 day = Some(d);
-                let n = self.entries.iter().filter(|e| e.day() == d && self.filter.keeps(e.meta.kind)).count();
+                let n = self.entries.iter().filter(|e| e.day() == d && self.filter.keeps_meta(&e.meta)).count();
                 let (title, small) = history::day_header(d, self.today, n);
                 out.push(Group { title, small, items: Vec::new() });
             }
@@ -313,7 +320,7 @@ impl History {
     /// Esc: closes a menu or the question, else clears the search, else
     /// the selection. Returns whether it did something.
     pub fn escape(&mut self) -> bool {
-        if self.menu.take().is_some() || self.clear.take().is_some() || self.ask_delete.take().is_some() {
+        if self.menu.take().is_some() || self.clear.take().is_some() || self.ask_delete.take().is_some() || self.ask_unupload.take().is_some() {
             return true;
         }
         if !self.search.text.is_empty() {
@@ -350,7 +357,7 @@ impl History {
         let where_ = dir.map(|d| format!(" in {}", history::tilde(&d))).unwrap_or_default();
         (
             format!("Removes all {n} capture{} from History. This can't be undone.", if n == 1 { "" } else { "s" }),
-            format!("Also delete saved files ({}{where_})", history::size_text(bytes)),
+            format!("Also delete saved files ({}{where_}) and forget upload links", history::size_text(bytes)),
         )
     }
 
@@ -360,7 +367,13 @@ impl History {
 
     /// A question is open ("Clear history?", "Delete N captures?").
     pub fn asking(&self) -> bool {
-        self.clear.is_some() || self.ask_delete.is_some()
+        self.clear.is_some() || self.ask_delete.is_some() || self.ask_unupload.is_some()
+    }
+
+    /// Whether entry `id`'s upload can be deleted from Imgur (its
+    /// deletehash was kept).
+    pub fn can_unupload(&self, id: &str) -> bool {
+        self.entry(id).is_some_and(|e| e.meta.uploaded.is_some() && e.meta.upload.as_ref().is_some_and(|u| !u.deletehash.is_empty()))
     }
 
     /// Delete `ids`: one at once, several after "Delete N captures?".
@@ -375,6 +388,15 @@ impl History {
 
     /// The question's title, text, checkbox (Clear only) and button.
     pub fn dialog_texts(&self) -> (String, String, Option<String>, &'static str) {
+        if let Some(id) = &self.ask_unupload {
+            let link = self.entry(id).and_then(|e| e.meta.uploaded.clone()).unwrap_or_default();
+            return (
+                "Delete from Imgur?".into(),
+                format!("{} stops working for everyone. The capture stays in History. This can't be undone.", crate::uploads::short_link(&link)),
+                None,
+                "Delete from Imgur",
+            );
+        }
         if let Some(ids) = &self.ask_delete {
             let n = ids.len();
             return (
@@ -390,6 +412,9 @@ impl History {
 
     /// The question's button (or Enter).
     pub fn dialog_ok(&mut self) -> Vec<Act> {
+        if let Some(id) = self.ask_unupload.take() {
+            return vec![Act::DeleteUpload(id)];
+        }
         if let Some(ids) = self.ask_delete.take() {
             return vec![Act::Delete(ids)];
         }
@@ -403,6 +428,7 @@ impl History {
     pub fn dialog_cancel(&mut self) {
         self.clear = None;
         self.ask_delete = None;
+        self.ask_unupload = None;
     }
 }
 
@@ -500,8 +526,7 @@ pub fn run_export(store: &Store, id: &str, task: crate::export::Task, cfg: &Conf
         return match rx.recv() {
             Ok(Ok(url)) => {
                 let copied = cfg.copy_url_after_upload && crate::export::copy_text_to_clipboard(&url).is_ok();
-                let u = url.clone();
-                let _ = store.update(id, move |m| m.uploaded = Some(u));
+                let _ = crate::uploads::finished_in(store, id, &url);
                 Done { changed: true, ..ok(if copied { "Uploaded \u{2014} link copied" } else { "Uploaded" }) }
             }
             Ok(Err(err)) => fail(format!("Upload failed: {err}")),
@@ -512,6 +537,38 @@ pub fn run_export(store: &Store, id: &str, task: crate::export::Task, cfg: &Conf
         Some(n) => Done { text: n.text, kind: n.kind, changed },
         None => Done { text: String::new(), ..ok("") },
     }
+}
+
+/// "Open with…" for entry `id`: its saved file (or the recording) when
+/// that is still what it looks like, else the picture as a temporary file.
+pub fn open_with(store: &Store, id: &str, cfg: &Config, owner: Option<usize>) -> Done {
+    let Some(e) = store.get(id) else { return fail("That capture is gone") };
+    let as_is = e.meta.kind.is_recording() || (!e.meta.edited && e.meta.saved.as_ref().is_some_and(|p| p.is_file()));
+    if as_is {
+        let f = file_of(&e);
+        if !f.is_file() {
+            return fail("The file is gone");
+        }
+        return crate::open_with::open_now(&f, owner).map_or_else(fail, |()| ok(""));
+    }
+    let img = match picture(store, &e) {
+        Ok(i) => i,
+        Err(err) => return fail(format!("Could not read the capture: {err:#}")),
+    };
+    match crate::open_with::file_for(&img, None, cfg) {
+        Ok(p) => crate::open_with::open_now(&p, owner).map_or_else(fail, |()| ok("")),
+        Err(err) => fail(format!("Open with failed: {err:#}")),
+    }
+}
+
+/// Delete entry `id`'s upload from Imgur over `http` (a fake in tests),
+/// then forget its link and record.
+pub fn delete_upload(store: &Store, id: &str, client_id: &str, http: crate::uploads::DeleteFn) -> Done {
+    let Some(e) = store.get(id) else { return fail("That capture is gone") };
+    let (Some(link), Some(info)) = (e.meta.uploaded.clone(), e.meta.upload.clone()) else { return fail("This capture has no upload to delete") };
+    let rec = crate::uploads::Record { link, info, entry: Some(id.to_string()) };
+    let (text, kind) = crate::uploads::delete_record(store, &rec, client_id, http);
+    Done { text, kind, changed: true }
 }
 
 /// Save every capture of `ids` as a PNG into `dir` (named by when they

@@ -268,6 +268,8 @@ pub fn run(
         crate::update_ui::set_quit_sender(h.sender());
         // A save in the Settings window makes us reload the config.
         crate::settings_ui::set_daemon(h.sender());
+        // The launcher's Capture comes here.
+        crate::launcher::set_daemon(h.sender());
     }
     let updates = match kind {
         RunKind::Daemon => crate::update::spawn_checker(cfg.check_updates),
@@ -307,6 +309,8 @@ pub fn run(
         last_entry: None,
         upload_entry: None,
         rec_poster: None,
+        delay: Default::default(),
+        delay_show: crate::launcher::Screen { th: theme::DARK, up: false },
         #[cfg(test)]
         rec_spec: None,
         #[cfg(test)]
@@ -315,6 +319,14 @@ pub fn run(
         rec_bubble: None,
     };
     app.keep_pruned();
+    // `rustshot launcher` without a daemon: its countdown, then the capture.
+    if app.one_shot()
+        && app.pending.is_none()
+        && let Some(plan) = crate::launcher::take_start()
+    {
+        app.delay_show.th = theme::resolve(&app.cfg);
+        app.pending = app.delay.start(plan, Instant::now(), &mut app.delay_show);
+    }
     if wind::run(&mut app) != 0 {
         return 1;
     }
@@ -422,6 +434,10 @@ struct App {
     upload_entry: Option<String>,
     /// The running recording's poster and source, for its entry.
     rec_poster: Option<Box<HistShot>>,
+    /// A delayed capture counting down (the launcher, the tray), and
+    /// how it is shown (the pill, the tray's tip).
+    delay: crate::launcher::Delay,
+    delay_show: crate::launcher::Screen,
     /// Tests: the spec the last recording started with.
     #[cfg(test)]
     rec_spec: Option<crate::rec::RecSpec>,
@@ -464,6 +480,7 @@ impl App {
         }
         self.poll_upload();
         self.poll_ocr();
+        self.poll_delay();
         if let Some(rx) = &self.updates {
             while let Ok(r) = rx.try_recv() {
                 // macOS has no dialog (windows need the main thread): the
@@ -579,6 +596,33 @@ impl App {
             }
             HotEvent::StopRecording => {}
             HotEvent::ClosePins => crate::pin::close_all(),
+            HotEvent::CancelDelay => {
+                self.delay.cancel(&mut self.delay_show);
+            }
+            HotEvent::Launch(_) if self.rec.is_some() => eprintln!("rustshot: a recording is running; capture ignored"),
+            HotEvent::Launch(_) if self.updating || self.restart_pending => eprintln!("rustshot: an update is installing; capture ignored"),
+            HotEvent::Launch(plan) => {
+                self.delay_show.th = theme::resolve(&self.cfg);
+                if let Some(p) = self.delay.start(plan, Instant::now(), &mut self.delay_show) {
+                    if matches!(self.st, State::Hidden) && self.pending.is_none() {
+                        self.pending = Some(p);
+                    } else {
+                        self.say_capture_open();
+                    }
+                }
+            }
+            HotEvent::UploadDelete(tag) => match crate::uploads::ask_delete(tag) {
+                Some(n) => {
+                    #[cfg(not(test))]
+                    let at = capture::cursor_pos();
+                    #[cfg(test)]
+                    let at = (0, 0);
+                    if !crate::notice::show(n, at, theme::resolve(&self.cfg)) {
+                        crate::tray::notify("Delete it from the History window (no notice window here)");
+                    }
+                }
+                None => crate::tray::notify("That upload is no longer listed"),
+            },
             // History opens over anything (a recording, another window).
             HotEvent::History => crate::history_ui::show(),
             // The pill's buttons from the tray or a while-recording chord.
@@ -622,6 +666,36 @@ impl App {
             HotEvent::Record => self.pending = Some(Pending::record()),
         }
         true
+    }
+
+    /// The delayed capture's countdown: its capture once it is due (not
+    /// over an open one, a recording or an update); a one-shot run that
+    /// was called off exits (2, as a cancelled capture).
+    fn poll_delay(&mut self) {
+        if !self.delay.active() {
+            return;
+        }
+        let busy = !matches!(self.st, State::Hidden) || self.pending.is_some() || self.rec.is_some() || self.updating || self.restart_pending;
+        let now = Instant::now();
+        match self.delay.poll(now, &mut self.delay_show) {
+            Some(p) if !busy => self.pending = Some(p),
+            Some(_) => self.say_capture_open(),
+            None if self.one_shot() && !self.delay.active() && self.pending.is_none() && matches!(self.st, State::Hidden) => self.request_exit(2),
+            None => {}
+        }
+    }
+
+    /// A launch found a capture open (or a recording, an update): say so
+    /// over the capture, else in a balloon.
+    fn say_capture_open(&mut self) {
+        let text = "Capture already open";
+        eprintln!("rustshot: {text}; the launch was dropped");
+        if let State::Edit(e) = &mut self.st {
+            e.notice = Some(Toast::new(text.to_string(), ToastKind::Info));
+            self.repaint();
+        } else {
+            crate::tray::notify(text);
+        }
     }
 
     /// A global hotkey pressed while the overlay is open: its chord goes
@@ -765,6 +839,7 @@ impl App {
         let code = match end {
             rec_ui::End::Saved { path, warnings } => {
                 println!("saved: {}", path.display());
+                let mut entry = None;
                 if let (Some(root), Some(p)) = (self.history_root.clone(), poster) {
                     let gif = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("gif"));
                     let a = self.rec_area.unwrap_or((0, 0, 0, 0));
@@ -781,14 +856,16 @@ impl App {
                         file: Some(path.clone()),
                         ..Default::default()
                     };
-                    crate::history::record_recording(&self.cfg, &root, Some(p.original), meta);
+                    entry = crate::history::record_recording(&self.cfg, &root, Some(p.original), meta);
                 }
                 for w in &warnings {
                     eprintln!("warning: {w}");
                 }
                 if daemon {
                     let bytes = std::fs::metadata(&path).map_or(0, |m| m.len());
-                    let note = crate::notice::recording_saved(&path, length, bytes, &warnings, crate::notice::upload_configured(&self.cfg));
+                    let mut note = crate::notice::recording_saved(&path, length, bytes, &warnings, crate::notice::upload_configured(&self.cfg));
+                    // Copy link files its record with the entry.
+                    note.entry = entry;
                     let at = self.rec_area.map_or((0, 0), |a| (a.0 + a.2 as i32 / 2, a.1 + a.3 as i32 / 2));
                     if !crate::notice::show(note, at, theme::resolve(&self.cfg)) {
                         crate::tray::notify_saved(&path, &warnings);
@@ -1375,9 +1452,11 @@ impl App {
         let (text, kind, copied) = match &res {
             Ok(url) => {
                 println!("uploaded: {url}");
-                if let (Some(root), Some(id)) = (self.history_root.as_ref(), self.upload_entry.take()) {
-                    let u = url.clone();
-                    crate::history::update(root, &id, move |m| m.uploaded = Some(u));
+                // Its record: the entry's meta, or uploads.json.
+                let id = self.upload_entry.take();
+                let entry = self.history_root.as_deref().zip(id.as_deref());
+                if !cfg!(test) {
+                    crate::uploads::finished(url, entry);
                 }
                 let copied = self.cfg.copy_url_after_upload
                     && export::copy_text_to_clipboard(url)
@@ -1805,6 +1884,7 @@ fn act_of(a: Action) -> Option<Act> {
         Action::Save => Act::Save,
         Action::SaveAs => Act::SaveAs,
         Action::SaveDesktop => Act::SaveDesktop,
+        Action::OpenWith => Act::OpenWith,
         Action::Upload => Act::Upload,
         Action::Pin => Act::Pin,
         Action::Undo => Act::Undo,
@@ -3710,6 +3790,8 @@ mod tests {
             last_entry: None,
             upload_entry: None,
             rec_poster: None,
+            delay: Default::default(),
+            delay_show: crate::launcher::Screen { th: theme::DARK, up: false },
             rec_spec: None,
             rec_cam: None,
             rec_bubble: None,

@@ -8,6 +8,20 @@ Rustshot does not collect, store or transmit personal data or telemetry.
   returned link is copied to your clipboard and printed to the console.
   A recording is uploaded only when you click **Copy link** on the notice
   after it (MP4s through imgur's video upload, which imgur then transcodes).
+  For each upload Rustshot keeps, on this computer only, the link, the
+  *deletehash* imgur returns (the key that deletes the upload again), the
+  time, the kind (image or video) and a 72 × 48 thumbnail: in the
+  capture's History entry, or else in `uploads.json` (the last 50) beside
+  the history folder (`%LOCALAPPDATA%\rustshot-data`, Linux
+  `$XDG_DATA_HOME/rustshot`, macOS `~/Library/Application Support/rustshot`).
+  The deletehash is never logged, shown or sent anywhere except in the one
+  request **Delete from Imgur…** makes (`DELETE
+  https://api.imgur.com/3/image/<deletehash>` with Rustshot's client id),
+  which you confirm first; once deleted, the link and the record go.
+- **Open with…** writes an unsaved capture to a private `rustshot-open`
+  folder (Windows `%TEMP%`, Linux `$XDG_RUNTIME_DIR` or the cache folder,
+  readable by you only) for the app you pick (removed once a day old);
+  nothing is sent anywhere.
 - Settings are stored locally in `config.toml` in your user config folder.
 - History (on by default; off in Settings › Capture › History): each capture
   is kept on this computer only, in `%LOCALAPPDATA%\rustshot-data\history`

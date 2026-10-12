@@ -178,7 +178,7 @@ impl Window {
                         self.e.perform(d);
                     }
                 }
-                Request::SaveAs | Request::SaveDesktop | Request::Copy | Request::Upload | Request::CopyText | Request::Pin => self.export(r),
+                Request::SaveAs | Request::SaveDesktop | Request::OpenWith | Request::Copy | Request::Upload | Request::CopyText | Request::Pin => self.export(r),
             }
         }
     }
@@ -202,6 +202,7 @@ impl Window {
         let task = match r {
             Request::SaveAs => Task::Save { path: None, ask: true },
             Request::SaveDesktop => Task::SaveDesktop,
+            Request::OpenWith => Task::OpenWith,
             Request::Upload => Task::Upload,
             Request::CopyText => Task::Text,
             _ => Task::Copy,
@@ -215,6 +216,21 @@ impl Window {
                 let res = crate::ocr::recognize(&img);
                 let note = crate::ocr::finish(&res);
                 let _ = tx.send(Done { text: note.text, kind: note.kind, uploaded: None, saved: None });
+            });
+            return;
+        }
+        if r == Request::OpenWith {
+            // The chooser is owned by this window, its failure a toast.
+            #[allow(clippy::unnecessary_cast)] // a pointer, a u64 or a usize
+            let owner = Some(self.hwnd.0 as usize);
+            let (tx, cfg) = (self.done.0.clone(), self.e.cfg.clone());
+            std::thread::spawn(move || {
+                let res = crate::open_with::file_for(&img, None, &cfg).map_err(|e| format!("Open with failed: {e:#}"));
+                let text = match res.and_then(|p| crate::open_with::open_now(&p, owner)) {
+                    Ok(()) => String::new(),
+                    Err(e) => e,
+                };
+                let _ = tx.send(Done { text, kind: ToastKind::Error, uploaded: None, saved: None });
             });
             return;
         }
@@ -431,8 +447,7 @@ impl Window {
                 self.e.saved(objs, &s);
             }
             if let Some(u) = d.uploaded {
-                let u2 = u.clone();
-                let _ = self.e.store.update(&self.e.entry.id, move |m| m.uploaded = Some(u2));
+                let _ = crate::uploads::finished_in(&self.e.store, &self.e.entry.id, &u);
                 self.e.entry.meta.uploaded = Some(u);
                 crate::history::changed();
             }

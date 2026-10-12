@@ -210,7 +210,14 @@ pub fn do_upload(png: &[u8], client_id: &str) -> Result<String, String> {
         ));
     }
     let text = String::from_utf8_lossy(&out.stdout);
-    extract_json_string(&text, "link").ok_or_else(|| format!("no link in response: {text}"))
+    crate::uploads::note_reply(&text, crate::uploads::UpKind::Image);
+    extract_json_string(&text, "link").ok_or_else(|| format!("no link in response: {}", crate::uploads::redact(&text)))
+}
+
+/// HTTPS DELETE via `curl` (an upload, by its deletehash); (status, body).
+#[cfg_attr(test, allow(dead_code))] // tests never delete
+pub fn http_delete(host: &str, path: &str, headers: &[(&str, &str)]) -> Result<(u32, String), String> {
+    super::curl::http_delete(host, path, headers)
 }
 
 /// HTTPS POST of `body` (on curl's stdin) with `headers`; returns (status,

@@ -110,6 +110,7 @@ rustshot update                   # check for a newer release
 rustshot settings                 # open the Settings window
 rustshot history                  # open the History window (captures kept; Edit)
 rustshot history --list           # print them: captured, kind, WxH, bytes, file (tab-separated)
+rustshot launcher                 # the capture launcher: what, after a delay, then what
 rustshot register-screenclip on   # Windows: Win+Shift+S opens Rustshot (off undoes it)
 rustshot --help
 ```
@@ -217,6 +218,31 @@ on, a save (or an upload) also copies the image.
 Characters Windows does not allow in names (`<>:"/\|?*`) become `-`; in the
 subfolder pattern `/` nests folders (`%Y/%m`) and `..` is dropped.
 
+### The launcher and delayed captures
+
+The tray's **Capture…** (or `rustshot launcher`) opens a small window:
+*Capture* Region / Screen / Window, *Delay* 0 / 3 / 5 / 10 s (− / + for
+any 0-60 s) and *After capture* Edit (the editor, as usual) / Copy / Save
+/ Pin; **Capture** (or <kbd>Enter</kbd>) closes it and starts. The choices
+are remembered (`launcher_source`, `launcher_delay`, `launcher_after`).
+During a delay a small pill bottom-right counts down ("Capturing in 3 s")
+with **Cancel**; the tray's tooltip counts too and its menu offers
+**Cancel capture**. The tray's **Capture in 3 s** and **Capture in 10 s**
+start a delayed region capture straight away. The pill never shows in
+the capture.
+
+### Open with
+
+**Open with…** (<kbd>Ctrl</kbd>+<kbd>O</kbd>; in the overlay and the Edit
+window it is in the Save button's chevron menu, in History in a card's ⋯
+menu) hands the capture to an app you pick: the system's *Open with*
+dialog on Windows, the desktop portal's app chooser on Linux (else
+`xdg-open`, the default app), the default app on macOS. A capture that
+was saved opens as that file; otherwise it is written to a private
+`rustshot-open` folder first (`%TEMP%` on Windows, `$XDG_RUNTIME_DIR` on
+Linux, 0700 with 0600 files; those files go once a day old, when the
+daemon starts).
+
 ### Pins and the thumbnail
 
 **Pin to screen** (<kbd>Ctrl</kbd>+<kbd>P</kbd> in the overlay, or the pin
@@ -271,12 +297,25 @@ history…** with *Also delete saved files* removes them). Uninstalling Rustshot
 **History** (<kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd>, `history_hotkey`,
 or the tray's **History…**, which shows how many captures today) lists
 them by day as cards or rows. Search matches the window title, the app,
-the file name and the date (Esc clears); filter Screenshots or Recordings;
+the file name and the date (Esc clears); filter Screenshots, Recordings or
+Uploaded (an uploaded capture has a cloud badge);
 a click shows the details on the right, <kbd>Ctrl</kbd>/<kbd>Shift</kbd>+click
 or a drag on empty space selects several (Copy, Save to folder…, Delete).
 Hovering a card offers Edit, Copy, Save, Upload, Pin and more; a
 double-click (or <kbd>Enter</kbd>, <kbd>E</kbd>) edits. <kbd>Del</kbd>
-removes from History only (several after asking).
+removes from History only (several after asking). A card's ⋯ menu has
+Save As…, Open with…, Show in folder and Copy file path, and for an
+uploaded capture **Copy link** and **Delete from Imgur…** (after asking:
+the link stops working; the capture stays).
+
+Every Imgur upload's link, its *deletehash* (the key that deletes it),
+the time, the kind (image or video) and a small thumbnail are kept: in the
+capture's History entry, or, when History is off or the upload has no
+entry, in `uploads.json` beside the history folder (the last 50). The
+tray's **Recent uploads** lists the last five; a click copies the link,
+and **Delete … from Imgur…** under each asks, then deletes it (one
+Imgur no longer has is just forgotten). **Clear history…** with its
+checkbox also forgets `uploads.json`.
 
 The **Edit window** reopens a capture with its annotations as objects: the
 overlay's toolbar docked at the top, every tool and object edit (the
@@ -444,6 +483,7 @@ recording starts video mode, and a delay waits that long.
 | Save to Desktop | <kbd>Ctrl</kbd>+<kbd>D</kbd> (with no objects selected) |
 | Undo / Redo | <kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> (or <kbd>Ctrl</kbd>+<kbd>Y</kbd>) |
 | Copy / Save / Upload | <kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>Ctrl</kbd>+<kbd>S</kbd> / <kbd>Ctrl</kbd>+<kbd>U</kbd> |
+| Open with… (pick an app) | <kbd>Ctrl</kbd>+<kbd>O</kbd> |
 | Save As (always asks) | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> |
 | Pin to screen | <kbd>Ctrl</kbd>+<kbd>P</kbd> |
 | Copy text (OCR) | <kbd>O</kbd> (or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd>) |
@@ -474,8 +514,8 @@ bubble keeps its width and grows down, <kbd>Esc</kbd> or a click outside
 finishes; click a selected callout to type in it again. Spotlights keep
 their rectangles bright and dim the rest of the selection to half (what
 is below them: annotations drawn after a spotlight stay bright); the
-magnifier shows the area under its source twice as large. Save As and
-Save to Desktop are in the menu of the Save button's chevron. Object actions
+magnifier shows the area under its source twice as large. Save As, Save
+to Desktop and Open with… are in the menu of the Save button's chevron. Object actions
 (<kbd>Del</kbd>, <kbd>Ctrl</kbd>+<kbd>D</kbd>, …) win over the other keys
 while objects are selected.
 
@@ -663,6 +703,9 @@ history_days = 30                 # entries older than this go
 history_max_mb = 2048             # then the oldest until it fits
 history_hotkey = "Shift+Meta+H"   # the History window
 edit_save = ""                    # the Edit window's Save: "" asks, "overwrite", "new"
+launcher_source = "region"        # the launcher's last choices: "region", "screen", "window",
+launcher_delay = 0                # the delay in seconds (0-60),
+launcher_after = "edit"           # then "edit", "copy", "save" or "pin"
 copy_url_after_upload = true
 capture_active_monitor = false    # true = only the monitor under the cursor
 snap_windows = true               # outline the window under the pointer; a click selects it
@@ -788,7 +831,9 @@ boards) and [docs/superpowers](docs/superpowers) (specs and plans).
 
 ## Privacy
 
-No telemetry. Images leave your machine only when you choose **Upload**;
+No telemetry. Images leave your machine only when you choose **Upload**
+(each upload's deletehash, which deletes it from Imgur again, is kept on
+this computer only; **Delete from Imgur…** sends one request to Imgur);
 recordings never do (the screen, sound and camera are captured only while
 a recording runs or the camera bubble is shown). The
 daemon's update check is a single anonymous request to the GitHub Releases

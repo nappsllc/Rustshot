@@ -157,6 +157,31 @@ fn get_layout_is_the_menu_model() {
     assert_eq!(r.body[0].get("Status").and_then(Value::as_str), Some("normal"));
 }
 
+/// "Recent uploads" is a submenu: its uploads are its children (not the
+/// root's), it says so, and a click on one is that upload.
+#[test]
+fn recent_uploads_are_a_submenu() {
+    let x = tray::Extras { launcher: true, delay: false, uploads: vec![1, 2], deletable: vec![] };
+    let menu = tray::menu_more(Some(true), None, false, None, false, &x);
+    let mut s = Sni::new(View { menu, ..view(None) });
+    let r = get_layout(&mut s, 0, -1, &[]);
+    let root = &r.body[1];
+    let top: Vec<i32> = root.items()[2].items().iter().map(|v| v.inner().items()[0].as_i32().unwrap()).collect();
+    assert!(top.contains(&25) && !top.contains(&30) && !top.contains(&32), "{top:?}");
+    let ru = root.items()[2].items().iter().map(|v| v.inner()).find(|n| n.items()[0].as_i32() == Some(25)).unwrap();
+    assert_eq!(ru.items()[1].get("children-display").and_then(Value::as_str), Some("submenu"));
+    let kids: Vec<i32> = ru.items()[2].items().iter().map(|v| v.inner().items()[0].as_i32().unwrap()).collect();
+    assert_eq!(kids, [30, 32]);
+    // Asked for itself: the same children; depth 0 at the root: none.
+    let sub = get_layout(&mut s, 25, -1, &[]);
+    assert_eq!(sub.body[1].items()[2].items().len(), 2);
+    let shallow = get_layout(&mut s, 0, 1, &[]);
+    let ru = shallow.body[1].items()[2].items().iter().map(|v| v.inner()).find(|n| n.items()[0].as_i32() == Some(25)).unwrap().clone();
+    assert!(ru.items()[2].items().is_empty(), "depth 1: the root's children only");
+    let (_, ask) = ask(&mut s, call(MENU_PATH, MENU, "Event", vec![Value::I32(32), Value::str("clicked"), Value::variant(Value::I32(0)), Value::U32(0)]));
+    assert_eq!(ask, Some(Ask::Item(tray::MenuItem::Upload { i: 1, tag: 2 })));
+}
+
 #[test]
 fn layout_while_recording() {
     let rec = RecMenu { paused: true, mic: Some(false), cam: None, pill_hidden: false };
