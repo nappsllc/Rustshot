@@ -132,6 +132,9 @@ struct CaptureArgs {
     noedit: bool,
     /// --edit: show the editor (default for gui, opt-in for full/screen).
     edit: bool,
+    /// --accept-on-select: a region drawn (or a window clicked) is
+    /// exported at once (copied, or the --path/--clip/--upload tasks).
+    accept_on_select: bool,
 }
 
 enum Parsed {
@@ -172,6 +175,8 @@ Options (gui/full/screen):
       --region <SPEC>    Region: WxH+X+Y (virtual-screen coords), \"all\", or \"screenN\"
       --noedit           Capture without showing the editor (gui)
       --edit             Show the editor (full/screen)
+      --accept-on-select Export as soon as a region is drawn (copy, or the
+                         --path/--clip/--upload tasks); Shift on release skips it
   -n, --number <N>       Monitor index for screen (0-based, default 0)
       --check            (config) Validate the config file and exit non-zero on errors
 
@@ -314,7 +319,7 @@ fn parse_capture(args: &[String]) -> Result<CaptureArgs, String> {
                 "--path" => {
                     out.path = Some(PathBuf::from(opt_value(args, &mut i, attached, name)?))
                 }
-                "--clip" | "--raw" | "--geometry" | "--upload" | "--noedit" | "--edit" => {
+                "--clip" | "--raw" | "--geometry" | "--upload" | "--noedit" | "--edit" | "--accept-on-select" => {
                     if attached.is_some() {
                         return Err(format!("unexpected value for {name}"));
                     }
@@ -324,6 +329,7 @@ fn parse_capture(args: &[String]) -> Result<CaptureArgs, String> {
                         "--geometry" => out.geometry = true,
                         "--upload" => out.upload = true,
                         "--noedit" => out.noedit = true,
+                        "--accept-on-select" => out.accept_on_select = true,
                         _ => out.edit = true,
                     }
                 }
@@ -463,6 +469,12 @@ fn plan_capture(cmd: &Cmd) -> Result<Option<Plan>> {
     pending.screen = screen;
     pending.region = region;
     pending.filename = args.filename.clone();
+    if args.accept_on_select {
+        // Copy unless the command names its own export; a --region given
+        // is already the selection: exported straight away.
+        pending.accept_new = Some(editor::AcceptOn::Copy);
+        pending.accept_on_select = region.is_some();
+    }
     Ok(Some(Plan::Editor(pending)))
 }
 
@@ -1034,6 +1046,39 @@ mod cli_tests {
 
     fn plan(args: &[&str]) -> Plan {
         plan_capture(&cmd(args)).expect("plans").expect("a capture command")
+    }
+
+    /// `--accept-on-select`: parsed on gui/full/screen (no value), copies
+    /// unless tasks are named, and a `--region` is accepted at once.
+    #[test]
+    fn accept_on_select_flag() {
+        assert!(capture_args(cmd(&["gui", "--accept-on-select"])).accept_on_select);
+        assert!(!capture_args(cmd(&["gui"])).accept_on_select);
+        assert!(capture_args(cmd(&["full", "--edit", "--accept-on-select"])).accept_on_select);
+        assert_eq!(err(&["gui", "--accept-on-select=yes"]), "unexpected value for --accept-on-select");
+        assert!(HELP.contains("--accept-on-select"));
+        match plan(&["gui", "--accept-on-select"]) {
+            Plan::Editor(p) => {
+                assert_eq!(p.accept_new, Some(editor::AcceptOn::Copy));
+                assert!(p.tasks.is_empty() && !p.accept_on_select, "drawn first, then copied");
+            }
+            Plan::Direct { .. } => panic!("gui opens the editor"),
+        }
+        match plan(&["gui", "--accept-on-select", "-p", "a.png"]) {
+            Plan::Editor(p) => {
+                assert!(matches!(p.tasks[..], [Task::Save { .. }]), "the path wins over the copy");
+                assert_eq!(p.accept_new, Some(editor::AcceptOn::Copy));
+            }
+            Plan::Direct { .. } => panic!("gui opens the editor"),
+        }
+        match plan(&["gui", "--accept-on-select", "--region", "10x10+0+0"]) {
+            Plan::Editor(p) => assert!(p.accept_on_select, "the region is the selection: at once"),
+            Plan::Direct { .. } => panic!("gui opens the editor"),
+        }
+        match plan(&["gui", "--region", "10x10+0+0"]) {
+            Plan::Editor(p) => assert!(p.accept_new.is_none() && !p.accept_on_select),
+            Plan::Direct { .. } => panic!("gui opens the editor"),
+        }
     }
 
     /// Dispatch: which capture commands open the editor, and with what.
