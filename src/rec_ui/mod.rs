@@ -835,6 +835,9 @@ pub struct Geom {
     pub monitors: Vec<(IRect, f32)>,
     /// UI scale off every monitor.
     pub scale: f32,
+    /// The UI size's multiplier, already in every scale above (the
+    /// border follows the OS scale only).
+    pub mult: f32,
 }
 
 impl Geom {
@@ -861,13 +864,22 @@ impl Geom {
     pub fn in_points(&self, k: f64) -> Geom {
         let p = |r: IRect| crate::capture::pts::rect_pt_i(r, k);
         let m = crate::uisize::mult();
-        Geom { area: p(self.area), monitors: self.monitors.iter().map(|x| (p(x.0), m)).collect(), scale: m }
+        Geom { area: p(self.area), monitors: self.monitors.iter().map(|x| (p(x.0), m)).collect(), scale: m, mult: m }
     }
 
-    /// Each monitor with the border's thickness there.
+    /// Each monitor with the border's thickness there: by the monitor's
+    /// own scale, not the UI size (a line, as on macOS where it is in
+    /// points).
     #[cfg_attr(target_os = "macos", allow(dead_code))] // macOS draws it in points
     pub fn border_monitors(&self) -> Vec<(IRect, i32)> {
-        self.monitors.iter().map(|&(m, s)| (m, border::thickness(s))).collect()
+        self.monitors
+            .iter()
+            .map(|&(m, s)| {
+                // Back to the OS scale (rounded: the division's noise must not tip a .5).
+                let os = (s / self.mult.max(f32::EPSILON) * 1000.0).round() / 1000.0;
+                (m, border::thickness(os))
+            })
+            .collect()
     }
 }
 

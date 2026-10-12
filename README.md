@@ -202,6 +202,13 @@ redo = "Ctrl+Shift+Z, Ctrl+Y"  # accept (Enter), cancel (Esc),
 ui_bigger = "Ctrl+=, Ctrl+Shift+=, Ctrl+NumpadAdd"  # ui_smaller, ui_reset
 ```
 
+The UI size keys (`ui_bigger`, `ui_smaller`, `ui_reset`) can be remapped like
+any other. On layouts where `=`, `-` or `0` need a modifier or sit elsewhere
+(AZERTY, German), use the keypad keys (Ctrl+NumpadAdd, Ctrl+NumpadSubtract,
+Ctrl+Numpad0) or bind your own chords. Ctrl and Alt chords work while typing
+a text and with the colour picker open; a remapped plain key (no Ctrl or Alt)
+does not, because those modes take every plain key as input.
+
 `record` (unbound by default) opens the Record popover for the selection
 (Windows). There is no `stop_recording` action: the overlay is hidden while
 a recording runs, so the record hotkey (`record_hotkey`) toggles start and

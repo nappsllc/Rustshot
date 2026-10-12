@@ -9,6 +9,7 @@
 //! ([`apply`]), which the daemon sets from the config on start and on
 //! every reload.
 
+#[cfg(not(test))]
 use std::sync::atomic::{AtomicU16, Ordering};
 
 /// The sizes the setting, the Settings dropdown and Ctrl+= / Ctrl+-
@@ -112,18 +113,51 @@ pub fn clamp(s: f32) -> f32 {
     if s.is_finite() { s.clamp(MIN_SCALE, MAX_SCALE) } else { 1.0 }
 }
 
-/// The process-wide setting, encoded (0 = Auto, else the percent).
-static CURRENT: AtomicU16 = AtomicU16::new(0);
+/// "Never set in this process" (otherwise 0 = Auto, else the percent).
+const UNSET: u16 = u16::MAX;
 
-/// Make `s` the process-wide UI size (the config was loaded or saved, or
-/// the overlay changed it).
+// The process-wide setting. Tests run in parallel and must not see each
+// other's values, so under `cfg(test)` it is per thread (a window test
+// sets it on the thread that runs the window).
+#[cfg(not(test))]
+static CURRENT: AtomicU16 = AtomicU16::new(UNSET);
+#[cfg(test)]
+thread_local! {
+    static CURRENT: std::cell::Cell<u16> = const { std::cell::Cell::new(UNSET) };
+}
+
+fn load() -> u16 {
+    #[cfg(not(test))]
+    return CURRENT.load(Ordering::Relaxed);
+    #[cfg(test)]
+    return CURRENT.with(std::cell::Cell::get);
+}
+
+fn store(v: u16) {
+    #[cfg(not(test))]
+    CURRENT.store(v, Ordering::Relaxed);
+    #[cfg(test)]
+    CURRENT.with(|c| c.set(v));
+}
+
+/// Make `s` the process-wide UI size (the overlay changed it, or Settings
+/// applied it).
 pub fn set(s: UiSize) {
-    CURRENT.store(if s == UiSize::Auto { 0 } else { s.pct() }, Ordering::Relaxed);
+    store(if s == UiSize::Auto { 0 } else { s.pct() });
+}
+
+/// Start-up value from the config file: only when nothing in this process
+/// has set the size yet (an overlay's change may still wait for its
+/// debounced write, and the file is then older than the process).
+pub fn init(s: UiSize) {
+    if load() == UNSET {
+        set(s);
+    }
 }
 
 pub fn current() -> UiSize {
-    match CURRENT.load(Ordering::Relaxed) {
-        0 => UiSize::Auto,
+    match load() {
+        UNSET | 0 => UiSize::Auto,
         n => UiSize::Pct(n),
     }
 }
@@ -134,9 +168,9 @@ pub fn mult() -> f32 {
 }
 
 /// The UI scale on a monitor whose OS scale is `os`, for windows without a
-/// config of their own (unclamped: these scales come from the window system).
+/// config of their own: the same formula as the overlay's ([`UiSize::apply`]).
 pub fn apply(os: f32) -> f32 {
-    os * mult()
+    current().apply(os)
 }
 
 #[cfg(test)]
@@ -228,6 +262,30 @@ mod tests {
         }
         assert_eq!(UiSize::from_index(99), UiSize::Auto);
         assert_eq!(UiSize::Pct(100).index(), 3);
+    }
+
+    /// The process-wide scale clamps the OS scale like the overlay does.
+    #[test]
+    fn process_wide_apply_clamps_like_the_overlay() {
+        set(UiSize::Pct(125));
+        for os in [0.5, 1.0, 1.75, 4.0, 6.0] {
+            assert_eq!(apply(os), UiSize::Pct(125).apply(os), "{os}");
+        }
+        assert_eq!(apply(6.0), 5.0);
+        assert_eq!(apply(0.5), 1.25);
+    }
+
+    /// The file's value only fills in a size nothing has set.
+    #[test]
+    fn init_does_not_overwrite_a_set_size() {
+        assert_eq!(current(), UiSize::Auto);
+        init(UiSize::Pct(90));
+        assert_eq!(current(), UiSize::Pct(90), "nothing set it yet");
+        init(UiSize::Pct(150));
+        assert_eq!(current(), UiSize::Pct(90), "already set");
+        set(UiSize::Auto);
+        init(UiSize::Pct(150));
+        assert_eq!(current(), UiSize::Auto, "an explicit Auto is a value too");
     }
 
     #[test]

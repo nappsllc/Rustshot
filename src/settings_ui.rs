@@ -1286,8 +1286,10 @@ fn run(rx: Receiver<Msg>) {
     s.hotkey_failures = hotkey::outstanding();
     let th = crate::theme::resolve(&s.loaded);
     // Opened without a daemon (`rustshot settings`): the file's UI size.
+    // In the daemon an overlay may have set it and still have the write
+    // pending, so the file is older: `init` leaves a set size alone.
     if !s.stale {
-        uisize::set(s.loaded.ui_scale);
+        uisize::init(s.loaded.ui_scale);
     }
     let mut w = Window::new(s, th, rx);
     let spec = WindowSpec { title: "Rustshot Settings".into(), w: W, h: H, resizable: false, min: (W, H) };
@@ -1332,6 +1334,8 @@ struct Window {
     picked: (Sender<Option<PathBuf>>, Receiver<Option<PathBuf>>),
     picking: bool,
     closing: bool,
+    /// The UI scale the window was sized for (0 = not known yet).
+    sized_for: f32,
 }
 
 impl Window {
@@ -1349,6 +1353,7 @@ impl Window {
             picked: std::sync::mpsc::channel(),
             picking: false,
             closing: false,
+            sized_for: 0.0,
         }
     }
 
@@ -1357,13 +1362,10 @@ impl Window {
             Act::Close => self.closing = true,
             Act::Saved(cfg) => {
                 self.th = crate::theme::resolve(&cfg);
-                // A new UI size: this window lays out again at once (the
-                // resize brings the new size and a frame), the overlay at
-                // its next capture.
-                if cfg.ui_scale != uisize::current() {
-                    uisize::set(cfg.ui_scale);
-                    wind::resize(self.hwnd, W, H);
-                }
+                // A new UI size: the next frame sees the new scale and
+                // resizes the window (`follow_scale`), the overlay lays
+                // out at its next capture.
+                uisize::set(cfg.ui_scale);
                 reload_daemon();
             }
             Act::Reload => reload_daemon(),
@@ -1386,11 +1388,11 @@ impl Window {
     /// Draw a frame from the current input; repeat while it produced a
     /// click (the content changes) or the kit asks for it.
     fn render(&mut self) {
-        let k = wind::scale(self.hwnd);
         for _ in 0..4 {
             if self.closing || self.canvas.width() == 0 {
                 return;
             }
+            let k = wind::follow_scale(self.hwnd, &mut self.sized_for, W, H);
             let click = frame(&mut self.canvas, &self.th, &self.input, &mut self.focus, &mut self.s, k);
             self.input.end_frame();
             let (click, redraw) = click;
@@ -1490,6 +1492,8 @@ impl Driver for Window {
                     #[cfg(windows)]
                     wind::raise(self.hwnd);
                 }
+                // The UI size changed elsewhere (the overlay's Ctrl+=).
+                wind::follow_scale(self.hwnd, &mut self.sized_for, W, H);
                 // The broken file fixed in an editor: the window works again.
                 if self.s.broken() && self.rechecked.elapsed() >= std::time::Duration::from_millis(500) {
                     self.rechecked = std::time::Instant::now();

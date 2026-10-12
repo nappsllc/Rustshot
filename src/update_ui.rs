@@ -691,6 +691,8 @@ struct Dialog {
     config: PathBuf,
     /// When the window opened or its content last changed (Enter grace).
     changed_at: Instant,
+    /// The UI scale the window was sized for (0 = not known yet).
+    sized_for: f32,
 }
 
 impl Dialog {
@@ -709,6 +711,7 @@ impl Dialog {
             queue: VecDeque::new(),
             phase: Arc::new(AtomicU8::new(CANCELLED)),
             closing: false,
+            sized_for: 0.0,
             config: crate::config::config_path(),
             changed_at: Instant::now(),
         }
@@ -772,11 +775,11 @@ impl Dialog {
     /// Draw a frame from the current input; repeat while it produced
     /// events (a click changes the screen) or the kit asks for it.
     fn render(&mut self) {
-        let k = wind::scale(self.hwnd);
         for _ in 0..4 {
             if self.closing || self.canvas.width() == 0 {
                 return;
             }
+            let k = wind::follow_scale(self.hwnd, &mut self.sized_for, W, H);
             let (w, h) = self.canvas.dimensions();
             let bg = self.th.surface.with_alpha(255);
             for p in self.canvas.as_raw_mut().as_chunks_mut::<4>().0 {
@@ -923,6 +926,8 @@ impl Driver for Dialog {
                 self.render();
             }
             Ev::Timer => {
+                // The UI size changed elsewhere (the overlay's Ctrl+=).
+                wind::follow_scale(self.hwnd, &mut self.sized_for, W, H);
                 self.queue.extend(self.rx.try_iter());
                 let changed = self.process();
                 if changed {

@@ -2446,8 +2446,11 @@ impl Edit {
             self.cfg.ui_scale = size;
             self.pending.set("ui_scale".into(), Some(size.to_toml()), now);
             publish_ui_size(size);
+            // Said once per change, and never over an error still showing.
+            if self.notice.as_ref().is_none_or(|t| t.kind != ToastKind::Error) {
+                self.notice = Some(Toast::new(size.describe(), ToastKind::Info));
+            }
         }
-        self.notice = Some(Toast::new(size.describe(), ToastKind::Info));
     }
 
     /// The selection as a recording area (physical virtual-screen px,
@@ -2471,6 +2474,7 @@ impl Edit {
                 })
                 .collect(),
             scale: self.ui_scale(),
+            mult: self.cfg.ui_scale.mult(),
         }
     }
 
@@ -2548,13 +2552,9 @@ impl Edit {
 // ---------------------------------------------------------------------------
 
 /// Make `s` the process-wide UI size (the windows without a config of
-/// their own read it). Not in tests: they run in parallel and the window
-/// tests read it.
+/// their own read it).
 fn publish_ui_size(s: UiSize) {
-    #[cfg(not(test))]
     crate::uisize::set(s);
-    #[cfg(test)]
-    let _ = s;
 }
 
 fn hit(r: FRect, p: Pt) -> bool {

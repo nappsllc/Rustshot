@@ -41,7 +41,7 @@ fn live_rec_border_and_bar_are_not_recorded() {
     // with no room outside, the bar and the countdown go inside too.
     let inner = (area.0 + 40, area.1 + 40, area.2 - 80, area.3 - 80);
     let border = Border::show(inner, &[(area, 4)]).unwrap();
-    let geom = Geom { area, monitors: vec![(area, 1.0)], scale: 1.0 };
+    let geom = Geom { area, monitors: vec![(area, 1.0)], scale: 1.0, mult: 1.0 };
     let mut bar = BarWin::new(0).unwrap();
     let v = BarView { elapsed: Duration::from_secs(5), paused: false, mic: Some(false), stopping: false, compact: false, asking: false };
     bar.show(&geom, &crate::theme::DARK, &v);
@@ -96,7 +96,7 @@ fn live_rec_border_and_bar_are_not_recorded() {
 #[ignore = "opens windows on the real desktop"]
 fn live_rec_bar_clicks_queue() {
     crate::capture::enable_dpi_awareness();
-    let geom = Geom { area: (200, 200, 400, 300), monitors: vec![((0, 0, 1280, 720), 1.0)], scale: 1.0 };
+    let geom = Geom { area: (200, 200, 400, 300), monitors: vec![((0, 0, 1280, 720), 1.0)], scale: 1.0, mult: 1.0 };
     let mut bar = BarWin::new(0).unwrap();
     let v = BarView { elapsed: Duration::ZERO, paused: false, mic: None, stopping: false, compact: false, asking: false };
     bar.show(&geom, &crate::theme::LIGHT, &v);
@@ -301,7 +301,7 @@ fn worker_open_failure_removes_the_part() {
 #[ignore = "opens windows on the real desktop"]
 fn live_rec_windows_close_when_the_start_fails() {
     crate::capture::enable_dpi_awareness();
-    let geom = Geom { area: (200, 200, 400, 300), monitors: vec![((0, 0, 1280, 720), 1.0)], scale: 1.0 };
+    let geom = Geom { area: (200, 200, 400, 300), monitors: vec![((0, 0, 1280, 720), 1.0)], scale: 1.0, mult: 1.0 };
     let dir = worker_dir("live-fail");
     let s = spec(RecFormat::Gif, 10, geom.area, dir.join("a.gif"));
     let open: Opener = Box::new(|_: &RecSpec| bail!("no capture"));
@@ -338,7 +338,7 @@ fn live_rec_windows_close_when_the_start_fails() {
 #[ignore = "opens windows on the real desktop"]
 fn live_rec_camera_failure_is_said_with_the_file() {
     crate::capture::enable_dpi_awareness();
-    let geom = Geom { area: (200, 200, 400, 300), monitors: vec![((0, 0, 1280, 720), 1.0)], scale: 1.0 };
+    let geom = Geom { area: (200, 200, 400, 300), monitors: vec![((0, 0, 1280, 720), 1.0)], scale: 1.0, mult: 1.0 };
     let dir = worker_dir("live-cam");
     let s = spec(RecFormat::Gif, 10, geom.area, dir.join("a.gif"));
     let mut ui = Recorder::start_with(s, geom, crate::theme::DARK, HWND::default(), fake_parts(None, Arc::new(AtomicBool::new(false)), vec![])).unwrap();
