@@ -13,7 +13,7 @@ pub struct Worker {
 
 impl Worker {
     /// Register `specs` on a new thread; `done` gets which registered.
-    pub fn start(specs: [(i32, String, HotEvent); SLOTS], tx: mpsc::Sender<HotEvent>, done: mpsc::Sender<Registered>) -> Worker {
+    pub fn start<const N: usize>(specs: [(i32, String, HotEvent); N], tx: mpsc::Sender<HotEvent>, done: mpsc::Sender<[Result<(), Cause>; N]>) -> Worker {
         let tid = Arc::new(AtomicU32::new(0));
         let t = tid.clone();
         let join = std::thread::spawn(move || hotkey_thread(specs, tx, &t, done));
@@ -40,7 +40,7 @@ impl Worker {
     }
 }
 
-fn hotkey_thread(specs: [(i32, String, HotEvent); SLOTS], tx: mpsc::Sender<HotEvent>, tid: &AtomicU32, done: mpsc::Sender<Registered>) {
+fn hotkey_thread<const N: usize>(specs: [(i32, String, HotEvent); N], tx: mpsc::Sender<HotEvent>, tid: &AtomicU32, done: mpsc::Sender<[Result<(), Cause>; N]>) {
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         RegisterHotKey, UnregisterHotKey, HOT_KEY_MODIFIERS, MOD_NOREPEAT,
     };
@@ -55,7 +55,7 @@ fn hotkey_thread(specs: [(i32, String, HotEvent); SLOTS], tx: mpsc::Sender<HotEv
         tid.store(windows::Win32::System::Threading::GetCurrentThreadId(), Ordering::SeqCst);
 
         let mut registered = Vec::new();
-        let mut result: Registered = [Ok(()); SLOTS];
+        let mut result: [Result<(), Cause>; N] = [Ok(()); N];
         for (i, (id, spec, _)) in specs.iter().enumerate() {
             if spec.trim().is_empty() {
                 continue; // no hotkey for this action

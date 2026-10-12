@@ -187,6 +187,19 @@ impl Motion {
     }
 }
 
+/// Hotkeys that did not register: on stderr, and in the Settings window
+/// when it is open, else a tray balloon.
+fn tell_hotkey_failures(failed: &[crate::hotkey::Failure]) {
+    if failed.is_empty() {
+        return;
+    }
+    let text = failed.iter().map(|f| f.message()).collect::<Vec<_>>().join("\n");
+    eprintln!("rustshot: {text}");
+    if !crate::settings_ui::notify(&text) {
+        crate::tray::notify(&text);
+    }
+}
+
 pub fn run(
     cfg: Config,
     kind: RunKind,
@@ -458,6 +471,20 @@ impl App {
                 }
             }
             HotEvent::StopRecording => {}
+            // The pill's buttons from the tray or a while-recording chord.
+            HotEvent::RecPause | HotEvent::RecMute | HotEvent::RecCamera | HotEvent::RecPill | HotEvent::RecDiscard => {
+                let now = Instant::now();
+                if let Some(r) = self.rec.as_mut() {
+                    match ev {
+                        HotEvent::RecPause => r.toggle_pause(now),
+                        HotEvent::RecMute => r.toggle_mute(),
+                        HotEvent::RecCamera => r.toggle_camera(),
+                        HotEvent::RecPill => r.toggle_pill(now),
+                        _ => r.discard(now),
+                    }
+                }
+                self.publish_rec_menu();
+            }
             // A global hotkey: inside the overlay its chord is the
             // overlay's key (Ctrl+Shift+S, if bound globally: Save As there), else its action.
             // Quit always quits.
@@ -603,6 +630,8 @@ impl App {
         // The tray's tip says the time recorded (once a second).
         if !self.one_shot() && ended.is_none() {
             crate::tray::set_elapsed(length);
+            // ...and its menu what the pill shows (paused, muted, ...).
+            self.publish_rec_menu();
         }
         let Some(end) = ended else { return };
         self.rec = None;
@@ -619,6 +648,7 @@ impl App {
         let daemon = !self.one_shot();
         if daemon {
             crate::tray::set_recording(false);
+            self.rec_hotkeys(false);
         }
         let code = match end {
             rec_ui::End::Saved { path, warnings } => {
@@ -687,10 +717,31 @@ impl App {
                 self.rec = Some(run);
                 if !self.one_shot() {
                     crate::tray::set_recording(true);
+                    self.publish_rec_menu();
+                    self.rec_hotkeys(true);
                 }
             }
             Err(e) if e.is::<rec_ui::NotStarted>() => self.recording_over(rec_ui::End::Cancelled, Duration::ZERO),
             Err(e) => self.recording_over(rec_ui::End::Failed(format!("{e:#}")), Duration::ZERO),
+        }
+    }
+
+    /// The tray menu follows the recording's pill (daemon only).
+    fn publish_rec_menu(&self) {
+        if let Some(r) = &self.rec
+            && !self.one_shot()
+        {
+            crate::tray::set_rec_menu(r.menu_state());
+        }
+    }
+
+    /// A recording started (`on`) or ended: its global chords (pause,
+    /// mute, hide the pill) are registered only meanwhile. A chord that
+    /// does not register is told like any other hotkey.
+    fn rec_hotkeys(&mut self, on: bool) {
+        if let Some(h) = self.hot.as_mut() {
+            let failed = h.set_recording(&self.cfg, on);
+            tell_hotkey_failures(&failed);
         }
     }
 
@@ -699,16 +750,12 @@ impl App {
     /// `check_updates`. An open capture keeps the config it started with.
     fn reload_config(&mut self, cfg: Config) {
         if let Some(h) = self.hot.as_mut() {
-            let failed = h.reload(&cfg);
-            if !failed.is_empty() {
-                let text = failed.iter().map(|f| f.message()).collect::<Vec<_>>().join("
-");
-                eprintln!("rustshot: {text}");
-                // In the Settings window when it is open, else a tray balloon.
-                if !crate::settings_ui::notify(&text) {
-                    crate::tray::notify(&text);
-                }
+            let mut failed = h.reload(&cfg);
+            // While recording, its chords follow the new key bindings.
+            if self.rec.is_some() {
+                failed.extend(h.set_recording(&cfg, true));
             }
+            tell_hotkey_failures(&failed);
         }
         if cfg.check_updates != self.cfg.check_updates && self.kind == RunKind::Daemon {
             // A new checker generation: the old one stops before its next
@@ -1943,6 +1990,7 @@ fn act_of(a: Action) -> Option<Act> {
         Action::Record => Act::Record,
         Action::SelectAll | Action::Accept | Action::Cancel => return None,
         Action::UiBigger | Action::UiSmaller | Action::UiReset => return None,
+        Action::RecPause | Action::RecMute | Action::RecHidePill => return None,
     })
 }
 

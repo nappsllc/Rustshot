@@ -600,6 +600,13 @@ struct BarWin {
 
 impl BarWin {
     fn show(&mut self, geom: &Geom, th: &Theme, v: &BarView) {
+        if v.hidden {
+            self.win.hide();
+            self.drawn = None; // drawn again when shown
+            self.hover = None;
+            self.pressed = None;
+            return;
+        }
         let font = Some(crate::fonts::ui_font());
         let panel = |s: f32, v: &BarView| {
             let p = bar::layout(&Ui { th, s, font }, v).panel;

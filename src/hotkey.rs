@@ -33,8 +33,114 @@ pub enum HotEvent {
     /// As, does its overlay job).
     Pressed(usize),
     /// Stop the recording in progress (the tray).
-    #[cfg_attr(not(windows), allow(dead_code))] // the Linux/macOS trays come later
     StopRecording,
+    /// The recording's pill, from the tray or a while-recording chord:
+    /// pause/resume, mute the microphone, hide the camera bubble, hide
+    /// the pill, discard.
+    RecPause,
+    RecMute,
+    RecCamera,
+    RecPill,
+    RecDiscard,
+}
+
+/// The chords registered only while a recording runs (Settings → Key
+/// bindings → While recording): pause/resume, mute the microphone,
+/// hide/show the pill. Stopping is the record hotkey (it toggles).
+pub const REC_SLOTS: usize = 3;
+
+/// The keymap action of each while-recording chord.
+#[cfg_attr(target_os = "macos", allow(dead_code))] // macOS: not registered yet
+pub const REC_ACTIONS: [crate::keymap::Action; REC_SLOTS] =
+    [crate::keymap::Action::RecPause, crate::keymap::Action::RecMute, crate::keymap::Action::RecHidePill];
+
+/// [`Failure::slot`] of the first while-recording chord (after the
+/// config's [`SLOTS`]).
+pub const REC_SLOT_BASE: usize = SLOTS;
+
+/// The event of while-recording chord `i`.
+pub fn rec_event(i: usize) -> HotEvent {
+    match i {
+        0 => HotEvent::RecPause,
+        1 => HotEvent::RecMute,
+        _ => HotEvent::RecPill,
+    }
+}
+
+/// The while-recording chords `cfg` asks for (the `[shortcuts]` table;
+/// "" = unbound), in [`REC_ACTIONS`] order.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub fn rec_wanted(cfg: &Config) -> [String; REC_SLOTS] {
+    let km = crate::keymap::Keymap::from_config(&cfg.shortcuts).0;
+    REC_ACTIONS.map(|a| km.chords(a).first().map(|c| c.display()).unwrap_or_default())
+}
+
+/// Registration specs of the while-recording chords: ids after the
+/// config's, events of their own.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn rec_specs_for(s: &[String; REC_SLOTS]) -> [(i32, String, HotEvent); REC_SLOTS] {
+    std::array::from_fn(|i| ((REC_SLOT_BASE + i) as i32 + 1, s[i].clone(), rec_event(i)))
+}
+
+/// The while-recording chords' registration: held only while a
+/// recording runs. `W` is the registration (a worker thread; a fake in
+/// tests): dropping it through `stop` unregisters the chords.
+pub struct RecKeys<W> {
+    held: Option<(W, [String; REC_SLOTS])>,
+}
+
+impl<W> Default for RecKeys<W> {
+    fn default() -> Self {
+        RecKeys { held: None }
+    }
+}
+
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+impl<W> RecKeys<W> {
+    /// Whether the chords are registered now.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn active(&self) -> bool {
+        self.held.is_some()
+    }
+
+    /// A recording started (or its chords changed while it runs):
+    /// register `want` with `start` (the registration and per chord whether
+    /// it worked), after `stop`ping what was held. The failures, as
+    /// [`Failure`]s with slots from [`REC_SLOT_BASE`].
+    pub fn begin(
+        &mut self,
+        want: &[String; REC_SLOTS],
+        start: impl FnOnce(&[String; REC_SLOTS]) -> (W, [Result<(), Cause>; REC_SLOTS]),
+        stop: impl FnOnce(W),
+    ) -> Vec<Failure> {
+        if let Some((_, held)) = &self.held
+            && held == want
+        {
+            return Vec::new();
+        }
+        self.end(stop);
+        if want.iter().all(|s| s.trim().is_empty()) {
+            return Vec::new(); // nothing to register
+        }
+        let (w, ok) = start(want);
+        self.held = Some((w, want.clone()));
+        (0..REC_SLOTS)
+            .filter_map(|i| ok[i].err().map(|cause| Failure { slot: REC_SLOT_BASE + i, wanted: want[i].clone(), cause, kept: None }))
+            .collect()
+    }
+
+    /// The recording is over: unregister the chords (nothing when none are held).
+    pub fn end(&mut self, stop: impl FnOnce(W)) {
+        if let Some((w, _)) = self.held.take() {
+            stop(w);
+        }
+    }
+
+    /// What is held (the chords asked for), while a recording runs.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn held(&self) -> Option<&[String; REC_SLOTS]> {
+        self.held.as_ref().map(|(_, s)| s)
+    }
 }
 
 /// Global hotkey slots: capture, quit, record, full screen, window, repeat.
@@ -58,6 +164,9 @@ pub struct Hotkeys {
     /// Failures already told to the user (once per run each).
     #[cfg(not(target_os = "macos"))]
     told: Vec<Failure>,
+    /// The while-recording chords, registered only while a recording runs.
+    #[cfg(not(target_os = "macos"))]
+    rec: RecKeys<imp::Worker>,
 }
 
 /// Why a hotkey did not register.
@@ -106,7 +215,8 @@ pub fn slot_event(i: usize) -> HotEvent {
         2 => HotEvent::Record,
         3 => HotEvent::CaptureFull,
         4 => HotEvent::CaptureWindow,
-        _ => HotEvent::RepeatLast,
+        5 => HotEvent::RepeatLast,
+        i => rec_event(i - REC_SLOT_BASE),
     }
 }
 
@@ -243,7 +353,7 @@ fn held(tried: &[String; SLOTS], ok: Registered) -> [String; SLOTS] {
 /// What a registration thread that did not answer means: every slot with
 /// a chord is unknown.
 #[cfg_attr(target_os = "macos", allow(dead_code))] // macOS: hotkeys apply after a restart
-fn unanswered(specs: &[String; SLOTS]) -> Registered {
+fn unanswered<const N: usize>(specs: &[String; N]) -> [Result<(), Cause>; N] {
     std::array::from_fn(|i| if specs[i].trim().is_empty() { Ok(()) } else { Err(Cause::Unknown) })
 }
 
@@ -280,6 +390,40 @@ impl Hotkeys {
             specs: now,
             #[cfg(not(target_os = "macos"))]
             told: Vec::new(),
+            #[cfg(not(target_os = "macos"))]
+            rec: RecKeys::default(),
+        }
+    }
+
+    /// A recording started (`on`) or ended: register the while-recording
+    /// chords of `cfg` (pause, mute, hide pill) or release them. Also
+    /// after a config reload while recording (changed chords register
+    /// again). Returns the failures not told to the user yet in this run.
+    /// macOS: not supported yet (its hotkeys register once, at start).
+    pub fn set_recording(&mut self, cfg: &Config, on: bool) -> Vec<Failure> {
+        #[cfg(not(target_os = "macos"))]
+        {
+            if !on {
+                self.rec.end(imp::Worker::stop);
+                return Vec::new();
+            }
+            let tx = self.tx.clone();
+            let failures = self.rec.begin(
+                &rec_wanted(cfg),
+                |want| {
+                    let (done, result) = mpsc::channel();
+                    let w = imp::Worker::start(rec_specs_for(want), tx, done);
+                    let ok = result.recv_timeout(RESULT_WAIT).unwrap_or_else(|_| unanswered(want));
+                    (w, ok)
+                },
+                imp::Worker::stop,
+            );
+            untold(&mut self.told, &failures)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let _ = (cfg, on);
+            Vec::new()
         }
     }
 
@@ -703,6 +847,80 @@ mod tests {
         let (now, f) = plan_reload(&s2("", ""), &w, registrar(&["Shift+Meta+W"], &mut calls));
         assert_eq!(now[4], "");
         assert_eq!((f.len(), f[0].slot, f[0].cause), (1, 4, Cause::InUse));
+    }
+
+    /// The while-recording chords come from the keymap (`[shortcuts]`),
+    /// with ids after the config's slots and their own events.
+    #[test]
+    fn rec_chords_are_the_keymap_rows() {
+        let cfg = Config::default();
+        assert_eq!(rec_wanted(&cfg), ["Shift+Meta+P", "Shift+Meta+M", "Shift+Meta+H"]);
+        let mut cfg = Config::default();
+        cfg.shortcuts.insert("rec_pause".into(), "Ctrl+Alt+P".into());
+        cfg.shortcuts.insert("rec_mute".into(), "".into());
+        assert_eq!(rec_wanted(&cfg), ["Ctrl+Alt+P", "", "Shift+Meta+H"]);
+        let specs = rec_specs_for(&rec_wanted(&cfg));
+        assert_eq!(specs.clone().map(|s| s.0), [7, 8, 9]);
+        assert!(matches!(specs[0].2, HotEvent::RecPause));
+        assert!(matches!(specs[1].2, HotEvent::RecMute));
+        assert!(matches!(specs[2].2, HotEvent::RecPill));
+        for s in specs {
+            assert!(s.1.is_empty() || parse_hotkey(&s.1).is_some(), "{s:?}");
+        }
+    }
+
+    /// A fake registration: which chords it holds, shared with the test.
+    struct FakeReg(std::rc::Rc<std::cell::RefCell<Vec<String>>>);
+
+    /// Registered only while recording: begin registers (once, even when
+    /// asked again), end unregisters, a changed chord while recording
+    /// registers again, and a refused chord is a failure with its slot.
+    #[test]
+    fn rec_chords_live_only_while_recording() {
+        let live = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut rk: RecKeys<FakeReg> = RecKeys::default();
+        let starts = std::cell::Cell::new(0);
+        let start = |want: &[String; REC_SLOTS], taken: &[&str]| {
+            starts.set(starts.get() + 1);
+            *live.borrow_mut() = want.iter().filter(|s| !s.is_empty() && !taken.contains(&s.as_str())).cloned().collect();
+            let ok = std::array::from_fn(|i| if taken.contains(&want[i].as_str()) { Err(Cause::InUse) } else { Ok(()) });
+            (FakeReg(live.clone()), ok)
+        };
+        let stop = |w: FakeReg| w.0.borrow_mut().clear();
+        // Before any recording: nothing held; ending is a no-op.
+        assert!(!rk.active());
+        rk.end(stop);
+        let want = rec_wanted(&Config::default());
+        let f = rk.begin(&want, |w| start(w, &[]), stop);
+        assert!(f.is_empty() && rk.active());
+        assert_eq!(live.borrow().len(), 3);
+        // Asked again (a reload with the same chords): no new registration.
+        let f = rk.begin(&want, |w| start(w, &[]), stop);
+        assert!(f.is_empty());
+        assert_eq!(starts.get(), 1);
+        // The recording ends: all released.
+        rk.end(stop);
+        assert!(!rk.active() && live.borrow().is_empty());
+        rk.end(stop);
+        // One chord is taken by another app: a failure for its slot, the others work.
+        let f = rk.begin(&want, |w| start(w, &["Shift+Meta+M"]), stop);
+        assert_eq!(f, [Failure { slot: REC_SLOT_BASE + 1, wanted: "Shift+Meta+M".into(), cause: Cause::InUse, kept: None }]);
+        assert_eq!(f[0].message(), format!("Couldn't register {} — it's in use by another app.", chord_label("Shift+Meta+M")));
+        assert_eq!(*live.borrow(), ["Shift+Meta+P", "Shift+Meta+H"]);
+        // New chords while recording: the old ones go, the new ones come.
+        let mut want2 = want.clone();
+        want2[0] = "Ctrl+Alt+P".into();
+        let f = rk.begin(&want2, |w| start(w, &[]), stop);
+        assert!(f.is_empty());
+        assert_eq!(rk.held(), Some(&want2));
+        assert!(live.borrow().contains(&"Ctrl+Alt+P".to_string()));
+        // All unbound: nothing registered at all.
+        rk.end(stop);
+        let none: [String; REC_SLOTS] = Default::default();
+        let before = starts.get();
+        assert!(rk.begin(&none, |w| start(w, &[]), stop).is_empty());
+        assert!(!rk.active());
+        assert_eq!(starts.get(), before);
     }
 
     #[test]

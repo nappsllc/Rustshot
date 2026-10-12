@@ -1800,6 +1800,40 @@ fn tray_stop_recording() {
     assert_eq!(a.rec.as_ref().unwrap().log.len(), 1);
 }
 
+/// The tray's recording items and the while-recording chords do what the
+/// pill's buttons do; the menu state follows. With nothing recording
+/// they do nothing.
+#[test]
+fn tray_items_drive_the_recording() {
+    let mut a = app(None);
+    a.st = State::Hidden;
+    for ev in [HotEvent::RecPause, HotEvent::RecMute, HotEvent::RecPill, HotEvent::RecCamera, HotEvent::RecDiscard] {
+        assert!(a.on_hot(ev));
+    }
+    assert!(a.rec.is_none() && a.pending.is_none());
+    a.rec = Some(rec_ui::Run::fake(false, true, Instant::now()));
+    let st = |a: &App| a.rec.as_ref().unwrap().menu_state();
+    assert_eq!(st(&a), crate::tray::RecMenu { paused: false, mic: Some(false), cam: None, pill_hidden: false });
+    a.on_hot(HotEvent::RecPause);
+    assert!(st(&a).paused);
+    assert_eq!(a.rec.as_ref().unwrap().phase(), rec_ui::Phase::Paused);
+    a.on_hot(HotEvent::RecPause);
+    assert!(!st(&a).paused);
+    a.on_hot(HotEvent::RecMute);
+    assert_eq!(st(&a).mic, Some(true));
+    assert!(a.rec.as_ref().unwrap().muted());
+    a.on_hot(HotEvent::RecPill);
+    assert!(st(&a).pill_hidden);
+    assert!(a.rec.as_ref().unwrap().view(Instant::now()).hidden, "the pill's window goes");
+    a.on_hot(HotEvent::RecPill);
+    assert!(!st(&a).pill_hidden);
+    a.on_hot(HotEvent::RecCamera);
+    assert_eq!(st(&a).cam, None, "no bubble: nothing to hide");
+    a.on_hot(HotEvent::RecDiscard);
+    assert_eq!(a.rec.as_ref().unwrap().phase(), rec_ui::Phase::Stopping);
+    assert_eq!(a.rec.as_ref().unwrap().log, [rec_ui::Effect::Go, rec_ui::Effect::Pause, rec_ui::Effect::Resume, rec_ui::Effect::Stop]);
+}
+
 /// The record hotkey while the overlay is open, or an update installing,
 /// starts nothing; keyboard Record opens the popover only with a selection.
 #[test]

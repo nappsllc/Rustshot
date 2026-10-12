@@ -46,10 +46,16 @@ pub enum Action {
     UiBigger,
     UiSmaller,
     UiReset,
+    /// While a recording runs (global chords, registered only then; not
+    /// overlay keys): pause/resume, mute the microphone, hide/show the
+    /// control pill.
+    RecPause,
+    RecMute,
+    RecHidePill,
 }
 
 impl Action {
-    pub const ALL: [Action; 27] = [
+    pub const ALL: [Action; 30] = [
         Action::ToolPencil,
         Action::ToolLine,
         Action::ToolArrow,
@@ -77,7 +83,15 @@ impl Action {
         Action::UiBigger,
         Action::UiSmaller,
         Action::UiReset,
+        Action::RecPause,
+        Action::RecMute,
+        Action::RecHidePill,
     ];
+
+    /// A while-recording chord: global (Meta allowed), not an overlay key.
+    pub fn while_recording(self) -> bool {
+        matches!(self, Action::RecPause | Action::RecMute | Action::RecHidePill)
+    }
 
     /// Config key in the `[shortcuts]` table.
     pub fn id(self) -> &'static str {
@@ -124,6 +138,9 @@ impl Action {
             Action::UiBigger => ("ui_bigger", "Bigger UI", &["Ctrl+=", "Ctrl+Shift+=", "Ctrl+NumpadAdd"]),
             Action::UiSmaller => ("ui_smaller", "Smaller UI", &["Ctrl+-", "Ctrl+NumpadSubtract"]),
             Action::UiReset => ("ui_reset", "UI size: Auto", &["Ctrl+0", "Ctrl+Numpad0"]),
+            Action::RecPause => ("rec_pause", "Pause / resume", &["Shift+Meta+P"]),
+            Action::RecMute => ("rec_mute", "Mute microphone", &["Shift+Meta+M"]),
+            Action::RecHidePill => ("rec_hide_pill", "Hide / show controls", &["Shift+Meta+H"]),
         }
     }
 
@@ -232,7 +249,7 @@ impl Keymap {
                     continue; // keep the default
                 }
             }
-            if good.iter().any(|c| c.meta) {
+            if !a.while_recording() && good.iter().any(|c| c.meta) {
                 warn.push(format!("[shortcuts] {k}: Meta chords do not reach the editor"));
             }
             km.chords[a.index()] = good;
@@ -240,19 +257,29 @@ impl Keymap {
         (km, warn)
     }
 
-    /// The action bound to `vk` with exactly these modifiers.
+    /// The overlay action bound to `vk` with exactly these modifiers
+    /// (never a while-recording chord).
     pub fn resolve(&self, vk: u32, mods: Mods) -> Option<Action> {
-        Action::ALL.into_iter().find(|a| self.chords(*a).iter().any(|c| c.matches(vk, mods)))
+        Action::ALL.into_iter().filter(|a| !a.while_recording()).find(|a| self.chords(*a).iter().any(|c| c.matches(vk, mods)))
     }
 
     pub fn chords(&self, a: Action) -> &[Chord] {
         &self.chords[a.index()]
     }
 
-    /// Chords bound to more than one action (actions in table order).
+    /// Chords bound to more than one action (actions in table order). The
+    /// overlay keys and the while-recording chords are apart (the overlay
+    /// is never open during a recording): each group is checked within
+    /// itself.
     pub fn conflicts(&self) -> Vec<(Chord, Vec<Action>)> {
+        let mut out = self.conflicts_in(false);
+        out.extend(self.conflicts_in(true));
+        out
+    }
+
+    fn conflicts_in(&self, rec: bool) -> Vec<(Chord, Vec<Action>)> {
         let mut by: BTreeMap<Chord, Vec<Action>> = BTreeMap::new();
-        for a in Action::ALL {
+        for a in Action::ALL.into_iter().filter(|a| a.while_recording() == rec) {
             for c in self.chords(a) {
                 let v = by.entry(*c).or_default();
                 if !v.contains(&a) {
@@ -299,7 +326,7 @@ mod tests {
     #[test]
     fn defaults_match_spec_table() {
         let km = Keymap::defaults();
-        let want: [(Action, &[&str]); 27] = [
+        let want: [(Action, &[&str]); 30] = [
             (Action::ToolPencil, &["P"]),
             (Action::ToolLine, &["L"]),
             (Action::ToolArrow, &["A"]),
@@ -327,6 +354,9 @@ mod tests {
             (Action::UiBigger, &["Ctrl+=", "Ctrl+Shift+=", "Ctrl+NumpadAdd"]),
             (Action::UiSmaller, &["Ctrl+-", "Ctrl+NumpadSubtract"]),
             (Action::UiReset, &["Ctrl+0", "Ctrl+Numpad0"]),
+            (Action::RecPause, &["Shift+Meta+P"]),
+            (Action::RecMute, &["Shift+Meta+M"]),
+            (Action::RecHidePill, &["Shift+Meta+H"]),
         ];
         for (a, keys) in want {
             assert_eq!(shown(&km, a), keys, "{a:?}");
@@ -463,5 +493,25 @@ mod tests {
         // Meta chords never fire (no meta state in `Mods`).
         let (km, _) = Keymap::from_config(&cfg(&[("copy", "Meta+C")]));
         assert_eq!(km.resolve('C' as u32, m(true, false, false)), None);
+    }
+
+    /// The while-recording chords are remappable like the overlay keys,
+    /// Meta is fine for them (no warning), they never resolve in the
+    /// overlay, and they clash only with each other.
+    #[test]
+    fn while_recording_chords() {
+        let (km, w) = Keymap::from_config(&cfg(&[("rec_pause", "Ctrl+Alt+P"), ("rec_mute", "Meta+Shift+K"), ("rec_hide_pill", "")]));
+        assert!(w.is_empty(), "{w:?}");
+        assert_eq!(shown(&km, Action::RecPause), ["Ctrl+Alt+P"]);
+        assert_eq!(shown(&km, Action::RecMute), ["Shift+Meta+K"]);
+        assert!(km.chords(Action::RecHidePill).is_empty());
+        assert_eq!(km.resolve('P' as u32, m(true, false, true)), None, "not an overlay key");
+        assert!(Action::RecPause.while_recording() && !Action::Record.while_recording());
+        // The same chord as an overlay key is no clash; two recording ones are.
+        let (km, _) = Keymap::from_config(&cfg(&[("rec_pause", "P")]));
+        assert!(km.conflicts().is_empty());
+        let (km, _) = Keymap::from_config(&cfg(&[("rec_pause", "Shift+Meta+M")]));
+        assert_eq!(km.conflicts(), [(Chord::parse("Shift+Meta+M").unwrap(), vec![Action::RecPause, Action::RecMute])]);
+        assert_eq!(Keymap::from_config(&km.to_config()).0, km);
     }
 }

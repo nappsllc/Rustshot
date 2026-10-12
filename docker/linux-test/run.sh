@@ -173,7 +173,7 @@ unit_tests() {
 # The ignored tests CI does not run on Linux (minus benches, previews,
 # network, folder pickers and cameras): informational.
 extra_tests() {
-    local ran='^(live_monitor_capture|live_desktop_capture|live_window_lifecycle|interactive_window_renders_rect|.*window_smoke|live_rec_linux_.*|live_oh264_.*)'
+    local ran='^(live_monitor_capture|live_desktop_capture|live_window_lifecycle|interactive_window_renders_rect|.*window_smoke|live_rec_linux_.*|live_oh264_.*|live_sni_.*)'
     local skip='(wayland|bench|perf_|render_|preview|write_glyph|interactive_pick_folder|live_download|live_imgur|live_portable_update|holder_child|probe_recording_file|leak|live_cam_)'
     local extra
     extra="$(sed 's/.*:://' "$LOGS/ignored-tests.txt" | grep -v -E "$ran" | grep -v -E "$skip" | sort -u | tr '\n' ' ')"
@@ -218,6 +218,78 @@ bar_stop_xy() {
         | awk '$1 > 60 && $1 < 600 && $2 > 30 && $2 < 160 { print $3 + $1 - 22 - 6 - 16, $4 + int($2 / 2); exit }'
 }
 
+# ------------------------------------------------------------ the tray ---
+# A StatusNotifierWatcher (sni_watcher.py: what a desktop's tray runs) for
+# the daemon's tray icon to register with.
+SNI_LOG=
+WATCHER_PID=
+start_watcher() { # start_watcher LOGNAME
+    SNI_LOG="$OUT/sni-registered.txt"
+    touch "$SNI_LOG"
+    bg "$1" python3 "$HERE/sni_watcher.py" "$SNI_LOG"
+    WATCHER_PID="${PIDS[-1]}"
+    if wait_for 10 sh -c 'gdbus call --session -d org.freedesktop.DBus -o /org/freedesktop/DBus -m org.freedesktop.DBus.NameHasOwner org.kde.StatusNotifierWatcher | grep -q true'; then
+        result "$1" pass "org.kde.StatusNotifierWatcher up"
+    else
+        result "$1" fail "no watcher on the bus; see logs/$1.log"
+    fi
+}
+sni_layout() { gdbus call --session -d "$1" -o /MenuBar -m com.canonical.dbusmenu.GetLayout -- 0 -1 '[]' 2>&1; }
+sni_has() { sni_layout "$1" | grep -qF "'$2'"; } # sni_has SERVICE LABEL
+sni_tip() { gdbus call --session -d "$1" -o /StatusNotifierItem -m org.freedesktop.DBus.Properties.Get org.kde.StatusNotifierItem ToolTip 2>&1; }
+sni_labels() { grep -o "'label': <'[^']*'>" | sed "s/'label': <'\(.*\)'>/\1/" | paste -sd, -; }
+
+# The daemon's icon: registered with the watcher, its menu (GetLayout) the
+# shared model, the tooltip; then the watcher restarts (the panel came
+# back) and the icon registers again.
+sni_steps_idle() {
+    local svc="$1" lay miss="" want n
+    if wait_for 10 grep -q "^$svc " "$SNI_LOG"; then
+        result sni-register pass "$svc"
+    else
+        result sni-register fail "$svc did not register; see logs/sni-watcher.log, logs/daemon.log"
+        return
+    fi
+    lay="$(sni_layout "$svc")"
+    echo "$lay" > "$LOGS/sni-layout-idle.txt"
+    for want in "Capture" "Settings" "Check for updates" "Quit Rustshot"; do
+        grep -qF "'$want" <<<"$lay" || miss="$miss $want"
+    done
+    if [ -z "$miss" ]; then result sni-menu pass "GetLayout: $(sni_labels <<<"$lay")"
+    else result sni-menu fail "missing:$miss; see logs/sni-layout-idle.txt"; fi
+    if sni_tip "$svc" | grep -q "'Rustshot'"; then result sni-tooltip pass "Rustshot"
+    else result sni-tooltip fail "$(sni_tip "$svc" | cut -c1-160)"; fi
+    n="$(grep -c "^$svc " "$SNI_LOG")"
+    kill "$WATCHER_PID" 2>/dev/null; wait "$WATCHER_PID" 2>/dev/null
+    start_watcher sni-watcher-2
+    if wait_for 10 sh -c "[ \$(grep -c '^$svc ' '$SNI_LOG') -gt $n ]"; then
+        result sni-reregister pass "registered again with the new watcher"
+    else
+        result sni-reregister fail "not registered with the restarted watcher"
+    fi
+}
+
+# While recording: the recording's items, the tooltip's time, a menu click
+# (Event) that pauses, and the while-recording chord that resumes.
+sni_steps_recording() {
+    local svc="$1" lay miss="" want
+    lay="$(sni_layout "$svc")"
+    echo "$lay" > "$LOGS/sni-layout-recording.txt"
+    for want in "Stop recording" "Pause recording" "Hide recording controls" "Discard recording"; do
+        grep -qF "'$want'" <<<"$lay" || miss="$miss $want"
+    done
+    if [ -z "$miss" ]; then result sni-menu-recording pass "$(sni_labels <<<"$lay")"
+    else result sni-menu-recording fail "missing:$miss; see logs/sni-layout-recording.txt"; fi
+    if sni_tip "$svc" | grep -q "recording"; then result sni-tooltip-recording pass "$(sni_tip "$svc" | grep -o "Rustshot[^']*")"
+    else result sni-tooltip-recording fail "$(sni_tip "$svc" | cut -c1-160)"; fi
+    gdbus call --session -d "$svc" -o /MenuBar -m com.canonical.dbusmenu.Event -- 2 clicked '<0>' 0 >>"$LOGS/sni-event.log" 2>&1
+    if wait_for 3 sni_has "$svc" "Resume recording"; then result sni-event-pause pass "Event(2, clicked): paused"
+    else result sni-event-pause fail "the menu does not say Resume after Event; see logs/sni-event.log"; fi
+    xdotool key ctrl+alt+shift+i
+    if wait_for 3 sni_has "$svc" "Pause recording"; then result rec-chord-pause pass "Ctrl+Alt+Shift+I (while recording): resumed"
+    else result rec-chord-pause fail "the while-recording chord did not resume"; fi
+}
+
 x11_daemon() {
     local cfgdir; cfgdir="$(mktemp -d)"
     local save="$OUT/saved"
@@ -239,6 +311,7 @@ rec_linux_encoder = "ffmpeg"
 
 [shortcuts]
 record = "Ctrl+R"
+rec_pause = "Ctrl+Alt+Shift+I"
 EOF
     cp "$cfgdir/rustshot/config.toml" "$OUT/daemon-config.toml"
     export XDG_CONFIG_HOME="$cfgdir" RUSTSHOT_INSTANCE="docker-$MODE-$$" RUSTSHOT_FFMPEG_LOG=1
@@ -252,6 +325,8 @@ EOF
     sleep 2
     kill -0 "$dpid" 2>/dev/null && result daemon-start pass "pid $dpid" || { result daemon-start fail "exited; see logs/daemon.log"; return; }
     shot_x 01-desktop
+    local svc="org.kde.StatusNotifierItem-$dpid-1"
+    sni_steps_idle "$svc"
 
     # Settings window, opened in the running daemon.
     "$BIN" settings >"$LOGS/settings-cmd.log" 2>&1 &
@@ -346,6 +421,7 @@ EOF
     for i in 1 2 1 2; do set_bg "$i"; sleep 0.4; done
     shot_x 08-recording-border-and-bar
     xwininfo -root -tree > "$LOGS/xwininfo-recording.txt" 2>&1
+    sni_steps_recording "$svc"
     sleep 1
     if [ "$route" = hotkey ]; then
         xdotool key ctrl+alt+shift+u
@@ -511,6 +587,7 @@ mode_x11() {
     wait_for 15 xdpyinfo || { result xvfb fail; exit 1; }
     xdpyinfo > "$LOGS/xdpyinfo.txt"
     result xvfb pass "$(grep dimensions "$LOGS/xdpyinfo.txt" | xargs)"
+    start_watcher sni-watcher
     build
     # RS_ONLY=daemon skips the cargo tests (iterating on the daemon part).
     if [ "${RS_ONLY:-}" != daemon ]; then
@@ -519,6 +596,7 @@ mode_x11() {
         cargo_tests live-x11-capture-windows live_monitor_capture live_desktop_capture \
             live_window_lifecycle interactive_window_renders_rect window_smoke
         cargo_tests live-rec-linux live_rec_linux_
+        cargo_tests live-sni live_sni_
         XDG_DATA_HOME="$(mktemp -d)" cargo_tests live-oh264 live_oh264_
         extra_tests
         # The camera tests (SKIP: without a /dev/video* or the camera portal) and

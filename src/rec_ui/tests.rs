@@ -362,12 +362,12 @@ fn render_recording_previews() {
         for s in [1.0f32, 2.0] {
             let ui = Ui { th, s, font: Some(crate::fonts::ui_font()) };
             let views = [
-                ("recording", bar::BarView { elapsed: secs(83.0), paused: false, mic: Some(false), cam: None, system: None, stopping: false, compact: false, asking: false }, Some(bar::BarAct::Stop)),
-                ("paused", bar::BarView { elapsed: secs(754.0), paused: true, mic: Some(true), cam: Some(true), system: Some(true), stopping: false, compact: false, asking: false }, None),
-                ("nomic", bar::BarView { elapsed: secs(5.0), paused: false, mic: None, cam: None, system: None, stopping: false, compact: false, asking: false }, Some(bar::BarAct::Pause)),
-                ("stopping", bar::BarView { elapsed: secs(9.0), paused: false, mic: None, cam: None, system: None, stopping: true, compact: false, asking: false }, None),
-                ("compact", bar::BarView { elapsed: secs(42.0), paused: false, mic: Some(false), cam: None, system: None, stopping: false, compact: true, asking: false }, None),
-                ("asking", bar::BarView { elapsed: secs(0.0), paused: false, mic: None, cam: None, system: None, stopping: false, compact: false, asking: true }, None),
+                ("recording", bar::BarView { elapsed: secs(83.0), paused: false, mic: Some(false), cam: None, system: None, stopping: false, compact: false, asking: false, hidden: false }, Some(bar::BarAct::Stop)),
+                ("paused", bar::BarView { elapsed: secs(754.0), paused: true, mic: Some(true), cam: Some(true), system: Some(true), stopping: false, compact: false, asking: false, hidden: false }, None),
+                ("nomic", bar::BarView { elapsed: secs(5.0), paused: false, mic: None, cam: None, system: None, stopping: false, compact: false, asking: false, hidden: false }, Some(bar::BarAct::Pause)),
+                ("stopping", bar::BarView { elapsed: secs(9.0), paused: false, mic: None, cam: None, system: None, stopping: true, compact: false, asking: false, hidden: false }, None),
+                ("compact", bar::BarView { elapsed: secs(42.0), paused: false, mic: Some(false), cam: None, system: None, stopping: false, compact: true, asking: false, hidden: false }, None),
+                ("asking", bar::BarView { elapsed: secs(0.0), paused: false, mic: None, cam: None, system: None, stopping: false, compact: false, asking: true, hidden: false }, None),
             ];
             for (vn, v, hover) in views {
                 let l = bar::layout(&ui, &v);
@@ -383,7 +383,8 @@ fn render_recording_previews() {
         }
         // The tray while recording: the icon (enlarged) and the menu.
         let ui = Ui { th, s: 2.0, font: Some(crate::fonts::ui_font()) };
-        let items = crate::tray::menu(Some(false), true);
+        let rec = crate::tray::RecMenu { mic: Some(false), ..Default::default() };
+        let items = crate::tray::menu(Some(false), Some(rec));
         let (w, h) = (360usize, 80 + 56 * items.len());
         let px = render_layer(w, h, |f| {
             let fg = if th.dark { (255, 255, 255) } else { (27, 28, 32) };
@@ -512,7 +513,7 @@ fn macos_geometry_converts_to_points() {
 fn bar_pill_and_countdown_geometry_at_a_scale() {
     use crate::editor::style::Ui;
     let th = crate::theme::DARK;
-    let view = bar::BarView { elapsed: secs(65.0), paused: false, mic: Some(false), cam: None, system: None, stopping: false, compact: false, asking: false };
+    let view = bar::BarView { elapsed: secs(65.0), paused: false, mic: Some(false), cam: None, system: None, stopping: false, compact: false, asking: false, hidden: false };
     let pill = bar::BarView { compact: true, ..view.clone() };
     let at = |s: f32, v: &bar::BarView| bar::layout(&Ui { th: &th, s, font: None }, v);
     let (full1, pill1) = (at(1.0, &view), at(1.0, &pill));

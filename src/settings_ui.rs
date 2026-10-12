@@ -416,6 +416,22 @@ impl Form {
         Some(format!("Already used by {}. Choose another.", other.label()))
     }
 
+    /// The problem with while-recording chord `a`, if any: the same chord
+    /// as another of them, or as a global hotkey (the global keeps it), or a
+    /// bare key that every app would lose while recording.
+    pub fn rec_note(&self, a: Action) -> Option<String> {
+        if let Some(n) = self.conflict_note(a) {
+            return Some(n);
+        }
+        let c = *self.keys.chords(a).first()?;
+        if let Some((label, _)) = GLOBALS.iter().find(|(_, s)| self.global(*s) == Some(c)) {
+            return Some(format!("Already used by {label}. Choose another."));
+        }
+        let modded = c.ctrl || c.alt || c.shift || c.meta;
+        let special = (0x70..=0x7B).contains(&c.vk) || c.vk == wind::key::PRINTSCREEN;
+        (!(modded || special)).then(|| BARE_NOTE.to_string())
+    }
+
     /// The problem with global hotkey `slot`, if any: the same chord as
     /// another global (the one listed first keeps it in the message), or a
     /// bare key that every app would lose.

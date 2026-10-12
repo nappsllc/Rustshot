@@ -86,6 +86,11 @@ impl BarWin {
     /// Draw `v` (when it changed), placed by `geom` (points) the first time
     /// and again when its size changes.
     fn show(&mut self, geom: &Geom, th: &Theme, v: &BarView) {
+        if v.hidden {
+            self.layer.hide();
+            self.drawn = None; // drawn again when shown
+            return;
+        }
         let font = Some(crate::fonts::ui_font());
         let spot = super::spot_bar_with(
             geom,
