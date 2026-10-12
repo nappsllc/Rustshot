@@ -4,7 +4,7 @@
 ; In-app updates run it as "setup.exe /S /RELAUNCH" (see .onInit and
 ; .onInstSuccess); interactive installs are unaffected by that path.
 !ifndef PRODUCT_VERSION
-  !define PRODUCT_VERSION "0.1.2"
+  !define PRODUCT_VERSION "0.1.3"
 !endif
 !define PRODUCT_NAME "rustshot"
 !define PRODUCT_DISPLAY "Rustshot"
