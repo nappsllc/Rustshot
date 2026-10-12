@@ -226,7 +226,7 @@ fn row_step(o: &mut [u8], a: &mut [u16], add: &[u8], sub: &[u8], dv: Div) {
 
 /// Blur `block` (`w` x `h` pixels, `w * 4` bytes a row) in place: three
 /// row passes, then three column passes. A big block is shared by up to
-/// eight threads: rows in bands, then (after a barrier) columns in slabs;
+/// eight threads: rows in bands, then (once all rows are done) columns in slabs, a part whose thread cannot be started running on the calling one;
 /// rows and columns never read each other within a phase, so the result is
 /// exactly the one-thread one. `tmp` is scratch.
 pub fn blur_block(block: &mut [u8], w: usize, h: usize, sigma: f32, tmp: &mut Vec<u8>, acc: &mut Vec<u16>) {
@@ -246,13 +246,15 @@ pub fn blur_block(block: &mut [u8], w: usize, h: usize, sigma: f32, tmp: &mut Ve
     }
     assert!(block.len() >= len);
     let bufs = Bufs(block.as_mut_ptr(), tmp.as_mut_ptr());
-    let threads = if w * h >= 60_000 { std::thread::available_parallelism().map_or(1, |p| p.get()).min(8) } else { 1 };
+    static CPUS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    let cpus = *CPUS.get_or_init(|| std::thread::available_parallelism().map_or(1, |p| p.get()));
+    let threads = if w * h >= 60_000 { cpus.min(8) } else { 1 };
     // Column slabs on 16-byte bounds, at least 256 bytes wide; row bands
     // at least 4 rows.
     let k = threads.min(n / 256).min(h / 4).max(1);
     let edge = move |i: usize| if i == k { n } else { (n * i / k) & !15 };
     let ws = &ws;
-    let work = move |i: usize, barrier: Option<&std::sync::Barrier>, acc: &mut Vec<u16>| {
+    let rows = move |i: usize, _acc: &mut Vec<u16>| {
         let bufs = bufs;
         let (mut ra, mut rb) = (vec![[0u8; 4]; w], vec![[0u8; 4]; w]);
         for y in h * i / k..h * (i + 1) / k {
@@ -266,9 +268,9 @@ pub fn blur_block(block: &mut [u8], w: usize, h: usize, sigma: f32, tmp: &mut Ve
             }
             row.copy_from_slice(&ra);
         }
-        if let Some(b) = barrier {
-            b.wait();
-        }
+    };
+    let cols = move |i: usize, acc: &mut Vec<u16>| {
+        let bufs = bufs;
         let cols = (edge(i), edge(i + 1));
         let mut in_block = true;
         for &b in ws {
@@ -285,18 +287,26 @@ pub fn blur_block(block: &mut [u8], w: usize, h: usize, sigma: f32, tmp: &mut Ve
             }
         }
     };
-    if k == 1 {
-        work(0, None, acc);
-        return;
-    }
-    let barrier = std::sync::Barrier::new(k);
-    let barrier = &barrier;
-    std::thread::scope(|s| {
-        for i in 1..k {
-            s.spawn(move || work(i, Some(barrier), &mut Vec::new()));
+    // Rows, then columns: each phase's parts on threads (part 0 on this
+    // one); a part whose thread could not be made runs here too.
+    let phase = |f: &(dyn Fn(usize, &mut Vec<u16>) + Sync), acc: &mut Vec<u16>| {
+        if k == 1 {
+            return f(0, acc);
         }
-        work(0, Some(barrier), acc);
-    });
+        std::thread::scope(|s| {
+            let mut here = vec![0];
+            for i in 1..k {
+                if std::thread::Builder::new().spawn_scoped(s, move || f(i, &mut Vec::new())).is_err() {
+                    here.push(i);
+                }
+            }
+            for i in here {
+                f(i, acc);
+            }
+        });
+    };
+    phase(&rows, acc);
+    phase(&cols, acc);
 }
 
 /// Blur the pixels of `r` in the surface (the part of its pixel rect the
