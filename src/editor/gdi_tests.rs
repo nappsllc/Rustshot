@@ -829,6 +829,8 @@ fn perf_gdi_object_drag() {
             app.mouse = (x, y);
             app.pointer_move(x, y);
             let rects = app.damage().unwrap_or_else(|| vec![[0, 0, w as i32, h as i32]]);
+            // Through a GDI region, as WM_PAINT gets them.
+            let rects = crate::wind::paint_rects_for(&rects);
             let rects: Vec<PxRect> = rects.iter().map(|r| PxRect::new(r[0], r[1], r[2], r[3])).collect();
             edit_of(&mut app).paint_gdi(t.dc, &rects);
             let _ = t.pixels();
@@ -879,4 +881,73 @@ fn perf_gdi_object_drag() {
         times.push(t0.elapsed().as_secs_f64() * 1000.0);
     }
     println!("GDI BENCH 4K first spotlight add/undo: median {:.2} max {:.2} ms", pct(&mut times.clone(), 0.5), pct(&mut times, 1.0));
+}
+
+/// The magnifier at 3840x2160 (scale 1.5) through the GDI renderer: per
+/// pointer move, the driver's move handling + `damage()` + paint of the
+/// damaged rects, before a selection (hover) and while drawing the
+/// region, with the magnifier off (before) and on.
+/// `cargo test --release perf_gdi_magnifier -- --ignored --nocapture`
+#[test]
+#[ignore = "benchmark; run in release"]
+fn perf_gdi_magnifier() {
+    let (w, h) = (3840u32, 2160u32);
+    let pct = |v: &mut Vec<f64>, q: f64| {
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        v[((v.len() - 1) as f64 * q) as usize]
+    };
+    for (name, on, drag) in [("hover", false, false), ("hover", true, false), ("new sel", false, true), ("new sel", true, true)] {
+        let shot = Shot { scale: 1.5, ..tiled_shot(w, h) };
+        let mut app = preview_app_with(theme::DARK, None, shot);
+        edit_of(&mut app).cfg.magnifier = on;
+        edit_of(&mut app).assist.dismiss_hint(Instant::now());
+        settled(&mut app);
+        attach(&mut app);
+        let t = Target::new(w, h);
+        let _ = app.damage();
+        edit_of(&mut app).paint_gdi(t.dc, &[PxRect::image((w, h))]);
+        if drag {
+            app.mouse = (400, 300);
+            app.pointer_down(400, 300);
+        }
+        let (mut tt, mut area, mut nr) = (vec![], vec![], vec![]);
+        crate::perf::force_on();
+        let _ = crate::perf::take();
+        for k in 0..300 {
+            let (x, y) = (500 + (k % 150) * 7, 400 + (k % 150) * 4);
+            let t0 = Instant::now();
+            app.mouse = (x, y);
+            let p = Pt::new(x as f32, y as f32);
+            if drag {
+                app.pointer_move(x, y);
+            } else {
+                let e = edit_of(&mut app);
+                let _ = e.track_hover(p) | e.track_assist(p);
+            }
+            let rects = app.damage().unwrap_or_else(|| vec![[0, 0, w as i32, h as i32]]);
+            let rects: Vec<PxRect> = rects.iter().map(|r| PxRect::new(r[0], r[1], r[2], r[3])).collect();
+            edit_of(&mut app).paint_gdi(t.dc, &rects);
+            let _ = t.pixels();
+            tt.push((Instant::now() - t0).as_secs_f64() * 1000.0);
+            area.push(rects.iter().map(|r| r.w() as f64 * r.h() as f64).sum::<f64>());
+            nr.push(rects.len() as f64);
+        }
+        println!(
+            "GDI BENCH 4K {name}, magnifier {}: median {:.2} p90 {:.2} max {:.2} ms | rects {:.0} (max {:.0}) damage {:.0} px",
+            if on { "on" } else { "off" },
+            pct(&mut tt.clone(), 0.5),
+            pct(&mut tt.clone(), 0.9),
+            pct(&mut tt, 1.0),
+            pct(&mut nr.clone(), 0.5),
+            pct(&mut nr, 1.0),
+            pct(&mut area, 0.5)
+        );
+        let per: Vec<String> = crate::perf::NAMES
+            .iter()
+            .zip(crate::perf::take())
+            .filter(|(_, (ms, _))| *ms > 0.0)
+            .map(|(k, (ms, c))| format!("{k} {:.3} ms ({:.1})", ms / 300.0, c as f64 / 300.0))
+            .collect();
+        println!("  per move: {}", per.join(", "));
+    }
 }

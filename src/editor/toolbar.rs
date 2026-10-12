@@ -712,6 +712,34 @@ pub(super) fn place_picker(pv: &PickView, bar: FRect, above: bool, items: &mut V
     FRect { x: px, y: py, w: pw, h: ph }
 }
 
+/// The color picker alone below `at` (opened from the color ring with
+/// nothing selected): no bar of its own (`docked`: no surface drawn).
+pub fn layout_picker(pv: &PickView, at: Pt, area: FRect, s: f32) -> Toolbar {
+    let bar = FRect { x: at.x, y: at.y, w: 0.0, h: 0.0 };
+    let inp = Input {
+        sel: bar,
+        area,
+        s,
+        busy: false,
+        can_undo: false,
+        can_redo: false,
+        palette: None,
+        record: false,
+        rec: None,
+        grip: None,
+        top: false,
+        sizes: false,
+        colors: true,
+        fills: false,
+        pick: Some(pv),
+        save_menu: None,
+        slot_menu: None,
+    };
+    let mut items = Vec::new();
+    let pop = place_picker(pv, bar, false, &mut items, &inp);
+    Toolbar { bar, pop: Some(pop), items, wrapped: false, above: false, texts: Vec::new(), extra: Vec::new(), mode: None, video: false, docked: true }
+}
+
 impl Toolbar {
     /// Index of the item under `p` (popover dots win over the bar).
     pub fn index_at(&self, p: Pt) -> Option<usize> {

@@ -459,6 +459,31 @@ fn reset_of_a_fixed_file_writes_nothing() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The overlay helpers' settings reach the file: Apply writes them, a
+/// fresh read gets them back, and a later save asks no rewrite question.
+#[test]
+fn overlay_helper_settings_are_saved() {
+    let dir = scratch("overlay-helpers");
+    let p = dir.join("config.toml");
+    config::save_at(&p, &Config::default()).unwrap();
+    let mut s = settings_at(&p);
+    s.form.magnifier = false;
+    s.form.magnifier_square = true;
+    s.form.accept = 1;
+    s.form.hints = false;
+    assert!(matches!(&s.on(Click::Apply)[..], [Act::Saved(_)]));
+    let text = std::fs::read_to_string(&p).unwrap();
+    let back = config::parse_config(&text).unwrap();
+    assert!(!back.magnifier && back.magnifier_square && back.accept_on_select == "copy" && !back.overlay_hints, "{text}");
+    assert!(!config::rewrite_loses(&text), "nothing the writer drops");
+    assert!(text.contains("accept_on_select = \"copy\""));
+    let mut s = settings_at(&p);
+    assert_eq!((s.form.magnifier, s.form.magnifier_square, s.form.accept, s.form.hints), (false, true, 1, false));
+    s.form.accept = 2;
+    assert!(matches!(&s.on(Click::Apply)[..], [Act::Saved(c)] if c.accept_on_select == "save"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The file breaks while the window is open: Save refuses to write
 /// (never merges onto the defaults) and shows the error; the edits stay
 /// and save once the file is fixed.
@@ -756,6 +781,15 @@ fn click(s: &mut Settings, focus: &mut FocusState, id: &str, k: f32) -> Option<C
     render(s, &DARK, k, &input, focus).1
 }
 
+/// Scroll the section so control `id` sits near the top of the viewport.
+fn reveal(s: &mut Settings, focus: &mut FocusState, id: &str) {
+    render(s, &DARK, 1.0, &Input::default(), focus);
+    let r = focus.rect_of(id).unwrap_or_else(|| panic!("{id} drawn"));
+    let sec = s.section;
+    s.scroll[sec] = (s.scroll[sec] + r.y - viewport().y - 40.0).max(0.0);
+    render(s, &DARK, 1.0, &Input::default(), focus);
+}
+
 fn press(vk: u32, mods: wind::Mods) -> Input {
     let mut input = Input::default();
     input.feed(&Ev::Key { vk, up: false, repeat: false, mods });
@@ -1012,8 +1046,34 @@ fn capture_controls_click() {
     assert_eq!(click(&mut s, &mut focus, "reset_tools", 1.0), None, "outside the viewport");
     s.scroll[CAPTURE] = 1e6;
     assert_eq!(click(&mut s, &mut focus, "reset_tools", 1.0), Some(Click::ResetTools));
+    reveal(&mut s, &mut focus, "snap_windows");
     click(&mut s, &mut focus, "snap_windows", 1.0);
     assert!(!s.form.snap);
+    // The magnifier (round unless Square), Accept on select.
+    assert!(s.form.magnifier && !s.form.magnifier_square && s.form.accept == 0);
+    reveal(&mut s, &mut focus, "magnifier_square");
+    click(&mut s, &mut focus, "magnifier_square", 1.0);
+    assert!(s.form.magnifier_square);
+    click(&mut s, &mut focus, "magnifier", 1.0);
+    assert!(!s.form.magnifier);
+    reveal(&mut s, &mut focus, "accept_on_select");
+    let r = focus.rect_of("accept_on_select").unwrap();
+    let (x, y) = ((r.x1() - 12.0) as i32, (r.y + r.h / 2.0) as i32);
+    let mut input = Input::default();
+    for e in [Ev::Move { x, y }, Ev::Down { x, y }, Ev::Up { x, y }] {
+        input.feed(&e);
+    }
+    render(&mut s, &DARK, 1.0, &input, &mut focus);
+    assert_eq!(s.form.accept, 2, "Save");
+    let c = s.form.apply(&s.loaded, &s.loaded);
+    assert!(!c.magnifier && c.magnifier_square && c.accept_on_select == "save");
+    // General: the hint card.
+    let mut g = sample();
+    let mut gfocus = FocusState::default();
+    assert!(g.form.hints);
+    reveal(&mut g, &mut gfocus, "overlay_hints");
+    click(&mut g, &mut gfocus, "overlay_hints", 1.0);
+    assert!(!g.form.hints && !g.form.apply(&g.loaded, &g.loaded).overlay_hints);
     // The Win+Shift+S switch lives here (sample() offers it), not in General.
     assert_eq!(s.form.screenclip, Some(true));
     click(&mut s, &mut focus, "screenclip", 1.0);

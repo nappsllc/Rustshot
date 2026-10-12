@@ -130,37 +130,98 @@ pub fn invalidate_rects(hwnd: HWND, rects: &[[i32; 4]]) {
     }
 }
 
-/// The update region as rects (before `BeginPaint` validates it); its
-/// bounding box when it has many pieces.
+/// The update region as rects (before `BeginPaint` validates it). A
+/// region of many pieces (a drag's bands: the crosshair's full-height
+/// line crosses every one) is coalesced into a few rects covering it,
+/// never its bounding box (that would repaint the whole overlay).
 unsafe fn update_rects(hwnd: HWND) -> Vec<[i32; 4]> {
     unsafe {
         let rgn = CreateRectRgn(0, 0, 0, 0);
-        let mut out = Vec::new();
         // 0 = ERROR, 1 = NULLREGION: nothing to read.
-        if GetUpdateRgn(hwnd, rgn, false).0 > 1 {
-            let n = GetRegionData(rgn, 0, None);
-            if n as usize >= std::mem::size_of::<RGNDATAHEADER>() {
-                // u64 storage keeps the RECTs after the header aligned.
-                let mut buf = vec![0u64; (n as usize).div_ceil(8)];
-                let data = buf.as_mut_ptr() as *mut RGNDATA;
-                if GetRegionData(rgn, n, Some(data)) != 0 {
-                    let hdr = &(*data).rdh;
-                    let rects = std::slice::from_raw_parts(
-                        (*data).Buffer.as_ptr() as *const RECT,
-                        hdr.nCount as usize,
-                    );
-                    if rects.len() > 32 {
-                        let b = hdr.rcBound;
-                        out.push([b.left, b.top, b.right, b.bottom]);
-                    } else {
-                        out.extend(rects.iter().map(|r| [r.left, r.top, r.right, r.bottom]));
-                    }
+        let out = if GetUpdateRgn(hwnd, rgn, false).0 > 1 { region_rects(rgn) } else { Vec::new() };
+        let _ = DeleteObject(rgn.into());
+        coalesce(out, MAX_PAINT_RECTS)
+    }
+}
+
+/// Tests and benches: `rects` invalidated as one region (as
+/// [`invalidate_rects`] does) and read back as a paint would get them.
+#[cfg(test)]
+pub fn paint_rects_for(rects: &[[i32; 4]]) -> Vec<[i32; 4]> {
+    if rects.is_empty() {
+        return Vec::new();
+    }
+    unsafe {
+        let all = CreateRectRgn(rects[0][0], rects[0][1], rects[0][2], rects[0][3]);
+        let one = CreateRectRgn(0, 0, 0, 0);
+        for r in &rects[1..] {
+            let _ = SetRectRgn(one, r[0], r[1], r[2], r[3]);
+            CombineRgn(Some(all), Some(all), Some(one), RGN_OR);
+        }
+        let out = region_rects(all);
+        let _ = DeleteObject(one.into());
+        let _ = DeleteObject(all.into());
+        coalesce(out, MAX_PAINT_RECTS)
+    }
+}
+
+/// The most rects a paint takes (more are coalesced).
+const MAX_PAINT_RECTS: usize = 32;
+
+/// The rects of region `rgn` (Windows' y-banded form).
+unsafe fn region_rects(rgn: windows::Win32::Graphics::Gdi::HRGN) -> Vec<[i32; 4]> {
+    unsafe {
+        let mut out = Vec::new();
+        let n = GetRegionData(rgn, 0, None);
+        if n as usize >= std::mem::size_of::<RGNDATAHEADER>() {
+            // u64 storage keeps the RECTs after the header aligned.
+            let mut buf = vec![0u64; (n as usize).div_ceil(8)];
+            let data = buf.as_mut_ptr() as *mut RGNDATA;
+            if GetRegionData(rgn, n, Some(data)) != 0 {
+                let hdr = &(*data).rdh;
+                let rects = std::slice::from_raw_parts((*data).Buffer.as_ptr() as *const RECT, hdr.nCount as usize);
+                out.extend(rects.iter().map(|r| [r.left, r.top, r.right, r.bottom]));
+            }
+        }
+        out
+    }
+}
+
+/// `rects` (disjoint, y-banded) as at most `max` rects covering them:
+/// first the bands of one column joined top to bottom (same left and
+/// right, touching), then the pair whose union adds the least area merged,
+/// until few enough are left.
+fn coalesce(rects: Vec<[i32; 4]>, max: usize) -> Vec<[i32; 4]> {
+    if rects.len() <= max {
+        return rects;
+    }
+    let mut v: Vec<[i32; 4]> = Vec::with_capacity(rects.len());
+    let mut sorted = rects;
+    sorted.sort_by_key(|r| (r[0], r[2], r[1]));
+    for r in sorted {
+        match v.last_mut() {
+            Some(l) if l[0] == r[0] && l[2] == r[2] && l[3] == r[1] => l[3] = r[3],
+            _ => v.push(r),
+        }
+    }
+    let area = |r: &[i32; 4]| (r[2] - r[0]) as i64 * (r[3] - r[1]) as i64;
+    let union = |a: &[i32; 4], b: &[i32; 4]| [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])];
+    while v.len() > max {
+        let mut best = (i64::MAX, 0, 1);
+        for i in 0..v.len() {
+            for j in i + 1..v.len() {
+                let cost = area(&union(&v[i], &v[j])) - area(&v[i]) - area(&v[j]);
+                if cost < best.0 {
+                    best = (cost, i, j);
                 }
             }
         }
-        let _ = DeleteObject(rgn.into());
-        out
+        let (_, i, j) = best;
+        let u = union(&v[i], &v[j]);
+        v.swap_remove(j);
+        v[i] = u;
     }
+    v
 }
 
 /// Re-arm the window timer (same id replaces the old interval).
@@ -210,6 +271,17 @@ unsafe extern "system" fn wndproc(
     }
 }
 
+/// A button went up: the mouse capture goes only once no button is held
+/// (a right click during a left drag keeps the drag's capture).
+unsafe fn release_capture(wp: WPARAM) {
+    // MK_LBUTTON | MK_RBUTTON | MK_MBUTTON: the buttons still down.
+    if wp.0 & (0x0001 | 0x0002 | 0x0010) == 0 {
+        unsafe {
+            let _ = ReleaseCapture();
+        }
+    }
+}
+
 /// Input, timer and paint messages shared by the overlay and `run_window`;
 /// `None` = not handled here.
 unsafe fn common(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM, drv: &mut dyn Driver) -> Option<LRESULT> {
@@ -235,7 +307,7 @@ unsafe fn common(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM, drv: &mut dyn Dri
                 LRESULT(0)
             }
             WM_LBUTTONUP => {
-                let _ = ReleaseCapture();
+                release_capture(wp);
                 drv.on_event(Ev::Up {
                     x: x_of(lp),
                     y: y_of(lp),
@@ -248,9 +320,20 @@ unsafe fn common(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM, drv: &mut dyn Dri
                 if down {
                     let _ = SetCapture(hwnd);
                 } else {
-                    let _ = ReleaseCapture();
+                    release_capture(wp);
                 }
                 drv.on_event(Ev::Middle { down, x: x_of(lp), y: y_of(lp) });
+                request(hwnd, drv);
+                LRESULT(0)
+            }
+            WM_RBUTTONDOWN | WM_RBUTTONUP => {
+                let down = msg == WM_RBUTTONDOWN;
+                if down {
+                    let _ = SetCapture(hwnd);
+                } else {
+                    release_capture(wp);
+                }
+                drv.on_event(Ev::Right { down, x: x_of(lp), y: y_of(lp) });
                 request(hwnd, drv);
                 LRESULT(0)
             }
@@ -837,6 +920,51 @@ unsafe fn window_loop(spec: &WindowSpec, drv: &mut dyn Driver) -> anyhow::Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A selection drag with the magnifier, through a real GDI region (the
+    /// banding `InvalidateRgn` makes): the paint gets at most 32 rects that
+    /// cover the damage, far smaller than the bounding box (the whole
+    /// 3840x2160 overlay, which the crosshair spans).
+    #[test]
+    fn many_region_pieces_coalesce_not_to_the_bounding_box() {
+        let (w, h) = (3840, 2160);
+        // Two frames of damage: the crosshair bands, the selection strips
+        // and handles, the label, the loupe and its caption.
+        let mut dmg: Vec<[i32; 4]> = vec![[0, 600, w, 606], [900, 0, 908, h], [0, 640, w, 646], [960, 0, 968, h]];
+        for (x, y) in [(400, 300), (900, 600), (960, 640)] {
+            dmg.push([400, 300, x + 4, 304]);
+            dmg.push([x - 2, 300, x + 2, y + 2]);
+            dmg.push([380, 280, 420, 320]);
+            dmg.push([x - 20, y - 20, x + 20, y + 20]);
+            dmg.push([x + 30, y + 30, x + 290, y + 360]);
+            dmg.push([400, 270, 560, 296]);
+        }
+        unsafe {
+            let all = CreateRectRgn(0, 0, 0, 0);
+            let one = CreateRectRgn(0, 0, 0, 0);
+            for r in &dmg {
+                let _ = SetRectRgn(one, r[0], r[1], r[2], r[3]);
+                CombineRgn(Some(all), Some(all), Some(one), RGN_OR);
+            }
+            let pieces = region_rects(all);
+            let _ = DeleteObject(one.into());
+            let _ = DeleteObject(all.into());
+            assert!(pieces.len() > MAX_PAINT_RECTS, "a banded region of {} pieces", pieces.len());
+            let got = coalesce(pieces.clone(), MAX_PAINT_RECTS);
+            assert!(got.len() <= MAX_PAINT_RECTS);
+            let area = |r: &[i32; 4]| (r[2] - r[0]) as i64 * (r[3] - r[1]) as i64;
+            let a: i64 = got.iter().map(area).sum();
+            let d: i64 = pieces.iter().map(area).sum();
+            assert!(a < (w as i64 * h as i64) / 8, "{a} px painted for {d} px of damage");
+            // Every piece is covered.
+            for p in &pieces {
+                assert!(got.iter().any(|g| g[0] <= p[0] && g[1] <= p[1] && p[2] <= g[2] && p[3] <= g[3]), "{p:?} not covered");
+            }
+        }
+        // Few pieces pass through as they are.
+        let few = vec![[0, 0, 4, 4], [10, 10, 20, 20]];
+        assert_eq!(coalesce(few.clone(), MAX_PAINT_RECTS), few);
+    }
     use windows::Win32::Graphics::Gdi::{
         CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GdiFlush,
         SelectObject,

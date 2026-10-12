@@ -33,6 +33,8 @@ mod draw;
 mod mini;
 mod select;
 mod input;
+mod assist;
+pub use assist::AcceptOn;
 // The editor in a normal window: the Edit window's canvas.
 pub mod host;
 
@@ -77,6 +79,9 @@ pub struct Pending {
     /// Snap to windows for this capture even when `snap_windows` is off
     /// (the capture-window hotkey).
     pub pick_window: bool,
+    /// Accept on select for this capture (`--accept-on-select`), over
+    /// the setting.
+    pub accept_new: Option<AcceptOn>,
 }
 
 impl Pending {
@@ -90,6 +95,7 @@ impl Pending {
             record: false,
             select_all: false,
             pick_window: false,
+            accept_new: None,
         }
     }
 
@@ -1094,6 +1100,7 @@ impl App {
         let region = pending.region.take();
         let tasks = std::mem::take(&mut pending.tasks);
         let accept_on_select = pending.accept_on_select;
+        let accept_new = pending.accept_new;
         if pending.pick_window {
             cfg.snap_windows = true;
         }
@@ -1138,6 +1145,9 @@ impl App {
         edit.sel = sel;
         edit.tasks = tasks;
         edit.accept_on_select = accept_on_select;
+        if accept_new.is_some() {
+            edit.assist.accept = accept_new;
+        }
         // Tests never write the user's config.
         edit.cfg_path = (!cfg!(test)).then(config::config_path);
         // The window in front before the overlay is: the history's source.
@@ -1150,7 +1160,24 @@ impl App {
             t.ttl = 6000.0;
             edit.notice = Some(t);
         }
+        // The pointer where it is (the magnifier shows there at once),
+        // and each monitor's scale (the magnifier's size on mixed DPI).
+        #[cfg(not(test))]
+        {
+            self.mouse = edit.shot.global_to_image(capture::cursor_pos());
+            let o = edit.shot.origin;
+            edit.assist.mon_scales = capture::monitors()
+                .unwrap_or_default()
+                .iter()
+                .map(|m| ((m.x - o.0, m.y - o.1, m.w, m.h), m.scale))
+                .collect();
+        }
         if accept_now {
+            if edit.tasks.is_empty()
+                && let Some(m) = edit.assist.accept
+            {
+                edit.tasks = m.tasks(&edit.cfg);
+            }
             edit.done = true;
             edit.cancelled = false;
         } else if edit.sel.is_none() {
@@ -1158,10 +1185,6 @@ impl App {
             // the one under the pointer.
             edit.snap = take_snap(&edit.cfg, &edit.shot);
             if edit.snap.is_some() {
-                #[cfg(not(test))]
-                {
-                    self.mouse = edit.shot.global_to_image(capture::cursor_pos());
-                }
                 let (x, y) = self.mouse;
                 edit.track_snap(Pt::new(x as f32, y as f32));
             }
@@ -1176,6 +1199,8 @@ impl App {
             edit.shot.size.1 as i32,
         );
         self.focus_tries = 0;
+        // The hint's 3 s count from now, the overlay on screen.
+        edit.assist.restart_hint(edit.cfg.overlay_hints, Instant::now());
         if edit.done {
             let cancelled = edit.cancelled;
             self.finish(&mut edit, cancelled);
@@ -1537,7 +1562,7 @@ impl Driver for App {
                     // nothing is selected (hint, toast placement).
                     let area_moved =
                         e.area_drawn.is_some_and(|a| a != pick_area(&e.shot.monitors, e.sel, p));
-                    if e.track_hover(p) | e.track_loupe(p) | e.track_snap(p) || area_moved {
+                    if e.track_hover(p) | e.track_loupe(p) | e.track_snap(p) | e.track_assist(p) || area_moved {
                         self.repaint();
                     }
                 }
@@ -1545,6 +1570,11 @@ impl Driver for App {
             Ev::Down { x, y } => {
                 self.mouse = (x, y);
                 self.pointer_down(x, y);
+            }
+            Ev::Right { down, x, y } => {
+                self.mouse = (x, y);
+                let p = Pt::new(x as f32, y as f32);
+                self.edit_tx(|_this, edit| if down { edit.right_down(p) } else { edit.right_up(p) });
             }
             Ev::Up { x, y } => {
                 self.mouse = (x, y);
@@ -1638,6 +1668,9 @@ impl Driver for App {
 
     fn cursor(&self) -> Cursor {
         let State::Edit(edit) = &self.st else { return Cursor::Arrow };
+        if edit.assist.ring.is_some() {
+            return Cursor::Arrow;
+        }
         if edit.pick.as_ref().is_some_and(|p| p.eyedrop) {
             return Cursor::Cross;
         }
@@ -1872,7 +1905,7 @@ fn act_of(a: Action) -> Option<Act> {
         Action::Redo => Act::Redo,
         Action::TogglePalette => Act::Palette,
         Action::Record => Act::Record,
-        Action::SelectAll | Action::Accept | Action::Cancel => return None,
+        Action::SelectAll | Action::Accept | Action::Cancel | Action::CopyColor => return None,
         Action::UiBigger | Action::UiSmaller | Action::UiReset => return None,
         Action::RecPause | Action::RecMute | Action::RecHidePill => return None,
         Action::ZoomIn | Action::ZoomOut | Action::ZoomFit | Action::ZoomActual => return None,
@@ -2477,10 +2510,13 @@ struct Edit {
     source: (String, String),
     /// Hosted in the Edit window ([`host::Canvas`]); `None`: the overlay.
     host: Option<host::Host>,
+    /// The magnifier, color ring, accept on select and hint card.
+    assist: assist::Assist,
 }
 
-/// More merged dirty rects than this invalidate the whole window.
-const MAX_DAMAGE_RECTS: usize = 16;
+/// More merged dirty rects than this invalidate the whole window (a
+/// selection drag with the magnifier and its crosshair takes up to 16).
+const MAX_DAMAGE_RECTS: usize = 24;
 
 const HANDLE_HIT: f32 = 10.0; // handle hit radius, logical px (20 px target)
 const CLICK_PX: f32 = 2.5; // movement below this counts as a click
@@ -2494,6 +2530,7 @@ impl Edit {
     #[allow(clippy::too_many_arguments)]
     fn new(shot: Shot, base: PixBuf, cfg: Config, th: Theme, font: Option<AnnotFont>, ui_font: Option<&'static UiFont>, rec: RecPop) -> Edit {
         let style = crate::objects::CalloutStyle::from_id(&cfg.callout_style).unwrap_or_default();
+        let assist = assist::Assist::new(&cfg, Instant::now());
         Edit {
             mo: Motion::new(Instant::now()),
             shot,
@@ -2552,6 +2589,7 @@ impl Edit {
             baked_area: (0, 0, 0, 0),
             source: Default::default(),
             host: None,
+            assist,
         }
     }
 
@@ -3064,7 +3102,8 @@ impl Edit {
     /// [`Edit::track_hover`] with the pointer at `p` on the capture and
     /// at `pb` in the toolbar's coordinates.
     fn track_hover_at(&mut self, p: Pt, pb: Pt) -> bool {
-        let hover = self.toolbar.as_ref().and_then(|tb| tb.index_at(pb));
+        // The color ring is over everything: no toolbar hover (nor tooltip) under it.
+        let hover = self.toolbar.as_ref().filter(|_| self.assist.ring.is_none()).and_then(|tb| tb.index_at(pb));
         let reach = HANDLE_HIT * self.ui_scale();
         let hot = self.sel.and_then(|sr| {
             handle_points(sr).iter().position(|(_, q)| (q.x - p.x).hypot(q.y - p.y) <= reach)
@@ -3125,11 +3164,16 @@ fn end_interaction(edit: &mut Edit) {
             edit.obj_release(it);
         }
         Interact::NewSel { moved, .. } => {
+            // A window clicked (or a region drawn): accept on select may
+            // take it; a plain click that selects everything does not.
+            let mut window = moved;
             if !moved {
                 // A plain click selects the window under the pointer
                 // (window snapping), else everything (Flameshot-ish).
                 let all = FRect { x: 0.0, y: 0.0, w: edit.shot.size.0 as f32, h: edit.shot.size.1 as f32 };
-                edit.sel = Some(edit.snap_rect().unwrap_or(all));
+                let snapped = edit.snap_rect();
+                window = snapped.is_some();
+                edit.sel = Some(snapped.unwrap_or(all));
             } else {
                 // A dragged area is a region, whatever the Record panel's
                 // source was (Window, Screen).
@@ -3138,6 +3182,8 @@ fn end_interaction(edit: &mut Edit) {
             if edit.accept_on_select {
                 edit.done = true;
                 edit.cancelled = false;
+            } else if window {
+                edit.accept_new_region();
             }
         }
         // A window's or a monitor's area moved or resized: a region now.
@@ -3313,7 +3359,7 @@ fn animating(edit: &Edit, app_notice: Option<&Toast>, now: Instant) -> bool {
     let tip_pending = edit.hover.is_some() && now.saturating_duration_since(edit.hover_at) < Duration::from_millis(500);
     let toast_moving = edit.notice.as_ref().or(app_notice).is_some_and(|t| t.animating(now));
     // The Camera row says "Looking for cameras…" until the list comes.
-    edit.mo.active(now) || tip_pending || toast_moving || edit.rec.cams_looking() || edit.guides_fading(now) || edit.slot_hold.is_some()
+    edit.mo.active(now) || tip_pending || toast_moving || edit.rec.cams_looking() || edit.guides_fading(now) || edit.assist.hint_due(now) || edit.slot_hold.is_some()
 }
 
 /// The last frame no longer matches: something animates (or did when it

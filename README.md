@@ -105,6 +105,7 @@ rustshot gui --clip               # select, annotate, Enter copies to clipboard
 rustshot full --path ~/Pictures   # whole desktop, no editor
 rustshot screen -n 1 --edit       # second monitor, open the editor
 rustshot gui --region 800x600+100+100 --upload
+rustshot gui --accept-on-select   # drag a region: copied at once (Alt on release to adjust)
 rustshot full --raw > shot.png    # PNG bytes to stdout
 rustshot update                   # check for a newer release
 rustshot settings                 # open the Settings window
@@ -131,12 +132,15 @@ section:
   row warns when no capture hotkey is set), *Copy to clipboard after
   capture* (a save or upload also copies the image), *Play shutter
   sound*, *Show thumbnail after capture* (see
-  [Pins and the thumbnail](#pins-and-the-thumbnail)), *Save to* (with **Change…**) and the file name with an example
-  and PNG / JPG.
+  [Pins and the thumbnail](#pins-and-the-thumbnail)), *Show hints in the
+  overlay* (the key card when it opens), *Save to* (with **Change…**) and
+  the file name with an example and PNG / JPG.
 - **Capture:** daily subfolders and their pattern, *Ask where to save*,
   the format (PNG, JPG or BMP) and JPEG quality, the file-name pattern
   editor (see [Saving](#saving)), the overlay's UI size (Auto follows each
-  display's scaling; 75-200 % on top of it), *Snap to windows*, *Use
+  display's scaling; 75-200 % on top of it), *Snap to windows*, *Show
+  magnifier* and *Square magnifier*, *Accept on select* (Off, Copy, Save;
+  see [Selecting](#selecting)), *Use
   Win+Shift+S and Print Screen* (Windows: see
   [Win+Shift+S and Print Screen](#winshifts-and-print-screen-windows)), the
   renderer (Windows) and *Reset tool sizes & colors*.
@@ -362,6 +366,38 @@ dragging works. `snap_windows = false` (or Settings › Capture) turns it
 off; a click then selects the whole screen. The *Capture window* hotkey
 snaps even then.
 
+While picking a region (before anything is selected, and while a
+selection is drawn or resized) a magnifier follows the pointer: 17 × 17
+pixels at 8× with a pixel grid, the pointer's pixel outlined, and under it
+the position (image pixels, as the size label counts them: with a monitor
+left of or above the primary, `0, 0` is the top-left of the whole capture)
+and color (`640, 360 · #1e2027`); a thin accent crosshair runs
+through the pointer across the whole overlay. It flips to stay on screen
+and off the pointer. <kbd>H</kbd> copies that color as `#rrggbb`.
+Settings › Capture *Show magnifier* turns it off, *Square magnifier* makes
+it square (`magnifier`, `magnifier_square`).
+
+**Right-click** anywhere (but on an object with the select tool) opens a
+ring of the palette's colors around the pointer, the current one ringed:
+move towards a color and release to pick it, or click, then click a color.
+The centre opens the color picker (on its own at the ring when nothing is
+selected yet). The color
+goes to the selected objects, else to the current tool (and is
+remembered). <kbd>Esc</kbd>, a click elsewhere or releasing back in the
+centre closes it.
+
+*Accept on select* (Settings › Capture, `accept_on_select = "copy"` or
+`"save"`; `--accept-on-select` copies, or runs the command's
+`--path`/`--clip`/`--upload`) finishes the capture as soon as a region is
+drawn or a window clicked, without the toolbar; hold <kbd>Alt</kbd> while
+releasing to adjust it first (<kbd>Shift</kbd> still makes it square, and a
+square region is accepted). A slip under 8 × 8 px and a plain click that
+selects the whole screen are not accepted. `full`/`screen` need `--edit`
+(or a `--region`) with the flag. On X11 the right button no longer acts as
+a left click in Rustshot's windows. When the overlay opens, a card shows the keys
+(as remapped) for three seconds or until the pointer moves or a key is
+pressed (*Show hints in the overlay*, `overlay_hints`).
+
 ### Global hotkeys
 
 | Action | Default | Config key |
@@ -461,6 +497,8 @@ recording starts video mode, and a delay waits that long.
 | Save As (always asks) | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> |
 | Pin to screen | <kbd>Ctrl</kbd>+<kbd>P</kbd> |
 | Copy text (OCR) | <kbd>O</kbd> (or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd>) |
+| Copy the color under the pointer (while the magnifier shows) | <kbd>H</kbd> |
+| Color ring | right-click |
 | Select the whole screen | <kbd>Ctrl</kbd>+<kbd>A</kbd> |
 | Toggle the color palette | <kbd>Space</kbd> |
 | Bigger / smaller UI, back to Auto | <kbd>Ctrl</kbd>+<kbd>=</kbd> (or <kbd>Ctrl</kbd>+<kbd>+</kbd>, keypad <kbd>+</kbd>) / <kbd>Ctrl</kbd>+<kbd>-</kbd> / <kbd>Ctrl</kbd>+<kbd>0</kbd> |
@@ -519,7 +557,7 @@ tool_pencil = "P"         # tool_line, tool_arrow, tool_rectangle, tool_circle,
                           # tool_marker, tool_text, tool_counter, tool_pixelate,
                           # tool_invert, tool_blur, size_down, size_up, save_desktop, pin,
                           # text_bold, text_italic, text_underline (while typing)
-save_as = "Ctrl+Shift+S"  # copy, copy_text, save, upload, undo, select_all, toggle_palette,
+save_as = "Ctrl+Shift+S"  # copy, copy_text, copy_color, save, upload, undo, select_all, toggle_palette,
 redo = "Ctrl+Shift+Z, Ctrl+Y"  # accept (Enter), cancel (Esc),
 ui_bigger = "Ctrl+=, Ctrl+Shift+=, Ctrl+NumpadAdd"  # ui_smaller, ui_reset
 ```
@@ -697,6 +735,10 @@ copy_url_after_upload = true
 capture_active_monitor = false    # true = only the monitor under the cursor
 snap_windows = true               # outline the window under the pointer; a click selects it
 snap_tab_hint = true              # "Tab: parts of the window" until Tab is first used
+magnifier = true                  # zoomed pixels and a crosshair while picking a region
+magnifier_square = false          # square instead of round
+accept_on_select = "off"          # "copy" or "save": a drawn region is exported at once
+overlay_hints = true              # the key card when the overlay opens
 check_updates = true              # daemon checks GitHub once a day
 skip_version = ""                 # a version the daily check ignores ("Skip this version")
 renderer = "gdi"                  # Windows overlay: "gdi" (low memory) or "software"; ignored elsewhere

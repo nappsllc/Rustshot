@@ -995,6 +995,9 @@ mod window {
 /// NSEventType values (stable ABI numbering).
 const LEFT_DOWN: u64 = 1;
 const LEFT_UP: u64 = 2;
+const RIGHT_DOWN: u64 = 3;
+const RIGHT_UP: u64 = 4;
+const RIGHT_DRAGGED: u64 = 7;
 const MOUSE_MOVED: u64 = 5;
 const LEFT_DRAGGED: u64 = 6;
 const KEY_DOWN: u64 = 10;
@@ -1018,11 +1021,17 @@ fn dispatch_nsevent(ev: *mut c_void, driver: &mut dyn Driver) -> bool {
     unsafe {
         let ty: u64 = msg0(ev, objc_sel(c"type"));
         match ty {
-            MOUSE_MOVED | LEFT_DRAGGED => {
+            MOUSE_MOVED | LEFT_DRAGGED | RIGHT_DRAGGED => {
                 let p: CGPoint = msg0(ev, objc_sel(c"locationInWindow"));
                 let (x, y) = client_pos(p);
                 driver.on_event(Ev::Move { x, y });
                 false
+            }
+            RIGHT_DOWN | RIGHT_UP => {
+                let p: CGPoint = msg0(ev, objc_sel(c"locationInWindow"));
+                let (x, y) = client_pos(p);
+                driver.on_event(Ev::Right { down: ty == RIGHT_DOWN, x, y });
+                true
             }
             LEFT_DOWN | LEFT_UP => {
                 let p: CGPoint = msg0(ev, objc_sel(c"locationInWindow"));
