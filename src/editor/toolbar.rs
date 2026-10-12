@@ -465,7 +465,6 @@ pub fn layout(inp: &Input) -> Toolbar {
 /// The Edit window's groups: the overlay's tools, history and size groups,
 /// then Save, Save As, Save to Desktop, Copy, Upload (no Record, Copy
 /// text, Pin or Close: the window has its own).
-#[allow(dead_code)] // the Edit window (opened from History next)
 fn docked_groups(inp: &Input) -> [Group; 4] {
     let [tools, history, size, _] = groups(inp);
     let out = [Act::Save, Act::SaveAs, Act::SaveDesktop, Act::Copy, Act::Upload].into_iter().map(|a| (Kind::Btn(a), false, BTN)).collect();
@@ -473,20 +472,17 @@ fn docked_groups(inp: &Input) -> [Group; 4] {
 }
 
 /// The width the docked toolbar's buttons take (logical px).
-#[allow(dead_code)]
 pub fn docked_width(inp: &Input) -> f32 {
     row_w(&docked_groups(inp)) + 2.0 * DOCK_PAD
 }
 
 /// The docked toolbar's side padding (logical px).
-#[allow(dead_code)]
 const DOCK_PAD: f32 = 8.0;
 
 /// The toolbar docked in the Edit window's top strip `bar` (the window's
 /// physical px, `inp.s` its scale): one row from the left, centred
 /// vertically; the palette, colour picker and save menu open below it,
 /// kept inside `inp.area` (the window).
-#[allow(dead_code)]
 pub fn layout_docked(inp: &Input, bar: FRect) -> Toolbar {
     let s = inp.s;
     let gs = docked_groups(inp);

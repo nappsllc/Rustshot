@@ -19,12 +19,9 @@
 //! thread, one at a time ([`show`] raises the open one). macOS opens no
 //! windows off the main thread: there the history folder opens instead.
 #![cfg_attr(target_os = "macos", allow(dead_code))]
-// The tray, the hotkey and the thumbnail open it (the next commits).
-#![allow(dead_code)]
 
 use crate::config::Config;
 use crate::history::{self, Entry, Filter, Store};
-use crate::objects::{FRect, Pt};
 use crate::pixbuf::PixBuf;
 use crate::ui::TextState;
 use std::collections::HashMap;
@@ -328,12 +325,7 @@ pub struct Group {
 
 /// Edit capture `id` (the Edit window).
 pub fn open_edit(id: &str) {
-    // Until the Edit window exists: the original opens.
-    let st = Store::open_default();
-    if let Some(e) = st.get(id) {
-        let f = e.original();
-        std::thread::spawn(move || crate::actions::open_path(&f));
-    }
+    crate::edit_ui::open(id);
 }
 
 /// The picture of `e` as it looks now: its original with its objects.
@@ -461,9 +453,29 @@ pub fn save_to_folder(store: &Store, ids: &[String], dir: &std::path::Path) -> D
 
 enum Msg {
     Raise,
+    /// Ask "Clear history?" (Settings › Capture › Clear history…).
+    Clear,
 }
 
 static OPEN: Mutex<Option<Sender<Msg>>> = Mutex::new(None);
+/// The window [`show_clear`] opens starts with the question.
+static START_CLEAR: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Open the History window (or raise it) asking "Clear history?".
+pub fn show_clear() {
+    #[cfg(not(target_os = "macos"))]
+    {
+        let open = lock(&OPEN);
+        if let Some(tx) = open.as_ref()
+            && tx.send(Msg::Clear).is_ok()
+        {
+            let _ = tx.send(Msg::Raise);
+            return;
+        }
+        START_CLEAR.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    show();
+}
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -496,7 +508,10 @@ pub fn show() {
 fn run(rx: Receiver<Msg>) {
     let cfg = crate::config::load();
     let t = crate::export::local_ymdhms();
-    let h = History::new(Store::open_default(), cfg, (t.0, t.1, t.2));
+    let mut h = History::new(Store::open_default(), cfg, (t.0, t.1, t.2));
+    if START_CLEAR.swap(false, std::sync::atomic::Ordering::SeqCst) && !h.entries.is_empty() {
+        h.clear = Some(false);
+    }
     let mut w = window::Window::new(h, rx);
     let spec = crate::wind::WindowSpec { title: "Rustshot History".into(), w: W, h: H, resizable: true, min: MIN };
     if let Err(e) = crate::wind::run_window(spec, &mut w) {
@@ -516,12 +531,3 @@ mod window;
 #[cfg(test)]
 mod tests;
 
-/// `p` as a point (tests and the driver).
-pub fn pt(x: f32, y: f32) -> Pt {
-    Pt::new(x, y)
-}
-
-/// A rect (tests and layout).
-pub fn rect(x: f32, y: f32, w: f32, h: f32) -> FRect {
-    FRect { x, y, w, h }
-}

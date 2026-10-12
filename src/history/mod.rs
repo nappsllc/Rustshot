@@ -1,5 +1,3 @@
-// The History and Edit windows (next) read most of this.
-#![allow(dead_code)]
 //! Capture history: every capture is kept (unless `history = false`) in
 //! `%LOCALAPPDATA%\rustshot\history\<yyyy-mm-dd>\<hhmmss>\` (Linux:
 //! `$XDG_DATA_HOME/rustshot/history`, macOS: `~/Library/Application
@@ -225,6 +223,7 @@ pub fn days_from_civil(y: i32, m: u32, d: u32) -> i64 {
 }
 
 /// The civil date `days` after 1970-01-01.
+#[cfg(test)]
 pub fn civil_from_days(days: i64) -> (i32, u32, u32) {
     let z = days + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
@@ -664,6 +663,7 @@ impl Store {
     }
 
     /// The bytes the history takes.
+    #[cfg(test)]
     pub fn usage(&self) -> u64 {
         dir_size(&self.root)
     }

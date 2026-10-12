@@ -298,7 +298,7 @@ fn item_props(it: MenuItem) -> Vec<(&'static str, Value)> {
     if it == MenuItem::Separator {
         return vec![("type", Value::str("separator")), ("visible", Value::Bool(true))];
     }
-    let mut p = vec![("label", Value::str(it.label())), ("enabled", Value::Bool(true)), ("visible", Value::Bool(true))];
+    let mut p = vec![("label", Value::str(&it.label())), ("enabled", Value::Bool(true)), ("visible", Value::Bool(true))];
     if let Some(on) = it.checked() {
         p.push(("toggle-type", Value::str("checkmark")));
         p.push(("toggle-state", Value::I32(i32::from(on))));

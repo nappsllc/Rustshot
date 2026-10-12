@@ -88,7 +88,7 @@ impl NoteAct {
 
     /// The first button is the accent one.
     fn primary(self) -> bool {
-        matches!(self, NoteAct::CopyLink | NoteAct::Copy)
+        matches!(self, NoteAct::CopyLink | NoteAct::Copy | NoteAct::Edit)
     }
 }
 
@@ -103,6 +103,8 @@ pub struct Note {
     pub actions: Vec<NoteAct>,
     /// The file the buttons act on.
     pub file: Option<std::path::PathBuf>,
+    /// The History entry a toast's Edit opens.
+    pub entry: Option<String>,
     /// A screenshot's thumbnail card (bottom-right) instead of the toast.
     pub thumb: Option<Thumb>,
 }
@@ -113,11 +115,13 @@ pub struct Thumb {
     pub img: Arc<PixBuf>,
     /// The capture's top-left (global physical px): a pin goes there.
     pub at: (i32, i32),
+    /// Its History entry: the card's Edit opens it.
+    pub entry: Option<String>,
 }
 
 impl PartialEq for Thumb {
     fn eq(&self, o: &Thumb) -> bool {
-        Arc::ptr_eq(&self.img, &o.img) && self.at == o.at
+        Arc::ptr_eq(&self.img, &o.img) && self.at == o.at && self.entry == o.entry
     }
 }
 
@@ -130,7 +134,7 @@ impl std::fmt::Debug for Thumb {
 impl Note {
     fn new(text: String, kind: ToastKind) -> Note {
         let ttl = if kind == ToastKind::Error { ERROR_TTL } else { TTL };
-        Note { text, kind, ttl, actions: Vec::new(), file: None, thumb: None }
+        Note { text, kind, ttl, actions: Vec::new(), file: None, thumb: None, entry: None }
     }
 
     /// A plain note (no buttons): `text` with the usual time.
@@ -177,7 +181,7 @@ pub fn recording_saved(path: &std::path::Path, length: Duration, bytes: u64, war
     }
     actions.extend([NoteAct::Open, NoteAct::ShowInFolder]);
     let kind = if warnings.is_empty() { ToastKind::Success } else { ToastKind::Error };
-    Note { text, kind, ttl: ACTION_TTL, actions, file: Some(path.to_path_buf()), thumb: None }
+    Note { text, kind, ttl: ACTION_TTL, actions, file: Some(path.to_path_buf()), thumb: None, entry: None }
 }
 
 fn reason(e: &str) -> String {
@@ -575,7 +579,18 @@ pub fn render(note: &Note, th: &Theme, s: f32, k: f32) -> (u32, u32, Vec<u8>) {
 /// The thumbnail's Edit button opens the capture in the edit window once
 /// History keeps captures; until then it is not shown.
 pub fn edit_enabled() -> bool {
-    false
+    true
+}
+
+/// A screenshot's toast with an accent Edit for its History entry first
+/// (board 11's entry points); a failure or no entry: the toast as it is.
+pub fn with_edit(n: Note, entry: Option<String>) -> Note {
+    match entry {
+        Some(id) if edit_enabled() && n.kind == ToastKind::Success && n.actions.is_empty() && n.thumb.is_none() => {
+            Note { actions: vec![NoteAct::Edit], ttl: ACTION_TTL, entry: Some(id), ..n }
+        }
+        _ => n,
+    }
 }
 
 /// The card for a screenshot that was copied or saved (`done`): the
@@ -584,16 +599,18 @@ pub fn edit_enabled() -> bool {
 /// while the pointer is on it. None when the toast should say it instead:
 /// nothing was copied or saved, something failed, or an upload runs (its
 /// link comes in the toast).
-pub fn thumbnail(done: &[Done], uploading: bool, img: Arc<PixBuf>, at: (i32, i32)) -> Option<Note> {
+pub fn thumbnail(done: &[Done], uploading: bool, img: Arc<PixBuf>, at: (i32, i32), entry: Option<String>) -> Option<Note> {
     if uploading || done.is_empty() || done.iter().any(|d| matches!(d, Done::Failed(..))) || img.width() == 0 || img.height() == 0 {
         return None;
     }
     let text = compose(done, false)?.text;
-    let mut actions = vec![NoteAct::Dismiss, NoteAct::ThumbCopy, NoteAct::ThumbSave, NoteAct::Pin];
-    if edit_enabled() {
+    // Edit first (the accent one): the capture's next step.
+    let mut actions = vec![NoteAct::Dismiss];
+    if edit_enabled() && entry.is_some() {
         actions.push(NoteAct::Edit);
     }
-    Some(Note { text, kind: ToastKind::Success, ttl: ACTION_TTL, actions, file: saved_file(done), thumb: Some(Thumb { img, at }) })
+    actions.extend([NoteAct::ThumbCopy, NoteAct::ThumbSave, NoteAct::Pin]);
+    Some(Note { text, kind: ToastKind::Success, ttl: ACTION_TTL, actions, file: saved_file(done), thumb: Some(Thumb { img, at, entry: entry.clone() }), entry })
 }
 
 /// The last file `done` saved.
@@ -655,9 +672,10 @@ pub fn thumb_layout(t: &Thumb, s: f32) -> ThumbLayout {
     let mut buttons = Vec::new();
     let c = px(TH_CLOSE);
     buttons.push((NoteAct::Dismiss, FRect { x: img.x1() - px(6.0) - c, y: img.y + px(6.0), w: c, h: c }));
-    let acts: Vec<NoteAct> = [NoteAct::ThumbCopy, NoteAct::ThumbSave, NoteAct::Pin]
+    let acts: Vec<NoteAct> = (edit_enabled() && t.entry.is_some())
+        .then_some(NoteAct::Edit)
         .into_iter()
-        .chain(edit_enabled().then_some(NoteAct::Edit))
+        .chain([NoteAct::ThumbCopy, NoteAct::ThumbSave, NoteAct::Pin])
         .collect();
     let n = acts.len() as f32;
     let (b, gap, pad) = (px(TH_BTN), px(2.0), px(3.0));
@@ -799,6 +817,13 @@ fn render_thumb(note: &Note, t: &Thumb, th: &Theme, s: f32, k: f32, hover: Optio
                     let c = if hot { th.danger_fg } else { th.icon_hover };
                     crate::icon_path::draw_icon(f, "x", r.x + (r.w - isz) / 2.0, r.y + (r.h - isz) / 2.0, isz, c.fade(k));
                 }
+                NoteAct::Edit => {
+                    // The accent one, first.
+                    fill(f, r, 6.0 * s, if hot { th.accent_bg_hover } else { th.accent_bg }.fade(k));
+                    ring(f, &ui, r, 6.0 * s, th.accent_ring.fade(k));
+                    let isz = 16.0 * s;
+                    crate::icon_path::draw_icon(f, a.icon(), r.x + (r.w - isz) / 2.0, r.y + (r.h - isz) / 2.0, isz, th.accent_fg.fade(k));
+                }
                 _ => {
                     if hot {
                         fill(f, r, 6.0 * s, th.bg_hover.fade(k));
@@ -830,7 +855,13 @@ pub enum Next {
 pub fn run_note_action(note: &Note, a: NoteAct, th: Theme, done: impl FnOnce(Note) + Send + 'static) -> Next {
     match a {
         NoteAct::Card => Next::Keep,
-        NoteAct::Dismiss | NoteAct::Edit => Next::Hide,
+        NoteAct::Dismiss => Next::Hide,
+        NoteAct::Edit => {
+            if let Some(id) = note.entry.as_ref().or(note.thumb.as_ref().and_then(|t| t.entry.as_ref())) {
+                crate::edit_ui::open(id);
+            }
+            Next::Hide
+        }
         NoteAct::Pin => {
             if let Some(t) = &note.thumb
                 && !crate::pin::open(t.img.clone(), t.at, th)
@@ -1187,23 +1218,34 @@ mod tests {
     #[test]
     fn a_thumbnail_for_copied_or_saved_captures() {
         let img = shot(320, 200);
-        let n = thumbnail(&[Done::Copied], false, img.clone(), (40, 50)).unwrap();
+        let n = thumbnail(&[Done::Copied], false, img.clone(), (40, 50), None).unwrap();
         assert_eq!((n.text.as_str(), n.kind, n.ttl), ("Copied to clipboard", ToastKind::Success, ACTION_TTL));
         assert_eq!(n.file, None);
         assert_eq!(n.thumb.as_ref().map(|t| t.at), Some((40, 50)));
-        assert_eq!(n.actions, [NoteAct::Dismiss, NoteAct::ThumbCopy, NoteAct::ThumbSave, NoteAct::Pin], "Edit waits for History");
-        assert!(!edit_enabled());
-        let n = thumbnail(&[Done::Copied, saved("a.png")], false, img.clone(), (0, 0)).unwrap();
+        assert_eq!(n.actions, [NoteAct::Dismiss, NoteAct::ThumbCopy, NoteAct::ThumbSave, NoteAct::Pin], "no History entry: no Edit");
+        assert!(edit_enabled());
+        // Kept in History: Edit comes first, the accent one.
+        let e = thumbnail(&[Done::Copied], false, img.clone(), (40, 50), Some("2026-10-12/091407".into())).unwrap();
+        assert_eq!(e.actions, [NoteAct::Dismiss, NoteAct::Edit, NoteAct::ThumbCopy, NoteAct::ThumbSave, NoteAct::Pin]);
+        assert!(NoteAct::Edit.primary());
+        let l = thumb_layout(e.thumb.as_ref().unwrap(), 1.0);
+        assert_eq!(l.act.buttons.iter().map(|b| b.0).collect::<Vec<_>>()[1], NoteAct::Edit, "first in the pill");
+        // The toast (no thumbnail) gets Edit too.
+        let t = with_edit(compose(&[Done::Copied], false).unwrap(), Some("2026-10-12/091407".into()));
+        assert_eq!((t.actions.as_slice(), t.ttl), (&[NoteAct::Edit][..], ACTION_TTL));
+        let f = with_edit(compose(&[Done::Failed("Save", "disk full".into())], false).unwrap(), Some("x/1".into()));
+        assert!(f.actions.is_empty(), "not on a failure");
+        let n = thumbnail(&[Done::Copied, saved("a.png")], false, img.clone(), (0, 0), None).unwrap();
         assert_eq!(n.text, "Copied \u{b7} Saved a.png");
         assert_eq!(n.file, Some(PathBuf::from("D:\\Downloads").join("a.png")));
         let desk = Done::SavedDesktop(PathBuf::from("/home/me/Desktop/b.png"));
-        assert_eq!(thumbnail(&[desk], false, img.clone(), (0, 0)).unwrap().file, Some(PathBuf::from("/home/me/Desktop/b.png")));
-        assert_eq!(thumbnail(&[Done::Copied], true, img.clone(), (0, 0)), None, "an upload: the toast says its link");
-        assert_eq!(thumbnail(&[Done::Copied, Done::Failed("Save", "disk full".into())], false, img.clone(), (0, 0)), None);
-        assert_eq!(thumbnail(&[], false, img.clone(), (0, 0)), None, "a cancelled save dialog");
-        assert_eq!(thumbnail(&[Done::Copied], false, Arc::new(PixBuf::default()), (0, 0)), None);
+        assert_eq!(thumbnail(&[desk], false, img.clone(), (0, 0), None).unwrap().file, Some(PathBuf::from("/home/me/Desktop/b.png")));
+        assert_eq!(thumbnail(&[Done::Copied], true, img.clone(), (0, 0), None), None, "an upload: the toast says its link");
+        assert_eq!(thumbnail(&[Done::Copied, Done::Failed("Save", "disk full".into())], false, img.clone(), (0, 0), None), None);
+        assert_eq!(thumbnail(&[], false, img.clone(), (0, 0), None), None, "a cancelled save dialog");
+        assert_eq!(thumbnail(&[Done::Copied], false, Arc::new(PixBuf::default()), (0, 0), None), None);
         // After its own Save button: the same card, saying so, with the file.
-        let n = thumbnail(&[Done::Copied], false, img, (0, 0)).unwrap();
+        let n = thumbnail(&[Done::Copied], false, img, (0, 0), None).unwrap();
         let after = thumb_after(&n, &[saved("c.png")]).unwrap();
         assert_eq!((after.text.as_str(), after.thumb.clone()), ("Saved \u{b7} c.png", n.thumb.clone()));
         assert_eq!(after.file, Some(PathBuf::from("D:\\Downloads").join("c.png")));
@@ -1219,7 +1261,7 @@ mod tests {
     fn thumbnail_layout() {
         for s in [1.0f32, 1.5, 2.0] {
             for (w, h) in [(1600u32, 900u32), (300, 2000), (2000, 100), (40, 30)] {
-                let t = Thumb { img: shot(w, h), at: (0, 0) };
+                let t = Thumb { img: shot(w, h), at: (0, 0), entry: None };
                 let l = thumb_layout(&t, s);
                 let card = l.act.panel;
                 assert_eq!(card.w, (200.0 * s).round(), "{w}x{h}@{s}");
@@ -1248,7 +1290,7 @@ mod tests {
                 assert_eq!(act_at(&l.act, Pt::new(1.0, 1.0)), None, "the shadow room");
             }
         }
-        let note = thumbnail(&[Done::Copied], false, shot(800, 600), (0, 0)).unwrap();
+        let note = thumbnail(&[Done::Copied], false, shot(800, 600), (0, 0), None).unwrap();
         assert_eq!(note_size(&note, 1.0), act_layout(&note, 1.0).size);
     }
 
@@ -1256,7 +1298,7 @@ mod tests {
     /// its right edge, 24 above its bottom); a toast stays bottom-centre.
     #[test]
     fn the_thumbnail_sits_bottom_right_of_the_work_area() {
-        let n = thumbnail(&[Done::Copied], false, shot(800, 450), (0, 0)).unwrap();
+        let n = thumbnail(&[Done::Copied], false, shot(800, 450), (0, 0), None).unwrap();
         for (work, s) in [((0, 0, 1920, 1032), 1.0f32), ((1920, 0, 2560, 1400), 1.5), ((-1280, -1024, 1280, 984), 2.0)] {
             let size = note_size(&n, s);
             let (x, y) = place_note(work, &n, size);
@@ -1307,7 +1349,7 @@ mod tests {
     /// clear (the shadow fits), the buttons only with the pointer on it.
     #[test]
     fn the_thumbnail_renders() {
-        let n = thumbnail(&[Done::Copied], false, shot(640, 400), (0, 0)).unwrap();
+        let n = thumbnail(&[Done::Copied], false, shot(640, 400), (0, 0), None).unwrap();
         for th in [&crate::theme::DARK, &crate::theme::LIGHT] {
             for s in [1.0f32, 2.0] {
                 let l = act_layout(&n, s);
@@ -1346,7 +1388,7 @@ mod tests {
     /// the card itself is no action; dragging takes the saved file.
     #[test]
     fn thumbnail_actions_and_the_drag_file() {
-        let n = thumbnail(&[Done::Copied], false, shot(64, 48), (5, 6)).unwrap();
+        let n = thumbnail(&[Done::Copied], false, shot(64, 48), (5, 6), None).unwrap();
         assert_eq!(run_note_action(&n, NoteAct::Card, crate::theme::DARK, |_| {}), Next::Keep);
         assert_eq!(run_note_action(&n, NoteAct::Dismiss, crate::theme::DARK, |_| {}), Next::Hide);
         let _ = crate::pin::take_opened();
@@ -1380,9 +1422,9 @@ mod tests {
         let dir = PathBuf::from(dir);
         std::fs::create_dir_all(&dir).unwrap();
         let cards = [
-            ("copied", thumbnail(&[Done::Copied], false, shot(1280, 720), (0, 0)).unwrap(), None),
-            ("saved-hover", thumbnail(&[saved("2026-10-12_09-41-07.png")], false, shot(1280, 720), (0, 0)).unwrap(), Some(NoteAct::Pin)),
-            ("tall-hover", thumbnail(&[Done::Copied, saved("a-rather-long-file-name-2026-10-12.png")], false, shot(400, 900), (0, 0)).unwrap(), Some(NoteAct::Card)),
+            ("copied", thumbnail(&[Done::Copied], false, shot(1280, 720), (0, 0), None).unwrap(), None),
+            ("saved-hover", thumbnail(&[saved("2026-10-12_09-41-07.png")], false, shot(1280, 720), (0, 0), None).unwrap(), Some(NoteAct::Pin)),
+            ("tall-hover", thumbnail(&[Done::Copied, saved("a-rather-long-file-name-2026-10-12.png")], false, shot(400, 900), (0, 0), None).unwrap(), Some(NoteAct::Card)),
         ];
         for (tn, th, bg) in [("dark", &crate::theme::DARK, [38u8, 44, 58]), ("light", &crate::theme::LIGHT, [214, 222, 232])] {
             for s in [1.0f32, 2.0] {

@@ -8,6 +8,7 @@ use super::window::{self, Press};
 use super::*;
 use crate::history::tests::TempRoot;
 use crate::history::{Kind, Meta};
+use crate::objects::{FRect, Pt};
 use crate::theme::{DARK, LIGHT, Theme};
 use crate::ui::{FocusState, Input};
 use crate::wind::{Ev, Mods};

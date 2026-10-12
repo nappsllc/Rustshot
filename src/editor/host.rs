@@ -20,8 +20,6 @@
 //! follows on release); the object chrome is drawn in window px from the
 //! editor's image-space chrome, mapped through the view.
 
-// The Edit window opens it (its entry points: the next commit).
-#![allow(dead_code)]
 
 use super::compose::{CaretUi, ObjSelUi, PxRect};
 use super::mini::MiniUi;
@@ -168,11 +166,6 @@ impl Canvas {
         &self.e.objects
     }
 
-    /// The capture as it was (no objects).
-    pub fn image(&self) -> &PixBuf {
-        &self.e.base
-    }
-
     /// The capture with its objects (what Save writes).
     pub fn export(&mut self) -> PixBuf {
         if self.e.dirty || self.e.spots_stale() {
@@ -194,10 +187,6 @@ impl Canvas {
 
     pub fn theme(&self) -> &Theme {
         &self.e.th
-    }
-
-    pub fn set_theme(&mut self, th: Theme) {
-        self.e.th = th;
     }
 
     pub fn keymap(&self) -> &Keymap {
@@ -370,10 +359,6 @@ impl Canvas {
         if self.on_canvas(p) {
             self.pan = Some((p, self.view));
         }
-    }
-
-    pub fn panning(&self) -> bool {
-        self.pan.is_some()
     }
 
     /// The pointer moved to window point `p` (a button held or not).

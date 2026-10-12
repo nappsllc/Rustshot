@@ -493,9 +493,19 @@ impl Window {
     /// Timer: worker results, a changed history, the toast's fade.
     fn tick(&mut self) -> bool {
         let mut changed = false;
-        while let Ok(Msg::Raise) = self.rx.try_recv() {
-            #[cfg(windows)]
-            wind::raise(self.hwnd);
+        while let Ok(m) = self.rx.try_recv() {
+            match m {
+                Msg::Raise => {
+                    #[cfg(windows)]
+                    wind::raise(self.hwnd);
+                }
+                Msg::Clear => {
+                    if !self.h.entries.is_empty() {
+                        self.h.clear = Some(false);
+                        changed = true;
+                    }
+                }
+            }
         }
         while let Ok(d) = self.done.1.try_recv() {
             self.busy = self.busy.saturating_sub(1);

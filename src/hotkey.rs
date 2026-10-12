@@ -28,8 +28,10 @@ pub enum HotEvent {
     RepeatLast,
     /// Pick an area and copy its text (OCR), no annotation step.
     CaptureText,
+    /// Open the History window.
+    History,
     /// A global hotkey was pressed: slot `i` (0 capture, 1 quit, 2 record,
-    /// 3 full screen, 4 window, 5 repeat, 6 copy text). The daemon
+    /// 3 full screen, 4 window, 5 repeat, 6 copy text, 7 History). The daemon
     /// runs [`slot_event`]`(i)`, or, with the overlay open, hands the chord
     /// to the overlay as a key (a chord bound there, e.g. Ctrl+Shift+S Save
     /// As, does its overlay job).
@@ -148,8 +150,8 @@ impl<W> RecKeys<W> {
 }
 
 /// Global hotkey slots: capture, quit, record, full screen, window,
-/// repeat, copy text.
-pub const SLOTS: usize = 7;
+/// repeat, copy text, History.
+pub const SLOTS: usize = 8;
 
 /// Global hotkeys backed by Win32 `RegisterHotKey` (replaces the
 /// `global-hotkey` crate). Registration and the message loop run on a
@@ -222,6 +224,7 @@ pub fn slot_event(i: usize) -> HotEvent {
         4 => HotEvent::CaptureWindow,
         5 => HotEvent::RepeatLast,
         6 => HotEvent::CaptureText,
+        7 => HotEvent::History,
         i => rec_event(i - REC_SLOT_BASE),
     }
 }
@@ -241,6 +244,7 @@ pub fn wanted(cfg: &Config) -> [String; SLOTS] {
         &cfg.capture_window_hotkey,
         &cfg.repeat_hotkey,
         &cfg.capture_text_hotkey,
+        &cfg.history_hotkey,
     ]
     .map(|s| s.trim().to_string())
 }
@@ -249,7 +253,7 @@ pub fn wanted(cfg: &Config) -> [String; SLOTS] {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Failure {
     /// The slot: 0 = capture, 1 = quit, 2 = record, 3 =
-    /// full screen, 4 = window, 5 = repeat, 6 = copy text.
+    /// full screen, 4 = window, 5 = repeat, 6 = copy text, 7 = History.
     pub slot: usize,
     pub wanted: String,
     pub cause: Cause,
@@ -842,7 +846,7 @@ mod tests {
     fn new_global_actions_are_slots() {
         let cfg = Config { repeat_hotkey: "Ctrl+Alt+P".into(), ..Config::default() };
         let w = wanted(&cfg);
-        assert_eq!(w, ["Shift+Meta+X", "Ctrl+Alt+Shift+Q", "Shift+Meta+R", "Shift+Meta+F", "Shift+Meta+E", "Ctrl+Alt+P", "Shift+Meta+T"]);
+        assert_eq!(w, ["Shift+Meta+X", "Ctrl+Alt+Shift+Q", "Shift+Meta+R", "Shift+Meta+F", "Shift+Meta+E", "Ctrl+Alt+P", "Shift+Meta+T", "Shift+Meta+H"]);
         let specs = specs_for(&w);
         for (i, (id, _, ev)) in specs.iter().enumerate() {
             assert!(*id == i as i32 + 1 && matches!(ev, HotEvent::Pressed(j) if *j == i));
@@ -851,6 +855,7 @@ mod tests {
         assert!(matches!(slot_event(4), HotEvent::CaptureWindow));
         assert!(matches!(slot_event(5), HotEvent::RepeatLast));
         assert!(matches!(slot_event(6), HotEvent::CaptureText));
+        assert!(matches!(slot_event(7), HotEvent::History));
         let mut calls = Vec::new();
         let (now, f) = plan_reload(&s2("", ""), &w, registrar(&["Shift+Meta+E"], &mut calls));
         assert_eq!(now[4], "");
@@ -868,7 +873,7 @@ mod tests {
         cfg.shortcuts.insert("rec_mute".into(), "".into());
         assert_eq!(rec_wanted(&cfg), ["Ctrl+Alt+P", "", "Ctrl+Alt+Shift+H"]);
         let specs = rec_specs_for(&rec_wanted(&cfg));
-        assert_eq!(specs.clone().map(|s| s.0), [8, 9, 10]);
+        assert_eq!(specs.clone().map(|s| s.0), [9, 10, 11]);
         assert!(matches!(specs[0].2, HotEvent::RecPause));
         assert!(matches!(specs[1].2, HotEvent::RecMute));
         assert!(matches!(specs[2].2, HotEvent::RecPill));

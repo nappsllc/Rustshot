@@ -125,7 +125,9 @@ fn get_layout_is_the_menu_model() {
     assert_eq!(root.items()[0], Value::I32(0));
     assert_eq!(root.items()[1].get("children-display").and_then(Value::as_str), Some("submenu"));
     let want: Vec<(i32, String)> = [
-        (10, "Capture"),
+        (10, "Capture region"),
+        (16, "Capture screen"),
+        (17, "Capture window"),
         (11, "Settings…"),
         (12, "Check for updates"),
         (13, "Start at login"),
@@ -137,7 +139,7 @@ fn get_layout_is_the_menu_model() {
     .collect();
     assert_eq!(labels(root), want);
     // Start at login is a check item, on.
-    let auto = root.items()[2].items()[3].inner();
+    let auto = root.items()[2].items()[5].inner();
     assert_eq!(auto.items()[1].get("toggle-type").and_then(Value::as_str), Some("checkmark"));
     assert_eq!(auto.items()[1].get("toggle-state").and_then(Value::as_i32), Some(1));
     // Depth 0: the root alone; one item; only the asked properties.

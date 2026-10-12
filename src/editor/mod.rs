@@ -558,6 +558,8 @@ impl App {
             }
             HotEvent::StopRecording => {}
             HotEvent::ClosePins => crate::pin::close_all(),
+            // History opens over anything (a recording, another window).
+            HotEvent::History => crate::history_ui::show(),
             // The pill's buttons from the tray or a while-recording chord.
             HotEvent::RecPause | HotEvent::RecMute | HotEvent::RecCamera | HotEvent::RecPill | HotEvent::RecDiscard => {
                 let now = Instant::now();
@@ -575,7 +577,7 @@ impl App {
             // A global hotkey: inside the overlay its chord is the
             // overlay's key (Ctrl+Shift+S, if bound globally: Save As there), else its action.
             // Quit always quits.
-            HotEvent::Pressed(i) if i != 1 && matches!(self.st, State::Edit(_)) => self.forward_hotkey(i),
+            HotEvent::Pressed(i) if i != 1 && i != 7 && matches!(self.st, State::Edit(_)) => self.forward_hotkey(i),
             HotEvent::Pressed(i) => return self.on_hot(crate::hotkey::slot_event(i)),
             // A capture would show the overlay in the recording.
             HotEvent::Capture | HotEvent::Record | HotEvent::CaptureFull | HotEvent::CaptureWindow | HotEvent::RepeatLast | HotEvent::CaptureText
@@ -1213,7 +1215,7 @@ impl App {
         let entry = job.hist.and_then(|h| self.keep_history(*h, &res, &job.cfg));
         // Its link goes to the entry once the upload is done.
         self.upload_entry = entry.clone().filter(|_| res.upload.is_some());
-        self.last_entry = entry;
+        self.last_entry = entry.clone();
         let img = Arc::new(job.img);
         // Pin to screen: the image where it was captured.
         if job.tasks.contains(&Task::Pin) && !crate::pin::open(img.clone(), job.sel_global, th) {
@@ -1230,9 +1232,9 @@ impl App {
             let note = job
                 .cfg
                 .show_thumbnail
-                .then(|| crate::notice::thumbnail(&res.done, up, img.clone(), job.sel_global))
+                .then(|| crate::notice::thumbnail(&res.done, up, img.clone(), job.sel_global, entry.clone()))
                 .flatten()
-                .or_else(|| crate::notice::compose(&res.done, up));
+                .or_else(|| crate::notice::compose(&res.done, up).map(|n| crate::notice::with_edit(n, entry.clone())));
             if let Some(note) = note {
                 crate::notice::show(note, at, th);
             }
