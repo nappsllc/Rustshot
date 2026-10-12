@@ -640,7 +640,7 @@ mod tests {
     /// in folder; it stays 6 s.
     #[test]
     fn the_toast_after_a_recording_has_buttons() {
-        let mp4 = PathBuf::from("C:\\shots\\rustshot-2026-10-10-2131.mp4");
+        let mp4 = PathBuf::from("shots").join("rustshot-2026-10-10-2131.mp4");
         let n = recording_saved(&mp4, Duration::from_secs(42), 1_400_000, &[], true);
         assert_eq!(n.text, "Saved rustshot-2026-10-10-2131.mp4 \u{b7} 00:42 \u{b7} 1.4 MB");
         assert_eq!((n.kind, n.ttl), (ToastKind::Success, ACTION_TTL));

@@ -616,8 +616,8 @@ fn render_bubble_previews() {
                         .collect()
                 })
                 .collect();
-            let col_w: Vec<u32> = (0..3).map(|c| cells[0][c].0.w).collect();
-            let (sw, sh) = (col_w.iter().sum::<u32>(), cells.iter().map(|r| r[2].0.w).sum::<u32>());
+            let col_w: Vec<u32> = (0..cells[0].len()).map(|c| cells[0][c].0.w).collect();
+            let (sw, sh) = (col_w.iter().sum::<u32>(), cells.iter().map(|r| r.last().unwrap().0.w).sum::<u32>());
             let mut sheet = [bg[0], bg[1], bg[2], 255].repeat((sw * sh) as usize);
             let mut y0 = 0;
             for row in &cells {
@@ -633,7 +633,7 @@ fn render_bubble_previews() {
                     }
                     x0 += col_w[c];
                 }
-                y0 += row[2].0.w;
+                y0 += row.last().unwrap().0.w;
             }
             let img = PixBuf::from_raw(sw, sh, sheet).unwrap();
             std::fs::write(dir.join(format!("{tn}-bubble-shapes@{s}x.png")), img.to_png().unwrap()).unwrap();
