@@ -38,7 +38,7 @@ renderer.
   shortcuts, and short animations.
 - **Multi-monitor aware:** spans all monitors when they share a scale factor;
   the toolbar and notices stay on the monitor you're working on.
-- **Global hotkey daemon** (capture a region with <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd>,
+- **Global hotkey daemon** (capture a region with <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>X</kbd>,
   the full screen, a window, a recording, or the last region again; see
   [Global hotkeys](#global-hotkeys)).
 - **Scriptable CLI** for headless captures (`rustshot full --clip`,
@@ -122,10 +122,11 @@ section:
   editor (see [Saving](#saving)), the overlay's UI size (Auto follows each
   display's scaling; 75-200 % on top of it), *Snap to windows*, the
   renderer (Windows) and *Reset tool sizes & colours*.
-- **Recording:** what the Record popover starts with: format (MP4 or
-  GIF), frame rate, MP4 quality, the 3-2-1 countdown, system sound,
-  microphone and its device, the camera bubble (camera, shape, size,
-  mirror, ring colour and width); on Linux also the MP4 encoder (Auto,
+- **Recording:** what video mode's panel starts with: format (MP4 or
+  GIF), frame rate (MP4 30 or 60, GIF 10, 15 or 24 fps), MP4 quality, a
+  GIF's max length (15, 30 or 60 s), the 3-2-1 countdown, system sound,
+  microphone and its device, the camera bubble (camera, shape, size 120,
+  160, 200 or 240 px, mirror, ring colour and width); on Linux also the MP4 encoder (Auto,
   ffmpeg or OpenH264) with what is installed ("ffmpeg found at
   /usr/bin/ffmpeg", "OpenH264 downloaded", or not available).
 - **Key bindings:** the global hotkeys and every editor shortcut (see
@@ -219,20 +220,21 @@ snaps even then.
 
 | Action | Default | Config key |
 |---|---|---|
-| Capture region (the overlay) | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> | `capture_hotkey` |
-| Capture full screen (saved at once, no overlay) | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> | `capture_full_hotkey` |
-| Capture window (the overlay picking a window: a click selects it) | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>W</kbd> | `capture_window_hotkey` |
-| Record video (again: stop) | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> | `record_hotkey` |
+| Capture region (the overlay) | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>X</kbd> | `capture_hotkey` |
+| Capture full screen (saved at once, no overlay) | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> | `capture_full_hotkey` |
+| Capture window (the overlay picking a window: a click selects it) | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>W</kbd> | `capture_window_hotkey` |
+| Record video (again: stop) | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> | `record_hotkey` |
 | Repeat last capture (the same region, saved at once) | none | `repeat_hotkey` |
 | Quit Rustshot | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>Q</kbd> | `quit_hotkey` |
 
-These are the defaults of a new `config.toml`; a file that already has a
-key keeps its value (older versions wrote <kbd>Shift</kbd>+<kbd>Win</kbd>+<kbd>X</kbd>
-and <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd>). A global hotkey takes
-its keys from every app (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> is
-Save As in many of them); while the overlay is open, a global hotkey's
-keys act as the overlay's own (there <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd>
-is Save As), only Quit always quits. Repeat last capture remembers the
+<kbd>Win</kbd> is <kbd>⌘</kbd> on macOS and <kbd>Super</kbd> on Linux
+(`Meta` in `config.toml`). These are the defaults of a new `config.toml`;
+a file that already has a key keeps its value (a custom chord, or an
+earlier default such as <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd>).
+A global hotkey takes its keys from every app; while the overlay is open,
+a global hotkey without <kbd>Win</kbd> acts as the overlay's own key (a
+capture hotkey set to <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> is
+Save As there), only Quit always quits. Repeat last capture remembers the
 region for as long as the daemon runs; before the first capture it opens
 the overlay.
 
@@ -290,7 +292,9 @@ Ctrl+Numpad0) or bind your own chords. Ctrl and Alt chords work while typing
 a text and with the colour picker open; a remapped plain key (no Ctrl or Alt)
 does not, because those modes take every plain key as input.
 
-`record` (unbound by default) opens the Record popover for the selection.
+`record` (unbound by default) switches the overlay to video mode
+(<kbd>2</kbd> does too, <kbd>1</kbd> goes back to Screenshot; both are
+built in).
 There is no `stop_recording` action: the overlay is hidden while
 a recording runs, so the record hotkey (`record_hotkey`) toggles start and
 stop, and the control bar's Stop button and the tray's **Stop recording**
@@ -301,29 +305,38 @@ Record is not offered.
 
 ### Recording
 
-Press the record hotkey (default <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd>),
-select an area (or press <kbd>Enter</kbd> for the monitor under the
-pointer) and choose **Start recording**; or click **Record** (the camera
-icon) in the overlay toolbar. The Record popover offers:
+Press the record hotkey (default <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd>),
+or switch the overlay to **Video** (the mode switch above the selection,
+or <kbd>2</kbd>; <kbd>1</kbd> goes back to Screenshot, **Close** or
+<kbd>Esc</kbd> cancels). Video mode draws nothing; its panel, centred
+under the selection, offers:
 
+- What to record: **Screen** (<kbd>F</kbd>, the monitor), **Window**
+  (<kbd>W</kbd>, click the outlined window) or **Region** (<kbd>R</kbd>,
+  drag one). In Screenshot mode these keys stay the tools' keys.
+- **Camera**, **Microphone** (with its device and a level meter; MP4
+  only) and **System audio** (MP4 only).
 - **MP4** (H.264 + AAC, or Opus with OpenH264 on Linux; 30 or 60 fps;
   Low / Medium / High quality; areas larger than 4096 × 2304 are scaled to
-  fit) or **GIF** (10 or 15 fps, full size, no sound).
-- **System sound** and **Microphone** (with its device; MP4 only).
-- **Camera**: a round, rounded-square or square bubble (S / M / L) showing
-  your camera, mirrored by default, with a ring in your accent or any
-  colour. It is a real window on the screen, so it is in the recording;
-  drag it anywhere (it snaps to the area's corners).
+  fit) or **GIF** (10, 15 or 24 fps, full size, no sound; it stops by
+  itself at its max length, 15, 30 or 60 s).
+- The countdown (0 or 3 s) and the camera's shape and ring (width and
+  colour, in the Camera row's palette).
 
-After a 3-2-1 countdown (Settings › Recording turns it off) a red border
-marks the area and a control bar beside it shows the time, **Pause**,
-**Mute** (with a microphone) and **Stop**; neither is in the video (on
-Windows and macOS; see the notes below). Stop with the bar, the record
-hotkey again, or the tray's **Stop recording**. The file goes where a
-screenshot would (save folder, daily subfolder, file-name pattern) as
-`.mp4` or `.gif`; it is written as `<name>.part` and renamed when it is
-complete, and a notification says where it is (click it to open the
-folder). Defaults for every choice are in Settings › Recording.
+The camera bubble is a real window on the screen, so it is in the
+recording: drag it anywhere (it is see-through while dragged and drops
+into the nearest corner when let go near one) and scroll over it for its
+size (120, 160, 200 or 240 px). After the countdown a red border marks
+the area and a pill beside it shows the time, **Pause**, **Stop**, the
+microphone, camera and system audio switches and **Discard**; neither is
+in the video (on Windows and macOS; see the notes below). Stop with the
+pill, the record hotkey again, or the tray's **Stop recording** (on
+Windows the tray icon's tooltip shows the time recorded). The file goes
+where a screenshot would (save folder, daily subfolder, file-name
+pattern) as `.mp4` or `.gif`; it is written as `<name>.part` and renamed
+when it is complete, and a notice says where it is, with **Copy**,
+**Open** and **Show in folder**. Defaults for every choice are in
+Settings › Recording.
 
 Per platform:
 
@@ -392,10 +405,10 @@ draw_font_size = 16.0
 undo_limit = 100
 user_colors = ["#f04438", "#ff8a1f", "#ffc532", "#2dc06f", "#19b5d6",
                "#3b82f6", "#8b5cf6", "#ec4899", "#ffffff", "#111318"]
-capture_hotkey = "Ctrl+Shift+S"   # the overlay
+capture_hotkey = "Shift+Meta+X"   # the overlay (Meta: Win, Cmd or Super)
 quit_hotkey = "Ctrl+Alt+Shift+Q"
-capture_full_hotkey = "Ctrl+Shift+F"    # every monitor, saved at once
-capture_window_hotkey = "Ctrl+Shift+W"  # the overlay picking a window
+capture_full_hotkey = "Shift+Meta+F"    # every monitor, saved at once
+capture_window_hotkey = "Shift+Meta+W"  # the overlay picking a window
 repeat_hotkey = ""                # the last region again ("" = none)
 show_tray = true                  # false = no tray icon (hotkeys still work)
 copy_after_capture = false        # a save or upload also copies the image
@@ -408,10 +421,11 @@ check_updates = true              # daemon checks GitHub once a day
 skip_version = ""                 # a version the daily check ignores ("Skip this version")
 renderer = "gdi"                  # Windows overlay: "gdi" (low memory) or "software"; ignored elsewhere
 upload_client_id = "313baf0c7b4d3ff"
-record_hotkey = "Ctrl+Shift+R"    # starts (select an area) and stops a recording
-rec_format = "mp4"                # Record popover defaults: "mp4" or "gif"
+record_hotkey = "Shift+Meta+R"    # starts (video mode) and stops a recording
+rec_format = "mp4"                # video mode's defaults: "mp4" or "gif"
 rec_fps = 30                      # MP4: 30 or 60
-rec_gif_fps = 15                  # GIF: 10 or 15
+rec_gif_fps = 15                  # GIF: 10, 15 or 24
+rec_gif_max = 30                  # GIF: stops after 15, 30 or 60 s
 rec_quality = "medium"            # MP4: "low", "medium" or "high"
 rec_system_audio = true
 rec_mic = false
@@ -419,10 +433,10 @@ rec_mic_device = ""               # "" = the default microphone
 rec_camera = false
 rec_camera_device = ""            # "" = the first camera
 rec_camera_shape = "circle"       # "circle", "rounded" or "square"
-rec_camera_size = "m"             # "s", "m" or "l" (160, 240, 320 px)
+rec_camera_size = "m"             # "s", "m", "l" or "xl" (120, 160, 200, 240 px)
 rec_camera_mirror = true
 rec_camera_ring_color = ""        # "" = the accent, or "#rrggbb"
-rec_camera_ring_width = 3         # 0 (no ring) to 16
+rec_camera_ring_width = 2         # 0 (no ring) to 16
 rec_countdown = true              # 3-2-1 before the first frame
 rec_linux_encoder = "auto"        # Linux MP4: "auto", "ffmpeg" or "openh264"
 ```
