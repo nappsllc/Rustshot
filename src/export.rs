@@ -25,6 +25,10 @@ pub enum Task {
     /// Pin the image to the screen where it was captured (the editor opens
     /// the pin window; nothing to export).
     Pin,
+    /// Open the picture with an app the user picks (the system's chooser,
+    /// [`crate::open_with`]): the file this export saved, else a
+    /// temporary one.
+    OpenWith,
 }
 
 /// Day of year (1-366) for a civil date.
@@ -612,6 +616,23 @@ pub fn run_export(
                 };
                 upload = Some(spawn_upload(bytes, cfg.upload_client_id.clone()));
             }
+            Task::OpenWith => {
+                let saved = done.iter().rev().find_map(|d| match d {
+                    Done::Saved(p) | Done::SavedDesktop(p) => Some(p.clone()),
+                    _ => None,
+                });
+                match crate::open_with::file_for(img, saved.as_deref(), cfg) {
+                    Ok(p) => {
+                        messages.push(format!("open with: {}", p.display()));
+                        crate::open_with::open(&p);
+                    }
+                    Err(e) => {
+                        messages.push(format!("error: open with: {e:#}"));
+                        done.push(Done::Failed("Open with", format!("{e:#}")));
+                        error = true;
+                    }
+                }
+            }
             Task::Text => {} // the caller's (it runs off the UI thread)
             // The editor opens the pin (`App::run_finish`).
             Task::Pin => {}
@@ -727,6 +748,10 @@ fn spawn_upload(png: Vec<u8>, client_id: String) -> Receiver<Result<String, Stri
         };
         #[cfg(not(test))]
         let r = do_upload(&png, &client_id);
+        // The record's thumbnail (the deletehash came with the reply).
+        if let Ok(link) = &r {
+            crate::uploads::note_thumb(link, crate::uploads::thumb_png(&png));
+        }
         let _ = tx.send(r);
     });
     rx

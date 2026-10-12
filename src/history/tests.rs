@@ -55,6 +55,12 @@ fn meta_round_trips() {
         app: "Chrome".into(),
         saved: Some(PathBuf::from(r"C:\Users\u\Pictures\rustshot\2026-10-12_09-14.png")),
         uploaded: Some("https://i.imgur.com/a8Kq2.png".into()),
+        upload: Some(crate::uploads::Info {
+            deletehash: crate::uploads::Secret::new("dH4sh"),
+            time: 1_791_000_000,
+            kind: crate::uploads::UpKind::Video,
+            thumb: Some(vec![0x89, b'P', b'N', b'G', 0, 1, 2]),
+        }),
         duration_ms: 42_000,
         file: Some(PathBuf::from("/home/u/Videos/rec.mp4")),
         edited: true,

@@ -132,6 +132,8 @@ pub fn upload_video(data: &[u8], name: &str, client_id: &str, seed: u64, http: &
     let ctype = format!("multipart/form-data; boundary={b}");
     let (status, text) = (http.post)(HOST, UPLOAD_PATH, &[("Authorization", &auth), ("Content-Type", &ctype)], &body)?;
     let mut r = parse_reply(status, &text)?;
+    // Its deletehash, for the upload's record.
+    crate::uploads::note_reply(&text, crate::uploads::UpKind::Video);
     let mut waited = Duration::ZERO;
     while r.pending && !r.id.is_empty() {
         if waited >= POLL_FOR {
