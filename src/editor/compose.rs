@@ -604,6 +604,9 @@ impl Edit {
                 .filter(|t| t.above && t.bar.y1() <= sr.y)
                 .map(|t| t.pop.map_or(t.bar, |p| toolbar::union(t.bar, p)));
             let lead = self.toolbar.as_ref().and_then(|t| t.mode);
+            // Following the mode switch it keeps off the Close button.
+            let close = self.toolbar.as_ref().and_then(|t| t.items.iter().find(|i| i.kind == toolbar::Kind::Close)).map(|i| i.r);
+            let avoid = if lead.is_some() { close } else { avoid };
             LabelUi { sr, show_pos: !interacting, area, avoid, lead }
         });
         let text = self.text.as_ref().map(|td| TextUi {

@@ -899,9 +899,13 @@ fn size_label_rect(ui: &Ui, sr: FRect, show_pos: bool, area: FRect, at: (Option<
         w += pad + tw(ui, 11.0, &pos);
     }
     if let Some(m) = at.1 {
+        // Right of the switch; when that runs into what to keep off (the
+        // Close button) or off the monitor, under the switch instead.
         let h = ui.px(22.0);
-        let x = (m.x1() + ui.px(10.0)).min((area.x1() - w).max(area.x));
-        return FRect { x, y: m.y + (m.h - h) / 2.0, w, h };
+        let x = m.x1() + ui.px(10.0);
+        let r = FRect { x, y: m.y + (m.h - h) / 2.0, w, h };
+        let clash = at.0.is_some_and(|a| r.x < a.x1() && a.x < r.x1() && r.y < a.y1() && a.y < r.y1()) || r.x1() > area.x1();
+        return if clash { FRect { x: m.x, y: m.y1() + ui.px(6.0), w, h } } else { r };
     }
     label_rect(sr, w, ui.s, area, at.0)
 }
