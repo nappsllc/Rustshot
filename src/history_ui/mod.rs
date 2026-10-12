@@ -357,7 +357,7 @@ impl History {
         let where_ = dir.map(|d| format!(" in {}", history::tilde(&d))).unwrap_or_default();
         (
             format!("Removes all {n} capture{} from History. This can't be undone.", if n == 1 { "" } else { "s" }),
-            format!("Also delete saved files ({}{where_})", history::size_text(bytes)),
+            format!("Also delete saved files ({}{where_}) and forget upload links", history::size_text(bytes)),
         )
     }
 
@@ -541,7 +541,7 @@ pub fn run_export(store: &Store, id: &str, task: crate::export::Task, cfg: &Conf
 
 /// "Open with…" for entry `id`: its saved file (or the recording) when
 /// that is still what it looks like, else the picture as a temporary file.
-pub fn open_with(store: &Store, id: &str, cfg: &Config) -> Done {
+pub fn open_with(store: &Store, id: &str, cfg: &Config, owner: Option<usize>) -> Done {
     let Some(e) = store.get(id) else { return fail("That capture is gone") };
     let as_is = e.meta.kind.is_recording() || (!e.meta.edited && e.meta.saved.as_ref().is_some_and(|p| p.is_file()));
     if as_is {
@@ -549,18 +549,14 @@ pub fn open_with(store: &Store, id: &str, cfg: &Config) -> Done {
         if !f.is_file() {
             return fail("The file is gone");
         }
-        crate::open_with::open(&f);
-        return ok("");
+        return crate::open_with::open_now(&f, owner).map_or_else(fail, |()| ok(""));
     }
     let img = match picture(store, &e) {
         Ok(i) => i,
         Err(err) => return fail(format!("Could not read the capture: {err:#}")),
     };
     match crate::open_with::file_for(&img, None, cfg) {
-        Ok(p) => {
-            crate::open_with::open(&p);
-            ok("")
-        }
+        Ok(p) => crate::open_with::open_now(&p, owner).map_or_else(fail, |()| ok("")),
         Err(err) => fail(format!("Open with failed: {err:#}")),
     }
 }
@@ -570,13 +566,9 @@ pub fn open_with(store: &Store, id: &str, cfg: &Config) -> Done {
 pub fn delete_upload(store: &Store, id: &str, client_id: &str, http: crate::uploads::DeleteFn) -> Done {
     let Some(e) = store.get(id) else { return fail("That capture is gone") };
     let (Some(link), Some(info)) = (e.meta.uploaded.clone(), e.meta.upload.clone()) else { return fail("This capture has no upload to delete") };
-    match crate::uploads::delete_remote(&info.deletehash, client_id, http) {
-        Ok(()) => match crate::uploads::forget(store, Some(id), &link) {
-            Ok(()) => Done { changed: true, ..ok("Deleted from Imgur") },
-            Err(err) => Done { changed: true, ..fail(format!("Deleted from Imgur, but the link is still listed: {err:#}")) },
-        },
-        Err(err) => fail(format!("Couldn't delete from Imgur: {err}")),
-    }
+    let rec = crate::uploads::Record { link, info, entry: Some(id.to_string()) };
+    let (text, kind) = crate::uploads::delete_record(store, &rec, client_id, http);
+    Done { text, kind, changed: true }
 }
 
 /// Save every capture of `ids` as a PNG into `dir` (named by when they

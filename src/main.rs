@@ -789,6 +789,8 @@ fn run() -> Result<()> {
             update_install::cleanup_previous();
             // "Open with…" files of earlier days.
             open_with::cleanup();
+            // The tray's Recent uploads, listed off the menu's thread.
+            uploads::warm();
             screenclip_win::repoint_on_start();
             rec_ui::warm_mp4();
             let cfg = config::load();

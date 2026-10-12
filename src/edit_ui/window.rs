@@ -219,6 +219,21 @@ impl Window {
             });
             return;
         }
+        if r == Request::OpenWith {
+            // The chooser is owned by this window, its failure a toast.
+            #[allow(clippy::unnecessary_cast)] // a pointer, a u64 or a usize
+            let owner = Some(self.hwnd.0 as usize);
+            let (tx, cfg) = (self.done.0.clone(), self.e.cfg.clone());
+            std::thread::spawn(move || {
+                let res = crate::open_with::file_for(&img, None, &cfg).map_err(|e| format!("Open with failed: {e:#}"));
+                let text = match res.and_then(|p| crate::open_with::open_now(&p, owner)) {
+                    Ok(()) => String::new(),
+                    Err(e) => e,
+                };
+                let _ = tx.send(Done { text, kind: ToastKind::Error, uploaded: None, saved: None });
+            });
+            return;
+        }
         let (store, id, cfg) = (self.e.store.clone(), self.e.entry.id.clone(), self.e.cfg.clone());
         let saves = matches!(r, Request::SaveAs | Request::SaveDesktop);
         let tx = self.done.0.clone();

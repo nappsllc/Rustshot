@@ -160,7 +160,7 @@ pub fn frame(canvas: &mut PixBuf, th: &Theme, input: &Input, focus: &mut FocusSt
 }
 
 /// The window driver.
-struct Window {
+pub(super) struct Window {
     hwnd: Hwnd,
     f: Form,
     th: Theme,
@@ -170,6 +170,8 @@ struct Window {
     out: PixBuf,
     rx: Receiver<()>,
     closing: bool,
+    /// Capture was clicked: launched after the window is destroyed.
+    chosen: Option<Plan>,
     sized_for: f32,
 }
 
@@ -184,11 +186,7 @@ impl Window {
             let (click, redraw) = frame(&mut self.canvas, &self.th, &self.input, &mut self.focus, &mut self.f, k, &mut clip);
             self.input.end_frame();
             match click {
-                Some(Click::Capture) => {
-                    self.closing = true;
-                    super::launch(self.f.plan);
-                }
-                Some(Click::Cancel) => self.closing = true,
+                Some(c) => self.click(c),
                 None if redraw => continue,
                 None => {}
             }
@@ -196,9 +194,45 @@ impl Window {
         }
     }
 
+    /// Capture or Cancel: the window closes; Capture's plan is launched
+    /// only once it is gone ([`super::after_close`]).
+    pub(super) fn click(&mut self, c: Click) {
+        self.closing = true;
+        if c == Click::Capture {
+            self.chosen = Some(self.f.plan);
+        }
+    }
+
     fn settle(&mut self) {
         if self.closing {
             wind::close(self.hwnd);
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn for_tests(plan: Plan) -> Window {
+        let (_tx, rx) = std::sync::mpsc::channel();
+        Window::new(Form::new(plan), crate::theme::DARK, rx)
+    }
+
+    #[cfg(test)]
+    pub(super) fn chosen(&self) -> Option<Plan> {
+        self.chosen
+    }
+
+    fn new(f: Form, th: Theme, rx: Receiver<()>) -> Window {
+        Window {
+            hwnd: Hwnd::default(),
+            f,
+            th,
+            input: Input::default(),
+            focus: FocusState::default(),
+            canvas: PixBuf::default(),
+            out: PixBuf::default(),
+            rx,
+            closing: false,
+            chosen: None,
+            sized_for: 0.0,
         }
     }
 }
@@ -261,21 +295,12 @@ impl Driver for Window {
 pub fn run(rx: Receiver<()>) {
     let cfg = crate::config::load();
     let th = crate::theme::resolve(&cfg);
-    let mut w = Window {
-        hwnd: Hwnd::default(),
-        f: Form::new(Plan::from_config(&cfg)),
-        th,
-        input: Input::default(),
-        focus: FocusState::default(),
-        canvas: PixBuf::default(),
-        out: PixBuf::default(),
-        rx,
-        closing: false,
-        sized_for: 0.0,
-    };
+    let mut w = Window::new(Form::new(Plan::from_config(&cfg)), th, rx);
     let spec = WindowSpec { title: "Rustshot Capture".into(), w: W, h: H, resizable: false, min: (W, H) };
     if let Err(e) = wind::run_window(spec, &mut w) {
         eprintln!("rustshot: launcher window: {e:#}");
     }
     super::release();
+    // Destroyed: give it time to leave the screen, then capture.
+    super::after_close(w.chosen, || std::thread::sleep(super::SETTLE));
 }

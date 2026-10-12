@@ -48,6 +48,8 @@ pub enum MenuItem {
     /// Upload `i` of the recent ones (a click copies its link); `tag`
     /// changes with the link, so a changed list is a changed menu.
     Upload { i: u8, tag: u32 },
+    /// "Delete … from Imgur…" for upload `i` (its question first).
+    DeleteUpload { i: u8, tag: u32 },
 }
 
 impl MenuItem {
@@ -61,7 +63,8 @@ impl MenuItem {
                 0 => "Cancel delayed capture".into(),
                 n => format!("Cancel capture ({n} s)").into(),
             },
-            MenuItem::Upload { i, .. } => upload_label(i as usize).into(),
+            MenuItem::Upload { tag, .. } => upload_label(tag).into(),
+            MenuItem::DeleteUpload { tag, .. } => format!("Delete {} from Imgur\u{2026}", upload_label(tag)).into(),
             m => m.fixed_label().into(),
         }
     }
@@ -90,7 +93,7 @@ impl MenuItem {
             MenuItem::CaptureIn(_) => "Capture in\u{2026}",
             MenuItem::CancelDelay => "Cancel delayed capture",
             MenuItem::RecentUploads => "Recent uploads",
-            MenuItem::Upload { .. } => "",
+            MenuItem::Upload { .. } | MenuItem::DeleteUpload { .. } => "",
         }
     }
 
@@ -130,7 +133,8 @@ impl MenuItem {
             MenuItem::CaptureIn(_) => 23,
             MenuItem::CancelDelay => 24,
             MenuItem::RecentUploads => 25,
-            MenuItem::Upload { i, .. } => 30 + i as i32,
+            MenuItem::Upload { i, .. } => 30 + 2 * i as i32,
+            MenuItem::DeleteUpload { i, .. } => 31 + 2 * i as i32,
             MenuItem::Separator => SEPARATOR_IDS,
         }
     }
@@ -234,6 +238,8 @@ pub struct Extras {
     pub delay: bool,
     /// One tag per recent upload (newest first).
     pub uploads: Vec<u32>,
+    /// Which of them can be deleted from Imgur (their key was kept).
+    pub deletable: Vec<bool>,
 }
 
 /// [`menu_full`] with `x`: a countdown's Cancel first, the launcher items
@@ -247,8 +253,13 @@ pub fn menu_more(autostart: Option<bool>, rec: Option<RecMenu>, pins: bool, hist
     }
     if !x.uploads.is_empty() {
         let at = v.iter().position(|m| *m == MenuItem::Settings).unwrap_or(v.len());
-        let ups = x.uploads.iter().take(u8::MAX as usize).enumerate().map(|(i, t)| MenuItem::Upload { i: i as u8, tag: *t });
-        let items: Vec<MenuItem> = std::iter::once(MenuItem::RecentUploads).chain(ups).collect();
+        let mut items = vec![MenuItem::RecentUploads];
+        for (i, t) in x.uploads.iter().take(32).enumerate() {
+            items.push(MenuItem::Upload { i: i as u8, tag: *t });
+            if x.deletable.get(i).copied().unwrap_or(false) {
+                items.push(MenuItem::DeleteUpload { i: i as u8, tag: *t });
+            }
+        }
         v.splice(at..at, items);
     }
     if x.delay {
@@ -263,7 +274,9 @@ pub fn nest(menu: &[MenuItem]) -> Vec<(usize, Vec<usize>)> {
     let mut out: Vec<(usize, Vec<usize>)> = Vec::new();
     for (i, m) in menu.iter().enumerate() {
         match out.last_mut() {
-            Some((p, kids)) if matches!(m, MenuItem::Upload { .. }) && menu[*p] == MenuItem::RecentUploads => kids.push(i),
+            Some((p, kids)) if matches!(m, MenuItem::Upload { .. } | MenuItem::DeleteUpload { .. }) && menu[*p] == MenuItem::RecentUploads => {
+                kids.push(i)
+            }
             _ => out.push((i, Vec::new())),
         }
     }
@@ -280,7 +293,12 @@ pub fn current_menu() -> Vec<MenuItem> {
     };
     let history = cfg.history.then(|| crate::history::today_count(&crate::history::default_root(), today));
     let recent = crate::uploads::recent();
-    let x = Extras { launcher: true, delay: DELAYING.load(Ordering::SeqCst), uploads: recent.iter().map(|r| tag_of(&r.link)).collect() };
+    let x = Extras {
+        launcher: true,
+        delay: DELAYING.load(Ordering::SeqCst),
+        uploads: recent.iter().map(|r| tag_of(&r.link)).collect(),
+        deletable: recent.iter().map(|r| crate::uploads::valid_deletehash(r.info.deletehash.reveal())).collect(),
+    };
     *RECENT.lock().unwrap_or_else(|e| e.into_inner()) = recent.into_iter().map(|r| r.link).collect();
     menu_more(auto, rec_menu(), crate::pin::count() > 0, history, crate::rec_ui::supported(), &x)
 }
@@ -293,14 +311,15 @@ pub fn tag_of(link: &str) -> u32 {
     link.bytes().fold(0x811c_9dc5u32, |h, b| (h ^ b as u32).wrapping_mul(0x0100_0193))
 }
 
-/// The link of upload `i` in the menu.
-fn recent_link(i: usize) -> Option<String> {
-    RECENT.lock().unwrap_or_else(|e| e.into_inner()).get(i).cloned()
+/// The listed link with menu tag `tag` (never another one: a menu built
+/// from an older list finds nothing).
+fn recent_link(tag: u32) -> Option<String> {
+    RECENT.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|l| tag_of(l) == tag).cloned()
 }
 
-/// Upload `i`'s menu text: "i.imgur.com/aB3x.png".
-fn upload_label(i: usize) -> String {
-    recent_link(i).map_or_else(|| "(gone)".into(), |l| crate::uploads::short_link(&l))
+/// An upload's menu text: "i.imgur.com/aB3x.png".
+fn upload_label(tag: u32) -> String {
+    recent_link(tag).map_or_else(|| "(gone)".into(), |l| crate::uploads::short_link(&l))
 }
 
 /// An upload record was filed or forgotten: "Recent uploads" follows.
@@ -352,6 +371,7 @@ pub fn item_event(item: MenuItem) -> Option<HotEvent> {
         MenuItem::Quit => HotEvent::Quit,
         MenuItem::CaptureIn(n) => HotEvent::Launch(crate::launcher::Plan::region_in(n as u32)),
         MenuItem::CancelDelay => HotEvent::CancelDelay,
+        MenuItem::DeleteUpload { tag, .. } => HotEvent::UploadDelete(tag),
         MenuItem::Settings
         | MenuItem::CheckUpdates
         | MenuItem::Autostart(_)
@@ -372,8 +392,8 @@ pub fn activate(item: MenuItem, tx: &Sender<HotEvent>) -> Result<(), String> {
     match item {
         MenuItem::Settings => crate::settings_ui::show(),
         MenuItem::Launcher => crate::launcher::show(),
-        MenuItem::Upload { i, .. } => {
-            let link = recent_link(i as usize).ok_or("That upload is no longer listed")?;
+        MenuItem::Upload { tag, .. } => {
+            let link = recent_link(tag).ok_or("That upload is no longer listed")?;
             crate::export::copy_text_to_clipboard(&link).map_err(|e| format!("Could not copy the link: {e:#}"))?;
             notify(&format!("Link copied \u{b7} {}", crate::uploads::short_link(&link)));
         }
@@ -800,7 +820,7 @@ mod tests {
     /// Cancel first. Ids stay unique; submenus nest.
     #[test]
     fn menu_with_launcher_uploads_and_a_countdown() {
-        let x = Extras { launcher: true, delay: false, uploads: vec![tag_of("a"), tag_of("b")] };
+        let x = Extras { launcher: true, delay: false, uploads: vec![tag_of("a"), tag_of("b")], deletable: vec![false, true] };
         let m = menu_more(Some(true), None, false, Some(2), true, &x);
         assert_eq!(
             m[..11],
@@ -818,7 +838,8 @@ mod tests {
                 MenuItem::Upload { i: 1, tag: tag_of("b") },
             ]
         );
-        assert_eq!(m[11], MenuItem::Settings);
+        assert_eq!(m[11], MenuItem::DeleteUpload { i: 1, tag: tag_of("b") }, "only the one whose key was kept");
+        assert_eq!(m[12], MenuItem::Settings);
         // Without Record (not supported here), after Capture window.
         let m2 = menu_more(None, None, false, None, false, &x);
         assert_eq!(m2[3], MenuItem::Launcher);
@@ -838,8 +859,8 @@ mod tests {
         let tree = nest(&d);
         let ru = d.iter().position(|i| *i == MenuItem::RecentUploads).unwrap();
         let (_, kids) = tree.iter().find(|(p, _)| *p == ru).unwrap();
-        assert_eq!(kids, &vec![ru + 1, ru + 2]);
-        assert_eq!(tree.len(), d.len() - 2, "the uploads are not top items");
+        assert_eq!(kids, &vec![ru + 1, ru + 2, ru + 3]);
+        assert_eq!(tree.len(), d.len() - 3, "the uploads are not top items");
         // A changed list is a changed menu (the Linux tray re-sends it).
         let other = menu_more(None, None, false, None, true, &Extras { uploads: vec![tag_of("c"), tag_of("b")], ..x.clone() });
         assert_ne!(other, menu_more(None, None, false, None, true, &x));
@@ -862,9 +883,12 @@ mod tests {
         }
         assert_eq!(delay_tip(3), "Rustshot \u{2014} capturing in 3 s");
         // An upload's text is its link, as the menu was built.
-        *RECENT.lock().unwrap() = vec!["https://i.imgur.com/aB3x.png".into()];
-        assert_eq!(MenuItem::Upload { i: 0, tag: 0 }.label(), "i.imgur.com/aB3x.png");
-        assert_eq!(MenuItem::Upload { i: 4, tag: 0 }.label(), "(gone)");
+        let l = "https://i.imgur.com/aB3x.png";
+        *RECENT.lock().unwrap() = vec!["https://i.imgur.com/zz.png".into(), l.into()];
+        assert_eq!(MenuItem::Upload { i: 0, tag: tag_of(l) }.label(), "i.imgur.com/aB3x.png", "by its tag, not its place");
+        assert_eq!(MenuItem::DeleteUpload { i: 0, tag: tag_of(l) }.label(), "Delete i.imgur.com/aB3x.png from Imgur\u{2026}");
+        assert_eq!(MenuItem::Upload { i: 4, tag: 7 }.label(), "(gone)");
+        assert_eq!(format!("{:?}", item_event(MenuItem::DeleteUpload { i: 0, tag: 5 })), "Some(UploadDelete(5))");
     }
 
     #[test]

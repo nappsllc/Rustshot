@@ -597,12 +597,26 @@ impl App {
             HotEvent::Launch(_) if self.updating || self.restart_pending => eprintln!("rustshot: an update is installing; capture ignored"),
             HotEvent::Launch(plan) => {
                 self.delay_show.th = theme::resolve(&self.cfg);
-                if let Some(p) = self.delay.start(plan, Instant::now(), &mut self.delay_show)
-                    && matches!(self.st, State::Hidden)
-                {
-                    self.pending = Some(p);
+                if let Some(p) = self.delay.start(plan, Instant::now(), &mut self.delay_show) {
+                    if matches!(self.st, State::Hidden) && self.pending.is_none() {
+                        self.pending = Some(p);
+                    } else {
+                        self.say_capture_open();
+                    }
                 }
             }
+            HotEvent::UploadDelete(tag) => match crate::uploads::ask_delete(tag) {
+                Some(n) => {
+                    #[cfg(not(test))]
+                    let at = capture::cursor_pos();
+                    #[cfg(test)]
+                    let at = (0, 0);
+                    if !crate::notice::show(n, at, theme::resolve(&self.cfg)) {
+                        crate::tray::notify("Delete it from the History window (no notice window here)");
+                    }
+                }
+                None => crate::tray::notify("That upload is no longer listed"),
+            },
             // History opens over anything (a recording, another window).
             HotEvent::History => crate::history_ui::show(),
             // The pill's buttons from the tray or a while-recording chord.
@@ -659,9 +673,22 @@ impl App {
         let now = Instant::now();
         match self.delay.poll(now, &mut self.delay_show) {
             Some(p) if !busy => self.pending = Some(p),
-            Some(_) => eprintln!("rustshot: busy; the delayed capture was dropped"),
+            Some(_) => self.say_capture_open(),
             None if self.one_shot() && !self.delay.active() && self.pending.is_none() && matches!(self.st, State::Hidden) => self.request_exit(2),
             None => {}
+        }
+    }
+
+    /// A launch found a capture open (or a recording, an update): say so
+    /// over the capture, else in a balloon.
+    fn say_capture_open(&mut self) {
+        let text = "Capture already open";
+        eprintln!("rustshot: {text}; the launch was dropped");
+        if let State::Edit(e) = &mut self.st {
+            e.notice = Some(Toast::new(text.to_string(), ToastKind::Info));
+            self.repaint();
+        } else {
+            crate::tray::notify(text);
         }
     }
 

@@ -231,6 +231,14 @@ pub fn note_thumb(link: &str, thumb: Option<Vec<u8>>) {
     note_mut(link, |n| n.thumb = thumb);
 }
 
+/// The link of an upload changed (a video's, after processing): its
+/// notes follow.
+pub fn rekey(old: &str, new: &str) {
+    if let Some(x) = lock(&NOTES).iter_mut().find(|x| x.link == old) {
+        x.link = new.to_string();
+    }
+}
+
 /// What is known about the upload of `link` (taken: filed once).
 fn take(link: &str) -> Option<Note> {
     let mut n = lock(&NOTES);
@@ -270,11 +278,14 @@ pub fn finished(link: &str, entry: Option<(&Path, &str)>) {
             let id2 = id.clone();
             crate::history::update(&root, &id, move |m| {
                 let info = info_for(&link, || entry_thumb(Store::new(&r2).dir_of(&id2)));
+                index_add(Record { link: link.clone(), info: info.clone(), entry: Some(id2.clone()) });
                 set(m, link, info);
+                changed();
             });
         }
         None => {
             let info = info_for(link, || None);
+            index_add(Record { link: link.to_string(), info: info.clone(), entry: None });
             if let Some(b) = Book::default_book()
                 && let Err(e) = b.add(Record { link: link.to_string(), info, entry: None })
             {
@@ -291,6 +302,7 @@ pub fn finished_in(store: &Store, id: &str, link: &str) -> anyhow::Result<Meta> 
     let dir = store.dir_of(id);
     let info = info_for(link, || entry_thumb(dir));
     let link = link.to_string();
+    index_add(Record { link: link.clone(), info: info.clone(), entry: Some(id.to_string()) });
     let r = store.update(id, move |m| set(m, link, info));
     changed();
     r
@@ -434,28 +446,56 @@ pub fn merge_recent(entries: &[crate::history::Entry], book: Vec<Record>) -> Vec
     all
 }
 
-/// The tray's "Recent uploads" (listed at most every few seconds).
-pub fn recent() -> Vec<Record> {
-    static CACHE: Mutex<Option<(u64, std::time::Instant, Vec<Record>)>> = Mutex::new(None);
-    let generation = crate::history::generation() ^ GEN.load(std::sync::atomic::Ordering::SeqCst) << 32;
-    if let Some((g, at, v)) = lock(&CACHE).as_ref()
-        && *g == generation
-        && at.elapsed() < std::time::Duration::from_secs(10)
-    {
-        return v.clone();
+/// The tray's list: built once off the caller's thread ([`warm`]), then
+/// kept up to date as uploads are filed and forgotten. `None`: not built.
+static INDEX: Mutex<Option<Vec<Record>>> = Mutex::new(None);
+static BUILDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// (Re)build the list on a worker (the daemon starts; History cleared).
+pub fn warm() {
+    if cfg!(test) || BUILDING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
     }
-    let entries = if cfg!(test) { Vec::new() } else { Store::open_default().list() };
-    let book = Book::default_book().map(|b| b.list()).unwrap_or_default();
-    let v = merge_recent(&entries, book);
-    *lock(&CACHE) = Some((generation, std::time::Instant::now(), v.clone()));
-    v
+    let _ = std::thread::Builder::new().name("rustshot-uploads".into()).spawn(|| {
+        let entries = Store::open_default().list();
+        let book = Book::default_book().map(|b| b.list()).unwrap_or_default();
+        *lock(&INDEX) = Some(merge_recent(&entries, book));
+        BUILDING.store(false, std::sync::atomic::Ordering::SeqCst);
+        crate::tray::uploads_changed();
+    });
 }
 
-/// Bumped when a record is filed or forgotten (the tray's list).
-static GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Put `rec` first in the list (once built).
+fn index_add(rec: Record) {
+    if let Some(v) = lock(&INDEX).as_mut() {
+        v.retain(|r| r.link != rec.link);
+        v.insert(0, rec);
+        v.truncate(RECENT);
+    }
+}
+
+fn index_remove(link: &str) {
+    if let Some(v) = lock(&INDEX).as_mut() {
+        v.retain(|r| r.link != link);
+    }
+}
+
+/// The tray's "Recent uploads": never lists anything on the caller's
+/// thread (empty until [`warm`] is done).
+pub fn recent() -> Vec<Record> {
+    let v = lock(&INDEX).clone();
+    v.unwrap_or_else(|| {
+        warm();
+        Vec::new()
+    })
+}
+
+/// The listed upload whose link has menu tag `tag`.
+pub fn by_tag(tag: u32) -> Option<Record> {
+    lock(&INDEX).as_ref()?.iter().find(|r| crate::tray::tag_of(&r.link) == tag).cloned()
+}
 
 fn changed() {
-    GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     crate::tray::uploads_changed();
 }
 
@@ -469,26 +509,57 @@ pub fn short_link(link: &str) -> String {
 /// DELETE (host, path, headers) → (status, body).
 pub type DeleteFn<'a> = &'a dyn Fn(&str, &str, &[(&str, &str)]) -> Result<(u32, String), String>;
 
+/// A deletehash as Imgur makes them (letters and digits): anything else
+/// (a hand-edited file) never reaches a URL.
+pub fn valid_deletehash(s: &str) -> bool {
+    (5..=32).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
 /// The request that deletes upload `deletehash`: host, path, headers.
 pub fn delete_request(deletehash: &Secret, client_id: &str) -> (&'static str, String, Vec<(&'static str, String)>) {
     (crate::imgur::HOST, format!("/3/image/{}", deletehash.reveal()), vec![("Authorization", format!("Client-ID {client_id}"))])
 }
 
+/// How a delete went.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Deleted {
+    Now,
+    /// Imgur no longer has it (404): deleted on imgur.com, or long gone.
+    AlreadyGone,
+}
+
+impl Deleted {
+    /// The toast.
+    pub fn text(self) -> &'static str {
+        match self {
+            Deleted::Now => "Deleted from Imgur",
+            Deleted::AlreadyGone => "Already deleted on Imgur",
+        }
+    }
+}
+
 /// Delete upload `deletehash` from Imgur over `http` (no network in tests:
 /// they pass a fake).
-pub fn delete_remote(deletehash: &Secret, client_id: &str, http: DeleteFn) -> Result<(), String> {
+pub fn delete_remote(deletehash: &Secret, client_id: &str, http: DeleteFn) -> Result<Deleted, String> {
     if deletehash.is_empty() {
         return Err("this upload can't be deleted (it was uploaded before Rustshot kept the key)".into());
     }
-    if client_id.trim().is_empty() {
-        return Err("no Imgur client id is set".into());
+    if !valid_deletehash(deletehash.reveal()) {
+        return Err("this upload's key is damaged".into());
     }
-    let (host, path, headers) = delete_request(deletehash, client_id.trim());
+    let client_id = client_id.trim();
+    if client_id.is_empty() || client_id.chars().any(|c| c.is_control()) {
+        return Err("no valid Imgur client id is set".into());
+    }
+    let (host, path, headers) = delete_request(deletehash, client_id);
     let hd: Vec<(&str, &str)> = headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
     let (status, body) = http(host, &path, &hd)?;
     let ok = (200..300).contains(&status) && !body.contains("\"success\":false") && !body.contains("\"success\": false");
     if ok {
-        return Ok(());
+        return Ok(Deleted::Now);
+    }
+    if status == 404 || body.contains("\"status\":404") {
+        return Ok(Deleted::AlreadyGone);
     }
     // Imgur's reason, never the request (it holds the deletehash).
     let why = json_field(&body, "error").or_else(|| json_field(&body, "message")).unwrap_or_else(|| format!("HTTP {status}"));
@@ -496,18 +567,79 @@ pub fn delete_remote(deletehash: &Secret, client_id: &str, http: DeleteFn) -> Re
 }
 
 /// Forget the upload of `link` wherever it is kept: entry `entry` of
-/// `store` (its link and record cleared) or `uploads.json`.
+/// `store` (its link and record cleared; an entry gone meanwhile is
+/// fine) or `uploads.json`.
 pub fn forget(store: &Store, entry: Option<&str>, link: &str) -> anyhow::Result<()> {
-    if let Some(id) = entry {
-        store.update(id, |m| {
-            m.uploaded = None;
-            m.upload = None;
-        })?;
-    } else if let Some(b) = Book::default_book() {
-        b.remove(link)?;
-    }
+    let r = match entry {
+        Some(id) if store.get(id).is_some() => store
+            .update(id, |m| {
+                m.uploaded = None;
+                m.upload = None;
+            })
+            .map(|_| ()),
+        Some(_) => Ok(()),
+        None => Book::default_book().map_or(Ok(()), |b| b.remove(link).map(|_| ())),
+    };
+    index_remove(link);
     changed();
-    Ok(())
+    r
+}
+
+/// "Clear history" with its checkbox: `uploads.json` goes too (the list
+/// is built again).
+pub fn forget_book() {
+    if let Some(b) = Book::default_book() {
+        let _ = std::fs::remove_file(&b.path);
+    }
+    *lock(&INDEX) = None;
+    warm();
+}
+
+/// Delete `rec` from Imgur and forget it; the toast's text and kind.
+pub fn delete_record(store: &Store, rec: &Record, client_id: &str, http: DeleteFn) -> (String, crate::editor::style::ToastKind) {
+    use crate::editor::style::ToastKind;
+    match delete_remote(&rec.info.deletehash, client_id, http) {
+        Ok(d) => match forget(store, rec.entry.as_deref(), &rec.link) {
+            Ok(()) => (d.text().into(), ToastKind::Success),
+            Err(e) => (format!("{}, but the link is still listed: {e:#}", d.text()), ToastKind::Error),
+        },
+        Err(e) => (format!("Couldn't delete from Imgur: {e}"), ToastKind::Error),
+    }
+}
+
+// --- the tray's Delete from Imgur… -------------------------------------------------
+
+/// The upload the tray asked to delete, until its question is answered.
+static ASKED: Mutex<Option<Record>> = Mutex::new(None);
+
+/// The question for the tray's "Delete from Imgur…": a note with Delete
+/// and Cancel (None: that upload is no longer listed).
+pub fn ask_delete(tag: u32) -> Option<crate::notice::Note> {
+    let rec = by_tag(tag)?;
+    let mut n = crate::notice::Note::plain(format!("Delete {} from Imgur?", short_link(&rec.link)), crate::editor::style::ToastKind::Info);
+    n.actions = vec![crate::notice::NoteAct::DeleteUpload, crate::notice::NoteAct::KeepUpload];
+    n.ttl = std::time::Duration::from_secs(10);
+    *lock(&ASKED) = Some(rec);
+    Some(n)
+}
+
+/// The question's answer: Delete runs on a worker (its result goes to
+/// `done`); the note while it runs.
+pub fn answer(delete: bool, done: impl FnOnce(crate::notice::Note) + Send + 'static) -> Option<crate::notice::Note> {
+    let rec = lock(&ASKED).take()?;
+    if !delete {
+        return None;
+    }
+    let cfg = crate::config::load();
+    std::thread::spawn(move || {
+        #[cfg(test)]
+        let del = |_: &str, _: &str, _: &[(&str, &str)]| -> Result<(u32, String), String> { Err("no network in tests".into()) };
+        #[cfg(not(test))]
+        let del = |h: &str, p: &str, hd: &[(&str, &str)]| crate::export::http_delete(h, p, hd);
+        let (text, kind) = delete_record(&Store::open_default(), &rec, &cfg.upload_client_id, &del);
+        done(crate::notice::Note::plain(text, kind));
+    });
+    Some(crate::notice::Note::plain("Deleting from Imgur\u{2026}", crate::editor::style::ToastKind::Info))
 }
 
 #[cfg(test)]

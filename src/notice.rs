@@ -60,6 +60,9 @@ pub enum NoteAct {
     Card,
     /// The delayed capture's pill: call the capture off.
     CancelDelay,
+    /// The tray's "Delete from Imgur?": delete it, or not.
+    DeleteUpload,
+    KeepUpload,
 }
 
 impl NoteAct {
@@ -74,7 +77,8 @@ impl NoteAct {
             NoteAct::Edit => "Edit",
             NoteAct::Dismiss => "Close",
             NoteAct::Card => "",
-            NoteAct::CancelDelay => "Cancel",
+            NoteAct::CancelDelay | NoteAct::KeepUpload => "Cancel",
+            NoteAct::DeleteUpload => "Delete from Imgur",
         }
     }
 
@@ -91,7 +95,7 @@ impl NoteAct {
 
     /// The first button is the accent one.
     fn primary(self) -> bool {
-        matches!(self, NoteAct::CopyLink | NoteAct::Copy | NoteAct::Edit)
+        matches!(self, NoteAct::CopyLink | NoteAct::Copy | NoteAct::Edit | NoteAct::DeleteUpload)
     }
 }
 
@@ -388,7 +392,7 @@ pub fn upload_configured(cfg: &crate::config::Config) -> bool {
 pub fn run_action(a: NoteAct, file: &std::path::Path, entry: Option<String>, done: impl FnOnce(Note) + Send + 'static) -> Option<Note> {
     match a {
         // A thumbnail's buttons act on its picture (`run_note_action`).
-        NoteAct::ThumbCopy | NoteAct::ThumbSave | NoteAct::Pin | NoteAct::Edit | NoteAct::Dismiss | NoteAct::Card | NoteAct::CancelDelay => None,
+        NoteAct::ThumbCopy | NoteAct::ThumbSave | NoteAct::Pin | NoteAct::Edit | NoteAct::Dismiss | NoteAct::Card | NoteAct::CancelDelay | NoteAct::DeleteUpload | NoteAct::KeepUpload => None,
         NoteAct::Open => {
             crate::actions::open_path(file);
             None
@@ -872,6 +876,7 @@ pub fn run_note_action(note: &Note, a: NoteAct, th: Theme, done: impl FnOnce(Not
             crate::launcher::cancel();
             Next::Hide
         }
+        NoteAct::DeleteUpload | NoteAct::KeepUpload => crate::uploads::answer(a == NoteAct::DeleteUpload, done).map_or(Next::Hide, Next::Show),
         NoteAct::Edit => {
             if let Some(id) = note.entry.as_ref().or(note.thumb.as_ref().and_then(|t| t.entry.as_ref())) {
                 crate::edit_ui::open(id);

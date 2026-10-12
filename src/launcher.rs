@@ -342,12 +342,37 @@ pub fn take_start() -> Option<Plan> {
 
 /// The window chose `plan`: remember it and capture (the daemon counts
 /// down; without one, `run_here` does).
+#[cfg(test)]
+fn launch(plan: Plan) {
+    LAUNCHED.with(|l| l.borrow_mut().push(plan));
+}
+
+#[cfg(not(test))]
 fn launch(plan: Plan) {
     let path = crate::config::config_path();
     crate::config::queue_key_edits(&path, plan.config_edits(), true);
     let sent = lock(&DAEMON).as_ref().is_some_and(|tx| tx.send(HotEvent::Launch(plan)).is_ok());
     if !sent {
         *lock(&CHOSEN) = Some(plan);
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Tests: the plans launched.
+    pub static LAUNCHED: std::cell::RefCell<Vec<Plan>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// How long a closed launcher is given to leave the screen (the DWM's
+/// close fade, a compositor's unmap) before its capture starts.
+pub const SETTLE: Duration = Duration::from_millis(250);
+
+/// The window is gone: after [`SETTLE`] (`settle`), its plan (if one was
+/// chosen) is launched, so the launcher is never in the capture.
+pub fn after_close(chosen: Option<Plan>, settle: impl FnOnce()) {
+    if let Some(p) = chosen {
+        settle();
+        launch(p);
     }
 }
 

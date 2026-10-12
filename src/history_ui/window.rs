@@ -481,7 +481,12 @@ impl Window {
                 self.spawn(move || super::run_export(&store, &id, crate::export::Task::Upload, &cfg))
             }
             Act::Pin(id) => self.spawn(move || super::run_export(&store, &id, crate::export::Task::Pin, &cfg)),
-            Act::OpenWith(id) => self.spawn(move || super::open_with(&store, &id, &cfg)),
+            Act::OpenWith(id) => {
+                // The chooser is owned by this window.
+                #[allow(clippy::unnecessary_cast)] // a pointer, a u64 or a usize
+                let owner = Some(self.hwnd.0 as usize);
+                self.spawn(move || super::open_with(&store, &id, &cfg, owner))
+            }
             Act::DeleteUpload(id) => {
                 self.h.note("Deleting from Imgur\u{2026}", crate::editor::style::ToastKind::Info);
                 self.spawn(move || {
@@ -511,6 +516,10 @@ impl Window {
             }
             Act::Clear(files) => {
                 let n = self.h.store.clear(files);
+                if files {
+                    // uploads.json too (uploads made with History off).
+                    crate::uploads::forget_book();
+                }
                 crate::history::changed();
                 self.h.sel.clear();
                 self.h.reload();

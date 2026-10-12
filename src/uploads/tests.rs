@@ -2,6 +2,9 @@ use super::*;
 use crate::history::tests::{meta_at, TempRoot};
 use std::cell::RefCell;
 
+/// The tests that touch the tray's index: one at a time.
+static SERIAL: Mutex<()> = Mutex::new(());
+
 #[test]
 fn base64_round_trips() {
     assert_eq!(b64_encode(b"Man"), "TWFu");
@@ -146,15 +149,19 @@ fn delete_requests_are_built_and_answered() {
         sent.borrow_mut().push((h.to_string(), p.to_string(), hd.iter().map(|(k, v)| format!("{k}: {v}")).collect::<Vec<_>>()));
         Ok((200, r#"{"data":true,"success":true,"status":200}"#.to_string()))
     };
-    assert_eq!(delete_remote(&dh, " cid42 ", &ok), Ok(()));
+    assert_eq!(delete_remote(&dh, " cid42 ", &ok), Ok(Deleted::Now));
     assert_eq!(sent.borrow()[0], ("api.imgur.com".to_string(), "/3/image/Kq2dH".to_string(), vec!["Authorization: Client-ID cid42".to_string()]));
 
-    // Imgur's reason, without the deletehash it may quote.
+    // 404: Imgur no longer has it (deleted there already): gone, not a failure.
     let gone = |_: &str, _: &str, _: &[(&str, &str)]| {
         Ok((404, r#"{"data":{"error":"Unable to find an image with the hash Kq2dH","request":"\/3\/image\/Kq2dH","method":"DELETE"},"success":false,"status":404}"#.to_string()))
     };
-    let e = delete_remote(&dh, "cid", &gone).unwrap_err();
-    assert!(e.starts_with("Unable to find an image") && !e.contains("Kq2dH"), "{e}");
+    assert_eq!(delete_remote(&dh, "cid", &gone), Ok(Deleted::AlreadyGone));
+    assert_eq!(Deleted::AlreadyGone.text(), "Already deleted on Imgur");
+    // Imgur's reason, without the deletehash it may quote.
+    let denied = |_: &str, _: &str, _: &[(&str, &str)]| Ok((403, r#"{"data":{"error":"Not allowed for Kq2dH"},"success":false,"status":403}"#.to_string()));
+    let e = delete_remote(&dh, "cid", &denied).unwrap_err();
+    assert!(e.starts_with("Not allowed") && !e.contains("Kq2dH"), "{e}");
     let limited = |_: &str, _: &str, _: &[(&str, &str)]| Ok((429, "Too Many Requests".to_string()));
     assert_eq!(delete_remote(&dh, "cid", &limited), Err("HTTP 429".into()));
     let offline = |_: &str, _: &str, _: &[(&str, &str)]| -> Result<(u32, String), String> { Err("WinHttpSendRequest: no network".into()) };
@@ -163,6 +170,41 @@ fn delete_requests_are_built_and_answered() {
     let never = |_: &str, _: &str, _: &[(&str, &str)]| -> Result<(u32, String), String> { panic!("sent") };
     assert!(delete_remote(&Secret::default(), "cid", &never).is_err());
     assert!(delete_remote(&dh, "  ", &never).is_err());
+    assert!(delete_remote(&dh, "cid\nX-Evil: 1", &never).is_err());
+    let long = "a".repeat(33);
+    for bad in ["abc", "Kq2dH/../x", "Kq2dH?x=1", "Kq 2dH", long.as_str()] {
+        assert!(!valid_deletehash(bad), "{bad}");
+        assert!(delete_remote(&Secret::new(bad), "cid", &never).is_err(), "{bad}");
+    }
+    assert!(valid_deletehash("Kq2dH") && valid_deletehash("aB3xYz9QwErTyUi"));
+}
+
+/// The tray's list comes from the index (never a listing on the caller's
+/// thread); filed and forgotten uploads update it; Delete from Imgur…
+/// is asked, then answered.
+#[test]
+fn the_index_follows_uploads_and_the_tray_asks() {
+    let _l = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    *lock(&INDEX) = Some(vec![rec("https://i.imgur.com/old1.png", "dOld1", 1)]);
+    index_add(rec("https://i.imgur.com/idx1.png", "dIdx1", 5));
+    let links: Vec<String> = recent().into_iter().map(|r| r.link).collect();
+    assert_eq!(links, ["https://i.imgur.com/idx1.png", "https://i.imgur.com/old1.png"]);
+    let t = crate::tray::tag_of("https://i.imgur.com/idx1.png");
+    assert_eq!(by_tag(t).unwrap().info.deletehash.reveal(), "dIdx1");
+    assert_eq!(by_tag(12345), None);
+    // The question, then Cancel: nothing happens.
+    let n = ask_delete(t).unwrap();
+    assert_eq!(n.text, "Delete i.imgur.com/idx1.png from Imgur?");
+    assert_eq!(n.actions, vec![crate::notice::NoteAct::DeleteUpload, crate::notice::NoteAct::KeepUpload]);
+    assert!(answer(false, |_| panic!("no delete")).is_none());
+    assert!(answer(true, |_| panic!("asked once")).is_none(), "answered already");
+    index_remove("https://i.imgur.com/idx1.png");
+    assert_eq!(recent().len(), 1);
+    assert!(ask_delete(t).is_none());
+    for i in 0..9 {
+        index_add(rec(&format!("https://i.imgur.com/many{i}.png"), "dMany1", i));
+    }
+    assert_eq!(recent().len(), RECENT);
 }
 
 /// An upload of a History entry files its record in the entry's meta (a
@@ -170,6 +212,7 @@ fn delete_requests_are_built_and_answered() {
 /// it clears the link and the record.
 #[test]
 fn entries_keep_their_upload() {
+    let _l = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let root = TempRoot::new("uploads-entry");
     let st = Store::new(&root.0);
     let (id, dir) = st.reserve((2026, 10, 12, 9, 14, 7)).unwrap();

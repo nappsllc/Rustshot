@@ -538,9 +538,9 @@ fn open_with_picks_the_file() {
     let e = st.list().into_iter().find(|e| !e.meta.edited && !e.meta.kind.is_recording()).unwrap();
     st.update(&e.id, |m| m.saved = Some(saved.clone())).unwrap();
     crate::open_with::OPENED.with(|o| o.borrow_mut().clear());
-    assert_eq!(open_with(&st, &e.id, &Config::default()).kind, crate::editor::style::ToastKind::Success);
+    assert_eq!(open_with(&st, &e.id, &Config::default(), None).kind, crate::editor::style::ToastKind::Success);
     let edited = st.list().into_iter().find(|e| e.meta.edited).unwrap();
-    open_with(&st, &edited.id, &Config::default());
+    open_with(&st, &edited.id, &Config::default(), None);
     let opened = crate::open_with::OPENED.with(|o| o.borrow().clone());
     assert_eq!(opened[0], saved);
     assert!(opened[1].starts_with(crate::open_with::temp_dir()), "an edited one as it looks now");

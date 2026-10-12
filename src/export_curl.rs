@@ -115,11 +115,7 @@ fn run_curl(
 #[cfg_attr(test, allow(dead_code))] // tests never delete
 pub fn http_delete(host: &str, path: &str, headers: &[(&str, &str)]) -> Result<(u32, String), String> {
     use std::io::Write;
-    let q = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
-    let mut conf = format!("url = \"https://{}{}\"\n", q(host), q(path));
-    for (k, v) in headers {
-        conf.push_str(&format!("header = \"{}: {}\"\n", q(k), q(v)));
-    }
+    let conf = curl_config(host, path, headers);
     let mut child = Command::new("curl")
         .args(["-sS", "--max-time", "30", "-X", "DELETE", "-w", "\n%{http_code}", "-K", "-"])
         .stdin(Stdio::piped())
@@ -138,4 +134,26 @@ pub fn http_delete(host: &str, path: &str, headers: &[(&str, &str)]) -> Result<(
     let text = String::from_utf8_lossy(&out.stdout);
     let (body, code) = text.rsplit_once('\n').unwrap_or(("", &text));
     Ok((code.trim().parse().unwrap_or(0), body.to_string()))
+}
+
+/// The `-K -` config for a request: its URL and headers, quoted (a line
+/// break would end the line and start another option: dropped).
+fn curl_config(host: &str, path: &str, headers: &[(&str, &str)]) -> String {
+    let q = |s: &str| s.replace(['\r', '\n'], "").replace('\\', r"\\").replace('"', r#"\""#);
+    let mut conf = format!("url = \"https://{}{}\"\n", q(host), q(path));
+    for (k, v) in headers {
+        conf.push_str(&format!("header = \"{}: {}\"\n", q(k), q(v)));
+    }
+    conf
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn curl_config_is_quoted_line_by_line() {
+        let c = super::curl_config("api.imgur.com", "/3/image/abc12", &[("Authorization", "Client-ID x\"y\nurl = \"https://evil\"")]);
+        assert_eq!(c.lines().count(), 2, "{c}");
+        assert!(c.starts_with("url = \"https://api.imgur.com/3/image/abc12\"\n"));
+        assert!(c.contains(r#"Client-ID x\"yurl = \"https://evil\""#), "{c}");
+    }
 }

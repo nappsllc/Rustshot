@@ -199,6 +199,32 @@ mod window_tests {
         assert_eq!(click(&mut f, &mut focus, "launcher.cancel", 0.5), Some(Click::Cancel));
     }
 
+    /// Capture only closes the window: the plan goes out after the window
+    /// is gone and the settle has run, never while it is on screen.
+    #[test]
+    fn the_plan_waits_for_the_window_to_go() {
+        use super::super::window::Window;
+        LAUNCHED.with(|l| l.borrow_mut().clear());
+        let plan = Plan { source: Source::Screen, delay: 0, after: After::Copy };
+        let mut w = Window::for_tests(plan);
+        w.click(Click::Capture);
+        assert_eq!(w.chosen(), Some(plan));
+        assert!(LAUNCHED.with(|l| l.borrow().is_empty()), "not while the window exists");
+        let settled = std::cell::Cell::new(false);
+        after_close(w.chosen(), || {
+            assert!(LAUNCHED.with(|l| l.borrow().is_empty()), "the settle comes first");
+            settled.set(true);
+        });
+        assert!(settled.get());
+        assert_eq!(LAUNCHED.with(|l| l.borrow().clone()), vec![plan]);
+        // Cancel: nothing at all.
+        let mut w = Window::for_tests(plan);
+        w.click(Click::Cancel);
+        after_close(w.chosen(), || panic!("no settle without a plan"));
+        assert_eq!(LAUNCHED.with(|l| l.borrow().len()), 1);
+        assert!(SETTLE >= Duration::from_millis(200), "past the DWM close fade");
+    }
+
     /// The board's look, dark and light, at 1x and 2x (PNGs under
     /// RUSTSHOT_PREVIEW_DIR); the controls fit the 360 × 260 window.
     #[test]
