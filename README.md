@@ -234,8 +234,9 @@ window it is in the Save button's chevron menu, in History in a card's ⋯
 menu) hands the capture to an app you pick: the system's *Open with*
 dialog on Windows, the desktop portal's app chooser on Linux (else
 `xdg-open`, the default app), the default app on macOS. A capture that
-was saved opens as that file; otherwise it is written to
-`<temp>/rustshot-open/` first (those files go once a day old, when the
+was saved opens as that file; otherwise it is written to a private
+`rustshot-open` folder first (`%TEMP%` on Windows, `$XDG_RUNTIME_DIR` on
+Linux, 0700 with 0600 files; those files go once a day old, when the
 daemon starts).
 
 ### Pins and the thumbnail
@@ -307,7 +308,10 @@ Every Imgur upload's link, its *deletehash* (the key that deletes it),
 the time, the kind (image or video) and a small thumbnail are kept: in the
 capture's History entry, or, when History is off or the upload has no
 entry, in `uploads.json` beside the history folder (the last 50). The
-tray's **Recent uploads** lists the last five; a click copies the link.
+tray's **Recent uploads** lists the last five; a click copies the link,
+and **Delete … from Imgur…** under each asks, then deletes it (one
+Imgur no longer has is just forgotten). **Clear history…** with its
+checkbox also forgets `uploads.json`.
 
 The **Edit window** reopens a capture with its annotations as objects: the
 overlay's toolbar docked at the top, every tool and object edit (the

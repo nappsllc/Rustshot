@@ -18,9 +18,10 @@ Rustshot does not collect, store or transmit personal data or telemetry.
   request **Delete from Imgur…** makes (`DELETE
   https://api.imgur.com/3/image/<deletehash>` with Rustshot's client id),
   which you confirm first; once deleted, the link and the record go.
-- **Open with…** writes an unsaved capture to `rustshot-open` in your
-  temporary folder for the app you pick (removed once a day old); nothing
-  is sent anywhere.
+- **Open with…** writes an unsaved capture to a private `rustshot-open`
+  folder (Windows `%TEMP%`, Linux `$XDG_RUNTIME_DIR` or the cache folder,
+  readable by you only) for the app you pick (removed once a day old);
+  nothing is sent anywhere.
 - Settings are stored locally in `config.toml` in your user config folder.
 - History (on by default; off in Settings › Capture › History): each capture
   is kept on this computer only, in `%LOCALAPPDATA%\rustshot-data\history`
