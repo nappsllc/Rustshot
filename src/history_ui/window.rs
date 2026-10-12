@@ -146,6 +146,11 @@ pub fn input(h: &mut History, lay: &Lay, targets: &[(FRect, Target)], inp: &Inpu
                     acts.push(if mods.shift { Act::SaveAs(e.id.clone()) } else { Act::Save(e.id.clone()) });
                 }
             }
+            v if v == 'O' as u32 && mods.ctrl && !typing => {
+                if let Some(e) = h.single() {
+                    acts.push(Act::OpenWith(e.id.clone()));
+                }
+            }
             v if v == 'U' as u32 && mods.ctrl && !typing => {
                 if let Some(e) = h.single() {
                     acts.push(Act::Upload(e.id.clone()));
@@ -277,6 +282,12 @@ fn click(h: &mut History, lay: &Lay, t: Target, mods: crate::wind::Mods, moved: 
                 (MenuAct::OpenFolder, _) => vec![Act::OpenFolder],
                 (MenuAct::Settings, _) => vec![Act::Settings],
                 (MenuAct::SaveAs, Some(id)) => vec![Act::SaveAs(id)],
+                (MenuAct::OpenWith, Some(id)) => vec![Act::OpenWith(id)],
+                (MenuAct::CopyLink, Some(id)) => vec![Act::CopyLink(id)],
+                (MenuAct::DeleteUpload, Some(id)) => {
+                    h.ask_unupload = Some(id);
+                    Vec::new()
+                }
                 (MenuAct::ShowInFolder, Some(id)) => vec![Act::ShowInFolder(id)],
                 (MenuAct::CopyPath, Some(id)) => vec![Act::CopyPath(id)],
                 (MenuAct::Delete, Some(id)) => vec![Act::Delete(vec![id])],
@@ -335,6 +346,17 @@ pub fn frame(canvas: &mut PixBuf, th: &crate::theme::Theme, inp: &Input, focus: 
     }
     let _ = &mut acts;
     (acts, out.redraw)
+}
+
+/// The DELETE request (tests never send one).
+fn delete_http(host: &str, path: &str, headers: &[(&str, &str)]) -> Result<(u32, String), String> {
+    #[cfg(test)]
+    {
+        let _ = (host, path, headers);
+        Err("no network in tests".into())
+    }
+    #[cfg(not(test))]
+    crate::export::http_delete(host, path, headers)
 }
 
 /// Save to folder…: the ids and the folder picked (None: cancelled).
@@ -459,6 +481,14 @@ impl Window {
                 self.spawn(move || super::run_export(&store, &id, crate::export::Task::Upload, &cfg))
             }
             Act::Pin(id) => self.spawn(move || super::run_export(&store, &id, crate::export::Task::Pin, &cfg)),
+            Act::OpenWith(id) => self.spawn(move || super::open_with(&store, &id, &cfg)),
+            Act::DeleteUpload(id) => {
+                self.h.note("Deleting from Imgur\u{2026}", crate::editor::style::ToastKind::Info);
+                self.spawn(move || {
+                    let del = |h: &str, p: &str, hd: &[(&str, &str)]| delete_http(h, p, hd);
+                    super::delete_upload(&store, &id, &cfg.upload_client_id, &del)
+                })
+            }
             Act::Delete(ids) => {
                 let n = ids.iter().filter(|id| self.h.store.delete(id, false).is_ok()).count();
                 crate::history::changed();

@@ -178,7 +178,7 @@ impl Window {
                         self.e.perform(d);
                     }
                 }
-                Request::SaveAs | Request::SaveDesktop | Request::Copy | Request::Upload | Request::CopyText | Request::Pin => self.export(r),
+                Request::SaveAs | Request::SaveDesktop | Request::OpenWith | Request::Copy | Request::Upload | Request::CopyText | Request::Pin => self.export(r),
             }
         }
     }
@@ -202,6 +202,7 @@ impl Window {
         let task = match r {
             Request::SaveAs => Task::Save { path: None, ask: true },
             Request::SaveDesktop => Task::SaveDesktop,
+            Request::OpenWith => Task::OpenWith,
             Request::Upload => Task::Upload,
             Request::CopyText => Task::Text,
             _ => Task::Copy,
@@ -429,8 +430,7 @@ impl Window {
                 self.e.saved(objs, &s);
             }
             if let Some(u) = d.uploaded {
-                let u2 = u.clone();
-                let _ = self.e.store.update(&self.e.entry.id, move |m| m.uploaded = Some(u2));
+                let _ = crate::uploads::finished_in(&self.e.store, &self.e.entry.id, &u);
                 self.e.entry.meta.uploaded = Some(u);
                 crate::history::changed();
             }
