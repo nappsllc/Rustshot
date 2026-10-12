@@ -117,7 +117,10 @@ pub fn act_icon(a: Act) -> &'static str {
         | Act::RecDevMenu(_)
         | Act::RecDev(..)
         | Act::RecShape(_)
-        | Act::RecCamSize(_)
+        | Act::Mode(_)
+        | Act::RecSource(_)
+        | Act::RecCountdown(_)
+        | Act::RecGifMax(_)
         | Act::RecStart
         | Act::Wheel
         | Act::RingPalette
@@ -150,7 +153,8 @@ pub struct BarState<'a> {
 }
 
 pub fn toolbar(f: &mut Fb, ui: &Ui, tb: &Toolbar, st: &BarState, k: f32) {
-    surface(f, ui, tb.bar, 12.0, &ALL_LAYERS, k);
+    // Video mode: the bar is the setup panel (14 px corners).
+    surface(f, ui, tb.bar, if tb.video { 14.0 } else { 12.0 }, &ALL_LAYERS, k);
     if let Some(pop) = tb.pop {
         // Opaque: the annotations under a popover never show through it.
         let bg = C4 { a: 255, ..ui.th.surface };
@@ -176,16 +180,49 @@ pub fn toolbar(f: &mut Fb, ui: &Ui, tb: &Toolbar, st: &BarState, k: f32) {
                 f.fill_rect(r.x as i32, r.y as i32, r.w.max(1.0) as i32, r.h.max(1.0) as i32, ui.th.separator.fade(k));
             }
             Kind::Dot(c) => dot(f, ui, it.r, c, (c == st.color, hovered), kp),
-            Kind::SegTrack => fill(f, round(it.r), ui.px(8.0), ui.th.bg_hover.fade(kp)),
-            Kind::Seg { label, on, .. } => segment(f, ui, it.r, label, on, hovered, if it.disabled { kp * 0.4 } else { kp }),
+            Kind::SegTrack => {
+                let r = round(it.r);
+                let rad = ui.px(if r.h < ui.px(30.0) { 7.0 } else { 9.0 });
+                fill(f, r, rad, ui.th.field_bg.fade(kp));
+                ring(f, ui, r, rad, ui.th.border.fade(kp));
+            }
+            Kind::Seg { label, icon, on, .. } => segment(f, ui, it.r, label, icon, on, hovered, if it.disabled { kp * 0.4 } else { kp }),
             Kind::Label(s) => {
                 text(f, ui, 12.0, s, it.r.x, it.r.y + it.r.h / 2.0, ui.th.text_muted.fade(kp));
             }
-            Kind::Switch { label, on, .. } => switch_row(f, ui, it, label, on, hovered, kp),
+            Kind::Caption(s) => {
+                text(f, ui, 11.0, s, it.r.x, it.r.y + it.r.h / 2.0, ui.th.text_muted.fade(kp));
+            }
+            Kind::Row { icon, label, value, dim, .. } => {
+                // Hovered itself or through one of its parts.
+                let hot = st.hover.and_then(|h| tb.items.get(h)).is_some_and(|h| !h.disabled && within(h.r, it.r));
+                panel_row(f, ui, it, (icon, label, value), dim, hot && !it.disabled, kp);
+            }
+            Kind::Switch { on, .. } => toggle(f, ui, it.r, on, hovered, if it.disabled { kp * 0.4 } else { kp }),
             Kind::DevBox { dev, open } => {
                 let name = tb.texts.get(dev.text()).map_or("", String::as_str);
                 dev_box(f, ui, it.r, name, open || hovered, kp);
             }
+            Kind::Meter { lit, clip } => meter(f, ui, it.r, lit, clip, kp),
+            Kind::ModeTrack => {
+                let r = round(it.r);
+                panel(f, ui, r, 9.0, &ALL_LAYERS, ui.th.surface, ui.th.border, k);
+            }
+            Kind::Mode { video, on } => {
+                let (label, icon) = if video { ("Video", "video") } else { ("Screenshot", "camera") };
+                mode_btn(f, ui, it.r, label, icon, on, hovered, k);
+            }
+            Kind::Close => {
+                let r = round(it.r);
+                panel(f, ui, r, 8.0, &ALL_LAYERS, ui.th.surface, ui.th.border, k);
+                if hovered {
+                    fill(f, r, ui.px(8.0), ui.th.danger_bg.fade(k));
+                }
+                let isz = ui.px(16.0);
+                let fg = if hovered { ui.th.danger_fg } else { ui.th.icon };
+                draw_icon(f, "x", r.x + (r.w - isz) / 2.0, r.y + (r.h - isz) / 2.0, isz, fg.fade(k));
+            }
+            Kind::Grip => grip(f, ui, it.r, k),
             Kind::DevList => {
                 let r = round(it.r);
                 panel(f, ui, r, 8.0, &SMALL_LAYERS, ui.th.surface.with_alpha(255), ui.th.border, kp);
@@ -194,7 +231,7 @@ pub fn toolbar(f: &mut Fb, ui: &Ui, tb: &Toolbar, st: &BarState, k: f32) {
                 let name = tb.texts.get(super::toolbar::LIST_TEXT + n).map_or("", String::as_str);
                 dev_item(f, ui, it.r, name, on, hovered, kp);
             }
-            Kind::Primary { label, .. } => primary(f, ui, it.r, label, (hovered, pressed), kp),
+            Kind::Primary { label, .. } => start_button(f, ui, it.r, label, (hovered, pressed), kp),
             Kind::Swatch { c, on, .. } => dot(f, ui, it.r, c.with_alpha(255), (on, hovered), kp),
             Kind::Rainbow(_) => {
                 let r = round(it.r);
@@ -466,8 +503,15 @@ fn fit_text(ui: &Ui, size: f32, s: &str, max_w: f32) -> String {
     "…".into()
 }
 
-/// One segment of a segmented control: raised surface when chosen.
-fn segment(f: &mut Fb, ui: &Ui, r: FRect, label: &str, on: bool, hovered: bool, k: f32) {
+/// `a` lies within `b`.
+fn within(a: FRect, b: FRect) -> bool {
+    a.x >= b.x - 0.5 && a.y >= b.y - 0.5 && a.x1() <= b.x1() + 0.5 && a.y1() <= b.y1() + 0.5
+}
+
+/// One segment of a segmented control: the accent tint when chosen; an
+/// icon (16 px) and / or a label (12 px), centred, 6 px apart.
+#[allow(clippy::too_many_arguments)]
+fn segment(f: &mut Fb, ui: &Ui, r: FRect, label: &str, icon: &str, on: bool, hovered: bool, k: f32) {
     let th = ui.th;
     let r = round(r);
     let rad = ui.px(6.0);
@@ -477,53 +521,130 @@ fn segment(f: &mut Fb, ui: &Ui, r: FRect, label: &str, on: bool, hovered: bool, 
     } else if hovered {
         fill(f, r, rad, th.bg_hover.fade(k));
     }
-    let fg = if on { th.accent_fg } else if hovered { th.text } else { th.text_muted };
-    let x = r.x + (r.w - tw(ui, 12.0, label)) / 2.0;
-    text(f, ui, 12.0, label, x, r.y + r.h / 2.0, fg.fade(k));
+    let fg = if on { th.accent_fg } else if hovered { th.icon_hover } else { th.icon };
+    let size = if r.h < ui.px(24.0) { 11.0 } else { 12.0 };
+    let isz = if icon.is_empty() { 0.0 } else { ui.px(16.0) };
+    let gap = if icon.is_empty() || label.is_empty() { 0.0 } else { ui.px(6.0) };
+    let w = isz + gap + tw(ui, size, label);
+    let (x, cy) = (r.x + (r.w - w) / 2.0, r.y + r.h / 2.0);
+    if !icon.is_empty() {
+        draw_icon(f, icon, x, cy - isz / 2.0, isz, fg.fade(k));
+    }
+    text(f, ui, size, label, x + isz + gap, cy, fg.fade(k));
 }
 
-/// A row with a label and an on/off switch at its right end.
-fn switch_row(f: &mut Fb, ui: &Ui, it: &Item, label: &str, on: bool, hovered: bool, k: f32) {
+/// A panel row: hover tint, the icon (20 px), the name (92 px column),
+/// a fixed value (when it has no device box), muted while off.
+fn panel_row(f: &mut Fb, ui: &Ui, it: &Item, (icon, label, value): (&str, &str, Option<&str>), dim: bool, hot: bool, k: f32) {
     let th = ui.th;
     let r = round(it.r);
-    let k = if it.disabled { k * 0.4 } else { k };
-    if hovered {
-        fill(f, r, ui.px(8.0), th.bg_hover.fade(k));
+    let k = if it.disabled && !icon.is_empty() { k * 0.4 } else { k };
+    if hot {
+        fill(f, r, ui.px(9.0), th.bg_hover.fade(k));
     }
     let cy = r.y + r.h / 2.0;
-    text(f, ui, 12.0, label, r.x + ui.px(4.0), cy, th.text.fade(k));
-    let (sw, sh) = (ui.px(36.0).round(), ui.px(20.0).round());
-    let t = FRect { x: r.x1() - ui.px(4.0) - sw, y: (cy - sh / 2.0).round(), w: sw, h: sh };
+    let mut x = r.x + ui.px(8.0);
+    if !icon.is_empty() {
+        let isz = ui.px(20.0);
+        draw_icon(f, icon, x, cy - isz / 2.0, isz, if dim { th.text_muted } else { th.icon }.fade(k));
+        x = r.x + ui.px(38.0);
+    }
+    let name = if dim { th.text_muted } else { th.text };
+    let nw = text(f, ui, 12.0, label, x, cy, name.fade(k));
+    if let Some(v) = value {
+        let vx = if icon.is_empty() { x + nw + ui.px(10.0) } else { r.x + ui.px(38.0 + 92.0 + 10.0) };
+        let room = r.x1() - ui.px(6.0 + 32.0 + 10.0) - vx;
+        text(f, ui, 12.0, &fit_text(ui, 12.0, v, room), vx, cy, th.text_muted.fade(k));
+    }
+}
+
+/// A row's on/off toggle (32 × 18, the 14 px knob), at the right of `r`.
+fn toggle(f: &mut Fb, ui: &Ui, r: FRect, on: bool, hovered: bool, k: f32) {
+    let th = ui.th;
+    let (sw, sh) = (ui.px(32.0).round(), ui.px(18.0).round());
+    let t = FRect { x: (r.x1() - ui.px(6.0) - sw).round(), y: (r.y + (r.h - sh) / 2.0).round(), w: sw, h: sh };
     let track = if on {
         if hovered { mix(th.accent, C4::rgb(255, 255, 255), 0.12) } else { th.accent }
     } else if hovered {
-        th.text_muted.fade(0.6)
+        th.text_muted.fade(0.55)
     } else {
-        th.text_muted.fade(0.45)
+        th.text_muted.fade(0.35)
     };
-    fill(f, t, ui.px(10.0), track.fade(k));
-    let kr = ui.px(8.0);
-    let cx = if on { t.x1() - ui.px(10.0) } else { t.x + ui.px(10.0) };
+    fill(f, t, sh / 2.0, track.fade(k));
+    let kr = ui.px(7.0);
+    let cx = if on { t.x1() - ui.px(9.0) } else { t.x + ui.px(9.0) };
     let ky = t.y + t.h / 2.0;
-    f.fill_circle(cx, ky + ui.px(0.5), kr + ui.px(0.5), C4::new(0, 0, 0, 40).fade(k));
+    f.fill_circle(cx, ky + ui.px(0.5), kr + ui.px(0.5), C4::new(0, 0, 0, 70).fade(k));
     f.fill_circle(cx, ky, kr, C4::rgb(255, 255, 255).fade(k));
 }
 
-/// The microphone box: recessed field, the chosen name, a chevron.
+/// The level meter: 7 bars of fixed heights, lit left to right; the top
+/// two amber while clipping.
+fn meter(f: &mut Fb, ui: &Ui, r: FRect, lit: u8, clip: bool, k: f32) {
+    let th = ui.th;
+    let (bw, gap) = (ui.px(3.0), ui.px(2.0));
+    let cy = r.y + r.h / 2.0;
+    for (i, h) in crate::rec_ui::meter::BARS.iter().enumerate() {
+        let h = ui.px(*h);
+        let b = round(FRect { x: r.x + i as f32 * (bw + gap), y: cy - h / 2.0, w: bw, h });
+        let on = (i as u8) < lit;
+        let c = if !on {
+            th.text_muted.fade(0.35)
+        } else if clip && i >= crate::rec_ui::meter::BARS.len() - 2 {
+            crate::rec_ui::AMBER
+        } else {
+            th.accent
+        };
+        fill(f, b, bw / 2.0, c.fade(k));
+    }
+}
+
+/// A mode of the mode switch: icon (14 px) and label (11.5 px).
+#[allow(clippy::too_many_arguments)]
+fn mode_btn(f: &mut Fb, ui: &Ui, r: FRect, label: &str, icon: &str, on: bool, hovered: bool, k: f32) {
+    let th = ui.th;
+    let r = round(r);
+    let rad = ui.px(6.0);
+    if on {
+        fill(f, r, rad, th.accent_bg.fade(k));
+        ring(f, ui, r, rad, th.accent_ring.fade(k));
+    } else if hovered {
+        fill(f, r, rad, th.bg_hover.fade(k));
+    }
+    let fg = if on { th.accent_fg } else if hovered { th.icon_hover } else { th.icon };
+    let (isz, gap) = (ui.px(14.0), ui.px(6.0));
+    let x = r.x + ui.px(10.0);
+    let cy = r.y + r.h / 2.0;
+    draw_icon(f, icon, x, cy - isz / 2.0, isz, fg.fade(k));
+    text(f, ui, 11.5, label, x + isz + gap, cy, fg.fade(k));
+}
+
+/// "Drag · scroll to resize" under the camera bubble: a pill with the grip.
+fn grip(f: &mut Fb, ui: &Ui, r: FRect, k: f32) {
+    let th = ui.th;
+    let r = round(r);
+    panel(f, ui, r, r.h / 2.0 / ui.s, &SMALL_LAYERS, th.surface, th.border, k);
+    let cy = r.y + r.h / 2.0;
+    let x = r.x + ui.px(8.0);
+    // Six dots (the board's grip glyph, 14 px).
+    let u = ui.px(14.0) / 24.0;
+    for (dx, dy) in [(9.0, 7.0), (15.0, 7.0), (9.0, 12.0), (15.0, 12.0), (9.0, 17.0), (15.0, 17.0)] {
+        f.fill_circle(x + dx * u, cy + (dy - 12.0) * u, (1.4 * u).max(0.8), th.icon.fade(k));
+    }
+    text(f, ui, 11.0, crate::cam::GRIP_HINT, x + ui.px(14.0 + 6.0), cy, th.text.fade(k));
+}
+
+/// A row's device: the chosen name (muted, cut to fit) and a chevron
+/// right after it; brighter while hovered or open.
 fn dev_box(f: &mut Fb, ui: &Ui, r: FRect, name: &str, hot: bool, k: f32) {
     let th = ui.th;
     let r = round(r);
-    let rad = ui.px(8.0);
-    fill(f, r, rad, th.field_bg.fade(k));
-    if hot {
-        fill(f, r, rad, th.bg_hover.fade(k));
-    }
-    ring(f, ui, r, rad, th.border.fade(k));
-    let isz = ui.px(16.0);
+    let isz = ui.px(14.0);
     let cy = r.y + r.h / 2.0;
-    let room = r.w - ui.px(10.0 + 8.0 + 10.0) - isz;
-    text(f, ui, 12.0, &fit_text(ui, 12.0, name, room), r.x + ui.px(10.0), cy, th.text.fade(k));
-    draw_icon(f, "chevron", r.x1() - ui.px(8.0) - isz, cy - isz / 2.0, isz, th.icon.fade(k));
+    let room = r.w - ui.px(4.0) - isz;
+    let c = if hot { th.text } else { th.text_muted };
+    let w = text(f, ui, 12.0, &fit_text(ui, 12.0, name, room), r.x, cy, c.fade(k));
+    draw_icon(f, "chevron", r.x + w + ui.px(4.0), cy - isz / 2.0, isz, c.fade(k));
 }
 
 /// A microphone in the open list: tinted when hovered, checked when chosen.
@@ -543,26 +664,33 @@ fn dev_item(f: &mut Fb, ui: &Ui, r: FRect, name: &str, on: bool, hovered: bool, 
     }
 }
 
-/// The popover's accent-filled primary button.
-fn primary(f: &mut Fb, ui: &Ui, r: FRect, label: &str, (hovered, pressed): (bool, bool), k: f32) {
-    let th = ui.th;
+/// "Start recording ⏎": the board's red button (40 px, 10 px corners),
+/// a dark dot, the label and the Enter key cap.
+fn start_button(f: &mut Fb, ui: &Ui, r: FRect, label: &str, (hovered, pressed): (bool, bool), k: f32) {
+    use crate::rec_ui::{ON_REC, REC};
     let r = round(r);
     let bg = if pressed {
-        mix(th.accent, C4::rgb(0, 0, 0), 0.2)
+        mix(REC, C4::rgb(0, 0, 0), 0.15)
     } else if hovered {
-        mix(th.accent, C4::rgb(255, 255, 255), 0.12)
+        mix(REC, C4::rgb(255, 255, 255), 0.12)
     } else {
-        th.accent
+        REC
     };
-    let fg = if th.dark { C4::rgb(0x10, 0x11, 0x16) } else { C4::rgb(255, 255, 255) };
-    fill(f, r, ui.px(8.0), bg.fade(k));
-    // A recording dot before the label.
-    let (dot_r, gap) = (ui.px(4.0), ui.px(8.0));
-    let w = 2.0 * dot_r + gap + tw(ui, 13.0, label);
+    let rad = ui.px(10.0);
+    fill(f, r, rad, bg.fade(k));
+    ring(f, ui, r, rad, C4::new(255, 255, 255, 46).fade(k));
+    let (dot_r, gap) = (ui.px(5.0), ui.px(10.0));
+    let cap_w = ui.px(22.0);
+    let w = 2.0 * dot_r + gap + tw(ui, 13.0, label) + gap + cap_w;
     let (x, cy) = (r.x + (r.w - w) / 2.0, r.y + r.h / 2.0);
-    let (rr, rg, rb) = crate::tray::REC_RED;
-    f.fill_circle(x + dot_r, cy, dot_r, C4::rgb(rr, rg, rb).fade(k));
-    text(f, ui, 13.0, label, x + 2.0 * dot_r + gap, cy, fg.fade(k));
+    f.fill_circle(x + dot_r, cy, dot_r, ON_REC.fade(k));
+    let tx = x + 2.0 * dot_r + gap;
+    let lw = text(f, ui, 13.0, label, tx, cy, ON_REC.fade(k));
+    let ch = ui.px(18.0);
+    let cap = round(FRect { x: tx + lw + gap, y: cy - ch / 2.0, w: cap_w, h: ch });
+    fill(f, cap, ui.px(4.0), C4::new(0, 0, 0, 46).fade(k));
+    let isz = ui.px(12.0);
+    draw_icon(f, "enter", cap.x + (cap.w - isz) / 2.0, cy - isz / 2.0, isz, ON_REC.fade(k));
 }
 
 fn button(f: &mut Fb, ui: &Ui, it: &Item, act: Act, (hovered, pressed): (bool, bool), st: &BarState, k: f32) {
@@ -759,21 +887,28 @@ fn label_texts(sr: FRect) -> (String, String) {
 }
 
 /// Where `size_label` puts its panel.
-fn size_label_rect(ui: &Ui, sr: FRect, show_pos: bool, area: FRect, avoid: Option<FRect>) -> FRect {
+/// `at`: what to keep off (the toolbar above), and the mode switch it
+/// follows (10 px right of it, centred on it) when there is one.
+fn size_label_rect(ui: &Ui, sr: FRect, show_pos: bool, area: FRect, at: (Option<FRect>, Option<FRect>)) -> FRect {
     let (size, pos) = label_texts(sr);
     let pad = ui.px(8.0);
     let mut w = 2.0 * pad + tw(ui, 12.0, &size);
     if show_pos {
         w += pad + tw(ui, 11.0, &pos);
     }
-    label_rect(sr, w, ui.s, area, avoid)
+    if let Some(m) = at.1 {
+        let h = ui.px(22.0);
+        let x = (m.x1() + ui.px(10.0)).min((area.x1() - w).max(area.x));
+        return FRect { x, y: m.y + (m.h - h) / 2.0, w, h };
+    }
+    label_rect(sr, w, ui.s, area, at.0)
 }
 
 /// "W × H" (and "x, y" when not dragging) above the selection.
-pub fn size_label(f: &mut Fb, ui: &Ui, sr: FRect, show_pos: bool, area: FRect, avoid: Option<FRect>, k: f32) {
+pub fn size_label(f: &mut Fb, ui: &Ui, sr: FRect, show_pos: bool, area: FRect, at: (Option<FRect>, Option<FRect>), k: f32) {
     let (size, pos) = label_texts(sr);
     let pad = ui.px(8.0);
-    let r = size_label_rect(ui, sr, show_pos, area, avoid);
+    let r = size_label_rect(ui, sr, show_pos, area, at);
     surface(f, ui, r, 6.0, &SMALL_LAYERS, k);
     let cy = r.y + r.h / 2.0;
     let x = r.x + pad + text(f, ui, 12.0, &size, r.x + pad, cy, ui.th.text.fade(k));
@@ -923,14 +1058,20 @@ pub fn act_tip(a: Act, km: &Keymap) -> (&'static str, Vec<String>) {
         Act::Upload => "Upload",
         Act::Exit => "Close",
         Act::Accept => "Accept",
-        Act::Record => "Record screen",
+        Act::Record => "Record video",
+        Act::Mode(false) => "Screenshot",
+        Act::Mode(true) => "Video",
+        Act::RecSource(crate::rec_ui::RecSource::Screen) => "Full screen",
+        Act::RecSource(crate::rec_ui::RecSource::Window) => "Window",
+        Act::RecSource(crate::rec_ui::RecSource::Region) => "Region",
+        Act::RecCountdown(_) => "Countdown",
+        Act::RecGifMax(_) => "Max length",
         Act::RecFormat(_) => "Format",
         Act::RecFps(_) => "Frame rate",
         Act::RecSystem => "System sound",
         Act::RecMic | Act::RecDevMenu(Dev::Mic) | Act::RecDev(Dev::Mic, _) => "Microphone",
         Act::RecCamera | Act::RecDevMenu(Dev::Cam) | Act::RecDev(Dev::Cam, _) => "Camera",
-        Act::RecShape(_) => "Shape",
-        Act::RecCamSize(_) => "Size",
+        Act::RecShape(_) => "Camera shape",
         Act::RecStart => "Start recording",
         Act::Wheel | Act::RingWheel => "More colors",
         Act::RingSize(d) if d < 0 => "Thinner ring",
@@ -941,6 +1082,10 @@ pub fn act_tip(a: Act, km: &Keymap) -> (&'static str, Vec<String>) {
     };
     let keys = match a {
         Act::Size(_) => vec!["Wheel".to_string()],
+        // Built in (not remappable): the mode keys, the source keys.
+        Act::Mode(v) => vec![if v { "2" } else { "1" }.to_string()],
+        Act::RecSource(src) => vec![crate::rec_ui::source_key(src).to_string()],
+        Act::RecStart => vec!["Enter".to_string()],
         _ => super::action_of(a).and_then(|x| km.chords(x).first()).map(chord_caps).unwrap_or_default(),
     };
     (label, keys)
@@ -1183,8 +1328,8 @@ pub fn selection_bounds(ui: &Ui, sr: FRect) -> Vec<FRect> {
     v
 }
 
-pub fn size_label_bounds(ui: &Ui, sr: FRect, show_pos: bool, area: FRect, avoid: Option<FRect>) -> FRect {
-    surface_bounds(ui, size_label_rect(ui, sr, show_pos, area, avoid))
+pub fn size_label_bounds(ui: &Ui, sr: FRect, show_pos: bool, area: FRect, at: (Option<FRect>, Option<FRect>)) -> FRect {
+    surface_bounds(ui, size_label_rect(ui, sr, show_pos, area, at))
 }
 
 /// The panel plus its texts, which may run past a panel clamped to the area.
@@ -1206,9 +1351,13 @@ pub fn toast_bounds(ui: &Ui, msg: &str, area: FRect, k: f32) -> FRect {
     union(surface_bounds(ui, r), grow4(t, AA, AA, AA, AA))
 }
 
-pub fn toolbar_bounds(ui: &Ui, tb: &Toolbar) -> FRect {
+/// The bar and its popover; then each surface outside them (the mode
+/// switch, Close, the grip hint), apart: they are far from the bar.
+pub fn toolbar_bounds(ui: &Ui, tb: &Toolbar) -> Vec<FRect> {
     let b = surface_bounds(ui, tb.bar);
-    tb.pop.map_or(b, |p| union(b, surface_bounds(ui, p)))
+    let mut v = vec![tb.pop.map_or(b, |p| union(b, surface_bounds(ui, p)))];
+    v.extend(tb.extra.iter().map(|r| surface_bounds(ui, *r)));
+    v
 }
 
 pub fn tooltip_bounds(ui: &Ui, at: TipAt, label: &str, keys: &[String]) -> FRect {
@@ -1267,6 +1416,7 @@ mod tests {
             palette: None,
             record: true,
             rec: None,
+            grip: None,
             sizes: true,
             colors: true,
             fills: true,

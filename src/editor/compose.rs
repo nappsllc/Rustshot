@@ -173,6 +173,8 @@ pub struct LabelUi {
     pub show_pos: bool,
     pub area: FRect,
     pub avoid: Option<FRect>,
+    /// The mode switch the label follows.
+    pub lead: Option<FRect>,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -529,7 +531,10 @@ impl Edit {
             cams: rp.has_cams(),
             cams_looking: rp.cams_looking(),
             shape: rp.opts.cam_shape,
-            size: rp.opts.cam_size,
+            source: rp.source,
+            countdown: rp.opts.countdown,
+            gif_max: rp.opts.gif_max,
+            meter: rp.meter.as_ref().map(|_| rp.bars),
             mic_label: &mic_label,
             cam_label: &cam_label,
             devs: names.as_ref().map(|(d, n)| (*d, n.as_slice())),
@@ -559,6 +564,7 @@ impl Edit {
                 palette: self.palette_open.then_some(colors.as_slice()),
                 record: crate::rec_ui::supported() && !busy,
                 rec: (rp.open && crate::rec_ui::supported() && !busy).then_some(&rv),
+                grip: rp.grip.filter(|_| rp.open),
                 sizes: tools::has_size(cur),
                 colors: tools::has_color(cur),
                 fills: tools::has_fill(cur),
@@ -572,7 +578,7 @@ impl Edit {
         } else {
             self.mo.bar.snap(0.0);
         }
-        if self.palette_open || self.rec.open || self.pick.is_some() {
+        if self.palette_open || self.pick.is_some() {
             self.mo.pop.set(1.0, 100, now);
         } else {
             self.mo.pop.snap(0.0);
@@ -595,7 +601,8 @@ impl Edit {
                 .as_ref()
                 .filter(|t| t.above && t.bar.y1() <= sr.y)
                 .map(|t| t.pop.map_or(t.bar, |p| toolbar::union(t.bar, p)));
-            LabelUi { sr, show_pos: !interacting, area, avoid }
+            let lead = self.toolbar.as_ref().and_then(|t| t.mode);
+            LabelUi { sr, show_pos: !interacting, area, avoid, lead }
         });
         let text = self.text.as_ref().map(|td| TextUi {
             boxr: text_box_rect(ww, td, self.mem.size(Tool::Text), self.font.as_ref(), s),
@@ -610,6 +617,14 @@ impl Edit {
             kind: t.kind,
             area,
             k: t.opacity(now),
+        });
+        // Video mode with a selection: the estimate ("1080p · 30 fps · est.
+        // 2.1 MB / min") while no other toast is up.
+        let toast = toast.or_else(|| {
+            let sel = self.sel.filter(|_| self.rec.open && crate::rec_ui::supported() && self.tasks.is_empty())?;
+            let q = crate::rec::Quality::from_config(&self.cfg.rec_quality);
+            let text = self.rec.opts.estimate((sel.w.round().max(2.0) as u32, sel.h.round().max(2.0) as u32), q);
+            Some(ToastUi { text, kind: ToastKind::Info, area, k: 1.0 })
         });
         let mut tip = None;
         let looking = self.rec.cams_looking();
@@ -728,7 +743,7 @@ impl Edit {
             El::Label => sc
                 .label
                 .as_ref()
-                .map_or(Vec::new(), |l| one(chrome::size_label_bounds(&ui, l.sr, l.show_pos, l.area, l.avoid))),
+                .map_or(Vec::new(), |l| one(chrome::size_label_bounds(&ui, l.sr, l.show_pos, l.area, (l.avoid, l.lead)))),
             El::Text => sc.text.as_ref().map_or(Vec::new(), |t| {
                 let lw = sc.s.round().max(1.0);
                 let m = lw / 2.0 + 2.0;
@@ -739,7 +754,7 @@ impl Edit {
                 vec![px_bounds(b), px_bounds(txt)]
             }),
             El::Toast => sc.toast.as_ref().map_or(Vec::new(), |t| one(chrome::toast_bounds(&ui, &t.text, t.area, t.k))),
-            El::Bar => sc.bar.as_ref().map_or(Vec::new(), |b| one(chrome::toolbar_bounds(&ui, &b.tb))),
+            El::Bar => sc.bar.as_ref().map_or(Vec::new(), |b| chrome::toolbar_bounds(&ui, &b.tb).into_iter().map(px_bounds).collect()),
             El::Tip => sc.tip.as_ref().map_or(Vec::new(), |t| {
                 one(chrome::tooltip_bounds(&ui, t.at(), t.label, &t.keys))
             }),
@@ -819,7 +834,7 @@ impl Edit {
             && hits(El::Label)
         {
             let _p = crate::perf::span(crate::perf::K::Label);
-            chrome::size_label(&mut f, &ui, l.sr, l.show_pos, l.area, l.avoid, 1.0);
+            chrome::size_label(&mut f, &ui, l.sr, l.show_pos, l.area, (l.avoid, l.lead), 1.0);
         }
         if let Some(t) = &sc.text
             && hits(El::Text)

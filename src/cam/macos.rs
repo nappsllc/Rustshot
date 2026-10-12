@@ -161,6 +161,8 @@ struct Geo {
     /// The pixels' template (at `px` × `ui`).
     tpl: Template,
     frame: Option<CamFrame>,
+    /// Hidden by the recording's camera button (the camera stays open).
+    hidden: bool,
 }
 
 impl Geo {
@@ -212,13 +214,16 @@ impl Ui {
 
     fn paint(&self) {
         let mut layer = self.layer.borrow_mut();
-        if lock(&self.shared.error).is_some() {
+        if lock(&self.shared.error).is_some() || self.geo.borrow().hidden {
             layer.hide();
             return;
         }
         let g = self.geo.borrow();
         let mut px = self.px.borrow_mut();
         super::compose(&g.tpl, g.frame.as_ref(), g.look.mirror, &mut px);
+        if g.drag.is_some() {
+            super::fade_layer(&mut px, super::DRAG_OPACITY);
+        }
         let s = f64::from(g.px);
         let pad = f64::from(g.tpl.pad) / s;
         let at = (f64::from(g.pos.0) - pad, f64::from(g.pos.1) - pad);
@@ -246,10 +251,13 @@ impl Ui {
                     g.pos = super::snap(at, g.area, g.d(), g.ui);
                 }
                 AuxKind::Up => {
-                    if g.drag.take().is_some() {
-                        super::remember(super::rel_of(g.pos, g.area, g.d(), g.ui));
+                    if g.drag.take().is_none() {
+                        return;
                     }
-                    return;
+                    // At rest in the nearest corner, opaque again.
+                    let d = g.d();
+                    g.pos = super::settle(g.pos, g.area, d, g.ui);
+                    super::remember(super::rel_of(g.pos, g.area, d, g.ui));
                 }
             }
         }
@@ -338,6 +346,7 @@ impl Bubble {
             ui: crate::uisize::mult(),
             tpl: super::template(look, px * crate::uisize::mult(), th),
             frame: None,
+            hidden: false,
         };
         geo.pos = geo.home();
         let shared = Arc::new(Shared::default());
@@ -382,6 +391,29 @@ impl Bubble {
     /// The window's id: the recording keeps it in (see `rec::macos::sck`).
     pub fn window_id(&self) -> u32 {
         self.ui.layer.borrow().id()
+    }
+
+    /// The look it has now.
+    #[allow(dead_code)] // Windows tests use it; kept alike
+    pub fn look(&self) -> Option<Look> {
+        Some(self.ui.geo.borrow().look)
+    }
+
+    /// Being dragged (drawn at [`super::DRAG_OPACITY`]).
+    #[allow(dead_code)] // kept alike
+    pub fn dragging(&self) -> bool {
+        self.ui.geo.borrow().drag.is_some()
+    }
+
+    /// Hide it during the recording (the camera button) or show it again.
+    pub fn set_hidden(&mut self, hidden: bool) {
+        let changed = {
+            let mut g = self.ui.geo.borrow_mut();
+            std::mem::replace(&mut g.hidden, hidden) != hidden
+        };
+        if changed {
+            self.ui.paint();
+        }
     }
 
     /// A camera picture came.

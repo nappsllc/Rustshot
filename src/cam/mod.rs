@@ -189,6 +189,7 @@ pub enum Shape {
 }
 
 impl Shape {
+    #[cfg_attr(not(test), allow(dead_code))]
     pub const ALL: [Shape; 3] = [Shape::Circle, Shape::Rounded, Shape::Square];
 
     /// `rec_camera_shape`: "circle" | "rounded" | "square".
@@ -209,58 +210,61 @@ impl Shape {
         }
     }
 
-    pub fn label(self) -> &'static str {
-        match self {
-            Shape::Circle => "Circle",
-            Shape::Rounded => "Rounded",
-            Shape::Square => "Square",
-        }
+    /// The Record panel's two choices: round, or the 16 px-radius square
+    /// (a sharp `square` from an older config counts as square).
+    pub fn is_round(self) -> bool {
+        self == Shape::Circle
     }
 }
 
+/// The bubble's size: 120 / 160 / 200 / 240 logical px, stepped with the
+/// scroll wheel over the bubble.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CamSize {
     S,
     M,
     L,
+    Xl,
 }
 
 impl CamSize {
-    pub const ALL: [CamSize; 3] = [CamSize::S, CamSize::M, CamSize::L];
+    pub const ALL: [CamSize; 4] = [CamSize::S, CamSize::M, CamSize::L, CamSize::Xl];
 
-    /// `rec_camera_size`: "s" | "m" | "l".
+    /// `rec_camera_size`: "s" | "m" | "l" | "xl".
     pub fn from_config(s: &str) -> CamSize {
         match s {
             "s" => CamSize::S,
             "l" => CamSize::L,
+            "xl" => CamSize::Xl,
             _ => CamSize::M,
         }
     }
 
-    #[cfg_attr(not(test), allow(dead_code))] // the Settings tab writes it
+    #[cfg_attr(not(test), allow(dead_code))] // the Settings tab writes the strings
     pub fn key(self) -> &'static str {
         match self {
             CamSize::S => "s",
             CamSize::M => "m",
             CamSize::L => "l",
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            CamSize::S => "S",
-            CamSize::M => "M",
-            CamSize::L => "L",
+            CamSize::Xl => "xl",
         }
     }
 
     /// The bubble's side in logical px.
     pub fn logical(self) -> u32 {
         match self {
-            CamSize::S => 160,
-            CamSize::M => 240,
-            CamSize::L => 320,
+            CamSize::S => 120,
+            CamSize::M => 160,
+            CamSize::L => 200,
+            CamSize::Xl => 240,
         }
+    }
+
+    /// One size up (`dir` > 0: the wheel turned away from the user) or
+    /// down, stopping at the ends.
+    pub fn step(self, dir: i32) -> CamSize {
+        let i = CamSize::ALL.iter().position(|z| *z == self).unwrap_or(1) as i32;
+        CamSize::ALL[(i + dir.signum()).clamp(0, 3) as usize]
     }
 }
 
@@ -301,11 +305,11 @@ pub fn ring_width(logical: u8, scale: f32) -> f32 {
     (logical as f32 * crate::uisize::clamp(scale)).round()
 }
 
-/// Corner radius of the rounded square: a fifth of its side.
+/// Corner radius of the rounded square: 8 % of its side (16 px at 200).
 fn radius(shape: Shape, d: f32) -> f32 {
     match shape {
         Shape::Circle => d / 2.0,
-        Shape::Rounded => d * 0.2,
+        Shape::Rounded => d * 0.08,
         Shape::Square => 0.0,
     }
 }
@@ -360,12 +364,19 @@ pub fn template(look: Look, scale: f32, th: &Theme) -> Template {
     // moved down, faded out over `blur` (smoothstep).
     let (dy, blur) = (3.0 * s, 10.0 * s);
     let peak = if th.dark { 0.5 } else { 0.3 };
+    // With a ring, a 1 px dark halo just outside it (45 %), so the ring
+    // reads on light pixels too.
+    let halo_w = if rw > 0.0 { s.round().max(1.0) } else { 0.0 };
     let mut shadow = vec![0u8; (w * w * 4) as usize];
     for y in 0..w {
         for x in 0..w {
-            let e = sdf(look.shape, df, x as f32 + 0.5 - pad as f32, y as f32 + 0.5 - pad as f32 - dy);
+            let (px, py) = (x as f32 + 0.5 - pad as f32, y as f32 + 0.5 - pad as f32);
+            let e = sdf(look.shape, df, px, py - dy);
             let t = ((e + blur * 0.25) / blur).clamp(0.0, 1.0);
-            let a = peak * (1.0 - t * t * (3.0 - 2.0 * t));
+            let sh = peak * (1.0 - t * t * (3.0 - 2.0 * t));
+            let eh = sdf(look.shape, df, px, py);
+            let halo = HALO * (0.5 + eh).clamp(0.0, 1.0).min((0.5 - (eh - halo_w)).clamp(0.0, 1.0));
+            let a = halo + sh * (1.0 - halo);
             shadow[((y * w + x) * 4 + 3) as usize] = (a * 255.0).round() as u8;
         }
     }
@@ -441,8 +452,15 @@ pub fn compose(t: &Template, frame: Option<&CamFrame>, mirror: bool, out: &mut V
 // Position
 // ---------------------------------------------------------------------------
 
+/// The halo's opacity (the board's `rgba(0,0,0,.45)`).
+const HALO: f32 = 0.45;
+
 /// Gap between the bubble and the area's edges at a corner (logical px).
-pub const INSET: f32 = 16.0;
+pub const INSET: f32 = 24.0;
+/// The bubble's opacity while it is dragged (what is under it shows).
+pub const DRAG_OPACITY: f32 = 0.4;
+/// The grip hint under the bubble while the Record panel is open.
+pub const GRIP_HINT: &str = "Drag \u{b7} scroll to resize";
 /// Within this many logical px of a corner position the bubble snaps to it.
 pub const SNAP: f32 = 24.0;
 
@@ -472,6 +490,44 @@ impl Default for Rel {
 }
 
 static REMEMBERED: Mutex<Option<Rel>> = Mutex::new(None);
+/// A size the wheel gave the bubble, not yet taken by its owner (X11: set
+/// on the bubble's window thread). Tests keep one per thread.
+#[cfg(not(test))]
+static RESIZED: Mutex<Option<CamSize>> = Mutex::new(None);
+#[cfg(test)]
+thread_local! {
+    static RESIZED: std::cell::Cell<Option<CamSize>> = const { std::cell::Cell::new(None) };
+}
+
+/// The bubble was resized with the wheel (the overlay's Record panel
+/// follows it: [`take_resized`]).
+pub fn note_resized(z: CamSize) {
+    #[cfg(not(test))]
+    {
+        *RESIZED.lock().unwrap_or_else(|e| e.into_inner()) = Some(z);
+    }
+    #[cfg(test)]
+    RESIZED.with(|r| r.set(Some(z)));
+}
+
+/// The size the wheel last gave the bubble, once.
+pub fn take_resized() -> Option<CamSize> {
+    #[cfg(not(test))]
+    {
+        RESIZED.lock().unwrap_or_else(|e| e.into_inner()).take()
+    }
+    #[cfg(test)]
+    {
+        RESIZED.with(|r| r.take())
+    }
+}
+
+/// The look after one wheel notch over the bubble (`delta` > 0: away from
+/// the user, bigger); `None` at either end.
+pub fn wheel_look(look: Look, delta: i32) -> Option<Look> {
+    let size = look.size.step(delta);
+    (delta != 0 && size != look.size).then_some(Look { size, ..look })
+}
 
 /// Where the bubble was last left (the default before that).
 pub fn remembered() -> Rel {
@@ -532,6 +588,21 @@ pub fn snap(pos: (i32, i32), area: IRect, d: i32, scale: f32) -> (i32, i32) {
         .filter(|t| (t.0 - pos.0).abs() <= reach && (t.1 - pos.1).abs() <= reach)
         .min_by_key(|t| (t.0 - pos.0).pow(2) + (t.1 - pos.1).pow(2));
     best.unwrap_or(pos)
+}
+
+/// Where a `d` px bubble dropped at `pos` comes to rest: the corner
+/// position ([`INSET`] in) of the area's quadrant its centre is in.
+pub fn settle(pos: (i32, i32), area: IRect, d: i32, scale: f32) -> (i32, i32) {
+    let corner = rel_of(pos, area, d, scale).corner;
+    place(Rel { corner, dx: INSET, dy: INSET }, area, d, scale)
+}
+
+/// A premultiplied BGRA layer at opacity `k` (the bubble while dragged).
+pub fn fade_layer(px: &mut [u8], k: f32) {
+    let k = (k.clamp(0.0, 1.0) * 255.0).round() as u32;
+    for b in px.iter_mut() {
+        *b = ((*b as u32 * k + 127) / 255) as u8;
+    }
 }
 
 fn overlaps(a: IRect, b: IRect) -> bool {

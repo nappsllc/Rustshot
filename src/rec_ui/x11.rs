@@ -659,23 +659,25 @@ impl BarWin {
 /// The countdown window.
 struct CountWin {
     win: Win,
-    drawn: Option<u32>,
+    /// The number and the arc (in 60ths of a second) on screen.
+    drawn: Option<(u32, u16)>,
 }
 
 impl CountWin {
-    fn show(&mut self, geom: &Geom, th: &Theme, n: Option<u32>) {
-        if n == self.drawn {
+    fn show(&mut self, geom: &Geom, th: &Theme, n: Option<(u32, f32)>) {
+        let key = n.map(|(n, f)| (n, (f * 60.0).round() as u16));
+        if key == self.drawn {
             return;
         }
-        self.drawn = n;
-        let Some(n) = n else {
+        self.drawn = key;
+        let Some((n, frac)) = n else {
             self.win.hide();
             return;
         };
         let s = geom.area_scale();
         let ui = Ui { th, s, font: Some(crate::fonts::ui_font()) };
         let (w, h) = countdown::size(s);
-        let px = super::render_layer(w as usize, h as usize, |f| countdown::draw(f, &ui, n));
+        let px = super::render_layer(w as usize, h as usize, |f| countdown::draw(f, &ui, n, frac));
         let (x, y) = super::centre_on(geom.area, (w as i32, h as i32));
         self.win.put(x, y, w, h, &px);
     }
@@ -787,7 +789,7 @@ fn open_sound(
         match open(name) {
             Ok(a) => {
                 late.push(ended_note("system sound", a.ended()));
-                audio.push(Box::new(a));
+                audio.push(Box::new(mic.system(a)));
             }
             Err(e) => warnings.push(format!("system sound not recorded: {e}")),
         }
@@ -983,7 +985,14 @@ impl Recorder {
         }
     }
 
-    pub fn show(&mut self, v: &BarView, count: Option<u32>) {
+    /// Hide the camera bubble or show it again (the pill's camera button).
+    pub fn set_cam_hidden(&mut self, hidden: bool) {
+        if let Some(b) = &mut self.bubble {
+            b.set_hidden(hidden);
+        }
+    }
+
+    pub fn show(&mut self, v: &BarView, count: Option<(u32, f32)>) {
         if let Some(b) = &mut self.bar {
             b.show(&self.geom, &self.th, v);
         }

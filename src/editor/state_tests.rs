@@ -1242,26 +1242,28 @@ fn rec_phase(a: &App) -> Option<rec_ui::Phase> {
     a.rec.as_ref().map(|r| r.phase())
 }
 
-/// The popover: format, rate, sound, microphone list, Start. Start hides
-/// the overlay and records the selection (physical px) with those choices.
+//// The Record button (or the mode switch, or 2) turns video mode on: the
+/// setup panel replaces the toolbar, centred under the selection; its
+/// choices start a recording of the selection (physical px).
 #[cfg(windows)]
 #[test]
-fn record_popover_choices_start_a_recording() {
+fn record_panel_choices_start_a_recording() {
     let mut a = app(Some(r(100.0, 100.0, 600.0, 400.0)));
     a.kind = RunKind::Daemon;
     let (x, y) = button(&mut a, Act::Record);
     click(&mut a, x, y);
     assert!(ed(&mut a).rec.open && !ed(&mut a).palette_open);
-    // The palette and the popover take turns.
-    let (px, py) = button(&mut a, Act::Palette);
-    click(&mut a, px, py);
-    assert!(!ed(&mut a).rec.open && ed(&mut a).palette_open);
-    click(&mut a, x, y);
-    assert!(ed(&mut a).rec.open && !ed(&mut a).palette_open);
+    let m = a.mouse;
+    ed(&mut a).prepare(None, m, Instant::now());
+    let tb = ed(&mut a).toolbar.clone().unwrap();
+    assert!(tb.video && tb.bar.w == panel::PANEL_W, "the panel replaces the toolbar");
+    assert_eq!(tb.bar.x + tb.bar.w / 2.0, 400.0, "centred under the selection");
+    assert_eq!(tb.bar.y, 508.0, "8 px below it");
+    assert!(!tb.items.iter().any(|i| i.kind == toolbar::Kind::Btn(Act::Copy)), "no toolbar buttons");
+    // Space (the palette) does nothing here.
+    key(&mut a, key::SPACE);
+    assert!(!ed(&mut a).palette_open && ed(&mut a).rec.open);
     let seg = |a: &mut App, act: Act| item(a, |k| matches!(k, toolbar::Kind::Seg { act: x, .. } if *x == act));
-    let (gx, gy) = seg(&mut a, Act::RecFps(60));
-    click(&mut a, gx, gy);
-    assert_eq!(ed(&mut a).rec.opts.fps(), 60);
     let (sx, sy) = item(&mut a, |k| matches!(k, toolbar::Kind::Switch { act: Act::RecSystem, .. }));
     click(&mut a, sx, sy);
     assert!(!ed(&mut a).rec.opts.system);
@@ -1269,7 +1271,7 @@ fn record_popover_choices_start_a_recording() {
     click(&mut a, mx, my);
     assert!(ed(&mut a).rec.opts.mic);
     // The microphone list: pick the second device.
-    let (bx, by) = item(&mut a, |k| matches!(k, toolbar::Kind::DevBox { .. }));
+    let (bx, by) = item(&mut a, |k| matches!(k, toolbar::Kind::DevBox { dev: toolbar::Dev::Mic, .. }));
     click(&mut a, bx, by);
     assert_eq!(ed(&mut a).rec.dev_open, Some(toolbar::Dev::Mic));
     let (dx, dy) = item(&mut a, |k| matches!(k, toolbar::Kind::DevItem { i: 2, .. }));
@@ -1284,33 +1286,200 @@ fn record_popover_choices_start_a_recording() {
     assert!(ed(&mut a).rec.cam.shown.is_some());
     click(&mut a, cx, cy);
     assert!(!ed(&mut a).rec.opts.camera && ed(&mut a).rec.cam.shown.is_none());
-    // Esc closes the popover before it cancels anything.
+    // Esc closes a list first, then cancels (the panel's Close).
+    click(&mut a, bx, by);
     key(&mut a, key::ESCAPE);
-    assert!(matches!(a.st, State::Edit(_)) && !ed(&mut a).rec.open);
-    click(&mut a, x, y);
+    assert!(matches!(a.st, State::Edit(_)) && ed(&mut a).rec.open && ed(&mut a).rec.dev_open.is_none());
+    // No countdown, then Start.
+    let (zx, zy) = seg(&mut a, Act::RecCountdown(false));
+    click(&mut a, zx, zy);
     let (tx, ty) = item(&mut a, |k| matches!(k, toolbar::Kind::Primary { .. }));
     click(&mut a, tx, ty);
     assert!(hidden(&a), "the overlay is gone while recording");
     let spec = a.rec_spec.clone().expect("recording started");
     assert_eq!(spec.area, (100, 100, 600, 400));
-    assert_eq!((spec.format, spec.fps, spec.system_audio), (crate::rec::RecFormat::Mp4, 60, false));
+    assert_eq!((spec.format, spec.fps, spec.system_audio), (crate::rec::RecFormat::Mp4, 30, false));
     assert_eq!(spec.mic.as_deref(), Some("{mic-2}"));
-    assert_eq!(rec_phase(&a), Some(rec_ui::Phase::Countdown), "the countdown is on by default");
+    assert_eq!(rec_phase(&a), Some(rec_ui::Phase::Recording), "Countdown 0: at once");
     assert!(!a.idle(), "recording is not idle");
-    // The choices are remembered for the next capture.
-    assert_eq!(a.rec_opts.as_ref().map(|o| o.fps_mp4), Some(60));
+    // The choices are remembered for the next capture; the microphone is
+    // no longer metered (the panel is gone).
+    assert_eq!(a.rec_opts.as_ref().map(|o| (o.countdown, o.mic)), Some((false, true)));
 }
 
-/// The camera in the popover: device list, shape, size; the bubble
-/// follows the selection, is handed to the recording on Start, and is
-/// closed when the popover closes.
+/// The mode switch: 2 / 1 and its two buttons; the size label sits right
+/// of it; Close cancels the capture.
 #[cfg(windows)]
 #[test]
-fn record_popover_camera_bubble() {
+fn mode_switch_keys_and_close() {
+    let mut a = app(Some(r(300.0, 200.0, 800.0, 400.0)));
+    key(&mut a, '2' as u32);
+    assert!(ed(&mut a).rec.open, "2: video");
+    key(&mut a, '1' as u32);
+    assert!(!ed(&mut a).rec.open, "1: screenshot");
+    let m = a.mouse;
+    ed(&mut a).prepare(None, m, Instant::now());
+    let tb = ed(&mut a).toolbar.clone().unwrap();
+    let mode = tb.mode.expect("the mode switch shows in screenshot mode too");
+    assert!(mode.y1() <= 200.0 - 8.0 + 0.01 && mode.x == 300.0, "above the selection's top-left: {mode:?}");
+    let label = ed(&mut a).scene.as_ref().unwrap().label.clone().unwrap();
+    assert_eq!(label.lead, Some(mode), "the size label follows it");
+    // Its Video button.
+    let (vx, vy) = item(&mut a, |k| matches!(k, toolbar::Kind::Mode { video: true, .. }));
+    click(&mut a, vx, vy);
+    assert!(ed(&mut a).rec.open);
+    let (sx, sy) = item(&mut a, |k| matches!(k, toolbar::Kind::Mode { video: false, .. }));
+    click(&mut a, sx, sy);
+    assert!(!ed(&mut a).rec.open);
+    // Ctrl+2 is not the mode key; in a run with tasks there is no video mode.
+    key_m(&mut a, '2' as u32, CTRL);
+    assert!(!ed(&mut a).rec.open);
+    // Close (video mode, top right of the selection) cancels.
+    key(&mut a, '2' as u32);
+    let m = a.mouse;
+    ed(&mut a).prepare(None, m, Instant::now());
+    let close = ed(&mut a).toolbar.as_ref().unwrap().items.iter().find(|i| i.kind == toolbar::Kind::Close).unwrap().r;
+    assert!((close.x1() - 1100.0).abs() < 0.01 && close.y1() <= 192.01, "at the selection's top right: {close:?}");
+    click(&mut a, (close.x + 5.0) as i32, (close.y + 5.0) as i32);
+    assert_eq!(code(&a), 2, "cancelled");
+    let mut a = app(Some(r(300.0, 200.0, 800.0, 400.0)));
+    ed(&mut a).tasks = vec![Task::Geometry];
+    key(&mut a, '2' as u32);
+    assert!(!ed(&mut a).rec.open);
+}
+
+/// The source: F the monitor, W a window picked like window snapping (a
+/// click takes it), R keeps the region.
+#[test]
+fn source_keys_pick_screen_window_region() {
+    let mut a = app(Some(r(300.0, 200.0, 400.0, 300.0)));
+    key(&mut a, '2' as u32);
+    key(&mut a, 'F' as u32);
+    assert_eq!(ed(&mut a).rec.source, rec_ui::RecSource::Screen);
+    assert_eq!(ed(&mut a).sel, Some(r(0.0, 0.0, 1440.0, 900.0)), "the whole monitor");
+    key(&mut a, 'R' as u32);
+    assert_eq!(ed(&mut a).rec.source, rec_ui::RecSource::Region);
+    assert_eq!(ed(&mut a).sel, Some(r(0.0, 0.0, 1440.0, 900.0)), "kept");
+    // W: windows to pick from (snapping off in the config or not).
+    ed(&mut a).cfg.snap_windows = false;
+    let win = crate::snap::Node::new(crate::snap::R::new(120, 90, 1320, 810), vec![]);
+    FAKE_SNAP.with(|s| *s.borrow_mut() = Some(crate::snap::Snapshot::build(&[win], (0, 0), (1440, 900))));
+    mv(&mut a, 400, 300);
+    key(&mut a, 'W' as u32);
+    assert_eq!(ed(&mut a).rec.source, rec_ui::RecSource::Window);
+    assert!(ed(&mut a).sel.is_none() && ed(&mut a).snap.is_some(), "picking a window");
+    assert_eq!(ed(&mut a).snap_rect(), Some(r(120.0, 90.0, 1200.0, 720.0)));
+    click(&mut a, 400, 300);
+    assert_eq!(ed(&mut a).sel, Some(r(120.0, 90.0, 1200.0, 720.0)), "the window");
+    assert!(ed(&mut a).rec.open, "still in video mode");
+    // Not in screenshot mode: F/W/R are the tools' keys there.
+    key(&mut a, '1' as u32);
+    key(&mut a, 'R' as u32);
+    assert_eq!(ed(&mut a).tool, Some(Tool::Rect));
+}
+
+/// A GIF: the sound rows say "Not recorded in GIF" and are disabled; the
+/// countdown gives way to the frame rate (10 / 15 / 24) and a max length
+/// (15 / 30 / 60 s) the recording stops at by itself.
+#[cfg(windows)]
+#[test]
+fn gif_mode_rows_frame_rate_and_max_length() {
+    let mut a = app(Some(r(100.0, 100.0, 600.0, 300.0)));
+    a.kind = RunKind::Daemon;
+    key(&mut a, '2' as u32);
+    let seg = |a: &mut App, act: Act| item(a, |k| matches!(k, toolbar::Kind::Seg { act: x, .. } if *x == act));
+    let (gx, gy) = seg(&mut a, Act::RecFormat(crate::rec::RecFormat::Gif));
+    click(&mut a, gx, gy);
+    let m = a.mouse;
+    ed(&mut a).prepare(None, m, Instant::now());
+    let tb = ed(&mut a).toolbar.clone().unwrap();
+    for act in [Act::RecMic, Act::RecSystem] {
+        let row = tb.items.iter().find(|i| matches!(i.kind, toolbar::Kind::Row { act: x, .. } if x == act)).unwrap();
+        assert!(row.disabled && matches!(row.kind, toolbar::Kind::Row { value: Some(rec_ui::NOT_IN_GIF), dim: true, .. }), "{act:?}");
+        let sw = tb.items.iter().find(|i| matches!(i.kind, toolbar::Kind::Switch { act: x, .. } if x == act)).unwrap();
+        assert!(sw.disabled && tb.act_at(Pt::new(sw.r.x + 10.0, sw.r.y + 10.0)).is_none());
+    }
+    assert!(!tb.items.iter().any(|i| matches!(i.kind, toolbar::Kind::Seg { act: Act::RecCountdown(_), .. })), "no countdown");
+    let fps: Vec<Act> = tb.items.iter().filter_map(|i| match i.kind {
+        toolbar::Kind::Seg { act: a @ Act::RecFps(_), .. } => Some(a),
+        _ => None,
+    }).collect();
+    assert_eq!(fps, [Act::RecFps(10), Act::RecFps(15), Act::RecFps(24)]);
+    let (fx, fy) = seg(&mut a, Act::RecFps(24));
+    click(&mut a, fx, fy);
+    let (lx, ly) = seg(&mut a, Act::RecGifMax(15));
+    click(&mut a, lx, ly);
+    assert_eq!((ed(&mut a).rec.opts.fps(), ed(&mut a).rec.opts.gif_max), (24, 15));
+    // The estimate toast says the GIF's rate.
+    let m = a.mouse;
+    ed(&mut a).prepare(None, m, Instant::now());
+    let toast = ed(&mut a).scene.as_ref().unwrap().toast.clone().expect("the estimate");
+    assert!(toast.text.starts_with("300p \u{b7} 24 fps \u{b7} est. "), "{}", toast.text);
+    key(&mut a, key::RETURN);
+    let spec = a.rec_spec.clone().unwrap();
+    assert_eq!((spec.format, spec.fps, spec.mic.is_none(), spec.system_audio), (crate::rec::RecFormat::Gif, 24, true, false));
+    // It stops by itself after 15 s of recording (paused time aside).
+    let t = Instant::now();
+    let run = a.rec.as_mut().unwrap();
+    assert_eq!(run.phase(), rec_ui::Phase::Countdown);
+    run.tick(t + Duration::from_secs(3));
+    assert_eq!(run.phase(), rec_ui::Phase::Recording);
+    run.tick(t + Duration::from_secs(17));
+    assert_eq!(run.phase(), rec_ui::Phase::Recording, "14 s recorded");
+    run.tick(t + Duration::from_secs(19));
+    assert_eq!(run.phase(), rec_ui::Phase::Stopping, "15 s: auto-stop");
+    assert_eq!(run.log.last(), Some(&rec_ui::Effect::Stop));
+}
+
+/// The microphone is metered only while the panel shows it on: opened
+/// with the panel, its level drawn as bars (amber at the top when it
+/// clips), released when the microphone, MP4 or video mode goes.
+#[test]
+fn mic_meter_opens_with_the_panel_only() {
+    let mut a = app(Some(r(100.0, 100.0, 600.0, 300.0)));
+    ed(&mut a).rec.opts.mic = true;
+    a.pump();
+    assert!(ed(&mut a).rec.meter.is_none(), "screenshot mode: no microphone open");
+    key(&mut a, '2' as u32);
+    a.pump();
+    assert_eq!(ed(&mut a).rec.meter.as_ref().map(|m| m.device().to_string()).as_deref(), Some(""), "the default microphone");
+    ed(&mut a).rec.meter.as_ref().unwrap().set_peak(1.0);
+    ed(&mut a).rec.meter_at = a_second_ago();
+    a.pump();
+    assert_eq!(ed(&mut a).rec.bars, (7, true), "loud: all bars, clipping");
+    let m = a.mouse;
+    ed(&mut a).prepare(None, m, Instant::now());
+    let tb = ed(&mut a).toolbar.clone().unwrap();
+    assert!(tb.items.iter().any(|i| i.kind == toolbar::Kind::Meter { lit: 7, clip: true }));
+    // Polled at 20 Hz: not before 50 ms.
+    ed(&mut a).rec.meter.as_ref().unwrap().set_peak(0.0);
+    ed(&mut a).rec.meter_at = Instant::now();
+    a.pump();
+    assert_eq!(ed(&mut a).rec.bars, (7, true));
+    // Another microphone: reopened on it.
+    ed(&mut a).rec.opts.mic_dev = "{mic-2}".into();
+    a.pump();
+    assert_eq!(ed(&mut a).rec.meter.as_ref().unwrap().device(), "{mic-2}");
+    // GIF, microphone off, screenshot mode: released.
+    ed(&mut a).rec.opts.format = crate::rec::RecFormat::Gif;
+    a.pump();
+    assert!(ed(&mut a).rec.meter.is_none());
+    ed(&mut a).rec.opts.format = crate::rec::RecFormat::Mp4;
+    a.pump();
+    assert!(ed(&mut a).rec.meter.is_some());
+    key(&mut a, '1' as u32);
+    a.pump();
+    assert!(ed(&mut a).rec.meter.is_none());
+}
+
+/// The camera in the panel: device list and shape; the bubble follows
+/// the selection and is handed to the recording on Start.
+#[cfg(windows)]
+#[test]
+fn record_panel_camera_bubble() {
     let mut a = app(Some(r(100.0, 100.0, 600.0, 400.0)));
     a.kind = RunKind::Daemon;
-    let (x, y) = button(&mut a, Act::Record);
-    click(&mut a, x, y);
+    key(&mut a, '2' as u32);
     let cam = |a: &mut App| item(a, |k| matches!(k, toolbar::Kind::Switch { act: Act::RecCamera, .. }));
     let (cx, cy) = cam(&mut a);
     click(&mut a, cx, cy);
@@ -1326,41 +1495,33 @@ fn record_popover_camera_bubble() {
     click(&mut a, dx, dy);
     assert_eq!(ed(&mut a).rec.opts.cam_dev, "{cam-2}");
     assert_eq!(ed(&mut a).rec.cam_label(), "USB Webcam");
-    assert_eq!(ed(&mut a).rec.cam.shown.as_ref().map(|s| s.0.as_str()), Some("{cam-2}"));
-    // Shape and size.
-    let seg = |a: &mut App, act: Act| item(a, |k| matches!(k, toolbar::Kind::Seg { act: x, .. } if *x == act));
-    let (sx, sy) = seg(&mut a, Act::RecShape(crate::cam::Shape::Square));
+    // Square.
+    let (sx, sy) = item(&mut a, |k| matches!(k, toolbar::Kind::Seg { act: Act::RecShape(crate::cam::Shape::Rounded), .. }));
     click(&mut a, sx, sy);
-    let (zx, zy) = seg(&mut a, Act::RecCamSize(crate::cam::CamSize::S));
-    click(&mut a, zx, zy);
-    let look = ed(&mut a).rec.cam.shown.as_ref().unwrap().1;
-    assert_eq!((look.shape, look.size), (crate::cam::Shape::Square, crate::cam::CamSize::S));
-    // Closing the popover closes the bubble; opening it again brings it back.
-    click(&mut a, x, y);
+    assert_eq!(ed(&mut a).rec.cam.shown.as_ref().unwrap().1.shape, crate::cam::Shape::Rounded);
+    // Screenshot mode closes the bubble; video mode brings it back.
+    key(&mut a, '1' as u32);
     assert!(ed(&mut a).rec.cam.shown.is_none());
-    click(&mut a, x, y);
+    key(&mut a, '2' as u32);
     assert!(ed(&mut a).rec.cam.shown.is_some());
-    // Start: the recording gets the bubble.
     let (tx, ty) = item(&mut a, |k| matches!(k, toolbar::Kind::Primary { .. }));
     click(&mut a, tx, ty);
     assert!(hidden(&a));
     let handed = a.rec_cam.clone().expect("the recording has the bubble");
-    assert_eq!((handed.0.as_str(), handed.1.shape, handed.2), ("{cam-2}", crate::cam::Shape::Square, (100, 100, 600, 400)));
-    // The choices are remembered for the next capture.
+    assert_eq!((handed.0.as_str(), handed.1.shape, handed.2), ("{cam-2}", crate::cam::Shape::Rounded, (100, 100, 600, 400)));
     let o = a.rec_opts.clone().unwrap();
-    assert!(o.camera && o.cam_dev == "{cam-2}" && o.cam_size == crate::cam::CamSize::S);
+    assert!(o.camera && o.cam_dev == "{cam-2}" && o.cam_shape == crate::cam::Shape::Rounded);
 }
 
 /// No camera: the Camera row is disabled and says why on hover; a config
 /// with the camera on shows no bubble.
 #[cfg(windows)]
 #[test]
-fn record_popover_without_a_camera() {
+fn record_panel_without_a_camera() {
     rec_ui::FAKE_CAMS.with(|c| c.borrow_mut().clear());
     let mut a = app(Some(r(100.0, 100.0, 600.0, 400.0)));
     ed(&mut a).rec.opts.camera = true;
-    let (x, y) = button(&mut a, Act::Record);
-    click(&mut a, x, y);
+    key(&mut a, '2' as u32);
     assert!(ed(&mut a).rec.open);
     assert!(ed(&mut a).rec.cam.shown.is_none(), "no bubble without a camera");
     let (cx, cy) = item(&mut a, |k| matches!(k, toolbar::Kind::Switch { act: Act::RecCamera, .. }));
@@ -1369,18 +1530,14 @@ fn record_popover_without_a_camera() {
     assert!(tb.items[i].disabled);
     click(&mut a, cx, cy);
     assert!(ed(&mut a).rec.cam.shown.is_none());
-    // Hover long enough: the tooltip.
+    let row = tb.items.iter().find(|i| matches!(i.kind, toolbar::Kind::Row { act: Act::RecCamera, .. })).unwrap();
+    assert!(matches!(row.kind, toolbar::Kind::Row { value: Some(crate::cam::NO_CAMERA), .. }), "the row says so");
     mv(&mut a, cx, cy);
     ed(&mut a).hover_at = Instant::now() - Duration::from_secs(2);
     let m = a.mouse;
     ed(&mut a).prepare(None, m, Instant::now());
-    let tip = ed(&mut a).scene.as_ref().and_then(|s| s.tip.as_ref()).map(|t| (t.label, t.below, t.anchor));
-    let (label, below, anchor) = tip.expect("tooltip");
-    assert_eq!(label, crate::cam::NO_CAMERA);
-    // Below the row (never over the Microphone row above it).
-    let tb = ed(&mut a).toolbar.clone().unwrap();
-    let row = tb.items[i].r;
-    assert!(below && anchor.y1() <= row.y1() + 0.5 && anchor.x >= row.x, "{anchor:?} {row:?}");
+    let tip = ed(&mut a).scene.as_ref().and_then(|s| s.tip.as_ref()).map(|t| (t.label, t.below));
+    assert_eq!(tip, Some((crate::cam::NO_CAMERA, true)));
     rec_ui::FAKE_CAMS.with(|c| *c.borrow_mut() = rec_ui::fake_cams());
 }
 
@@ -1420,59 +1577,81 @@ fn overlaps(a: capture::IRect, b: capture::IRect) -> bool {
     a.0 < b.0 + b.2 as i32 && b.0 < a.0 + a.2 as i32 && a.1 < b.1 + b.3 as i32 && b.1 < a.1 + a.3 as i32
 }
 
-/// The real bubble (a fake camera): opened with the camera switch,
-/// reopened for another camera (not for another shape), kept off the
-/// toolbar and popover, handed to the recording at Start.
+/// The real bubble (a fake camera): opened with the camera switch, kept
+/// off the panel and the mode switch, the grip hint under it; the wheel
+/// over it steps its size (the panel follows), a drag shows it at 40 %
+/// and the drop puts it in the nearest corner, 24 px in; another camera
+/// reopens it, Start hands it to the recording.
 #[cfg(windows)]
 #[test]
-fn record_popover_bubble_opens_reopens_and_is_handed_over() {
+fn record_panel_bubble_scroll_drag_and_handover() {
+    use windows::Win32::Foundation::{LPARAM, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{SendMessageW, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEWHEEL};
     let mut a = app(Some(r(100.0, 100.0, 600.0, 400.0)));
     a.kind = RunKind::Daemon;
     fake_camera(&mut a, None);
-    let (x, y) = button(&mut a, Act::Record);
-    click(&mut a, x, y);
+    key(&mut a, '2' as u32);
     let (cx, cy) = item(&mut a, |k| matches!(k, toolbar::Kind::Switch { act: Act::RecCamera, .. }));
     click(&mut a, cx, cy);
     assert_eq!(ed(&mut a).rec.cam.opened, 1);
-    assert_eq!(ed(&mut a).rec.cam.bubble.as_ref().map(|b| b.device().to_string()).as_deref(), Some(""));
-    // Off the toolbar and the popover.
+    a.pump();
     let (pos, d) = {
         let e = ed(&mut a);
         let d = crate::cam::side(e.rec.opts.cam_size, 1.0);
         (e.rec.cam.bubble.as_ref().and_then(|b| b.pos()).unwrap(), d)
     };
-    a.pump();
     for t in ed(&mut a).toolbar_screen_rects() {
-        assert!(!overlaps((pos.0, pos.1, d, d), t), "bubble {pos:?} over the toolbar {t:?}");
+        assert!(!overlaps((pos.0, pos.1, d, d), t), "bubble {pos:?} over the panel {t:?}");
     }
-    // Another shape: the same camera stays open.
-    let seg = |a: &mut App, act: Act| item(a, |k| matches!(k, toolbar::Kind::Seg { act: x, .. } if *x == act));
-    let (sx, sy) = seg(&mut a, Act::RecShape(crate::cam::Shape::Rounded));
-    click(&mut a, sx, sy);
-    assert_eq!(ed(&mut a).rec.cam.opened, 1);
-    // Another camera: reopened.
+    // The grip hint: centred under the bubble, 12 px below it.
+    let m = a.mouse;
+    ed(&mut a).prepare(None, m, Instant::now());
+    let grip = ed(&mut a).toolbar.as_ref().unwrap().items.iter().find(|i| i.kind == toolbar::Kind::Grip).expect("the grip hint").r;
+    assert!((grip.x + grip.w / 2.0 - (pos.0 as f32 + d as f32 / 2.0)).abs() < 0.6 && (grip.y - (pos.1 + d as i32 + 12) as f32).abs() < 0.6, "{grip:?} {pos:?}");
+    // The wheel: a size up, the panel's choice follows.
+    let hwnd = ed(&mut a).rec.cam.bubble.as_ref().unwrap().hwnd();
+    unsafe { SendMessageW(hwnd, WM_MOUSEWHEEL, Some(WPARAM((120usize) << 16)), Some(LPARAM(0))) };
+    a.pump();
+    assert_eq!(ed(&mut a).rec.opts.cam_size, crate::cam::CamSize::L, "160 → 200");
+    assert_eq!(ed(&mut a).rec.cam.bubble.as_ref().unwrap().look().unwrap().size, crate::cam::CamSize::L);
+    unsafe { SendMessageW(hwnd, WM_MOUSEWHEEL, Some(WPARAM(((-120i16 as u16) as usize) << 16)), Some(LPARAM(0))) };
+    unsafe { SendMessageW(hwnd, WM_MOUSEWHEEL, Some(WPARAM(((-120i16 as u16) as usize) << 16)), Some(LPARAM(0))) };
+    a.pump();
+    assert_eq!(ed(&mut a).rec.opts.cam_size, crate::cam::CamSize::S, "down to 120");
+    // A drag: see-through until dropped; the drop settles in a corner.
+    unsafe { SendMessageW(hwnd, WM_LBUTTONDOWN, Some(WPARAM(1)), Some(LPARAM(0))) };
+    assert!(ed(&mut a).rec.cam.bubble.as_ref().unwrap().dragging());
+    a.pump();
+    let m = a.mouse;
+    ed(&mut a).prepare(None, m, Instant::now());
+    assert!(!ed(&mut a).toolbar.as_ref().unwrap().items.iter().any(|i| i.kind == toolbar::Kind::Grip), "no grip while dragged");
+    unsafe { SendMessageW(hwnd, WM_LBUTTONUP, Some(WPARAM(0)), Some(LPARAM(0))) };
+    let b = ed(&mut a).rec.cam.bubble.as_ref().unwrap();
+    assert!(!b.dragging());
+    let p = b.pos().unwrap();
+    let ds = crate::cam::side(crate::cam::CamSize::S, 1.0) as i32;
+    assert_eq!(p, crate::cam::settle(p, (100, 100, 600, 400), ds, 1.0), "at rest in a corner");
+    // Another camera: reopened; Start hands it over (no new camera).
     let (bx, by) = item(&mut a, |k| matches!(k, toolbar::Kind::DevBox { dev: toolbar::Dev::Cam, .. }));
     click(&mut a, bx, by);
     let (dx, dy) = item(&mut a, |k| matches!(k, toolbar::Kind::DevItem { dev: toolbar::Dev::Cam, i: 2, .. }));
     click(&mut a, dx, dy);
     assert_eq!(ed(&mut a).rec.cam.opened, 2);
-    assert_eq!(ed(&mut a).rec.cam.bubble.as_ref().map(|b| b.device().to_string()).as_deref(), Some("{cam-2}"));
-    // Start: the recording gets that bubble (no new camera).
     let (tx, ty) = item(&mut a, |k| matches!(k, toolbar::Kind::Primary { .. }));
     click(&mut a, tx, ty);
     assert!(hidden(&a));
     assert!(a.rec_bubble.is_some(), "the recording has the bubble");
+    assert_eq!(a.rec_opts.as_ref().unwrap().cam_size, crate::cam::CamSize::S, "the wheel's size is remembered");
 }
 
 /// The camera fails once open: a toast says why, the camera switches off
 /// and the bubble closes.
 #[cfg(windows)]
 #[test]
-fn record_popover_camera_error_is_a_toast() {
+fn record_panel_camera_error_is_a_toast() {
     let mut a = app(Some(r(100.0, 100.0, 600.0, 400.0)));
     fake_camera(&mut a, Some(crate::cam::ACCESS_OFF));
-    let (x, y) = button(&mut a, Act::Record);
-    click(&mut a, x, y);
+    key(&mut a, '2' as u32);
     let (cx, cy) = item(&mut a, |k| matches!(k, toolbar::Kind::Switch { act: Act::RecCamera, .. }));
     click(&mut a, cx, cy);
     let t = Instant::now();
@@ -1486,28 +1665,26 @@ fn record_popover_camera_error_is_a_toast() {
     assert_eq!(e.notice.as_ref().map(|n| n.text.as_str()), Some(crate::cam::ACCESS_OFF));
 }
 
-/// Enter in record mode with the popover closed, no countdown and the
-/// camera on: the camera opens and the recording starts once its first
-/// picture is in.
+/// Enter in record mode after leaving video mode, with no countdown and
+/// the camera on: the camera opens and the recording starts once its
+/// first picture is in.
 #[cfg(windows)]
 #[test]
 fn record_mode_enter_waits_for_the_first_picture() {
     let mut a = app(None);
     a.st = State::Hidden;
     a.kind = RunKind::Daemon;
-    a.cfg.rec_countdown = false;
     assert!(a.on_hot(HotEvent::Record));
     queue(Ok(synthetic_shot()));
     a.on_event(Ev::Timer);
     drag(&mut a, (200, 150), (520, 390));
-    // The popover closed, then the camera on (no bubble before Start).
-    let (x, y) = button(&mut a, Act::Record);
-    click(&mut a, x, y);
+    key(&mut a, '1' as u32);
     assert!(!ed(&mut a).rec.open);
     ed(&mut a).rec.opts.camera = true;
+    ed(&mut a).rec.opts.countdown = false;
     fake_camera(&mut a, None);
     a.pump();
-    assert_eq!(ed(&mut a).rec.cam.opened, 0, "no bubble while the popover is closed");
+    assert_eq!(ed(&mut a).rec.cam.opened, 0, "no bubble outside video mode");
     key(&mut a, key::RETURN);
     assert!(hidden(&a));
     assert_eq!(rec_phase(&a), Some(rec_ui::Phase::Recording), "no countdown");
@@ -1519,12 +1696,11 @@ fn record_mode_enter_waits_for_the_first_picture() {
 /// is the Camera switch.
 #[cfg(windows)]
 #[test]
-fn record_popover_lists_cameras_in_the_background() {
+fn record_panel_lists_cameras_in_the_background() {
     let mut a = app(Some(r(100.0, 100.0, 600.0, 400.0)));
     let (tx, rx) = std::sync::mpsc::channel();
     ed(&mut a).rec.cams_rx = Some(rx);
-    let (x, y) = button(&mut a, Act::Record);
-    click(&mut a, x, y);
+    key(&mut a, '2' as u32);
     assert!(ed(&mut a).rec.cams_looking());
     let row = |a: &mut App| {
         let m = a.mouse;
@@ -1548,7 +1724,7 @@ fn record_popover_lists_cameras_in_the_background() {
     assert!(matches!(it.kind, toolbar::Kind::Switch { label: "Camera", .. }) && !it.disabled);
 }
 
-/// The record hotkey: idle → selection in record mode (popover open,
+// The record hotkey: idle → selection in record mode (popover open,
 /// Enter records); again → stop; the end makes the daemon idle.
 #[cfg(windows)]
 #[test]
@@ -1565,7 +1741,7 @@ fn record_hotkey_selects_records_and_stops() {
     drag(&mut a, (200, 150), (520, 390));
     let m = a.mouse;
     ed(&mut a).prepare(None, m, Instant::now());
-    assert!(ed(&mut a).toolbar.as_ref().is_some_and(|t| t.pop.is_some()), "the popover shows with the selection");
+    assert!(ed(&mut a).toolbar.as_ref().is_some_and(|t| t.video), "the panel shows with the selection");
     key(&mut a, key::RETURN);
     assert!(hidden(&a));
     assert_eq!(a.rec_spec.as_ref().unwrap().area, (200, 150, 320, 240));

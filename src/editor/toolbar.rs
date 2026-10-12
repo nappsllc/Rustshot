@@ -4,7 +4,8 @@
 
 use super::pick::Part;
 use super::Tool;
-use crate::cam::{CamSize, Shape};
+use crate::cam::Shape;
+use crate::rec_ui::RecSource;
 use crate::objects::{FRect, Pt};
 use crate::rec::RecFormat;
 use crate::uifb::C4;
@@ -65,8 +66,13 @@ pub enum Act {
     Upload,
     Exit,
     Accept,
-    /// The Record button: opens/closes the Record popover.
+    /// The Record button: video mode on/off.
     Record,
+    /// The mode switch above the selection: Screenshot (false) or Video
+    /// (true); keys 1 and 2.
+    Mode(bool),
+    /// The panel's source: Screen, Window, Region (F / W / R).
+    RecSource(RecSource),
     RecFormat(RecFormat),
     RecFps(u32),
     RecSystem,
@@ -77,7 +83,10 @@ pub enum Act {
     /// Pick device `i` of the list (0 = the default device).
     RecDev(Dev, usize),
     RecShape(Shape),
-    RecCamSize(CamSize),
+    /// The countdown 0 / 3 s.
+    RecCountdown(bool),
+    /// A GIF's max length (seconds).
+    RecGifMax(u32),
     /// "Start recording".
     RecStart,
     /// The palette's rainbow swatch: the colour picker for the tool.
@@ -127,16 +136,31 @@ pub enum Kind {
     SepH,
     /// A palette color in the popover.
     Dot(C4),
-    /// Record popover: a segmented control's track.
+    /// The Record panel: a segmented control's track.
     SegTrack,
-    /// A segment (`on` = chosen).
-    Seg { act: Act, label: &'static str, on: bool },
+    /// A segment (`on` = chosen), with an icon and/or a label.
+    Seg { act: Act, label: &'static str, icon: &'static str, on: bool },
     /// Muted text.
     Label(&'static str),
-    /// A row with a label and an on/off switch (the whole row toggles).
+    /// A column's caption over a segmented control (11 px, muted).
+    Caption(&'static str),
+    /// A panel row: icon, name, a value (else its device box), `dim`
+    /// while off; a press on it acts `act` (unless disabled).
+    Row { act: Act, icon: &'static str, label: &'static str, value: Option<&'static str>, dim: bool },
+    /// A row's on/off toggle at its right end (`label` names the row).
     Switch { act: Act, label: &'static str, on: bool },
-    /// A device dropdown box (shows `Toolbar::texts[dev.text()]`).
+    /// A row's device: its name and a chevron (shows
+    /// `Toolbar::texts[dev.text()]`); opens the list.
     DevBox { dev: Dev, open: bool },
+    /// The microphone's 7-bar level meter.
+    Meter { lit: u8, clip: bool },
+    /// The mode switch's track and its two modes.
+    ModeTrack,
+    Mode { video: bool, on: bool },
+    /// Video mode's Close button above the selection.
+    Close,
+    /// "Drag · scroll to resize" under the camera bubble.
+    Grip,
     /// The open device list's panel.
     DevList,
     /// Device `i` of the open list (`Toolbar::texts[LIST_TEXT + i]`).
@@ -183,8 +207,10 @@ pub struct Input<'a> {
     pub palette: Option<&'a [C4]>,
     /// Show the Record button (recording works on this platform).
     pub record: bool,
-    /// The Record popover while it is open (instead of the palette).
+    /// Video mode: the setup panel (instead of the toolbar).
     pub rec: Option<&'a RecView<'a>>,
+    /// The camera bubble on screen (image px): the grip hint goes under it.
+    pub grip: Option<FRect>,
     /// The current tool has a size (else `– N +` is disabled) and a
     /// colour (else the palette button is).
     pub sizes: bool,
@@ -205,7 +231,7 @@ pub struct PickView<'a> {
     pub recents: &'a [C4],
 }
 
-/// What the Record popover shows.
+/// What the Record panel shows.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RecView<'a> {
     pub format: RecFormat,
@@ -214,7 +240,7 @@ pub struct RecView<'a> {
     /// ffmpeg is being asked it says "checking…" (disabled too).
     pub mp4: crate::rec_ui::Mp4,
     pub fps: u32,
-    pub fps_choices: [u32; 2],
+    pub fps_choices: &'static [u32],
     pub system: bool,
     pub mic: bool,
     pub camera: bool,
@@ -223,7 +249,6 @@ pub struct RecView<'a> {
     /// The cameras are still being listed (the row says so, disabled).
     pub cams_looking: bool,
     pub shape: Shape,
-    pub size: CamSize,
     /// The chosen microphone's name ("Default microphone" for the default).
     pub mic_label: &'a str,
     /// The chosen camera's name ("Default camera" for the first).
@@ -239,6 +264,13 @@ pub struct RecView<'a> {
     pub ring_pal: bool,
     pub ring_colors: &'a [C4],
     pub accent: C4,
+    pub source: RecSource,
+    /// 3-2-1 before the first frame (MP4's Countdown segment).
+    pub countdown: bool,
+    /// A GIF's max length (seconds).
+    pub gif_max: u32,
+    /// The microphone's level as bars lit and clipping, while metered.
+    pub meter: Option<(u8, bool)>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -249,9 +281,16 @@ pub struct Toolbar {
     pub wrapped: bool,
     /// The bar's anchor edge is its bottom (placed above / inside).
     pub above: bool,
-    /// Texts of the Record popover: the microphone box, the camera box,
+    /// Texts of the Record panel: the microphone box, the camera box,
     /// then the open list ([`LIST_TEXT`]).
     pub texts: Vec<String>,
+    /// Surfaces outside the bar and popover (the mode switch, Close, the
+    /// grip hint): they take presses too.
+    pub extra: Vec<FRect>,
+    /// The mode switch above the selection (the size label follows it).
+    pub mode: Option<FRect>,
+    /// Video mode: `bar` is the setup panel.
+    pub video: bool,
 }
 
 type Group = Vec<(Kind, bool, f32)>;
@@ -317,6 +356,9 @@ fn place_row(gs: &[Group], x0: f32, y: f32, items: &mut Vec<Item>) {
 }
 
 pub fn layout(inp: &Input) -> Toolbar {
+    if let Some(rv) = inp.rec {
+        return super::panel::layout(inp, rv);
+    }
     let s = inp.s;
     let gs = groups(inp);
     let area = inp.area;
@@ -359,14 +401,18 @@ pub fn layout(inp: &Input) -> Toolbar {
         it.r = FRect { x: x + it.r.x * s, y: y + it.r.y * s, w: it.r.w * s, h: it.r.h * s };
     }
     let bar = FRect { x, y, w: bw, h: bh };
-    let mut texts = Vec::new();
-    let pop = match (inp.pick, inp.rec, inp.palette) {
-        (Some(pv), _, _) => Some(place_picker(pv, bar, above, &mut items, inp)),
-        (None, Some(rv), _) => Some(place_rec(rv, bar, above, &mut items, &mut texts, inp)),
-        (None, None, Some(colors)) => Some(place_palette(colors, bar, above, &mut items, inp)),
-        (None, None, None) => None,
+    let pop = match (inp.pick, inp.palette) {
+        (Some(pv), _) => Some(place_picker(pv, bar, above, &mut items, inp)),
+        (None, Some(colors)) => Some(place_palette(colors, bar, above, &mut items, inp)),
+        (None, None) => None,
     };
-    Toolbar { bar, pop, items, wrapped, above, texts }
+    // The mode switch above the selection (recording works here).
+    let mut extra = Vec::new();
+    let mode = inp.record.then(|| {
+        let up = above.then(|| pop.map_or(bar, |p| union(bar, p))).filter(|b| b.y1() <= sel.y + 0.5);
+        super::panel::place_top(sel, area, s, false, up, &mut items, &mut extra)
+    });
+    Toolbar { bar, pop, items, wrapped, above, texts: Vec::new(), extra, mode, video: false }
 }
 
 /// Top-left of a `pw`x`ph` popover 6 px from the bar on the side away from
@@ -400,176 +446,6 @@ fn place_pop(pw: f32, ph: f32, anchor: FRect, bar: FRect, above: bool, inp: &Inp
         }
     };
     (px, py)
-}
-
-const REC_W: f32 = 256.0;
-const REC_PAD: f32 = 12.0;
-const SEG_H: f32 = 28.0;
-const SWITCH_H: f32 = 32.0;
-const DEV_H: f32 = 28.0;
-const DEV_ITEM_H: f32 = 26.0;
-/// At most this many microphones are listed.
-const DEV_MAX: usize = 8;
-const START_H: f32 = 32.0;
-/// The ring row's controls: thinner, the readout, thicker, the swatch.
-const RING_VALUE_W: f32 = 56.0;
-const RING_CTL_W: f32 = 3.0 * SEG_H + RING_VALUE_W + 2.0 * IN_GAP + 6.0;
-/// Swatches per row of the ring's palette.
-const RING_PAL_COLS: usize = 6;
-
-/// Segment labels for the frame rates on offer.
-fn fps_label(n: u32) -> &'static str {
-    match n {
-        10 => "10 fps",
-        15 => "15 fps",
-        30 => "30 fps",
-        60 => "60 fps",
-        _ => "fps",
-    }
-}
-
-/// The Record popover: format, frame rate, sound, microphone, camera and
-/// Start recording, in a column `REC_W` wide; placed like the palette.
-fn place_rec(rv: &RecView, bar: FRect, above: bool, items: &mut Vec<Item>, texts: &mut Vec<String>, inp: &Input) -> FRect {
-    let s = inp.s;
-    let mut local: Vec<Item> = Vec::new();
-    let mut push = |kind: Kind, r: FRect, disabled: bool| local.push(Item { kind, r, disabled });
-    let inner = REC_W - 2.0 * REC_PAD;
-    let x0 = REC_PAD;
-    let mut y = REC_PAD;
-    // Format: MP4 | GIF across the width.
-    push(Kind::SegTrack, FRect { x: x0, y, w: inner, h: SEG_H }, false);
-    let half = (inner - 4.0) / 2.0;
-    for (i, (f, label)) in [(RecFormat::Mp4, "MP4"), (RecFormat::Gif, "GIF")].into_iter().enumerate() {
-        let r = FRect { x: x0 + 2.0 + i as f32 * half, y: y + 2.0, w: half, h: SEG_H - 4.0 };
-        let label = if f == RecFormat::Mp4 && rv.mp4 == crate::rec_ui::Mp4::Checking { "checking\u{2026}" } else { label };
-        push(Kind::Seg { act: Act::RecFormat(f), label, on: rv.format == f }, r, f == RecFormat::Mp4 && rv.mp4 != crate::rec_ui::Mp4::Yes);
-    }
-    y += SEG_H + 10.0;
-    // Frame rate: label left, two segments right.
-    push(Kind::Label("Frame rate"), FRect { x: x0, y, w: inner / 2.0, h: SEG_H }, false);
-    let fw = 128.0;
-    let fx = x0 + inner - fw;
-    push(Kind::SegTrack, FRect { x: fx, y, w: fw, h: SEG_H }, false);
-    let fh = (fw - 4.0) / 2.0;
-    for (i, n) in rv.fps_choices.into_iter().enumerate() {
-        let r = FRect { x: fx + 2.0 + i as f32 * fh, y: y + 2.0, w: fh, h: SEG_H - 4.0 };
-        push(Kind::Seg { act: Act::RecFps(n), label: fps_label(n), on: rv.fps == n }, r, false);
-    }
-    y += SEG_H + 8.0;
-    push(Kind::SepH, FRect { x: x0, y, w: inner, h: 1.0 }, false);
-    y += 1.0 + 4.0;
-    let audio = rv.format == RecFormat::Mp4;
-    let row = |y: f32| FRect { x: x0 - 4.0, y, w: inner + 8.0, h: SWITCH_H };
-    push(Kind::Switch { act: Act::RecSystem, label: "System sound", on: audio && rv.system }, row(y), !audio);
-    y += SWITCH_H;
-    push(Kind::Switch { act: Act::RecMic, label: "Microphone", on: audio && rv.mic }, row(y), !audio);
-    y += SWITCH_H;
-    texts.push(rv.mic_label.to_string());
-    texts.push(rv.cam_label.to_string());
-    let mut list = None;
-    let mut ring_pal = None;
-    // A device box at `y`; its list (when open) floats below it.
-    let mut dev_box = |dev: Dev, y: f32, push: &mut dyn FnMut(Kind, FRect, bool)| {
-        let open = rv.devs.filter(|d| d.0 == dev);
-        push(Kind::DevBox { dev, open: open.is_some() }, FRect { x: x0, y, w: inner, h: DEV_H }, false);
-        if let Some((_, devs)) = open {
-            let n = devs.len().min(DEV_MAX);
-            let lr = FRect { x: x0, y: y + DEV_H + 4.0, w: inner, h: n as f32 * DEV_ITEM_H + 8.0 };
-            list = Some((dev, lr, n));
-            texts.extend(devs.iter().take(n).cloned());
-        }
-    };
-    if audio && rv.mic {
-        y += 2.0;
-        dev_box(Dev::Mic, y, &mut push);
-        y += DEV_H + 6.0;
-    }
-    let cam = rv.camera && rv.cams;
-    let label = if rv.cams_looking { LOOKING_CAMS } else { "Camera" };
-    push(Kind::Switch { act: Act::RecCamera, label, on: cam }, row(y), !rv.cams);
-    y += SWITCH_H;
-    if cam {
-        y += 2.0;
-        dev_box(Dev::Cam, y, &mut push);
-        y += DEV_H + 8.0;
-        // Shape: three segments across the width.
-        push(Kind::SegTrack, FRect { x: x0, y, w: inner, h: SEG_H }, false);
-        let third = (inner - 4.0) / 3.0;
-        for (i, sh) in Shape::ALL.into_iter().enumerate() {
-            let r = FRect { x: x0 + 2.0 + i as f32 * third, y: y + 2.0, w: third, h: SEG_H - 4.0 };
-            push(Kind::Seg { act: Act::RecShape(sh), label: sh.label(), on: rv.shape == sh }, r, false);
-        }
-        y += SEG_H + 8.0;
-        // Size: label left, S M L right.
-        push(Kind::Label("Size"), FRect { x: x0, y, w: inner / 2.0, h: SEG_H }, false);
-        let (fw, fx) = (128.0, x0 + inner - 128.0);
-        push(Kind::SegTrack, FRect { x: fx, y, w: fw, h: SEG_H }, false);
-        let fh = (fw - 4.0) / 3.0;
-        for (i, sz) in CamSize::ALL.into_iter().enumerate() {
-            let r = FRect { x: fx + 2.0 + i as f32 * fh, y: y + 2.0, w: fh, h: SEG_H - 4.0 };
-            push(Kind::Seg { act: Act::RecCamSize(sz), label: sz.label(), on: rv.size == sz }, r, false);
-        }
-        y += SEG_H + 8.0;
-        // Ring: label left; thinner, the width (and its preview), thicker
-        // and the colour swatch right.
-        push(Kind::Label("Ring"), FRect { x: x0, y, w: 60.0, h: SEG_H }, false);
-        let ring_c = rv.ring.unwrap_or(rv.accent);
-        let rx = x0 + inner - RING_CTL_W;
-        push(Kind::Btn(Act::RingSize(-1)), FRect { x: rx, y, w: SEG_H, h: SEG_H }, rv.ring_w == 0);
-        let vx = rx + SEG_H + IN_GAP;
-        push(Kind::RingValue { w: rv.ring_w, c: ring_c }, FRect { x: vx, y, w: RING_VALUE_W, h: SEG_H }, false);
-        let px = vx + RING_VALUE_W + IN_GAP;
-        push(Kind::Btn(Act::RingSize(1)), FRect { x: px, y, w: SEG_H, h: SEG_H }, rv.ring_w >= crate::config::RING_WIDTH_MAX);
-        let sx = px + SEG_H + 6.0;
-        push(Kind::Swatch { act: Act::RingPalette, c: ring_c, on: rv.ring_pal }, FRect { x: sx, y, w: SEG_H, h: SEG_H }, false);
-        if rv.ring_pal {
-            // The accent, the palette, the rainbow: rows of six above the row.
-            let n = rv.ring_colors.len() + 2;
-            let rows = n.div_ceil(RING_PAL_COLS);
-            let pw = RING_PAL_COLS as f32 * DOT_BTN + (RING_PAL_COLS - 1) as f32 * DOT_GAP + 2.0 * PAD;
-            let ph = rows as f32 * DOT_BTN + (rows - 1) as f32 * DOT_GAP + 2.0 * PAD;
-            let r = FRect { x: x0 + inner - pw, y: y - 4.0 - ph, w: pw, h: ph };
-            ring_pal = Some((r, ring_c));
-        }
-        y += SEG_H;
-    }
-    y += 8.0;
-    push(Kind::Primary { act: Act::RecStart, label: "Start recording" }, FRect { x: x0, y, w: inner, h: START_H }, false);
-    y += START_H + REC_PAD;
-    // The open list floats over the rows below the box: drawn (and hit) last.
-    let mut h = y;
-    if let Some((dev, lr, n)) = list {
-        h = h.max(lr.y1() + REC_PAD);
-        push(Kind::DevList, lr, false);
-        for i in 0..n {
-            let r = FRect { x: lr.x + 4.0, y: lr.y + 4.0 + i as f32 * DEV_ITEM_H, w: lr.w - 8.0, h: DEV_ITEM_H };
-            push(Kind::DevItem { dev, i, on: i == rv.dev_sel }, r, false);
-        }
-    }
-    if let Some((pr, cur)) = ring_pal {
-        push(Kind::DevList, pr, false);
-        let at = |i: usize| FRect {
-            x: pr.x + PAD + (i % RING_PAL_COLS) as f32 * (DOT_BTN + DOT_GAP),
-            y: pr.y + PAD + (i / RING_PAL_COLS) as f32 * (DOT_BTN + DOT_GAP),
-            w: DOT_BTN,
-            h: DOT_BTN,
-        };
-        push(Kind::Swatch { act: Act::RingColor(None), c: rv.accent, on: rv.ring.is_none() }, at(0), false);
-        for (i, c) in rv.ring_colors.iter().enumerate() {
-            let on = rv.ring.is_some() && *c == cur;
-            push(Kind::Swatch { act: Act::RingColor(Some(c.with_alpha(255))), c: c.with_alpha(255), on }, at(i + 1), false);
-        }
-        push(Kind::Rainbow(Act::RingWheel), at(rv.ring_colors.len() + 1), false);
-    }
-    let (pw, ph) = (REC_W * s, h * s);
-    let anchor = items.iter().find(|it| it.kind == Kind::Btn(Act::Record)).map(|it| it.r).unwrap_or(bar);
-    let (px, py) = place_pop(pw, ph, anchor, bar, above, inp);
-    for it in local {
-        let r = FRect { x: px + it.r.x * s, y: py + it.r.y * s, w: it.r.w * s, h: it.r.h * s };
-        items.push(Item { r, ..it });
-    }
-    FRect { x: px, y: py, w: pw, h: ph }
 }
 
 /// Popover 6 px from the bar on the side away from the selection (below a
@@ -628,7 +504,7 @@ const RECENT_GAP: f32 = 4.0;
 /// slider (tool colours) and the recent colours; centred over the palette
 /// button (or the Record button, for the camera ring), placed like the
 /// Record popover.
-fn place_picker(pv: &PickView, bar: FRect, above: bool, items: &mut Vec<Item>, inp: &Input) -> FRect {
+pub(super) fn place_picker(pv: &PickView, bar: FRect, above: bool, items: &mut Vec<Item>, inp: &Input) -> FRect {
     let s = inp.s;
     let mut local: Vec<Item> = Vec::new();
     let mut push = |kind: Kind, r: FRect| local.push(Item { kind, r, disabled: false });
@@ -690,6 +566,9 @@ impl Toolbar {
             Kind::Btn(a) => Some(a),
             Kind::Dot(c) => Some(Act::Color(c)),
             Kind::Seg { act, .. } | Kind::Switch { act, .. } | Kind::Primary { act, .. } | Kind::Swatch { act, .. } => Some(act),
+            Kind::Row { act, .. } => Some(act),
+            Kind::Mode { video, .. } => Some(Act::Mode(video)),
+            Kind::Close => Some(Act::Exit),
             Kind::Rainbow(act) => Some(act),
             Kind::DevBox { dev, .. } => Some(Act::RecDevMenu(dev)),
             Kind::DevItem { dev, i, .. } => Some(Act::RecDev(dev, i)),
@@ -703,6 +582,10 @@ impl Toolbar {
             | Kind::SepH
             | Kind::SegTrack
             | Kind::Label(_)
+            | Kind::Caption(_)
+            | Kind::Meter { .. }
+            | Kind::ModeTrack
+            | Kind::Grip
             | Kind::DevList
             | Kind::RingValue { .. }
             | Kind::PickSwatch => None,
@@ -711,7 +594,7 @@ impl Toolbar {
 
     /// True over the bar or the open popover: the press is consumed.
     pub fn contains(&self, p: Pt) -> bool {
-        hit(self.bar, p) || self.pop.is_some_and(|r| hit(r, p))
+        hit(self.bar, p) || self.pop.is_some_and(|r| hit(r, p)) || self.extra.iter().any(|r| hit(*r, p))
     }
 
     /// A copy scaled by `z` about the anchor edge (scale-in animation).
@@ -726,6 +609,9 @@ impl Toolbar {
             wrapped: self.wrapped,
             above: self.above,
             texts: self.texts.clone(),
+            extra: self.extra.iter().map(|r| f(*r)).collect(),
+            mode: self.mode.map(f),
+            video: self.video,
         }
     }
 }
@@ -782,6 +668,7 @@ mod tests {
             palette: None,
             record: false,
             rec: None,
+            grip: None,
             sizes: true,
             colors: true,
             fills: true,
@@ -1050,39 +937,12 @@ mod tests {
         assert!((z.bar.w - tb.bar.w * 0.5).abs() < 1e-3);
     }
 
-    fn rec_view(format: RecFormat, mic: bool, devs: Option<&[String]>) -> RecView<'_> {
-        RecView {
-            format,
-            mp4: crate::rec_ui::Mp4::Yes,
-            fps: if format == RecFormat::Gif { 15 } else { 30 },
-            fps_choices: if format == RecFormat::Gif { [10, 15] } else { [30, 60] },
-            system: true,
-            mic,
-            camera: false,
-            cams: true,
-            cams_looking: false,
-            shape: Shape::Circle,
-            size: CamSize::M,
-            mic_label: "Default microphone",
-            cam_label: "Default camera",
-            devs: devs.map(|d| (Dev::Mic, d)),
-            dev_sel: 0,
-            ring: None,
-            ring_w: 3,
-            ring_pal: false,
-            ring_colors: &RING_COLORS,
-            accent: C4::rgb(0x8b, 0x93, 0xff),
-        }
+    fn centre(r: FRect) -> Pt {
+        Pt::new(r.x + r.w / 2.0, r.y + r.h / 2.0)
     }
-
-    const RING_COLORS: [C4; 10] = [C4::rgb(240, 68, 56); 10];
 
     fn kind_at(tb: &Toolbar, f: impl Fn(&Kind) -> bool) -> Item {
         *tb.items.iter().find(|i| f(&i.kind)).expect("item")
-    }
-
-    fn centre(r: FRect) -> Pt {
-        Pt::new(r.x + r.w / 2.0, r.y + r.h / 2.0)
     }
 
     #[test]
@@ -1097,214 +957,5 @@ mod tests {
         // The busy OK mode has no Record button.
         i.busy = true;
         assert!(!layout(&i).items.iter().any(|it| it.kind == Kind::Btn(Act::Record)));
-    }
-
-    /// Without an MP4 encoder (Linux without ffmpeg) the MP4 segment is
-    /// there but disabled; GIF still works.
-    #[test]
-    fn record_popover_without_mp4() {
-        let mut i = inp(r(100.0, 100.0, 800.0, 300.0));
-        i.record = true;
-        let mut rv = rec_view(RecFormat::Gif, false, None);
-        rv.mp4 = crate::rec_ui::Mp4::No;
-        i.rec = Some(&rv);
-        let tb = layout(&i);
-        let seg = |a: Act| kind_at(&tb, |k| matches!(k, Kind::Seg { act, .. } if *act == a));
-        let mp4 = seg(Act::RecFormat(RecFormat::Mp4));
-        assert!(mp4.disabled);
-        assert!(matches!(mp4.kind, Kind::Seg { label: "MP4", .. }));
-        assert_eq!(tb.act_at(centre(mp4.r)), None);
-        assert!(!seg(Act::RecFormat(RecFormat::Gif)).disabled);
-        assert_eq!(tb.act_at(centre(seg(Act::RecFormat(RecFormat::Gif)).r)), Some(Act::RecFormat(RecFormat::Gif)));
-        // While ffmpeg is being asked: "checking…", disabled.
-        let mut rv2 = rv.clone();
-        rv2.mp4 = crate::rec_ui::Mp4::Checking;
-        i.rec = Some(&rv2);
-        let tb = layout(&i);
-        let mp4 = kind_at(&tb, |k| matches!(k, Kind::Seg { act: Act::RecFormat(RecFormat::Mp4), .. }));
-        assert!(mp4.disabled);
-        assert!(matches!(mp4.kind, Kind::Seg { label: "checking\u{2026}", .. }), "{:?}", mp4.kind);
-    }
-
-    #[test]
-    fn record_popover_layout_and_hits() {
-        let mut i = inp(r(100.0, 100.0, 800.0, 300.0));
-        i.record = true;
-        let rv = rec_view(RecFormat::Mp4, false, None);
-        i.rec = Some(&rv);
-        let tb = layout(&i);
-        let pop = tb.pop.expect("popover");
-        assert_eq!(pop.w, REC_W);
-        assert_eq!(pop.y, tb.bar.y1() + POP_GAP, "below a bar below the selection");
-        assert_eq!(cx(pop), cx(btn(&tb, Act::Record)), "centred over the Record button");
-        assert!(tb.items.iter().all(|it| !matches!(it.kind, Kind::Dot(_))), "no palette");
-        // Every popover item lies inside it.
-        let n = tb.items.iter().position(|it| it.kind == Kind::SegTrack).unwrap();
-        for it in &tb.items[n..] {
-            assert!(it.r.x >= pop.x && it.r.x1() <= pop.x1() + 0.01 && it.r.y >= pop.y && it.r.y1() <= pop.y1() + 0.01, "{it:?}");
-        }
-        let seg = |a: Act| kind_at(&tb, |k| matches!(k, Kind::Seg { act, .. } if *act == a));
-        assert!(matches!(seg(Act::RecFormat(RecFormat::Mp4)).kind, Kind::Seg { on: true, .. }));
-        assert!(matches!(seg(Act::RecFormat(RecFormat::Gif)).kind, Kind::Seg { on: false, .. }));
-        assert_eq!(tb.act_at(centre(seg(Act::RecFormat(RecFormat::Gif)).r)), Some(Act::RecFormat(RecFormat::Gif)));
-        assert_eq!(tb.act_at(centre(seg(Act::RecFps(60)).r)), Some(Act::RecFps(60)));
-        let sw = |a: Act| kind_at(&tb, |k| matches!(k, Kind::Switch { act, .. } if *act == a));
-        // A whole switch row toggles: its left end too.
-        let sys = sw(Act::RecSystem);
-        assert_eq!(tb.act_at(Pt::new(sys.r.x + 6.0, sys.r.y + 10.0)), Some(Act::RecSystem));
-        assert_eq!(tb.act_at(centre(sw(Act::RecMic).r)), Some(Act::RecMic));
-        // The camera toggles; while it is off there are no camera options.
-        let cam = sw(Act::RecCamera);
-        assert!(!cam.disabled);
-        assert_eq!(tb.act_at(centre(cam.r)), Some(Act::RecCamera));
-        assert!(!tb.items.iter().any(|it| matches!(it.kind, Kind::DevBox { dev: Dev::Cam, .. })));
-        assert!(!tb.items.iter().any(|it| matches!(it.kind, Kind::Seg { act: Act::RecShape(_), .. })));
-        let start = kind_at(&tb, |k| matches!(k, Kind::Primary { .. }));
-        assert_eq!(tb.act_at(centre(start.r)), Some(Act::RecStart));
-        assert!(start.r.y1() < pop.y1() && start.r.y > cam.r.y1());
-        // No microphone box while the microphone is off.
-        assert!(!tb.items.iter().any(|it| matches!(it.kind, Kind::DevBox { .. })));
-        // Labels hit nothing.
-        let label = kind_at(&tb, |k| matches!(k, Kind::Label(_)));
-        assert_eq!(tb.act_at(Pt::new(label.r.x + 4.0, label.r.y + 4.0)), None);
-    }
-
-    #[test]
-    fn record_popover_gif_disables_sound() {
-        let mut i = inp(r(100.0, 100.0, 800.0, 300.0));
-        i.record = true;
-        let rv = rec_view(RecFormat::Gif, true, None);
-        i.rec = Some(&rv);
-        let tb = layout(&i);
-        let sys = kind_at(&tb, |k| matches!(k, Kind::Switch { act: Act::RecSystem, .. }));
-        assert!(sys.disabled && matches!(sys.kind, Kind::Switch { on: false, .. }));
-        assert!(!tb.items.iter().any(|it| matches!(it.kind, Kind::DevBox { .. })), "no microphone for a GIF");
-        let fps: Vec<Act> = tb.items.iter().filter_map(|it| match it.kind {
-            Kind::Seg { act: a @ Act::RecFps(_), .. } => Some(a),
-            _ => None,
-        }).collect();
-        assert_eq!(fps, [Act::RecFps(10), Act::RecFps(15)]);
-    }
-
-    #[test]
-    fn record_popover_microphone_list() {
-        let mut i = inp(r(100.0, 100.0, 800.0, 300.0));
-        i.record = true;
-        let closed = rec_view(RecFormat::Mp4, true, None);
-        i.rec = Some(&closed);
-        let short = layout(&i);
-        let bx = kind_at(&short, |k| matches!(k, Kind::DevBox { dev: Dev::Mic, open: false }));
-        assert_eq!(short.act_at(centre(bx.r)), Some(Act::RecDevMenu(Dev::Mic)));
-        assert_eq!(short.texts, ["Default microphone", "Default camera"]);
-        let devs: Vec<String> = ["Default microphone", "USB mic", "Headset"].iter().map(|s| s.to_string()).collect();
-        let mut open = rec_view(RecFormat::Mp4, true, Some(&devs));
-        open.dev_sel = 2;
-        i.rec = Some(&open);
-        let tb = layout(&i);
-        assert_eq!(tb.texts.len(), 5);
-        let items: Vec<Item> = tb.items.iter().filter(|it| matches!(it.kind, Kind::DevItem { .. })).copied().collect();
-        assert_eq!(items.len(), 3);
-        assert!(matches!(items[2].kind, Kind::DevItem { dev: Dev::Mic, i: 2, on: true }));
-        // The list floats over the rows below the box and wins their hits.
-        let cam = kind_at(&tb, |k| matches!(k, Kind::Switch { act: Act::RecCamera, .. }));
-        assert!(items[1].r.y < cam.r.y1() && items[2].r.y1() > cam.r.y);
-        assert_eq!(tb.act_at(centre(items[1].r)), Some(Act::RecDev(Dev::Mic, 1)));
-        let pop = tb.pop.unwrap();
-        assert!(items[2].r.y1() <= pop.y1(), "the popover grows to hold the list");
-        // Many devices: the list is capped.
-        let many: Vec<String> = (0..20).map(|n| format!("Mic {n}")).collect();
-        let lots = rec_view(RecFormat::Mp4, true, Some(&many));
-        i.rec = Some(&lots);
-        let tb = layout(&i);
-        assert_eq!(tb.items.iter().filter(|it| matches!(it.kind, Kind::DevItem { .. })).count(), DEV_MAX);
-    }
-
-    #[test]
-    fn record_popover_camera_options() {
-        let mut i = inp(r(100.0, 100.0, 800.0, 300.0));
-        i.record = true;
-        let mut rv = rec_view(RecFormat::Mp4, false, None);
-        rv.camera = true;
-        rv.shape = Shape::Rounded;
-        rv.size = CamSize::L;
-        rv.cam_label = "USB Webcam";
-        i.rec = Some(&rv);
-        let tb = layout(&i);
-        let pop = tb.pop.unwrap();
-        let cam = kind_at(&tb, |k| matches!(k, Kind::Switch { act: Act::RecCamera, on: true, .. }));
-        // Camera box, then shape, then size, all below the switch and above Start.
-        let bx = kind_at(&tb, |k| matches!(k, Kind::DevBox { dev: Dev::Cam, open: false }));
-        assert!(bx.r.y >= cam.r.y1());
-        assert_eq!(tb.act_at(centre(bx.r)), Some(Act::RecDevMenu(Dev::Cam)));
-        assert_eq!(tb.texts[Dev::Cam.text()], "USB Webcam");
-        let seg = |a: Act| kind_at(&tb, |k| matches!(k, Kind::Seg { act, .. } if *act == a));
-        let shapes: Vec<Item> = Shape::ALL.iter().map(|&s| seg(Act::RecShape(s))).collect();
-        assert!(matches!(shapes[1].kind, Kind::Seg { on: true, label: "Rounded", .. }));
-        assert!(shapes[0].r.y > bx.r.y1());
-        assert_eq!(tb.act_at(centre(shapes[2].r)), Some(Act::RecShape(Shape::Square)));
-        let sizes: Vec<Item> = CamSize::ALL.iter().map(|&s| seg(Act::RecCamSize(s))).collect();
-        assert!(matches!(sizes[2].kind, Kind::Seg { on: true, label: "L", .. }));
-        assert!(sizes[0].r.y > shapes[0].r.y1());
-        assert_eq!(tb.act_at(centre(sizes[0].r)), Some(Act::RecCamSize(CamSize::S)));
-        let start = kind_at(&tb, |k| matches!(k, Kind::Primary { .. }));
-        assert!(start.r.y > sizes[0].r.y1() && start.r.y1() < pop.y1());
-        let n = tb.items.iter().position(|it| it.kind == Kind::SegTrack).unwrap();
-        for it in &tb.items[n..] {
-            assert!(it.r.x >= pop.x && it.r.x1() <= pop.x1() + 0.01 && it.r.y >= pop.y && it.r.y1() <= pop.y1() + 0.01, "{it:?}");
-        }
-        // The camera list: its entries pick cameras.
-        let names: Vec<String> = ["Default camera", "Integrated Camera", "USB Webcam"].iter().map(|s| s.to_string()).collect();
-        let mut listed = rv.clone();
-        listed.devs = Some((Dev::Cam, &names));
-        listed.dev_sel = 2;
-        i.rec = Some(&listed);
-        let tb = layout(&i);
-        let items: Vec<Item> = tb.items.iter().filter(|it| matches!(it.kind, Kind::DevItem { .. })).copied().collect();
-        assert_eq!(items.len(), 3);
-        assert!(matches!(items[2].kind, Kind::DevItem { dev: Dev::Cam, i: 2, on: true }));
-        assert_eq!(tb.act_at(centre(items[1].r)), Some(Act::RecDev(Dev::Cam, 1)));
-        assert_eq!(&tb.texts[LIST_TEXT..], &names[..]);
-        assert!(items[2].r.y1() <= tb.pop.unwrap().y1());
-    }
-
-    #[test]
-    fn record_popover_without_a_camera() {
-        let mut i = inp(r(100.0, 100.0, 800.0, 300.0));
-        i.record = true;
-        let mut rv = rec_view(RecFormat::Mp4, false, None);
-        rv.camera = true; // on in the config, but there is none
-        rv.cams = false;
-        i.rec = Some(&rv);
-        let tb = layout(&i);
-        let cam = kind_at(&tb, |k| matches!(k, Kind::Switch { act: Act::RecCamera, .. }));
-        assert!(cam.disabled && matches!(cam.kind, Kind::Switch { on: false, .. }));
-        assert_eq!(tb.act_at(centre(cam.r)), None);
-        assert!(tb.contains(centre(cam.r)), "the press is consumed");
-        assert!(!tb.items.iter().any(|it| matches!(it.kind, Kind::DevBox { dev: Dev::Cam, .. })));
-    }
-
-    #[test]
-    fn record_popover_flips_above_and_clamps() {
-        let mut i = inp(r(100.0, 600.0, 800.0, 300.0));
-        i.record = true;
-        let rv = rec_view(RecFormat::Mp4, false, None);
-        i.rec = Some(&rv);
-        let tb = layout(&i);
-        let pop = tb.pop.unwrap();
-        assert!(pop.y1() <= tb.bar.y - POP_GAP + 0.01 || pop.y >= tb.bar.y1(), "{pop:?} {:?}", tb.bar);
-        assert!(pop.y >= MARGIN && pop.y1() <= AREA.h - MARGIN, "{pop:?}");
-        // A short area fits it on neither side: clamped inside.
-        i.area = r(0.0, 0.0, 1920.0, 360.0);
-        i.sel = r(100.0, 100.0, 800.0, 150.0);
-        let tb = layout(&i);
-        let pop = tb.pop.unwrap();
-        assert!(pop.y >= MARGIN - 0.01, "{pop:?}");
-        // At 2x every size doubles.
-        let mut j = inp(r(100.0, 100.0, 1600.0, 300.0));
-        j.area = r(0.0, 0.0, 3840.0, 2160.0);
-        j.s = 2.0;
-        j.record = true;
-        j.rec = Some(&rv);
-        assert_eq!(layout(&j).pop.unwrap().w, 2.0 * REC_W);
     }
 }

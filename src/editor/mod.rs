@@ -24,6 +24,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 mod toolbar;
+mod panel;
 mod chrome;
 mod compose;
 mod pick;
@@ -217,6 +218,7 @@ pub fn run(
         focus_tries: 0,
         rec: None,
         rec_opts: None,
+        rec_area: None,
         #[cfg(test)]
         rec_spec: None,
         #[cfg(test)]
@@ -280,8 +282,10 @@ struct App {
     focus_tries: u8,
     /// The recording in progress (the overlay is hidden meanwhile).
     rec: Option<rec_ui::Run>,
-    /// The Record popover's last choices (until the config is reloaded).
+    /// The Record panel's last choices (until the config is reloaded).
     rec_opts: Option<RecOpts>,
+    /// The recorded area (physical px): the toast after it goes there.
+    rec_area: Option<capture::IRect>,
     /// Tests: the spec the last recording started with.
     #[cfg(test)]
     rec_spec: Option<crate::rec::RecSpec>,
@@ -355,6 +359,7 @@ impl App {
             self.repaint(); // the Camera row or the MP4 choice is ready
         }
         self.sync_bubble();
+        self.sync_meter();
 
         for _ in 0..16 {
             match std::mem::replace(&mut self.st, State::Hidden) {
@@ -450,7 +455,12 @@ impl App {
         let want = rec_ui::supported() && e.rec.open && e.rec.opts.camera && e.rec.has_cams() && e.sel.is_some() && e.tasks.is_empty();
         if !want {
             e.rec.cam.close();
+            e.rec.grip = None;
             return;
+        }
+        // The wheel over the bubble resized it: the panel follows.
+        if let Some(z) = crate::cam::take_resized() {
+            e.rec.opts.cam_size = z;
         }
         #[cfg(not(test))]
         let mons = e.rec.cam.mons.get_or_insert_with(|| capture::monitors().unwrap_or_default()).clone();
@@ -462,6 +472,42 @@ impl App {
         if let Some(err) = e.rec.cam.sync(&want, nudge) {
             e.rec.opts.camera = false;
             e.notice = Some(Toast::new(err, ToastKind::Error));
+        }
+        // The grip hint goes under the bubble (not while it is dragged).
+        let grip = e.rec.cam.shape_rect().map(|(x, y, d)| {
+            let (ox, oy) = e.shot.origin;
+            FRect { x: (x - ox) as f32, y: (y - oy) as f32, w: d as f32, h: d as f32 }
+        });
+        if grip != e.rec.grip {
+            e.rec.grip = grip;
+            self.repaint();
+        }
+    }
+
+    /// The microphone's level for the panel: metered while video mode is up
+    /// with the microphone on (MP4), released otherwise; looked at 20
+    /// times a second, a frame only when the bars change.
+    fn sync_meter(&mut self) {
+        let State::Edit(e) = &mut self.st else { return };
+        let o = &e.rec.opts;
+        let want = rec_ui::supported() && e.rec.open && e.tasks.is_empty() && o.mic && o.format == crate::rec::RecFormat::Mp4;
+        if !want {
+            e.rec.meter = None;
+            e.rec.bars = (0, false);
+            return;
+        }
+        if e.rec.meter.as_ref().is_none_or(|m| m.device() != o.mic_dev) {
+            e.rec.meter = Some(rec_ui::meter::MicMeter::open(&o.mic_dev));
+        }
+        let now = Instant::now();
+        if now.saturating_duration_since(e.rec.meter_at) < Duration::from_millis(rec_ui::meter::POLL_MS) {
+            return;
+        }
+        e.rec.meter_at = now;
+        let bars = rec_ui::meter::bars(e.rec.meter.as_ref().map_or(0.0, |m| m.peak()));
+        if bars != e.rec.bars {
+            e.rec.bars = bars;
+            self.repaint();
         }
     }
 
@@ -476,15 +522,31 @@ impl App {
             }
         }
         let Some(run) = self.rec.as_mut() else { return };
-        let Some(end) = run.tick(Instant::now()) else { return };
+        let now = Instant::now();
+        let ended = run.tick(now);
+        // "No mic input": the microphone has been silent for 5 s.
+        if let Some(n) = run.take_notice()
+            && !self.one_shot()
+        {
+            let at = self.rec_area.map_or((0, 0), |a| (a.0 + a.2 as i32 / 2, a.1 + a.3 as i32 / 2));
+            if !crate::notice::show(crate::notice::Note::plain(n, ToastKind::Error), at, theme::resolve(&self.cfg)) {
+                crate::tray::notify(n);
+            }
+        }
+        let Some(run) = self.rec.as_ref() else { return };
+        let length = run.length(now);
+        let Some(end) = ended else { return };
         self.rec = None;
-        self.recording_over(end);
+        self.recording_over(end, length);
     }
 
     /// Say how a recording ended: on stdout/stderr, and in a tray balloon
     /// for the daemon. A one-shot run (no tray, no hotkeys: the bar's Stop
     /// ends it) exits like a capture: 0 saved, 1 failed, 2 cancelled.
-    fn recording_over(&mut self, end: rec_ui::End) {
+    /// A saved recording is said in the toast with its buttons (Copy link
+    /// or Copy, Open, Show in folder; a tray balloon where there is no toast
+    /// window); `length` is the time recorded.
+    fn recording_over(&mut self, end: rec_ui::End, length: Duration) {
         let daemon = !self.one_shot();
         if daemon {
             crate::tray::set_recording(false);
@@ -496,7 +558,12 @@ impl App {
                     eprintln!("warning: {w}");
                 }
                 if daemon {
-                    crate::tray::notify_saved(&path, &warnings);
+                    let bytes = std::fs::metadata(&path).map_or(0, |m| m.len());
+                    let note = crate::notice::recording_saved(&path, length, bytes, &warnings, crate::notice::upload_configured(&self.cfg));
+                    let at = self.rec_area.map_or((0, 0), |a| (a.0 + a.2 as i32 / 2, a.1 + a.3 as i32 / 2));
+                    if !crate::notice::show(note, at, theme::resolve(&self.cfg)) {
+                        crate::tray::notify_saved(&path, &warnings);
+                    }
                 }
                 0
             }
@@ -520,6 +587,9 @@ impl App {
     /// recording), up until the recording is over.
     fn start_recording(&mut self, cfg: &Config, opts: &RecOpts, geom: rec_ui::Geom, th: Theme, bubble: Option<crate::cam::Bubble>) {
         let spec = opts.spec(cfg, geom.area, export::local_ymdhms());
+        self.rec_area = Some(geom.area);
+        // The panel's Countdown (0 / 3s); a GIF stops by itself at its max length.
+        let countdown = opts.countdown;
         #[cfg(test)]
         {
             #[cfg(windows)]
@@ -532,11 +602,12 @@ impl App {
             }
             let _ = (th, bubble);
             self.rec_spec = Some(spec);
-            self.recording_started(Ok(rec_ui::Run::fake(cfg.rec_countdown, opts.mic, Instant::now())));
+            self.recording_started(Ok(rec_ui::Run::fake(countdown, opts.mic, Instant::now()).with_max(opts.max_len())));
         }
         #[cfg(not(test))]
         {
-            self.recording_started(rec_ui::Run::start(spec, geom, th, cfg.rec_countdown, self.hwnd, bubble));
+            let run = rec_ui::Run::start(spec, geom, th, countdown, self.hwnd, bubble).map(|r| r.with_max(opts.max_len()));
+            self.recording_started(run);
         }
     }
 
@@ -549,8 +620,8 @@ impl App {
                     crate::tray::set_recording(true);
                 }
             }
-            Err(e) if e.is::<rec_ui::NotStarted>() => self.recording_over(rec_ui::End::Cancelled),
-            Err(e) => self.recording_over(rec_ui::End::Failed(format!("{e:#}"))),
+            Err(e) if e.is::<rec_ui::NotStarted>() => self.recording_over(rec_ui::End::Cancelled, Duration::ZERO),
+            Err(e) => self.recording_over(rec_ui::End::Failed(format!("{e:#}")), Duration::ZERO),
         }
     }
 
@@ -620,9 +691,14 @@ impl App {
         let before = sig(self);
         self.pump();
         let changed = sig(self) != before;
+        // The countdown's arc drains smoothly: fast ticks while it is up.
+        if let Some(r) = &self.rec {
+            wind::set_fast_timer(self.hwnd, r.counting());
+        }
         let State::Edit(edit) = &self.st else { return changed };
         let repaint = changed || stale(edit, self.notice.as_ref(), Instant::now());
-        if !repaint {
+        // The microphone's level is looked at 20 times a second.
+        if !repaint && edit.rec.meter.is_none() {
             // No frame runs to re-evaluate the cadence: drop to idle.
             wind::set_fast_timer(self.hwnd, false);
         }
@@ -818,7 +894,7 @@ impl App {
                 edit.rec.wait_cams(CAM_LIST_WAIT);
                 if edit.rec.has_cams() {
                     let want = edit.cam_want(&geom);
-                    let wait = (!cfg.rec_countdown).then_some(FIRST_PICTURE_WAIT);
+                    let wait = (!opts.countdown).then_some(FIRST_PICTURE_WAIT);
                     bubble = edit.rec.cam.open_now(&want, self.hwnd, wait);
                 }
             }
@@ -1048,6 +1124,12 @@ impl App {
             return;
         }
 
+        // Built in (not remappable): 1 / 2 switch Screenshot / Video; in
+        // video mode F / W / R pick Screen / Window / Region.
+        if let Some(act) = video_key(edit, vk, mods) {
+            self.apply_act(edit, act);
+            return;
+        }
         let Some(action) = edit.keys.resolve(vk, mods) else { return };
         match action {
             Action::UiBigger => edit.set_ui_size(edit.cfg.ui_scale.bigger(), Instant::now()),
@@ -1319,6 +1401,8 @@ impl App {
 
     fn apply_act(&mut self, edit: &mut Edit, act: Act) {
         match act {
+            // Video mode draws nothing (the recording is live).
+            Act::Tool(_) if edit.rec.open => {}
             Act::Tool(t) => {
                 edit.tool = if edit.tool == Some(t) { None } else { Some(t) };
                 edit.last_tool = t;
@@ -1335,10 +1419,9 @@ impl App {
             }
             // Pixelate and Invert have no colour: no palette (Space included).
             Act::Palette if !edit.palette_open && !tools::has_color(edit.cur_tool()) => {}
-            Act::Palette => {
-                edit.palette_open = !edit.palette_open;
-                edit.rec.open = false;
-            }
+            // Video mode has no palette (the panel replaces the toolbar).
+            Act::Palette if edit.rec.open => {}
+            Act::Palette => edit.palette_open = !edit.palette_open,
             Act::Wheel if !tools::has_color(edit.cur_tool()) => {}
             Act::Wheel => edit.open_picker(pick::Target::Tool),
             Act::RingSize(d) => {
@@ -1374,18 +1457,15 @@ impl App {
                 edit.loupe = None;
             }
             // A run with tasks has no Record button.
-            Act::Record | Act::RecStart if !edit.tasks.is_empty() => {}
+            Act::Record | Act::RecStart | Act::Mode(_) if !edit.tasks.is_empty() => {}
             Act::Record => {
-                edit.rec.open = !edit.rec.open;
-                edit.rec.dev_open = None;
-                edit.palette_open = false;
-                if edit.rec.open && edit.rec.opts.mic && !edit.rec.opts.mic_dev.is_empty() {
-                    edit.rec.load_devs(); // the chosen microphone's name
-                }
-                if edit.rec.open {
-                    edit.rec.load_cams(); // whether there is one
-                }
+                let on = !edit.rec.open;
+                edit.set_video(on);
             }
+            Act::Mode(on) => edit.set_video(on),
+            Act::RecSource(src) => edit.set_source(src, Pt::new(self.mouse.0 as f32, self.mouse.1 as f32)),
+            Act::RecCountdown(on) => edit.rec.opts.countdown = on,
+            Act::RecGifMax(n) => edit.rec.opts.gif_max = n,
             Act::RecFormat(crate::rec::RecFormat::Mp4) if edit.rec.mp4 != rec_ui::Mp4::Yes => {}
             Act::RecFormat(f) => {
                 edit.rec.opts.format = f;
@@ -1408,7 +1488,6 @@ impl App {
                 edit.rec.dev_open = None;
             }
             Act::RecShape(sh) => edit.rec.opts.cam_shape = sh,
-            Act::RecCamSize(sz) => edit.rec.opts.cam_size = sz,
             Act::RecDevMenu(dev) => {
                 edit.rec.ring_pal = false;
                 match dev {
@@ -1541,7 +1620,7 @@ impl Driver for App {
         // The whole image as one rect: same code path as partial repaints.
         let bd = PixBufBackdrop { img: edit.composed(), dim: edit.th.dim };
         edit.compose_rect(compose::PxRect::image(edit.shot.size), &bd, img.as_raw_mut(), Order::Rgba);
-        wind::set_fast_timer(self.hwnd, animating(edit, self.notice.as_ref(), now));
+        wind::set_fast_timer(self.hwnd, animating(edit, self.notice.as_ref(), now) || edit.rec.meter.is_some());
         edit.frame = img;
         Some(&mut edit.frame)
     }
@@ -1553,7 +1632,7 @@ impl Driver for App {
         let _p = crate::perf::span(crate::perf::K::Damage);
         let now = Instant::now();
         edit.prepare(self.notice.as_ref(), self.mouse, now);
-        wind::set_fast_timer(self.hwnd, animating(edit, self.notice.as_ref(), now));
+        wind::set_fast_timer(self.hwnd, animating(edit, self.notice.as_ref(), now) || edit.rec.meter.is_some());
         let rects = compose::merge_rects(edit.dirty_rects(edit.painted.as_ref()));
         // The target state: every pixel that differs from it is invalid now.
         edit.painted = edit.scene.clone();
@@ -1575,7 +1654,7 @@ impl Driver for App {
             // A system paint before any damage (first show).
             let now = Instant::now();
             edit.prepare(self.notice.as_ref(), self.mouse, now);
-            wind::set_fast_timer(self.hwnd, animating(edit, self.notice.as_ref(), now));
+            wind::set_fast_timer(self.hwnd, animating(edit, self.notice.as_ref(), now) || edit.rec.meter.is_some());
             edit.painted = edit.scene.clone();
         }
         let rects: Vec<compose::PxRect> =
@@ -1661,6 +1740,12 @@ fn take_snap(cfg: &Config, shot: &Shot) -> Option<crate::snap::Snapshot> {
     if !cfg.snap_windows {
         return None;
     }
+    take_snap_any(shot)
+}
+
+/// The windows on screen now, snapping on or off (video mode's Window
+/// source picks one like window snapping does).
+fn take_snap_any(shot: &Shot) -> Option<crate::snap::Snapshot> {
     // Tests never list the real windows: they queue a snapshot.
     #[cfg(test)]
     {
@@ -1680,8 +1765,25 @@ fn drag_mods() -> Mods {
     Mods::current()
 }
 
-/// Esc: close a device list or the Record popover, drop the current
-/// tool / draft / palette, or cancel the capture.
+/// The built-in key `vk` of video mode: 1 / 2 (Screenshot / Video) while
+/// recording works here, and F / W / R (the source) in video mode.
+fn video_key(edit: &Edit, vk: u32, mods: Mods) -> Option<Act> {
+    if mods.ctrl || mods.alt || mods.shift || !rec_ui::supported() || !edit.tasks.is_empty() {
+        return None;
+    }
+    let video = edit.rec.open;
+    match char::from_u32(vk)? {
+        '1' => Some(Act::Mode(false)),
+        '2' => Some(Act::Mode(true)),
+        'F' if video => Some(Act::RecSource(rec_ui::RecSource::Screen)),
+        'W' if video => Some(Act::RecSource(rec_ui::RecSource::Window)),
+        'R' if video => Some(Act::RecSource(rec_ui::RecSource::Region)),
+        _ => None,
+    }
+}
+
+/// Esc: close a device list or the ring's palette, drop the current
+/// tool / draft / palette, or cancel the capture (video mode's Close).
 fn cancel_key(edit: &mut Edit) {
     if edit.rec.dev_open.is_some() {
         edit.rec.dev_open = None;
@@ -1689,10 +1791,6 @@ fn cancel_key(edit: &mut Edit) {
     }
     if edit.rec.ring_pal {
         edit.rec.ring_pal = false;
-        return;
-    }
-    if edit.rec.open {
-        edit.rec.open = false;
         return;
     }
     if matches!(edit.interact, Interact::None)
@@ -1843,6 +1941,15 @@ struct RecPop {
     /// The format chosen (the config's, or a click): taken again once MP4
     /// turns out to be there.
     wanted: crate::rec::RecFormat,
+    /// What is recorded: the screen, a window or the region.
+    source: rec_ui::RecSource,
+    /// The microphone metered while the panel shows it on (released
+    /// otherwise), the bars it lit when last looked at, and when.
+    meter: Option<rec_ui::meter::MicMeter>,
+    bars: (u8, bool),
+    meter_at: Instant,
+    /// The camera bubble's shape (image px): the grip hint goes under it.
+    grip: Option<FRect>,
 }
 
 /// How long Start waits for the camera list (it is usually there long
@@ -1872,6 +1979,11 @@ impl RecPop {
             ring_pal: false,
             start: false,
             cam: CamSlot::default(),
+            source: rec_ui::RecSource::Region,
+            meter: None,
+            bars: (0, false),
+            meter_at: Instant::now(),
+            grip: None,
         };
         if mode {
             p.load_cams();
@@ -2142,6 +2254,25 @@ impl CamSlot {
             }
         }
         None
+    }
+
+    /// The bubble's shape on screen (physical top-left and side) while it
+    /// is shown and not dragged.
+    fn shape_rect(&self) -> Option<(i32, i32, u32)> {
+        #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
+        {
+            let b = self.bubble.as_ref()?;
+            if b.dragging() || b.error().is_some() {
+                return None;
+            }
+            let (x, y) = b.pos()?;
+            let scale = self.shown.as_ref().map_or(1.0, |s| s.3);
+            Some((x, y, crate::cam::side(b.look()?.size, scale)))
+        }
+        #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+        {
+            None
+        }
     }
 
     /// The bubble, for the recording (closed here); it keeps off nothing
@@ -2540,7 +2671,12 @@ impl Edit {
             let (x, y) = (r.x.floor() as i32, r.y.floor() as i32);
             (x + ox, y + oy, (r.x1().ceil() as i32 - x).max(0) as u32, (r.y1().ceil() as i32 - y).max(0) as u32)
         };
-        self.toolbar.as_ref().map_or(Vec::new(), |t| std::iter::once(t.bar).chain(t.pop).map(to).collect())
+        // The bar (video mode: the panel), its popover, the mode switch and
+        // Close (not the grip hint: it follows the bubble).
+        self.toolbar.as_ref().map_or(Vec::new(), |t| {
+            let top = t.items.iter().filter(|i| matches!(i.kind, toolbar::Kind::ModeTrack | toolbar::Kind::Close)).map(|i| i.r);
+            std::iter::once(t.bar).chain(t.pop).chain(top).map(to).collect()
+        })
     }
 
     /// Write the remembered settings waiting (`wait`: before returning).
@@ -2551,6 +2687,49 @@ impl Edit {
         let edits = self.pending.take();
         if let Some(path) = &self.cfg_path {
             config::queue_key_edits(path, edits, wait);
+        }
+    }
+
+    /// Video mode on (the setup panel instead of the toolbar; no tool, no
+    /// palette or picker) or off (back to the toolbar).
+    fn set_video(&mut self, on: bool) {
+        if on && !rec_ui::supported() {
+            return;
+        }
+        self.rec.open = on;
+        self.rec.dev_open = None;
+        self.rec.ring_pal = false;
+        self.palette_open = false;
+        if on {
+            self.close_picker(true);
+            self.tool = None;
+            self.draft = None;
+            self.text = None;
+            if self.rec.opts.mic && !self.rec.opts.mic_dev.is_empty() {
+                self.rec.load_devs(); // the chosen microphone's name
+            }
+            self.rec.load_cams(); // whether there is one
+        }
+    }
+
+    /// The panel's source: Screen selects the monitor (the selection's, or
+    /// the one under `pointer`); Window drops the selection and picks a
+    /// window like window snapping (a click takes it); Region keeps the
+    /// selection to drag a new one.
+    fn set_source(&mut self, src: rec_ui::RecSource, pointer: Pt) {
+        self.rec.source = src;
+        self.rec.dev_open = None;
+        self.interact = Interact::None;
+        match src {
+            rec_ui::RecSource::Screen => self.sel = Some(pick_area(&self.shot.monitors, self.sel, pointer)),
+            rec_ui::RecSource::Window => {
+                self.sel = None;
+                if self.snap.is_none() {
+                    self.snap = take_snap_any(&self.shot);
+                }
+                self.track_snap(pointer);
+            }
+            rec_ui::RecSource::Region => {}
         }
     }
 
@@ -3259,6 +3438,7 @@ mod tests {
             focus_tries: 0,
             rec: None,
             rec_opts: None,
+            rec_area: None,
             rec_spec: None,
             rec_cam: None,
             rec_bubble: None,
@@ -3522,94 +3702,126 @@ mod tests {
         edit_of(&mut app).notice = Some(Toast::new("Copied", ToastKind::Success));
         save(&mut app, "dark-two-monitors.png");
 
-        // The Record popover: MP4 with the microphone list open, GIF, and
-        // above the bar near the bottom; the Record button's tooltip.
-        for (name, th, sel, gif, mic, list) in [
-            ("dark-record-popover.png", theme::DARK, big, false, false, false),
-            ("light-record-popover.png", theme::LIGHT, big, false, false, false),
-            ("dark-record-mic-list.png", theme::DARK, big, false, true, true),
-            ("light-record-mic-list.png", theme::LIGHT, big, false, true, true),
-            ("dark-record-gif.png", theme::DARK, FRect { x: 240.0, y: 560.0, w: 960.0, h: 300.0 }, true, false, false),
-            ("light-record-gif.png", theme::LIGHT, FRect { x: 240.0, y: 560.0, w: 960.0, h: 300.0 }, true, false, false),
-        ] {
-            let mut app = annotated(th, sel);
+        // Video mode (the Video and Recording boards): the setup panel
+        // centred under a 960x420 selection, MP4 with the microphone's
+        // level, GIF, the lists, without a camera, above and inside, the
+        // grip hint under a bubble (drawn in), and the screenshot mode's
+        // switch.
+        let vsel = FRect { x: 240.0, y: 110.0, w: 960.0, h: 420.0 };
+        let video = |th: Theme, sel: FRect| {
+            let mut app = preview_app(th, Some(sel));
             let e = edit_of(&mut app);
-            e.rec.open = true;
-            e.rec.opts.format = if gif { crate::rec::RecFormat::Gif } else { crate::rec::RecFormat::Mp4 };
-            e.rec.opts.mic = mic;
-            if list {
-                e.rec.load_devs();
-                e.rec.opts.mic_dev = "{mic-1}".into();
-                e.rec.dev_open = Some(Dev::Mic);
+            e.set_video(true);
+            e.rec.opts.mic = true;
+            e.rec.opts.camera = true;
+            e.rec.meter = Some(rec_ui::meter::MicMeter::open(""));
+            e.rec.bars = (5, false);
+            app
+        };
+        // The bubble the overlay does not draw (its own window), drawn into
+        // the preview where it would be.
+        let with_bubble = |png: &mut PixBuf, th: &Theme, look: crate::cam::Look, at: (i32, i32)| {
+            let t = crate::cam::template(look, 1.0, th);
+            let mut px = Vec::new();
+            crate::cam::compose(&t, None, false, &mut px);
+            for y in 0..t.w as i32 {
+                for x in 0..t.w as i32 {
+                    let (dx, dy) = (at.0 - t.pad as i32 + x, at.1 - t.pad as i32 + y);
+                    if dx < 0 || dy < 0 || dx >= png.width() as i32 || dy >= png.height() as i32 {
+                        continue;
+                    }
+                    let s = &px[((y as u32 * t.w + x as u32) * 4) as usize..][..4];
+                    let a = s[3] as u32;
+                    let d = png.get_pixel(dx as u32, dy as u32);
+                    let ch = |c: u8, b: u8| (c as u32 + b as u32 * (255 - a) / 255).min(255) as u8;
+                    let i = ((dy as u32 * png.width() + dx as u32) * 4) as usize;
+                    png.as_raw_mut()[i..i + 4].copy_from_slice(&[ch(s[2], d[0]), ch(s[1], d[1]), ch(s[0], d[2]), 255]);
+                }
             }
+        };
+        for (tn, th) in [("dark", theme::DARK), ("light", theme::LIGHT)] {
+            let mut app = video(th, vsel);
+            // The bubble at the bottom-left corner (24 px in), its grip.
+            let look = edit_of(&mut app).rec.opts.cam_look();
+            let d = crate::cam::side(look.size, 1.0) as i32;
+            let at = crate::cam::place(crate::cam::remembered(), (240, 110, 960, 420), d, 1.0);
+            edit_of(&mut app).rec.grip = Some(FRect { x: at.0 as f32, y: at.1 as f32, w: d as f32, h: d as f32 });
             app.frame();
             let e = edit_of(&mut app);
-            let tb = e.toolbar.clone().expect("toolbar");
+            let tb = e.toolbar.clone().expect("panel");
             e.hover = tb.items.iter().position(|i| matches!(i.kind, toolbar::Kind::Primary { .. }));
-            save(&mut app, name);
-        }
-        let mut app = annotated(theme::DARK, big);
-        app.frame();
-        let i = btn(&mut app, Act::Record);
-        let e = edit_of(&mut app);
-        e.hover = Some(i);
-        e.hover_at = Instant::now() - Duration::from_secs(2);
-        save(&mut app, "dark-tooltip-record.png");
-
-        // The camera options (device, shape, size), the camera list, and
-        // a machine without a camera (the row's tooltip).
-        for (tn, th) in [("dark", theme::DARK), ("light", theme::LIGHT)] {
-            for (name, list) in [("record-camera", false), ("record-camera-list", true)] {
-                let mut app = annotated(th, big);
-                let e = edit_of(&mut app);
-                e.rec.open = true;
-                e.rec.load_cams();
-                e.rec.opts.camera = true;
-                e.rec.opts.cam_shape = crate::cam::Shape::Rounded;
-                e.rec.opts.cam_size = crate::cam::CamSize::L;
-                if list {
-                    e.rec.opts.cam_dev = "{cam-2}".into();
-                    e.rec.dev_open = Some(Dev::Cam);
-                }
-                app.frame();
-                let e = edit_of(&mut app);
-                let tb = e.toolbar.clone().expect("toolbar");
-                e.hover = tb.items.iter().position(|i| matches!(i.kind, toolbar::Kind::Seg { act: Act::RecShape(crate::cam::Shape::Square), .. }));
-                save(&mut app, &format!("{tn}-{name}.png"));
-            }
-            rec_ui::FAKE_CAMS.with(|c| c.borrow_mut().clear());
-            let mut app = annotated(th, big);
+            save(&mut app, &format!("{tn}-video-panel.png"));
+            let path = dir.join(format!("{tn}-video-panel.png"));
+            let mut png = PixBuf::from_png(&std::fs::read(&path).unwrap()).unwrap();
+            with_bubble(&mut png, &th, look, at);
+            std::fs::write(&path, png.to_png().unwrap()).unwrap();
+            // Clipping: the top bars amber; the square bubble.
+            let mut app = video(th, vsel);
             let e = edit_of(&mut app);
-            e.rec.open = true;
+            e.rec.bars = (7, true);
+            e.rec.opts.cam_shape = crate::cam::Shape::Rounded;
+            e.rec.source = rec_ui::RecSource::Screen;
+            save(&mut app, &format!("{tn}-video-clipping-square.png"));
+            // GIF: the sound rows off, frame rate and max length.
+            let mut app = video(th, vsel);
+            let e = edit_of(&mut app);
+            e.rec.opts.format = crate::rec::RecFormat::Gif;
+            e.rec.meter = None;
+            save(&mut app, &format!("{tn}-video-gif.png"));
+            // The microphone list.
+            let mut app = video(th, vsel);
+            let e = edit_of(&mut app);
+            e.rec.load_devs();
+            e.rec.opts.mic_dev = "{mic-1}".into();
+            e.rec.dev_open = Some(Dev::Mic);
+            app.frame();
+            let e = edit_of(&mut app);
+            let tb = e.toolbar.clone().unwrap();
+            e.hover = tb.items.iter().position(|i| matches!(i.kind, toolbar::Kind::DevItem { i: 2, .. }));
+            save(&mut app, &format!("{tn}-video-mic-list.png"));
+            // The camera ring's row and palette.
+            let mut app = video(th, vsel);
+            let e = edit_of(&mut app);
             e.rec.load_cams();
+            e.rec.ring_pal = true;
+            save(&mut app, &format!("{tn}-video-ring-palette.png"));
+            // No room below: above the selection; none above either: inside.
+            save(&mut video(th, FRect { x: 240.0, y: 520.0, w: 960.0, h: 340.0 }), &format!("{tn}-video-above.png"));
+            save(&mut video(th, FRect { x: 0.0, y: 0.0, w: 1440.0, h: 900.0 }), &format!("{tn}-video-inside.png"));
+            // At the right edge: it slides along it.
+            save(&mut video(th, FRect { x: 1200.0, y: 200.0, w: 220.0, h: 200.0 }), &format!("{tn}-video-edge.png"));
+            // Screenshot mode: the mode switch before the size label.
+            let mut app = annotated(th, vsel);
+            app.frame();
+            save(&mut app, &format!("{tn}-screenshot-mode-switch.png"));
+            // No camera on this machine: the row says so (and its tooltip).
+            rec_ui::FAKE_CAMS.with(|c| c.borrow_mut().clear());
+            let mut app = video(th, vsel);
+            edit_of(&mut app).rec.load_cams();
             app.frame();
             let e = edit_of(&mut app);
             let tb = e.toolbar.clone().expect("toolbar");
             e.hover = tb.items.iter().position(|i| matches!(i.kind, toolbar::Kind::Switch { act: Act::RecCamera, .. }));
             e.hover_at = Instant::now() - Duration::from_secs(2);
-            save(&mut app, &format!("{tn}-record-no-camera.png"));
+            save(&mut app, &format!("{tn}-video-no-camera.png"));
             rec_ui::FAKE_CAMS.with(|c| *c.borrow_mut() = rec_ui::fake_cams());
             // The cameras still being listed.
-            let mut app = annotated(th, big);
-            let e = edit_of(&mut app);
-            e.rec.open = true;
+            let mut app = video(th, vsel);
             let (_tx, rx) = std::sync::mpsc::channel();
-            e.rec.cams_rx = Some(rx);
-            app.frame();
-            save(&mut app, &format!("{tn}-record-looking-for-cameras.png"));
+            edit_of(&mut app).rec.cams_rx = Some(rx);
+            save(&mut app, &format!("{tn}-video-looking-for-cameras.png"));
             // Linux without ffmpeg: GIF only, MP4 disabled with its tooltip.
             rec_ui::FAKE_MP4.with(|c| c.set(rec_ui::Mp4::No));
-            let mut app = annotated(th, big);
+            let mut app = video(th, vsel);
             let e = edit_of(&mut app);
             e.rec = RecPop::new(e.rec.opts.clone(), false);
-            e.rec.open = true;
-            e.rec.load_cams();
+            e.set_video(true);
             app.frame();
             let e = edit_of(&mut app);
             let tb = e.toolbar.clone().expect("toolbar");
             e.hover = tb.items.iter().position(|i| matches!(i.kind, toolbar::Kind::Seg { act: Act::RecFormat(crate::rec::RecFormat::Mp4), .. }));
             e.hover_at = Instant::now() - Duration::from_secs(2);
-            save(&mut app, &format!("{tn}-record-no-ffmpeg.png"));
+            save(&mut app, &format!("{tn}-video-no-ffmpeg.png"));
             rec_ui::FAKE_MP4.with(|c| c.set(rec_ui::Mp4::Yes));
         }
     }

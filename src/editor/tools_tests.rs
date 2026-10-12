@@ -598,10 +598,10 @@ fn ring_controls_change_the_bubble() {
         assert_eq!(shown, want, "the bubble shows the look");
         shown
     };
-    assert_eq!((look(&mut a).ring, look(&mut a).ring_w), (None, 3), "the accent, 3 px");
+    assert_eq!((look(&mut a).ring, look(&mut a).ring_w), (None, 2), "the accent, 2 px");
     let plus = item(&mut a, |k| *k == toolbar::Kind::Btn(Act::RingSize(1)));
     click(&mut a, mid(plus));
-    assert_eq!(look(&mut a).ring_w, 4);
+    assert_eq!(look(&mut a).ring_w, 3);
     let minus = item(&mut a, |k| *k == toolbar::Kind::Btn(Act::RingSize(-1)));
     for _ in 0..6 {
         click(&mut a, mid(minus));
@@ -783,7 +783,7 @@ fn ring_settings_from_the_config() {
     let look = RecOpts::from_config(&cfg).cam_look();
     assert_eq!((look.ring, look.ring_w), (Some(C4::rgb(0, 255, 0)), 6));
     let look = RecOpts::from_config(&Config::default()).cam_look();
-    assert_eq!((look.ring, look.ring_w), (None, 3));
+    assert_eq!((look.ring, look.ring_w), (None, 2), "the board's 2 px ring");
 }
 
 // ---- previews ----------------------------------------------------------------

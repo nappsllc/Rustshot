@@ -276,7 +276,7 @@ impl RecFormat {
     pub fn max_fps(self) -> u32 {
         match self {
             RecFormat::Mp4 => 60,
-            RecFormat::Gif => 15,
+            RecFormat::Gif => 24,
         }
     }
 }

@@ -20,8 +20,84 @@ fn config_values_round_trip() {
     }
     assert_eq!(Shape::from_config("blob"), Shape::Circle);
     assert_eq!(CamSize::from_config(""), CamSize::M);
-    assert_eq!(CamSize::ALL.map(|z| z.logical()), [160, 240, 320]);
-    assert_eq!(side(CamSize::M, 1.5), 360);
+    assert_eq!(CamSize::ALL.map(|z| z.logical()), [120, 160, 200, 240]);
+    assert_eq!(side(CamSize::M, 1.5), 240);
+    assert_eq!(CamSize::from_config("xl"), CamSize::Xl);
+}
+
+/// The wheel over the bubble: 120 / 160 / 200 / 240, a notch at a time,
+/// stopping at either end; the look keeps everything else.
+#[test]
+fn bubble_sizes_by_scroll() {
+    let mut look = Look { size: CamSize::S, ..LOOK };
+    let mut seen = vec![look.size.logical()];
+    while let Some(l) = wheel_look(look, 120) {
+        look = l;
+        seen.push(look.size.logical());
+    }
+    assert_eq!(seen, [120, 160, 200, 240]);
+    assert_eq!(wheel_look(look, 120), None, "the largest stays");
+    let down = wheel_look(look, -120).unwrap();
+    assert_eq!((down.size, down.shape, down.ring_w), (CamSize::L, LOOK.shape, LOOK.ring_w));
+    assert_eq!(wheel_look(Look { size: CamSize::S, ..LOOK }, -1), None, "the smallest stays");
+    assert_eq!(wheel_look(LOOK, 0), None);
+    assert_eq!(CamSize::M.step(1), CamSize::L);
+    // The owner hears of a wheel resize once.
+    note_resized(CamSize::Xl);
+    assert_eq!(take_resized(), Some(CamSize::Xl));
+    assert_eq!(take_resized(), None);
+}
+
+/// Dropped anywhere, the bubble comes to rest at the corner of the
+/// quadrant its centre is in, 24 px in; dragged it is 40 % opaque.
+#[test]
+fn drop_snaps_to_the_four_corners() {
+    let area = (100, 50, 1000, 800);
+    let d = 160;
+    assert_eq!(INSET, 24.0);
+    let at = |c| place(Rel { corner: c, dx: INSET, dy: INSET }, area, d, 1.0);
+    assert_eq!(at(Corner::TopLeft), (124, 74));
+    assert_eq!(at(Corner::BottomRight), (100 + 1000 - 24 - 160, 50 + 800 - 24 - 160));
+    assert_eq!(settle((300, 200), area, d, 1.0), at(Corner::TopLeft));
+    assert_eq!(settle((700, 200), area, d, 1.0), at(Corner::TopRight));
+    assert_eq!(settle((300, 600), area, d, 1.0), at(Corner::BottomLeft));
+    assert_eq!(settle((900, 700), area, d, 1.0), at(Corner::BottomRight));
+    // At 2x the inset is 48 px.
+    assert_eq!(settle((150, 80), area, 320, 2.0), (148, 98));
+    let r = rel_of(settle((900, 700), area, d, 1.0), area, d, 1.0);
+    assert_eq!((r.corner, r.dx, r.dy), (Corner::BottomRight, INSET, INSET), "remembered at the corner");
+    let mut px = vec![200u8, 100, 50, 255];
+    fade_layer(&mut px, DRAG_OPACITY);
+    assert_eq!(px, [80, 40, 20, 102], "premultiplied: every channel at 40 %");
+}
+
+/// The default ring: 2 px of accent and a 1 px dark halo just outside it
+/// (it reads on white); the square's corners are 8 % of its side.
+#[test]
+fn ring_with_a_dark_halo() {
+    assert_eq!(crate::config::RING_WIDTH_DEFAULT, 2);
+    let look = Look::new(Shape::Circle, CamSize::L);
+    let t = template(look, 1.0, &crate::theme::LIGHT);
+    let mut out = Vec::new();
+    compose(&t, None, false, &mut out);
+    let w = t.w as usize;
+    let mid = t.pad as usize + t.d as usize / 2;
+    // Along the middle row: the halo pixel just left of the shape, then the ring.
+    let a = |x: usize| out[(mid * w + x) * 4 + 3];
+    let c = |x: usize| (out[(mid * w + x) * 4 + 2], out[(mid * w + x) * 4 + 1], out[(mid * w + x) * 4]);
+    let edge = t.pad as usize;
+    assert!(a(edge - 1) >= 100, "a dark halo outside the ring: {}", a(edge - 1));
+    assert!(c(edge - 1).0 < 10, "dark");
+    let ac = crate::theme::LIGHT.accent;
+    assert_eq!(c(edge), (ac.r, ac.g, ac.b), "the ring");
+    let no_ring = template(Look { ring_w: 0, ..look }, 1.0, &crate::theme::LIGHT);
+    let mut out2 = Vec::new();
+    compose(&no_ring, None, false, &mut out2);
+    assert!(out2[(mid * w + edge - 1) * 4 + 3] < 100, "no ring: no halo either");
+    // The square: 16 px corners at 200 px.
+    assert!((sdf(Shape::Rounded, 200.0, 100.0, 0.5) - (-0.5)).abs() < 1e-3, "flat top");
+    assert!(sdf(Shape::Rounded, 200.0, 2.0, 2.0) > 0.0, "the corner is cut");
+    assert!(sdf(Shape::Rounded, 200.0, 16.0, 16.0) < 0.0, "inside past the 16 px radius");
 }
 
 /// Every shape at every size (1x and 2x): full inside, empty outside its
@@ -55,12 +131,12 @@ fn shape_masks_are_anti_aliased() {
                     }
                     Shape::Rounded => {
                         assert_eq!(corner, 0.0);
-                        let r = df * 0.2;
+                        let r = df * 0.08;
                         let want = df * df - (4.0 - std::f32::consts::PI) * r * r;
                         assert!((area - want).abs() / want < 0.005, "rounded {d}: area {area} vs {want}");
                         assert!(partial > 0);
                         // Straight runs are crisp.
-                        assert_eq!(cov(0, d / 2), 1.0);
+                        assert!(cov(0, d / 2) > 0.9999);
                     }
                     Shape::Square => {
                         assert_eq!(corner, 1.0);
@@ -183,10 +259,10 @@ fn compose_masks_mirrors_and_premultiplies() {
 fn placement_is_relative_to_the_area() {
     let area = (100, 50, 800, 600);
     let d = 240;
-    // Default: bottom left, 16 px in.
-    assert_eq!(place(Rel::default(), area, d, 1.0), (116, 50 + 600 - 16 - 240));
+    // Default: bottom left, 24 px in.
+    assert_eq!(place(Rel::default(), area, d, 1.0), (124, 50 + 600 - 24 - 240));
     // At 2x the offsets double.
-    assert_eq!(place(Rel::default(), area, 480, 2.0), (132, 650 - 32 - 480));
+    assert_eq!(place(Rel::default(), area, 480, 2.0), (148, 650 - 48 - 480));
     // Every corner round-trips through rel_of.
     for (x, y) in [(130, 70), (600, 80), (140, 380), (630, 390)] {
         let r = rel_of((x, y), area, d, 1.0);
@@ -214,7 +290,7 @@ fn snapping_to_corners() {
     // A small area: the nearest corner wins.
     let tiny = (0, 0, 200, 200);
     let p = snap((20, 20), tiny, d, 1.0);
-    assert_eq!(p, (16, 16));
+    assert_eq!(p, (24, 24));
 }
 
 #[test]
@@ -450,7 +526,7 @@ fn bubble_keeps_off_the_toolbar() {
     let p = clear_of(place(Rel::default(), small, d, 1.0), small, d, 1.0, &[small], screen);
     let r = (p.0, p.1, d as u32, d as u32);
     assert!(!overlaps(r, small) && inside(r, screen), "{p:?}");
-    assert_eq!(p, (600, 300 - 16 - d), "above the area (the nearest), left aligned");
+    assert_eq!(p, (600, 300 - 24 - d), "above the area (the nearest), left aligned");
     // At the top of the screen: never off it.
     for top in [(600, 0, 300, 260), (0, 0, 300, 260), (1620, 0, 300, 260)] {
         let p = clear_of(place(Rel::default(), top, d, 1.0), top, d, 1.0, &[top], screen);
@@ -636,7 +712,7 @@ mod window;
 /// sides, the shadow room and the ring follow it, and the template agrees.
 #[test]
 fn bubble_sizes_and_ring_at_three_quarters() {
-    for (size, want) in [(CamSize::S, 120), (CamSize::M, 180), (CamSize::L, 240)] {
+    for (size, want) in [(CamSize::S, 90), (CamSize::M, 120), (CamSize::L, 150), (CamSize::Xl, 180)] {
         assert_eq!(side(size, 0.75), want, "{size:?}");
         let look = Look { ring_w: 4, ..Look::new(Shape::Circle, size) };
         let t = template(look, 0.75, &DARK);
@@ -647,5 +723,5 @@ fn bubble_sizes_and_ring_at_three_quarters() {
     assert_eq!(ring_width(2, 0.75), 2.0, "1.5 rounds up");
     assert_eq!(ring_width(4, 2.0), 8.0);
     // Below the smallest scale it holds at 0.75.
-    assert_eq!(side(CamSize::M, 0.3), 180);
+    assert_eq!(side(CamSize::M, 0.3), 120);
 }

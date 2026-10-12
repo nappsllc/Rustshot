@@ -535,7 +535,7 @@ fn spec_from_config() {
     let mic = crate::config::Config { rec_mic: true, rec_mic_device: "usb".into(), ..cfg };
     assert_eq!(RecSpec::from_config(&mic, (0, 0, 8, 8), now).mic.as_deref(), Some("usb"));
     // Capture rates are capped per format.
-    assert_eq!(RecSpec { fps: 60, ..s.clone() }.capture_fps(), 15);
+    assert_eq!(RecSpec { fps: 60, ..s.clone() }.capture_fps(), 24);
     assert_eq!(RecSpec { fps: 0, ..s.clone() }.capture_fps(), 1);
     assert_eq!(RecSpec { fps: 60, format: RecFormat::Mp4, ..s }.capture_fps(), 60);
     assert_eq!(Quality::from_config("HIGH"), Quality::High);
