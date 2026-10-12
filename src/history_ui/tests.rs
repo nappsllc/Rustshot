@@ -31,7 +31,7 @@ fn page(w: u32, h: u32, bg: [u8; 3], accent: [u8; 3]) -> PixBuf {
     img
 }
 
-/// (title, app, time, kind, edited, size, page colours)
+/// (title, app, time, kind, edited, size, page colors)
 type Spec = (&'static str, &'static str, (i32, u32, u32, u32, u32, u32), Kind, bool, (u32, u32), [u8; 3], [u8; 3]);
 
 const SPECS: [Spec; 10] = [

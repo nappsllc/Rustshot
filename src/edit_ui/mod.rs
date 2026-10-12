@@ -17,6 +17,8 @@
 //! marked Edited with its new `annotations.json`; `original.png` is never
 //! written, so a capture can always be edited again.
 #![cfg_attr(target_os = "macos", allow(dead_code))]
+// Opened from History and the thumbnail (the next commit).
+#![allow(dead_code)]
 
 use crate::config::Config;
 use crate::editor::host::{Canvas, Request};

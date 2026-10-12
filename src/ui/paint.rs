@@ -1,5 +1,5 @@
 //! Drawing shared by the History and Edit windows (boards 10 and 11):
-//! their colour tokens ([`WTok`]), raised surfaces with the four-layer
+//! their color tokens ([`WTok`]), raised surfaces with the four-layer
 //! shadow, the transparency checkerboard, pictures blitted into
 //! (rounded) rects, key caps, menus and dialogs.
 
@@ -178,7 +178,7 @@ pub fn outer_ring(f: &mut Fb, r: FRect, radius: f32, gap: f32, w: f32, c: C4) {
 }
 
 /// The boards' raised shadow under `r` (physical px): `layers` of
-/// `theme::SHADOW` (offset y, spread) in the token colours.
+/// `theme::SHADOW` (offset y, spread) in the token colors.
 pub fn shadow(f: &mut Fb, t: &WTok, r: FRect, radius: f32, k: f32, layers: &[usize]) {
     for &i in layers.iter().rev() {
         let (dy, sp) = (crate::theme::SHADOW[i].0 * k, crate::theme::SHADOW[i].1 * k);
@@ -305,7 +305,7 @@ mod tests {
         blit(&mut f, &img, r, r, 0.0);
         assert_eq!(&d[(3 * 8 + 3) * 4..(3 * 8 + 3) * 4 + 4], &[200, 100, 50, 255]);
         assert_eq!(&d[..4], &[0, 0, 0, 0], "outside the rect untouched");
-        // Scaled to 8x8 the colour stays.
+        // Scaled to 8x8 the color stays.
         let mut d = vec![0u8; 8 * 8 * 4];
         let mut f = Fb::new(&mut d, 8);
         let all = FRect { x: 0.0, y: 0.0, w: 8.0, h: 8.0 };

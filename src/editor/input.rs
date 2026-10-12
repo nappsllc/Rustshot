@@ -25,7 +25,7 @@ impl Edit {
         }
 
         // The UI size keys (Ctrl/Alt chords) work in every mode, the text
-        // draft and the colour picker included.
+        // draft and the color picker included.
         if (mods.ctrl || mods.alt)
             && self.host.is_none()
             && (self.text.is_some() || self.pick.is_some() || self.obj.cedit.is_some())
@@ -86,7 +86,7 @@ impl Edit {
             return;
         }
 
-        // The colour picker takes every key while it is open.
+        // The color picker takes every key while it is open.
         if self.pick.is_some() {
             self.pick_key(vk, mods);
             return;
@@ -299,7 +299,7 @@ impl Edit {
                 if self.text.is_some() {
                     self.commit_text();
                 }
-                // A colour or size for the bubble being typed in keeps it
+                // A color or size for the bubble being typed in keeps it
                 // open; anything else on the bar finishes it.
                 if !matches!(act, Some(Act::Color(_) | Act::Palette | Act::Size(_) | Act::Fill | Act::Wheel)) {
                     self.finish_callout_edit();
@@ -308,7 +308,7 @@ impl Edit {
                     let ring = pk.target == pick::Target::Ring;
                     let in_pop = self.toolbar.as_ref().and_then(|t| t.pop).is_some_and(|r| hit(r, p));
                     if !in_pop {
-                        // The bar: the picker closes (keeping its colour)
+                        // The bar: the picker closes (keeping its color)
                         // and the button acts; its own button only closes it.
                         self.close_picker(true);
                         if act == Some(Act::Palette) || (ring && act == Some(Act::Record)) {
@@ -334,8 +334,8 @@ impl Edit {
     /// A press on the capture at `p` (image coordinates).
     pub(super) fn canvas_press(&mut self, p: Pt) {
         {
-            // The colour picker: the eyedropper picks the pixel; any other
-            // press outside closes it (keeping the colour), nothing else.
+            // The color picker: the eyedropper picks the pixel; any other
+            // press outside closes it (keeping the color), nothing else.
             if let Some(pk) = &self.pick {
                 if pk.eyedrop {
                     let c = self.sample(p);
@@ -600,7 +600,7 @@ impl Edit {
                 // Indices may name other objects now.
                 self.obj.sel.clear();
             }
-            // With objects selected, size, fill and colour are theirs.
+            // With objects selected, size, fill and color are theirs.
             Act::Size(d) if !self.obj.sel.is_empty() => {
                 self.obj_act(Act::ObjSize(d));
             }
@@ -620,7 +620,7 @@ impl Edit {
             Act::ObjColor | Act::ObjFill | Act::ObjSize(_) | Act::ObjStyle(_) | Act::ObjFront | Act::ObjBack | Act::ObjDup | Act::ObjDelete => {
                 self.obj_act(act);
             }
-            // Pixelate and Invert have no colour: no palette (Space included).
+            // Pixelate and Invert have no color: no palette (Space included).
             Act::Palette if !self.palette_open && !tools::has_color(self.cur_tool()) && self.sel_color().is_none() => {}
             // Video mode has no palette (the panel replaces the toolbar).
             Act::Palette if self.rec.open => {}

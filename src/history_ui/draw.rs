@@ -994,7 +994,7 @@ fn checkbox(ui: &mut Ui, r: FRect, on: bool, t: &WTok) {
     }
 }
 
-/// `s` with the byte ranges `hl` on the mark colour.
+/// `s` with the byte ranges `hl` on the mark color.
 fn highlighted(ui: &mut Ui, s: &str, hl: &[std::ops::Range<usize>], x: f32, cy: f32, size: f32, t: &WTok) {
     for r in hl {
         if r.end > s.len() || !s.is_char_boundary(r.start) || !s.is_char_boundary(r.end) {

@@ -20,13 +20,14 @@
 //! follows on release); the object chrome is drawn in window px from the
 //! editor's image-space chrome, mapped through the view.
 
+// The Edit window opens it (its entry points: the next commit).
+#![allow(dead_code)]
+
 use super::compose::{CaretUi, ObjSelUi, PxRect};
 use super::mini::MiniUi;
 use super::*;
 use super::chrome::Ui;
 use crate::anim;
-#[cfg(test)]
-use crate::raster::Surf;
 use crate::uifb::Fb;
 
 /// The editor's hosting: chrome px per image px.
@@ -44,11 +45,11 @@ pub struct View {
 }
 
 impl View {
-    pub fn to_img(&self, p: Pt) -> Pt {
+    pub fn to_img(self, p: Pt) -> Pt {
         Pt::new((p.x - self.ox) / self.z, (p.y - self.oy) / self.z)
     }
 
-    pub fn to_win(&self, p: Pt) -> Pt {
+    pub fn to_win(self, p: Pt) -> Pt {
         Pt::new(self.ox + p.x * self.z, self.oy + p.y * self.z)
     }
 
@@ -117,6 +118,10 @@ pub struct Canvas {
     request: Option<Request>,
     /// The objects as last saved (unsaved changes: they differ).
     saved: Vec<Obj>,
+    /// The objects left out of the bake (being dragged).
+    bake_excl: Vec<usize>,
+    /// A move's ghost and held objects, rendered once.
+    sprites: Option<Sprites>,
 }
 
 impl Canvas {
@@ -134,7 +139,7 @@ impl Canvas {
         e.objects = objects.clone();
         e.tool = Some(Tool::Select);
         e.host = Some(Host { s: 1.0 });
-        // The tools' sizes and colours are the overlay's (remembered alike).
+        // The tools' sizes and colors are the overlay's (remembered alike).
         e.cfg_path = (!cfg!(test)).then(config::config_path);
         Canvas {
             e,
@@ -150,6 +155,8 @@ impl Canvas {
             space: false,
             request: None,
             saved: objects,
+            bake_excl: Vec::new(),
+            sprites: None,
         }
     }
 
@@ -381,6 +388,7 @@ impl Canvas {
         }
         let ip = self.view.to_img(p);
         if held && !matches!(self.e.interact, Interact::None) {
+            let _p = crate::perf::span(crate::perf::K::Ptr);
             self.e.pointer_move(ip, p);
             return true;
         }
@@ -546,7 +554,7 @@ impl Canvas {
         super::animating(&self.e, None, now) || self.e.text.is_some() || self.e.obj.cedit.is_some()
     }
 
-    /// Write the tools' remembered sizes and colours (`wait`: now).
+    /// Write the tools' remembered sizes and colors (`wait`: now).
     pub fn flush(&mut self, wait: bool) {
         if wait || self.e.pending.is_due(Instant::now()) {
             self.e.close_picker(true);
@@ -616,8 +624,20 @@ impl Canvas {
         toolbar::docked_width(&inp)
     }
 
+    /// The objects a drag is moving, resizing or re-aiming (not the
+    /// spotlights: their dim must follow the drag, baked).
+    fn dragged(&self) -> Vec<usize> {
+        let idx: &[usize] = match &self.e.interact {
+            Interact::ObjMove { moved: true, idx, .. } | Interact::ObjResize { idx, .. } => idx,
+            Interact::ObjPoint { idx, .. } => std::slice::from_ref(idx),
+            _ => &[],
+        };
+        idx.iter().copied().filter(|&i| self.e.objects.get(i).is_some_and(|o| !o.is_spot())).collect()
+    }
+
     /// Bring the scaled copy in line with `composed` where a bake changed it.
     fn cache_damage(&mut self, d: Option<Vec<PxRect>>) {
+        let _p = crate::perf::span(crate::perf::K::Blit);
         let Some(c) = self.cache.as_mut() else { return };
         let src = self.e.composed.as_ref().unwrap_or(&self.e.base);
         let (iw, ih) = (src.width() as usize, src.height() as usize);
@@ -660,14 +680,26 @@ impl Canvas {
     }
 
     /// Paint the canvas into `f` (the window's frame, physical px): the
-    /// canvas colour `cv`, the picture, the drafts and the object chrome;
+    /// canvas color `cv`, the picture, the drafts and the object chrome;
     /// then the docked toolbar (its strip is the window's).
     pub fn paint(&mut self, f: &mut Fb, cv: C4, edge: C4, now: Instant) {
         self.layout_bar(now);
-        // Bake what changed, then the scaled copy follows.
-        if self.e.dirty || self.e.spots_stale() {
+        // Bake what changed, then the scaled copy follows. The objects a
+        // drag moves stay out of the bake meanwhile (drawn over it in
+        // window px, baked again on release): a move costs no re-bake.
+        let drag = self.dragged();
+        if self.e.dirty || self.e.spots_stale() || drag != self.bake_excl {
             let _p = crate::perf::span(crate::perf::K::Bake);
-            let d = self.e.rebuild();
+            let d = if drag.is_empty() {
+                self.e.rebuild()
+            } else {
+                let keep: Vec<Obj> = self.e.objects.iter().enumerate().filter(|(i, _)| !drag.contains(i)).map(|(_, o)| o.clone()).collect();
+                let all = std::mem::replace(&mut self.e.objects, keep);
+                let d = self.e.rebuild();
+                self.e.objects = all;
+                d
+            };
+            self.bake_excl = drag;
             if self.cache.as_ref().is_some_and(|c| c.z == self.view.z) {
                 self.cache_damage(d);
             } else {
@@ -676,13 +708,23 @@ impl Canvas {
         }
         self.ensure_cache();
         let a = self.area;
-        f.fill_rect(a.x as i32, a.y as i32, a.w as i32, a.h as i32, cv);
         let img = self.view.image(self.size());
+        // The canvas color round the picture (not under it).
+        let pic = PxRect::new(img.x as i32, img.y as i32, img.x1() as i32, img.y1() as i32);
+        for r in PxRect::new(a.x as i32, a.y as i32, a.x1() as i32, a.y1() as i32).minus_iter(&pic) {
+            f.fill_rect(r.x0, r.y0, r.w(), r.h(), cv);
+        }
         // The picture's edge (dark: 1 px border; light: a soft shadow).
         let k = self.k;
         if edge.a > 0 {
-            let e = FRect { x: img.x - k.round(), y: img.y - k.round(), w: img.w + 2.0 * k.round(), h: img.h + 2.0 * k.round() };
-            f.fill_rect(e.x as i32, e.y as i32, e.w as i32, e.h as i32, edge);
+            // A ring just outside the picture (never under it: a blend
+            // over the whole picture would cost more than the picture).
+            let lw = k.round().max(1.0) as i32;
+            let (x0, y0, x1, y1) = (img.x as i32 - lw, img.y as i32 - lw, img.x1() as i32 + lw, img.y1() as i32 + lw);
+            let outer = PxRect::new(x0, y0, x1, y1).intersect(&PxRect::new(a.x as i32, a.y as i32, a.x1() as i32, a.y1() as i32));
+            for r in outer.minus_iter(&pic) {
+                f.fill_rect(r.x0, r.y0, r.w(), r.h(), edge);
+            }
         }
         self.blit_picture(f);
         self.paint_drafts(f);
@@ -751,21 +793,62 @@ impl Canvas {
     /// The draft and the drag's ghost, as objects in window px (they may
     /// reach past the canvas: the window paints its rail, toolbar strip
     /// and status bar after).
-    fn paint_drafts(&self, f: &mut Fb) {
-        let e = &self.e;
-        let font = e.font.as_ref();
+    fn paint_drafts(&mut self, f: &mut Fb) {
         let v = self.view;
-        let ghosts: Vec<Obj> = match &e.interact {
-            Interact::ObjMove { moved: true, orig, .. } => orig.iter().filter_map(|o| crate::objects::edit::faded(o, select::GHOST)).collect(),
-            _ => Vec::new(),
+        let moving = match &self.e.interact {
+            Interact::ObjMove { moved: true, orig, idx, .. } => Some((orig.clone(), idx.clone())),
+            _ => None,
         };
-        if ghosts.is_empty() && e.draft.is_none() {
+        if moving.is_none() && self.e.draft.is_none() && self.bake_excl.is_empty() {
+            self.sprites = None;
             return;
         }
         let _p = crate::perf::span(crate::perf::K::Compose);
+        // A move only translates: the ghost and the moved objects are
+        // rendered once into sprites, then blitted at the offset.
+        let mut drawn = false;
+        if let Some((orig, idx)) = &moving
+            && orig.iter().all(|o| !reads_below(o))
+            && self.bake_excl == *idx
+        {
+            let key = (v.z, v.ox, v.oy, idx.clone());
+            if self.sprites.as_ref().is_none_or(|s| s.key != key) {
+                let font = self.e.font.as_ref();
+                let clip = FRect { x: self.area.x - self.area.w, y: self.area.y - self.area.h, w: 3.0 * self.area.w, h: 3.0 * self.area.h };
+                let ghost: Vec<Obj> = orig.iter().filter_map(|o| crate::objects::edit::faded(o, select::GHOST)).map(|o| view_obj(&o, &v)).collect();
+                let held: Vec<Obj> = orig.iter().map(|o| view_obj(o, &v)).collect();
+                let at = idx.first().and_then(|_| crate::objects::edit::sel_box(&orig[0], font)).unwrap_or(FRect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 });
+                self.sprites = Some(Sprites { key, ghost: Sprite::of(&ghost, font, clip), held: Sprite::of(&held, font, clip), at });
+            }
+            if let Some(s) = &self.sprites {
+                let now = idx.first().and_then(|&i| self.e.objects.get(i)).and_then(|o| crate::objects::edit::sel_box(o, self.e.font.as_ref())).unwrap_or(s.at);
+                let (dx, dy) = (((now.x - s.at.x) * v.z).round() as i32, ((now.y - s.at.y) * v.z).round() as i32);
+                if let Some(g) = &s.ghost {
+                    g.blit(f, 0, 0);
+                }
+                if let Some(h) = &s.held {
+                    h.blit(f, dx, dy);
+                }
+                drawn = true;
+            }
+        } else {
+            self.sprites = None;
+        }
+        let e = &self.e;
+        let font = e.font.as_ref();
         let mut sf = f.surf();
-        for g in &ghosts {
-            view_obj(g, &v).render_into(&mut sf, font);
+        if !drawn {
+            if let Some((orig, _)) = &moving {
+                for g in orig.iter().filter_map(|o| crate::objects::edit::faded(o, select::GHOST)) {
+                    view_obj(&g, &v).render_into(&mut sf, font);
+                }
+            }
+            // What the drag holds (left out of the bake).
+            for &i in &self.bake_excl {
+                if let Some(o) = e.objects.get(i) {
+                    view_obj(o, &v).render_into(&mut sf, font);
+                }
+            }
         }
         match &e.draft {
             Some(Obj::Spotlight { .. }) | None => {}
@@ -846,6 +929,7 @@ impl Canvas {
     /// The docked toolbar with its popover and tooltip (after the window
     /// drew its strip).
     pub fn paint_bar(&self, f: &mut Fb, now: Instant) {
+        let _p = crate::perf::span(crate::perf::K::Bar);
         let e = &self.e;
         let Some(tb) = &e.toolbar else { return };
         let ui = Ui { th: &e.th, s: self.k, font: e.ui_font };
@@ -876,6 +960,86 @@ impl Canvas {
             let in_pop = tb.pop.is_some_and(|p| toolbar::hit(p, Pt::new(it.r.x + 1.0, it.r.y + 1.0)));
             let at = chrome::TipAt { anchor: it.r, area: self.win, below: !in_pop };
             chrome::tooltip(f, &ui, at, label, &keys, anim::ease_out(shown_ms / 80.0));
+        }
+    }
+}
+
+/// An object that reads the pixels below it (it cannot be drawn apart).
+fn reads_below(o: &Obj) -> bool {
+    matches!(o, Obj::Pixelate { .. } | Obj::Invert { .. } | Obj::Magnify { .. } | Obj::Spotlight { .. })
+}
+
+/// Objects rendered once over transparency (premultiplied RGBA: the
+/// rasterizer's blend over a zero pixel leaves color × alpha), blitted
+/// at an offset frame after frame.
+struct Sprite {
+    x: i32,
+    y: i32,
+    w: usize,
+    h: usize,
+    px: Vec<u8>,
+}
+
+/// A move's sprites: the 40 % ghost and the held objects, for one view
+/// (and the held objects' box at the start).
+struct Sprites {
+    key: (f32, f32, f32, Vec<usize>),
+    ghost: Option<Sprite>,
+    held: Option<Sprite>,
+    at: FRect,
+}
+
+impl Sprite {
+    /// `objs` (window px) rendered inside `clip`.
+    fn of(objs: &[Obj], font: Option<&AnnotFont>, clip: FRect) -> Option<Sprite> {
+        let b = objs.iter().filter_map(|o| o.bounds(font)).reduce(|a, b| {
+            let (x0, y0) = (a.x.min(b.x), a.y.min(b.y));
+            FRect { x: x0, y: y0, w: a.x1().max(b.x1()) - x0, h: a.y1().max(b.y1()) - y0 }
+        })?;
+        let r = PxRect::outer(b).intersect(&PxRect::outer(clip));
+        if r.is_empty() {
+            return None;
+        }
+        let (w, h) = (r.w() as usize, r.h() as usize);
+        let mut px = vec![0u8; w * h * 4];
+        {
+            let mut sf = crate::raster::Surf::with_origin(&mut px, w as u32, h as u32, r.x0, r.y0, Order::Rgba);
+            for o in objs {
+                o.render_into(&mut sf, font);
+            }
+        }
+        Some(Sprite { x: r.x0, y: r.y0, w, h, px })
+    }
+
+    /// Premultiplied over at offset (`dx`, `dy`), clipped to `f`.
+    fn blit(&self, f: &mut Fb, dx: i32, dy: i32) {
+        let (fw, fh) = (f.stride as i32, f.height());
+        let (x0, y0) = (self.x + dx, self.y + dy);
+        let (sx0, sy0) = ((-x0).max(0) as usize, (-y0).max(0) as usize);
+        let (cx1, cy1) = ((x0 + self.w as i32).min(fw), (y0 + self.h as i32).min(fh));
+        if cx1 <= x0.max(0) || cy1 <= y0.max(0) {
+            return;
+        }
+        let n = (cx1 - x0.max(0)) as usize;
+        for row in sy0..(cy1 - y0) as usize {
+            let s = &self.px[(row * self.w + sx0) * 4..][..n * 4];
+            let d0 = ((y0 + row as i32) as usize * f.stride + x0.max(0) as usize) * 4;
+            let d = &mut f.d[d0..d0 + n * 4];
+            for (o, p) in d.as_chunks_mut::<4>().0.iter_mut().zip(s.as_chunks::<4>().0) {
+                let a = p[3] as u32;
+                if a == 0 {
+                    continue;
+                }
+                if a == 255 {
+                    *o = [p[0], p[1], p[2], 255];
+                    continue;
+                }
+                let ia = 255 - a;
+                for c in 0..3 {
+                    o[c] = (p[c] as u32 + (o[c] as u32 * ia + 127) / 255).min(255) as u8;
+                }
+                o[3] = 255;
+            }
         }
     }
 }
@@ -928,24 +1092,18 @@ fn map_mini(m: &MiniUi, v: &View) -> MiniUi {
     MiniUi { r: r(m.r), items: m.items.iter().map(|it| toolbar::Item { r: r(it.r), ..*it }).collect(), inp: m.inp.clone(), hover: m.hover }
 }
 
-/// Window and surface helpers for the Edit window's tests.
+/// Helpers for the Edit window's tests.
 #[cfg(test)]
 impl Canvas {
-    pub fn edit_mut(&mut self) -> &mut Edit {
-        &mut self.e
+    /// The objects, to change behind the editor's back (then baked).
+    pub fn edit_mut_for_tests(&mut self) -> &mut Vec<Obj> {
+        self.e.dirty = true;
+        &mut self.e.objects
     }
 
-    pub fn tool(&self) -> Option<Tool> {
-        self.e.tool
+    /// The docked toolbar's button with icon `icon` (window px).
+    pub fn button(&self, icon: &str) -> Option<FRect> {
+        let t = self.e.toolbar.as_ref()?;
+        t.items.iter().find(|i| matches!(i.kind, toolbar::Kind::Btn(a) if chrome::act_icon(a) == icon)).map(|i| i.r)
     }
-
-    pub fn toolbar_items(&self) -> Vec<(FRect, Option<Act>)> {
-        self.e.toolbar.as_ref().map_or(Vec::new(), |t| t.items.iter().map(|i| (i.r, t.act_at(Pt::new(i.r.x + i.r.w / 2.0, i.r.y + i.r.h / 2.0)))).collect())
-    }
-}
-
-/// A surface over a frame (tests).
-#[cfg(test)]
-pub fn surf_of(px: &mut PixBuf) -> Surf<'_> {
-    Surf::from_buf(px)
 }

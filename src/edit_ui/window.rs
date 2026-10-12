@@ -37,6 +37,8 @@ pub struct Window {
     hover: Option<Hit>,
     /// How long the last frame took to compose (the perf measurements).
     pub last_frame: Duration,
+    /// Tests: the scale to draw at (no window to ask).
+    pub scale: Option<f32>,
 }
 
 impl Window {
@@ -54,11 +56,21 @@ impl Window {
             last_row_click: None,
             hover: None,
             last_frame: Duration::ZERO,
+            scale: None,
         }
     }
 
     fn k(&self) -> f32 {
+        if let Some(k) = self.scale {
+            return k;
+        }
         if cfg!(test) && self.hwnd == Hwnd::default() { 1.0 } else { wind::scale(self.hwnd) }
+    }
+
+    /// The frame as composed (tests).
+    #[cfg(test)]
+    pub fn pixels(&self) -> &PixBuf {
+        &self.canvas
     }
 
     /// The window was closed: what the tools remember is written.
@@ -97,6 +109,7 @@ impl Window {
         {
             let mut fb = crate::uifb::Fb::new(self.canvas.as_raw_mut(), w as usize);
             let edge = if tok.dark { tok.bd } else { C4_SHADOW };
+            let _dp = crate::perf::span(crate::perf::K::Damage);
             self.e.canvas.paint(&mut fb, tok.cv, edge, now);
         }
         let inp = Input::default();
@@ -105,10 +118,12 @@ impl Window {
         let fb = crate::uifb::Fb::new(self.canvas.as_raw_mut(), w as usize);
         let area = FRect { x: 0.0, y: 0.0, w: lay.w, h: lay.h };
         let mut ui = Ui::new(fb, &th, &inp, &mut focus, &mut clip, k, area);
+        let _lp = crate::perf::span(crate::perf::K::Label);
         draw::paint_strip(&mut ui, &lay, &tok);
         draw::paint_rail(&mut ui, &self.e, &lay, &tok, self.hover);
         draw::paint_status(&mut ui, &self.e, &lay, &tok);
         draw::paint_zoom(&mut ui, &self.e, &lay, &tok, self.hover);
+        drop(_lp);
         self.e.canvas.paint_bar(&mut ui.fb, now);
         draw::paint_toast(&mut ui, &self.e, &lay, now);
         draw::paint_dialog(&mut ui, &self.e, &lay, &tok, self.hover);
