@@ -826,6 +826,8 @@ mod window {
             }
             let normal = atom(dpy, c"_NET_WM_WINDOW_TYPE_NORMAL");
             set_prop32(dpy, win, atom(dpy, c"_NET_WM_WINDOW_TYPE"), XA_ATOM, &[normal]);
+            // Ours: window snapping leaves it out of a capture's windows.
+            set_prop32(dpy, win, atom(dpy, c"_NET_WM_PID"), XA_CARDINAL, &[std::process::id() as c_ulong]);
             let wm_protocols = atom(dpy, c"WM_PROTOCOLS");
             let mut wm_delete = atom(dpy, c"WM_DELETE_WINDOW");
             XSetWMProtocols(dpy, win, &mut wm_delete, 1);
@@ -1106,7 +1108,7 @@ fn vk_of(ks: c_ulong) -> u32 {
         0xff54 => key::DOWN,
         0xff63 => key::INSERT,
         0xff61 => key::PRINTSCREEN,
-        0xff09 => key::TAB,
+        0xff09 | 0xfe20 => key::TAB, // Tab, ISO_Left_Tab (Shift+Tab)
         0x020 => key::SPACE,
         0xffbe..=0xffc9 => 0x70 + (ks - 0xffbe) as u32, // XK_F1..XK_F12
         0x41..=0x5a => ks as u32,                       // A..Z

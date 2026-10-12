@@ -170,6 +170,9 @@ pub fn run(
 ) -> i32 {
     // Settings, the update dialog and the notice follow the UI size too.
     publish_ui_size(cfg.ui_scale);
+    if cfg.snap_windows && !cfg!(test) {
+        crate::snap::warm_up();
+    }
     let hot = match kind {
         RunKind::Daemon => Some(Hotkeys::new(&cfg)),
         RunKind::OneShot => None,
@@ -734,6 +737,8 @@ impl App {
             hover_at: Instant::now(),
             pressed: None,
             hot_handle: None,
+            snap: None,
+            hover_win: Default::default(),
         };
         #[cfg(target_os = "macos")]
         if let Some(r) = self.update_pending.take() {
@@ -744,6 +749,18 @@ impl App {
         if accept_now {
             edit.done = true;
             edit.cancelled = false;
+        } else if edit.sel.is_none() {
+            // The windows on screen now (the overlay is not up yet), and
+            // the one under the pointer.
+            edit.snap = take_snap(&edit.cfg, &edit.shot);
+            if edit.snap.is_some() {
+                #[cfg(not(test))]
+                {
+                    self.mouse = edit.shot.global_to_image(capture::cursor_pos());
+                }
+                let (x, y) = self.mouse;
+                edit.track_snap(Pt::new(x as f32, y as f32));
+            }
         }
         // Place the overlay at the exact physical rect of the shot (the
         // window is DPI-aware and borderless, so outer == inner).
@@ -978,6 +995,22 @@ impl App {
             return;
         }
 
+        // Tab / Shift+Tab: into the part of the window under the pointer
+        // and back out while snapping to windows (built in, like the arrows).
+        if vk == wind::key::TAB && !mods.ctrl && !mods.alt && edit.snap_rect().is_some() {
+            if mods.shift {
+                edit.hover_win.outer();
+            } else {
+                edit.hover_win.deeper();
+            }
+            if edit.cfg.snap_tab_hint {
+                // The hint has done its job: not shown again.
+                edit.cfg.snap_tab_hint = false;
+                edit.pending.set("snap_tab_hint".into(), Some("false".into()), Instant::now());
+            }
+            return;
+        }
+
         // Arrow keys nudge / resize the selection (built in, not remappable).
         if is_arrow && edit.sel.is_some() && !mods.ctrl && !mods.alt {
             let step = edit.shot.scale.round().max(1.0);
@@ -1202,12 +1235,15 @@ impl App {
             let p = Pt::new(x as f32, y as f32);
             let mods = drag_mods();
             let img = (edit.shot.size.0 as f32, edit.shot.size.1 as f32);
+            // A click on a window selects it: a press that moved less than
+            // SNAP_CLICK_PX is still a click.
+            let click_px = if edit.snapping() { SNAP_CLICK_PX } else { CLICK_PX };
             match &mut edit.interact {
                 Interact::None => {}
                 Interact::NewSel { anchor, moved } => {
                     let anchor = *anchor;
                     let dist = (p.x - anchor.x).hypot(p.y - anchor.y);
-                    if dist >= CLICK_PX {
+                    if dist >= click_px {
                         *moved = true;
                     }
                     if *moved {
@@ -1490,7 +1526,7 @@ impl Driver for App {
                     // nothing is selected (hint, toast placement).
                     let area_moved =
                         e.area_drawn.is_some_and(|a| a != pick_area(&e.shot.monitors, e.sel, p));
-                    if e.track_hover(p) | e.track_loupe(p) || area_moved {
+                    if e.track_hover(p) | e.track_loupe(p) | e.track_snap(p) || area_moved {
                         self.repaint();
                     }
                 }
@@ -1648,9 +1684,26 @@ fn grab_screen(cfg: &Config, th: &Theme, screen: Option<u32>) -> anyhow::Result<
 thread_local! {
     /// Tests: what the next `grab` returns (none queued: an error).
     static FAKE_GRAB: std::cell::RefCell<Option<anyhow::Result<Shot>>> = const { std::cell::RefCell::new(None) };
+    /// Tests: the windows the next capture snaps to (none queued: none).
+    static FAKE_SNAP: std::cell::RefCell<Option<crate::snap::Snapshot>> = const { std::cell::RefCell::new(None) };
     /// Tests: the modifiers a drag sees (the real keyboard is not read).
     static FAKE_MODS: std::cell::Cell<Option<Mods>> =
         const { std::cell::Cell::new(Some(Mods { shift: false, ctrl: false, alt: false })) };
+}
+
+/// The windows for window snapping (`snap_windows`), listed now.
+fn take_snap(cfg: &Config, shot: &Shot) -> Option<crate::snap::Snapshot> {
+    if !cfg.snap_windows {
+        return None;
+    }
+    // Tests never list the real windows: they queue a snapshot.
+    #[cfg(test)]
+    {
+        let _ = shot;
+        FAKE_SNAP.with(|s| s.borrow_mut().take())
+    }
+    #[cfg(not(test))]
+    crate::snap::take(shot.origin, shot.size)
 }
 
 /// Modifiers held during a drag (Shift/Ctrl constraints).
@@ -2226,6 +2279,11 @@ struct Edit {
     pressed: Option<usize>,
     /// Selection handle under the pointer (ring grows to 3 px).
     hot_handle: Option<usize>,
+    /// Window snapping: the windows when the capture started (`None`:
+    /// off, or windows cannot be listed here).
+    snap: Option<crate::snap::Snapshot>,
+    /// The window (or part, after Tab) under the pointer.
+    hover_win: crate::snap::Hover,
 }
 
 /// More merged dirty rects than this invalidate the whole window.
@@ -2233,6 +2291,9 @@ const MAX_DAMAGE_RECTS: usize = 16;
 
 const HANDLE_HIT: f32 = 10.0; // handle hit radius, logical px (20 px target)
 const CLICK_PX: f32 = 2.5; // movement below this counts as a click
+/// While snapping to windows, a press moving less than this is a click
+/// (selects the window); from it on, a drag draws a rectangle.
+const SNAP_CLICK_PX: f32 = 4.0;
 
 impl Edit {
     /// The selection crop (`sel` in image coords) to export, objects
@@ -2523,6 +2584,44 @@ impl Edit {
         self.cfg.rec_camera_ring_width = w;
     }
 
+    /// Window snapping is live: windows were listed and nothing is
+    /// selected, drawn or typed yet (a press that has not moved is still
+    /// a click on the window).
+    fn snapping(&self) -> bool {
+        self.snap.is_some()
+            && self.sel.is_none()
+            && self.tool.is_none()
+            && self.text.is_none()
+            && self.pick.is_none()
+            && matches!(self.interact, Interact::None | Interact::NewSel { moved: false, .. })
+    }
+
+    /// The window (or part) a click selects now, when snapping.
+    fn snap_rect(&self) -> Option<FRect> {
+        if !self.snapping() {
+            return None;
+        }
+        let r = self.hover_win.rect()?;
+        Some(FRect { x: r.x0 as f32, y: r.y0 as f32, w: r.w() as f32, h: r.h() as f32 })
+    }
+
+    /// Follow the window under `p` (over none: the monitor there, the
+    /// "whole screen"); true when the outline changed.
+    fn track_snap(&mut self, p: Pt) -> bool {
+        let Some(s) = &self.snap else { return false };
+        let _p = crate::perf::span(crate::perf::K::Snap);
+        let mut chain = s.chain(p.x.floor() as i32, p.y.floor() as i32);
+        if chain.is_empty()
+            && let Some(m) = monitor_at(&self.shot.monitors, p)
+        {
+            chain.push(crate::snap::R::new(m.x as i32, m.y as i32, m.x1() as i32, m.y1() as i32));
+        }
+        let h = self.hover_win.moved(chain);
+        let changed = h.rect() != self.hover_win.rect() || h.has_parts() != self.hover_win.has_parts();
+        self.hover_win = h;
+        changed && self.snapping()
+    }
+
     /// Track the hovered toolbar item / handle; true when either changed.
     fn track_hover(&mut self, p: Pt) -> bool {
         let hover = self.toolbar.as_ref().and_then(|tb| tb.index_at(p));
@@ -2573,13 +2672,10 @@ fn end_interaction(edit: &mut Edit) {
         }
         Interact::NewSel { moved, .. } => {
             if !moved {
-                // A plain click selects everything (Flameshot-ish).
-                edit.sel = Some(FRect {
-                    x: 0.0,
-                    y: 0.0,
-                    w: edit.shot.size.0 as f32,
-                    h: edit.shot.size.1 as f32,
-                });
+                // A plain click selects the window under the pointer
+                // (window snapping), else everything (Flameshot-ish).
+                let all = FRect { x: 0.0, y: 0.0, w: edit.shot.size.0 as f32, h: edit.shot.size.1 as f32 };
+                edit.sel = Some(edit.snap_rect().unwrap_or(all));
             }
             if edit.accept_on_select {
                 edit.done = true;
@@ -2936,6 +3032,8 @@ mod state_tests;
 mod tools_tests;
 #[cfg(test)]
 mod uisize_tests;
+#[cfg(test)]
+mod snap_tests;
 
 #[cfg(test)]
 mod tests {
@@ -3159,6 +3257,8 @@ mod tests {
             hover_at: Instant::now(),
             pressed: None,
             hot_handle: None,
+            snap: None,
+            hover_win: Default::default(),
         };
         App {
             cfg,
@@ -3834,7 +3934,7 @@ mod tests {
 
     /// Compose the prepared scene through random tiles (both orders) and
     /// compare with the whole-image frame `want`.
-    fn assert_tiles_match(app: &mut App, want: &PixBuf, name: &str, seed: u64) {
+    pub(super) fn assert_tiles_match(app: &mut App, want: &PixBuf, name: &str, seed: u64) {
         use compose::PxRect;
         let e = edit_of(app);
         let bd = PixBufBackdrop { img: e.composed(), dim: e.th.dim };

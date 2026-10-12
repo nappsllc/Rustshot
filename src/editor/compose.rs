@@ -158,6 +158,15 @@ pub struct SelUi {
     pub hot: Option<usize>,
 }
 
+/// Window snapping: the window (or part) under the pointer, outlined with
+/// its size badge (and the Tab hint).
+#[derive(Clone, PartialEq, Debug)]
+pub struct SnapUi {
+    pub r: FRect,
+    pub hint: bool,
+    pub area: FRect,
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub struct LabelUi {
     pub sr: FRect,
@@ -231,9 +240,10 @@ impl TipUi {
 
 /// Chrome elements in paint order.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum El {
+pub(super) enum El {
     Draft,
     Sel,
+    Snap,
     Label,
     Text,
     Toast,
@@ -243,7 +253,7 @@ enum El {
     Loupe,
 }
 
-const ELS: [El; 9] = [El::Draft, El::Sel, El::Label, El::Text, El::Toast, El::Bar, El::Tip, El::Hint, El::Loupe];
+const ELS: [El; 10] = [El::Draft, El::Sel, El::Snap, El::Label, El::Text, El::Toast, El::Bar, El::Tip, El::Hint, El::Loupe];
 
 /// Everything one frame paints, resolved at one instant. Two scenes
 /// compare element by element (`dirty_rects`); a clone is the "painted
@@ -255,24 +265,27 @@ pub struct Scene {
     pub th: Theme,
     /// Dim alpha this frame (0 while the fade-in starts).
     pub dim_alpha: u8,
-    /// The selection as the backdrop sees it (unrounded).
+    /// The selection as the backdrop sees it (unrounded); while snapping
+    /// to windows, the window outlined.
     pub sel: Option<FRect>,
     pub objects: Arc<Vec<Obj>>,
     pub draft: Option<Obj>,
     pub sel_ui: Option<SelUi>,
+    pub snap: Option<SnapUi>,
     pub label: Option<LabelUi>,
     pub text: Option<TextUi>,
     pub toast: Option<ToastUi>,
     pub bar: Option<BarUi>,
     pub tip: Option<TipUi>,
-    pub hint: Option<(FRect, f32)>,
+    /// The empty-state hint: area, opacity, the snapping wording.
+    pub hint: Option<(FRect, f32, bool)>,
     pub loupe: Option<LoupeUi>,
     /// Per element (index = `El as usize`): conservative pixel bounds.
-    bounds: [Vec<PxRect>; 9],
+    bounds: [Vec<PxRect>; 10],
 }
 
 impl Scene {
-    fn rects(&self, e: El) -> &[PxRect] {
+    pub(super) fn rects(&self, e: El) -> &[PxRect] {
         &self.bounds[e as usize]
     }
 
@@ -280,6 +293,7 @@ impl Scene {
         match e {
             El::Draft => self.draft == o.draft,
             El::Sel => self.sel_ui == o.sel_ui,
+            El::Snap => self.snap == o.snap,
             El::Label => self.label == o.label,
             El::Text => self.text == o.text,
             El::Toast => self.toast == o.toast,
@@ -570,6 +584,8 @@ impl Edit {
         };
 
         let sel_ui = self.sel.map(|sr| SelUi { sr, hot: self.hot_handle });
+        let snap_r = self.snap_rect();
+        let snap = snap_r.map(|r| SnapUi { r, hint: self.cfg.snap_tab_hint && self.hover_win.has_parts(), area });
         let label = self.sel.map(|sr| {
             let avoid = self
                 .toolbar
@@ -643,7 +659,7 @@ impl Edit {
             }
         });
         let kh = self.mo.hint.value(now);
-        let hint = (kh > 0.01).then_some((area, kh));
+        let hint = (kh > 0.01).then_some((area, kh, self.snap.is_some() && self.tool.is_none()));
         // The eyedropper's loupe follows the pointer, off the toolbar.
         let on_chrome = |p: Pt| self.toolbar.as_ref().is_some_and(|t| t.contains(p));
         let loupe = match (self.pick.as_ref().filter(|p| p.eyedrop), self.loupe) {
@@ -663,10 +679,11 @@ impl Edit {
             s,
             th: self.th,
             dim_alpha: dim_a.round() as u8,
-            sel: self.sel,
+            sel: self.sel.or(snap_r),
             objects,
             draft: self.draft.clone(),
             sel_ui,
+            snap,
             label,
             text,
             toast,
@@ -699,6 +716,11 @@ impl Edit {
                 .sel_ui
                 .as_ref()
                 .map_or(Vec::new(), |u| chrome::selection_bounds(&ui, u.sr).into_iter().map(px_bounds).collect()),
+            El::Snap => sc.snap.as_ref().map_or(Vec::new(), |u| {
+                let mut v: Vec<PxRect> = chrome::outline_bounds(&ui, u.r).into_iter().map(px_bounds).collect();
+                v.push(px_bounds(chrome::snap_label_bounds(&ui, u.r, u.hint, u.area)));
+                v
+            }),
             El::Label => sc
                 .label
                 .as_ref()
@@ -717,7 +739,7 @@ impl Edit {
             El::Tip => sc.tip.as_ref().map_or(Vec::new(), |t| {
                 one(chrome::tooltip_bounds(&ui, t.at(), t.label, &t.keys))
             }),
-            El::Hint => sc.hint.map_or(Vec::new(), |(area, _)| one(chrome::hint_bounds(&ui, area))),
+            El::Hint => sc.hint.map_or(Vec::new(), |(area, _, snap)| one(chrome::hint_bounds(&ui, area, snap))),
             El::Loupe => sc.loupe.as_ref().map_or(Vec::new(), |l| one(chrome::loupe_bounds(&ui, l.r))),
         }
     }
@@ -782,6 +804,13 @@ impl Edit {
             let _p = crate::perf::span(crate::perf::K::Sel);
             chrome::selection(&mut f, &ui, u.sr, u.hot, 1.0);
         }
+        if let Some(u) = &sc.snap
+            && hits(El::Snap)
+        {
+            let _p = crate::perf::span(crate::perf::K::Sel);
+            chrome::outline(&mut f, &ui, u.r, 1.0);
+            chrome::snap_label(&mut f, &ui, u.r, u.hint, u.area, 1.0);
+        }
         if let Some(l) = &sc.label
             && hits(El::Label)
         {
@@ -837,10 +866,10 @@ impl Edit {
         {
             chrome::tooltip(&mut f, &ui, t.at(), t.label, &t.keys, t.k);
         }
-        if let Some((area, kh)) = sc.hint
+        if let Some((area, kh, snap)) = sc.hint
             && hits(El::Hint)
         {
-            chrome::hint(&mut f, &ui, area, kh);
+            chrome::hint(&mut f, &ui, area, kh, snap);
         }
         if let Some(l) = &sc.loupe
             && hits(El::Loupe)

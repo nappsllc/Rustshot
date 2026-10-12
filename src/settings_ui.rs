@@ -1,5 +1,6 @@
-//! The Settings window: **General** (theme, renderer, start at login,
-//! update check, global hotkeys), **Saving** (folder, daily subfolders,
+//! The Settings window: **General** (theme, UI size, snapping to windows,
+//! renderer, start at login, update check, global hotkeys), **Saving**
+//! (folder, daily subfolders,
 //! format and JPEG quality, the Save As toggle and a file-name pattern
 //! editor with a live preview; "Reset tool sizes & colours" for the
 //! drawing tools' remembered settings) and **Shortcuts** (the editor keymap), with
@@ -152,6 +153,8 @@ pub struct Form {
     /// The UI size ([`uisize::LABELS`] index).
     pub ui_size: usize,
     pub renderer: usize,
+    /// Snap to windows (`snap_windows`).
+    pub snap: bool,
     /// Start at login; `None` hides it (store installs).
     pub autostart: Option<bool>,
     pub check_updates: bool,
@@ -173,6 +176,7 @@ impl Form {
             theme: theme_index(&cfg.theme),
             ui_size: cfg.ui_scale.index(),
             renderer: !cfg.use_gdi() as usize,
+            snap: cfg.snap_windows,
             autostart,
             check_updates: cfg.check_updates,
             capture: Chord::parse(&cfg.capture_hotkey),
@@ -203,6 +207,9 @@ impl Form {
         }
         if self.renderer != was.renderer {
             c.renderer = RENDERERS[self.renderer].1.into();
+        }
+        if self.snap != was.snap {
+            c.snap_windows = self.snap;
         }
         if self.check_updates != was.check_updates {
             c.check_updates = self.check_updates;
@@ -975,6 +982,11 @@ fn question(ui: &mut Ui, m: &Modal) -> Option<Click> {
 
 fn general(ui: &mut Ui, s: &mut Settings, body: FRect) {
     let show_renderer = s.renderer;
+    // Wayland lists no window positions: nothing to snap to.
+    #[cfg(target_os = "linux")]
+    let wayland = crate::rec::linux::portal::wayland_now();
+    #[cfg(not(target_os = "linux"))]
+    let wayland = false;
     let slot_notes = [s.hotkey_slot_note(0), s.hotkey_slot_note(1)];
     let f = &mut s.form;
     let note = f.hotkey_note();
@@ -998,12 +1010,19 @@ fn general(ui: &mut Ui, s: &mut Settings, body: FRect) {
             ui.label("UI size");
             ui.dropdown("ui_size", &uisize::LABELS, &mut f.ui_size);
         });
-        if show_renderer {
-            field(ui, "Overlay renderer", |ui| {
+        // The overlay's behaviour and (Windows) its renderer share a row:
+        // the tab has no room for another one in the worst case.
+        field(ui, "Overlay", |ui| {
+            ui.toggle("snap_windows", &mut f.snap);
+            ui.label("Snap to windows");
+            if show_renderer {
+                ui.space(2.0 * GAP);
+                ui.label("Renderer");
                 ui.dropdown("renderer", &labels(&RENDERERS), &mut f.renderer);
-                ui.note(if f.renderer == 0 { "Uses the least memory" } else { "Composes every frame in memory" });
-            });
-        }
+            } else if wayland {
+                ui.note("Not on Wayland");
+            }
+        });
         if roomy {
             ui.space(6.0);
         }
@@ -1045,7 +1064,15 @@ fn general(ui: &mut Ui, s: &mut Settings, body: FRect) {
             });
         }
         ui.allow_meta = false;
+        #[cfg(test)]
+        GENERAL_END.with(|c| c.set(ui.cursor_y() - ui.lay.gap));
     });
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Tests: where the General tab's last row ended (logical px).
+    static GENERAL_END: std::cell::Cell<f32> = const { std::cell::Cell::new(0.0) };
 }
 
 fn saving(ui: &mut Ui, s: &mut Settings, body: FRect, click: &mut Option<Click>) {

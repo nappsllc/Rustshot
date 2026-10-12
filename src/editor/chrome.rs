@@ -690,9 +690,9 @@ fn dot(f: &mut Fb, ui: &Ui, r: FRect, c: C4, (selected, hovered): (bool, bool), 
     swatch(f, ui, r.x + r.w / 2.0, r.y + r.h / 2.0, c, k);
 }
 
-/// Accent border with dark (or light) outer/inner lines, plus 8 handles:
-/// white 6 ⌀ dot, 2 px accent ring (3 when hot), 1 px halo.
-pub fn selection(f: &mut Fb, ui: &Ui, sr: FRect, hot: Option<usize>, k: f32) {
+/// Accent border with dark (or light) outer/inner lines (the selection's,
+/// and the window snapping's outline).
+pub fn outline(f: &mut Fb, ui: &Ui, sr: FRect, k: f32) {
     let sr = round(sr);
     let th = ui.th;
     let lw = ui.line();
@@ -701,6 +701,14 @@ pub fn selection(f: &mut Fb, ui: &Ui, sr: FRect, hot: Option<usize>, k: f32) {
         let r = grow(lw * d);
         f.stroke_rect(r.x, r.y, r.w, r.h, lw, c.fade(k));
     }
+}
+
+/// The [`outline`] plus 8 handles: white 6 ⌀ dot, 2 px accent ring (3
+/// when hot), 1 px halo.
+pub fn selection(f: &mut Fb, ui: &Ui, sr: FRect, hot: Option<usize>, k: f32) {
+    outline(f, ui, sr, k);
+    let sr = round(sr);
+    let th = ui.th;
     for (n, (_, p)) in super::handle_points(sr).iter().enumerate() {
         let ring_w = if hot == Some(n) { 3.0 } else { 2.0 };
         f.fill_circle(p.x, p.y, ui.px(3.0 + ring_w + 1.0), th.handle_halo.fade(k));
@@ -736,6 +744,42 @@ pub fn size_label(f: &mut Fb, ui: &Ui, sr: FRect, show_pos: bool, area: FRect, a
     let x = r.x + pad + text(f, ui, 12.0, &size, r.x + pad, cy, ui.th.text.fade(k));
     if show_pos {
         text(f, ui, 11.0, &pos, x + pad, cy, ui.th.text_muted.fade(k));
+    }
+}
+
+/// What the window snapping badge says after the size, until Tab is used.
+const SNAP_TAB: &str = "parts of the window";
+
+fn tab_cap_w(ui: &Ui) -> f32 {
+    tw(ui, 10.5, "Tab") + ui.px(10.0)
+}
+
+/// Where `snap_label` puts its panel: like the selection's size label.
+fn snap_label_rect(ui: &Ui, sr: FRect, hint: bool, area: FRect) -> FRect {
+    let (size, _) = label_texts(sr);
+    let pad = ui.px(8.0);
+    let mut w = 2.0 * pad + tw(ui, 12.0, &size);
+    if hint {
+        w += pad + tab_cap_w(ui) + ui.px(6.0) + tw(ui, 11.0, SNAP_TAB);
+    }
+    label_rect(sr, w, ui.s, area, None)
+}
+
+/// Window snapping's badge: "W × H" of the window (or part) outlined and,
+/// while it has parts and Tab was never used, "[Tab] parts of the window".
+pub fn snap_label(f: &mut Fb, ui: &Ui, sr: FRect, hint: bool, area: FRect, k: f32) {
+    let (size, _) = label_texts(sr);
+    let pad = ui.px(8.0);
+    let r = snap_label_rect(ui, sr, hint, area);
+    surface(f, ui, r, 6.0, &SMALL_LAYERS, k);
+    let cy = r.y + r.h / 2.0;
+    let x = r.x + pad + text(f, ui, 12.0, &size, r.x + pad, cy, ui.th.text.fade(k));
+    if hint {
+        let (w, h) = (tab_cap_w(ui), ui.px(16.0));
+        let cap = round(FRect { x: x + pad, y: cy - h / 2.0, w, h });
+        fill(f, cap, ui.px(4.0), ui.th.bg_pressed.fade(k));
+        text(f, ui, 10.5, "Tab", cap.x + (w - tw(ui, 10.5, "Tab")) / 2.0, cy, ui.th.text.fade(k));
+        text(f, ui, 11.0, SNAP_TAB, cap.x + w + ui.px(6.0), cy, ui.th.text_muted.fade(k));
     }
 }
 
@@ -915,6 +959,16 @@ enum HintPart {
     K(&'static str),
 }
 
+const HINT_SNAP: [HintPart; 7] = [
+    HintPart::T("Click a window or drag to select"),
+    HintPart::T("·"),
+    HintPart::K("Enter"),
+    HintPart::T("to save"),
+    HintPart::T("·"),
+    HintPart::K("Esc"),
+    HintPart::T("to cancel"),
+];
+
 const HINT: [HintPart; 7] = [
     HintPart::T("Drag to select"),
     HintPart::T("·"),
@@ -932,27 +986,50 @@ fn hint_part_w(ui: &Ui, p: &HintPart) -> f32 {
     }
 }
 
-/// Total width of the hint line (texts, key caps and 6 px gaps).
-fn hint_width(ui: &Ui) -> f32 {
-    HINT.iter().map(|p| hint_part_w(ui, p)).sum::<f32>() + ui.px(6.0) * (HINT.len() - 1) as f32
+fn hint_parts(snap: bool) -> &'static [HintPart] {
+    if snap { &HINT_SNAP } else { &HINT }
 }
 
-/// "Drag to select · Enter to save · Esc to cancel", centred in the active monitor.
-pub fn hint(f: &mut Fb, ui: &Ui, area: FRect, k: f32) {
+/// Total width of the hint line (texts, key caps and 6 px gaps).
+fn hint_width(ui: &Ui, snap: bool) -> f32 {
+    let parts = hint_parts(snap);
+    parts.iter().map(|p| hint_part_w(ui, p)).sum::<f32>() + ui.px(6.0) * (parts.len() - 1) as f32
+}
+
+/// "Drag to select · Enter to save · Esc to cancel" ("Click a window or
+/// drag to select" while snapping to windows), centred in the active monitor.
+/// While snapping it sits on a panel: the window outlined under it is
+/// shown plain (not dimmed), where white text would not read.
+pub fn hint(f: &mut Fb, ui: &Ui, area: FRect, k: f32, snap: bool) {
     let sp = ui.px(6.0);
-    let total = hint_width(ui);
+    let total = hint_width(ui, snap);
     let (mut x, cy) = (area.x + (area.w - total) / 2.0, area.y + area.h / 2.0);
-    let c = C4::rgb(255, 255, 255).fade(0.7 * k);
-    for p in &HINT {
+    let c = if snap { ui.th.text.fade(k) } else { C4::rgb(255, 255, 255).fade(0.7 * k) };
+    if snap {
+        surface(f, ui, hint_panel(ui, x, cy, total), 16.0, &SMALL_LAYERS, k);
+    }
+    for p in hint_parts(snap) {
         let w = hint_part_w(ui, p);
         match p {
             HintPart::T(s) => {
                 text(f, ui, 13.0, s, x, cy, c);
             }
+            HintPart::K(s) if snap => {
+                let h = ui.px(18.0);
+                let r = round(FRect { x, y: cy - h / 2.0, w, h });
+                fill(f, r, ui.px(4.0), ui.th.bg_pressed.fade(k));
+                text(f, ui, 11.0, s, x + (w - tw(ui, 11.0, s)) / 2.0, cy, c);
+            }
             HintPart::K(s) => key_cap(f, ui, x, cy, w, s, k),
         }
         x += w + sp;
     }
+}
+
+/// The snapping hint's panel around a line `total` wide at `x`, `cy`.
+fn hint_panel(ui: &Ui, x: f32, cy: f32, total: f32) -> FRect {
+    let (m, h) = (ui.px(12.0), ui.px(32.0));
+    FRect { x: x - m, y: cy - h / 2.0, w: total + 2.0 * m, h }
 }
 
 /// The eyedropper's loupe: [`LOUPE_N`]² pixels around the pointer, each
@@ -1044,16 +1121,23 @@ fn surface_bounds(ui: &Ui, r: FRect) -> FRect {
     grow4(r, sp + 1.0 + AA, 1.0 + AA, sp + 1.0 + AA, dy + sp + 1.0 + AA)
 }
 
-/// Border strips (three 1 px lines) and the eight handles.
-pub fn selection_bounds(ui: &Ui, sr: FRect) -> Vec<FRect> {
+/// The [`outline`]'s border strips (three 1 px lines): top, bottom,
+/// left, right.
+pub fn outline_bounds(ui: &Ui, sr: FRect) -> Vec<FRect> {
     let sr = round(sr);
     let b = 2.0 * ui.line() + AA;
-    let mut v = vec![
+    vec![
         FRect { x: sr.x - b, y: sr.y - b, w: sr.w + 2.0 * b, h: 2.0 * b },
         FRect { x: sr.x - b, y: sr.y1() - b, w: sr.w + 2.0 * b, h: 2.0 * b },
         FRect { x: sr.x - b, y: sr.y - b, w: 2.0 * b, h: sr.h + 2.0 * b },
         FRect { x: sr.x1() - b, y: sr.y - b, w: 2.0 * b, h: sr.h + 2.0 * b },
-    ];
+    ]
+}
+
+/// Border strips and the eight handles.
+pub fn selection_bounds(ui: &Ui, sr: FRect) -> Vec<FRect> {
+    let mut v = outline_bounds(ui, sr);
+    let sr = round(sr);
     let hr = ui.px(3.0 + 3.0 + 1.0) + 1.0 + AA;
     for (_, p) in super::handle_points(sr) {
         v.push(FRect { x: p.x - hr, y: p.y - hr, w: 2.0 * hr, h: 2.0 * hr });
@@ -1063,6 +1147,17 @@ pub fn selection_bounds(ui: &Ui, sr: FRect) -> Vec<FRect> {
 
 pub fn size_label_bounds(ui: &Ui, sr: FRect, show_pos: bool, area: FRect, avoid: Option<FRect>) -> FRect {
     surface_bounds(ui, size_label_rect(ui, sr, show_pos, area, avoid))
+}
+
+/// The panel plus its texts, which may run past a panel clamped to the area.
+pub fn snap_label_bounds(ui: &Ui, sr: FRect, hint: bool, area: FRect) -> FRect {
+    let r = snap_label_rect(ui, sr, hint, area);
+    let (size, _) = label_texts(sr);
+    let mut w = ui.px(8.0) * 2.0 + tw(ui, 12.0, &size);
+    if hint {
+        w += ui.px(8.0) + tab_cap_w(ui) + ui.px(6.0) + tw(ui, 11.0, SNAP_TAB);
+    }
+    union(surface_bounds(ui, r), grow4(FRect { w, ..r }, AA, AA, AA, AA))
 }
 
 /// The panel plus the message, which may run past a panel clamped to the area.
@@ -1082,11 +1177,12 @@ pub fn tooltip_bounds(ui: &Ui, at: TipAt, label: &str, keys: &[String]) -> FRect
     surface_bounds(ui, tooltip_rect(ui, at, label, keys))
 }
 
-pub fn hint_bounds(ui: &Ui, area: FRect) -> FRect {
-    let total = hint_width(ui);
+pub fn hint_bounds(ui: &Ui, area: FRect, snap: bool) -> FRect {
+    let total = hint_width(ui, snap);
     let (x, cy) = (area.x + (area.w - total) / 2.0, area.y + area.h / 2.0);
     let m = ui.px(13.0);
-    FRect { x: x - m - AA, y: cy - ui.px(14.0) - AA, w: total + 2.0 * (m + AA), h: ui.px(28.0) + 2.0 * AA }
+    let line = FRect { x: x - m - AA, y: cy - ui.px(14.0) - AA, w: total + 2.0 * (m + AA), h: ui.px(28.0) + 2.0 * AA };
+    if snap { union(line, surface_bounds(ui, hint_panel(ui, x, cy, total))) } else { line }
 }
 
 #[cfg(test)]

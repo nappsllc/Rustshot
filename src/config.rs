@@ -51,6 +51,13 @@ pub struct Config {
     /// If true, GUI captures only the monitor under the cursor even when
     /// all monitors share the same scale factor.
     pub capture_active_monitor: bool,
+    /// Before a selection exists, the overlay outlines the window under
+    /// the pointer and a click selects it (Tab: its parts). X11, Windows
+    /// and macOS; Wayland has no window positions.
+    pub snap_windows: bool,
+    /// Show "Tab: parts of the window" while snapping, until Tab is first
+    /// used (then written as `false`).
+    pub snap_tab_hint: bool,
     /// Let the daemon check GitHub for a newer release once a day.
     pub check_updates: bool,
     /// A release version the user chose to skip; the daily check ignores it
@@ -162,6 +169,8 @@ impl Default for Config {
             upload_client_id: "313baf0c7b4d3ff".into(),
             copy_url_after_upload: true,
             capture_active_monitor: false,
+            snap_windows: true,
+            snap_tab_hint: true,
             check_updates: true,
             skip_version: String::new(),
             renderer: "gdi".into(),
@@ -477,6 +486,7 @@ pub fn copy_key(from: &Config, to: &mut Config, key: &str) {
         "rec_camera_ring_color" => to.rec_camera_ring_color = from.rec_camera_ring_color.clone(),
         "rec_camera_ring_width" => to.rec_camera_ring_width = from.rec_camera_ring_width,
         "ui_scale" => to.ui_scale = from.ui_scale,
+        "snap_tab_hint" => to.snap_tab_hint = from.snap_tab_hint,
         k => match tool_key(k) {
             Some((id, true)) => match from.tool_sizes.get(id) {
                 Some(v) => {
@@ -791,6 +801,8 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
             "capture_active_monitor" => {
                 cfg.capture_active_monitor = as_bool(val).map_err(|e| bad("boolean", &e))?
             }
+            "snap_windows" => cfg.snap_windows = as_bool(val).map_err(|e| bad("boolean", &e))?,
+            "snap_tab_hint" => cfg.snap_tab_hint = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "check_updates" => {
                 cfg.check_updates = as_bool(val).map_err(|e| bad("boolean", &e))?
             }
@@ -876,6 +888,8 @@ pub fn to_toml(c: &Config) -> String {
          upload_client_id = {}\n\
          copy_url_after_upload = {}\n\
          capture_active_monitor = {}\n\
+         snap_windows = {}\n\
+         snap_tab_hint = {}\n\
          check_updates = {}\n\
          skip_version = {}\n\
          renderer = {}\n\
@@ -920,6 +934,8 @@ pub fn to_toml(c: &Config) -> String {
         q(&c.upload_client_id),
         c.copy_url_after_upload,
         c.capture_active_monitor,
+        c.snap_windows,
+        c.snap_tab_hint,
         c.check_updates,
         q(&c.skip_version),
         q(&c.renderer),

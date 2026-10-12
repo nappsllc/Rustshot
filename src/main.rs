@@ -33,6 +33,7 @@ mod rec;
 mod rec_ui;
 mod settings_ui;
 mod sha256;
+mod snap;
 mod text;
 mod theme;
 mod tray;

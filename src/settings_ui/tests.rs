@@ -795,6 +795,49 @@ fn preview_settings_pngs() {
     preview::save("settings-hotkey-unregistered-worst-light.png", &img);
 }
 
+/// The General tab never runs into the button bar: the most it can show
+/// (the renderer, start at login, both hotkey notes under their boxes and
+/// the warning) still ends above it.
+#[test]
+fn general_fits_above_the_buttons_in_the_worst_case() {
+    let long = |slot, kept: &str| crate::hotkey::Failure {
+        slot,
+        wanted: "Ctrl+Alt+F10".into(),
+        cause: crate::hotkey::Cause::InUse,
+        kept: Some(kept.into()),
+    };
+    let body_end = H as f32 - PAD - ROW - 16.0;
+    for worst in [false, true] {
+        let mut s = sample();
+        if worst {
+            s.form.capture = Chord::parse("X");
+            s.hotkey_failures = vec![long(0, "Ctrl+Alt+Shift+Meta+F11"), long(1, "Ctrl+Alt+Shift+Meta+F12")];
+        }
+        render(&mut s, &LIGHT, 1.0, &Input::default(), &mut FocusState::default());
+        let end = GENERAL_END.with(|c| c.get());
+        assert!(end > BODY_Y + 200.0 && end <= body_end, "worst={worst}: the last row ends at {end}, the body at {body_end}");
+    }
+}
+
+/// Snap to windows is on the Overlay row and saved as `snap_windows`.
+#[test]
+fn snap_to_windows_toggles_and_saves() {
+    let cfg = Config::default();
+    let mut f = Form::new(&cfg, None);
+    assert!(f.snap, "on by default");
+    f.snap = false;
+    let c = f.apply(&cfg, &cfg);
+    assert!(!c.snap_windows);
+    assert!(!Form::new(&c, None).snap);
+    // Its toggle clicks where drawn: the first control of the second row.
+    let mut s = sample();
+    let y = BODY_Y + 24.0 + 12.0 + 32.0 + 12.0 + 16.0;
+    let x = PAD + LABEL_W + GAP + 18.0;
+    render(&mut s, &DARK, 1.0, &click_at(x, y, 1.0), &mut FocusState::default());
+    assert!(!s.form.snap, "toggled off");
+    assert!(s.dirty());
+}
+
 fn click_at(x: f32, y: f32, k: f32) -> Input {
     let (x, y) = ((x * k) as i32, (y * k) as i32);
     let mut input = Input::default();

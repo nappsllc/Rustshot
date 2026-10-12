@@ -8,8 +8,10 @@
 //! (moves handled since the last paint), `dmg <n>/<px>` (rects and pixels
 //! of the last damage), `upd <n>/<px>` (the update region painted), then
 //! each probe's total ms and call count since the last paint (probes
-//! nest: `move` includes `ptr`, `damage` and `inval`; `bar` its `text`).
-//! Only the Windows overlay (GDI renderer) writes the log.
+//! nest: `move` includes `ptr`, `damage` and `inval`; `bar` its `text`;
+//! `snap` is a hover's window hit test). Only the Windows overlay (GDI
+//! renderer) writes paint lines; a capture's window snapshot adds one
+//! `snap <ms> list <ms> windows <n> parts <n>` line on every OS.
 #![cfg_attr(not(windows), allow(dead_code))]
 
 use std::cell::{Cell, RefCell};
@@ -44,10 +46,12 @@ pub enum K {
     Ptr,
     /// Invalidating the damage.
     Inval,
+    /// Window snapping: the hit test of a hover.
+    Snap,
 }
 
-const N: usize = K::Inval as usize + 1;
-pub const NAMES: [&str; N] = ["move", "damage", "compose", "bg", "sel", "label", "bar", "text", "blit", "put", "ptr", "inval"];
+const N: usize = K::Snap as usize + 1;
+pub const NAMES: [&str; N] = ["move", "damage", "compose", "bg", "sel", "label", "bar", "text", "blit", "put", "ptr", "inval", "snap"];
 
 /// 0 = not looked up yet, 1 = off, 2 = on.
 static STATE: AtomicU8 = AtomicU8::new(0);
@@ -167,21 +171,36 @@ pub fn painted(t0: Instant) {
     let (n, px) = DMG.replace((0, 0));
     let (un, upx) = UPD.replace((0, 0));
     let acc = take();
-    OUT.with_borrow_mut(|out| {
-        if out.is_none() {
-            let Some(path) = std::env::var_os("RUSTSHOT_PERFLOG") else { return };
-            let f = std::fs::OpenOptions::new().create(true).append(true).open(path).ok();
-            *out = f.map(|f| (f, now));
-        }
-        let Some((f, start)) = out.as_mut() else { return };
-        let t = (now - *start).as_secs_f64() * 1000.0;
+    write_line(now, |t| {
         let mut line = format!("t {t:.1} paint {paint:.3} lag {lag:.3} moves {moves} dmg {n}/{px} upd {un}/{upx}");
         for (name, (ms, c)) in NAMES.iter().zip(acc) {
             if c > 0 {
                 line += &format!(" {name} {ms:.3}/{c}");
             }
         }
+        line
+    });
+}
+
+/// A one-off line (`t <ms> <text>`), e.g. the window snapshot's time.
+pub fn note(text: &str) {
+    if on() {
+        write_line(Instant::now(), |t| format!("t {t:.1} {text}"));
+    }
+}
+
+/// Append the line `f` makes (given the log's clock, ms) to the log.
+fn write_line(now: Instant, f: impl FnOnce(f64) -> String) {
+    OUT.with_borrow_mut(|out| {
+        if out.is_none() {
+            let Some(path) = std::env::var_os("RUSTSHOT_PERFLOG") else { return };
+            let file = std::fs::OpenOptions::new().create(true).append(true).open(path).ok();
+            *out = file.map(|file| (file, now));
+        }
+        let Some((file, start)) = out.as_mut() else { return };
+        let t = now.saturating_duration_since(*start).as_secs_f64() * 1000.0;
+        let mut line = f(t);
         line.push('\n');
-        let _ = f.write_all(line.as_bytes());
+        let _ = file.write_all(line.as_bytes());
     });
 }

@@ -418,7 +418,89 @@ EOF
         wait "$gpid"; local drc=$?
         result overlay-drag fail "rustshot gui died during a mouse drag (exit $drc$([ $drc = 139 ] && echo ', SIGSEGV'))"
     fi
+    snap_steps "$save"
     unset XDG_CONFIG_HOME RUSTSHOT_INSTANCE
+}
+
+# Window snapping: an xmessage test window (no window manager here, so its
+# rect is its geometry plus border); a one-shot overlay; hover, click,
+# Ctrl+S: the saved PNG is exactly the window. Then over its button, Tab
+# (into the part under the pointer), click, Ctrl+S: a part's size.
+snap_steps() {
+    local save="$1" before n gpid
+    log "window snapping"
+    xmessage -title rs-snap-test -geometry 640x360+300+200 -buttons "okay:0" "Rustshot snapping test window" \
+        >"$LOGS/xmessage.log" 2>&1 &
+    local xpid=$!
+    PIDS+=("$xpid")
+    if ! wait_for 5 xwininfo -name rs-snap-test; then result snap-window fail "no xmessage window"; return; fi
+    sleep 0.5
+    local info; info="$(xwininfo -name rs-snap-test)"
+    echo "$info" > "$LOGS/snap-xwininfo.txt"
+    xwininfo -name rs-snap-test -tree >> "$LOGS/snap-xwininfo.txt" 2>&1
+    local wx wy ww wh bw
+    wx=$(echo "$info" | awk '/Absolute upper-left X/ {print $4}')
+    wy=$(echo "$info" | awk '/Absolute upper-left Y/ {print $4}')
+    ww=$(echo "$info" | awk '/Width:/ {print $2}')
+    wh=$(echo "$info" | awk '/Height:/ {print $2}')
+    bw=$(echo "$info" | awk '/Border width:/ {print $3}')
+    local want="$((ww + 2 * bw))x$((wh + 2 * bw))"
+    result snap-window info "xmessage at $wx,$wy ${ww}x${wh} border $bw: expecting $want"
+
+    before="$(ls "$save"/*.png 2>/dev/null | wc -l)"
+    RUSTSHOT_INSTANCE="docker-snap-$$" "$BIN" gui >"$LOGS/gui-snap.log" 2>&1 &
+    gpid=$!
+    wait_for 5 overlay_up; sleep 0.5
+    xdotool mousemove $((wx + ww / 2)) $((wy + wh / 3)); sleep 0.5
+    shot_x 12-snap-hover
+    xdotool click 1; sleep 0.7
+    shot_x 12b-snap-clicked
+    xdotool key ctrl+s
+    if wait_for 10 sh -c "[ \$(ls '$save'/*.png 2>/dev/null | wc -l) -gt $before ]"; then
+        local png; png="$(ls -t "$save"/*.png | head -1)"
+        local sz; sz="$(identify -format '%wx%h' "$png" 2>/dev/null)"
+        cp "$png" "$SHOTS/12c-saved-snap.png"
+        if [ "$sz" = "$want" ]; then result snap-click-save pass "$(basename "$png") $sz = the window"
+        else result snap-click-save fail "$(basename "$png") is $sz, not the window's $want"; fi
+    else
+        result snap-click-save fail "no new PNG after hover, click and Ctrl+S"
+    fi
+    wait_for 5 sh -c "! kill -0 $gpid" || { xdotool key Escape; wait_for 5 sh -c "! kill -0 $gpid" || kill "$gpid"; }
+
+    # The parts: every subwindow's size (outer, border included).
+    local parts; parts="$(xwininfo -name rs-snap-test -tree | awk '/^ +0x/ { for (i = 1; i <= NF; i++) if ($i ~ /^[0-9]+x[0-9]+\+/) { split($i, g, /[x+]/); print g[1] "x" g[2] } }' | sort -u | tr '\n' ' ')"
+    # The button: the smallest subwindow (xmessage's widgets have no
+    # names); its centre from the absolute position xwininfo prints.
+    before="$(ls "$save"/*.png 2>/dev/null | wc -l)"
+    RUSTSHOT_INSTANCE="docker-snap2-$$" "$BIN" gui >"$LOGS/gui-snap2.log" 2>&1 &
+    gpid=$!
+    wait_for 5 overlay_up; sleep 0.5
+    local bx by; read -r bx by < <(xwininfo -name rs-snap-test -tree | awk '/^ +0x/ { s = ""; a = ""; for (i = 1; i <= NF; i++) { if ($i ~ /^[0-9]+x[0-9]+[+-]/) s = $i; else if ($i ~ /^[+-][0-9]+[+-][0-9]+$/) a = $i } if (s != "" && a != "") { split(s, g, /[x+]/); split(substr(a, 2), q, /[+]/); print g[1] * g[2], q[1] + int(g[1] / 2), q[2] + int(g[2] / 2) } }' | sort -n | head -1 | cut -d" " -f2-)
+    if [ -z "$bx" ]; then bx=$((wx + ww / 2)); by=$((wy + wh - 20)); fi
+    xdotool mousemove "$bx" "$by"; sleep 0.4
+    xdotool key Tab; sleep 0.4
+    shot_x 13-snap-tab-part
+    xdotool click 1; sleep 0.5
+    xdotool key ctrl+s
+    if wait_for 10 sh -c "[ \$(ls '$save'/*.png 2>/dev/null | wc -l) -gt $before ]"; then
+        local png; png="$(ls -t "$save"/*.png | head -1)"
+        local sz; sz="$(identify -format '%wx%h' "$png" 2>/dev/null)"
+        cp "$png" "$SHOTS/13b-saved-part.png"
+        # A child geometry is inside its parent (relative position), so its
+        # size is what to compare; xwininfo prints sizes without the border.
+        local ok=0 p w h
+        for p in $parts; do
+            w=${p%x*}; h=${p#*x}
+            for b in 0 1 2; do [ "$sz" = "$((w + 2 * b))x$((h + 2 * b))" ] && ok=1; done
+        done
+        # Not the window, nor its form (all of it but the border).
+        if [ "$ok" = 1 ] && [ "${sz%x*}" -lt "$((ww - 4))" ]; then result snap-tab-part pass "$(basename "$png") $sz, a part (parts: $parts)"
+        else result snap-tab-part fail "$(basename "$png") is $sz; parts are: $parts"; fi
+    else
+        result snap-tab-part fail "no new PNG after Tab, click and Ctrl+S"
+    fi
+    wait_for 5 sh -c "! kill -0 $gpid" || { xdotool key Escape; wait_for 5 sh -c "! kill -0 $gpid" || kill "$gpid"; }
+    kill "$xpid" 2>/dev/null
 }
 
 mode_x11() {

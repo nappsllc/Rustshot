@@ -70,6 +70,11 @@ dbus session, PipeWire + WirePlumber + pipewire-pulse with a null sink
    decode; the quit hotkey; last, a mouse drag (400,300 to 1200,700) in a
    one-shot overlay and Ctrl+S: the saved PNG must be 800x400. Each hotkey
    is pressed through XTEST (`xdotool key`) and is its own pass/fail step.
+5. Window snapping: an `xmessage` window at 640x360+300+200; in a one-shot
+   overlay the pointer hovers it, a click (no drag) and Ctrl+S must save
+   exactly the window (its size from `xwininfo`, border included:
+   `snap-click-save`); then, over its button, Tab, click, Ctrl+S must save
+   one of its parts (`snap-tab-part`).
 
 ## wayland
 

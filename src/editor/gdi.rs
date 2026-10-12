@@ -30,6 +30,9 @@ use windows::Win32::Graphics::Gdi::{
 /// Rows per band (dimmed build, read-back, compose).
 const BAND: i32 = 64;
 
+/// Update regions above this many pixels paint their chrome first.
+const BIG_PAINT: i64 = 1_000_000;
+
 fn bmi(w: i32, h: i32) -> BITMAPINFO {
     let mut b: BITMAPINFO = unsafe { std::mem::zeroed() };
     b.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
@@ -534,6 +537,16 @@ impl Edit {
             }
         }
         *ov = compose::merge_rects(std::mem::take(ov));
+        // A paint of megapixels (window snapping's dim flipping over a big
+        // window): the chrome goes first, so its small writes do not wait
+        // behind the big blits (5 ms instead of 10 at 5120x1440). Small
+        // paints (drags) keep blits first, measured faster there.
+        let big = clips.iter().map(area).sum::<i64>() > BIG_PAINT;
+        if big {
+            for o in ov.iter() {
+                self.compose_put(hdc, *o, &bd);
+            }
+        }
         slow.clear();
         for clip in clips.iter() {
             bg.clear();
@@ -569,7 +582,8 @@ impl Edit {
                 }
             }
         }
-        for o in ov.iter().chain(slow.iter()) {
+        let first = if big { &[][..] } else { &ov[..] };
+        for o in first.iter().chain(slow.iter()) {
             self.compose_put(hdc, *o, &bd);
         }
     }

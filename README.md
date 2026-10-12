@@ -17,7 +17,10 @@ renderer.
 ## Features
 
 - **Region capture** with resize handles, arrow-key nudging, and a live
-  `W × H` size readout. A single click selects the whole screen.
+  `W × H` size readout.
+- **Window snapping:** the window under the pointer is outlined with its
+  size; a click selects exactly that window (or menu, or tooltip), and
+  <kbd>Tab</kbd> steps into its parts (panels, toolbars, fields).
 - **Annotation tools:** pencil, line, arrow, rectangle, ellipse, highlighter,
   text, pixelate and invert, with Shift constraints (squares, circles, 45°
   lines) and unlimited undo/redo.
@@ -99,8 +102,8 @@ on Linux and macOS, where there is no tray icon, this is the way in). On
 Linux the Settings window is *(experimental)*. Three tabs:
 
 - **General:** theme (Auto follows the OS), UI size (Auto follows each
-  display's scaling; 75-200 % on top of it), the overlay renderer
-  (Windows), start at login (hidden for store installs), the daily update
+  display's scaling; 75-200 % on top of it), *Snap to windows* and the
+  overlay renderer (Windows), start at login (hidden for store installs), the daily update
   check, and the global capture and quit hotkeys (click a box, then press
   the keys; <kbd>Backspace</kbd> clears it). *Open config file* opens
   `config.toml`.
@@ -160,6 +163,26 @@ capture would go. **Restore** brings back `%F_%H-%M`, **Clear** empties it.
 Characters Windows does not allow in names (`<>:"/\|?*`) become `-`; in the
 subfolder pattern `/` nests folders (`%Y/%m`) and `..` is dropped.
 
+### Selecting
+
+Drag to select a region. Before anything is selected, the window under the
+pointer is outlined (the rest of the screen stays dimmed) with its size,
+e.g. `1280 × 720`; a click (less than 4 px of movement) selects exactly
+that window, then the handles and arrow keys adjust it as for a dragged
+selection. Menus, popups and tooltips are windows of their own, so hovering
+one outlines just it. Over the desktop the whole monitor is outlined.
+<kbd>Tab</kbd> steps from the whole window into the part under the pointer
+(a panel, a toolbar, a sidebar, an edit field), again for the part inside
+that; <kbd>Shift</kbd>+<kbd>Tab</kbd> steps back out. <kbd>Esc</kbd> still
+cancels.
+
+The windows are listed once, when the overlay opens. Parts are the child
+windows an app has: on Windows most classic apps have them (many modern
+ones draw everything in one window); on X11 few toolkits do; macOS lists
+none. On Wayland there are no window positions to snap to, so only
+dragging works. `snap_windows = false` (or Settings › General) turns it
+off; a click then selects the whole screen.
+
 ### Editor shortcuts
 
 | Action | Keys |
@@ -177,13 +200,14 @@ subfolder pattern `/` nests folders (`%Y/%m`) and `..` is dropped.
 | Accept (save, or run the `--clip`/`--path` tasks) | <kbd>Enter</kbd> |
 | Drop the current tool / cancel | <kbd>Esc</kbd> |
 | Move / resize the selection | arrow keys / <kbd>Shift</kbd>+arrows |
+| Into a window's parts / back out (before selecting) | <kbd>Tab</kbd> / <kbd>Shift</kbd>+<kbd>Tab</kbd> |
 | Square, circle, 45° line | hold <kbd>Shift</kbd> while drawing |
 | Keep aspect ratio while resizing | hold <kbd>Ctrl</kbd> |
 
 On macOS, <kbd>⌘</kbd> works wherever <kbd>Ctrl</kbd> is listed.
 
-The keys above (except arrows, the mouse wheel and hold-while-drawing
-modifiers) can be remapped in Settings › Shortcuts: select an action, press
+The keys above (except arrows, <kbd>Tab</kbd>, the mouse wheel and
+hold-while-drawing modifiers) can be remapped in Settings › Shortcuts: select an action, press
 its new keys (<kbd>Backspace</kbd> unbinds it), and **Reset all** goes back
 to the defaults. Rebinding sets a single chord; an action with two (Redo's
 <kbd>Ctrl</kbd>+<kbd>Y</kbd>) gets its second one back with **Reset all**, or
@@ -248,6 +272,8 @@ capture_hotkey = "Shift+Meta+X"
 quit_hotkey = "Ctrl+Alt+Shift+Q"
 copy_url_after_upload = true
 capture_active_monitor = false    # true = only the monitor under the cursor
+snap_windows = true               # outline the window under the pointer; a click selects it
+snap_tab_hint = true              # "Tab: parts of the window" until Tab is first used
 check_updates = true              # daemon checks GitHub once a day
 skip_version = ""                 # a version the daily check ignores ("Skip this version")
 renderer = "gdi"                  # Windows overlay: "gdi" (low memory) or "software"; ignored elsewhere
