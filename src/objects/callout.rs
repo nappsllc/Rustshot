@@ -38,6 +38,11 @@ impl Style {
     }
 }
 
+/// The bubble's text face: the annotation font at semibold (the boards').
+fn face(font: &AnnotFont) -> AnnotFont {
+    font.semibold()
+}
+
 /// Outline width of an unfilled bubble.
 pub const OUTLINE: f32 = 3.0;
 /// Smallest bubble a drag makes (a click makes [`DEFAULT_W`]).
@@ -102,6 +107,7 @@ pub fn wrap(font: &AnnotFont, text: &str, px: f32, max_w: f32) -> Vec<(usize, us
 }
 
 fn wrap_uncached(font: &AnnotFont, text: &str, px: f32, max_w: f32) -> Vec<(usize, usize)> {
+    let font = &face(font);
     let mut out = Vec::new();
     let mut start = 0;
     for para in text.split('\n') {
@@ -112,48 +118,102 @@ fn wrap_uncached(font: &AnnotFont, text: &str, px: f32, max_w: f32) -> Vec<(usiz
     out
 }
 
+/// The width of one word (cached: a drag re-wraps the same words at every
+/// width).
+fn word_w(font: &AnnotFont, w: &str, px: f32) -> f32 {
+    thread_local! {
+        static WORDS: std::cell::RefCell<std::collections::HashMap<(String, u32), f32>> = std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    let key = (w.to_string(), px.to_bits());
+    if let Some(v) = WORDS.with(|c| c.borrow().get(&key).copied()) {
+        return v;
+    }
+    let v = font.line_width(w, px);
+    WORDS.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.len() > 4096 {
+            c.clear();
+        }
+        c.insert(key, v);
+    });
+    v
+}
+
+/// Words of `text[start..end]`: (start, end of its letters, end with the
+/// spaces after it); leading spaces belong to the first word.
+fn words(text: &str, start: usize, end: usize) -> Vec<(usize, usize, usize)> {
+    let b = text.as_bytes();
+    let mut v = Vec::new();
+    let mut i = start;
+    while i < end {
+        let ws = i;
+        while i < end && b[i] == b' ' {
+            i += 1;
+        }
+        while i < end && b[i] != b' ' {
+            i += 1;
+        }
+        let we = i;
+        while i < end && b[i] == b' ' {
+            i += 1;
+        }
+        v.push((ws, we, i));
+    }
+    v
+}
+
 fn wrap_para(font: &AnnotFont, text: &str, start: usize, end: usize, px: f32, max_w: f32, out: &mut Vec<(usize, usize)>) {
     let fits = |a: usize, b: usize| font.line_width(text[a..b].trim_end(), px) <= max_w;
-    let mut a = start;
-    loop {
-        if a >= end || fits(a, end) {
-            out.push((a, end));
-            return;
+    let mut ws = words(text, start, end);
+    if ws.is_empty() {
+        out.push((start, end));
+        return;
+    }
+    let space = word_w(font, " ", px).max(0.0);
+    let width = |&(a, b, _): &(usize, usize, usize)| word_w(font, &text[a..b], px);
+    let mut i = 0;
+    while i < ws.len() {
+        // Greedy on the words' widths, then the line measured once (and a
+        // word dropped while it does not fit: kerning, shaping).
+        let mut j = i;
+        let mut est = width(&ws[i]);
+        while j + 1 < ws.len() {
+            let gap = (ws[j].2 - ws[j].1) as f32 * space;
+            let next = est + gap + width(&ws[j + 1]);
+            if next > max_w {
+                break;
+            }
+            est = next;
+            j += 1;
         }
-        // The last word break that fits.
-        let mut cut = None;
-        for (k, ch) in text[a..end].char_indices() {
-            let at = a + k;
-            if ch == ' ' && at > a {
-                if fits(a, at) {
-                    cut = Some(at + 1);
+        while j > i && !fits(ws[i].0, ws[j].1) {
+            j -= 1;
+        }
+        if j == i && !fits(ws[i].0, ws[i].1) {
+            // One long word: as many characters as fit (at least one),
+            // the rest goes on.
+            let (a, we) = (ws[i].0, ws[i].1);
+            let mut b = a + text[a..we].chars().next().map_or(1, char::len_utf8);
+            for (k, ch) in text[a..we].char_indices().skip(1) {
+                if fits(a, a + k + ch.len_utf8()) {
+                    b = a + k + ch.len_utf8();
                 } else {
                     break;
                 }
             }
-        }
-        let b = match cut {
-            Some(b) => b,
-            None => {
-                // One long word: as many characters as fit (at least one).
-                let mut b = a + text[a..end].chars().next().map_or(1, char::len_utf8);
-                for (k, ch) in text[a..end].char_indices().skip(1) {
-                    if fits(a, a + k + ch.len_utf8()) {
-                        b = a + k + ch.len_utf8();
-                    } else {
-                        break;
-                    }
-                }
-                b
+            if b < we {
+                // The word's rest is a word now: wrap on from it.
+                out.push((a, b));
+                ws = words(text, b, end);
+                i = 0;
+                continue;
             }
-        };
-        // Spaces right after a soft break stay on the line before.
-        let mut b = b;
-        while b < end && text.as_bytes()[b] == b' ' {
-            b += 1;
+            out.push((a, ws[i].2));
+            i += 1;
+            continue;
         }
-        out.push((a, b));
-        a = b;
+        out.push((ws[i].0, ws[j].2));
+        i = j + 1;
     }
 }
 
@@ -167,7 +227,7 @@ pub struct Layout {
 
 pub fn layout(font: &AnnotFont, r: FRect, text: &str, px: f32, style: Style) -> Layout {
     let a = text_area(r, style, px);
-    let m = font.metrics(px);
+    let m = face(font).metrics(px);
     let lines = wrap(font, text, px, a.w);
     // The cloud and the ellipse centre their text; the box keeps it at
     // the top (the boards' bubble).
@@ -183,7 +243,7 @@ pub fn layout(font: &AnnotFont, r: FRect, text: &str, px: f32, style: Style) -> 
 pub fn needed_h(font: Option<&AnnotFont>, r: FRect, text: &str, px: f32, style: Style) -> f32 {
     let Some(font) = font else { return r.h };
     let lines = wrap(font, text, px, text_area(r, style, px).w).len().max(1);
-    let th = lines as f32 * font.metrics(px).line_height;
+    let th = lines as f32 * face(font).metrics(px).line_height;
     let (_, py) = pad(px);
     let h = match style {
         Style::Rounded => th + 2.0 * py,
@@ -216,7 +276,7 @@ pub fn caret_at(font: &AnnotFont, lay: &Layout, text: &str, caret: usize, px: f3
         }
     }
     let Some(&(a, b)) = lay.lines.get(row) else { return lay.top };
-    let x = font.caret_x(&text[a..b], caret.clamp(a, b) - a, px);
+    let x = face(font).caret_x(&text[a..b], caret.clamp(a, b) - a, px);
     Pt::new(lay.top.x + x, lay.top.y + row as f32 * lay.line_h)
 }
 
@@ -228,11 +288,12 @@ pub fn caret_near(font: &AnnotFont, lay: &Layout, text: &str, p: Pt, px: f32) ->
     let row = (((p.y - lay.top.y) / lay.line_h).floor().max(0.0) as usize).min(lay.lines.len() - 1);
     let (a, b) = lay.lines[row];
     let line = &text[a..b];
+    let f = face(font);
     let mut best = (f32::MAX, b);
     let mut idxs: Vec<usize> = line.char_indices().map(|(k, _)| k).collect();
     idxs.push(line.len());
     for k in idxs {
-        let d = (lay.top.x + font.caret_x(line, k, px) - p.x).abs();
+        let d = (lay.top.x + f.caret_x(line, k, px) - p.x).abs();
         if d < best.0 {
             best = (d, a + k);
         }
@@ -322,7 +383,8 @@ fn cloud(m: &mut Mask, r: FRect, grow: f32) {
     let (rx, ry) = (core.w / 2.0, core.h / 2.0);
     let (cx, cy) = (core.x + rx, core.y + ry);
     let per = std::f32::consts::PI * (3.0 * (rx + ry) - ((3.0 * rx + ry) * (rx + 3.0 * ry)).max(0.0).sqrt());
-    let n = ((per / (b * 1.4)).round() as i32).max(6);
+    // At most a few hundred bumps, whatever the size.
+    let n = ((per / (b * 1.4)).round().clamp(6.0, 512.0)) as i32;
     let rad = (b + grow).max(0.5);
     for k in 0..n {
         let a = std::f32::consts::TAU * k as f32 / n as f32;
@@ -428,7 +490,27 @@ pub fn render(sf: &mut Surf, r: FRect, tip: Pt, text: &str, color: C4, px: f32, 
     }
     let lay = layout(font, r, text, px, style);
     let joined: Vec<&str> = lay.lines.iter().map(|&(a, b)| text[a..b].trim_end()).collect();
-    font.render(sf, &joined.join("\n"), px, lay.top, ink);
+    // The text's raster is kept: a drag re-bakes the bubble every move,
+    // and its lines change only when the wrap does.
+    type Entry = (String, u32, std::rc::Rc<crate::text::TextCov>);
+    thread_local! {
+        static COV: std::cell::RefCell<Vec<Entry>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    let joined = joined.join("\n");
+    let key = px.to_bits();
+    let cov = COV.with(|c| c.borrow().iter().find(|e| e.1 == key && e.0 == joined).map(|e| e.2.clone()));
+    let cov = cov.unwrap_or_else(|| {
+        let v = std::rc::Rc::new(face(font).coverage(&joined, px));
+        COV.with(|c| {
+            let mut c = c.borrow_mut();
+            if c.len() >= 4 {
+                c.remove(0);
+            }
+            c.push((joined.clone(), key, v.clone()));
+        });
+        v
+    });
+    cov.blend(sf, (lay.top.x as i32, lay.top.y as i32), ink);
 }
 
 #[cfg(test)]

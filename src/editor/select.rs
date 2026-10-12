@@ -28,7 +28,11 @@ pub(super) const SNAP_PX: f32 = 6.0;
 /// The ghost's opacity.
 pub(super) const GHOST: f32 = 0.4;
 /// Slack round an object a press still hits, logical px.
-const HIT_PX: f32 = 6.0;
+const HIT_PX: f32 = 8.0;
+/// The snap guides fade out over this long after a drag.
+const GUIDE_FADE_MS: f32 = 100.0;
+/// Undo steps of the same kind (nudges, wheel ticks) this close coalesce.
+const COALESCE: std::time::Duration = std::time::Duration::from_millis(700);
 /// What a duplicate is offset by, logical px.
 const DUP_PX: f32 = 12.0;
 /// The dashed frame's distance outside an object's stroke, logical px.
@@ -52,6 +56,13 @@ pub(super) struct ObjState {
     /// Ctrl+press on an object with a drawing tool: a click (no drag)
     /// selects it (a drag draws, Ctrl snapping as before).
     pub click_pick: Option<(usize, Pt)>,
+    /// The last coalescing undo step: its kind and when.
+    pub coalesce: Option<(&'static str, Instant)>,
+    /// The objects as they were when the colour picker opened over a
+    /// selection (Esc puts them back).
+    pub pick_backup: Option<Vec<Obj>>,
+    /// Snap guides fading out after a drag, and since when.
+    pub fading: Option<(Vec<(Pt, Pt)>, Instant)>,
 }
 
 /// Typing in a callout.
@@ -171,10 +182,93 @@ impl Edit {
     }
 
     /// Push an undo step when the objects differ from the last one.
+    /// While a callout is being typed in, its edit is the step (taken when
+    /// it finishes): nothing is pushed now.
     pub(super) fn commit_edits(&mut self) {
-        if self.hist.get(self.hi) != Some(&self.objects) {
+        self.obj.coalesce = None;
+        if self.obj.cedit.is_none() && self.hist.get(self.hi) != Some(&self.objects) {
             self.push_history();
         }
+    }
+
+    /// [`Edit::commit_edits`] where a quick run of the same `kind` (arrow
+    /// repeats, wheel ticks) is one undo step.
+    pub(super) fn commit_coalesced(&mut self, kind: &'static str) {
+        let now = Instant::now();
+        let joins = self.obj.coalesce.is_some_and(|(k, at)| k == kind && now.duration_since(at) < COALESCE)
+            && self.hi + 1 == self.hist.len()
+            && self.hi > 0;
+        if joins && self.obj.cedit.is_none() {
+            self.hist[self.hi] = self.objects.clone();
+        } else {
+            self.commit_edits();
+        }
+        self.obj.coalesce = Some((kind, now));
+    }
+
+    /// Esc or a key during an object drag: everything goes back to where
+    /// the drag started, and it ends.
+    pub(super) fn cancel_obj_drag(&mut self) {
+        match std::mem::replace(&mut self.interact, Interact::None) {
+            Interact::ObjMove { orig, idx, .. } | Interact::ObjResize { orig, idx, .. } => {
+                for (k, i) in idx.into_iter().enumerate() {
+                    if let (Some(o), Some(slot)) = (orig.get(k), self.objects.get_mut(i)) {
+                        *slot = o.clone();
+                    }
+                }
+            }
+            Interact::ObjPoint { idx, orig, .. } => {
+                if let Some(slot) = self.objects.get_mut(idx) {
+                    *slot = orig;
+                }
+            }
+            Interact::Marquee { base, .. } => self.obj.sel = base,
+            other => self.interact = other,
+        }
+        self.obj.guides.clear();
+        self.dirty = true;
+    }
+
+    /// The snap guides this frame and their opacity: the drag's, or the
+    /// last drag's fading out over 100 ms.
+    pub(super) fn guides_now(&mut self, now: Instant) -> (Vec<(Pt, Pt)>, f32) {
+        if !self.obj.guides.is_empty() {
+            self.obj.fading = None;
+            return (self.obj.guides.clone(), 1.0);
+        }
+        let Some((g, at)) = &self.obj.fading else { return (Vec::new(), 0.0) };
+        let t = now.saturating_duration_since(*at).as_secs_f32() * 1000.0;
+        if t >= GUIDE_FADE_MS {
+            self.obj.fading = None;
+            return (Vec::new(), 0.0);
+        }
+        // Quantised so a frame and its repeat compare equal.
+        (g.clone(), ((1.0 - t / GUIDE_FADE_MS) * 16.0).ceil() / 16.0)
+    }
+
+    /// The guides are fading (frames are due).
+    pub(super) fn guides_fading(&self, now: Instant) -> bool {
+        self.obj.fading.as_ref().is_some_and(|(_, at)| now.saturating_duration_since(*at).as_secs_f32() * 1000.0 < GUIDE_FADE_MS + 20.0)
+    }
+
+    /// An object drag is on (keys that edit objects wait for its end).
+    pub(super) fn obj_dragging(&self) -> bool {
+        matches!(self.interact, Interact::ObjMove { .. } | Interact::ObjResize { .. } | Interact::ObjPoint { .. } | Interact::Marquee { .. })
+    }
+
+    /// How near a handle a press must be: the usual reach, less on a
+    /// small selection so its middle still moves it.
+    fn handle_reach(&self) -> f32 {
+        let full = HANDLE_HIT * self.ui_scale();
+        let small = match self.obj.sel[..] {
+            [i] => match self.objects.get(i) {
+                Some(Obj::Line { a, b, .. } | Obj::Arrow { a, b, .. } | Obj::Marker { a, b, .. }) => (a.x - b.x).hypot(a.y - b.y),
+                Some(Obj::Magnify { radius, zoom, .. }) => 2.0 * radius / zoom.max(1.0),
+                _ => self.osel_frame().map_or(f32::MAX, |f| f.w.min(f.h)),
+            },
+            _ => self.osel_frame().map_or(f32::MAX, |f| f.w.min(f.h)),
+        };
+        (small / 3.0).clamp(4.0 * self.ui_scale(), full)
     }
 
     /// The selection's square and round handles (none while typing in a
@@ -201,7 +295,7 @@ impl Edit {
 
     /// The handle under `p` (round ones first: a tail by a corner).
     pub(super) fn obj_handle_at(&self, p: Pt) -> Option<OHandle> {
-        let reach = HANDLE_HIT * self.ui_scale();
+        let reach = self.handle_reach();
         let near = |q: &Pt| (q.x - p.x).hypot(q.y - p.y) <= reach;
         let (sq, round) = self.obj_handles();
         round.iter().find(|(_, q)| near(q)).map(|(h, _)| *h).or_else(|| sq.iter().find(|(_, q)| near(q)).map(|(h, _)| OHandle::Box(*h)))
@@ -209,7 +303,10 @@ impl Edit {
 
     /// The hot handle under `p`, for the chrome: (round?, index).
     pub(super) fn obj_hot_at(&self, p: Pt) -> Option<(bool, usize)> {
-        let reach = HANDLE_HIT * self.ui_scale();
+        if self.obj.sel.is_empty() {
+            return None;
+        }
+        let reach = self.handle_reach();
         let near = |q: &Pt| (q.x - p.x).hypot(q.y - p.y) <= reach;
         let (sq, round) = self.obj_handles();
         if let Some(i) = round.iter().position(|(_, q)| near(q)) {
@@ -222,11 +319,14 @@ impl Edit {
     pub(super) fn handle_press(&mut self, h: OHandle) {
         self.interact = match h {
             OHandle::Box(handle) => {
-                let orig = self.obj.sel.iter().map(|&i| self.objects[i].clone()).collect();
+                let orig = self.obj.sel.iter().filter_map(|&i| self.objects.get(i).cloned()).collect();
                 let (Some(bx), Some(fr)) = (self.osel_box(), self.osel_frame()) else { return };
-                Interact::ObjResize { handle, orig, bx, fr }
+                Interact::ObjResize { handle, orig, bx, fr, idx: self.obj.sel.clone(), n: self.objects.len() }
             }
-            OHandle::Point(idx, which) => Interact::ObjPoint { idx, which, orig: self.objects[idx].clone() },
+            OHandle::Point(idx, which) => {
+                let Some(orig) = self.objects.get(idx).cloned() else { return };
+                Interact::ObjPoint { idx, which, orig, n: self.objects.len() }
+            }
         };
     }
 
@@ -249,9 +349,10 @@ impl Edit {
             if !was {
                 self.obj.sel = vec![i];
             }
-            let orig = self.obj.sel.iter().map(|&k| self.objects[k].clone()).collect();
+            let orig = self.obj.sel.iter().filter_map(|&k| self.objects.get(k).cloned()).collect();
             let bx = self.osel_box().unwrap_or(FRect { x: p.x, y: p.y, w: 0.0, h: 0.0 });
-            self.interact = Interact::ObjMove { start: p, orig, bx, moved: false, hit: i, was_sel: was };
+            let (idx, n) = (self.obj.sel.clone(), self.objects.len());
+            self.interact = Interact::ObjMove { start: p, orig, bx, moved: false, hit: i, was_sel: was, idx, n };
             return true;
         }
         if marquee {
@@ -329,9 +430,20 @@ impl Edit {
 
     /// A pointer move during an object interaction.
     pub(super) fn obj_drag(&mut self, p: Pt, mods: Mods) {
+        // The list changed under the drag (it should not: keys wait for
+        // the release): the drag ends where it is.
+        let stale = match &self.interact {
+            Interact::ObjMove { n, .. } | Interact::ObjResize { n, .. } | Interact::ObjPoint { n, .. } => *n != self.objects.len(),
+            _ => false,
+        };
+        if stale {
+            self.interact = Interact::None;
+            self.obj.guides.clear();
+            return;
+        }
         let mut it = std::mem::replace(&mut self.interact, Interact::None);
         match &mut it {
-            Interact::ObjMove { start, orig, bx, moved, .. } => {
+            Interact::ObjMove { start, orig, bx, moved, idx, .. } => {
                 if !*moved && (p.x - start.x).hypot(p.y - start.y) < CLICK_PX {
                     self.interact = it;
                     return;
@@ -345,31 +457,38 @@ impl Edit {
                     dy += sy;
                     self.obj.guides = g;
                 }
-                for (k, &i) in self.obj.sel.iter().enumerate() {
-                    let mut o = orig[k].clone();
+                for (&i, o0) in idx.iter().zip(orig.iter()) {
+                    let mut o = o0.clone();
                     oe::translate(&mut o, dx, dy);
-                    self.objects[i] = o;
+                    if let Some(slot) = self.objects.get_mut(i) {
+                        *slot = o;
+                    }
                 }
                 self.dirty = true;
             }
-            Interact::ObjResize { handle, orig, bx, fr } => {
-                let keep = self.obj.sel.len() > 1 || orig.first().is_some_and(|o| oe::boxes(o) == oe::Boxes::Corners) || mods.shift;
+            Interact::ObjResize { handle, orig, bx, fr, idx, .. } => {
+                // Ctrl or Shift: keep the shape (Ctrl as for the capture's
+                // selection); text, tags and groups always do.
+                let keep = idx.len() > 1 || orig.first().is_some_and(|o| oe::boxes(o) == oe::Boxes::Corners) || mods.shift || mods.ctrl;
                 // The frame follows the pointer; the box keeps its margins in it.
                 let nf = resize_box(*handle, *fr, p, keep);
                 let (l, t) = (bx.x - fr.x, bx.y - fr.y);
                 let (r, b) = (fr.x1() - bx.x1(), fr.y1() - bx.y1());
                 let nb = FRect { x: nf.x + l, y: nf.y + t, w: (nf.w - l - r).max(1.0), h: (nf.h - t - b).max(1.0) };
-                for (k, &i) in self.obj.sel.clone().iter().enumerate() {
-                    let mut o = orig[k].clone();
+                for (&i, o0) in idx.iter().zip(orig.iter()) {
+                    let mut o = o0.clone();
                     oe::map_box(&mut o, *bx, nb);
-                    self.objects[i] = o;
-                    if matches!(self.objects[i], Obj::Callout { .. }) {
+                    let callout = matches!(o, Obj::Callout { .. });
+                    if let Some(slot) = self.objects.get_mut(i) {
+                        *slot = o;
+                    }
+                    if callout {
                         self.refit_callout(i);
                     }
                 }
                 self.dirty = true;
             }
-            Interact::ObjPoint { idx, which, orig } => {
+            Interact::ObjPoint { idx, which, orig, .. } => {
                 let mut o = orig.clone();
                 let mut q = p;
                 // Shift: a line's end in 45-degree steps from the other.
@@ -380,7 +499,9 @@ impl Edit {
                     q = self.snap_point(other, p, true);
                 }
                 oe::set_point(&mut o, *which, q);
-                self.objects[*idx] = o;
+                if let Some(slot) = self.objects.get_mut(*idx) {
+                    *slot = o;
+                }
                 self.dirty = true;
             }
             Interact::Marquee { anchor, cur, base } => {
@@ -404,7 +525,11 @@ impl Edit {
 
     /// The end of an object interaction (`it`, taken out of `interact`).
     pub(super) fn obj_release(&mut self, it: Interact) {
-        self.obj.guides.clear();
+        // The guides fade out over 100 ms.
+        let g = std::mem::take(&mut self.obj.guides);
+        if !g.is_empty() {
+            self.obj.fading = Some((g, Instant::now()));
+        }
         match it {
             Interact::ObjMove { moved: true, .. } | Interact::ObjResize { .. } | Interact::ObjPoint { .. } => self.commit_edits(),
             Interact::ObjMove { moved: false, hit, was_sel, start, .. } => {
@@ -425,10 +550,25 @@ impl Edit {
         if self.obj.sel.is_empty() {
             return false;
         }
-        self.finish_callout_edit();
+        if let Act::ObjStyle(st) = act {
+            self.obj.style = st;
+        }
+        // Colour, fill, size and shape restyle a bubble being typed in
+        // (it stays open, a new one included); the others finish it first,
+        // keeping a new bubble even when it is still empty.
+        let restyle = matches!(act, Act::ObjStyle(_) | Act::ObjSize(_) | Act::ObjFill | Act::ObjColor);
+        if !restyle {
+            if act != Act::ObjDelete
+                && let Some(ce) = self.obj.cedit.as_mut()
+            {
+                ce.fresh = false;
+            }
+            self.finish_callout_edit();
+        }
         if self.obj.sel.is_empty() {
             return true;
         }
+        self.obj.sel.retain(|&i| i < self.objects.len());
         let sel = self.obj.sel.clone();
         match act {
             Act::ObjDelete => {
@@ -467,7 +607,6 @@ impl Edit {
                 }
             }
             Act::ObjStyle(st) => {
-                self.obj.style = st;
                 for &i in &sel {
                     if let Obj::Callout { style, .. } = &mut self.objects[i] {
                         *style = st;
@@ -498,7 +637,11 @@ impl Edit {
             _ => return false,
         }
         self.dirty = true;
-        self.commit_edits();
+        if matches!(act, Act::ObjSize(_)) {
+            self.commit_coalesced("size");
+        } else {
+            self.commit_edits();
+        }
         true
     }
 
@@ -508,11 +651,39 @@ impl Edit {
             return false;
         }
         for &i in &self.obj.sel.clone() {
-            oe::set_color(&mut self.objects[i], c);
+            if let Some(o) = self.objects.get_mut(i) {
+                oe::set_color(o, c);
+            }
         }
         self.dirty = true;
         self.commit_edits();
         true
+    }
+
+    /// The colour picker over a selection: its colour shows on the
+    /// objects as it changes (no undo step yet).
+    pub(super) fn preview_color(&mut self, c: crate::uifb::C4) {
+        if self.obj.pick_backup.is_none() {
+            self.obj.pick_backup = Some(self.objects.clone());
+        }
+        for &i in &self.obj.sel.clone() {
+            if let Some(o) = self.objects.get_mut(i) {
+                oe::set_color(o, c);
+            }
+        }
+        self.dirty = true;
+    }
+
+    /// The picker closed over a selection: `keep` its colour (one undo
+    /// step) or put the objects back.
+    pub(super) fn end_preview_color(&mut self, keep: bool, c: crate::uifb::C4) {
+        let backup = self.obj.pick_backup.take();
+        if keep {
+            self.color_selection(c);
+        } else if let Some(b) = backup {
+            self.objects = b;
+            self.dirty = true;
+        }
     }
 
     /// The selection's colour: the first selected object with one.
@@ -524,10 +695,12 @@ impl Edit {
     pub(super) fn nudge(&mut self, dx: f32, dy: f32) {
         let k = self.shot.scale.round().max(1.0);
         for &i in &self.obj.sel.clone() {
-            oe::translate(&mut self.objects[i], dx * k, dy * k);
+            if let Some(o) = self.objects.get_mut(i) {
+                oe::translate(o, dx * k, dy * k);
+            }
         }
         self.dirty = true;
-        self.commit_edits();
+        self.commit_coalesced("nudge");
     }
 
     /// Start typing in callout `idx`: the caret at `at` (a click), else at

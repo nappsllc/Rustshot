@@ -169,6 +169,8 @@ pub struct AnnotLayer {
     px: Vec<u8>,
     /// The objects baked in, in order (appending one renders just it).
     baked: Vec<Obj>,
+    /// The spotlight pass's area they were baked with.
+    area: crate::objects::Px,
 }
 
 /// `c` with R and B exchanged: a [`Dimmer`] for BGRA bytes.
@@ -312,7 +314,7 @@ impl GdiScreen {
     /// to apply on top (`None`: none).
     fn source(&self, src: Source) -> (HDC, Option<(u8, u8)>) {
         match (src, &self.dimmed) {
-            (Source::Plain | Source::Spot, _) => (self.plain.dc, None),
+            (Source::Plain, _) => (self.plain.dc, None),
             (Source::Dimmed { alpha, times }, Some(d)) if alpha == self.dim.a => {
                 (d.dc, (times > 1).then_some((alpha, times - 1)))
             }
@@ -329,71 +331,60 @@ impl GdiScreen {
         }
     }
 
-    /// Bake `objects` (in order) over the plain capture into the layer:
-    /// appended objects are rendered into the existing layer (grown when
-    /// needed, keeping its pixels); anything else rebuilds it. No objects:
-    /// no layer.
-    pub fn set_objects(&mut self, objects: &[Obj], font: Option<&AnnotFont>) {
+    /// Bake `objects` (in order) over the plain capture into the layer,
+    /// with their spotlight pass over `area` (the layer then holds the
+    /// area): objects appended above (the same pass) are rendered into the
+    /// existing layer; an edit re-bakes only the windows it changed (the
+    /// layer grown when they reach past it, kept while it is not much
+    /// bigger than needed); anything else builds it again. No objects: no
+    /// layer.
+    pub fn set_objects(&mut self, objects: &[Obj], area: crate::objects::Px, font: Option<&AnnotFont>) {
         let img = PxRect::image(self.size);
-        let rect = objects
+        let pass = crate::objects::SpotPass::of(objects, area);
+        let mut rect = objects
             .iter()
             .filter(|o| !o.is_spot())
             .filter_map(|o| o.bounds(font))
             .map(|b| PxRect::outer(b).intersect(&img))
             .fold(PxRect::default(), |u, b| u.union(&b));
+        if let Some(p) = &pass {
+            rect = rect.union(&PxRect::new(p.area.0, p.area.1, p.area.2, p.area.3)).intersect(&img);
+        }
         if rect.is_empty() {
             self.layer = None;
             return;
         }
-        // Edited in place (a moved, restyled or deleted object): re-bake
-        // only the windows that changed, the layer grown when they reach
-        // past it (kept while it is not much bigger than needed).
-        if let Some(l) = self.layer.as_ref().filter(|l| !objects.starts_with(&l.baked))
-            && let Some(rects) = compose::object_damage(&l.baked, objects, font, self.size, false)
-        {
-            let grown = l.rect.union(&rect);
-            let area = |r: &PxRect| r.w() as i64 * r.h() as i64;
-            if area(&grown) <= 2 * area(&rect).max(1) {
-                if grown != l.rect {
-                    self.grow_layer(grown);
+        let ext = |r: &PxRect| r.w() as i64 * r.h() as i64;
+        if let Some(l) = self.layer.as_ref() {
+            let same_pass = crate::objects::SpotPass::of(&l.baked, l.area) == pass;
+            if objects.starts_with(&l.baked) && same_pass && l.rect.contains(&rect) {
+                let from = l.baked.len();
+                let mut l = self.layer.take().expect("layer");
+                let (w, h) = (l.rect.w() as u32, l.rect.h() as u32);
+                {
+                    let mut sf = Surf::with_origin(&mut l.px, w, h, l.rect.x0, l.rect.y0, Order::Bgra);
+                    for o in &objects[from..] {
+                        o.render_into(&mut sf, font);
+                    }
                 }
-                self.rebake(objects, font, &rects);
+                l.baked = objects.to_vec();
+                self.layer = Some(l);
                 return;
             }
+            if let Some(rects) = compose::object_damage(&l.baked, objects, l.area, area, font, self.size) {
+                let grown = l.rect.union(&rect);
+                if ext(&grown) <= 2 * ext(&rect).max(1) {
+                    if grown != l.rect {
+                        self.grow_layer(grown);
+                    }
+                    self.rebake(objects, area, font, &rects);
+                    return;
+                }
+            }
         }
-        let keep = self.layer.take().filter(|l| rect.contains(&l.rect) && objects.starts_with(&l.baked));
         let (w, h) = (rect.w() as usize, rect.h() as usize);
-        let (mut px, from) = match keep {
-            Some(l) if l.rect == rect => (l.px, l.baked.len()),
-            keep => {
-                let mut px = vec![0u8; w * h * 4];
-                let from = match &keep {
-                    // Grown: the old layer where it was, plain around it.
-                    Some(l) => {
-                        for p in rect.minus_iter(&l.rect) {
-                            self.read(self.plain.dc, p, &mut px[at(rect, p.x0, p.y0)..], w, true);
-                        }
-                        let n = l.rect.w() as usize * 4;
-                        for (i, y) in (l.rect.y0..l.rect.y1).enumerate() {
-                            px[at(rect, l.rect.x0, y)..][..n].copy_from_slice(&l.px[i * n..][..n]);
-                        }
-                        l.baked.len()
-                    }
-                    None => {
-                        self.read(self.plain.dc, rect, &mut px, w, true);
-                        0
-                    }
-                };
-                (px, from)
-            }
-        };
-        {
-            let mut sf = Surf::with_origin(&mut px, w as u32, h as u32, rect.x0, rect.y0, Order::Bgra);
-            for o in &objects[from..] {
-                o.render_into(&mut sf, font);
-            }
-        }
-        self.layer = Some(AnnotLayer { rect, px, baked: objects.to_vec() });
+        self.layer = Some(AnnotLayer { rect, px: vec![0u8; w * h * 4], baked: Vec::new(), area });
+        self.rebake(objects, area, font, &[rect]);
     }
 
     /// The layer grown to `rect` (holding it): its pixels where they
@@ -409,12 +400,13 @@ impl GdiScreen {
         for (i, y) in (l.rect.y0..l.rect.y1).enumerate() {
             px[at(rect, l.rect.x0, y)..][..n].copy_from_slice(&l.px[i * n..][..n]);
         }
-        self.layer = Some(AnnotLayer { rect, px, baked: l.baked });
+        self.layer = Some(AnnotLayer { rect, px, baked: l.baked, area: l.area });
     }
 
     /// Re-bake windows `rects` of the layer from the plain capture with
-    /// `objects` (the layer holds every window).
-    fn rebake(&mut self, objects: &[Obj], font: Option<&AnnotFont>, rects: &[PxRect]) {
+    /// `objects` and their spotlight pass over `area` (the layer holds every
+    /// window).
+    fn rebake(&mut self, objects: &[Obj], area: crate::objects::Px, font: Option<&AnnotFont>, rects: &[PxRect]) {
         let Some(mut l) = self.layer.take() else { return };
         let mut tmp = Vec::new();
         let lw = l.rect.w() as usize;
@@ -422,28 +414,21 @@ impl GdiScreen {
         let bg = |r: PxRect, out: &mut [u8]| {
             self.read(self.plain.dc, r, out, r.w() as usize, true);
         };
+        let bake = compose::Bake { objs: objects, font, pass: crate::objects::SpotPass::of(objects, area), img, bg: &bg };
         for w in rects.iter().map(|w| w.intersect(&l.rect)).filter(|w| !w.is_empty()) {
             let (ww, wh) = (w.w() as usize, w.h() as usize);
             tmp.clear();
             tmp.resize(ww * wh * 4, 0);
-            self.read(self.plain.dc, w, &mut tmp, ww, true);
-            compose::render_window(&mut tmp, w, img, Order::Bgra, objects, font, &bg);
+            bg(w, &mut tmp);
+            bake.window(&mut tmp, w, Order::Bgra);
             for (i, y) in (w.y0..w.y1).enumerate() {
                 let o = ((y - l.rect.y0) as usize * lw + (w.x0 - l.rect.x0) as usize) * 4;
                 l.px[o..][..ww * 4].copy_from_slice(&tmp[i * ww * 4..][..ww * 4]);
             }
         }
         l.baked = objects.to_vec();
+        l.area = area;
         self.layer = Some(l);
-    }
-
-    /// Spotlight-dim rows of `out` (BGRA).
-    fn spot_rows(out: &mut [u8], r: PxRect, stride: usize) {
-        let dm = compose::spot_dimmer();
-        let n = r.w() as usize * 4;
-        for i in 0..r.h() as usize {
-            dm.apply(&mut out[i * stride * 4..][..n], 1);
-        }
     }
 
     /// The layer rect (tests).
@@ -459,9 +444,6 @@ impl GdiScreen {
         if let Some((alpha, times)) = extra {
             self.dim_rows(out, r, stride, alpha, times);
         }
-        if src == Source::Spot {
-            Self::spot_rows(out, r, stride);
-        }
     }
 
     /// Paint backdrop run `q` straight to `hdc`; false when it needs the
@@ -469,9 +451,6 @@ impl GdiScreen {
     fn blit(&self, hdc: HDC, q: PxRect, src: Source) -> bool {
         let _p = crate::perf::span(crate::perf::K::Blit);
         let (x, y, w, h) = (q.x0, q.y0, q.w(), q.h());
-        if src == Source::Spot {
-            return false; // composed (the dim is in software)
-        }
         let (dc, extra) = self.source(src);
         unsafe {
             match extra {
@@ -562,9 +541,6 @@ impl Backdrop for GdiBackdrop<'_> {
                 if let Source::Dimmed { alpha, times } = src {
                     scr.dim_rows(d, i, stride, alpha, times);
                 }
-                if src == Source::Spot {
-                    GdiScreen::spot_rows(d, i, stride);
-                }
             }
         }
         if order == Order::Rgba {
@@ -634,7 +610,7 @@ impl Edit {
             }
             for p in bg.iter() {
                 runs.clear();
-                compose::backdrop_runs_into(sc.sel, sc.size, sc.dim_alpha, &sc.spots, *p, runs);
+                compose::backdrop_runs_into(sc.sel, sc.size, sc.dim_alpha, *p, runs);
                 for &(q, src) in runs.iter() {
                     let li = scr.layer.as_ref().map(|l| (l, q.intersect(&l.rect))).filter(|(_, i)| !i.is_empty());
                     let Some((l, i)) = li else {
@@ -715,9 +691,7 @@ impl Edit {
             y = band.y1;
         }
         if src.w() == w && src.h() == h && src.x0 == x0 && src.y0 == y0 {
-            let mut img = crate::pixbuf::PixBuf::from_raw(w as u32, h as u32, px).expect("crop size");
-            self.spot_export(&mut img, r);
-            return img;
+            return crate::pixbuf::PixBuf::from_raw(w as u32, h as u32, px).expect("crop size");
         }
         let mut out = crate::pixbuf::PixBuf::new(w as u32, h as u32);
         let d = out.as_raw_mut();
@@ -729,7 +703,6 @@ impl Edit {
                 d[di..di + 4].copy_from_slice(&px[(sy * sw + sx) * 4..][..4]);
             }
         }
-        self.spot_export(&mut out, r);
         out
     }
 }

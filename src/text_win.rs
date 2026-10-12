@@ -14,8 +14,12 @@ use windows::Win32::Graphics::Gdi::{
     HGDIOBJ, OUT_TT_PRECIS, TEXTMETRICW, TRANSPARENT,
 };
 
+/// The annotation face: Segoe UI at a GDI weight (400 regular, 600
+/// semibold).
 #[derive(Clone)]
-pub struct Face;
+pub struct Face {
+    weight: i32,
+}
 
 /// A memory DC with the face selected at a pixel size; freed on drop.
 struct FontDc {
@@ -25,7 +29,7 @@ struct FontDc {
 }
 
 impl FontDc {
-    fn new(px: f32) -> Option<Self> {
+    fn new(px: f32, weight: i32) -> Option<Self> {
         unsafe {
             let dc = CreateCompatibleDC(None);
             if dc.is_invalid() {
@@ -38,7 +42,7 @@ impl FontDc {
                 0,
                 0,
                 0,
-                FW_NORMAL.0 as i32,
+                weight,
                 0,
                 0,
                 0,
@@ -84,11 +88,16 @@ impl Drop for FontDc {
 
 impl Face {
     pub fn load() -> Option<Self> {
-        FontDc::new(16.0).map(|_| Face)
+        FontDc::new(16.0, FW_NORMAL.0 as i32).map(|_| Face { weight: FW_NORMAL.0 as i32 })
+    }
+
+    /// The same face at semibold (FW_SEMIBOLD).
+    pub fn semibold(&self) -> Face {
+        Face { weight: 600 }
     }
 
     pub fn metrics(&self, px: f32) -> (f32, f32, f32) {
-        let Some(fd) = FontDc::new(px) else { return (px * 0.8, px * 0.2, 0.0) };
+        let Some(fd) = FontDc::new(px, self.weight) else { return (px * 0.8, px * 0.2, 0.0) };
         let mut tm = TEXTMETRICW::default();
         if !unsafe { GetTextMetricsW(fd.dc, &mut tm) }.as_bool() {
             return (px * 0.8, px * 0.2, 0.0);
@@ -110,7 +119,7 @@ impl Face {
         let wide: Vec<u16> = line.encode_utf16().collect();
         let cp = line.get(..idx)?.encode_utf16().count();
         let n = wide.len() as i32;
-        let fd = FontDc::new(px)?;
+        let fd = FontDc::new(px, self.weight)?;
         unsafe {
             let mut ssa: *mut core::ffi::c_void = std::ptr::null_mut();
             ScriptStringAnalyse(
@@ -136,7 +145,7 @@ impl Face {
     }
 
     pub fn width(&self, line: &str, px: f32) -> f32 {
-        let Some(fd) = FontDc::new(px) else { return 0.0 };
+        let Some(fd) = FontDc::new(px, self.weight) else { return 0.0 };
         let mut r = RECT::default();
         fd.text(line, &mut r, DT_CALCRECT);
         (r.right - r.left).max(0) as f32
@@ -151,7 +160,7 @@ impl Face {
         clip: (i32, i32, i32, i32),
         f: &mut dyn FnMut(i32, i32, f32),
     ) {
-        let Some(fd) = FontDc::new(px) else { return };
+        let Some(fd) = FontDc::new(px, self.weight) else { return };
         let mut ext = RECT::default();
         fd.text(line, &mut ext, DT_CALCRECT);
         // Overhang (italic-ish fallback glyphs, combining marks) beyond the

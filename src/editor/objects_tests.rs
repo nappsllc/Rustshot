@@ -493,9 +493,16 @@ fn in_place_rebake_matches_a_full_bake() {
     ]);
     let full = |a: &mut App| {
         let e = ed(a);
+        // Every object in order, the spotlights' dim (over the
+        // selection) after the topmost one.
         let mut img = e.base.clone();
-        for o in &e.objects {
-            o.render(&mut img, e.font.as_ref());
+        let pass = crate::objects::SpotPass::of(&e.objects, compose::spot_area(e.sel, e.shot.size));
+        let mut sf = crate::raster::Surf::from_buf(&mut img);
+        for (j, o) in e.objects.iter().enumerate() {
+            o.render_into(&mut sf, e.font.as_ref());
+            if let Some(p) = pass.as_ref().filter(|p| p.at == j) {
+                p.apply(&mut sf);
+            }
         }
         img
     };

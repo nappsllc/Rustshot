@@ -46,39 +46,72 @@ pub fn spots(objs: &[Obj]) -> impl Iterator<Item = FRect> + '_ {
     })
 }
 
-/// Dim every pixel of the surface outside all `spots` (pixel rects): the
-/// spotlight pass. Nothing happens without spotlights.
-pub fn apply_spots(sf: &mut Surf, spots: &[(i32, i32, i32, i32)]) {
-    if spots.is_empty() {
-        return;
+/// A pixel rect `(x0, y0, x1, y1)`, end-exclusive.
+pub type Px = (i32, i32, i32, i32);
+
+/// The spotlight pass of a bake: after the objects below the topmost
+/// spotlight (`at`), every pixel inside `area` (the capture's selection)
+/// and outside all `spots` is dimmed; the objects above it stay bright.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SpotPass {
+    pub at: usize,
+    pub area: Px,
+    pub spots: Vec<Px>,
+}
+
+impl SpotPass {
+    /// The pass of `objs` over `area`; `None` without spotlights.
+    pub fn of(objs: &[Obj], area: Px) -> Option<SpotPass> {
+        let at = objs.iter().rposition(Obj::is_spot)?;
+        Some(SpotPass { at, area, spots: spots(objs).map(spot_px).collect() })
     }
-    let (bx0, by0, bx1, by1) = sf.bounds();
-    let w = (bx1 - bx0) as usize;
-    let ch = sf.order().rgb_idx();
-    for y in by0..by1 {
-        let row = &mut sf.data[(y - by0) as usize * w * 4..][..w * 4];
-        for (i, p) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-            let x = bx0 + i as i32;
-            if spots.iter().any(|s| x >= s.0 && x < s.2 && y >= s.1 && y < s.3) {
-                continue;
-            }
-            for c in ch {
-                p[c] = spot_dim(p[c]);
+
+    /// Dim the surface's pixels inside the area and outside every spot.
+    pub fn apply(&self, sf: &mut Surf) {
+        let (bx0, by0, bx1, by1) = sf.bounds();
+        let (x0, y0) = (self.area.0.max(bx0), self.area.1.max(by0));
+        let (x1, y1) = (self.area.2.min(bx1), self.area.3.min(by1));
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
+        let w = (bx1 - bx0) as usize;
+        let ch = sf.order().rgb_idx();
+        for y in y0..y1 {
+            let row = &mut sf.data[(y - by0) as usize * w * 4..][..w * 4];
+            // The spots crossing this row, as x spans.
+            let mut x = x0;
+            while x < x1 {
+                let lit = self.spots.iter().filter(|s| y >= s.1 && y < s.3 && x >= s.0 && x < s.2).map(|s| s.2).max();
+                if let Some(e) = lit {
+                    x = e;
+                    continue;
+                }
+                // Dim up to the next spot starting on this row.
+                let next = self.spots.iter().filter(|s| y >= s.1 && y < s.3 && s.0 > x).map(|s| s.0).min().unwrap_or(x1).min(x1);
+                for p in row[(x - bx0) as usize * 4..(next - bx0) as usize * 4].as_chunks_mut::<4>().0 {
+                    for c in ch {
+                        p[c] = spot_dim(p[c]);
+                    }
+                }
+                x = next;
             }
         }
     }
 }
 
-/// Render `objs` in order into `buf`, then the spotlights' dim: the image
-/// as exported.
+/// Render `objs` in order into `buf`, the spotlight pass at the topmost
+/// spotlight (over the whole image): the image as exported.
 #[allow(dead_code)]
 pub fn render_all(buf: &mut PixBuf, objs: &[Obj], font: Option<&AnnotFont>) {
+    let area = (0, 0, buf.width() as i32, buf.height() as i32);
+    let pass = SpotPass::of(objs, area);
     let mut sf = Surf::from_buf(buf);
-    for o in objs {
+    for (j, o) in objs.iter().enumerate() {
         o.render_into(&mut sf, font);
+        if pass.as_ref().is_some_and(|p| p.at == j) {
+            pass.as_ref().unwrap().apply(&mut sf);
+        }
     }
-    let sp: Vec<_> = spots(objs).map(spot_px).collect();
-    apply_spots(&mut sf, &sp);
 }
 
 /// A point in image (physical pixel) coordinates.
@@ -275,7 +308,8 @@ pub enum Obj {
     },
     /// Keeps `r` bright and dims everything else in the selection (all
     /// spotlights together: their union stays bright). Draws no pixels of
-    /// its own: the dim is a pass over the finished image ([`apply_spots`]).
+    /// its own: the dim is a pass over what is below the topmost one
+    /// ([`SpotPass`]).
     Spotlight {
         r: FRect,
     },
@@ -532,7 +566,8 @@ impl Obj {
                 bbox(&pts, 2.0)
             }
             Obj::Callout { r, tail, .. } => Some(callout::bounds(*r, *tail)),
-            Obj::Spotlight { r } => Some(*r),
+            // (Its outline while drawn reaches a pixel or two out.)
+            Obj::Spotlight { r } => Some(grown(*r, 3.0)),
             Obj::Magnify { src, dst, radius, zoom, width, .. } => {
                 let (rs, m) = (radius / zoom.max(1.0), width.max(0.5) + 2.0);
                 let a = FRect { x: src.x - rs - m, y: src.y - rs - m, w: 2.0 * (rs + m), h: 2.0 * (rs + m) };
@@ -648,7 +683,7 @@ impl Obj {
         }
     }
 
-    /// A spotlight (draws nothing itself; see [`apply_spots`]).
+    /// A spotlight (draws nothing itself; see [`SpotPass`]).
     pub fn is_spot(&self) -> bool {
         matches!(self, Obj::Spotlight { .. })
     }
@@ -693,9 +728,15 @@ fn magnify(sf: &mut Surf, ext: Option<&Surf>, src: Pt, dst: Pt, radius: f32, zoo
     if radius < 2.0 {
         return;
     }
-    // Copy the source first: the loupe may cover it.
-    let (sx0, sy0) = ((src.x - rs).floor() as i32 - 1, (src.y - rs).floor() as i32 - 1);
-    let (sx1, sy1) = ((src.x + rs).ceil() as i32 + 1, (src.y + rs).ceil() as i32 + 1);
+    if ![src.x, src.y, dst.x, dst.y, radius, zoom].iter().all(|v| v.is_finite()) || radius > 1.0e5 {
+        return;
+    }
+    // Copy the source first (the loupe may cover it): only the part the
+    // read surface holds.
+    let (bx0, by0, bx1, by1) = ext.map_or(sf.bounds(), |e| e.bounds());
+    let clip = |v: f32, lo: i32, hi: i32| (v as f64).clamp(lo as f64, hi as f64) as i32;
+    let (sx0, sy0) = (clip((src.x - rs).floor() - 1.0, bx0, bx1), clip((src.y - rs).floor() - 1.0, by0, by1));
+    let (sx1, sy1) = (clip((src.x + rs).ceil() + 1.0, bx0, bx1), clip((src.y + rs).ceil() + 1.0, by0, by1));
     let sw = (sx1 - sx0).max(0) as usize;
     let mut tmp = vec![None; sw * (sy1 - sy0).max(0) as usize];
     for y in sy0..sy1 {

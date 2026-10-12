@@ -26,6 +26,11 @@ use std::fmt::Write;
 
 /// The format version this build writes (and the newest it reads).
 pub const VERSION: u32 = 1;
+/// What a document may hold: objects, points of a stroke, characters of a
+/// text (more is an error).
+pub const MAX_OBJECTS: usize = 10_000;
+pub const MAX_POINTS: usize = 100_000;
+pub const MAX_TEXT: usize = 100_000;
 
 fn num(out: &mut String, v: f32) {
     let v = if v.is_finite() { v } else { 0.0 };
@@ -364,9 +369,17 @@ impl P<'_> {
                         b'u' => {
                             let hi = self.hex4()?;
                             let cp = if (0xD800..0xDC00).contains(&hi) && self.s[self.i..].starts_with(b"\\u") {
+                                // A pair; a high half without its low one
+                                // is U+FFFD and the next escape stands.
+                                let back = self.i;
                                 self.i += 2;
                                 let lo = self.hex4()?;
-                                0x10000 + ((hi - 0xD800) << 10) + (lo.wrapping_sub(0xDC00) & 0x3FF)
+                                if (0xDC00..0xE000).contains(&lo) {
+                                    0x10000 + ((hi - 0xD800) << 10) + (lo - 0xDC00)
+                                } else {
+                                    self.i = back;
+                                    0xFFFD
+                                }
                             } else {
                                 hi
                             };
@@ -413,12 +426,20 @@ impl F<'_> {
                 let mut out = [0.0; N];
                 for (o, v) in out.iter_mut().zip(a) {
                     let V::Num(n) = v else { bail!("annotations.json: {}.{k}: not a number", self.ty) };
-                    *o = *n as f32;
+                    *o = self.finite(k, *n)?;
                 }
                 Ok(out)
             }
             _ => bail!("annotations.json: {}.{k}: expected {N} numbers", self.ty),
         }
+    }
+    /// A finite number (as f32: out of its range is not finite either).
+    fn finite(&self, k: &str, v: f64) -> Result<f32> {
+        let f = v as f32;
+        if !f.is_finite() {
+            bail!("annotations.json: {}.{k}: {v} is not a finite number", self.ty);
+        }
+        Ok(f)
     }
     fn pt(&self, k: &str) -> Result<Pt> {
         let [x, y] = self.nums::<2>(k)?;
@@ -430,12 +451,13 @@ impl F<'_> {
     }
     fn num(&self, k: &str) -> Result<f32> {
         match self.need(k)? {
-            V::Num(n) => Ok(*n as f32),
+            V::Num(n) => self.finite(k, *n),
             _ => bail!("annotations.json: {}.{k}: not a number", self.ty),
         }
     }
     fn str(&self, k: &str) -> Result<&str> {
         match self.need(k)? {
+            V::Str(s) if s.chars().count() > MAX_TEXT => bail!("annotations.json: {}.{k}: longer than {MAX_TEXT} characters", self.ty),
             V::Str(s) => Ok(s),
             _ => bail!("annotations.json: {}.{k}: not a string", self.ty),
         }
@@ -454,10 +476,13 @@ impl F<'_> {
     }
     fn pts(&self, k: &str) -> Result<Vec<Pt>> {
         let V::Arr(a) = self.need(k)? else { bail!("annotations.json: {}.{k}: expected points", self.ty) };
+        if a.len() > MAX_POINTS {
+            bail!("annotations.json: {}.{k}: more than {MAX_POINTS} points", self.ty);
+        }
         a.iter()
             .map(|p| match p {
                 V::Arr(xy) if xy.len() == 2 => match (&xy[0], &xy[1]) {
-                    (V::Num(x), V::Num(y)) => Ok(Pt::new(*x as f32, *y as f32)),
+                    (V::Num(x), V::Num(y)) => Ok(Pt::new(self.finite(k, *x)?, self.finite(k, *y)?)),
                     _ => bail!("annotations.json: {}.{k}: bad point", self.ty),
                 },
                 _ => bail!("annotations.json: {}.{k}: bad point", self.ty),
@@ -467,17 +492,24 @@ impl F<'_> {
 }
 
 /// The objects of an `annotations.json` document. Unknown object types
-/// are skipped; a malformed document, a missing field or a `version`
-/// newer than [`VERSION`] is an error.
+/// are skipped; a malformed document, a missing field, a number that is
+/// not finite, more than [`MAX_OBJECTS`] objects or a `version` newer
+/// than [`VERSION`] is an error. What is read is made safe to render
+/// ([`super::edit::sanitize`]: sizes in range, rects normalised, points
+/// within a million pixels).
 pub fn from_json(s: &str) -> Result<Vec<Obj>> {
     let V::Obj(top) = parse(s)? else { bail!("annotations.json: not an object") };
     let get = |k: &str| top.iter().find(|(n, _)| n == k).map(|(_, v)| v);
     match get("version") {
         Some(V::Num(v)) if *v >= 1.0 && *v <= VERSION as f64 && v.fract() == 0.0 => {}
         Some(V::Num(v)) => bail!("annotations.json: version {v} is not supported (this build reads up to {VERSION})"),
+        Some(_) => bail!("annotations.json: the version is not a number"),
         _ => bail!("annotations.json: no version"),
     }
     let Some(V::Arr(items)) = get("objects") else { bail!("annotations.json: no objects list") };
+    if items.len() > MAX_OBJECTS {
+        bail!("annotations.json: more than {MAX_OBJECTS} objects");
+    }
     let mut out = Vec::with_capacity(items.len());
     for it in items {
         let V::Obj(fields) = it else { bail!("annotations.json: an object is not an object") };
@@ -507,7 +539,10 @@ pub fn from_json(s: &str) -> Result<Vec<Obj>> {
             "spotlight" => Obj::Spotlight { r: f.rect("r")? },
             "number" => Obj::Counter {
                 c: f.pt("c")?,
-                n: f.num("n")?.max(0.0) as u32,
+                n: match f.need("n")? {
+                    V::Num(n) if n.is_finite() => n.clamp(0.0, 1.0e6).round() as u32,
+                    _ => bail!("annotations.json: number.n: not a finite number"),
+                },
                 color: f.color("color")?,
                 d: f.num("d")?,
                 tail: if f.get("tail").is_some() { Some(f.pt("tail")?) } else { None },
@@ -531,6 +566,8 @@ pub fn from_json(s: &str) -> Result<Vec<Obj>> {
             },
             _ => continue,
         };
+        let mut o = o;
+        super::edit::sanitize(&mut o);
         out.push(o);
     }
     Ok(out)

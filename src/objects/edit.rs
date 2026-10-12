@@ -18,6 +18,77 @@ pub enum Point {
     Dst,
 }
 
+/// The range of an object's size (as [`size`] reads it): what the
+/// toolbar's steps, a resize and a file read all keep it in.
+pub fn size_range(o: &Obj) -> (f32, f32) {
+    match o {
+        Obj::Text { .. } | Obj::Callout { .. } => (8.0, 96.0),
+        Obj::Counter { .. } => (12.0, 120.0),
+        Obj::Pixelate { .. } => (4.0, 100.0),
+        Obj::Magnify { .. } => (20.0, 300.0),
+        _ => (1.0, 50.0),
+    }
+}
+
+/// How far from the origin a point read from a file may lie.
+pub const COORD_MAX: f32 = 1.0e6;
+
+/// `o` made safe to render: sizes in their ranges, the loupe's zoom in
+/// 1-8 and its ring in 1-20, rects normalised and at most 2e6 across,
+/// points within [`COORD_MAX`] (the file reader's last step).
+pub fn sanitize(o: &mut Obj) {
+    let c = |v: &mut f32| *v = if v.is_finite() { v.clamp(-COORD_MAX, COORD_MAX) } else { 0.0 };
+    let cp = |p: &mut Pt| {
+        c(&mut p.x);
+        c(&mut p.y);
+    };
+    let cr = |r: &mut FRect| {
+        let ok = |v: f32| v.is_finite() && v.abs() <= COORD_MAX;
+        if [r.x, r.y, r.x + r.w, r.y + r.h].into_iter().all(ok) && r.w >= 0.0 && r.h >= 0.0 {
+            return; // already sane: kept exactly
+        }
+        let (mut a, mut b) = (Pt::new(r.x, r.y), Pt::new(r.x + r.w, r.y + r.h));
+        cp(&mut a);
+        cp(&mut b);
+        *r = FRect::from_pts(a, b);
+    };
+    match o {
+        Obj::Line { a, b, .. } | Obj::Arrow { a, b, .. } | Obj::Marker { a, b, .. } => {
+            cp(a);
+            cp(b);
+        }
+        Obj::Path { pts, .. } | Obj::MarkerPath { pts, .. } => pts.iter_mut().for_each(cp),
+        Obj::Rect { r, .. }
+        | Obj::Ellipse { r, .. }
+        | Obj::RectFill { r, .. }
+        | Obj::EllipseFill { r, .. }
+        | Obj::Pixelate { r, .. }
+        | Obj::Invert { r }
+        | Obj::Spotlight { r } => cr(r),
+        Obj::Text { pos, .. } => cp(pos),
+        Obj::Counter { c, tail, .. } => {
+            cp(c);
+            if let Some(t) = tail {
+                cp(t);
+            }
+        }
+        Obj::Callout { r, tail, .. } => {
+            cr(r);
+            cp(tail);
+        }
+        Obj::Magnify { src, dst, zoom, width, .. } => {
+            cp(src);
+            cp(dst);
+            *zoom = if zoom.is_finite() { zoom.clamp(1.0, 8.0) } else { 2.0 };
+            *width = if width.is_finite() { width.clamp(1.0, 20.0) } else { 3.0 };
+        }
+    }
+    if let Some(v) = size(o) {
+        let (lo, hi) = size_range(o);
+        set_size(o, if v.is_finite() { v.clamp(lo, hi) } else { lo });
+    }
+}
+
 /// The box handles an object gets when it is the only one selected.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Boxes {
@@ -228,11 +299,11 @@ pub fn map_box(o: &mut Obj, from: FRect, to: FRect) {
         | Obj::Spotlight { r } => mr(r),
         Obj::Text { pos, size, .. } => {
             m(pos);
-            *size = (*size * sy.abs()).clamp(4.0, 400.0);
+            *size = (*size * sy.abs()).clamp(8.0, 96.0);
         }
         Obj::Counter { c, d, tail, .. } => {
             m(c);
-            *d = (*d * k).clamp(6.0, 400.0);
+            *d = (*d * k).clamp(12.0, 120.0);
             if let Some(t) = tail {
                 m(t);
             }
@@ -244,7 +315,7 @@ pub fn map_box(o: &mut Obj, from: FRect, to: FRect) {
         Obj::Magnify { src, dst, radius, .. } => {
             m(src);
             m(dst);
-            *radius = (*radius * k).clamp(8.0, 1000.0);
+            *radius = (*radius * k).clamp(20.0, 300.0);
         }
     }
 }

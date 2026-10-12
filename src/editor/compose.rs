@@ -111,14 +111,6 @@ impl PxRect {
 pub enum Source {
     Plain,
     Dimmed { alpha: u8, times: u8 },
-    /// Inside the selection, outside every spotlight: the capture at half
-    /// brightness (black at [`crate::objects::SPOT_ALPHA`]).
-    Spot,
-}
-
-/// The spotlight dim as a [`Dimmer`] (black: the same in either order).
-pub(super) fn spot_dimmer() -> Dimmer {
-    Dimmer::new(C4::new(0, 0, 0, crate::objects::SPOT_ALPHA))
 }
 
 /// The pixels under the chrome: the capture (with committed objects).
@@ -143,7 +135,6 @@ impl Backdrop for PixBufBackdrop<'_> {
         let dimmer = match src {
             Source::Plain => None,
             Source::Dimmed { alpha, times } => Some((Dimmer::new(self.dim.with_alpha(alpha)), times as i32)),
-            Source::Spot => Some((spot_dimmer(), 1)),
         };
         for (i, y) in (r.y0..r.y1).enumerate() {
             let s = &raw[(y as usize * iw + r.x0 as usize) * 4..][..w];
@@ -337,14 +328,13 @@ pub struct Scene {
     /// The empty-state hint: area, opacity, the snapping wording.
     pub hint: Option<(FRect, f32, bool)>,
     pub loupe: Option<LoupeUi>,
-    /// Spotlights (committed, and a spotlight draft): what stays bright
-    /// inside the selection.
-    pub spots: Vec<PxRect>,
     /// The drag's origin at 40 % (the objects as they were).
     pub ghost: Vec<Obj>,
     pub osel: Option<ObjSelUi>,
-    /// Snap guides: 1 px accent lines.
+    /// Snap guides: 1 px accent lines, at this opacity (fading out for
+    /// 100 ms after a drag).
     pub guides: Vec<(Pt, Pt)>,
+    pub guides_k: f32,
     pub marquee: Option<FRect>,
     pub caret: Option<CaretUi>,
     pub mini: Option<super::mini::MiniUi>,
@@ -362,7 +352,7 @@ impl Scene {
             El::Draft => self.draft == o.draft,
             El::Ghost => self.ghost == o.ghost,
             El::ObjSel => self.osel == o.osel,
-            El::Guides => self.guides == o.guides,
+            El::Guides => self.guides == o.guides && self.guides_k == o.guides_k,
             El::Marquee => self.marquee == o.marquee,
             El::Caret => self.caret == o.caret,
             El::Mini => self.mini == o.mini,
@@ -436,11 +426,10 @@ fn dim_spans(sel: Option<FRect>, size: (u32, u32)) -> ([PxRect; 4], usize) {
 /// selection, dimmed outside. Split into bands of rows crossed by the same
 /// spans, so a backdrop gets a handful of rect fills, not one per row.
 pub(super) fn compose_bg(sc: &Scene, r: PxRect, bd: &dyn Backdrop, out: &mut [u8], order: Order) {
-    backdrop_spots(sc.sel, sc.size, sc.dim_alpha, &sc.spots, r, bd, out, order);
+    backdrop_rect(sc.sel, sc.size, sc.dim_alpha, r, bd, out, order);
 }
 
 /// `compose_bg` for a selection, image size and dim alpha.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn backdrop_rect(
     sel: Option<FRect>,
     size: (u32, u32),
@@ -450,24 +439,9 @@ pub(super) fn backdrop_rect(
     out: &mut [u8],
     order: Order,
 ) {
-    backdrop_spots(sel, size, alpha, &[], r, bd, out, order);
-}
-
-/// [`backdrop_rect`] with spotlights.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn backdrop_spots(
-    sel: Option<FRect>,
-    size: (u32, u32),
-    alpha: u8,
-    spots: &[PxRect],
-    r: PxRect,
-    bd: &dyn Backdrop,
-    out: &mut [u8],
-    order: Order,
-) {
     let stride = r.w() as usize;
     let mut runs = Vec::new();
-    backdrop_runs_into(sel, size, alpha, spots, r, &mut runs);
+    backdrop_runs_into(sel, size, alpha, r, &mut runs);
     for (q, src) in runs {
         let off = ((q.y0 - r.y0) as usize * stride + (q.x0 - r.x0) as usize) * 4;
         bd.fill(q, src, &mut out[off..], stride, order);
@@ -482,46 +456,9 @@ pub(super) fn backdrop_runs_into(
     sel: Option<FRect>,
     size: (u32, u32),
     alpha: u8,
-    spots: &[PxRect],
     r: PxRect,
     runs: &mut Vec<(PxRect, Source)>,
 ) {
-    if r.is_empty() {
-        return;
-    }
-    let from = runs.len();
-    plain_runs_into(sel, size, alpha, r, runs);
-    // Spotlights: the plain runs inside the selection split into the
-    // parts no spotlight covers (dimmed) and the rest.
-    let Some(inner) = sel.filter(|_| !spots.is_empty()).map(|s| PxRect::outer(s).intersect(&PxRect::image(size))) else { return };
-    let mut i = from;
-    while i < runs.len() {
-        let (q, src) = runs[i];
-        let qi = q.intersect(&inner);
-        if src != Source::Plain || qi.is_empty() || spots.iter().any(|s| s.contains(&qi) && s.contains(&q)) {
-            i += 1;
-            continue;
-        }
-        let mut dark = vec![qi];
-        for s in spots {
-            dark = dark.iter().flat_map(|p| p.minus_iter(s)).collect();
-        }
-        if dark.is_empty() {
-            i += 1;
-            continue;
-        }
-        let mut lit = vec![q];
-        for d in &dark {
-            lit = lit.iter().flat_map(|p| p.minus_iter(d)).collect();
-        }
-        runs.swap_remove(i);
-        runs.extend(lit.into_iter().map(|p| (p, Source::Plain)));
-        runs.extend(dark.into_iter().map(|p| (p, Source::Spot)));
-    }
-}
-
-/// [`backdrop_runs_into`] without spotlights.
-fn plain_runs_into(sel: Option<FRect>, size: (u32, u32), alpha: u8, r: PxRect, runs: &mut Vec<(PxRect, Source)>) {
     if r.is_empty() {
         return;
     }
@@ -631,7 +568,7 @@ impl Edit {
     /// draft; the result is `self.scene`. Also records what is drawn for
     /// `stale()` and rebuilds `composed` when objects changed.
     pub(super) fn prepare(&mut self, app_notice: Option<&Toast>, mouse: (i32, i32), now: Instant) {
-        if self.dirty {
+        if self.dirty || self.spots_stale() {
             self.rebuild();
         }
         let (ww, _) = (self.shot.size.0 as f32, self.shot.size.1 as f32);
@@ -827,21 +764,7 @@ impl Edit {
         };
 
         let (ghost, osel, marquee, caret, mini) = self.obj_scene(area, s);
-        let img = PxRect::image(self.shot.size);
-        let mut spots: Vec<PxRect> = crate::objects::spots(&self.objects)
-            .chain(self.draft.as_ref().and_then(|d| match d {
-                Obj::Spotlight { r } if !r.is_trivial() => Some(*r),
-                _ => None,
-            }))
-            .map(|r| {
-                let (x0, y0, x1, y1) = crate::objects::spot_px(r);
-                PxRect::new(x0, y0, x1, y1).intersect(&img)
-            })
-            .collect();
-        // An empty spotlight still dims everything else.
-        if spots.iter().all(|r| r.is_empty()) && !spots.is_empty() {
-            spots = vec![PxRect::default()];
-        }
+        let (guides, guides_k) = self.guides_now(now);
         // A tip for the mini-toolbar's buttons too.
         if tip.is_none()
             && !interacting
@@ -856,10 +779,10 @@ impl Edit {
             }
         }
         let mut sc = Scene {
-            spots,
             ghost,
             osel,
-            guides: self.obj.guides.clone(),
+            guides,
+            guides_k,
             marquee,
             caret,
             mini,
@@ -1002,6 +925,12 @@ impl Edit {
         }
         let mut f = Fb::with_origin(out, w, r.x0, r.y0, order);
         let ui = self.ui(sc);
+        // A spotlight being drawn: its rect (the dim comes on release).
+        if let Some(Obj::Spotlight { r: sr }) = &sc.draft
+            && hits(El::Draft)
+        {
+            super::mini::marquee(&mut f, &ui, *sr);
+        }
         if let Some(u) = &sc.sel_ui
             && hits(El::Sel)
         {
@@ -1014,7 +943,7 @@ impl Edit {
             super::mini::osel(&mut f, &ui, u);
         }
         if hits(El::Guides) {
-            super::mini::guides(&mut f, &ui, &sc.guides);
+            super::mini::guides(&mut f, &ui, &sc.guides, sc.guides_k);
         }
         if let Some(m) = sc.marquee
             && hits(El::Marquee)
@@ -1206,49 +1135,76 @@ pub fn dirty_rects(prev: Option<&Scene>, now: &Scene, font: Option<&crate::text:
         out.extend_from_slice(prev.rects(e));
         out.extend_from_slice(now.rects(e));
     }
-    if !Arc::ptr_eq(&prev.objects, &now.objects) {
-        // (Spotlights draw nothing: their dim is the `spots` below.)
-        match object_damage(&prev.objects, &now.objects, font, now.size, false) {
+    // The objects, and the spotlights' dim (which follows the selection).
+    if !Arc::ptr_eq(&prev.objects, &now.objects) || (prev.sel != now.sel && now.objects.iter().any(Obj::is_spot)) {
+        let (pa, na) = (spot_area(prev.sel, prev.size), spot_area(now.sel, now.size));
+        match object_damage(&prev.objects, &now.objects, pa, na, font, now.size) {
             Some(v) => out.extend(v),
             None => return whole,
-        }
-    }
-    if prev.spots != now.spots {
-        if prev.spots.is_empty() != now.spots.is_empty() {
-            // Spotlights came or went: the whole selection dims or not.
-            let inner = |s: Option<FRect>| s.map_or(img, PxRect::outer).intersect(&img);
-            out.push(inner(prev.sel));
-            out.push(inner(now.sel));
-        } else if prev.spots.len() == now.spots.len() {
-            // A spotlight moved or resized: only where it was or is now,
-            // not both, can a pixel change.
-            for (a, b) in prev.spots.iter().zip(&now.spots).filter(|(a, b)| a != b) {
-                out.extend(a.minus_iter(b));
-                out.extend(b.minus_iter(a));
-            }
-        } else {
-            out.extend(prev.spots.iter().filter(|r| !now.spots.contains(r)));
-            out.extend(now.spots.iter().filter(|r| !prev.spots.contains(r)));
         }
     }
     out.into_iter().map(|r| r.intersect(&img)).filter(|r| !r.is_empty()).collect()
 }
 
+/// The area a bake's spotlight pass dims: the capture's selection (on
+/// whole pixels, as the export crops it), else the whole image.
+pub fn spot_area(sel: Option<FRect>, size: (u32, u32)) -> crate::objects::Px {
+    let img = PxRect::image(size);
+    let r = sel.map_or(img, PxRect::outer).intersect(&img);
+    (r.x0, r.y0, r.x1, r.y1)
+}
+
+fn px_of(p: crate::objects::Px) -> PxRect {
+    PxRect::new(p.0, p.1, p.2, p.3)
+}
+
+/// The pixels two spotlight passes dim differently.
+fn pass_damage(a: Option<&crate::objects::SpotPass>, b: Option<&crate::objects::SpotPass>, out: &mut Vec<PxRect>) {
+    match (a, b) {
+        (None, None) => {}
+        (Some(p), None) | (None, Some(p)) => out.push(px_of(p.area)),
+        (Some(p), Some(q)) if p == q => {}
+        (Some(p), Some(q)) if p.at != q.at || p.spots.len() != q.spots.len() => {
+            out.push(px_of(p.area));
+            out.push(px_of(q.area));
+        }
+        (Some(p), Some(q)) => {
+            // Only where an area or a spot was or is now, not both.
+            let (ap, aq) = (px_of(p.area), px_of(q.area));
+            if ap != aq {
+                out.extend(ap.minus_iter(&aq));
+                out.extend(aq.minus_iter(&ap));
+            }
+            for (s, t) in p.spots.iter().zip(&q.spots).filter(|(s, t)| s != t) {
+                let (s, t) = (px_of(*s), px_of(*t));
+                out.extend(s.minus_iter(&t).map(|r| r.intersect(&ap.union(&aq))));
+                out.extend(t.minus_iter(&s).map(|r| r.intersect(&ap.union(&aq))));
+            }
+        }
+    }
+}
+
 /// Pixel windows covering every pixel whose baked value differs between
-/// baking `prev` and `now` (`spots_too`: and the spotlights' rects, for
-/// the screen), each safe to re-bake on its own: cell-aligned to every
-/// pixelate it cuts, holding the whole bounds of every far-reading object
-/// (the loupe) it touches. Changed objects' old and new bounds, then what
+/// baking `prev` over spotlight area `pa` and `now` over `na`, each safe to
+/// re-bake on its own: cell-aligned to every pixelate it cuts. Changed
+/// objects' old and new bounds, a spotlight pass that changed, then what
 /// later objects read from them (cells of a pixelate, a loupe's view);
 /// the objects below the first change are untouched. `None` when the
 /// windows do not settle (re-bake everything).
-pub fn object_damage(prev: &[Obj], now: &[Obj], font: Option<&crate::text::AnnotFont>, size: (u32, u32), spots_too: bool) -> Option<Vec<PxRect>> {
+pub fn object_damage(
+    prev: &[Obj],
+    now: &[Obj],
+    pa: crate::objects::Px,
+    na: crate::objects::Px,
+    font: Option<&crate::text::AnnotFont>,
+    size: (u32, u32),
+) -> Option<Vec<PxRect>> {
     let img = PxRect::image(size);
     let pb = |o: &Obj| o.bounds(font).map(|b| px_bounds(b).intersect(&img)).filter(|r| !r.is_empty());
     let common = prev.iter().zip(now).take_while(|(a, b)| a == b).count();
     let mut d = Vec::new();
     let add = |o: &Obj, d: &mut Vec<PxRect>| {
-        if spots_too || !o.is_spot() {
+        if !o.is_spot() {
             d.extend(pb(o));
         }
     };
@@ -1264,11 +1220,15 @@ pub fn object_damage(prev: &[Obj], now: &[Obj], font: Option<&crate::text::Annot
             add(o, &mut d);
         }
     }
+    let (pp, np) = (crate::objects::SpotPass::of(prev, pa), crate::objects::SpotPass::of(now, na));
+    pass_damage(pp.as_ref(), np.as_ref(), &mut d);
+    d.retain(|r| !r.intersect(&img).is_empty());
     if d.is_empty() {
         return Some(d);
     }
+    let common = if pp != np { 0 } else { common };
     // What the later objects read from the changed pixels.
-    for o in now[common..].iter().filter(|o| !o.is_spot()) {
+    for o in now[common.min(now.len())..].iter().filter(|o| !o.is_spot()) {
         let Some(b) = pb(o) else { continue };
         let hits: Vec<PxRect> = d.iter().map(|r| r.intersect(&b)).filter(|r| !r.is_empty()).collect();
         if hits.is_empty() {
@@ -1314,26 +1274,25 @@ pub fn object_damage(prev: &[Obj], now: &[Obj], font: Option<&crate::text::Annot
 }
 
 /// Re-bake windows `rects` of `out` (the capture `base` with `objs` baked
-/// in): each from the base, every object over it rendered into it.
-pub fn rebake(out: &mut PixBuf, base: &PixBuf, objs: &[Obj], font: Option<&crate::text::AnnotFont>, rects: &[PxRect]) {
+/// in, the spotlight pass over `area`): each from the base, every object
+/// over it rendered into it.
+pub fn rebake(out: &mut PixBuf, base: &PixBuf, objs: &[Obj], area: crate::objects::Px, font: Option<&crate::text::AnnotFont>, rects: &[PxRect]) {
     let iw = base.width() as usize;
+    let img = PxRect::image(base.dimensions());
+    let bg = |r: PxRect, out: &mut [u8]| {
+        let n = r.w() as usize * 4;
+        for (i, y) in (r.y0..r.y1).enumerate() {
+            out[i * n..][..n].copy_from_slice(&base.as_raw()[(y as usize * iw + r.x0 as usize) * 4..][..n]);
+        }
+    };
+    let bake = Bake { objs, font, pass: crate::objects::SpotPass::of(objs, area), img, bg: &bg };
     let mut tmp = Vec::new();
-    for w in rects {
+    for w in rects.iter().map(|w| w.intersect(&img)).filter(|w| !w.is_empty()) {
         let (ww, wh) = (w.w() as usize, w.h() as usize);
-        if ww == 0 || wh == 0 {
-            continue;
-        }
         tmp.clear();
-        for y in w.y0..w.y1 {
-            tmp.extend_from_slice(&base.as_raw()[(y as usize * iw + w.x0 as usize) * 4..][..ww * 4]);
-        }
-        let bg = |r: PxRect, out: &mut [u8]| {
-            let n = r.w() as usize * 4;
-            for (i, y) in (r.y0..r.y1).enumerate() {
-                out[i * n..][..n].copy_from_slice(&base.as_raw()[(y as usize * iw + r.x0 as usize) * 4..][..n]);
-            }
-        };
-        render_window(&mut tmp, *w, PxRect::image(base.dimensions()), Order::Rgba, objs, font, &bg);
+        tmp.resize(ww * wh * 4, 0);
+        bg(w, &mut tmp);
+        bake.window(&mut tmp, w, Order::Rgba);
         let raw = out.as_raw_mut();
         for (i, y) in (w.y0..w.y1).enumerate() {
             raw[(y as usize * iw + w.x0 as usize) * 4..][..ww * 4].copy_from_slice(&tmp[i * ww * 4..][..ww * 4]);
@@ -1341,38 +1300,60 @@ pub fn rebake(out: &mut PixBuf, base: &PixBuf, objs: &[Obj], font: Option<&crate
     }
 }
 
-/// Every object over window `w` rendered into `buf` (its pixels, in
-/// `order`, already the background). A loupe whose source lies outside
-/// the window reads it from a window of its own, rendered from `bg`
-/// (the background of any rect) with the objects below the loupe.
-#[allow(clippy::too_many_arguments)]
-pub fn render_window(buf: &mut [u8], w: PxRect, img: PxRect, order: Order, objs: &[Obj], font: Option<&crate::text::AnnotFont>, bg: &dyn Fn(PxRect, &mut [u8])) {
-    let img_w = w;
-    let mut sf = Surf::with_origin(buf, w.w() as u32, w.h() as u32, w.x0, w.y0, order);
-    for (j, o) in objs.iter().enumerate().filter(|(_, o)| !o.is_spot()) {
-        if !o.bounds(font).is_some_and(|b| px_bounds(b).intersects(&w)) {
-            continue;
-        }
-        if let Some((s, l)) = o.loupe_parts() {
-            let mut s = px_bounds(s).intersect(&img);
-            if px_bounds(l).intersects(&w) && !s.is_empty() && !img_w.contains(&s) {
-                // Whole cells of the pixelates below (it renders them).
-                let size = (img.x1 as u32, img.y1 as u32);
-                for _ in 0..4 {
-                    let n = objs[..j].iter().filter_map(Obj::pixel_grid).fold(s, |s, g| cell_align(s, &g, size));
-                    if n == s {
-                        break;
-                    }
-                    s = n;
-                }
-                let mut sb = vec![0u8; s.w() as usize * s.h() as usize * 4];
-                bg(s, &mut sb);
-                render_window(&mut sb, s, img, order, &objs[..j], font, bg);
-                let src = Surf::with_origin(&mut sb, s.w() as u32, s.h() as u32, s.x0, s.y0, order);
-                o.render_with_source(&mut sf, &src, font);
+/// What a bake renders: the objects, their spotlight pass, the image
+/// rect, and where the background of any rect comes from (`bg`: the
+/// capture's pixels of a rect inside the image).
+pub struct Bake<'a> {
+    pub objs: &'a [Obj],
+    pub font: Option<&'a crate::text::AnnotFont>,
+    pub pass: Option<crate::objects::SpotPass>,
+    pub img: PxRect,
+    pub bg: &'a dyn Fn(PxRect, &mut [u8]),
+}
+
+impl Bake<'_> {
+    /// Every object over window `w` rendered into `buf` (its pixels, in
+    /// `order`, already the background), the spotlight pass after the
+    /// topmost spotlight.
+    pub fn window(&self, buf: &mut [u8], w: PxRect, order: Order) {
+        self.window_upto(buf, w, order, self.objs.len());
+    }
+
+    /// [`Bake::window`] with the objects below `upto` only. A loupe whose
+    /// source lies outside the window reads it from a window of its own,
+    /// rendered with the objects below the loupe.
+    fn window_upto(&self, buf: &mut [u8], w: PxRect, order: Order, upto: usize) {
+        let font = self.font;
+        let mut sf = Surf::with_origin(buf, w.w() as u32, w.h() as u32, w.x0, w.y0, order);
+        for (j, o) in self.objs[..upto].iter().enumerate() {
+            if let Some(p) = self.pass.as_ref().filter(|p| p.at == j) {
+                p.apply(&mut sf);
                 continue;
             }
+            if o.is_spot() || !o.bounds(font).is_some_and(|b| px_bounds(b).intersects(&w)) {
+                continue;
+            }
+            if let Some((s, l)) = o.loupe_parts() {
+                let mut s = px_bounds(s).intersect(&self.img);
+                if px_bounds(l).intersects(&w) && !s.is_empty() && !w.contains(&s) {
+                    // Whole cells of the pixelates below (it renders them).
+                    let size = (self.img.x1 as u32, self.img.y1 as u32);
+                    for _ in 0..4 {
+                        let n = self.objs[..j].iter().filter_map(Obj::pixel_grid).fold(s, |s, g| cell_align(s, &g, size));
+                        if n == s {
+                            break;
+                        }
+                        s = n;
+                    }
+                    let mut sb = vec![0u8; s.w() as usize * s.h() as usize * 4];
+                    (self.bg)(s, &mut sb);
+                    self.window_upto(&mut sb, s, order, j);
+                    let src = Surf::with_origin(&mut sb, s.w() as u32, s.h() as u32, s.x0, s.y0, order);
+                    o.render_with_source(&mut sf, &src, font);
+                    continue;
+                }
+            }
+            o.render_into(&mut sf, font);
         }
-        o.render_into(&mut sf, font);
     }
 }

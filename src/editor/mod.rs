@@ -986,6 +986,7 @@ impl App {
             hover_win: Default::default(),
             obj: Default::default(),
             baked: Vec::new(),
+            baked_area: (0, 0, 0, 0),
         };
         #[cfg(target_os = "macos")]
         if let Some(r) = self.update_pending.take() {
@@ -1281,6 +1282,15 @@ impl App {
             return;
         }
 
+        // An object drag: Esc puts everything back and ends it; any other
+        // key waits for the release (no edit under the drag's feet).
+        if edit.obj_dragging() {
+            if escape {
+                edit.cancel_obj_drag();
+            }
+            return;
+        }
+
         // Text editing mode consumes keys.
         if edit.text.is_some() {
             if escape {
@@ -1465,7 +1475,7 @@ impl App {
 
     fn wheel(&mut self, delta: i32) {
         self.edit_tx(|_this, edit| {
-            if edit.text.is_some() {
+            if edit.text.is_some() || edit.obj_dragging() {
                 return;
             }
             if delta != 0 && edit.last_wheel.elapsed() > Duration::from_millis(160) {
@@ -1800,7 +1810,7 @@ impl App {
             // Video mode has no palette (the panel replaces the toolbar).
             Act::Palette if edit.rec.open => {}
             Act::Palette => edit.palette_open = !edit.palette_open,
-            Act::Wheel if !tools::has_color(edit.cur_tool()) => {}
+            Act::Wheel if !tools::has_color(edit.cur_tool()) && edit.sel_color().is_none() => {}
             Act::Wheel => edit.open_picker(pick::Target::Tool),
             Act::RingSize(d) => {
                 let w = (edit.rec.opts.cam_ring_w as i32 + d).clamp(0, config::RING_WIDTH_MAX as i32) as u32;
@@ -2343,6 +2353,8 @@ enum Interact {
     /// Moving the selected objects (`orig`: as they were, in selection
     /// order; `bx`: their box); `hit` was pressed, `was_sel` already
     /// selected (a click on it then picks it alone, or edits a callout).
+    /// `idx`: the objects moved (`orig` in the same order), `n`: how
+    /// many objects there were (a change ends the drag).
     ObjMove {
         start: Pt,
         orig: Vec<Obj>,
@@ -2350,6 +2362,8 @@ enum Interact {
         moved: bool,
         hit: usize,
         was_sel: bool,
+        idx: Vec<usize>,
+        n: usize,
     },
     /// Resizing the selected objects by a handle on their frame `fr`
     /// (`bx`: their box inside it).
@@ -2358,12 +2372,15 @@ enum Interact {
         orig: Vec<Obj>,
         bx: FRect,
         fr: FRect,
+        idx: Vec<usize>,
+        n: usize,
     },
     /// Dragging a round handle (an end, a tail, the loupe or its source).
     ObjPoint {
         idx: usize,
         which: crate::objects::edit::Point,
         orig: Obj,
+        n: usize,
     },
     /// A marquee from `anchor` (`base`: kept selected, Shift).
     Marquee {
@@ -2853,6 +2870,8 @@ struct Edit {
     /// The objects `composed` holds (software renderer): rebuilt in place
     /// where they changed.
     baked: Vec<Obj>,
+    /// The spotlight area `composed` was baked with.
+    baked_area: crate::objects::Px,
 }
 
 /// More merged dirty rects than this invalidate the whole window.
@@ -2872,21 +2891,18 @@ impl Edit {
         if self.gdi.is_some() {
             return self.export_gdi(sel);
         }
-        let mut img = crop_to_image(self.composed(), sel);
-        self.spot_export(&mut img, sel);
-        img
+        crop_to_image(self.composed(), sel)
     }
 
-    /// The spotlights' dim on an export crop of `sel`.
-    fn spot_export(&self, img: &mut PixBuf, sel: FRect) {
-        let spots: Vec<_> = crate::objects::spots(&self.objects).map(crate::objects::spot_px).collect();
-        if spots.is_empty() {
-            return;
-        }
-        let (w, h) = (img.width(), img.height());
-        let (x0, y0) = (sel.x.floor().max(0.0) as i32, sel.y.floor().max(0.0) as i32);
-        let mut sf = crate::raster::Surf::with_origin(img.as_raw_mut(), w, h, x0, y0, Order::Rgba);
-        crate::objects::apply_spots(&mut sf, &spots);
+    /// The area the spotlights dim: the selection, on whole pixels.
+    fn spot_area(&self) -> crate::objects::Px {
+        compose::spot_area(self.sel, self.shot.size)
+    }
+
+    /// The spotlights' area moved since the bake (the selection changed
+    /// under them): the bake is behind.
+    fn spots_stale(&self) -> bool {
+        self.baked_area != self.spot_area() && self.objects.iter().any(Obj::is_spot)
     }
 
     /// The capture with committed objects baked in.
@@ -2895,15 +2911,17 @@ impl Edit {
     }
 
     fn rebuild(&mut self) {
+        let area = self.spot_area();
         #[cfg(windows)]
         if let Some(scr) = self.gdi.as_mut() {
             // The annotation layer: objects baked over the plain capture,
             // only where they are.
-            scr.set_objects(&self.objects, self.font.as_ref());
+            scr.set_objects(&self.objects, area, self.font.as_ref());
+            self.baked_area = area;
             self.dirty = false;
             return;
         }
-        if self.objects.iter().all(Obj::is_spot) {
+        if self.objects.is_empty() {
             // Nothing to bake (e.g. undid the last object): drop the copy.
             self.composed = None;
             self.baked.clear();
@@ -2913,22 +2931,30 @@ impl Edit {
             let damage = self
                 .composed
                 .as_ref()
-                .and_then(|_| compose::object_damage(&self.baked, &self.objects, font, size, false));
+                .and_then(|_| compose::object_damage(&self.baked, &self.objects, self.baked_area, area, font, size));
             let base = &self.base;
             match (self.composed.as_mut(), damage) {
-                // Re-bake only where the objects changed.
-                (Some(composed), Some(rects)) => compose::rebake(composed, base, &self.objects, font, &rects),
+                // Re-bake only where the objects (or the spotlights' area) changed.
+                (Some(composed), Some(rects)) => compose::rebake(composed, base, &self.objects, area, font, &rects),
                 _ => {
                     // Re-bake in place; allocate only when it was `None`.
                     let composed = self.composed.get_or_insert_with(|| base.clone());
                     composed.as_raw_mut().copy_from_slice(base.as_raw());
-                    for o in &self.objects {
-                        o.render(composed, font);
-                    }
+                    let img = compose::PxRect::image(size);
+                    let iw = base.width() as usize;
+                    let bg = |r: compose::PxRect, out: &mut [u8]| {
+                        let n = r.w() as usize * 4;
+                        for (i, y) in (r.y0..r.y1).enumerate() {
+                            out[i * n..][..n].copy_from_slice(&base.as_raw()[(y as usize * iw + r.x0 as usize) * 4..][..n]);
+                        }
+                    };
+                    let bake = compose::Bake { objs: &self.objects, font, pass: crate::objects::SpotPass::of(&self.objects, area), img, bg: &bg };
+                    bake.window(composed.as_raw_mut(), img, Order::Rgba);
                 }
             }
             self.baked.clone_from(&self.objects);
         }
+        self.baked_area = area;
         self.dirty = false;
     }
 
@@ -3548,7 +3574,7 @@ fn animating(edit: &Edit, app_notice: Option<&Toast>, now: Instant) -> bool {
     let tip_pending = edit.hover.is_some() && now.saturating_duration_since(edit.hover_at) < Duration::from_millis(500);
     let toast_moving = edit.notice.as_ref().or(app_notice).is_some_and(|t| t.animating(now));
     // The Camera row says "Looking for cameras…" until the list comes.
-    edit.mo.active(now) || tip_pending || toast_moving || edit.rec.cams_looking()
+    edit.mo.active(now) || tip_pending || toast_moving || edit.rec.cams_looking() || edit.guides_fading(now)
 }
 
 /// The last frame no longer matches: something animates (or did when it
@@ -3978,6 +4004,7 @@ mod tests {
             hover_win: Default::default(),
             obj: Default::default(),
             baked: Vec::new(),
+            baked_area: (0, 0, 0, 0),
         };
         App {
             cfg,

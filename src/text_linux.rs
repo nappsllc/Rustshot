@@ -19,6 +19,11 @@ const CANDIDATES: &[&str] = &[
 pub struct Face(FontArc);
 
 impl Face {
+    /// ab_glyph has the one system face: semibold is the same face.
+    pub fn semibold(&self) -> Face {
+        self.clone()
+    }
+
     pub fn load() -> Option<Self> {
         CANDIDATES
             .iter()

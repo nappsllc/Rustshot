@@ -322,7 +322,11 @@ impl Edit {
     /// Open the colour picker for `target` at its colour.
     pub(super) fn open_picker(&mut self, target: Target) {
         let p = match target {
-            Target::Tool => Picker::new(target, self.color(), Some(self.color())),
+            // Over a selection: its colour.
+            Target::Tool => {
+                let c = self.sel_color().unwrap_or(self.color());
+                Picker::new(target, c, Some(c))
+            }
             Target::Ring => {
                 let ring = self.rec.opts.cam_ring;
                 Picker::new(target, ring.unwrap_or(self.th.accent), ring)
@@ -338,6 +342,7 @@ impl Edit {
         let Some(p) = &self.pick else { return };
         let c = p.color();
         match p.target {
+            Target::Tool if !self.obj.sel.is_empty() => self.preview_color(c),
             Target::Tool => {
                 let t = self.cur_tool();
                 self.mem.set_color(t, c);
@@ -360,6 +365,14 @@ impl Edit {
         // Esc. Nothing is remembered and no recent is added; a ring that
         // followed the accent keeps following it.
         let keep = keep && c != p.start;
+        if p.target == Target::Tool && (!self.obj.sel.is_empty() || self.obj.pick_backup.is_some()) {
+            // A selection's colour: one undo step, or the objects back.
+            self.end_preview_color(keep, c);
+            if keep {
+                self.add_recent(c, now);
+            }
+            return;
+        }
         match (p.target, keep) {
             (Target::Tool, true) => {
                 self.set_tool_color(c, now);

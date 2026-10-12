@@ -267,11 +267,11 @@ pub fn osel_bounds(ui: &Ui, u: &ObjSelUi) -> Vec<FRect> {
 }
 
 /// Snap guides: 1 px accent lines.
-pub fn guides(f: &mut Fb, ui: &Ui, g: &[(Pt, Pt)]) {
+pub fn guides(f: &mut Fb, ui: &Ui, g: &[(Pt, Pt)], k: f32) {
     let lw = ui.line_px();
     for (a, b) in g {
         let r = guide_rect(*a, *b, lw);
-        f.fill_rect(r.x as i32, r.y as i32, r.w as i32, r.h as i32, ui.th.accent);
+        f.fill_rect(r.x as i32, r.y as i32, r.w as i32, r.h as i32, ui.th.accent.fade(k));
     }
 }
 
