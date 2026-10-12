@@ -842,7 +842,7 @@ mod tests {
     fn new_global_actions_are_slots() {
         let cfg = Config { repeat_hotkey: "Ctrl+Alt+P".into(), ..Config::default() };
         let w = wanted(&cfg);
-        assert_eq!(w, ["Shift+Meta+X", "Ctrl+Alt+Shift+Q", "Shift+Meta+R", "Shift+Meta+F", "Shift+Meta+W", "Ctrl+Alt+P", "Shift+Meta+T"]);
+        assert_eq!(w, ["Shift+Meta+X", "Ctrl+Alt+Shift+Q", "Shift+Meta+R", "Shift+Meta+F", "Shift+Meta+E", "Ctrl+Alt+P", "Shift+Meta+T"]);
         let specs = specs_for(&w);
         for (i, (id, _, ev)) in specs.iter().enumerate() {
             assert!(*id == i as i32 + 1 && matches!(ev, HotEvent::Pressed(j) if *j == i));
@@ -852,7 +852,7 @@ mod tests {
         assert!(matches!(slot_event(5), HotEvent::RepeatLast));
         assert!(matches!(slot_event(6), HotEvent::CaptureText));
         let mut calls = Vec::new();
-        let (now, f) = plan_reload(&s2("", ""), &w, registrar(&["Shift+Meta+W"], &mut calls));
+        let (now, f) = plan_reload(&s2("", ""), &w, registrar(&["Shift+Meta+E"], &mut calls));
         assert_eq!(now[4], "");
         assert_eq!((f.len(), f[0].slot, f[0].cause), (1, 4, Cause::InUse));
     }

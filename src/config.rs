@@ -225,7 +225,7 @@ impl Default for Config {
             capture_hotkey: "Shift+Meta+X".into(),
             quit_hotkey: "Ctrl+Alt+Shift+Q".into(),
             capture_full_hotkey: "Shift+Meta+F".into(),
-            capture_window_hotkey: "Shift+Meta+W".into(),
+            capture_window_hotkey: "Shift+Meta+E".into(),
             repeat_hotkey: String::new(),
             capture_text_hotkey: "Shift+Meta+T".into(),
             show_tray: true,
@@ -1602,7 +1602,7 @@ bogus = 1
         }
     }
 
-    /// The redesign's keys: the new global hotkeys (Win+Shift+X/F/W/R —
+    /// The redesign's keys: the new global hotkeys (Win+Shift+X/F/E/R —
     /// the boards' Ctrl+Shift chords are common app keys —, repeat unbound), the tray, copy-after-capture and the
     /// shutter sound; a file without them gets the defaults, one with them
     /// keeps its values.
@@ -1610,7 +1610,7 @@ bogus = 1
     fn redesign_keys_defaults_and_roundtrip() {
         let d = Config::default();
         let hk = [d.capture_hotkey.as_str(), d.capture_full_hotkey.as_str(), d.capture_window_hotkey.as_str(), d.record_hotkey.as_str()];
-        assert_eq!(hk, ["Shift+Meta+X", "Shift+Meta+F", "Shift+Meta+W", "Shift+Meta+R"]);
+        assert_eq!(hk, ["Shift+Meta+X", "Shift+Meta+F", "Shift+Meta+E", "Shift+Meta+R"]);
         for h in hk {
             let c = crate::keymap::Chord::parse(h).unwrap();
             assert!(c.meta && c.shift && !c.ctrl && !c.alt, "{h}: Win+Shift");
@@ -1638,6 +1638,10 @@ bogus = 1
 record_hotkey = \"Ctrl+Shift+R\"
 ").unwrap();
         assert_eq!((older.capture_hotkey.as_str(), older.record_hotkey.as_str()), ("Ctrl+Shift+S", "Ctrl+Shift+R"), "custom keys kept");
+        // 0.1.3 moved Capture window off Win+Shift+W (taken on a clean
+        // Windows); a file with 0.1.2's default keeps it.
+        let w = parse_config("capture_window_hotkey = \"Shift+Meta+W\"\n").unwrap();
+        assert_eq!(w.capture_window_hotkey, "Shift+Meta+W", "a written key is kept");
         assert!(parse_config("show_tray = 1").is_err());
         // The thumbnail after a capture: on by default, round-trips off.
         assert!(d.show_thumbnail);

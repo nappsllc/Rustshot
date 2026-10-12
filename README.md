@@ -264,7 +264,7 @@ snaps even then.
 |---|---|---|
 | Capture region (the overlay) | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>X</kbd> | `capture_hotkey` |
 | Capture full screen (saved at once, no overlay) | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd> | `capture_full_hotkey` |
-| Capture window (the overlay picking a window: a click selects it) | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>W</kbd> | `capture_window_hotkey` |
+| Capture window (the overlay picking a window: a click selects it) | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd> | `capture_window_hotkey` |
 | Record video (again: stop) | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> | `record_hotkey` |
 | Repeat last capture (the same region, saved at once) | none | `repeat_hotkey` |
 | Copy text from area (pick an area, its text is copied; no annotation) | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> | `capture_text_hotkey` |
@@ -273,7 +273,9 @@ snaps even then.
 <kbd>Win</kbd> is <kbd>⌘</kbd> on macOS and <kbd>Super</kbd> on Linux
 (`Meta` in `config.toml`). These are the defaults of a new `config.toml`;
 a file that already has a key keeps its value (a custom chord, or an
-earlier default such as <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd>).
+earlier default such as <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd>, or
+0.1.2's <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>W</kbd> for Capture window,
+which Windows itself takes on many systems).
 A global hotkey takes its keys from every app; while the overlay is open,
 a global hotkey without <kbd>Win</kbd> acts as the overlay's own key (a
 capture hotkey set to <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> is
@@ -553,7 +555,7 @@ user_colors = ["#f04438", "#ff8a1f", "#ffc532", "#2dc06f", "#19b5d6",
 capture_hotkey = "Shift+Meta+X"   # the overlay (Meta: Win, Cmd or Super)
 quit_hotkey = "Ctrl+Alt+Shift+Q"
 capture_full_hotkey = "Shift+Meta+F"    # every monitor, saved at once
-capture_window_hotkey = "Shift+Meta+W"  # the overlay picking a window
+capture_window_hotkey = "Shift+Meta+E"  # the overlay picking a window
 repeat_hotkey = ""                # the last region again ("" = none)
 capture_text_hotkey = "Shift+Meta+T"  # pick an area, copy its text (OCR)
 show_tray = true                  # false = no tray icon (hotkeys still work)

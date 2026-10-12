@@ -629,22 +629,25 @@ fn wait_pid_window(pid: u32, ms: u64) -> Option<HWND> {
 }
 
 /// The daemon's other global hotkeys off (their defaults, Win+Shift+R /
-/// F / W, would take keys from the desktop while a test runs).
-const NO_OTHER_HOTKEYS: &str = "record_hotkey = \"\"\ncapture_full_hotkey = \"\"\ncapture_window_hotkey = \"\"\nrepeat_hotkey = \"\"\n";
+/// F / E / T, would take keys from the desktop while a test runs).
+const NO_OTHER_HOTKEYS: &str =
+    "record_hotkey = \"\"\ncapture_full_hotkey = \"\"\ncapture_window_hotkey = \"\"\nrepeat_hotkey = \"\"\ncapture_text_hotkey = \"\"\n";
 
 /// Tab presses from the Settings rail to Accept's key cap in Key bindings:
-/// the six global rows, then the overlay rows (`KEY_ROWS` in
-/// src/settings_ui/draw.rs): Tools (10 caps), Stroke size (2), Copy ·
-/// Save · Upload (3), then Accept.
-const ACCEPT_TABS: usize = 6 + 10 + 2 + 3 + 1;
-/// From Accept's cap to the footer's OK: the 11 overlay caps after it,
+/// the seven global rows, then the overlay rows (`KEY_ROWS` in
+/// src/settings_ui/draw.rs): Tools (10 caps), Select · Callout ·
+/// Spotlight · Magnify (4), Selected objects (4), Stroke size (2), Copy ·
+/// Save · Upload (3), Copy text (1), then Accept.
+const ACCEPT_TABS: usize = 7 + 10 + 4 + 4 + 2 + 3 + 1 + 1;
+/// From Accept's cap to the footer's OK: the 12 overlay caps after it,
 /// the 3 While recording rows, the header's Reset to defaults, then Open
 /// config file, Apply, Cancel, OK.
-const ACCEPT_TO_OK: usize = 11 + 3 + 1 + 4;
+const ACCEPT_TO_OK: usize = 12 + 3 + 1 + 4;
 /// Tab presses from the rail to General's Save to field: Theme, the
 /// four accent swatches, Launch at login, Show icon in tray, Copy after
-/// capture, Play shutter sound, Change…, then the field.
-const FOLDER_TABS: usize = 11;
+/// capture, Play shutter sound, Show thumbnail after capture, Change…,
+/// then the field.
+const FOLDER_TABS: usize = 12;
 
 /// Keys posted one by one with a short pause (each is its own frame).
 fn keys(hwnd: HWND, vks: &[u32]) {
@@ -656,9 +659,10 @@ fn keys(hwnd: HWND, vks: &[u32]) {
 
 /// The Settings window in a private daemon (own instance name, config dir
 /// and unusual hotkeys): General → JPG into another folder (with the
-/// rewrite question), Key bindings → Accept on K; the daemon reloads (its
-/// capture hotkey moves to the one now in the file), and a capture
-/// accepted with K writes `<folder>/<date>/<name>.jpg`.
+/// rewrite question), Key bindings → Accept on J (a key no overlay action
+/// has); the daemon reloads (its capture hotkey moves to the one now in
+/// the file), and a capture
+/// accepted with J writes `<folder>/<date>/<name>.jpg`.
 ///
 ///     cargo test --test e2e settings_window -- --ignored --nocapture
 #[test]
@@ -717,21 +721,21 @@ fn settings_window_saves_and_the_daemon_reloads() {
         std::thread::sleep(Duration::from_millis(500));
         assert!(hotkey_free(MODS, F11), "the old capture hotkey is released");
         assert!(!hotkey_free(MODS, F9), "the new one is registered");
-        // Session 2: Shortcuts tab, Accept → K.
+        // Session 2: Shortcuts tab, Accept → J.
         assert_eq!(wait_exit(&mut run(&["settings"]).spawn().unwrap(), 5000), Some(0));
         let w = wait_pid_window(pid, 5000).expect("settings window again");
         std::thread::sleep(Duration::from_millis(500));
-        // The rail → Key bindings; Accept's cap: record K; then OK.
+        // The rail → Key bindings; Accept's cap: record J; then OK.
         keys(w, &[TAB, 0x28, 0x28, 0x28]);
         keys(w, &[TAB; ACCEPT_TABS]);
-        keys(w, &[RET, 'K' as u32]);
+        keys(w, &[RET, 'J' as u32]);
         keys(w, &[TAB; ACCEPT_TO_OK]);
         keys(w, &[RET]);
         assert!(wait_gone(pid, 5000), "OK closes the window");
         let text = std::fs::read_to_string(&cfg).unwrap();
-        assert!(text.contains("[shortcuts]\naccept = \"K\""), "{text}");
+        assert!(text.contains("[shortcuts]\naccept = \"J\""), "{text}");
         std::thread::sleep(Duration::from_millis(500));
-        // A capture in the daemon: click selects the screen, K accepts (saves).
+        // A capture in the daemon: click selects the screen, J accepts (saves).
         let _ = run(&[]).spawn().unwrap().wait();
         let o = wait_pid_window(pid, 8000).expect("overlay");
         std::thread::sleep(Duration::from_millis(800));
@@ -739,8 +743,8 @@ fn settings_window_saves_and_the_daemon_reloads() {
         mouse_down(o, 300, 300);
         mouse_up(o, 300, 300);
         std::thread::sleep(Duration::from_millis(300));
-        key(o, 'K' as u32);
-        assert!(wait_gone(pid, 8000), "K accepted the capture");
+        key(o, 'J' as u32);
+        assert!(wait_gone(pid, 8000), "J accepted the capture");
         std::thread::sleep(Duration::from_millis(1000));
         let mut found = Vec::new();
         for d in std::fs::read_dir(&shots).expect("save folder created").flatten() {

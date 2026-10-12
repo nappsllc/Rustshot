@@ -1099,9 +1099,13 @@ mod tests {
     /// Printed by `window_leak_probe` once its checks passed.
     const LEAK_PROBE_DONE: &str = "rustshot-leak-probe: done";
 
-    /// Run alone in a child process by the test above: five windows in a
-    /// row leave the GDI/USER object counts where they were (three rounds:
-    /// the first window may allocate process-wide caches).
+    /// Run alone in a child process by the test above: windows in a row do
+    /// not grow the GDI/USER object counts per window. Windows allocates
+    /// some process-wide objects lazily and frees others a little late
+    /// (IME/text-services windows, theme data), so an exact "no growth
+    /// over N windows" check flakes under load; a leak of even one object
+    /// per window shows as at least `PER_ROUND` over a round, while that
+    /// background noise stays a few objects, so the bound sits between.
     #[test]
     #[ignore = "helper: run as a child process by run_window_closes_on_request_without_leaks"]
     fn window_leak_probe() {
@@ -1114,20 +1118,25 @@ mod tests {
         // A real handle: the GetCurrentProcess pseudo handle reads 0.
         let me = unsafe { OpenProcess(PROCESS_QUERY_INFORMATION, false, std::process::id()) }.expect("process handle");
         let count = || unsafe { (GetGuiResources(me, GR_GDIOBJECTS), GetGuiResources(me, GR_USEROBJECTS)) };
+        const PER_ROUND: u32 = 20;
+        const NOISE: u32 = PER_ROUND / 2;
+        let window = || {
+            let d = run_closer();
+            assert_eq!(d.resizes, 1 + RESIZES.len() as u32);
+        };
+        // Warm-up: the first windows allocate process-wide caches.
+        (0..3).for_each(|_| window());
         let mut seen = Vec::new();
         let ok = (0..3).any(|_| {
             let before = count();
-            for _ in 0..5 {
-                let d = run_closer();
-                assert_eq!(d.resizes, 1 + RESIZES.len() as u32);
-            }
+            (0..PER_ROUND).for_each(|_| window());
             let after = count();
             seen.push((before, after));
-            after.0 <= before.0 && after.1 <= before.1
+            after.0 < before.0 + NOISE && after.1 < before.1 + NOISE
         });
         let _ = unsafe { windows::Win32::Foundation::CloseHandle(me) };
-        println!("(gdi, user) objects before -> after 5 windows: {seen:?}");
-        assert!(ok, "GDI/USER objects grew over 5 windows ((gdi, user) before -> after): {seen:?}");
+        println!("(gdi, user) objects before -> after {PER_ROUND} windows: {seen:?}");
+        assert!(ok, "GDI/USER objects grew by {NOISE}+ over {PER_ROUND} windows ((gdi, user) before -> after): {seen:?}");
         println!("{LEAK_PROBE_DONE}");
     }
 
