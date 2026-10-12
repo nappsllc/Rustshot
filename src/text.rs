@@ -55,6 +55,22 @@ impl AnnotFont {
         if line.is_empty() { 0.0 } else { self.0.width(line, px) }
     }
 
+    /// Where the caret before byte `idx` of `line` goes, from the line's
+    /// left. Windows asks Uniscribe (`ScriptStringCPtoX`), so the caret
+    /// sits where the character is drawn in right-to-left text (Arabic,
+    /// Hebrew) and mixed runs. Linux (ab_glyph lays glyphs out left to
+    /// right in logical order) and macOS take the prefix's width: right for
+    /// left-to-right text, approximate for right-to-left text on macOS
+    /// (CoreText reorders it when drawing).
+    pub fn caret_x(&self, line: &str, idx: usize, px: f32) -> f32 {
+        let idx = idx.min(line.len());
+        #[cfg(windows)]
+        if let Some(x) = self.0.caret_x(line, idx, px) {
+            return x;
+        }
+        self.line_width(line.get(..idx).unwrap_or(""), px)
+    }
+
     /// Widest line and total height of `text`, with the line metrics.
     pub fn measure(&self, text: &str, px: f32) -> (f32, f32, LineMetrics) {
         let m = self.metrics(px);
@@ -131,6 +147,27 @@ mod tests {
                 prev = w;
             }
             assert!(prev > 20.0 && end == s.len(), "{s:?}: {prev}");
+        }
+    }
+
+    /// The caret: after the prefix in left-to-right text; in Hebrew and
+    /// Arabic (Windows: Uniscribe) it starts at the right and moves left.
+    #[test]
+    fn the_caret_follows_the_text_direction() {
+        let f = font();
+        let ltr = "Hello";
+        for i in 0..=ltr.len() {
+            let want = f.line_width(&ltr[..i], 24.0);
+            assert!((f.caret_x(ltr, i, 24.0) - want).abs() <= 1.0, "{i}");
+        }
+        assert_eq!(f.caret_x(ltr, 99, 24.0), f.caret_x(ltr, ltr.len(), 24.0), "past the end: the end");
+        #[cfg(windows)]
+        for rtl in ["\u{5e9}\u{5dc}\u{5d5}\u{5dd}", "\u{645}\u{631}\u{62d}\u{628}\u{627}"] {
+            let w = f.line_width(rtl, 24.0);
+            let xs: Vec<f32> = rtl.char_indices().map(|(i, _)| i).chain([rtl.len()]).map(|i| f.caret_x(rtl, i, 24.0)).collect();
+            assert!((xs[0] - w).abs() <= 2.0, "the start is at the right: {xs:?} of {w}");
+            assert!(xs[xs.len() - 1].abs() <= 2.0, "the end is at the left: {xs:?}");
+            assert!(xs.windows(2).all(|p| p[1] <= p[0]), "moves left: {xs:?}");
         }
     }
 

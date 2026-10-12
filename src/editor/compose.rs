@@ -855,8 +855,7 @@ impl Edit {
                 // Drawn exactly as the committed text object renders.
                 font.render(&mut f.surf(), &t.text, t.px, t.pos, t.color);
                 if let Some(caret) = t.caret {
-                    let before = t.text.get(..caret).unwrap_or("");
-                    let cx = t.pos.x + font.line_width(before, t.px);
+                    let cx = t.pos.x + font.caret_x(&t.text, caret, t.px);
                     f.fill_rect(
                         cx.round() as i32,
                         t.pos.y.round() as i32,
