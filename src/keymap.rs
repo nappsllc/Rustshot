@@ -37,6 +37,8 @@ pub enum Action {
     SaveAs,
     /// Save straight to the Desktop folder (no dialog, no daily folder).
     SaveDesktop,
+    /// Open the capture with an app the user picks (the system's chooser).
+    OpenWith,
     Upload,
     /// Pin the selection to the screen (an always-on-top window).
     Pin,
@@ -78,7 +80,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Action; 44] = [
+    pub const ALL: [Action; 45] = [
         Action::ToolSelect,
         Action::ToolPencil,
         Action::ToolLine,
@@ -100,6 +102,7 @@ impl Action {
         Action::Save,
         Action::SaveAs,
         Action::SaveDesktop,
+        Action::OpenWith,
         Action::Upload,
         Action::Pin,
         Action::Undo,
@@ -180,6 +183,7 @@ impl Action {
             Action::Save => ("save", "Save", &["Ctrl+S"]),
             Action::SaveAs => ("save_as", "Save As", &["Ctrl+Shift+S"]),
             Action::SaveDesktop => ("save_desktop", "Save to Desktop", &["Ctrl+D"]),
+            Action::OpenWith => ("open_with", "Open with\u{2026}", &["Ctrl+O"]),
             Action::Upload => ("upload", "Upload", &["Ctrl+U"]),
             Action::Pin => ("pin", "Pin to screen", &["Ctrl+P"]),
             Action::Undo => ("undo", "Undo", &["Ctrl+Z"]),
