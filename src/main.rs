@@ -524,6 +524,9 @@ fn run_direct(cfg: &Config, args: &CaptureArgs, shot: Shot, region: Option<(i32,
         },
         None => (shot.image.clone(), shot.origin),
     };
+    // Settings › Capture "Add a border", around what is exported.
+    let b = export::border(cfg, shot.scale).map_or(0, |(b, _)| b as i32);
+    let (img, global) = (export::with_border(img, cfg, shot.scale), (global.0 - b, global.1 - b));
     let res = export::run_export(&img, global, &tasks, cfg);
     let raw_stdout = tasks.iter().any(|t| matches!(t, Task::Raw));
     for m in &res.messages {

@@ -1,8 +1,9 @@
 //! Trim to content in the overlay: the key and the size label's menu
 //! tighten the selection, undo and redo put it back and again, Settings'
 //! "Trim margins automatically" trims every new region or window, a
-//! window's client area is tried when its frame has nothing to trim; plus
-//! the preview PNGs of the menu.
+//! window's client area is tried when its frame has nothing to trim; the
+//! export border ("Add a border": around the export, previewed around the
+//! selection, never in the history's original); plus the preview PNGs.
 
 use super::tests::{assert_dirty_covers, edit_of, preview_app_with, settled};
 use super::*;
@@ -239,6 +240,56 @@ fn the_menu_and_the_trim_repaint_what_changed() {
     }
 }
 
+/// The export carries the border (at the capture's scale), its top-left
+/// moved out by it; the history keeps the capture without it.
+#[test]
+fn the_export_has_the_border_and_the_history_original_not() {
+    let mut s = shot();
+    s.scale = 1.5;
+    let mut a = app_with(Some(fr(300.0, 200.0, 400.0, 250.0)), s);
+    a.history_root = Some(std::env::temp_dir().join("rustshot-border-hist-unused"));
+    let e = ed(&mut a);
+    e.cfg.border_width = 4;
+    e.cfg.border_color = "#ff0000".into();
+    e.tasks = vec![Task::Copy];
+    let State::Edit(e) = std::mem::replace(&mut a.st, State::Hidden) else { unreachable!() };
+    let mut e = *e;
+    a.finish(&mut e, false);
+    let State::Finish(job) = &a.st else { panic!("finish job") };
+    // 4 logical px at 150 % are 6 px on each side.
+    assert_eq!(job.img.dimensions(), (412, 262));
+    assert_eq!(job.sel_global, (294, 194));
+    assert_eq!(job.img.get_pixel(0, 0), [255, 0, 0, 255]);
+    assert_eq!(job.img.get_pixel(5, 130), [255, 0, 0, 255]);
+    assert_eq!(job.img.get_pixel(6, 130), [40, 90, 220, 255], "the capture inside");
+    let h = job.hist.as_ref().expect("history shot");
+    assert_eq!(h.original.dimensions(), (400, 250), "no border in the history");
+    assert_eq!(a.last_region, Some((300, 200, 400, 250)), "Repeat takes the region, not the border");
+}
+
+/// The preview: a band of the border color outside the outline, nothing
+/// inside the selection; none when off.
+#[test]
+fn the_border_is_previewed_around_the_selection() {
+    let sel = fr(300.0, 200.0, 400.0, 250.0);
+    let mut a = app_with(Some(sel), shot());
+    let plain = settled(&mut a);
+    let e = ed(&mut a);
+    e.cfg.border_width = 3;
+    e.cfg.border_color = "#00ff00".into();
+    let framed = settled(&mut a);
+    // 1 px outside the outline (2 px at 100 %): green, 3 px wide (at the
+    // sides: clear of the label's and the toolbar's shadows, the handles).
+    for d in 3..6 {
+        assert_eq!(framed.get_pixel(300 - 1 - d, 330), [0, 255, 0, 255], "left, {d}");
+        assert_eq!(framed.get_pixel(700 + d, 290), [0, 255, 0, 255], "right, {d}");
+    }
+    assert_ne!(framed.get_pixel(300 - 7, 330), [0, 255, 0, 255], "3 px wide");
+    assert_ne!(framed.get_pixel(300 - 3, 330), [0, 255, 0, 255], "clear of the outline");
+    assert_eq!(framed.get_pixel(500, 300), plain.get_pixel(500, 300), "the selection untouched");
+    assert_dirty_covers(&mut a, "border off", |a| ed(a).cfg.border_width = 0);
+}
+
 #[test]
 #[ignore = "writes preview PNGs; set RUSTSHOT_PREVIEW_DIR"]
 fn render_trim_preview_pngs() {
@@ -252,5 +303,8 @@ fn render_trim_preview_pngs() {
         std::fs::write(dir.join(format!("trim-{tn}-menu.png")), settled(&mut a).to_png().unwrap()).unwrap();
         ed(&mut a).trim_selection(true);
         std::fs::write(dir.join(format!("trim-{tn}-trimmed.png")), settled(&mut a).to_png().unwrap()).unwrap();
+        ed(&mut a).cfg.border_width = 4;
+        ed(&mut a).cfg.border_color = "#f04438".into();
+        std::fs::write(dir.join(format!("border-{tn}-preview.png")), settled(&mut a).to_png().unwrap()).unwrap();
     }
 }

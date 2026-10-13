@@ -187,7 +187,8 @@ impl Window {
     /// encoding and uploads take a while).
     fn export(&mut self, r: Request) {
         use crate::export::Task;
-        let img = self.e.canvas.export();
+        // Settings › Capture "Add a border" (the capture's scale).
+        let img = crate::export::with_border(self.e.canvas.export(), &self.e.cfg, self.e.entry.meta.scale);
         let objs = self.e.canvas.objects().to_vec();
         if r == Request::Pin {
             #[cfg(not(test))]

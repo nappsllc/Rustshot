@@ -1320,9 +1320,14 @@ impl App {
                 scale: edit.shot.scale,
             })
         });
+        // Settings › Capture "Add a border": around what is exported
+        // (the history keeps the capture without it); the exported
+        // image's top-left moves out by it (a pin stays in place).
+        let b = export::border(&edit.cfg, edit.shot.scale).map_or(0, |(b, _)| b as i32);
+        let img = export::with_border(img, &edit.cfg, edit.shot.scale);
         self.st = State::Finish(Box::new(FinishJob {
             img,
-            sel_global: g,
+            sel_global: (g.0 - b, g.1 - b),
             tasks,
             cfg: edit.cfg.clone(),
             hist,

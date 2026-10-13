@@ -157,6 +157,9 @@ impl Backdrop for PixBufBackdrop<'_> {
 pub struct SelUi {
     pub sr: FRect,
     pub hot: Option<usize>,
+    /// Settings › Capture "Add a border": its preview around the
+    /// selection (width in image px, color); not part of the capture.
+    pub border: Option<(f32, C4)>,
 }
 
 /// Window snapping: the window (or part) under the pointer, outlined with
@@ -688,7 +691,8 @@ impl Edit {
             _ => Arc::new(self.objects.clone()),
         };
 
-        let sel_ui = self.sel.map(|sr| SelUi { sr, hot: self.hot_handle });
+        let border = crate::export::border(&self.cfg, self.shot.scale).map(|(b, c)| (b as f32, C4::rgb(c[0], c[1], c[2])));
+        let sel_ui = self.sel.map(|sr| SelUi { sr, hot: self.hot_handle, border: border.filter(|_| self.host.is_none()) });
         let snap_r = self.snap_rect();
         let snap = snap_r.map(|r| SnapUi { r, hint: self.cfg.snap_tab_hint && self.hover_win.has_parts(), area });
         let label = self.sel.map(|sr| {
@@ -904,7 +908,13 @@ impl Edit {
             El::Sel => sc
                 .sel_ui
                 .as_ref()
-                .map_or(Vec::new(), |u| chrome::selection_bounds(&ui, u.sr).into_iter().map(px_bounds).collect()),
+                .map_or(Vec::new(), |u| {
+                    let mut v = chrome::selection_bounds(&ui, u.sr);
+                    if let Some((b, _)) = u.border {
+                        v.extend(chrome::border_preview_bounds(&ui, u.sr, b));
+                    }
+                    v.into_iter().map(px_bounds).collect()
+                }),
             El::Snap => sc.snap.as_ref().map_or(Vec::new(), |u| {
                 let mut v: Vec<PxRect> = chrome::outline_bounds(&ui, u.r).into_iter().map(px_bounds).collect();
                 v.push(px_bounds(chrome::snap_label_bounds(&ui, u.r, u.hint, u.area)));
@@ -1017,6 +1027,9 @@ impl Edit {
             && hits(El::Sel)
         {
             let _p = crate::perf::span(crate::perf::K::Sel);
+            if let Some((b, c)) = u.border {
+                chrome::border_preview(&mut f, &ui, u.sr, b, c);
+            }
             chrome::selection(&mut f, &ui, u.sr, u.hot, 1.0);
         }
         if let Some(u) = &sc.osel
