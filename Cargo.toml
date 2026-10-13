@@ -7,10 +7,12 @@ license = "GPL-3.0-only"
 description = "Tiny yet powerful, beautiful, open-source and cross-platform tool for screenshots, editing and video capture"
 
 [features]
-# Embed the camera background blur's person-segmentation model
+# The camera background blur's person-segmentation model
 # (assets/selfie.bin, converted from MediaPipe's Selfie Segmentation
 # landscape .tflite with tools/convert-selfie; Apache-2.0, see
-# THIRD_PARTY_NOTICES.md). Off: the Background setting is unavailable.
+# THIRD_PARTY_NOTICES.md) is embedded whenever the file is there (build.rs;
+# RUSTSHOT_NO_SELFIE=1 leaves it out, and the Background setting is then
+# unavailable). This feature makes a missing file an error.
 selfie_model = []
 
 [dependencies]

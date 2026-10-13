@@ -446,7 +446,6 @@ fn every_operator_matches_the_reference() {
                 b.dw_full(c, 1, (3, 3), (1, 1), (2, 2), false, false, Act::None)
             }),
         ),
-        ("depthwise multiplier 2", (8, 9), Box::new(|b, x| b.dw_full(x, 2, (3, 3), (2, 1), (1, 1), true, true, Act::Relu))),
         ("transposed conv same", (5, 6), Box::new(|b, x| b.tconv(x, 6, 2, 2, true, Act::None))),
         ("transposed conv 3x3 s2", (5, 4), Box::new(|b, x| b.tconv(x, 5, 3, 2, true, Act::Relu))),
         ("transposed conv valid", (4, 5), Box::new(|b, x| b.tconv(x, 2, 3, 2, false, Act::None))),
@@ -565,6 +564,20 @@ fn a_mobile_graph_matches_the_reference() {
     assert!(err < 2e-5, "relative error {err}");
 }
 
+/// A loaded net run as the camera thread would: `run`, and `segment` on
+/// a prepared picture (the crop reads the output).
+fn run_all(n: &mut Net) {
+    n.run();
+    let (w, h) = n.input_size();
+    let f = CamFrame { w: 64, h: 36, bgra: (0..64 * 36 * 4).map(|i| (i * 7 % 251) as u8).collect() };
+    let mut inp = SegInput::default();
+    inp.prepare(&f, w, h);
+    let mut sq = SqMask::default();
+    if n.segment(&inp, &mut sq) {
+        assert!(sq.v.iter().all(|v| (0.0..=1.0).contains(v)));
+    }
+}
+
 #[test]
 fn bad_models_are_refused() {
     let ok = {
@@ -589,7 +602,7 @@ fn bad_models_are_refused() {
         if let Ok(m) = Model::parse(&c)
             && let Ok(mut n) = Net::with_helpers(m, 1)
         {
-            n.run();
+            run_all(&mut n);
         }
     }
     // The same for a graph with every kind of operator in it.
@@ -601,7 +614,7 @@ fn bad_models_are_refused() {
         if let Ok(m) = Model::parse(&c)
             && let Ok(mut n) = Net::with_helpers(m, 1)
         {
-            n.run();
+            run_all(&mut n);
         }
     }
     let with = |f: &dyn Fn(&mut Model)| {
@@ -624,14 +637,47 @@ fn bad_models_are_refused() {
     assert!(with(&|m| m.output = m.input).contains("output"));
     assert!(with(&|m| m.tensors[0].dims[3] = 4).contains("input"));
     assert!(with(&|m| m.ops[1].output = 3).contains("twice"));
-    // A segmentation model has a 1- or 2-channel output.
+    // The review's holes: a zero dimension, a constant as the output, a
+    // picture input of batch 2, a depthwise multiplier.
+    assert!(with(&|m| m.tensors.push(Tensor { dims: vec![1, 0, 4, 4], data: Some(Vec::new()) })).contains("zero dimension"));
+    assert!(with(&|m| m.output = 1).contains("nothing computes the output"));
+    assert!(with(&|m| m.ops.clear()).contains("nothing computes the output"));
+    let batch2 = {
+        let mut b = B::new(3);
+        let x = b.input(4, 4);
+        let y = b.conv(x, 2, 1, 1, Act::None);
+        let k = b.konst(vec![2, 4, 4, 2], 1.0);
+        let z = b.bin(y, k, false, Act::None);
+        b.finish(z)
+    };
+    assert!(Net::from_model(batch2).err().unwrap().0.contains("batch"));
+    let mult = {
+        let mut b = B::new(3);
+        let x = b.input(8, 8);
+        let y = b.dw_full(x, 2, (3, 3), (1, 1), (1, 1), true, true, Act::None);
+        b.finish(y)
+    };
+    assert!(Net::from_model(mult).err().unwrap().0.contains("multiplier 1 only"));
+    // A transposed convolution's output must be what its padding gives.
+    let tc = {
+        let mut b = B::new(3);
+        let x = b.input(4, 4);
+        let y = b.tconv(x, 1, 2, 2, true, Act::None);
+        b.finish(y)
+    };
+    assert!(Net::from_model(tc.clone()).is_ok());
+    let mut bad_tc = tc;
+    let o = bad_tc.output as usize;
+    bad_tc.tensors[o].dims = vec![1, 6, 8, 1];
+    assert!(Net::from_model(bad_tc).err().unwrap().0.contains("output size"));
+    // A segmentation model has a one-channel output.
     let wide = {
         let mut b = B::new(2);
         let x = b.input(8, 8);
         let y = b.conv(x, 3, 3, 1, Act::None);
         b.finish(y)
     };
-    assert!(Net::selfie(&wide.to_bytes()).err().unwrap().0.contains("1xHxWx1 or 2"));
+    assert!(Net::selfie(&wide.to_bytes()).err().unwrap().0.contains("1xHxWx1"));
     assert!(Net::selfie(&bytes).is_ok());
 }
 
@@ -703,7 +749,8 @@ fn net_segments_the_square() {
 #[test]
 #[ignore = "benchmark; run in release"]
 fn seg_bench() {
-    let m = mobile_model(144, 256, 8, 3);
+    // The real model when it is there, else one of about its size.
+    let m = real_model().map(|b| Model::parse(&b).unwrap()).unwrap_or_else(|| mobile_model(144, 256, 8, 3));
     let weights: usize = m.tensors.iter().filter_map(|t| t.data.as_ref()).map(Vec::len).sum();
     let bytes = m.to_bytes();
     let mut net = Net::load(&bytes).unwrap();
@@ -834,7 +881,7 @@ fn write_synthetic_selfie_bin() {
 /// The model this build embeds (`selfie_model`): it loads, takes a
 /// 144x256 picture (the landscape model) and gives a probability per
 /// pixel. `cargo test --features selfie_model embedded_model`
-#[cfg(feature = "selfie_model")]
+#[cfg(selfie_embedded)]
 #[test]
 fn embedded_model_loads_and_runs() {
     let bytes = EMBEDDED.expect("the feature embeds the model");

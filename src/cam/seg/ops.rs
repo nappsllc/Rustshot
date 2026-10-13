@@ -514,31 +514,6 @@ pub fn depthwise(x: &[f32], xd: Dim, w: &[f32], b: &[f32], g: Geo, act: Act, out
     }
 }
 
-/// A depthwise convolution with a channel multiplier: output channel `o`
-/// reads input channel `o / mult`; raw `1 x kh x kw x (c·mult)` weights.
-#[allow(clippy::too_many_arguments)]
-pub fn depthwise_mult(x: &[f32], xd: Dim, w: &[f32], b: Option<&[f32]>, g: Geo, mult: usize, act: Act, out: &mut [f32], od: Dim) {
-    let (ih, iw, c) = xd;
-    let (oh, ow, oc) = od;
-    for oy in 0..oh {
-        let (ky0, ky1) = taps(oy, g.stride.0, g.pad.0, g.dil.0, g.k.0, ih);
-        for ox in 0..ow {
-            let (kx0, kx1) = taps(ox, g.stride.1, g.pad.1, g.dil.1, g.k.1, iw);
-            for o in 0..oc {
-                let mut a = b.map_or(0.0, |b| b[o]);
-                for ky in ky0..ky1 {
-                    let iy = oy * g.stride.0 + ky * g.dil.0 - g.pad.0;
-                    for kx in kx0..kx1 {
-                        let ix = ox * g.stride.1 + kx * g.dil.1 - g.pad.1;
-                        a += x[(iy * iw + ix) * c + o / mult] * w[(ky * g.k.1 + kx) * oc + o];
-                    }
-                }
-                out[(oy * ow + ox) * oc + o] = act1(act, a);
-            }
-        }
-    }
-}
-
 /// Every output pixel of a transposed convolution starts at the bias.
 pub fn tconv_bias(out: &mut [f32], (oh, ow, oc): Dim, b: &[f32]) {
     for p in out[..oh * ow * oc].chunks_exact_mut(oc) {
@@ -757,6 +732,7 @@ pub fn lerp_index(i: usize, n_in: usize, n_out: usize, align: bool, half: bool) 
 
 /// Bilinear resize (TensorFlow Lite's `RESIZE_BILINEAR`).
 pub fn resize_bilinear(x: &[f32], (ih, iw, c): Dim, (oh, ow): (usize, usize), align: bool, half: bool, out: &mut [f32]) {
+    assert!(ih > 0 && iw > 0 && x.len() >= ih * iw * c && out.len() >= oh * ow * c);
     let xs: Vec<_> = (0..ow).map(|i| lerp_index(i, iw, ow, align, half)).collect();
     let c4 = c / 4 * 4;
     for oy in 0..oh {

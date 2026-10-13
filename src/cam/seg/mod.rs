@@ -26,12 +26,13 @@ use ops::{dims4, Dim, Geo};
 use std::sync::Mutex;
 use team::{Rows, Team};
 
-/// The model in this build (`selfie_model` feature: converted with
-/// `tools/convert-selfie` into `assets/selfie.bin`).
-#[cfg(feature = "selfie_model")]
-pub static EMBEDDED: Option<&[u8]> = Some(include_bytes!("../../../assets/selfie.bin"));
-#[cfg(not(feature = "selfie_model"))]
-pub static EMBEDDED: Option<&[u8]> = None;
+/// The model in this build: `assets/selfie.bin` (converted with
+/// `tools/convert-selfie`), embedded whenever it is there (build.rs sets
+/// `selfie_embedded`; `RUSTSHOT_NO_SELFIE=1` builds without it).
+#[cfg(selfie_embedded)]
+pub const EMBEDDED: Option<&[u8]> = Some(include_bytes!("../../../assets/selfie.bin"));
+#[cfg(not(selfie_embedded))]
+pub const EMBEDDED: Option<&[u8]> = None;
 
 /// What a convolution keeps ready.
 enum Prep {
@@ -92,7 +93,8 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 /// the team costs more).
 const PAR_WORK: usize = 250_000;
 
-/// The most activation values a model may have (all its tensors; the
+/// The most activation and scratch values a model may have (its tensors
+/// and every part's scratch; the
 /// selfie model at 144x256 has about 3 million).
 const MAX_ACTIVATIONS: usize = 24 << 20;
 
@@ -114,13 +116,13 @@ impl Net {
         Net::from_model(Model::parse(bytes)?)
     }
 
-    /// [`Net::load`] for a segmentation model: one output channel (the
-    /// person's probability) or two (background and person scores).
+    /// [`Net::load`] for a segmentation model: one output channel, the
+    /// person's probability (the landscape model ends in a sigmoid).
     pub fn selfie(bytes: &[u8]) -> Result<Net, FormatError> {
         let net = Net::load(bytes)?;
         let so = net.shapes[net.output];
-        if !(1..=2).contains(&so[3]) {
-            return Err(bad(format!("the output must be 1xHxWx1 or 2 (it is {so:?})")));
+        if so[3] != 1 {
+            return Err(bad(format!("the output must be 1xHxWx1 (it is {so:?})")));
         }
         Ok(net)
     }
@@ -134,6 +136,10 @@ impl Net {
         let shapes: Vec<[usize; 4]> = m.tensors.iter().map(|t| dims4(&t.dims)).collect();
         let consts: Vec<Option<Vec<f32>>> = m.tensors.into_iter().map(|t| t.data).collect();
         let (input, output) = (m.input as usize, m.output as usize);
+        // No empty tensor anywhere (every kernel assumes at least one value).
+        if let Some(t) = shapes.iter().position(|s| s.contains(&0)) {
+            return Err(bad(format!("tensor {t} has a zero dimension ({:?})", shapes[t])));
+        }
         let si = shapes[input];
         if consts[input].is_some() || si[0] != 1 || si[3] != 3 {
             return Err(bad(format!("the input must be 1xHxWx3 (it is {si:?})")));
@@ -149,6 +155,10 @@ impl Net {
             }
         }
         let mut steps = Vec::with_capacity(m.ops.len());
+        // The largest scratch a part needs (patches, products), and what
+        // an operator computes.
+        let mut scratch_max = 0usize;
+        let mut computed = vec![false; shapes.len()];
         for (n, op) in m.ops.iter().enumerate() {
             let e = |s: &str| bad(format!("op {n} ({:?}): {s}", op.kind));
             let ins: Vec<usize> = op.inputs.iter().map(|&i| i as usize).collect();
@@ -163,7 +173,14 @@ impl Net {
             let cst = |i: usize| consts[ins[i]].as_deref();
             let need = |k: usize| if ins.len() < k { Err(e("too few inputs")) } else { Ok(()) };
             let od = shapes[out];
-            if od[0] != 1 {
+            // Batch 1 for the output and for every input read as a picture
+            // (not the weights).
+            let pictures = match op.kind {
+                Kind::Add | Kind::Mul => 2,
+                Kind::Concat => ins.len(),
+                _ => 1,
+            };
+            if od[0] != 1 || ins.iter().take(pictures).any(|&i| shapes[i][0] != 1) {
                 return Err(e("batch must be 1"));
             }
             let mut prep = Prep::None;
@@ -186,33 +203,46 @@ impl Net {
                         return Err(e("bias size"));
                     }
                     if dw {
+                        // (Only a multiplier of 1: what the selfie model has.)
                         let Kind::Depthwise { mult, .. } = op.kind else { unreachable!() };
-                        if w[0] != 1 || w[3] != oc || oc != x[3] * mult as usize || mult == 0 {
-                            return Err(e("depthwise weights / channels"));
+                        if w[0] != 1 || w[3] != oc || oc != x[3] || mult != 1 {
+                            return Err(e("depthwise weights / channels (multiplier 1 only)"));
                         }
-                        if mult == 1 {
-                            let (pw, pb) = ops::pack_dw(wd, (kh, kw, oc), bias);
-                            prep = Prep::Packed(pw, pb);
-                        }
+                        let (pw, pb) = ops::pack_dw(wd, (kh, kw, oc), bias);
+                        prep = Prep::Packed(pw, pb);
                     } else {
                         if w[0] != oc || w[3] != x[3] {
                             return Err(e("weights / channels"));
                         }
                         let (pw, pb) = ops::pack_hwio(wd, (oc, kh, kw, x[3]), bias);
                         prep = Prep::Packed(pw, pb);
+                        // An output row of patches (im2col), unless a plain 1x1.
+                        if (kh, kw) != (1, 1) || stride != [1, 1] {
+                            scratch_max = scratch_max.max(od[2] * kh * kw * x[3]);
+                        }
                     }
                 }
-                Kind::TransposeConv { stride, .. } => {
+                Kind::TransposeConv { stride, pad } => {
                     need(2)?;
                     let (x, w) = (sh(0), sh(1));
                     cst(1).ok_or_else(|| e("weights must be constant"))?;
                     if ins.len() > 2 && cst(2).is_none_or(|b| b.len() != od[3]) {
                         return Err(e("bias"));
                     }
-                    if stride.contains(&0) || w[0] != od[3] || w[3] != x[3] || od[1] == 0 || od[2] == 0 {
+                    if stride.contains(&0) || w[0] != od[3] || w[3] != x[3] {
                         return Err(e("weights / channels"));
                     }
+                    // The output is the full one, `(in - 1)·s + k`, less the
+                    // padding (that before it, as much or one more after).
+                    for (a, n) in [(0, x[1]), (1, x[2])] {
+                        let full = (n - 1) * stride[a] as usize + w[1 + a];
+                        let p = pad[a] as usize;
+                        if od[1 + a] > full || !(2 * p..=2 * p + 1).contains(&(full - od[1 + a])) {
+                            return Err(e("output size"));
+                        }
+                    }
                     let oc = od[3];
+                    scratch_max = scratch_max.max(x[2] * w[1] * w[2] * ops::round4(oc));
                     let wp = ops::pack_tconv(cst(1).unwrap_or_default(), (oc, w[1], w[2], x[3]));
                     let b = ops::pad_bias(if ins.len() > 2 { cst(2) } else { None }, oc);
                     let zero = vec![0.0; w[1] * w[2] * ops::round4(oc)];
@@ -278,11 +308,12 @@ impl Net {
                 }
             }
             ready[out] = true;
+            computed[out] = true;
             // A reshape's or pad's shape input (a constant) is not read.
             let inputs = if matches!(op.kind, Kind::Reshape | Kind::Pad { .. }) { ins[..1].to_vec() } else { ins };
             steps.push(Step { kind: op.kind, act: op.act, inputs, output: out, prep, hswish: false });
         }
-        if !ready[output] || output == input {
+        if !computed[output] {
             return Err(bad("nothing computes the output"));
         }
         // A hard-swish right after a convolution whose output it alone
@@ -295,6 +326,21 @@ impl Net {
         }
         let mut fused: Vec<Step> = Vec::with_capacity(steps.len());
         for s in steps {
+            // A ReLU (or ReLU6) likewise becomes the convolution's activation.
+            if let Some(prev) = fused.last_mut()
+                && matches!(s.kind, Kind::Relu | Kind::Relu6)
+                && s.act == Act::None
+                && prev.output == s.inputs[0]
+                && uses[prev.output] == 1
+                && prev.output != output
+                && prev.act == Act::None
+                && !prev.hswish
+                && matches!((prev.kind, &prev.prep), (Kind::Conv { .. } | Kind::Depthwise { .. }, Prep::Packed(..)))
+            {
+                prev.output = s.output;
+                prev.act = if s.kind == Kind::Relu { Act::Relu } else { Act::Relu6 };
+                continue;
+            }
             if let Some(prev) = fused.last_mut()
                 && s.kind == Kind::HardSwish
                 && s.act == Act::None
@@ -319,8 +365,9 @@ impl Net {
         }
         // (A damaged file must not ask for gigabytes.)
         let total: usize = shapes.iter().zip(&written).filter(|(_, w)| **w).map(|(s, _)| s.iter().product::<usize>()).sum();
+        let total = total + scratch_max * (helpers + 1);
         if total > MAX_ACTIVATIONS {
-            return Err(bad(format!("{total} activation values (at most {MAX_ACTIVATIONS})")));
+            return Err(bad(format!("{total} activation and scratch values (at most {MAX_ACTIVATIONS})")));
         }
         let bufs = shapes.iter().zip(&written).map(|(s, &w)| if w { vec![0.0; s.iter().product()] } else { Vec::new() }).collect();
         let team = Team::new(helpers);
@@ -447,12 +494,6 @@ impl Net {
                     }
                 });
             }
-            (Kind::Depthwise { stride, pad, dil, mult }, Prep::None) => {
-                let ws = self.shapes[st.inputs[1]];
-                let g = Geo { k: (ws[1], ws[2]), stride: p2(stride), pad: p2(pad), dil: p2(dil) };
-                let b = (st.inputs.len() > 2).then(|| get(2));
-                ops::depthwise_mult(get(0), xd, get(1), b, g, mult as usize, st.act, out, od);
-            }
             (Kind::TransposeConv { stride, pad }, Prep::TConv { w, b, zero }) => {
                 let ws = self.shapes[st.inputs[1]];
                 let (k, x) = ((ws[1], ws[2]), get(0));
@@ -509,7 +550,7 @@ impl Net {
                 ops::concat(&parts, od.0 * od.1, out);
                 ops::activate(st.act, out);
             }
-            (Kind::Conv { .. } | Kind::TransposeConv { .. }, _) | (Kind::Depthwise { .. }, Prep::TConv { .. }) => {
+            (Kind::Conv { .. } | Kind::TransposeConv { .. } | Kind::Depthwise { .. }, _) => {
                 unreachable!("convolutions are packed at load")
             }
         }
@@ -642,13 +683,15 @@ impl Segment for Net {
         }
         let (oh, ow, oc) = self.output_dim();
         let y = self.run();
-        // Two channels: background and person scores (a softmax's second).
-        let m: std::borrow::Cow<[f32]> = if oc == 1 {
-            std::borrow::Cow::Borrowed(y)
-        } else {
-            y.as_chunks::<2>().0.iter().map(|p| 1.0 / (1.0 + (p[0] - p[1]).exp())).collect::<Vec<_>>().into()
-        };
-        crop_square(&m, (ow, oh), (w, h), sq, out);
+        // (One channel: a model from `Net::selfie`.)
+        if oc != 1 || y.len() < oh * ow {
+            return false;
+        }
+        crop_square(y, (ow, oh), (w, h), sq, out);
+        // Anything not a probability (a NaN from a bad picture) is none.
+        for v in &mut out.v {
+            *v = if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
+        }
         true
     }
 }

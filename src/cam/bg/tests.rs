@@ -276,10 +276,15 @@ fn effect_blurs_once_a_mask_came() {
     let mut p = sq.clone();
     fx.apply(Bg::Off, &raw, &mut p);
     assert_eq!((p == sq, fx.running()), (true, None));
-    // The first picture goes out; until its mask is back it shows as is.
+    // The segmenter is made on its thread (the camera thread goes on);
+    // then a picture goes out; until its mask is back it shows as is.
     let mut p = sq.clone();
     fx.apply(Bg::Strong, &raw, &mut p);
+    assert!(p == sq, "no mask yet");
+    fx.settle();
     assert_eq!(fx.running(), Some(true));
+    let mut p = sq.clone();
+    fx.apply(Bg::Strong, &raw, &mut p);
     assert!(p == sq || calls.load(Ordering::SeqCst) == 1);
     fx.settle();
     let mut p = sq.clone();
@@ -292,6 +297,24 @@ fn effect_blurs_once_a_mask_came() {
     let mut p = sq.clone();
     fx.apply(Bg::Off, &raw, &mut p);
     assert!(p == sq && fx.mask().n == 0);
+    // A mask made before Off is not used after On.
+    let mut p = sq.clone();
+    fx.apply(Bg::Strong, &raw, &mut p); // sends a picture
+    fx.apply(Bg::Off, &raw, &mut p);
+    fx.settle();
+    let mut p = sq.clone();
+    fx.apply(Bg::Strong, &raw, &mut p);
+    assert_eq!(fx.mask().n, 0, "the old mask is dropped");
+}
+
+/// A NaN in one mask does not stay in the average.
+#[test]
+fn bad_mask_values_do_not_stick() {
+    let mut s = Smooth::default();
+    s.push(&SqMask { n: 2, v: vec![f32::NAN, 2.0, -1.0, 0.5] });
+    assert_eq!(s.m.v, vec![0.0, 1.0, 0.0, 0.5]);
+    s.push(&SqMask { n: 2, v: vec![1.0, f32::INFINITY, 1.0, 1.0] });
+    assert!(s.m.v.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)), "{:?}", s.m.v);
 }
 
 #[test]
@@ -302,6 +325,7 @@ fn without_a_segmenter_nothing_changes() {
     let was = p.clone();
     for _ in 0..3 {
         fx.apply(Bg::Light, &raw, &mut p);
+        fx.settle();
     }
     assert_eq!((p, fx.running()), (was, Some(false)));
 }

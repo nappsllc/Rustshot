@@ -175,16 +175,19 @@ pub struct Smooth {
 }
 
 impl Smooth {
-    /// Fold in a new mask (a different size starts over).
+    /// Fold in a new mask (a different size starts over). Values are
+    /// taken as 0..1 (anything else, a NaN included, as 0), so one bad
+    /// mask cannot stay in the average.
     pub fn push(&mut self, new: &SqMask) {
+        let ok = |q: f32| if q.is_finite() { q.clamp(0.0, 1.0) } else { 0.0 };
         if self.m.n != new.n || self.m.v.len() != new.v.len() {
             self.m.n = new.n;
             self.m.v.clear();
-            self.m.v.extend_from_slice(&new.v);
+            self.m.v.extend(new.v.iter().map(|&q| ok(q)));
             return;
         }
         for (p, &q) in self.m.v.iter_mut().zip(&new.v) {
-            *p = EMA * q + (1.0 - EMA) * *p;
+            *p = EMA * ok(q) + (1.0 - EMA) * *p;
         }
     }
 
@@ -263,6 +266,9 @@ const EDGE: (f32, f32) = (0.2, 0.8);
 pub struct Scratch {
     f: [Vec<f32>; 12],
     blur: Vec<u8>,
+    /// The half-size picture (plain means) and the bilinear taps.
+    plain: Vec<u8>,
+    taps: Vec<(usize, usize, f32)>,
     tmp: Vec<u8>,
     acc: Vec<u16>,
 }
@@ -437,46 +443,72 @@ pub fn composite(pic: &mut CamFrame, mask: &[u8], sigma: f32, s: &mut Scratch) {
         }
         return;
     }
-    // Half size: the weighted 2x2 means, blurred at half the sigma, read
-    // back bilinearly (each full pixel sits a quarter of a half pixel off
-    // a half pixel's centre: weights 3:1).
+    // Half size: the weighted 2x2 means (and the plain ones), blurred at
+    // half the sigma; the background's color is worked out there (the
+    // division, a quarter as often), then read back bilinearly (each full
+    // pixel sits a quarter of a half pixel off a half pixel's centre:
+    // weights 3:1) and laid under the person.
     let h = d.div_ceil(2);
     bl.resize(h * h * 4, 0);
+    let plain = &mut s.plain;
+    plain.clear();
+    plain.resize(h * h * 4, 0);
     for j in 0..h {
         let (y0, y1) = (2 * j, (2 * j + 1).min(d - 1));
         for i in 0..h {
             let (x0, x1) = (2 * i, (2 * i + 1).min(d - 1));
-            let mut acc = F4::splat(0.0);
+            let (mut acc, mut sum) = (F4::splat(0.0), F4::splat(0.0));
             for at in [y0 * d + x0, y0 * d + x1, y1 * d + x0, y1 * d + x1] {
-                acc = acc.mul_add(F4::from_px(px[at]), F4::splat((255 - mask[at]) as f32 * (0.25 / 255.0)));
+                let v = F4::from_px(px[at]);
+                acc = acc.mul_add(v, F4::splat((255 - mask[at]) as f32 * (0.25 / 255.0)));
+                sum = sum.mul_add(v, F4::splat(0.25));
             }
             bl[(j * h + i) * 4..][..4].copy_from_slice(&acc.to_px());
+            plain[(j * h + i) * 4..][..4].copy_from_slice(&sum.to_px());
         }
     }
     crate::objects::blur::blur_block_on(bl, h, h, sigma / 2.0, &mut s.tmp, &mut s.acc, 1);
+    for (b, q) in bl.as_chunks_mut::<4>().0.iter_mut().zip(plain.as_chunks::<4>().0) {
+        *b = background(F4::from_px(*b), F4::from_px(*q)).to_px();
+    }
     // Per full index: the two half pixels and the first one's weight.
-    let taps: Vec<(usize, usize, f32)> = (0..d)
-        .map(|x| {
-            let i = x / 2;
-            if x % 2 == 0 { (i.saturating_sub(1), i, if i == 0 { 1.0 } else { 0.25 }) } else { (i, (i + 1).min(h - 1), 0.75) }
-        })
-        .collect();
-    let bl = &s.blur;
-    let bp = bl.as_chunks::<4>().0;
+    let taps = &mut s.taps;
+    taps.clear();
+    taps.extend((0..d).map(|x| {
+        let i = x / 2;
+        if x % 2 == 0 { (i.saturating_sub(1), i, if i == 0 { 1.0 } else { 0.25 }) } else { (i, (i + 1).min(h - 1), 0.75) }
+    }));
+    let bp = s.blur.as_chunks::<4>().0;
     for (y, &(y0, y1, wy)) in taps.iter().enumerate() {
         let (r0, r1) = (&bp[y0 * h..][..h], &bp[y1 * h..][..h]);
         let row = pic.bgra[y * d * 4..][..d * 4].as_chunks_mut::<4>().0;
         let (wy0, wy1) = (F4::splat(wy), F4::splat(1.0 - wy));
-        for ((p, &(x0, x1, wx)), &m) in row.iter_mut().zip(&taps).zip(&mask[y * d..][..d]) {
+        for ((p, &(x0, x1, wx)), &m) in row.iter_mut().zip(taps.iter()).zip(&mask[y * d..][..d]) {
             if m == 255 {
                 continue;
             }
             let (wx0, wx1) = (F4::splat(wx), F4::splat(1.0 - wx));
             let top = F4::from_px(r0[x0]).mul(wx0).mul_add(F4::from_px(r0[x1]), wx1);
             let bot = F4::from_px(r1[x0]).mul(wx0).mul_add(F4::from_px(r1[x1]), wx1);
-            mix(p, top.mul(wy0).mul_add(bot, wy1), m);
+            let k = m as f32 * (1.0 / 255.0);
+            *p = F4::from_px(*p).mul(F4::splat(k)).mul_add(top.mul(wy0).mul_add(bot, wy1), F4::splat(1.0 - k)).to_px();
         }
     }
+}
+
+/// The background's color from its blurred weighted colors `b` (the
+/// weight, of 255, in the fourth lane): the weight divided out. Where
+/// little background is near (a weight under [`SURE`], e.g. a narrow gap
+/// by the person) that division magnifies the 8-bit rounding, so it fades
+/// into `plain` (the picture's own color there) instead of switching.
+#[inline(always)]
+fn background(b: F4, plain: F4) -> F4 {
+    let a = b.lane3();
+    if a < 1.0 {
+        return plain;
+    }
+    let t = ((a - 1.0) * (1.0 / (SURE - 1.0))).min(1.0);
+    b.mul(F4::splat(255.0 / a)).mul(F4::splat(t)).mul_add(plain, F4::splat(1.0 - t))
 }
 
 /// Bubbles this large blur their background at half size (it is a blur:
@@ -484,17 +516,18 @@ pub fn composite(pic: &mut CamFrame, mask: &[u8], sigma: f32, s: &mut Scratch) {
 const HALF_FROM: usize = 256;
 
 /// The picture's pixel `p` over the blurred background `b` (weighted
-/// colors and, in the fourth lane, their weight) by the mask `m`: the
-/// background's color has its weight divided out; where no background is
-/// near, the picture's own.
+/// colors and, in the fourth lane, their weight; see [`background`]) by
+/// the mask `m`.
 #[inline(always)]
 fn mix(p: &mut [u8; 4], b: F4, m: u8) {
-    let a = b.lane3();
     let pv = F4::from_px(*p);
-    let bg = if a >= 0.5 { b.mul(F4::splat(255.0 / a)) } else { pv };
     let k = m as f32 * (1.0 / 255.0);
-    *p = pv.mul(F4::splat(k)).mul_add(bg, F4::splat(1.0 - k)).to_px();
+    *p = pv.mul(F4::splat(k)).mul_add(background(b, pv), F4::splat(1.0 - k)).to_px();
 }
+
+/// The blurred background weight (of 255) from which its color is
+/// trusted fully.
+const SURE: f32 = 16.0;
 
 /// What the camera thread and the segmentation thread share.
 #[derive(Default)]
@@ -509,6 +542,10 @@ struct Slot {
     /// A job is out (from submit until its mask is taken).
     busy: bool,
     stop: bool,
+    /// The picture size the segmenter wants, once it is made; `failed`:
+    /// there is none.
+    size: Option<(usize, usize)>,
+    failed: bool,
 }
 
 struct Shared {
@@ -520,23 +557,28 @@ fn lock(m: &Mutex<Slot>) -> MutexGuard<'_, Slot> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// The segmentation thread (stopped and joined on drop).
+/// The segmentation thread (stopped and joined on drop). It makes the
+/// segmenter itself (loading the model and starting its helpers takes a
+/// few ms, which the camera thread does not wait for).
 struct Worker {
     sh: Arc<Shared>,
     thread: Option<std::thread::JoinHandle<()>>,
-    /// The picture size the segmenter wants.
-    size: (usize, usize),
 }
 
 impl Worker {
-    fn start(mut eng: Box<dyn Segment>) -> Option<Worker> {
-        let size = eng.input_size();
+    fn start(make: Maker) -> Option<Worker> {
         let sh = Arc::new(Shared { slot: Mutex::new(Slot::default()), cv: Condvar::new() });
         let s2 = sh.clone();
         let thread = std::thread::Builder::new()
             .name("camera-segment".into())
             .spawn(move || {
                 let sh = s2;
+                let mut make = make;
+                let Some(mut eng) = make() else {
+                    lock(&sh.slot).failed = true;
+                    return;
+                };
+                lock(&sh.slot).size = Some(eng.input_size());
                 loop {
                     let job = {
                         let mut st = lock(&sh.slot);
@@ -565,7 +607,16 @@ impl Worker {
                 }
             })
             .ok()?;
-        Some(Worker { sh, thread: Some(thread), size })
+        Some(Worker { sh, thread: Some(thread) })
+    }
+
+    /// The segmenter's picture size (`None` while it is being made).
+    fn size(&self) -> Option<(usize, usize)> {
+        lock(&self.sh.slot).size
+    }
+
+    fn failed(&self) -> bool {
+        lock(&self.sh.slot).failed
     }
 
     /// The finished mask, if one is waiting (the job is over then).
@@ -595,11 +646,12 @@ impl Worker {
         self.sh.cv.notify_all();
     }
 
-    /// Wait (tests) until the job out is done.
+    /// Wait (tests) until the segmenter is made (or not) and the job out
+    /// is done.
     #[cfg(test)]
     fn wait_idle(&self) {
         let end = Instant::now() + std::time::Duration::from_secs(10);
-        let out = |st: &Slot| st.job.is_some() || (st.busy && st.done.is_none());
+        let out = |st: &Slot| (st.size.is_none() && !st.failed) || st.job.is_some() || (st.busy && st.done.is_none());
         while out(&lock(&self.sh.slot)) {
             assert!(Instant::now() < end, "the segmentation thread is stuck");
             std::thread::sleep(std::time::Duration::from_millis(1));
@@ -617,16 +669,19 @@ impl Drop for Worker {
     }
 }
 
-/// Makes the segmenter, once, when the blur is first wanted.
+/// Makes the segmenter, once, on the segmentation thread.
 pub type Maker = Box<dyn FnMut() -> Option<Box<dyn Segment>> + Send>;
 
 /// The background effect of one camera thread.
 pub struct Effect {
-    make: Maker,
+    /// Taken by the worker when it starts.
+    make: Option<Maker>,
     /// `Some(None)`: tried, no segmenter here.
     worker: Option<Option<Worker>>,
     pub pacer: Pacer,
     smooth: Smooth,
+    /// A job sent before the blur was turned off: its mask is dropped.
+    stale: bool,
     mask: Vec<u8>,
     scratch: Scratch,
 }
@@ -639,7 +694,7 @@ impl Default for Effect {
 
 impl Effect {
     pub fn with_maker(make: Maker) -> Effect {
-        Effect { make, worker: None, pacer: Pacer::default(), smooth: Smooth::default(), mask: Vec::new(), scratch: Scratch::default() }
+        Effect { make: Some(make), worker: None, pacer: Pacer::default(), smooth: Smooth::default(), stale: false, mask: Vec::new(), scratch: Scratch::default() }
     }
 
     /// `pic` (the bubble's square of `raw`) with its background blurred
@@ -648,20 +703,35 @@ impl Effect {
     pub fn apply(&mut self, bg: Bg, raw: &CamFrame, pic: &mut CamFrame) {
         if bg == Bg::Off {
             // The thread stays (turning it on again is instant); the old
-            // mask would show the wrong place.
+            // mask, and one still being made, would show the wrong place.
             self.smooth.clear();
+            if let Some(Some(w)) = &self.worker {
+                if let Some((m, _)) = w.take() {
+                    w.give_back(m);
+                }
+                self.stale |= w.busy();
+            }
             return;
         }
-        let make = &mut self.make;
-        let Some(w) = self.worker.get_or_insert_with(|| make().and_then(Worker::start)) else { return };
+        if self.worker.is_none() {
+            self.worker = Some(self.make.take().and_then(Worker::start));
+        }
+        if matches!(&self.worker, Some(Some(w)) if w.failed()) {
+            self.worker = Some(None);
+        }
+        let Some(Some(w)) = &self.worker else { return };
         if let Some((m, ms)) = w.take() {
             self.pacer.took(ms);
-            self.smooth.push(&m);
+            if !std::mem::take(&mut self.stale) {
+                self.smooth.push(&m);
+            }
             w.give_back(m);
         }
-        if self.pacer.want(w.busy()) {
+        if let Some((sw, sh)) = w.size()
+            && self.pacer.want(w.busy())
+        {
             let mut inp = w.spare();
-            inp.prepare(raw, w.size.0, w.size.1);
+            inp.prepare(raw, sw, sh);
             if inp.sq.is_some() {
                 w.submit(inp);
             }
@@ -679,7 +749,7 @@ impl Effect {
         &self.smooth.m
     }
 
-    /// Wait for the segmentation out (tests).
+    /// Wait for the segmenter and the segmentation out (tests).
     #[cfg(test)]
     pub fn settle(&self) {
         if let Some(Some(w)) = &self.worker {
@@ -687,10 +757,10 @@ impl Effect {
         }
     }
 
-    /// Whether a segmenter runs (tests).
+    /// Whether a segmenter runs (tests; after `settle`).
     #[cfg(test)]
     pub fn running(&self) -> Option<bool> {
-        self.worker.as_ref().map(Option::is_some)
+        self.worker.as_ref().map(|w| w.as_ref().is_some_and(|w| !w.failed()))
     }
 }
 
