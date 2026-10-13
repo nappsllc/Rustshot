@@ -304,6 +304,16 @@ fn the_export_has_the_border_and_the_history_original_not() {
     let h = job.hist.as_ref().expect("history shot");
     assert_eq!(h.original.dimensions(), (400, 250), "no border in the history");
     assert_eq!(a.last_region, Some((300, 200, 400, 250)), "Repeat takes the region, not the border");
+    // Copy text reads the capture alone.
+    let mut a = app_with(Some(fr(300.0, 200.0, 400.0, 250.0)), shot());
+    let e = ed(&mut a);
+    e.cfg.border_width = 4;
+    e.tasks = vec![Task::Text];
+    let State::Edit(e) = std::mem::replace(&mut a.st, State::Hidden) else { unreachable!() };
+    let mut e = *e;
+    a.finish(&mut e, false);
+    let State::Finish(job) = &a.st else { panic!("finish job") };
+    assert_eq!((job.img.dimensions(), job.sel_global), ((400, 250), (300, 200)), "no border for OCR");
 }
 
 /// The preview: a band of the border color outside the outline, nothing
