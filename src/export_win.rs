@@ -243,6 +243,91 @@ pub fn http_get(host: &str, path: &str, headers: &[(&str, &str)]) -> Result<Stri
     }
 }
 
+/// One HTTPS request for S3 (`crate::s3`): any port, the body streamed
+/// with `WinHttpWriteData` (a file is read as it is sent), no redirects
+/// (a signed request is for its own host only), the response headers
+/// kept (a part's `ETag`). Long timeouts: a part can be tens of MB.
+#[cfg_attr(test, allow(dead_code))] // tests use a mock transport
+pub fn http_request(r: &crate::s3::HttpReq) -> Result<crate::s3::HttpResp, String> {
+    use std::ptr;
+    use windows::Win32::Networking::WinHttp::{
+        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_FLAG_SECURE, WINHTTP_OPTION_REDIRECT_POLICY,
+        WINHTTP_OPTION_REDIRECT_POLICY_NEVER, WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_RAW_HEADERS_CRLF,
+        WINHTTP_QUERY_STATUS_CODE, WinHttpConnect, WinHttpOpen, WinHttpOpenRequest, WinHttpQueryHeaders,
+        WinHttpReceiveResponse, WinHttpSendRequest, WinHttpSetOption, WinHttpSetTimeouts, WinHttpWriteData,
+    };
+    use windows::core::PCWSTR;
+
+    let err = |step: &str| format!("{step}: {}", std::io::Error::last_os_error());
+    let (host, port) = r.host_port();
+    let total = r.body.len();
+    let total = u32::try_from(total).map_err(|_| "a request body over 4 GB".to_string())?;
+    let headers = r
+        .headers
+        .iter()
+        .filter(|(k, _)| !k.eq_ignore_ascii_case("host") && !k.eq_ignore_ascii_case("content-length"))
+        .map(|(k, v)| format!("{k}: {v}"))
+        .collect::<Vec<_>>()
+        .join("\r\n");
+    unsafe {
+        let agent = wide(concat!("rustshot/", env!("CARGO_PKG_VERSION")));
+        let session = Handle(WinHttpOpen(PCWSTR(agent.as_ptr()), WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, PCWSTR::null(), PCWSTR::null(), 0));
+        if session.0.is_null() {
+            return Err(err("WinHttpOpen"));
+        }
+        let _ = WinHttpSetTimeouts(session.0, 15_000, 15_000, 300_000, 300_000);
+        let host_w = wide(host);
+        let conn = Handle(WinHttpConnect(session.0, PCWSTR(host_w.as_ptr()), port, 0));
+        if conn.0.is_null() {
+            return Err(err("WinHttpConnect"));
+        }
+        let method = wide(r.method);
+        let object = wide(&r.path);
+        let req = Handle(WinHttpOpenRequest(conn.0, PCWSTR(method.as_ptr()), PCWSTR(object.as_ptr()), PCWSTR::null(), PCWSTR::null(), ptr::null(), WINHTTP_FLAG_SECURE));
+        if req.0.is_null() {
+            return Err(err("WinHttpOpenRequest"));
+        }
+        let never = WINHTTP_OPTION_REDIRECT_POLICY_NEVER.to_ne_bytes();
+        WinHttpSetOption(Some(req.0), WINHTTP_OPTION_REDIRECT_POLICY, Some(&never)).map_err(|e| format!("WinHttpSetOption: {e}"))?;
+        let hw: Vec<u16> = headers.encode_utf16().collect();
+        let hw = if hw.is_empty() { None } else { Some(&hw[..]) };
+        WinHttpSendRequest(req.0, hw, None, 0, total, 0).map_err(|e| format!("WinHttpSendRequest: {e}"))?;
+        r.body.for_each_chunk(1 << 20, &mut |c| {
+            let mut done = 0usize;
+            while done < c.len() {
+                let mut wrote = 0u32;
+                let rest = &c[done..];
+                WinHttpWriteData(req.0, Some(rest.as_ptr() as *const _), rest.len() as u32, &mut wrote).map_err(|e| format!("WinHttpWriteData: {e}"))?;
+                if wrote == 0 {
+                    return Err("WinHttpWriteData: nothing written".into());
+                }
+                done += wrote as usize;
+            }
+            Ok(())
+        })?;
+        WinHttpReceiveResponse(req.0, ptr::null_mut()).map_err(|e| format!("WinHttpReceiveResponse: {e}"))?;
+        let mut status = 0u32;
+        let mut size = std::mem::size_of::<u32>() as u32;
+        WinHttpQueryHeaders(req.0, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, PCWSTR::null(), Some(&mut status as *mut u32 as *mut _), &mut size, ptr::null_mut())
+            .map_err(|e| format!("WinHttpQueryHeaders: {e}"))?;
+        // The raw header block: its size first, then the block.
+        let mut len = 0u32;
+        let _ = WinHttpQueryHeaders(req.0, WINHTTP_QUERY_RAW_HEADERS_CRLF, PCWSTR::null(), None, &mut len, ptr::null_mut());
+        let mut raw = vec![0u16; (len as usize).div_ceil(2) + 1];
+        let mut len = (raw.len() * 2) as u32;
+        let headers = match WinHttpQueryHeaders(req.0, WINHTTP_QUERY_RAW_HEADERS_CRLF, PCWSTR::null(), Some(raw.as_mut_ptr() as *mut _), &mut len, ptr::null_mut()) {
+            Ok(()) => {
+                raw.truncate(len as usize / 2);
+                crate::s3::parse_header_block(&String::from_utf16_lossy(&raw))
+            }
+            Err(_) => Vec::new(),
+        };
+        let resp = Response { req, _conn: conn, _session: session, status };
+        let body = read_all(&resp)?;
+        Ok(crate::s3::HttpResp { status, headers, body })
+    }
+}
+
 /// Owned WinHTTP handle.
 struct Handle(*mut std::ffi::c_void);
 impl Drop for Handle {

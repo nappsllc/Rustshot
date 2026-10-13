@@ -34,6 +34,8 @@ windows = { version = "0.62", features = [
     "Win32_UI_HiDpi",
     "Win32_System_Threading",
     "Win32_Security",
+    # The S3 secret access key in Credential Manager (CredWriteW / CredReadW).
+    "Win32_Security_Credentials",
     "Win32_Networking_WinHttp",
     "Win32_System_SystemInformation",
     "Win32_UI_Controls_Dialogs",

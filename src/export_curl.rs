@@ -136,6 +136,95 @@ pub fn http_delete(host: &str, path: &str, headers: &[(&str, &str)]) -> Result<(
     Ok((code.trim().parse().unwrap_or(0), body.to_string()))
 }
 
+/// One HTTPS request for S3 (`crate::s3`) via `curl`. The URL and headers
+/// go in a config file only we can read (`-K`), never on the command line
+/// (the `Authorization` header is a live signature other users' process
+/// lists must not show); the body goes on stdin, fed from a thread as
+/// curl reads it (`--data-binary @-`); `-i` prints the response headers
+/// (a part's `ETag`) before the body. No redirects are followed.
+#[cfg_attr(test, allow(dead_code))] // tests use a mock transport
+pub fn http_request(r: &crate::s3::HttpReq) -> Result<crate::s3::HttpResp, String> {
+    use std::io::Write;
+    let headers: Vec<(&str, &str)> = r
+        .headers
+        .iter()
+        .filter(|(k, _)| !k.eq_ignore_ascii_case("host") && !k.eq_ignore_ascii_case("content-length"))
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let mut conf = curl_config(&r.host, &r.path, &headers);
+    conf.push_str(&format!("request = \"{}\"\n", r.method));
+    let send_body = matches!(r.method, "PUT" | "POST");
+    if send_body && !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("content-type")) {
+        // curl would add a form content type of its own.
+        conf.push_str("header = \"Content-Type:\"\n");
+    }
+    let conf_path = private_conf(&conf)?;
+    let mut cmd = Command::new("curl");
+    cmd.args(["-q", "-sS", "-i", "--proto", "=https", "--max-redirs", "0", "--connect-timeout", "15", "--max-time", "1800", "-w", "\n%{http_code}", "-K"]).arg(&conf_path);
+    if send_body {
+        cmd.args(["--data-binary", "@-"]);
+    }
+    let spawned = cmd.stdin(if send_body { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn();
+    let mut child = match spawned {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = std::fs::remove_file(&conf_path);
+            return Err(format!("spawn curl: {e}"));
+        }
+    };
+    let stdin = child.stdin.take();
+    let out = std::thread::scope(|s| {
+        if let Some(mut stdin) = stdin {
+            // Fed on a thread: curl may answer (an error) before it read it all.
+            s.spawn(move || {
+                let _ = r.body.for_each_chunk(1 << 20, &mut |c| stdin.write_all(c).map_err(|e| e.to_string()));
+            });
+        }
+        child.wait_with_output()
+    });
+    // curl has read its config long before it exits.
+    let _ = std::fs::remove_file(&conf_path);
+    let out = out.map_err(|e| format!("curl: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("curl: {}", String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    Ok(parse_included(&String::from_utf8_lossy(&out.stdout)))
+}
+
+/// curl's `-i` output with `-w "\n%{http_code}"` after it: the last header
+/// block (after any `100 Continue`), the body, the status.
+pub fn parse_included(text: &str) -> crate::s3::HttpResp {
+    let (mut rest, code) = text.rsplit_once('\n').unwrap_or(("", text));
+    let mut headers = Vec::new();
+    while rest.starts_with("HTTP/") {
+        let (block, after) = match rest.find("\r\n\r\n") {
+            Some(i) => (&rest[..i], &rest[i + 4..]),
+            None => match rest.find("\n\n") {
+                Some(i) => (&rest[..i], &rest[i + 2..]),
+                None => (rest, ""),
+            },
+        };
+        headers = crate::s3::parse_header_block(block);
+        rest = after;
+    }
+    crate::s3::HttpResp { status: code.trim().parse().unwrap_or(0), headers, body: rest.to_string() }
+}
+
+/// Write `conf` to a new file only this user can read (in
+/// `$XDG_RUNTIME_DIR`, else the temp folder); its path.
+fn private_conf(conf: &str) -> Result<std::path::PathBuf, String> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let dir = std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from).filter(|d| d.is_dir()).unwrap_or_else(std::env::temp_dir);
+    let path = dir.join(format!("rustshot-curl-{}-{}.conf", std::process::id(), crate::s3::random_tail(10)));
+    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path).map_err(|e| format!("write {}: {e}", path.display()))?;
+    if let Err(e) = f.write_all(conf.as_bytes()) {
+        let _ = std::fs::remove_file(&path);
+        return Err(format!("write {}: {e}", path.display()));
+    }
+    Ok(path)
+}
+
 /// The `-K -` config for a request: its URL and headers, quoted (a line
 /// break would end the line and start another option: dropped).
 fn curl_config(host: &str, path: &str, headers: &[(&str, &str)]) -> String {
@@ -155,5 +244,16 @@ mod tests {
         assert_eq!(c.lines().count(), 2, "{c}");
         assert!(c.starts_with("url = \"https://api.imgur.com/3/image/abc12\"\n"));
         assert!(c.contains(r#"Client-ID x\"yurl = \"https://evil\""#), "{c}");
+    }
+
+    /// `-i` output: a 100 Continue block, then the real one, the body and
+    /// the `-w` status line.
+    #[test]
+    fn included_headers_are_split_from_the_body() {
+        let t = "HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nETag: \"abc\"\r\nContent-Length: 2\r\n\r\nok\n200";
+        let r = super::parse_included(t);
+        assert_eq!((r.status, r.header("etag"), r.body.as_str()), (200, Some("\"abc\""), "ok"));
+        let r = super::parse_included("HTTP/2 204 \r\nx-amz-request-id: 1\r\n\r\n\n204");
+        assert_eq!((r.status, r.body.as_str(), r.header("X-Amz-Request-Id")), (204, "", Some("1")));
     }
 }
