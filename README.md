@@ -135,6 +135,30 @@ If you launch Rustshot while it is already running, the running copy
 starts a capture. The tray menu has **Capture…**, **History…** and
 **Settings…**.
 
+## Replace the Snipping Tool (Windows)
+
+Windows sends <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> and
+<kbd>Print Screen</kbd> to the Snipping Tool, and getting rid of that is
+well hidden. Rustshot does it in three steps:
+
+1. In Rustshot, open **Settings › Capture** and turn on **Use Win+Shift+S
+   and Print Screen**.
+2. Open Windows **Settings › Apps › Default apps**, scroll to the bottom
+   and click **Choose defaults by link type**.
+3. Find **MS-SCREENCLIP** and pick **Rustshot**.
+
+Now both keys open Rustshot, even when it isn't running: it starts for
+the capture and quits afterwards. For <kbd>Print Screen</kbd>, also keep
+**Settings › Accessibility › Keyboard › Use the Print screen key to open
+screen capture** on (it is on by default in Windows 11).
+
+Windows only lets you, not an app, make that choice, which is why step 2
+can't be skipped. If Win+Shift+S shows "This file does not have an app
+associated with it", the Snipping Tool was uninstalled and the old choice
+points nowhere: the same three steps fix it. To go back, turn the option
+off in Rustshot, and Windows uses the Snipping Tool again. More detail:
+[docs/guide.md](docs/guide.md#winshifts-and-print-screen-windows).
+
 ## Shortcuts
 
 | Global | Default |
