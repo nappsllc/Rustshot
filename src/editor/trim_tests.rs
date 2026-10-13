@@ -172,7 +172,7 @@ fn a_window_frame_without_margins_falls_back_to_its_client_area() {
     // No snapshot: the frame's title bar keeps every side.
     assert_eq!(ed(&mut a).trimmed_sel(), None);
     let app_win = Node::new(R::xywh(100, 80, 900, 600), vec![]).with_client(Some(R::xywh(101, 120, 898, 559)));
-    ed(&mut a).snap = Some(Snapshot::build(&[app_win.clone()], (0, 0), (1200, 800)));
+    ed(&mut a).snap = Some(Snapshot::build(std::slice::from_ref(&app_win), (0, 0), (1200, 800)));
     assert_eq!(ed(&mut a).trimmed_sel(), Some(fr(398.0, 298.0, 204.0, 124.0)));
     // A client area with nothing to trim is the trim.
     let mut s = window_shot();
