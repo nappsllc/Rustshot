@@ -524,6 +524,10 @@ fn general(ui: &mut Ui, s: &mut Settings, tok: &Tok) {
     srow(ui, tok, tr!("settings.general.theme"), None, |ui| {
         ui.seg("theme", &labels(&THEMES), &mut f.theme, tok);
     });
+    srow(ui, tok, tr!("settings.general.language"), None, |ui| {
+        let names: Vec<&str> = language_choices().into_iter().map(|l| l.1).collect();
+        ui.width(FIELD_W).dropdown("language", &names, &mut f.language);
+    });
     srow(ui, tok, tr!("settings.general.accent"), Some(tr!("settings.general.accent.help")), |ui| {
         ui.lay.gap = 10.0;
         let accents = crate::theme::ACCENTS;

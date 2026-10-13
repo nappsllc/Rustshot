@@ -612,6 +612,10 @@ fn export_done(res: crate::export::ExportResult, saves: bool, store: &crate::his
 const C4_SHADOW: crate::uifb::C4 = crate::uifb::C4 { r: 0, g: 0, b: 0, a: 22 };
 
 impl Driver for Window {
+    fn title(&self) -> Option<String> {
+        Some(tr!("edit.window_title", name = crate::history::title(&self.e.entry.meta)))
+    }
+
     fn on_create(&mut self, hwnd: Hwnd) {
         self.hwnd = hwnd;
     }

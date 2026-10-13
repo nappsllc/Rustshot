@@ -472,6 +472,10 @@ fn resolve(setting: &str) -> usize {
             return i;
         }
     }
+    // Tests never follow the machine's language.
+    if cfg!(test) {
+        return 0;
+    }
     best_match(&sys::preferred())
 }
 

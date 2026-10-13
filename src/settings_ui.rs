@@ -265,6 +265,21 @@ pub fn backup_path(path: &Path) -> PathBuf {
         .expect("a free name")
 }
 
+/// General › Language's choices: (`language` value, label): the system's
+/// first ("System default"), then every language in its own name.
+pub fn language_choices() -> Vec<(&'static str, &'static str)> {
+    std::iter::once(("", tr!("settings.general.language.system"))).chain(crate::i18n::languages().into_iter().map(|l| (l.code, l.name))).collect()
+}
+
+/// The choice `language = v` is ([`language_choices`]; unknown: the system's).
+fn language_index(v: &str) -> usize {
+    let v = v.trim();
+    if v.is_empty() || v.eq_ignore_ascii_case("system") {
+        return 0;
+    }
+    language_choices().iter().position(|(c, _)| c.eq_ignore_ascii_case(v)).unwrap_or(0)
+}
+
 fn theme_index(v: &str) -> usize {
     THEMES.iter().position(|(_, t)| v.trim().eq_ignore_ascii_case(t)).unwrap_or(0)
 }
@@ -311,6 +326,8 @@ fn accent_value(i: usize) -> Option<String> {
 #[derive(Clone, Debug)]
 pub struct Form {
     pub theme: usize,
+    /// General › Language ([`language_choices`] index).
+    pub language: usize,
     /// Accent swatch (`ui_color`), and the custom color's text.
     pub accent: usize,
     pub accent_hex: TextState,
@@ -386,6 +403,7 @@ impl Form {
         let accent = accent_index(&cfg.ui_color);
         Form {
             theme: theme_index(&cfg.theme),
+            language: language_index(&cfg.language),
             accent,
             accent_hex: TextState::new(if accent == ACCENT_CUSTOM { cfg.ui_color.trim() } else { "" }),
             ui_size: cfg.ui_scale.index(),
@@ -470,6 +488,9 @@ impl Form {
         let mut c = onto.clone();
         if self.theme != was.theme {
             c.theme = THEMES[self.theme].1.into();
+        }
+        if self.language != was.language {
+            c.language = language_choices().get(self.language).map_or("", |l| l.0).into();
         }
         if self.accent != was.accent || (self.accent == ACCENT_CUSTOM && self.accent_hex.text.trim() != was.accent_hex.text.trim()) {
             match accent_value(self.accent) {
@@ -1609,6 +1630,9 @@ impl Settings {
         self.confirmed = true; // the file is ours now
         let tray_on = cfg.show_tray && !self.loaded.show_tray;
         self.loaded = cfg.clone();
+        // The new language shows at once: this window and the others of
+        // this process lay themselves out again (the daemon on its reload).
+        crate::i18n::set_language(&cfg.language);
         // The typed S3 secret goes to the OS credential store, never the file.
         let secret = std::mem::take(&mut self.form.up.secret.text);
         // The form shows what was saved (merged with the file, trimmed).
@@ -1750,6 +1774,9 @@ impl Settings {
         self.stale = false;
         self.form = self.form_for(&cfg);
         self.loaded = cfg.clone();
+        // The new language shows at once: this window and the others of
+        // this process lay themselves out again (the daemon on its reload).
+        crate::i18n::set_language(&cfg.language);
         self.show_pending();
         vec![Act::Saved(Box::new(cfg))]
     }
@@ -2181,6 +2208,10 @@ impl OwnerHandle {
 }
 
 impl Driver for Window {
+    fn title(&self) -> Option<String> {
+        Some(tr!("settings.window_title").into())
+    }
+
     fn on_create(&mut self, hwnd: Hwnd) {
         self.hwnd = hwnd;
     }

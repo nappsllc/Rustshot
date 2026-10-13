@@ -608,6 +608,8 @@ struct WinState<'a> {
     ex_style: WINDOW_EX_STYLE,
     /// The title bar colours last applied (`Driver::frame_colors`).
     frame: core::cell::Cell<Option<FrameColors>>,
+    /// The UI language generation the window last drew in.
+    lang: core::cell::Cell<u64>,
 }
 
 /// The native frame for `controls`: always a caption with a system menu
@@ -831,6 +833,18 @@ unsafe extern "system" fn wndproc_window(hwnd: HWND, msg: u32, wp: WPARAM, lp: L
                 request(hwnd, drv);
                 LRESULT(0)
             }
+            WM_TIMER if crate::i18n::generation() != st.lang.get() => {
+                // The UI language switched: lay out again, retitle, repaint.
+                let mut seen = st.lang.get();
+                if let Some(title) = crate::wind::relocalize(&mut seen, drv, st.size.get()) {
+                    if let Some(t) = title {
+                        set_title(hwnd, &t);
+                    }
+                    invalidate(hwnd);
+                }
+                st.lang.set(seen);
+                common(hwnd, msg, wp, lp, drv).unwrap_or_default()
+            }
             WM_PAINT => {
                 sync_frame(hwnd, st, drv);
                 common(hwnd, msg, wp, lp, drv).unwrap_or_default()
@@ -845,6 +859,14 @@ unsafe extern "system" fn wndproc_window(hwnd: HWND, msg: u32, wp: WPARAM, lp: L
             }
             _ => common(hwnd, msg, wp, lp, drv).unwrap_or_else(|| DefWindowProcW(hwnd, msg, wp, lp)),
         }
+    }
+}
+
+/// Set a `run_window` window's title bar text.
+pub fn set_title(hwnd: HWND, title: &str) {
+    let w: Vec<u16> = title.encode_utf16().chain(Some(0)).collect();
+    unsafe {
+        let _ = windows::Win32::UI::WindowsAndMessaging::SetWindowTextW(hwnd, PCWSTR(w.as_ptr()));
     }
 }
 
@@ -910,6 +932,7 @@ unsafe fn window_loop(spec: &WindowSpec, drv: &mut dyn Driver) -> anyhow::Result
             style,
             ex_style,
             frame: core::cell::Cell::new(None),
+            lang: core::cell::Cell::new(crate::i18n::generation()),
         };
         let hwnd = CreateWindowExW(
             ex_style,

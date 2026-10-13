@@ -1215,6 +1215,8 @@ impl App {
     /// hotkeys are re-registered and the update checker follows
     /// `check_updates`. An open capture keeps the config it started with.
     fn reload_config(&mut self, cfg: Config) {
+        // Open windows of this process re-lay themselves out in it.
+        crate::i18n::set_language(&cfg.language);
         if self.kind == RunKind::Daemon {
             match (self.bg, cfg.show_tray) {
                 // The tray icon on again: this run is the daemon now.

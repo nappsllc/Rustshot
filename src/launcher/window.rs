@@ -238,6 +238,10 @@ impl Window {
 }
 
 impl Driver for Window {
+    fn title(&self) -> Option<String> {
+        Some(tr!("launcher.window_title").into())
+    }
+
     fn on_create(&mut self, hwnd: Hwnd) {
         self.hwnd = hwnd;
     }

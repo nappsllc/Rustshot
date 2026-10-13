@@ -924,6 +924,10 @@ fn install(fetched: Result<(PathBuf, [u8; 32]), String>, phase: &AtomicU8, tx: &
 }
 
 impl Driver for Dialog {
+    fn title(&self) -> Option<String> {
+        Some(tr!("update.window_title").into())
+    }
+
     fn on_create(&mut self, hwnd: Hwnd) {
         self.hwnd = hwnd;
         self.changed_at = Instant::now();

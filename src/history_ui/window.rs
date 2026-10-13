@@ -638,6 +638,10 @@ impl Window {
 }
 
 impl Driver for Window {
+    fn title(&self) -> Option<String> {
+        Some(tr!("history.window_title").into())
+    }
+
     fn on_create(&mut self, hwnd: Hwnd) {
         self.hwnd = hwnd;
     }
@@ -659,6 +663,7 @@ impl Driver for Window {
             Ev::Focus(true) => {
                 // Settings may have changed meanwhile.
                 self.h.cfg = crate::config::load();
+                crate::i18n::set_language(&self.h.cfg.language);
                 self.input.feed(&ev);
                 self.render();
             }

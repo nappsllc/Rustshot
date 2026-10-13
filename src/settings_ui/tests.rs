@@ -1600,6 +1600,21 @@ fn crowded() -> Settings {
     s
 }
 
+/// Every section in the pseudo-languages (RUSTSHOT_PREVIEW_DIR).
+#[test]
+fn preview_settings_pseudo_pngs() {
+    for lang in ["qps", "qps-rtl"] {
+        crate::i18n::with_lang(lang, || {
+            for i in 0..SECTIONS.len() {
+                let mut s = sample();
+                s.section = i;
+                let (img, _) = render(&mut s, &DARK, 1.0, &Input::default(), &mut FocusState::default());
+                preview::save(&format!("settings-{i:02}-{lang}.png"), &img);
+            }
+        });
+    }
+}
+
 #[test]
 fn preview_settings_pngs() {
     for k in [1.0f32, 1.5] {
@@ -1776,23 +1791,44 @@ fn preview_settings_pngs() {
 /// content ends above the footer and every control sits inside the body
 /// (or the header and footer bars).
 #[test]
+/// Every section fits the body without scrolling, in English and in the
+/// pseudo-languages (40 % longer, accented / right to left): no section
+/// taller than the body, every control inside the window, on its side of
+/// the rail edge, and no two controls overlapping.
 fn every_section_fits() {
+    for lang in ["en", "qps", "qps-rtl"] {
+        crate::i18n::with_lang(lang, || sections_fit(lang));
+    }
+}
+
+fn sections_fit(lang: &str) {
     let vp = viewport();
+    // (The pseudo-languages in one theme: the theme moves nothing.)
+    let themes: &[&Theme] = if lang == "en" { &[&DARK, &LIGHT] } else { &[&DARK] };
     for k in [1.0f32, 2.0, 3.0] {
-        for th in [&DARK, &LIGHT] {
+        for th in themes {
             for (i, title) in TITLES.iter().enumerate() {
                 for (state, mut s) in [("default", sample()), ("crowded", crowded())] {
                     s.section = i;
                     let mut focus = FocusState::default();
                     render(&mut s, th, k, &Input::default(), &mut focus);
                     let h = s.content_h[i];
-                    assert!(h > 100.0 && h <= vp.h, "{} ({state}) at {k}: {h} of {}", title, vp.h);
-                    for r in focus.all_rects() {
-                        let (x0, y0, x1, y1) = (r.x / k, r.y / k, r.x1() / k, r.y1() / k);
-                        assert!(x0 >= 0.0 && x1 <= W as f32 + 0.5 && y0 >= 0.0 && y1 <= H as f32 + 0.5, "{} ({state}): {r:?}", title);
+                    assert!(h > 100.0 && h <= vp.h, "{lang} {} ({state}) at {k}: {h} of {}", title, vp.h);
+                    let rects: Vec<FRect> = focus.all_rects().into_iter().map(|r| FRect { x: r.x / k, y: r.y / k, w: r.w / k, h: r.h / k }).collect();
+                    for r in &rects {
+                        let (x0, y0, x1, y1) = (r.x, r.y, r.x1(), r.y1());
+                        assert!(x0 >= 0.0 && x1 <= W as f32 + 0.5 && y0 >= 0.0 && y1 <= H as f32 + 0.5, "{lang} {} ({state}) at {k}: {r:?}", title);
+                        assert!(x1 <= RAIL_W + 0.5 || x0 >= RAIL_W - 0.5, "{lang} {} ({state}) at {k}: {r:?} across the rail edge", title);
                         if x0 >= RAIL_W {
                             let bar = y1 <= HDR_H + 0.5 || y0 >= H as f32 - FOOT_H - 0.5;
-                            assert!(bar || (y0 >= vp.y - 0.5 && y1 <= vp.y1() + 0.5), "{} ({state}): {r:?} outside the body", title);
+                            assert!(bar || (y0 >= vp.y - 0.5 && y1 <= vp.y1() + 0.5), "{lang} {} ({state}) at {k}: {r:?} outside the body", title);
+                        }
+                    }
+                    for (a, ra) in rects.iter().enumerate() {
+                        for rb in &rects[a + 1..] {
+                            let ow = ra.x1().min(rb.x1()) - ra.x.max(rb.x);
+                            let oh = ra.y1().min(rb.y1()) - ra.y.max(rb.y);
+                            assert!(ow <= 1.0 || oh <= 1.0, "{lang} {} ({state}) at {k}: {ra:?} and {rb:?} overlap", title);
                         }
                     }
                 }
