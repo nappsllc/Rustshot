@@ -1,8 +1,9 @@
 //! Trim an MP4 without re-encoding: the samples from the key frame at
-//! or before the new start up to the end of the GOP that holds the new
-//! end are copied into a new file, and an edit list makes it start and
-//! end exactly where asked (players show the presentation the edit list
-//! describes; the frames before the start are decoded but not shown).
+//! or before the new start up to the last one (in decode order) shown
+//! before the new end are copied into a new file (a cut in decode order
+//! loses no reference), and an edit list makes it start and end exactly
+//! where asked (players show the presentation the edit list describes;
+//! the frames before the start are decoded but not shown).
 //! Sound (every sample a sync sample) is cut a little before the start
 //! ([`AUDIO_PREROLL`], so the decoder has settled by then) and its own
 //! edit list skips that.
@@ -40,15 +41,15 @@ fn be64(b: &[u8], at: usize) -> Result<u64> {
 
 /// A box in memory: its type and its body (after the header).
 #[derive(Clone, Debug)]
-struct Bx<'a> {
-    kind: [u8; 4],
-    body: &'a [u8],
+pub(crate) struct Bx<'a> {
+    pub(crate) kind: [u8; 4],
+    pub(crate) body: &'a [u8],
     /// The whole box (header included), to copy as is.
-    raw: &'a [u8],
+    pub(crate) raw: &'a [u8],
 }
 
 /// The boxes in `data`.
-fn children(data: &[u8]) -> Result<Vec<Bx<'_>>> {
+pub(crate) fn children(data: &[u8]) -> Result<Vec<Bx<'_>>> {
     let mut out = Vec::new();
     let mut at = 0;
     while at + 8 <= data.len() {
@@ -178,17 +179,17 @@ impl Samples {
 
 /// What the trim needs of a track.
 #[derive(Clone, Debug)]
-struct Track<'a> {
-    tkhd: Bx<'a>,
-    mdhd: Bx<'a>,
-    hdlr: Bx<'a>,
+pub(crate) struct Track<'a> {
+    pub(crate) tkhd: Bx<'a>,
+    pub(crate) mdhd: Bx<'a>,
+    pub(crate) hdlr: Bx<'a>,
     /// The `minf` children before `stbl` (`vmhd`/`smhd`, `dinf`).
-    minf_rest: Vec<Bx<'a>>,
-    stsd: Bx<'a>,
-    timescale: u32,
-    video: bool,
-    edit: Edit,
-    s: Samples,
+    pub(crate) minf_rest: Vec<Bx<'a>>,
+    pub(crate) stsd: Bx<'a>,
+    pub(crate) timescale: u32,
+    pub(crate) video: bool,
+    pub(crate) edit: Edit,
+    pub(crate) s: Samples,
 }
 
 fn parse_samples(stbl: &[Bx]) -> Result<Samples> {
@@ -318,7 +319,8 @@ fn ticks(d: Duration, scale: u32) -> u64 {
 /// Which samples of a track to keep for `start..end` (presentation
 /// time), the track's `edit` and timescale given, the movie's timescale
 /// `movie`. Video starts at the last key frame shown at or before the
-/// start and ends with the GOP that shows the end; sound starts
+/// start and ends with the last frame (decode order) shown before the
+/// end; sound starts
 /// `preroll` before the start.
 pub fn plan(s: &Samples, edit: Edit, timescale: u32, movie: u32, video: bool, start: Duration, end: Duration, preroll: Duration) -> Option<Keep> {
     let n = s.len();
@@ -337,7 +339,10 @@ pub fn plan(s: &Samples, edit: Edit, timescale: u32, movie: u32, video: bool, st
     let (ms, me) = (m0 + ticks(from, timescale), m0 + ticks(to, timescale));
     let (first, last) = if video {
         let first = (0..n).rev().find(|&i| s.is_sync(i) && s.cts(i, dts[i]) <= ms as i64).or_else(|| (0..n).find(|&i| s.is_sync(i)))?;
-        let last = (first + 1..n).find(|&i| s.is_sync(i) && s.cts(i, dts[i]) > me as i64).unwrap_or(n);
+        // Up to the last frame (decode order) shown before the end: a cut
+        // in decode order loses no reference, and a player that ignores
+        // the edit list's length still stops there.
+        let last = (first..n).rev().find(|&i| s.cts(i, dts[i]) < me as i64).map_or(first + 1, |i| i + 1).max(first + 1);
         (first, last)
     } else {
         let back = ms.saturating_sub(ticks(preroll, timescale));
@@ -351,6 +356,7 @@ pub fn plan(s: &Samples, edit: Edit, timescale: u32, movie: u32, video: bool, st
     let shown = ticks(end - start.max(empty_d), movie);
     Some(Keep { first, last, empty, media_time, shown })
 }
+
 
 // --- writing ------------------------------------------------------------------
 
@@ -420,14 +426,61 @@ fn elst(k: &Keep) -> Vec<u8> {
     boxed(b"edts", &full(b"elst", u8::from(wide), &b))
 }
 
-/// The new `trak` for `t` keeping `k`, its samples at `offsets`.
-fn write_trak(t: &Track, k: &Keep, offsets: &[u64]) -> Vec<u8> {
-    let s = &t.s;
-    let r = k.first..k.last;
-    let media_dur: u64 = s.durations[r.clone()].iter().map(|d| *d as u64).sum();
-    let mut stbl = t.stsd.raw.to_vec();
+/// One sample of the new file: where its bytes are (which source, where)
+/// and its table entries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct OutSample {
+    pub src: usize,
+    pub off: u64,
+    pub size: u32,
+    pub dur: u32,
+    /// Composition offset.
+    pub cto: i32,
+    pub sync: bool,
+    pub desc: u32,
+}
+
+/// A track of the new file: the old one's boxes, the samples, its edit.
+pub(crate) struct OutTrack<'t, 'a> {
+    pub t: &'t Track<'a>,
+    pub samples: Vec<OutSample>,
+    /// Write `ctts` (with this version) / `stss`.
+    pub ctts: Option<u8>,
+    pub stss: bool,
+    /// Leading empty time, the shown part's media time and length (see
+    /// [`Keep`]; only those fields are used).
+    pub edit: Keep,
+    /// Sample descriptions to write instead of the old track's.
+    pub stsd: Option<Vec<u8>>,
+}
+
+impl<'t, 'a> OutTrack<'t, 'a> {
+    /// The samples `k` keeps of `t` (from source 0).
+    fn kept(t: &'t Track<'a>, k: Keep) -> OutTrack<'t, 'a> {
+        let s = &t.s;
+        let samples = (k.first..k.last)
+            .map(|i| OutSample {
+                src: 0,
+                off: s.offsets[i],
+                size: s.sizes[i],
+                dur: s.durations[i],
+                cto: s.ctts.as_ref().map_or(0, |(c, _)| c[i]),
+                sync: s.is_sync(i),
+                desc: s.desc[i],
+            })
+            .collect();
+        OutTrack { t, samples, ctts: s.ctts.as_ref().map(|c| c.1), stss: s.sync.is_some(), edit: k, stsd: None }
+    }
+}
+
+/// The new `trak` for `o`, its samples at `offsets`.
+fn write_trak(o: &OutTrack, offsets: &[u64]) -> Vec<u8> {
+    let t = o.t;
+    let ss = &o.samples;
+    let media_dur: u64 = ss.iter().map(|s| s.dur as u64).sum();
+    let mut stbl = o.stsd.clone().unwrap_or_else(|| t.stsd.raw.to_vec());
     // stts
-    let rl = runs(s.durations[r.clone()].iter().copied());
+    let rl = runs(ss.iter().map(|s| s.dur));
     let mut b = Vec::new();
     put32(&mut b, rl.len() as u32);
     for (n, d) in rl {
@@ -436,19 +489,19 @@ fn write_trak(t: &Track, k: &Keep, offsets: &[u64]) -> Vec<u8> {
     }
     stbl.extend(full(b"stts", 0, &b));
     // ctts
-    if let Some((c, v)) = &s.ctts {
-        let rl = runs(c[r.clone()].iter().copied());
+    if let Some(v) = o.ctts {
+        let rl = runs(ss.iter().map(|s| s.cto));
         let mut b = Vec::new();
         put32(&mut b, rl.len() as u32);
-        for (n, o) in rl {
+        for (n, c) in rl {
             put32(&mut b, n);
-            put32(&mut b, o as u32);
+            put32(&mut b, c as u32);
         }
-        stbl.extend(full(b"ctts", *v, &b));
+        stbl.extend(full(b"ctts", v, &b));
     }
     // stss
-    if s.sync.is_some() {
-        let idx: Vec<u32> = r.clone().filter(|&i| s.is_sync(i)).map(|i| (i - k.first + 1) as u32).collect();
+    if o.stss {
+        let idx: Vec<u32> = ss.iter().enumerate().filter(|(_, s)| s.sync).map(|(i, _)| i as u32 + 1).collect();
         let mut b = Vec::new();
         put32(&mut b, idx.len() as u32);
         for i in idx {
@@ -459,19 +512,19 @@ fn write_trak(t: &Track, k: &Keep, offsets: &[u64]) -> Vec<u8> {
     // stsz
     let mut b = Vec::new();
     put32(&mut b, 0);
-    put32(&mut b, r.len() as u32);
-    for i in r.clone() {
-        put32(&mut b, s.sizes[i]);
+    put32(&mut b, ss.len() as u32);
+    for s in ss {
+        put32(&mut b, s.size);
     }
     stbl.extend(full(b"stsz", 0, &b));
     // stsc: one sample a chunk, a run per description.
-    let mut b = Vec::new();
     let mut entries: Vec<(u32, u32)> = Vec::new();
-    for (j, i) in r.clone().enumerate() {
-        if entries.last().is_none_or(|e| e.1 != s.desc[i]) {
-            entries.push((j as u32 + 1, s.desc[i]));
+    for (j, s) in ss.iter().enumerate() {
+        if entries.last().is_none_or(|e| e.1 != s.desc) {
+            entries.push((j as u32 + 1, s.desc));
         }
     }
+    let mut b = Vec::new();
     put32(&mut b, entries.len() as u32);
     for (first, d) in entries {
         put32(&mut b, first);
@@ -494,11 +547,131 @@ fn write_trak(t: &Track, k: &Keep, offsets: &[u64]) -> Vec<u8> {
     let mut mdia = boxed(b"mdhd", &with_duration(t.mdhd.body, 16, 24, media_dur));
     mdia.extend_from_slice(t.hdlr.raw);
     mdia.extend(boxed(b"minf", &minf));
+    let k = &o.edit;
     let mut trak = boxed(b"tkhd", &with_duration(t.tkhd.body, 20, 28, k.empty + k.shown));
     trak.extend(elst(k));
     trak.extend(boxed(b"mdia", &mdia));
     boxed(b"trak", &trak)
 }
+
+/// A parsed MP4: its `ftyp` and `moov` (held), and the tracks in it.
+pub(crate) struct Movie {
+    ftyp: Option<Vec<u8>>,
+    moov: Vec<u8>,
+    head: usize,
+}
+
+impl Movie {
+    pub fn read<R: Read + Seek>(src: &mut R) -> Result<Movie> {
+        let tops = top_boxes(src)?;
+        let read = |src: &mut R, t: Top| -> Result<Vec<u8>> {
+            src.seek(SeekFrom::Start(t.at))?;
+            let mut v = vec![0u8; t.size as usize];
+            src.read_exact(&mut v)?;
+            Ok(v)
+        };
+        let ftyp = tops.iter().find(|t| &t.kind == b"ftyp").copied().map(|t| read(src, t)).transpose()?;
+        let at = tops.iter().find(|t| &t.kind == b"moov").copied().context("not an MP4 (no moov)")?;
+        Ok(Movie { ftyp, moov: read(src, at)?, head: at.head as usize })
+    }
+
+    fn kids(&self) -> Result<Vec<Bx<'_>>> {
+        let kids = children(&self.moov[self.head..])?;
+        ensure!(find(&kids, b"mvex").is_none(), "a fragmented MP4 cannot be trimmed here");
+        Ok(kids)
+    }
+
+    /// The movie timescale, and the tracks.
+    pub fn tracks(&self) -> Result<(u32, Vec<Track<'_>>)> {
+        let kids = self.kids()?;
+        let mvhd = need(&kids, b"mvhd")?;
+        let movie = if mvhd.body.first() == Some(&1) { be32(mvhd.body, 20)? } else { be32(mvhd.body, 12)? }.max(1);
+        let tracks: Vec<Track> = kids.iter().filter(|b| &b.kind == b"trak").cloned().map(parse_track).collect::<Result<_>>()?;
+        ensure!(!tracks.is_empty(), "no tracks");
+        Ok((movie, tracks))
+    }
+}
+
+/// Write a movie of `tracks` (from `m`'s boxes) whose samples are read
+/// from `sources`; the bytes written.
+pub(crate) fn write_movie<W: Write>(m: &Movie, tracks: &[OutTrack], sources: &mut [&mut dyn ReadSeek], dst: &mut W) -> Result<u64> {
+    let kids = m.kids()?;
+    let mvhd = need(&kids, b"mvhd")?;
+    // The samples by decode time (the tracks interleaved, each in its own
+    // order: Media Foundation reads a track's chunks only forwards), and
+    // where each goes in mdat.
+    let mut timed: Vec<(u128, usize, usize)> = Vec::new();
+    for (ti, t) in tracks.iter().enumerate() {
+        let scale = t.t.timescale.max(1) as u128;
+        let mut at = 0u128;
+        for (i, s) in t.samples.iter().enumerate() {
+            timed.push((at * 1_000_000_000 / scale, ti, i));
+            at += s.dur as u128;
+        }
+    }
+    timed.sort_unstable();
+    let order: Vec<(usize, u64, usize, usize)> = timed
+        .iter()
+        .map(|&(_, ti, i)| {
+            let s = &tracks[ti].samples[i];
+            (s.src, s.off, ti, i)
+        })
+        .collect();
+    let mut rel: Vec<Vec<u64>> = tracks.iter().map(|t| vec![0; t.samples.len()]).collect();
+    let mut pos = 0u64;
+    for &(_, _, ti, i) in &order {
+        rel[ti][i] = pos;
+        pos += tracks[ti].samples[i].size as u64;
+    }
+    let mdat_len = pos;
+    let moov = |shift: u64| -> Vec<u8> {
+        let shown = tracks.iter().map(|t| t.edit.empty + t.edit.shown).max().unwrap_or(0);
+        let mut body = boxed(b"mvhd", &with_duration(mvhd.body, 16, 24, shown));
+        for (ti, t) in tracks.iter().enumerate() {
+            let offs: Vec<u64> = rel[ti].iter().map(|o| o + shift).collect();
+            body.extend(write_trak(t, &offs));
+        }
+        for b in kids.iter().filter(|b| !matches!(&b.kind, b"mvhd" | b"trak")) {
+            body.extend_from_slice(b.raw);
+        }
+        boxed(b"moov", &body)
+    };
+    let ftyp = m.ftyp.clone().unwrap_or_else(|| boxed(b"ftyp", b"isom\0\0\x02\0isomiso6mp41"));
+    let data_at = ftyp.len() as u64 + moov(0).len() as u64 + 16;
+    dst.write_all(&ftyp)?;
+    dst.write_all(&moov(data_at))?;
+    let mut head = Vec::new();
+    put32(&mut head, 1);
+    head.extend_from_slice(b"mdat");
+    put64(&mut head, mdat_len + 16);
+    dst.write_all(&head)?;
+    // Copy the samples, reading runs of adjacent ones at once.
+    let mut buf = Vec::new();
+    let mut k = 0;
+    let size = |e: &(usize, u64, usize, usize)| tracks[e.2].samples[e.3].size as u64;
+    while k < order.len() {
+        let (src, start_at) = (order[k].0, order[k].1);
+        let mut end_at = start_at + size(&order[k]);
+        let mut j = k + 1;
+        while j < order.len() && order[j].0 == src && order[j].1 == end_at && end_at - start_at < (4 << 20) {
+            end_at += size(&order[j]);
+            j += 1;
+        }
+        buf.resize((end_at - start_at) as usize, 0);
+        let r = sources.get_mut(src).context("a sample from no source")?;
+        r.seek(SeekFrom::Start(start_at))?;
+        r.read_exact(&mut buf).context("read the samples")?;
+        dst.write_all(&buf)?;
+        k = j;
+    }
+    dst.flush()?;
+    Ok(data_at + mdat_len)
+}
+
+/// What [`write_movie`] reads samples from.
+pub(crate) trait ReadSeek: Read + Seek {}
+
+impl<T: Read + Seek> ReadSeek for T {}
 
 /// How a trim went.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -513,95 +686,13 @@ pub struct Trimmed {
 /// Copy `src`'s `start..end` (presentation time) into `dst`.
 pub fn trim<R: Read + Seek, W: Write>(src: &mut R, dst: &mut W, start: Duration, end: Duration) -> Result<Trimmed> {
     ensure!(end > start, "the trim is empty");
-    let tops = top_boxes(src)?;
-    let ftyp = tops.iter().find(|t| &t.kind == b"ftyp").copied();
-    let moov_at = tops.iter().find(|t| &t.kind == b"moov").copied().context("not an MP4 (no moov)")?;
-    let read = |src: &mut R, t: Top| -> Result<Vec<u8>> {
-        src.seek(SeekFrom::Start(t.at))?;
-        let mut v = vec![0u8; t.size as usize];
-        src.read_exact(&mut v)?;
-        Ok(v)
-    };
-    let ftyp_raw = ftyp.map(|t| read(src, t)).transpose()?;
-    let moov_raw = read(src, moov_at)?;
-    let moov_kids = children(&moov_raw[moov_at.head as usize..])?;
-    ensure!(find(&moov_kids, b"mvex").is_none(), "a fragmented MP4 cannot be trimmed here");
-    let mvhd = need(&moov_kids, b"mvhd")?;
-    let movie = if mvhd.body.first() == Some(&1) { be32(mvhd.body, 20)? } else { be32(mvhd.body, 12)? }.max(1);
-    let tracks: Vec<Track> = moov_kids.iter().filter(|b| &b.kind == b"trak").cloned().map(parse_track).collect::<Result<_>>()?;
-    ensure!(!tracks.is_empty(), "no tracks");
+    let m = Movie::read(src)?;
+    let (movie, tracks) = m.tracks()?;
     let keeps: Vec<Option<Keep>> =
         tracks.iter().map(|t| plan(&t.s, t.edit, t.timescale, movie, t.video, start, end, if t.video { Duration::ZERO } else { AUDIO_PREROLL })).collect();
     ensure!(keeps.iter().any(Option::is_some), "nothing to keep in that range");
-    // The samples in file order, and where each goes in the new mdat.
-    let mut order: Vec<(u64, usize, usize)> = Vec::new(); // (old offset, track, sample)
-    for (ti, (t, k)) in tracks.iter().zip(&keeps).enumerate() {
-        if let Some(k) = k {
-            order.extend((k.first..k.last).map(|i| (t.s.offsets[i], ti, i)));
-        }
-    }
-    order.sort_unstable();
-    let mut rel: Vec<Vec<u64>> = tracks.iter().map(|_| Vec::new()).collect();
-    let mut placed: Vec<(usize, usize, u64)> = Vec::with_capacity(order.len());
-    let mut pos = 0u64;
-    for &(_, ti, i) in &order {
-        placed.push((ti, i, pos));
-        pos += tracks[ti].s.sizes[i] as u64;
-    }
-    let mdat_len = pos;
-    // Each track's offsets in its sample order.
-    for (ti, k) in keeps.iter().enumerate() {
-        if let Some(k) = k {
-            rel[ti] = vec![0; k.last - k.first];
-        }
-    }
-    for &(ti, i, p) in &placed {
-        if let Some(k) = &keeps[ti] {
-            rel[ti][i - k.first] = p;
-        }
-    }
-    let moov = |shift: u64| -> Vec<u8> {
-        let shown = keeps.iter().flatten().map(|k| k.empty + k.shown).max().unwrap_or(0);
-        let mut body = boxed(b"mvhd", &with_duration(mvhd.body, 16, 24, shown));
-        for (ti, (t, k)) in tracks.iter().zip(&keeps).enumerate() {
-            if let Some(k) = k {
-                let offs: Vec<u64> = rel[ti].iter().map(|o| o + shift).collect();
-                body.extend(write_trak(t, k, &offs));
-            }
-        }
-        for b in moov_kids.iter().filter(|b| !matches!(&b.kind, b"mvhd" | b"trak")) {
-            body.extend_from_slice(b.raw);
-        }
-        boxed(b"moov", &body)
-    };
-    let ftyp_bytes = ftyp_raw.unwrap_or_else(|| boxed(b"ftyp", b"isom\0\0\x02\0isomiso6mp41"));
-    let moov_len = moov(0).len() as u64;
-    let data_at = ftyp_bytes.len() as u64 + moov_len + 16;
-    dst.write_all(&ftyp_bytes)?;
-    dst.write_all(&moov(data_at))?;
-    let mut head = Vec::new();
-    put32(&mut head, 1);
-    head.extend_from_slice(b"mdat");
-    put64(&mut head, mdat_len + 16);
-    dst.write_all(&head)?;
-    // Copy the samples, reading runs of adjacent ones at once.
-    let mut buf = Vec::new();
-    let mut k = 0;
-    while k < order.len() {
-        let start_at = order[k].0;
-        let mut end_at = start_at + tracks[order[k].1].s.sizes[order[k].2] as u64;
-        let mut j = k + 1;
-        while j < order.len() && order[j].0 == end_at && end_at - start_at < (4 << 20) {
-            end_at += tracks[order[j].1].s.sizes[order[j].2] as u64;
-            j += 1;
-        }
-        buf.resize((end_at - start_at) as usize, 0);
-        src.seek(SeekFrom::Start(start_at))?;
-        src.read_exact(&mut buf).context("read the samples")?;
-        dst.write_all(&buf)?;
-        k = j;
-    }
-    dst.flush()?;
+    let outs: Vec<OutTrack> = tracks.iter().zip(&keeps).filter_map(|(t, k)| k.map(|k| OutTrack::kept(t, k))).collect();
+    let bytes = write_movie(&m, &outs, &mut [src], dst)?;
     let (video_samples, lead_in) = tracks
         .iter()
         .zip(&keeps)
@@ -613,7 +704,7 @@ pub fn trim<R: Read + Seek, W: Write>(src: &mut R, dst: &mut W, start: Duration,
             Some((k.last - k.first, (k.first..k.last).filter(|&i| t.s.cts(i, dts[i]) < ms as i64).count()))
         })
         .unwrap_or((0, 0));
-    Ok(Trimmed { video_samples, lead_in, bytes: data_at + mdat_len })
+    Ok(Trimmed { video_samples, lead_in, bytes })
 }
 
 /// The presentation length of an MP4 (`mvhd`'s duration).

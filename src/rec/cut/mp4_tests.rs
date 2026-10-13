@@ -70,13 +70,13 @@ fn a_trim_copies_from_the_key_frame_and_edits_the_start() {
     // Video: frames 30 (the key frame at 1 s) up to the key frame at 4 s.
     let v = tr[0];
     let stbl = v.get(&[b"mdia", b"minf", b"stbl"]);
-    assert_eq!(stbl.get(&[b"stsz"]).u32(8), 90);
+    assert_eq!(stbl.get(&[b"stsz"]).u32(8), 66, "frames 30 to 95: the last shown before 3.2 s");
     assert_eq!(stbl.get(&[b"stss"]).table(4, 1), vec![vec![1], vec![31], vec![61]]);
-    for i in [0usize, 1, 45, 89] {
+    for i in [0usize, 1, 45, 65] {
         let s = sample(&out, v, i);
         assert_eq!(u32::from_be_bytes(s[6..10].try_into().unwrap()), 30 + i as u32, "video sample {i}");
     }
-    assert_eq!((t.video_samples, t.lead_in), (90, 15), "half a second decoded before the start");
+    assert_eq!((t.video_samples, t.lead_in), (66, 15), "half a second decoded before the start");
     // Its edit list: 0.5 s into the kept media (90 kHz), shown for 1.7 s.
     let elst = v.get(&[b"edts", b"elst"]);
     assert_eq!(elst.u32(4), 1);
@@ -135,7 +135,7 @@ fn what_cannot_be_trimmed_says_so() {
 }
 
 /// B-frames: the start key frame is the last one *shown* at or before the
-/// start; the end keeps the GOP that shows the end.
+/// start; the end keeps every frame shown before it.
 #[test]
 fn plan_with_composition_offsets_and_empty_edits() {
     // Decode order I P B B | I P B B | I ...: 8 frames, 1000 ticks each.
@@ -152,7 +152,7 @@ fn plan_with_composition_offsets_and_empty_edits() {
     let edit = Edit { empty: 0, media_time: 1000 };
     let k = plan(&s, edit, 1000, 1000, true, Duration::from_millis(4500), Duration::from_millis(6200), Duration::ZERO).unwrap();
     // 4.5 s is media 5500: the key frame at decode 4 shows at 5000.
-    assert_eq!((k.first, k.last), (4, 8), "the GOP from 4 shows up to 8 s: it holds the end");
+    assert_eq!((k.first, k.last), (4, 8), "frame 7 (shown at 7 s) is the last before the end");
     assert_eq!(k.media_time, 5500 - 4000);
     assert_eq!(k.shown, 1700);
     // A clip that starts with 2 s of nothing (an empty edit).
@@ -183,4 +183,104 @@ fn edit_lists_and_runs() {
     assert_eq!(runs([3, 3, 3, 5, 3].into_iter()), vec![(3, 3), (1, 5), (1, 3)]);
     let wide = elst(&Keep { first: 0, last: 1, empty: 0, media_time: 1 << 40, shown: 10 });
     assert_eq!(wide[16], 1, "a 64-bit edit list when the values need it");
+}
+
+/// Windows: a Media Foundation recording trimmed and read back with the
+/// source reader (the platform's own player stack): the edit list is
+/// honoured, the picture starts where the trim did.
+/// `cargo test live_rec_trim -- --ignored --nocapture`
+#[cfg(windows)]
+#[test]
+#[ignore = "encodes with Media Foundation"]
+fn live_rec_trim_mf_round_trip() {
+    use crate::rec::win::{mf, MfEncoder};
+    use crate::rec::{Frame, Quality, VideoEncoder};
+    let dir = std::env::temp_dir().join(format!("rustshot-trim-mf-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let src = dir.join("rec.mp4");
+    let (w, h) = (128u32, 96u32);
+    let mut e = MfEncoder::create(&src, w, h, 30, Quality::High, true).unwrap();
+    for i in 0..120u64 {
+        // Frame i is a flat gray of 20 + i (its luma says which it is).
+        let v = 20 + i as u8;
+        e.push_video(&Frame::bgra(w, h, [v, v, v, 255].repeat((w * h) as usize), Duration::from_millis(i * 1000 / 30))).unwrap();
+        if i % 3 == 0 {
+            e.push_audio(&vec![0.0f32; 9600], Duration::from_millis(i * 1000 / 30)).unwrap();
+        }
+    }
+    Box::new(e).finish().unwrap();
+    let keys = key_times(&mut std::io::BufReader::new(std::fs::File::open(&src).unwrap())).unwrap();
+    println!("key frames at {keys:?}");
+    let out = crate::rec::cut::trim_file(&src, Duration::from_millis(1300), Duration::from_millis(2600)).unwrap();
+    let p = mf::probe(&out).unwrap();
+    println!("trimmed: {:?}, {} frames decoded, first lumas {:?}", p.duration, p.frames, &p.center_luma[..p.center_luma.len().min(5)]);
+    assert!((p.duration.as_millis() as i64 - 1300).abs() <= 40, "{:?}", p.duration);
+    assert!((p.frames as i64 - 39).abs() <= 2, "1.3 s of frames: {}", p.frames);
+    let mut d = crate::rec::cut::decode::open(&out).unwrap();
+    let pic = d.frame_at(Duration::ZERO, (w, h)).expect("a picture at the start");
+    let luma = pic.get_pixel(w / 2, h / 2)[0] as i32;
+    println!("shown at 0: {luma} (frame 39 is {})", 20 + 39);
+    // Gray 59 → RGB about 59 after the round trip through limited range.
+    assert!((luma - 59).abs() <= 6, "the picture at the new start is frame 39: {luma}");
+    // Across the key frame at 3 s: the new head, then the copied rest.
+    let out = crate::rec::cut::trim_file(&src, Duration::from_millis(1300), Duration::from_millis(3900)).unwrap();
+    let p = mf::probe(&out).unwrap();
+    println!("across the key frame: {:?}, {} frames", p.duration, p.frames);
+    assert!((p.frames as i64 - 78).abs() <= 2, "2.6 s of frames: {}", p.frames);
+    let mut d = crate::rec::cut::decode::open(&out).unwrap();
+    for (t, k) in [(500u64, 54i32), (1800, 93), (2400, 111)] {
+        let pic = d.frame_at(Duration::from_millis(t), (w, h)).unwrap();
+        let luma = pic.get_pixel(w / 2, h / 2)[0] as i32;
+        println!("at {t} ms: {luma} (frame {k} is {})", 20 + k);
+        assert!((luma - (20 + k)).abs() <= 6, "at {t} ms the picture is frame {k}: {luma}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "debug"]
+fn dump_mf_times() {
+    use windows::Win32::Media::MediaFoundation::*;
+    let Ok(p) = std::env::var("RUSTSHOT_DUMP") else { return };
+    crate::rec::win::com_init();
+    unsafe {
+        let r = crate::rec::win::mf::open_reader(std::path::Path::new(&p)).unwrap();
+        let v = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
+        let want = crate::rec::win::mf::new_media_type().unwrap();
+        want.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video).unwrap();
+        want.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12).unwrap();
+        r.SetCurrentMediaType(v, None, &want).unwrap();
+        for _ in 0..5 {
+            let (mut f, mut ts, mut s) = (0u32, 0i64, None);
+            r.ReadSample(v, 0, None, Some(&mut f), Some(&mut ts), Some(&mut s)).unwrap();
+            println!("video ts {ts} flags {f:#x} sample {}", s.is_some());
+        }
+    }
+}
+
+/// `RUSTSHOT_DUMP=<file.mp4> cargo test dump_mp4_boxes -- --ignored --nocapture`
+#[test]
+#[ignore = "prints an MP4's boxes"]
+fn dump_mp4_boxes() {
+    let Ok(p) = std::env::var("RUSTSHOT_DUMP") else { return };
+    let b = std::fs::read(p).unwrap();
+    fn walk(b: &PBx, d: usize) {
+        let extra = match &b.kind {
+            b"elst" => format!(" n={} {:?}", b.u32(4), &b.body[8..b.body.len().min(32)]),
+            b"ctts" => format!(" {:?}", b.table(4, 2).into_iter().take(4).collect::<Vec<_>>()),
+            b"stts" => format!(" {:?}", b.table(4, 2).into_iter().take(4).collect::<Vec<_>>()),
+            b"stss" => format!(" {:?}", b.table(4, 1).into_iter().take(4).collect::<Vec<_>>()),
+            b"mdhd" => format!(" ts={}", b.u32(12)),
+            b"mvhd" => format!(" ts={} dur={}", b.u32(12), b.u32(16)),
+            _ => String::new(),
+        };
+        println!("{}{} {}{extra}", "  ".repeat(d), String::from_utf8_lossy(&b.kind), b.size);
+        for c in &b.kids {
+            walk(c, d + 1);
+        }
+    }
+    for t in boxes(&b, 0, b.len()) {
+        walk(&t, 0);
+    }
 }

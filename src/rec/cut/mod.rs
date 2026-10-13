@@ -2,7 +2,7 @@
 //! without re-encoding where the format allows it.
 //!
 //! - MP4 ([`mp4`]): the samples from the key frame at or before the
-//!   start to the end of the GOP holding the end are copied, and edit
+//!   start to the last frame shown before the end are copied, and edit
 //!   lists start and end the presentation exactly where asked.
 //! - GIF ([`gif`]): frames are copied as they are; the first kept frame is
 //!   recomposed (it may only hold what changed) and its delay shortened.
@@ -11,6 +11,9 @@
 //! `.part` first, renamed once finished) and returns its path; the
 //! original is left for the caller to keep or remove.
 
+pub mod decode;
+#[cfg(windows)]
+mod exact_win;
 pub mod gif;
 pub mod mp4;
 
@@ -60,6 +63,21 @@ pub fn trim_file(path: &Path, start: Duration, end: Duration) -> Result<PathBuf>
     let mut part = dst.as_os_str().to_os_string();
     part.push(".part");
     let part = PathBuf::from(part);
+    // Windows' own player ignores edit lists: the start is made exact in
+    // the samples there (the edit-list trim when that cannot be done).
+    #[cfg(windows)]
+    if kind == Kind::Mp4 {
+        match exact_win::trim(path, &part, start, end) {
+            Ok(()) => {
+                std::fs::rename(&part, &dst).with_context(|| format!("move the trimmed recording to {}", dst.display()))?;
+                return Ok(dst);
+            }
+            Err(e) => {
+                eprintln!("rustshot: trimming with an edit list ({e:#})");
+                let _ = std::fs::remove_file(&part);
+            }
+        }
+    }
     let r = (|| -> Result<()> {
         let mut src = std::io::BufReader::new(std::fs::File::open(path).with_context(|| format!("open {}", path.display()))?);
         let mut out = std::io::BufWriter::new(std::fs::File::create(&part).with_context(|| format!("create {}", part.display()))?);
