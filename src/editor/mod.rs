@@ -3957,6 +3957,8 @@ mod history_tests;
 #[cfg(test)]
 mod snip_tests;
 #[cfg(test)]
+mod store_tests;
+#[cfg(test)]
 mod trim_tests;
 
 #[cfg(test)]
