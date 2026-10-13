@@ -307,15 +307,15 @@ cargo test                     # unit tests
 cargo test -- --ignored        # live display / clipboard / network tests
 ```
 
-The camera's background blur needs the person-segmentation model on
-Windows and Linux (macOS 12+ uses Vision). Convert MediaPipe's
-`selfie_segmentation_landscape.tflite` (Apache-2.0) once, then build with
-the `selfie_model` feature:
+The camera's background blur uses MediaPipe's Selfie Segmentation model
+(Apache-2.0), converted to `assets/selfie.bin` (source and hash in
+`assets/selfie.bin.txt`); it is embedded whenever that file is there.
+`RUSTSHOT_NO_SELFIE=1` builds without it (macOS 12+ still blurs with
+Vision). To convert the model again:
 
 ```bash
 cargo run --manifest-path tools/convert-selfie/Cargo.toml -- \
     selfie_segmentation_landscape.tflite assets/selfie.bin
-cargo build --release --features selfie_model
 ```
 
 Packaging scripts for NSIS, MSIX, `.app`/dmg, deb, AppImage, Flatpak,
