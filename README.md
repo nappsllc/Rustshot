@@ -61,8 +61,10 @@ screenshots, editing and video capture.** Windows, Linux and macOS.
   with your own file-name pattern.
 - Save As, Save to Desktop, **Open with…** any app, or (on Windows) drag
   the thumbnail into another app.
-- Upload to Imgur with the link copied for you. Images and MP4 recordings
-  can be uploaded, and you can delete an upload from Imgur later.
+- Upload to Imgur, or to your own S3-compatible bucket (Amazon S3,
+  Cloudflare R2, MinIO, …), with the link copied for you. Images and MP4
+  recordings can be uploaded, and you can delete an upload later
+  ([Uploads](docs/guide.md#uploads)).
 
 **History**
 - Every capture is kept for 30 days (up to 2 GB) with its annotations
@@ -255,8 +257,11 @@ Every key, the file-name tokens and the `[shortcuts]` table are listed in
 ## Privacy
 
 No telemetry and no account. Captures leave your computer only when you
-choose **Upload** (images) or **Copy link** (an MP4 recording). Both go
-to Imgur. History, upload records and settings stay on your computer.
+choose **Upload** (images) or **Copy link** (an MP4 recording), or turn
+on *Upload recordings automatically*. They go to the destination you
+set: Imgur, or your own S3-compatible bucket, whose secret access key
+stays in the OS credential store. History, upload records and settings
+stay on your computer.
 The only automatic network request is the daemon's update check: one
 anonymous call to the GitHub Releases API, at most once a day. Turn it
 off with `check_updates = false`. See [PRIVACY.md](PRIVACY.md).
