@@ -53,7 +53,7 @@ pub enum HotEvent {
     Launch(crate::launcher::Plan),
     /// Call the delayed capture off (the tray's "Cancel capture").
     CancelDelay,
-    /// The tray's "Delete … from Imgur…" (the upload's menu tag): ask first.
+    /// The tray's "Delete upload …" (the upload's menu tag): ask first.
     UploadDelete(u32),
 }
 

@@ -27,7 +27,8 @@ renderer.
   circles, 45° lines) and unlimited undo/redo.
 - **Export:** copy to the clipboard, save as PNG, JPEG or BMP straight into
   a dated folder (or through the native save dialog), or upload to imgur
-  with the link copied for you.
+  or your own S3-compatible bucket (Amazon S3, Cloudflare R2, MinIO, …)
+  with the link copied for you ([Uploads](#uploads)).
 - **Pin to screen** (<kbd>Ctrl</kbd>+<kbd>P</kbd>): the selection stays on
   top where it was, to zoom, fade and compare ([Pins](#pins-and-the-thumbnail)),
   and a **thumbnail** after each capture to copy, save, pin or drag it out.
@@ -155,7 +156,10 @@ section:
   below) and the *While recording* chords (see [Recording](#recording)). Click a row (or a key cap) and press the new keys; <kbd>Esc</kbd>
   cancels, <kbd>Backspace</kbd> unbinds. **Reset to defaults** (top right)
   puts every key back.
-- **Upload:** the Imgur client id and *Copy link after upload*.
+- **Upload:** the destination (*Imgur* or *S3-compatible*), the Imgur
+  client id or the bucket's settings with **Test connection** (see
+  [Uploads](#uploads)), *Copy link after upload* and *Upload recordings
+  automatically*.
 - **About:** the version with *Check for updates* (the update dialog),
   the daily update check, and links to the website, the source, the
   issue tracker, the release notes and the licenses.
@@ -306,17 +310,19 @@ Hovering a card offers Edit, Copy, Save, Upload, Pin and more; a
 double-click (or <kbd>Enter</kbd>, <kbd>E</kbd>) edits. <kbd>Del</kbd>
 removes from History only (several after asking). A card's ⋯ menu has
 Save As…, Open with…, Show in folder and Copy file path, and for an
-uploaded capture **Copy link** and **Delete from Imgur…** (after asking:
+uploaded capture **Copy link** and **Delete upload…** (after asking:
 the link stops working; the capture stays).
 
-Every Imgur upload's link, its *deletehash* (the key that deletes it),
-the time, the kind (image or video) and a small thumbnail are kept: in the
+Every upload's link, where it went (Imgur and its *deletehash*, the key
+that deletes it, or the S3 bucket and the object's key), the time, the
+kind (image or video) and a small thumbnail are kept: in the
 capture's History entry, or, when History is off or the upload has no
 entry, in `uploads.json` beside the history folder (the last 50). The
 tray's **Recent uploads** lists the last five; a click copies the link,
-and **Delete … from Imgur…** under each asks, then deletes it (one
-Imgur no longer has is just forgotten). **Clear history…** with its
-checkbox also forgets `uploads.json`.
+and **Delete upload …** under each asks, then deletes it (from Imgur, or
+with a signed `DELETE` from the bucket; one Imgur no longer has is just
+forgotten). **Clear history…** with its checkbox also forgets
+`uploads.json`.
 
 The **Edit window** reopens a capture with its annotations as objects: the
 overlay's toolbar docked at the top, every tool and object edit (the
@@ -668,12 +674,60 @@ Per platform:
   microphone and camera permission. This code has not been run on a Mac
   yet.
 
-Limitations: one recording at a time; no editing or trimming; no upload
-of recordings; MJPG-only cameras are not supported; X11 cannot hide a
+A recording's toast offers **Copy link** (an MP4, when uploading is set
+up): it uploads to the configured destination and copies the link. With
+*Upload recordings automatically* (Settings › Upload) the upload starts
+the moment the recording is saved, so the link is ready when you click.
+
+Limitations: one recording at a time; no editing or trimming; Imgur
+takes videos up to 200 MB and 60 s (an S3 bucket takes any size);
+MJPG-only cameras are not supported; X11 cannot hide a
 window from the recording, so there the bar sits outside the area (or
 shrinks to a small pill in the corner when you record your only screen);
 a selection spanning two screens on Wayland records the whole shared
 screen.
+
+## Uploads
+
+<kbd>Ctrl</kbd>+<kbd>U</kbd> (or **Upload** in History, Edit and the
+CLI's `--upload`) sends the capture to the destination chosen in
+Settings › Upload; the link replaces the image on the clipboard (*Copy
+link after upload*).
+
+- **Imgur** (the default): anonymous, with Rustshot's client id (or your
+  own).
+- **S3-compatible**: any bucket that speaks the S3 API: Amazon S3,
+  Cloudflare R2, MinIO, Backblaze B2, Wasabi and the like. Set:
+  - **Endpoint**: `https://<account>.r2.cloudflarestorage.com` (R2),
+    `https://s3.<region>.amazonaws.com` (AWS), your server's address
+    (`https://` only; a `:port` is fine).
+  - **Region**: `auto` for R2 (the default), the bucket's region for AWS.
+  - **Bucket** and **Access key ID**.
+  - **Secret access key**: typed into a masked field and kept in the OS
+    credential store, never in `config.toml` or a log — Windows Credential
+    Manager (a generic credential `rustshot:s3:<bucket>`), the Secret
+    Service on Linux (GNOME Keyring, KWallet, KeePassXC; without one
+    Rustshot refuses to save the secret and says so), the login Keychain
+    on macOS.
+  - **Public URL base**: what links start with — a CDN in front of the
+    bucket, or its `https://pub-….r2.dev` address. Empty: the object's
+    own URL (only useful for a public bucket).
+  - **Key prefix**: where in the bucket, with the file-name tokens
+    (`%Y/%m/%d/` by default). The object is named after the capture's
+    file name plus a short random tail (`2026/10/12/rustshot_2026-10-12_09-14-a8f3k2.png`),
+    so nothing is overwritten.
+  - **Path-style URLs** (on by default; R2 and most self-hosted servers
+    want it): `https://<endpoint>/<bucket>/<key>`; off, virtual-hosted
+    `https://<bucket>.<endpoint>/<key>` (AWS).
+  - **Test connection** uploads a tiny `rustshot-test-<random>.txt` and
+    deletes it again, and says what the bucket answered.
+
+  Requests are signed with AWS Signature Version 4 (written in Rustshot,
+  no SDK); pictures are hashed and signed, recordings stream with
+  `UNSIGNED-PAYLOAD` over HTTPS, and files over 64 MB go up as a multipart
+  upload in 16 MB parts (aborted if any part fails, so no orphaned parts
+  are left behind). The objects need no special ACL: make the bucket (or
+  the CDN in front of it) public for the links to open for others.
 
 ## Configuration
 
@@ -743,6 +797,15 @@ check_updates = true              # daemon checks GitHub once a day
 skip_version = ""                 # a version the daily check ignores ("Skip this version")
 renderer = "gdi"                  # Windows overlay: "gdi" (low memory) or "software"; ignored elsewhere
 upload_client_id = "313baf0c7b4d3ff"
+upload_destination = "imgur"      # "imgur" or "s3" (an S3-compatible bucket, see Uploads)
+s3_endpoint = ""                  # e.g. "https://<account>.r2.cloudflarestorage.com"
+s3_region = "auto"                # "auto" for R2, the bucket's region for AWS
+s3_bucket = ""
+s3_access_key_id = ""             # the secret access key is in the OS credential store, never here
+s3_public_url = ""                # links start with it ("" = the object's own URL)
+s3_key_prefix = "%Y/%m/%d/"       # file-name tokens; "" = the bucket's root
+s3_path_style = true              # false = virtual-hosted (<bucket>.<endpoint>)
+upload_recordings = false         # upload a recording when it is saved (Copy link is then instant)
 record_hotkey = "Shift+Meta+G"    # starts (video mode) and stops a recording
 rec_format = "mp4"                # video mode's defaults: "mp4" or "gif"
 rec_fps = 30                      # MP4: 30 or 60
@@ -856,11 +919,14 @@ boards) and [docs/superpowers](docs/superpowers) (specs and plans).
 
 ## Privacy
 
-No telemetry. Images leave your machine only when you choose **Upload**
-(each upload's deletehash, which deletes it from Imgur again, is kept on
-this computer only; **Delete from Imgur…** sends one request to Imgur);
-recordings never do (the screen, sound and camera are captured only while
-a recording runs or the camera bubble is shown). The
+No telemetry. Images and recordings leave your machine only when you
+choose **Upload** or **Copy link** (or turn on *Upload recordings
+automatically*), and only to the destination you set: Imgur, or your own
+S3-compatible bucket (its secret access key stays in the OS credential
+store). Each Imgur upload's deletehash, which deletes it again, is kept on
+this computer only; **Delete upload…** sends one request to Imgur or the
+bucket. The screen, sound and camera are captured only while a recording
+runs or the camera bubble is shown. The
 daemon's update check is a single anonymous request to the GitHub Releases
 API, at most once a day, and can be turned off with `check_updates = false`;
 an update you accept is downloaded from GitHub's release servers.

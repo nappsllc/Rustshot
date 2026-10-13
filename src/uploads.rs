@@ -1,6 +1,8 @@
-//! Imgur upload records: each upload's link, its deletehash (the secret
-//! that deletes it again), when, whether it was an image or a video, and
-//! a 72 × 48 thumbnail. With History on and the upload belonging to an
+//! Upload records: each upload's link, where it went (Imgur and its
+//! deletehash, the secret that deletes it again; or an S3 bucket and the
+//! object's key, [`Info::s3`]), when, whether it was an image or a video,
+//! and a 72 × 48 thumbnail. "Delete upload…" ([`delete_record`]) deletes
+//! from Imgur or sends the bucket a signed `DELETE` (`crate::s3`). With History on and the upload belonging to an
 //! entry they live in its `meta.json` ([`crate::history::Meta::upload`]);
 //! otherwise in a small `uploads.json` next to the history folder
 //! (`%LOCALAPPDATA%\rustshot\uploads.json`, `$XDG_DATA_HOME/rustshot/…`),
@@ -13,7 +15,8 @@
 //! [`Secret`], whose `Debug` hides it.
 //!
 //! The upload code (`export::do_upload`, `imgur::upload_video`) hands the
-//! reply to [`note_reply`] (the deletehash, kept in memory by link) and the
+//! reply to [`note_reply`] (the deletehash, kept in memory by link; an S3
+//! upload its object to [`note_s3`]) and the
 //! upload thread its thumbnail to [`note_thumb`]; whoever learns that the
 //! upload finished calls [`finished`] (or [`finished_in`] with a
 //! [`Store`]), which files the record where it belongs.

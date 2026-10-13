@@ -3,21 +3,44 @@
 Rustshot does not collect, store or transmit personal data or telemetry.
 
 - Screenshots stay on your computer unless you choose **Upload**. Upload sends
-  only the selected image to imgur (https://imgur.com) using Rustshot's
-  public client id; imgur's privacy policy then applies to that image. The
-  returned link is copied to your clipboard and printed to the console.
+  only the selected image to the destination chosen in Settings › Upload:
+  - **Imgur** (the default, https://imgur.com) using Rustshot's public
+    client id; imgur's privacy policy then applies to that image.
+  - **S3-compatible storage** you configure (Amazon S3, Cloudflare R2,
+    MinIO, …): the image goes to your endpoint and bucket only, signed
+    with your access key; that provider's terms then apply. Rustshot
+    talks to no other server for it.
+
+  The returned link is copied to your clipboard and printed to the console.
   A recording is uploaded only when you click **Copy link** on the notice
-  after it (MP4s through imgur's video upload, which imgur then transcodes).
-  For each upload Rustshot keeps, on this computer only, the link, the
-  *deletehash* imgur returns (the key that deletes the upload again), the
+  after it, or, if you turn on *Upload recordings automatically*, as soon as
+  it is saved (to Imgur, MP4s through its video upload, which imgur then
+  transcodes; or to your bucket).
+  For each upload Rustshot keeps, on this computer only, the link, where it
+  went (for Imgur the *deletehash* it returns, the key that deletes the
+  upload again; for S3 the endpoint, region, bucket and object key), the
   time, the kind (image or video) and a 72 × 48 thumbnail: in the
   capture's History entry, or else in `uploads.json` (the last 50) beside
   the history folder (`%LOCALAPPDATA%\rustshot-data`, Linux
   `$XDG_DATA_HOME/rustshot`, macOS `~/Library/Application Support/rustshot`).
   The deletehash is never logged, shown or sent anywhere except in the one
-  request **Delete from Imgur…** makes (`DELETE
-  https://api.imgur.com/3/image/<deletehash>` with Rustshot's client id),
-  which you confirm first; once deleted, the link and the record go.
+  request **Delete upload…** makes (`DELETE
+  https://api.imgur.com/3/image/<deletehash>` with Rustshot's client id);
+  for an S3 upload it is one signed `DELETE` of the object to your
+  endpoint. You confirm first; once deleted, the link and the record go.
+- S3 credentials: the endpoint, region, bucket, access key id, public URL
+  base and key prefix are in `config.toml`. The **secret access key** is
+  never written to `config.toml`, `uploads.json`, History or any log: it is
+  kept in your operating system's credential store (Windows Credential
+  Manager, as the generic credential `rustshot:s3:<bucket>`; on Linux the
+  Secret Service, e.g. GNOME Keyring or KWallet — without one Rustshot does
+  not save it at all; on macOS the login Keychain) and read from there when
+  an upload is signed. It is used only to compute request signatures and is
+  never sent anywhere itself. On Linux and macOS the signed request's
+  headers are handed to `curl` in a temporary file only you can read
+  (deleted right after), not on its command line. **Test connection**
+  uploads one tiny `rustshot-test-<random>.txt` to your bucket and deletes
+  it again.
 - **Open with…** writes an unsaved capture to a private `rustshot-open`
   folder (Windows `%TEMP%`, Linux `$XDG_RUNTIME_DIR` or the cache folder,
   readable by you only) for the app you pick (removed once a day old);
@@ -48,8 +71,8 @@ Rustshot does not collect, store or transmit personal data or telemetry.
   your operating system asks for the microphone, camera and (macOS,
   Wayland, Flatpak) screen permission first.
   Recordings (MP4 or GIF) are written straight to your save folder; they
-  are never uploaded (Upload is for screenshots only), and Rustshot keeps
-  no other copy. Settings › Recording lists the names of your microphones
+  are uploaded only as described above (**Copy link**, or *Upload
+  recordings automatically*), and Rustshot keeps no other copy. Settings › Recording lists the names of your microphones
   and cameras to choose from; it does not open them.
 - OpenH264 (Linux without ffmpeg, only if you choose **Download OpenH264**
   when you first record MP4): Rustshot downloads Cisco's OpenH264 library
