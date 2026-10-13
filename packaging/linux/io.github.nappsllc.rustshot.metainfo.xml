@@ -4,19 +4,17 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-only</project_license>
   <name>Rustshot</name>
-  <summary>Capture, annotate and share screenshots</summary>
+  <summary>Screenshots, editing and video capture</summary>
   <developer id="io.github.nappsllc">
     <name>PowerNapps</name>
   </developer>
   <description>
     <p>
-      Rustshot captures the whole screen or a region and lets you annotate it
-      with arrows, lines, shapes, text, a highlighter and pixelation before
-      saving it, copying it to the clipboard or uploading it to imgur.
+      Rustshot captures a region, a window or the whole screen, lets you annotate it (arrows, shapes, text, callouts, blur, numbered tags and more), and copies, saves, pins or uploads it. It also records the screen to MP4 or GIF with sound, microphone and a camera bubble, keeps a history of captures you can re-edit, and recognises text (OCR). One small native binary, no runtime.
     </p>
     <p>
-      A small background daemon provides global hotkeys. Rustshot currently
-      needs an X11 session (or XWayland).
+      A small background daemon provides global hotkeys. Works on X11 and
+      Wayland (through the desktop portals).
     </p>
   </description>
   <launchable type="desktop-id">io.github.nappsllc.rustshot.desktop</launchable>
