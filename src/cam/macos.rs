@@ -25,7 +25,7 @@ use crate::wind::{msg1, objc_cls, objc_sel, AuxKind, Layer};
 use anyhow::{anyhow, Context, Result};
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -138,6 +138,8 @@ struct Shared {
     stop: AtomicBool,
     /// The picture's side in pixels.
     side: AtomicU32,
+    /// The background effect ([`super::bg::Bg`]).
+    bg: AtomicU8,
     picture: AtomicBool,
     /// A repaint is queued on the main thread.
     queued: AtomicBool,
@@ -288,6 +290,7 @@ fn camera_thread(open: Opener, sh: Arc<Shared>, done: mpsc::Sender<()>) {
         let mut src = open()?;
         let mut last: Option<Instant> = None;
         let (mut raw, mut tmp) = (CamFrame::default(), Vec::new());
+        let mut fx = super::bg::Effect::default();
         while !sh.stop.load(Ordering::SeqCst) {
             if !src.read(&mut raw)? {
                 continue;
@@ -299,6 +302,7 @@ fn camera_thread(open: Opener, sh: Arc<Shared>, done: mpsc::Sender<()>) {
             last = Some(now);
             let mut sq = lock(&sh.spare).take().unwrap_or_default();
             super::fit_square_into(&raw, sh.side.load(Ordering::SeqCst), &mut tmp, &mut sq);
+            fx.apply(super::bg::Bg::from_u8(sh.bg.load(Ordering::SeqCst)), &raw, &mut sq);
             if let Some(old) = lock(&sh.fresh).replace(sq) {
                 *lock(&sh.spare) = Some(old);
             }
@@ -351,6 +355,7 @@ impl Bubble {
         geo.pos = geo.home();
         let shared = Arc::new(Shared::default());
         shared.side.store(geo.tpl.d, Ordering::SeqCst);
+        shared.bg.store(look.bg.to_u8(), Ordering::SeqCst);
         let ui = Rc::new(Ui { geo: RefCell::new(geo), layer: RefCell::new(layer), shared: shared.clone(), px: RefCell::new(Vec::new()) });
         let weak = Rc::downgrade(&ui);
         ui.layer.borrow().on_pointer(move |ev| {
@@ -491,9 +496,15 @@ impl Bubble {
 
     /// Change the shape, size or mirroring (and the theme's accent).
     pub fn set_look(&mut self, look: Look, th: &Theme) {
+        self.ui.shared.bg.store(look.bg.to_u8(), Ordering::SeqCst);
         {
             let mut g = self.ui.geo.borrow_mut();
             if g.look == look && g.th == *th {
+                return;
+            }
+            if (Look { bg: g.look.bg, ..look }) == g.look && g.th == *th {
+                // Only the background: the camera thread's next picture.
+                g.look = look;
                 return;
             }
             let resized = g.look.size != look.size;
