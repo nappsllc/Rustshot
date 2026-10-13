@@ -37,6 +37,14 @@ static TX: Mutex<Option<Sender<HotEvent>>> = Mutex::new(None);
 static BALLOON: Mutex<Option<String>> = Mutex::new(None);
 /// The folder the next balloon click opens (set with a "Saved" balloon).
 static SAVED: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
+/// The next balloon click opens Settings › Key bindings (a hotkey note).
+static KEYS_CLICK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The balloon just shown is about the hotkeys: its click opens Key bindings.
+#[cfg_attr(test, allow(dead_code))]
+pub fn click_opens_keys() {
+    KEYS_CLICK.store(true, std::sync::atomic::Ordering::SeqCst);
+}
 
 fn taskbar_created() -> u32 {
     static MSG: OnceLock<u32> = OnceLock::new();
@@ -63,6 +71,7 @@ pub fn spawn(tx: Sender<HotEvent>) {
 #[cfg_attr(test, allow(dead_code))] // tests collect notes instead (`tray::take_notes`)
 pub fn notify(text: &str) {
     *SAVED.lock().unwrap() = None;
+    KEYS_CLICK.store(false, std::sync::atomic::Ordering::SeqCst);
     post_balloon(text);
 }
 
@@ -383,6 +392,8 @@ pub fn handle(hwnd: HWND, m: u32, _w: WPARAM, l: LPARAM) -> Option<LRESULT> {
             BALLOON_CLICK => {
                 if let Some(dir) = SAVED.lock().unwrap().take() {
                     crate::actions::open_path(&dir);
+                } else if KEYS_CLICK.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                    crate::settings_ui::show_at(crate::settings_ui::KEYS);
                 }
             }
             WM_RBUTTONUP | WM_CONTEXTMENU => show_menu(hwnd),

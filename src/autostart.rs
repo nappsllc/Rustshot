@@ -5,10 +5,17 @@ use std::path::Path;
 
 pub const LABEL: &str = "io.github.nappsllc.rustshot";
 
-/// Windows Run-key value data: `"<exe>" daemon`.
+/// Windows Run-key value data: `"<exe>" daemon` (`daemon --force` for a
+/// forced daemon: it runs with the tray icon off too).
 #[cfg_attr(not(windows), allow(dead_code))]
-pub fn run_command(exe: &Path) -> String {
-    format!("\"{}\" daemon", exe.display())
+pub fn run_command(exe: &Path, force: bool) -> String {
+    format!("\"{}\" daemon{}", exe.display(), if force { " --force" } else { "" })
+}
+
+/// A Run value asks for `--force` (kept when the value is written again).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn wants_force(value: &str) -> bool {
+    value.split_whitespace().any(|a| a == "--force")
 }
 
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
@@ -109,6 +116,16 @@ mod imp {
         set_named(VALUE, on, &exe)
     }
 
+    /// The Run value's data, if any.
+    fn read_named(name: &str) -> Option<String> {
+        let mut buf = vec![0u16; 2048];
+        let mut len = (buf.len() * 2) as u32;
+        let r = unsafe {
+            RegGetValueW(HKEY_CURRENT_USER, SUBKEY, &HSTRING::from(name), RRF_RT_REG_SZ, None, Some(buf.as_mut_ptr() as *mut _), Some(&mut len))
+        };
+        (r == ERROR_SUCCESS).then(|| String::from_utf16_lossy(&buf[..(len as usize / 2).saturating_sub(1)]))
+    }
+
     pub fn is_enabled_named(name: &str) -> bool {
         unsafe {
             RegGetValueW(HKEY_CURRENT_USER, SUBKEY, &HSTRING::from(name), RRF_RT_REG_SZ, None, None, None)
@@ -119,7 +136,9 @@ mod imp {
     pub fn set_named(name: &str, on: bool, exe: &Path) -> Result<(), String> {
         unsafe {
             if on {
-                let data: Vec<u16> = super::run_command(exe).encode_utf16().chain(Some(0)).collect();
+                // A forced daemon (this one, or the value already says so) stays forced.
+                let force = std::env::args().any(|a| a == "--force") || read_named(name).is_some_and(|v| super::wants_force(&v));
+                let data: Vec<u16> = super::run_command(exe, force).encode_utf16().chain(Some(0)).collect();
                 let r = RegSetKeyValueW(
                     HKEY_CURRENT_USER,
                     SUBKEY,
@@ -203,7 +222,9 @@ mod tests {
 
     #[test]
     fn run_command_quotes_exe() {
-        assert_eq!(run_command(Path::new("C:\\a b\\rustshot.exe")), "\"C:\\a b\\rustshot.exe\" daemon");
+        assert_eq!(run_command(Path::new("C:\\a b\\rustshot.exe"), false), "\"C:\\a b\\rustshot.exe\" daemon");
+        assert_eq!(run_command(Path::new("C:\\r.exe"), true), "\"C:\\r.exe\" daemon --force");
+        assert!(wants_force("\"C:\\r.exe\" daemon --force") && !wants_force("\"C:\\r.exe\" daemon"));
     }
 
     #[test]

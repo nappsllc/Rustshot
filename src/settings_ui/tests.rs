@@ -843,14 +843,14 @@ fn unregistered_hotkey_can_be_retried() {
     assert_eq!((s.hotkey_slot_note(0), s.hotkey_slot_note(1)), (None, None));
     assert_eq!(s.on(Click::Apply), vec![]);
     s.hotkey_failures = vec![
-        Failure { slot: 0, wanted: "Ctrl+Alt+F9".into(), cause: Cause::InUse, kept: Some("Ctrl+Alt+Shift+Q".into()) },
-        Failure { slot: 1, wanted: "Ctrl+Alt+F10".into(), cause: Cause::Unknown, kept: None },
-        Failure { slot: 5, wanted: "Ctrl+Shift+P".into(), cause: Cause::InUse, kept: None },
+        Failure { slot: 0, wanted: "Ctrl+Alt+F9".into(), cause: Cause::InUse, kept: Some("Ctrl+Alt+Shift+Q".into()), ..Failure::default() },
+        Failure { slot: 1, wanted: "Ctrl+Alt+F10".into(), cause: Cause::Unknown, ..Failure::default() },
+        Failure { slot: 5, wanted: "Ctrl+Shift+P".into(), cause: Cause::InUse, ..Failure::default() },
     ];
     assert!(s.retry_hotkeys() && !s.dirty());
-    assert_eq!(s.hotkey_slot_note(0).as_deref(), Some("Not registered \u{2014} using Ctrl+Alt+Shift+Q"));
+    assert_eq!(s.hotkey_slot_note(0).as_deref(), Some("In use by another app \u{2014} using Ctrl+Alt+Shift+Q"));
     assert_eq!(s.hotkey_slot_note(1).as_deref(), Some("Not registered"));
-    assert_eq!(s.global_message(5).as_deref(), Some("Already used by another app. Choose another."));
+    assert_eq!(s.global_message(5).as_deref(), Some("In use by another app. Choose another."));
     assert_eq!(s.on(Click::Apply), vec![Act::Reload]);
     assert_eq!(s.on(Click::Ok), vec![Act::Reload, Act::Close]);
     assert_eq!(s.on(Click::Enter), vec![Act::Reload, Act::Close]);
@@ -860,10 +860,213 @@ fn unregistered_hotkey_can_be_retried() {
     assert!(matches!(&s.on(Click::Apply)[..], [Act::Saved(_)]));
     // Apply is enabled for the retry: a click on it lands.
     let mut s = sample();
-    s.hotkey_failures = vec![Failure { slot: 0, wanted: "Ctrl+Alt+F9".into(), cause: Cause::InUse, kept: None }];
+    s.hotkey_failures = vec![Failure { slot: 0, wanted: "Ctrl+Alt+F9".into(), cause: Cause::InUse, ..Failure::default() }];
     let mut focus = FocusState::default();
     assert_eq!(click(&mut s, &mut focus, "apply", 1.0), Some(Click::Apply));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The user's case: Record still unregistered, full screen fallen back.
+const HOTKEY_TEXT: &str = "Shift+Win+F is in use by another app \u{2014} Capture full screen is on Shift+Win+Y instead.\nShift+Win+K is used by another app. Pick another key: click Change shortcuts\u{2026}, click the Record video key and press a new one (Shift+Win+J is free).";
+
+/// Another app holds a global key: its row shows red with "In use by
+/// another app" (and what is used meanwhile, or a free key); a new key
+/// recorded in its place clears that until it is saved.
+#[test]
+fn rows_show_keys_in_use_by_another_app() {
+    use crate::hotkey::{Cause, Failure};
+    let mut s = sample();
+    assert!(!s.global_err(3) && s.global_message(3).is_none());
+    s.hotkey_failures = vec![
+        Failure { slot: 3, wanted: "Shift+Meta+F".into(), cause: Cause::InUse, alt: Some("Shift+Meta+Y".into()), ..Failure::default() },
+        Failure { slot: 2, wanted: "Shift+Meta+G".into(), cause: Cause::InUse, free: Some("Shift+Meta+J".into()), ..Failure::default() },
+        Failure { slot: 4, wanted: "Shift+Meta+E".into(), cause: Cause::InUse, ..Failure::default() },
+        Failure { slot: 7, wanted: "Shift+Meta+H".into(), cause: Cause::Unknown, ..Failure::default() },
+    ];
+    let l = crate::hotkey::chord_label;
+    assert_eq!(s.global_message(3).unwrap(), format!("In use by another app \u{2014} using {} for now", l("Shift+Meta+Y")));
+    assert_eq!(s.global_message(2).unwrap(), format!("In use by another app. {} is free.", l("Shift+Meta+J")));
+    assert_eq!(s.global_message(4).as_deref(), Some("In use by another app. Choose another."));
+    assert_eq!(s.global_message(7).as_deref(), Some("Not registered"));
+    assert!(s.global_err(3) && s.global_err(2) && s.global_err(4));
+    assert!(!s.global_err(7) && !s.global_err(0), "not in use: no red");
+    // A new key recorded in the row: its own state, not the old failure.
+    s.form.full = Chord::parse("Ctrl+Alt+F");
+    assert!(!s.global_err(3) && s.global_message(3).is_none());
+    // The red keys and the note are drawn.
+    let mut s2 = sample();
+    s2.section = KEYS;
+    s2.hotkey_failures = s.hotkey_failures.clone();
+    let (img, _) = render(&mut s2, &DARK, 1.0, &Input::default(), &mut FocusState::default());
+    preview::save("settings-keys-in-use-dark.png", &img);
+}
+
+/// The hotkey dialog: OK closes it; "Change shortcuts…" goes to Key
+/// bindings with the first row needing a new key recording; a second
+/// note joins the open dialog; an error turns into one.
+#[test]
+fn hotkey_dialog_changes_shortcuts() {
+    let mut s = sample();
+    s.notify_hotkeys(HOTKEY_TEXT.into(), Some("global2".into()));
+    assert_eq!(s.modal, Some(Modal::Hotkeys { text: HOTKEY_TEXT.into(), field: Some("global2".into()) }));
+    assert_eq!(s.on(Click::Enter), vec![], "Enter is OK");
+    assert_eq!(s.modal, None);
+    assert_eq!(s.section, GENERAL);
+    // Both buttons are drawn and land.
+    s.notify_hotkeys("one".into(), None);
+    s.notify_hotkeys("two".into(), Some("global2".into()));
+    assert_eq!(s.modal, Some(Modal::Hotkeys { text: "one\ntwo".into(), field: Some("global2".into()) }));
+    let mut focus = FocusState::default();
+    assert_eq!(click(&mut s, &mut focus, "q_change", 1.0), Some(Click::ChangeShortcuts));
+    assert_eq!(s.on(Click::ChangeShortcuts), vec![]);
+    assert_eq!((s.modal.clone(), s.section, s.scroll[KEYS]), (None, KEYS, 0.0));
+    let mut focus = FocusState::default();
+    render(&mut s, &DARK, 1.0, &Input::default(), &mut focus);
+    assert!(focus.is_recording("global2"), "the Record video key records");
+    assert_eq!(s.record_field, None);
+    // An error dialog open: the note joins it, with the button.
+    let mut s = sample();
+    s.notify("Could not save".into());
+    s.notify_hotkeys("x".into(), Some("global3".into()));
+    assert_eq!(s.modal, Some(Modal::Hotkeys { text: "Could not save\nx".into(), field: Some("global3".into()) }));
+    let mut focus = FocusState::default();
+    assert_eq!(click(&mut s, &mut focus, "q_ok", 1.0), Some(Click::Back));
+    // Behind another question: shown (with the button) once it closes.
+    let mut s = sample();
+    s.modal = Some(Modal::Rewrite { close: false });
+    s.notify_hotkeys("later".into(), Some("global0".into()));
+    s.on(Click::Back);
+    assert_eq!(s.modal, Some(Modal::Hotkeys { text: "later".into(), field: Some("global0".into()) }));
+}
+
+/// The daemon's routing: a key the user must change opens the dialog at
+/// its row; only fallbacks are a balloon.
+#[test]
+fn hotkey_notes_route_to_dialog_or_balloon() {
+    use crate::editor::{HotkeyNote, hotkey_note};
+    use crate::hotkey::{Cause, Failure};
+    assert_eq!(hotkey_note(&[]), None);
+    let alt = Failure { slot: 3, wanted: "Shift+Meta+F".into(), cause: Cause::InUse, alt: Some("Shift+Meta+Y".into()), ..Failure::default() };
+    let stuck = Failure { slot: 2, wanted: "Shift+Meta+K".into(), cause: Cause::InUse, free: Some("Shift+Meta+J".into()), ..Failure::default() };
+    assert_eq!(hotkey_note(std::slice::from_ref(&alt)), Some(HotkeyNote::Balloon(alt.message())));
+    // A while-recording chord never opens the dialog (it would cover the
+    // recording): a note only.
+    let rec = Failure { slot: crate::hotkey::REC_SLOT_BASE + 1, wanted: "Ctrl+Alt+Shift+M".into(), cause: Cause::InUse, ..Failure::default() };
+    assert!(rec.needs_action());
+    assert_eq!(hotkey_note(std::slice::from_ref(&rec)), Some(HotkeyNote::Balloon(rec.message())));
+    let both = [alt.clone(), stuck.clone()];
+    let Some(HotkeyNote::Dialog { text, field }) = hotkey_note(&both) else { panic!() };
+    assert_eq!(field.as_deref(), Some("global2"));
+    assert_eq!(text, format!("{}\n{}", alt.message(), stuck.message()));
+    #[cfg(windows)]
+    assert_eq!(text, HOTKEY_TEXT);
+}
+
+/// The tray-icon-off question: one more line (and "Set up…") while
+/// Win+Shift+S does not open Rustshot; "Set up…" keeps the icon and goes
+/// to the Win+Shift+S row. Saving the icon on again starts the daemon.
+#[test]
+fn tray_off_question_variants() {
+    // Registered and chosen: the plain text, Turn off / Cancel.
+    let mut s = sample(); // screenclip on, not waiting
+    assert_eq!(s.screenclip_ready(), Some(true));
+    assert_eq!(s.hide_tray_text(), HIDE_TRAY);
+    s.ask_hide_tray();
+    let mut focus = FocusState::default();
+    render(&mut s, &DARK, 1.0, &Input::default(), &mut focus);
+    assert!(focus.rect_of("q_hide").is_some() && focus.rect_of("q_setup").is_none());
+    // Registered but Windows still opens the Snipping Tool, or not
+    // registered: the setup line and its button.
+    for state in [Some(true), Some(false)] {
+        let mut s = sample().with_screenclip(state, Handler::None);
+        s.read_handler = || Handler::None;
+        s.set_screenclip = |_| Ok(()); // never the real registry
+        assert_eq!(s.screenclip_ready(), Some(false));
+        assert_eq!(s.hide_tray_text(), format!("{HIDE_TRAY}\n{HIDE_TRAY_SETUP}"));
+        assert_eq!(HIDE_TRAY_SETUP, "Rustshot isn't set as your screenshot app yet \u{2014} Set up\u{2026}");
+        s.form.show_tray = false;
+        s.ask_hide_tray();
+        let mut focus = FocusState::default();
+        assert_eq!(click(&mut s, &mut focus, "q_setup", 1.0), Some(Click::ScreenclipSetup));
+        s.on(Click::ScreenclipSetup);
+        assert!(s.form.show_tray, "the icon stays for now");
+        assert_eq!(s.section, CAPTURE);
+        assert!(matches!(s.modal, Some(Modal::Guide { .. })), "the Win+Shift+S guide: {:?}", s.modal);
+        s.modal = None; // the guide closed: the row is there
+        render(&mut s, &DARK, 1.0, &Input::default(), &mut focus);
+        assert!(focus.is_focused("screenclip") && s.focus_field.is_none(), "the Win+Shift+S row");
+        assert_eq!(s.screenclip, Some(true), "turned on for the guide");
+    }
+    // Not available here (no handler to set up): nothing extra.
+    let s = sample().with_screenclip(None, Handler::Ours);
+    assert_eq!((s.screenclip_ready(), s.hide_tray_text()), (None, HIDE_TRAY.to_string()));
+    // The row's help.
+    assert_eq!(TRAY_HELP, "Off: no background process; only Win+Shift+S / Print Screen (when set up)");
+    // Saved off, then on again: the daemon is started (Windows).
+    let dir = scratch("trayon");
+    let p = dir.join("config.toml");
+    config::save_at(&p, &Config { show_tray: false, ..Config::default() }).unwrap();
+    let mut s = settings_at(&p);
+    s.confirmed = true;
+    s.form.show_tray = true;
+    let acts = s.on(Click::Apply);
+    assert_eq!(acts.contains(&Act::StartDaemon), cfg!(windows), "{acts:?}");
+    s.form.ask = !s.form.ask;
+    assert!(!s.on(Click::Apply).contains(&Act::StartDaemon), "only when it was turned on");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The one-time notice for an older file with the tray icon off: Set up
+/// Win+Shift+S, Show tray icon again (saved; the daemon starts), OK
+/// (closes). Turning it off here marks the file, so it never shows.
+/// The Store build keeps a hidden daemon: its question and help say so.
+#[test]
+fn tray_off_notice_and_store_build() {
+    assert_eq!(TRAY_OFF_NOTICE, "Rustshot no longer runs in the background while the tray icon is off. Win+Shift+S and Print Screen can still open it.");
+    let dir = scratch("traynotice");
+    let p = dir.join("config.toml");
+    config::save_at(&p, &Config { show_tray: false, ..Config::default() }).unwrap();
+    let mut s = settings_at(&p);
+    s.no_background = true;
+    s.confirmed = true;
+    s.show_tray_off_notice();
+    let mut focus = FocusState::default();
+    render(&mut s, &DARK, 1.0, &Input::default(), &mut focus);
+    for id in ["q_setup", "q_tray_on", "q_ok"] {
+        assert!(focus.rect_of(id).is_some(), "{id}");
+    }
+    assert_eq!(s.on(Click::Enter), vec![Act::Close], "Enter is OK");
+    s.show_tray_off_notice();
+    let acts = s.on(Click::ShowTrayAgain);
+    assert!(matches!(&acts[..], [Act::Saved(c), Act::StartDaemon, Act::Close] if c.show_tray), "{acts:?}");
+    assert!(config::read_at(&p).unwrap().unwrap().show_tray);
+    // Turned off here: marked (the notice is for older files only).
+    s.form.show_tray = false;
+    s.on(Click::Apply);
+    let saved = config::read_at(&p).unwrap().unwrap();
+    assert!(!saved.show_tray && saved.tray_off_mode_seen);
+    // The Store build: the icon off keeps the daemon; nothing to start.
+    let mut s = sample();
+    s.no_background = false;
+    assert_eq!(s.hide_tray_text(), HIDE_TRAY_KEEP);
+    assert_eq!(s.tray_help(), TRAY_HELP_KEEP);
+    s.no_background = true;
+    assert_eq!(s.tray_help(), TRAY_HELP);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// "Change shortcuts…" for a while-recording chord: Key bindings scrolled
+/// to the bottom, where those rows are.
+#[test]
+fn change_shortcuts_reaches_the_recording_rows() {
+    let mut s = sample();
+    s.notify_hotkeys("x".into(), Some("key_rec_mute".into()));
+    s.on(Click::ChangeShortcuts);
+    assert_eq!((s.section, s.record_field.as_deref()), (KEYS, Some("key_rec_mute")));
+    let mut focus = FocusState::default();
+    render(&mut s, &DARK, 1.0, &Input::default(), &mut focus);
+    assert!(focus.is_recording("key_rec_mute"));
+    assert!(s.scroll[KEYS] > 0.0, "scrolled down to the recording rows");
 }
 
 #[test]
@@ -1005,7 +1208,7 @@ fn hidden_tray_without_a_hotkey_warns() {
     s.form.capture = None;
     assert!(s.tray_warning());
     s.form.capture = Chord::parse("Ctrl+Shift+S");
-    s.hotkey_failures = vec![crate::hotkey::Failure { slot: 0, wanted: "Ctrl+Shift+S".into(), cause: crate::hotkey::Cause::InUse, kept: None }];
+    s.hotkey_failures = vec![crate::hotkey::Failure { slot: 0, wanted: "Ctrl+Shift+S".into(), cause: crate::hotkey::Cause::InUse, ..Default::default() }];
     assert!(s.tray_warning());
 }
 
@@ -1090,7 +1293,8 @@ fn preview_settings_pngs() {
             let mut s = sample();
             s.section = KEYS;
             s.form.repeat = Chord::parse("Ctrl+Shift+P");
-            s.hotkey_failures = vec![crate::hotkey::Failure { slot: 5, wanted: "Ctrl+Shift+P".into(), cause: crate::hotkey::Cause::InUse, kept: None }];
+            s.loaded.repeat_hotkey = "Ctrl+Shift+P".into();
+            s.hotkey_failures = vec![crate::hotkey::Failure { slot: 5, wanted: "Ctrl+Shift+P".into(), cause: crate::hotkey::Cause::InUse, ..Default::default() }];
             let mut focus = FocusState::default();
             render(&mut s, th, k, &Input::default(), &mut focus);
             focus.record("global3");
@@ -1179,7 +1383,8 @@ fn preview_settings_pngs() {
             for (name, m) in [
                 ("rewrite", Modal::Rewrite { close: true }),
                 ("error", Modal::Error(r"Could not save C:\Users\denis\AppData\Roaming\rustshot\config.toml: Access is denied. (os error 5)".into())),
-                ("hotkey-failed", Modal::Error("Couldn't register Ctrl+Shift+S \u{2014} it's in use by another app; kept Shift+Win+X.".into())),
+                ("hotkey-failed", Modal::Hotkeys { text: HOTKEY_TEXT.into(), field: Some("global3".into()) }),
+                ("hide-tray", Modal::HideTray),
             ] {
                 let mut s = sample();
                 s.modal = Some(m);
@@ -1292,6 +1497,36 @@ fn general_controls_click() {
     assert!(!s.form.copy_after);
     click(&mut s, &mut focus, "show_tray", 1.0);
     assert!(!s.form.show_tray);
+    // Turning the tray icon off asks first, saying what goes and how to
+    // get back in.
+    assert_eq!(s.modal, Some(Modal::HideTray));
+    assert!(HIDE_TRAY.contains("Settings"));
+    #[cfg(windows)]
+    assert_eq!(
+        HIDE_TRAY,
+        "Rustshot won't run in the background. Win+Shift+S and Print Screen still open it if Rustshot is set as your screenshot app (Settings > Capture); other global shortcuts stop working. To open Settings, start Rustshot from the Start menu."
+    );
+    let mut qfocus = FocusState::default();
+    assert_eq!(click(&mut s, &mut qfocus, "q_cancel", 1.0), Some(Click::KeepTray));
+    assert_eq!(s.on(Click::KeepTray), vec![]);
+    assert!(s.form.show_tray && s.modal.is_none(), "Cancel: the icon stays");
+    // Esc keeps it too; Hide icon (or Enter) hides it.
+    s.form.show_tray = false;
+    s.ask_hide_tray();
+    s.on(Click::Escape);
+    assert!(s.form.show_tray && s.modal.is_none());
+    s.form.show_tray = false;
+    s.ask_hide_tray();
+    assert_eq!(click(&mut s, &mut qfocus, "q_hide", 1.0), Some(Click::HideTray));
+    s.on(Click::HideTray);
+    assert!(!s.form.show_tray && s.modal.is_none());
+    s.form.show_tray = false;
+    s.ask_hide_tray();
+    s.on(Click::Enter);
+    assert!(!s.form.show_tray && s.modal.is_none());
+    // Turning it back on asks nothing.
+    click(&mut s, &mut focus, "show_tray", 1.0);
+    assert!(s.form.show_tray && s.modal.is_none());
     click(&mut s, &mut focus, "accent_teal", 1.5);
     assert_eq!(s.form.accent, 1);
     s.form.theme = 1; // Dark

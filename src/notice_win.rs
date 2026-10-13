@@ -318,6 +318,12 @@ fn up_for(note: Note, th: Theme, s: f32, pos: (i32, i32), since: Instant) -> Up 
     Up { note, th, s, pos, since, k: None, layout, hover: None, dirty: false, press: None, frozen: None }
 }
 
+/// A note is up (the window shows one).
+#[cfg_attr(test, allow(dead_code))]
+pub fn showing() -> bool {
+    WIN.with(|w| w.borrow().as_ref().is_some_and(|w| w.up.is_some()))
+}
+
 pub fn show(note: Note, at: (i32, i32), th: Theme) -> bool {
     let (work, s) = monitor_at(at);
     let pos = place_note(work, &note, note_size(&note, s));
@@ -423,6 +429,8 @@ mod tests {
 
     #[test]
     fn the_notice_window_never_takes_focus_or_clicks_and_is_not_captured() {
+        // Real windows: never alongside the other window tests.
+        let _guard = crate::wind::test_window_lock();
         let note = |t: &str| Note { ttl: std::time::Duration::from_millis(300), ..Note::plain(t, ToastKind::Info) };
         assert!(!replace(note("x")), "nothing up yet");
         assert!(show(note("Uploading\u{2026}"), (0, 0), crate::theme::DARK));
@@ -451,6 +459,8 @@ mod tests {
     /// pins the capture where it was and takes the card down.
     #[test]
     fn the_thumbnail_window() {
+        // Real windows: never alongside the other window tests.
+        let _guard = crate::wind::test_window_lock();
         let img = std::sync::Arc::new(crate::pin::tests::sample_shot(320, 180));
         let n = super::super::thumbnail(&[crate::export::Done::Copied], false, img, (12, 34), None).unwrap();
         assert!(show(n.clone(), (0, 0), crate::theme::DARK));
@@ -509,6 +519,8 @@ mod tests {
     /// the file on the clipboard (tests: no clipboard) and says so.
     #[test]
     fn a_note_with_buttons_takes_clicks() {
+        // Real windows: never alongside the other window tests.
+        let _guard = crate::wind::test_window_lock();
         let path = std::path::PathBuf::from("C:\\shots\\rustshot-2026-10-10-2131.gif");
         let n = super::super::recording_saved(&path, std::time::Duration::from_secs(42), 1_400_000, &[], true);
         assert_eq!(n.ttl, super::super::ACTION_TTL);

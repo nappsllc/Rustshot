@@ -436,7 +436,7 @@ impl Window {
     fn spawn(&mut self, f: impl FnOnce() -> super::Done + Send + 'static) {
         let tx = self.done.0.clone();
         self.busy += 1;
-        std::thread::spawn(move || {
+        crate::busy::spawn(move || {
             let _ = tx.send(f());
         });
     }

@@ -150,7 +150,8 @@ pub fn share(file: &Path) {
         let f = file.to_path_buf();
         // Counted before the thread starts: an exit right after waits.
         let running = Running::start();
-        let _ = std::thread::Builder::new().name("rustshot-share".into()).spawn(move || {
+        // Also busy work: a daemon that quits when idle (tray off) waits.
+        crate::busy::spawn(move || {
             let r = share_now(&f, None);
             drop(running);
             if let Err(e) = r {

@@ -468,6 +468,9 @@ fn question(ui: &mut Ui, s: &Settings, m: &Modal) -> Option<Click> {
             },
         );
     }
+    // The tray-icon-off question's text, and whether Win+Shift+S still
+    // needs setting up (its "Set up…").
+    let (text_for_tray, setup) = (s.hide_tray_text(), s.screenclip_ready() == Some(false));
     type Btns = &'static [(&'static str, &'static str, Click)];
     let (icon, text, btns): (&str, String, Btns) = match m {
         Modal::Guide { .. } => unreachable!("drawn above"),
@@ -475,6 +478,22 @@ fn question(ui: &mut Ui, s: &Settings, m: &Modal) -> Option<Click> {
             ("info", REWRITE.into(), &[("q_save", "Save", Click::Save), ("q_cancel", "Cancel", Click::Back)])
         }
         Modal::Error(e) => ("alert", e.clone(), &[("q_ok", "OK", Click::Back)]),
+        Modal::HideTray if setup => (
+            "info",
+            text_for_tray,
+            &[("q_hide", "Turn off", Click::HideTray), ("q_setup", "Set up\u{2026}", Click::ScreenclipSetup), ("q_cancel", "Cancel", Click::KeepTray)],
+        ),
+        Modal::HideTray => ("info", text_for_tray, &[("q_hide", "Turn off", Click::HideTray), ("q_cancel", "Cancel", Click::KeepTray)]),
+        Modal::TrayOffNotice => (
+            "info",
+            TRAY_OFF_NOTICE.into(),
+            &[("q_setup", "Set up Win+Shift+S", Click::ScreenclipSetup), ("q_tray_on", "Show tray icon again", Click::ShowTrayAgain), ("q_ok", "OK", Click::NoticeOk)],
+        ),
+        Modal::Hotkeys { text, .. } => (
+            "alert",
+            text.clone(),
+            &[("q_ok", "OK", Click::Back), ("q_change", "Change shortcuts\u{2026}", Click::ChangeShortcuts)],
+        ),
         Modal::Broken(e) => (
             "alert",
             broken_text(e),
@@ -486,7 +505,7 @@ fn question(ui: &mut Ui, s: &Settings, m: &Modal) -> Option<Click> {
         ),
         Modal::Reset(_) => ("alert", RESET.into(), &[("q_replace", "Replace", Click::Replace), ("q_cancel", "Cancel", Click::Back)]),
     };
-    let icon_color = if matches!(m, Modal::Rewrite { .. }) { ui.theme.accent_fg } else { ui.theme.error };
+    let icon_color = if matches!(m, Modal::Rewrite { .. } | Modal::HideTray | Modal::TrayOffNotice) { ui.theme.accent_fg } else { ui.theme.error };
     dialog(ui, &Dialog { icon, icon_color, title: None, text: &text, buttons: btns, check: None, min_w: 420.0, max_text_h: 160.0, error: None })
 }
 
@@ -507,6 +526,7 @@ fn general(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) 
     let example = example_name(s);
     let tray_row = s.tray_row;
     let warn = s.tray_warning();
+    let tray_help = s.tray_help();
     let f = &mut s.form;
     ui.sec("Appearance", tok);
     srow(ui, tok, "Theme", None, |ui| {
@@ -543,10 +563,14 @@ fn general(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) 
             ui.switch("autostart", on, tok);
         });
     }
+    let mut hid = false;
     if tray_row {
-        let help = warn.then_some("No capture hotkey: start Rustshot again to capture");
-        srow_ex(ui, tok, "Show icon in tray / menu bar", help, true, ROW_H, |ui| {
-            ui.switch("show_tray", &mut f.show_tray, tok);
+        // Windows: off is no background process at all.
+        let help = if cfg!(windows) { Some(tray_help) } else { warn.then_some("No capture hotkey: start Rustshot again to capture") };
+        // (Windows: two lines of plain help; elsewhere the warning, red.)
+        let (err, h) = if cfg!(windows) { (false, 44.0) } else { (true, ROW_H) };
+        srow_ex(ui, tok, "Show icon in tray / menu bar", help, err, h, |ui| {
+            hid = ui.switch("show_tray", &mut f.show_tray, tok) && !f.show_tray;
         });
     }
     srow(ui, tok, "Copy to clipboard after capture", Some("Also when saving or uploading"), |ui| {
@@ -583,9 +607,19 @@ fn general(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) 
     if ui.focus.is_focused("filename") {
         s.pattern = Pattern::File;
     }
+    // Turned off: say how to get back before it goes.
+    if hid {
+        s.ask_hide_tray();
+    }
 }
 
 fn capture(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) {
+    // "Set up…" (tray icon off): the Win+Shift+S row, focused and in view.
+    if ui.enabled
+        && let Some(id) = s.focus_field.take()
+    {
+        ui.focus.focus(&id);
+    }
     let base = s.loaded.clone();
     let wayland = wayland();
     let show_renderer = s.renderer;
@@ -819,9 +853,15 @@ pub const REC_ROWS: [(&str, Action); 3] = [
 fn keys(ui: &mut Ui, s: &mut Settings, tok: &Tok) {
     sec_at(ui, tok, "Global \u{b7} work anywhere", 8.0);
     let msgs: Vec<Option<String>> = GLOBALS.iter().map(|(_, slot)| s.global_message(*slot)).collect();
+    let errs: Vec<bool> = GLOBALS.iter().map(|(_, slot)| s.global_err(*slot)).collect();
+    // "Change shortcuts…" in the hotkey dialog: that row's box records.
+    if ui.enabled
+        && let Some(id) = s.record_field.take()
+    {
+        ui.focus.record(&id);
+    }
     ui.allow_meta = true;
-    for ((label, slot), msg) in GLOBALS.iter().zip(&msgs) {
-        let err = msg.as_deref().is_some_and(|m| m.starts_with("Already"));
+    for (((label, slot), msg), err) in GLOBALS.iter().zip(&msgs).zip(errs) {
         let chord = s.form.global_mut(*slot);
         let mut slots = [Slot { id: format!("global{slot}"), chord, err }];
         ui.key_row(label, &[], &mut slots, true, 34.0, tok);
