@@ -1697,6 +1697,26 @@ fn dialogs_fit_in_long_languages() {
     }
 }
 
+//// The cost of a frame in each language (General, warm caches):
+/// `cargo test --release language_frame_cost -- --ignored --nocapture`.
+#[test]
+#[ignore = "a benchmark"]
+fn language_frame_cost() {
+    for lang in ["en", "qps", "qps-rtl"] {
+        crate::i18n::with_lang(lang, || {
+            let mut s = sample();
+            s.section = GENERAL;
+            render(&mut s, &DARK, 1.5, &Input::default(), &mut FocusState::default());
+            let t = std::time::Instant::now();
+            let n = 50;
+            for _ in 0..n {
+                render(&mut s, &DARK, 1.5, &Input::default(), &mut FocusState::default());
+            }
+            eprintln!("{lang}: {:.2} ms a frame", t.elapsed().as_secs_f64() * 1000.0 / n as f64);
+        });
+    }
+}
+
 /// Every section in the pseudo-languages (RUSTSHOT_PREVIEW_DIR).
 #[test]
 fn preview_settings_pseudo_pngs() {

@@ -40,6 +40,7 @@ copy_after_capture = false        # a save or upload also copies the image
 
 # Look
 theme = "auto"                    # "auto" (follow the OS), "dark" or "light"
+language = ""                     # UI language: "" = the system's, else a tag ("en", "de", "pt-BR"); other than English, downloaded when first used
 ui_color = ""                     # accent override, e.g. "#8b93ff" ("" = theme accent)
 ui_scale = "auto"                 # overlay UI size: "auto" (each display's scaling) or
                                   # 75, 90, 100, 125, 150, 200 (% on top of it)
