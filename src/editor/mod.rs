@@ -3610,6 +3610,8 @@ mod ocr_tests;
 mod pin_tests;
 #[cfg(test)]
 mod history_tests;
+#[cfg(test)]
+mod snip_tests;
 
 #[cfg(test)]
 mod tests {

@@ -165,10 +165,6 @@ impl TextBar {
     pub fn contains(&self, p: Pt) -> bool {
         hit(self.r, p) || self.pill.as_ref().is_some_and(|b| hit(b.r, p))
     }
-
-    fn bounds(&self) -> FRect {
-        self.pill.as_ref().map_or(self.r, |p| toolbar::union(self.r, p.r))
-    }
 }
 
 /// What a frame paints of the snip state.
@@ -490,14 +486,11 @@ impl Edit {
         let h = BAR_H * s;
         let ta = tm.area;
         let x = (ta.x + ta.w / 2.0 - w / 2.0).clamp(area.x + 8.0 * s, (area.x1() - 8.0 * s - w).max(area.x + 8.0 * s));
-        let below = ta.y1() + BAR_GAP * s;
-        let y = if below + h <= area.y1() - 8.0 * s {
-            below
-        } else if ta.y - BAR_GAP * s - h >= area.y + 8.0 * s {
-            ta.y - BAR_GAP * s - h
-        } else {
-            ta.y1() - BAR_GAP * s - h
-        };
+        // Inside the area along its bottom (the toolbar is below it, the
+        // mode switch above); a short area: above it.
+        let g = BAR_GAP * s;
+        let inside = ta.y1() - g - h;
+        let y = if ta.h >= h + 2.0 * g + 24.0 * s || ta.y - g - h < area.y + 8.0 * s { inside.max(area.y + 8.0 * s) } else { ta.y - g - h };
         let mut bx = x + BAR_PAD * s;
         for (act, label, icon, on) in defs {
             let bw = btn_w(label);
@@ -923,7 +916,11 @@ pub fn bounds(ui: &Ui, u: &SnipUi) -> Vec<FRect> {
         v.push(grow(a, 2.0));
     }
     if let Some(b) = &u.bar {
-        v.push(grow(b.bounds(), ui.px(12.0)));
+        // The surfaces' shadows reach past them.
+        v.push(chrome::surface_bounds(ui, b.r));
+        if let Some(p) = &b.pill {
+            v.push(chrome::surface_bounds(ui, p.r));
+        }
     }
     let lw = ui.px(3.0) + 2.0;
     if u.lasso.len() > 1 {

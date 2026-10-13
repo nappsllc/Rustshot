@@ -697,7 +697,8 @@ impl Edit {
             _ => Arc::new(self.objects.clone()),
         };
 
-        let sel_ui = self.sel.map(|sr| SelUi { sr, hot: self.hot_handle });
+        // The crop frame has its own handles (not two sets at once).
+        let sel_ui = self.sel.filter(|_| self.snip.crop_mode.is_none()).map(|sr| SelUi { sr, hot: self.hot_handle });
         let snap_r = self.snap_rect();
         let snap = snap_r.map(|r| SnapUi { r, hint: self.cfg.snap_tab_hint && self.hover_win.has_parts(), area });
         let label = self.sel.map(|sr| {

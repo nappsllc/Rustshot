@@ -431,7 +431,7 @@ fn token_urls(s: &str) -> Vec<Range<usize>> {
         let lower = tok.to_ascii_lowercase();
         let url_at = lower.find("://").map(|i| lower[..i].rfind(|c: char| !c.is_ascii_alphanumeric()).map_or(0, |j| j + 1)).or_else(|| lower.find("www."));
         let Some(u) = url_at else { continue };
-        let url = tok[u..].trim_end_matches(|c: char| matches!(c, '.' | ',' | ')' | ']' | '"' | '\'' | '>'));
+        let url = tok[u..].trim_end_matches(['.', ',', ')', ']', '"', '\'', '>']);
         let Some(q) = url.find(['?', '#']) else { continue };
         let has = url[q + 1..].split(['&', ';', '#', '?']).any(|kv| {
             let (k, v) = kv.split_once('=').unwrap_or((kv, ""));

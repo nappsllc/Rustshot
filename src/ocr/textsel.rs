@@ -127,8 +127,9 @@ pub fn all(lines: &[Line]) -> Option<(Pos, Pos)> {
 pub fn per_line(lines: &[Line], a: Pos, b: Pos) -> Vec<(usize, usize, usize)> {
     let (a, b) = span(a, b);
     let mut out = Vec::new();
-    for li in a.0..=b.0.min(lines.len().saturating_sub(1)) {
-        let n = lines[li].words.len();
+    let last = b.0.min(lines.len().saturating_sub(1));
+    for (li, l) in lines.iter().enumerate().take(last + 1).skip(a.0) {
+        let n = l.words.len();
         if n == 0 {
             continue;
         }
