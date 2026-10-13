@@ -6,10 +6,6 @@
 // inflated on first use.
 #[path = "src/deflate.rs"]
 mod deflate;
-#[path = "src/pngfile.rs"]
-mod pngfile;
-#[path = "src/ico.rs"]
-mod ico;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -18,8 +14,6 @@ use std::{env, fs};
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=src/deflate.rs");
-    println!("cargo:rerun-if-changed=src/pngfile.rs");
-    println!("cargo:rerun-if-changed=src/ico.rs");
     // The camera blur's segmentation model is embedded when it is there
     // (`assets/selfie.bin`, converted by tools/convert-selfie); the
     // `selfie_model` feature insists on it, `RUSTSHOT_NO_SELFIE=1` leaves
@@ -58,16 +52,6 @@ fn embed() -> Result<(), String> {
     if !ico.exists() {
         return Err(format!("{} missing", ico.display()));
     }
-    // The icon's BMP sizes stored as PNG (smaller; Windows reads PNG
-    // icons of any size since Vista).
-    let ico = match fs::read(&ico).ok().and_then(|b| ico::repack(&b)) {
-        Some(b) => {
-            let p = out_dir.join("rustshot.ico");
-            fs::write(&p, b).map_err(|e| e.to_string())?;
-            p
-        }
-        None => ico,
-    };
     let ico = ico.to_string_lossy().replace('\\', "\\\\");
     let ver = env::var("CARGO_PKG_VERSION").map_err(|e| e.to_string())?;
     let num = |k: &str| env::var(k).unwrap_or_else(|_| "0".into());
@@ -314,4 +298,3 @@ fn compress_model() {
     fs::write(out_dir.join("selfie.bin.z"), &z).expect("write selfie.bin.z");
     fs::write(out_dir.join("selfie_len.rs"), format!("{}", raw.len())).expect("write selfie_len.rs");
 }
-
