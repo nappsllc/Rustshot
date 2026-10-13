@@ -26,6 +26,7 @@ impl Box4 {
     pub fn y1(&self) -> f32 {
         self.y + self.h
     }
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn contains(&self, p: (f32, f32)) -> bool {
         p.0 >= self.x && p.0 < self.x1() && p.1 >= self.y && p.1 < self.y1()
     }
@@ -60,6 +61,7 @@ pub fn span(a: Pos, b: Pos) -> (Pos, Pos) {
 
 /// The word exactly under `p` (inside its box): the I-beam shows there,
 /// a click there starts a selection; `None` in the gaps between words.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn hit(lines: &[Line], p: (f32, f32)) -> Option<Pos> {
     lines.iter().enumerate().find_map(|(li, l)| {
         l.words.iter().position(|w| (Box4 { x: w.x, y: w.y, w: w.w, h: w.h }).contains(p)).map(|wi| (li, wi))
@@ -150,6 +152,7 @@ pub fn text(lines: &[Line], a: Pos, b: Pos) -> String {
 }
 
 /// How many words `a`..=`b` holds.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn count(lines: &[Line], a: Pos, b: Pos) -> usize {
     per_line(lines, a, b).iter().map(|(_, w0, w1)| w1 - w0 + 1).sum()
 }

@@ -119,6 +119,12 @@ impl Edit {
             return;
         }
 
+        // Text mode (Ctrl+C, Ctrl+A, Enter, Esc) and the crop frame
+        // (Enter, Esc) take their keys.
+        if self.snip_key(vk, mods) {
+            return;
+        }
+
         // Selected objects: their actions first (Del, Ctrl+D...), and
         // the arrows nudge them (Shift: 10 px).
         if !self.obj.sel.is_empty() {
@@ -192,7 +198,9 @@ impl Edit {
                 r.y += dir.1 * step;
                 r.clamp_to(self.shot.size.0 as f32, self.shot.size.1 as f32);
             }
+            let was = self.sel.unwrap();
             self.sel = Some(r);
+            self.fit_mask(was, r);
             return;
         }
 
@@ -338,6 +346,17 @@ impl Edit {
                 self.slot_hold = Some(Instant::now());
                 return true;
             }
+            // Copy text: a click is Copy text (on release), a long press
+            // opens its menu (Select text, Copy all, Redact and its kinds).
+            let copy = idx
+                .and_then(|i| self.toolbar.as_ref().and_then(|tb| tb.items.get(i)))
+                .is_some_and(|it| it.kind == toolbar::Kind::Btn(Act::CopyText));
+            if copy {
+                self.pressed = idx;
+                self.snip.copy_menu = false;
+                self.snip.copy_hold = Some(Instant::now());
+                return true;
+            }
             {
                 self.pressed = idx;
                 if self.text.is_some() {
@@ -432,6 +451,22 @@ impl Edit {
             if std::mem::take(&mut self.slot_menu) {
                 return; // a press outside the Blur / Invert menu closes it
             }
+            if std::mem::take(&mut self.snip.copy_menu) {
+                return; // and outside the Copy text menu
+            }
+            // The crop frame takes every press on the capture.
+            if self.snip.crop_mode.is_some() {
+                self.crop_press(p);
+                return;
+            }
+            // Text mode: its bar, its words; a press outside its area
+            // leaves it (and goes on as usual).
+            if self.snip.text.is_some() {
+                if self.text_press(p, drag_mods()) {
+                    return;
+                }
+                self.leave_text_mode();
+            }
             // The mini-toolbar over the selected objects.
             if let Some(act) = self.obj.mini.as_ref().filter(|m| m.contains(p)).map(|m| m.act_at(p)) {
                 if let Some(act) = act {
@@ -524,6 +559,8 @@ impl Edit {
                     return;
                 }
             }
+            // Freeform: the lasso starts here.
+            self.snip.lasso = if self.snip.freeform { vec![p] } else { Vec::new() };
             self.interact = Interact::NewSel {
                 anchor: p,
                 moved: false,
@@ -550,7 +587,11 @@ impl Edit {
                     if dist >= click_px {
                         *moved = true;
                     }
-                    if *moved {
+                    if *moved && self.snip.freeform {
+                        // The lasso follows the pointer (inside the shot).
+                        self.snip.lasso.push(Pt::new(p.x.clamp(0.0, img.0), p.y.clamp(0.0, img.1)));
+                        self.sel = None;
+                    } else if *moved {
                         // A pointer past the shot edge (captured drag) stops
                         // at the edge instead of pushing the rect back in.
                         let p = Pt::new(p.x.clamp(0.0, img.0), p.y.clamp(0.0, img.1));
@@ -597,7 +638,10 @@ impl Edit {
                 Interact::ObjMove { .. } | Interact::ObjResize { .. } | Interact::ObjPoint { .. } | Interact::Marquee { .. } => {
                     self.obj_drag(p, mods);
                 }
+                Interact::Snip => self.snip_drag(p),
             }
+            // A lasso selection moved or resized: the lasso follows.
+            self.follow_mask();
         }
     }
 
@@ -608,6 +652,10 @@ impl Edit {
             // click, Blur.
             if self.slot_hold.take().is_some() {
                 self.apply_act(Act::Tool(Tool::Blur), Pt::new(0.0, 0.0));
+            }
+            // Copy text let go before its menu opened: a click.
+            if self.snip.copy_hold.take().is_some() {
+                self.apply_act(Act::CopyText, Pt::new(0.0, 0.0));
             }
             end_interaction(self);
         }
@@ -652,7 +700,31 @@ impl Edit {
         }
         // A pick from the Blur / Invert menu picks (never toggles off).
         let from_menu = std::mem::take(&mut self.slot_menu);
+        // The Copy text menu closes on a pick (a kind's checkbox keeps it).
+        self.snip.copy_menu = false;
+        // A tool, video mode or a new selection mode ends Text mode and
+        // the crop frame.
+        if matches!(act, Act::Tool(_) | Act::Record | Act::Mode(_) | Act::Freeform) {
+            self.leave_text_mode();
+            self.snip.crop_mode = None;
+        }
         match act {
+            Act::Crop => self.toggle_crop(),
+            Act::Redact => self.redact(),
+            Act::Freeform => self.toggle_freeform(),
+            Act::TextSelect => {
+                if self.snip.text.is_none() {
+                    self.start_ocr(snip::Want::Text);
+                }
+            }
+            Act::CopyAll => self.copy_all(),
+            Act::TextCopy => {
+                self.copy_selected();
+            }
+            Act::RedactKind(k) => {
+                self.toggle_redact_kind(k);
+                self.snip.copy_menu = true;
+            }
             // Video mode draws nothing (the recording is live).
             Act::Tool(_) if self.rec.open => {}
             Act::Tool(t) if from_menu && self.tool == Some(t) => {}
@@ -801,10 +873,7 @@ impl Edit {
                 self.tasks = vec![Task::Copy];
                 self.done = true;
             }
-            Act::CopyText => {
-                self.tasks = vec![Task::Text];
-                self.done = true;
-            }
+            Act::CopyText => self.copy_text(),
             Act::Save => {
                 self.tasks = vec![Task::Save { path: None, ask: self.cfg.save_dialog }];
                 self.done = true;

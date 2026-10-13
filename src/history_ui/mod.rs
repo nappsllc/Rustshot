@@ -452,13 +452,10 @@ pub fn open_edit(id: &str) {
 /// broken file, or one from a newer build), it is an error, never the
 /// original without the annotations (they may hide something).
 pub fn picture(store: &Store, e: &Entry) -> anyhow::Result<PixBuf> {
-    let objs = store.objects(e).map_err(|err| anyhow::anyhow!("its annotations cannot be read, so it is not shown without them ({err:#})"))?;
+    let doc = store.doc(e).map_err(|err| anyhow::anyhow!("its annotations cannot be read, so it is not shown without them ({err:#})"))?;
     let orig = store.original(e)?;
-    if objs.is_empty() {
-        return Ok(orig);
-    }
-    let font = crate::text::AnnotFont::load();
-    Ok(crate::editor::bake_objects(&orig, &objs, font.as_ref()))
+    // Its crop and lasso too (what they leave out is never shown).
+    Ok(crate::history::render(&orig, &doc.objects, doc.crop, e.meta.mask.as_deref()))
 }
 
 /// The file a capture opens as: the saved one (or the recording) when it

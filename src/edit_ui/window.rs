@@ -82,7 +82,7 @@ impl Window {
     /// A worker's export result, applied as the timer would (tests).
     #[cfg(test)]
     pub fn apply_done_for_tests(&mut self, res: crate::export::ExportResult, saves: bool, objs: Vec<crate::objects::Obj>) {
-        let d = export_done(res, saves, &self.e.store, &self.e.entry.id.clone(), objs, &self.e.cfg);
+        let d = export_done(res, saves, &self.e.store, &self.e.entry.id.clone(), objs, self.e.canvas.crop(), &self.e.cfg);
         let _ = self.done.0.send(d);
         self.tick();
     }
@@ -189,6 +189,7 @@ impl Window {
         use crate::export::Task;
         let img = self.e.canvas.export();
         let objs = self.e.canvas.objects().to_vec();
+        let crop = self.e.canvas.crop();
         if r == Request::Pin {
             #[cfg(not(test))]
             let at = crate::capture::cursor_pos();
@@ -239,12 +240,15 @@ impl Window {
         let tx = self.done.0.clone();
         std::thread::spawn(move || {
             let res = crate::export::run_export(&img, (0, 0), std::slice::from_ref(&task), &cfg);
-            let _ = tx.send(export_done(res, saves, &store, &id, objs, &cfg));
+            let _ = tx.send(export_done(res, saves, &store, &id, objs, crop, &cfg));
         });
     }
 
     fn settle(&mut self) {
         self.handle_requests();
+        if let Some((text, kind)) = self.e.canvas.take_notice() {
+            self.e.note(text, kind);
+        }
         self.e.settle_quit();
         if self.e.closing {
             wind::close(self.hwnd);
@@ -457,6 +461,14 @@ impl Window {
             changed = true;
         }
         self.e.canvas.flush(false);
+        // Text mode's words, Quick Redact's blurs; the editor's notices.
+        if self.e.canvas.poll() {
+            changed = true;
+        }
+        if let Some((text, kind)) = self.e.canvas.take_notice() {
+            self.e.note(text, kind);
+            changed = true;
+        }
         let now = Instant::now();
         let toast = self.e.toast.as_ref().is_some_and(|(_, _, at)| at.elapsed() < Duration::from_millis(2500));
         if self.e.toast.is_some() && !toast {
@@ -472,14 +484,14 @@ impl Window {
 /// A worker's export finished: a save (`saves`) that wrote a file is an
 /// edit of the entry (its objects and the file) and saves the edits; a
 /// cancelled or failed one saves nothing.
-fn export_done(res: crate::export::ExportResult, saves: bool, store: &crate::history::Store, id: &str, objs: Vec<crate::objects::Obj>, cfg: &crate::config::Config) -> Done {
+fn export_done(res: crate::export::ExportResult, saves: bool, store: &crate::history::Store, id: &str, objs: Vec<crate::objects::Obj>, crop: Option<crate::objects::FRect>, cfg: &crate::config::Config) -> Done {
     let file = res.done.iter().find_map(|d| match d {
         crate::export::Done::Saved(p) | crate::export::Done::SavedDesktop(p) => Some(p.clone()),
         _ => None,
     });
     if saves && let Some(p) = file {
         let bytes = std::fs::metadata(&p).map_or(0, |m| m.len());
-        let recorded = super::record_save(store, id, &objs, &p, bytes);
+        let recorded = super::record_save(store, id, &objs, crop, &p, bytes);
         let s = super::Saved { path: p, bytes, recorded };
         return Done { text: s.note(), kind: if recorded { ToastKind::Success } else { ToastKind::Info }, uploaded: None, saved: Some((objs, s)) };
     }

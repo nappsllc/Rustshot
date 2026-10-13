@@ -118,7 +118,7 @@ pub fn find(lines: &[Line], kinds: &[Kind]) -> Vec<Hit> {
 pub fn find_in_text(s: &str, kinds: &[Kind]) -> Vec<(Kind, Range<usize>)> {
     let on = |k: Kind| kinds.contains(&k);
     let mut found: Vec<(Kind, Range<usize>)> = Vec::new();
-    let mut add = |k: Kind, r: Range<usize>, found: &mut Vec<(Kind, Range<usize>)>| {
+    let add = |k: Kind, r: Range<usize>, found: &mut Vec<(Kind, Range<usize>)>| {
         if r.is_empty() || found.iter().any(|(_, f)| f.start < r.end && r.start < f.end) {
             return;
         }

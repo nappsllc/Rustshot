@@ -65,9 +65,14 @@ fn meta_round_trips() {
         file: Some(PathBuf::from("/home/u/Videos/rec.mp4")),
         edited: true,
         objects: vec!["Arrow".into(), "Number".into(), "Number".into()],
+        mask: Some(vec![crate::objects::Pt::new(1.5, 2.0), crate::objects::Pt::new(40.0, 3.25), crate::objects::Pt::new(20.0, 30.0)]),
     };
     let back = meta_from_json(&meta_to_json(&m)).expect("parses");
     assert_eq!(back, m);
+    assert!(meta_to_json(&m).contains("\"mask\":[[1.5,2],[40,3.25],[20,30]]"));
+    // A broken lasso is no lasso (the picture is shown whole).
+    let bad = meta_to_json(&m).replace("[[1.5,2],[40,3.25],[20,30]]", "[[1,2],\"x\"]");
+    assert_eq!(meta_from_json(&bad).unwrap().mask, None);
     // The defaults (no saved file, no link) round-trip too.
     let d = Meta { captured: (2025, 1, 31, 23, 59, 59), ..Meta::default() };
     assert_eq!(meta_from_json(&meta_to_json(&d)).unwrap(), d);

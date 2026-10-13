@@ -86,10 +86,17 @@ pub enum Action {
     TextBold,
     TextItalic,
     TextUnderline,
+    /// The crop frame: in the overlay over the selection, in the Edit
+    /// window over the picture (non-destructive there).
+    ToolCrop,
+    /// Quick Redact: blur the sensitive text the selection's OCR finds.
+    Redact,
+    /// The freeform (lasso) selection on / off (remembered).
+    SelectFreeform,
 }
 
 impl Action {
-    pub const ALL: [Action; 50] = [
+    pub const ALL: [Action; 53] = [
         Action::ToolSelect,
         Action::ToolPencil,
         Action::ToolLine,
@@ -140,6 +147,9 @@ impl Action {
         Action::TextBold,
         Action::TextItalic,
         Action::TextUnderline,
+        Action::ToolCrop,
+        Action::Redact,
+        Action::SelectFreeform,
     ];
 
     /// A while-recording chord: global (Meta allowed), not an overlay key.
@@ -233,6 +243,11 @@ impl Action {
             Action::TextBold => ("text_bold", "Bold (while typing)", &["Ctrl+B"]),
             Action::TextItalic => ("text_italic", "Italic (while typing)", &["Ctrl+I"]),
             Action::TextUnderline => ("text_underline", "Underline (while typing)", &["Ctrl+U"]),
+            // C (Ctrl+C is Copy), Shift+R (R is the rectangle), Shift+F
+            // (F is video mode's Screen source).
+            Action::ToolCrop => ("tool_crop", "Crop", &["C"]),
+            Action::Redact => ("redact", "Quick Redact", &["Shift+R"]),
+            Action::SelectFreeform => ("select_freeform", "Freeform selection", &["Shift+F"]),
         }
     }
 
@@ -668,7 +683,9 @@ mod tests {
         assert_eq!(km.resolve('B' as u32, NONE), Some(Action::ToolBlur));
         assert_eq!(km.resolve(key::LBRACKET, NONE), Some(Action::SizeDown));
         assert_eq!(km.resolve(key::RBRACKET, NONE), Some(Action::SizeUp));
-        assert_eq!(km.resolve('C' as u32, NONE), None);
+        assert_eq!(km.resolve('C' as u32, NONE), Some(Action::ToolCrop), "C crops (Ctrl+C copies)");
+        assert_eq!(km.resolve('R' as u32, m(false, true, false)), Some(Action::Redact));
+        assert_eq!(km.resolve('F' as u32, m(false, true, false)), Some(Action::SelectFreeform));
         assert_eq!(km.resolve('O' as u32, NONE), Some(Action::CopyText));
         assert_eq!(km.resolve('H' as u32, NONE), Some(Action::CopyColor));
         assert_eq!(km.resolve('H' as u32, m(true, false, false)), None);

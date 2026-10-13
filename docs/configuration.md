@@ -88,6 +88,11 @@ launcher_source = "region"        # "region", "screen" or "window"
 launcher_delay = 0                # seconds (0-60)
 launcher_after = "edit"           # "edit", "copy", "save" or "pin"
 
+# Copy text, Quick Redact, selection (remembered choices)
+copy_text_mode = "select"         # the Copy text button: "select" (pick words) or "all"
+redact_kinds = "all"              # or a list: "emails,phones,cards,ids,urls,ips"
+selection_mode = "rect"           # the last selection mode: "rect" or "freeform"
+
 # History
 history = true                    # keep a history of captures (History, Edit)
 history_days = 30                 # entries older than this go

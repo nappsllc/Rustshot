@@ -121,6 +121,9 @@ pub struct Meta {
     pub edited: bool,
     /// Its objects' kinds, bottom-most first ("Arrow", "Number").
     pub objects: Vec<String>,
+    /// A freeform capture's lasso (`original.png`'s pixels): outside it
+    /// the picture is transparent (white in a JPG or BMP).
+    pub mask: Option<Vec<crate::objects::Pt>>,
 }
 
 /// One capture in the store.
@@ -479,6 +482,17 @@ pub fn meta_to_json(m: &Meta) -> String {
     if let Some(i) = &m.upload {
         o.push_str(&format!(",\"upload_time\":{}", i.time));
     }
+    if let Some(pts) = m.mask.as_ref().filter(|p| !p.is_empty()) {
+        o.push_str(",\"mask\":[");
+        for (i, p) in pts.iter().enumerate() {
+            if i > 0 {
+                o.push(',');
+            }
+            let f = |v: f32| if v.is_finite() { v } else { 0.0 };
+            o.push_str(&format!("[{},{}]", f(p.x), f(p.y)));
+        }
+        o.push(']');
+    }
     o.push_str(",\"objects\":[");
     for (i, k) in m.objects.iter().enumerate() {
         if i > 0 {
@@ -488,6 +502,23 @@ pub fn meta_to_json(m: &Meta) -> String {
     }
     o.push_str("]}\n");
     o
+}
+
+/// `meta.json`'s `mask`: points `[x, y]` (a broken one: no mask).
+fn mask_of(v: Option<&V>) -> Option<Vec<crate::objects::Pt>> {
+    let V::Arr(a) = v? else { return None };
+    let pts: Option<Vec<crate::objects::Pt>> = a
+        .iter()
+        .take(json::MAX_POINTS)
+        .map(|p| match p {
+            V::Arr(xy) if xy.len() == 2 => match (&xy[0], &xy[1]) {
+                (V::Num(x), V::Num(y)) if x.is_finite() && y.is_finite() => Some(crate::objects::Pt::new(*x as f32, *y as f32)),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    pts.filter(|p| p.len() >= 3)
 }
 
 /// A `meta.json` document. Unknown keys are ignored; a newer version, a
@@ -542,6 +573,7 @@ pub fn meta_from_json(s: &str) -> Result<Meta> {
         file: opt("file").map(PathBuf::from),
         edited: matches!(get("edited"), Some(V::Bool(true))),
         objects,
+        mask: mask_of(get("mask")),
     })
 }
 
@@ -805,7 +837,7 @@ impl Store {
         let thumb = match thumb {
             Some(t) => t,
             None => {
-                made = thumbnail(original, objects);
+                made = thumbnail_doc(original, objects, None, meta.mask.as_deref());
                 &made
             }
         };
@@ -924,11 +956,21 @@ impl Store {
     /// The Edit window saved `id`: its objects, a new thumbnail (made
     /// from the original and them), "Edited", and the file it was saved
     /// to. `original.png` stays as it was.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn save_edit(&self, id: &str, objects: &[Obj], saved: Option<(PathBuf, u64)>) -> Result<Meta> {
+        self.save_edit_doc(id, objects, None, saved)
+    }
+
+    /// [`Store::save_edit`] with the Edit window's crop (written with its
+    /// stand-ins for older builds, [`crate::objects::to_json_doc`]).
+    pub fn save_edit_doc(&self, id: &str, objects: &[Obj], crop: Option<crate::objects::FRect>, saved: Option<(PathBuf, u64)>) -> Result<Meta> {
         let dir = self.entry_dir(id).ok_or_else(|| anyhow!("bad history id {id:?}"))?;
-        let thumb = PixBuf::from_png(&std::fs::read(dir.join(ORIGINAL)).unwrap_or_default()).ok().map(|o| thumbnail(&o, objects));
+        let original = PixBuf::from_png(&std::fs::read(dir.join(ORIGINAL)).unwrap_or_default()).ok();
+        let mask = std::fs::read_to_string(dir.join(META)).ok().and_then(|s| meta_from_json(&s).ok()).and_then(|m| m.mask);
+        let thumb = original.as_ref().map(|o| thumbnail_doc(o, objects, crop, mask.as_deref()));
+        let size = original.as_ref().map_or((0, 0), PixBuf::dimensions);
         let _l = self.lock_existing(id, &dir)?;
-        write_atomic(&dir.join(ANNOTATIONS), crate::objects::to_json(objects).as_bytes())?;
+        write_atomic(&dir.join(ANNOTATIONS), crate::objects::to_json_doc(objects, crop, size).as_bytes())?;
         if let Some(t) = thumb {
             write_atomic(&dir.join(THUMB), &t.to_png()?)?;
         }
@@ -949,10 +991,16 @@ impl Store {
     }
 
     /// The objects of `e` (none when it has no annotations.json).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn objects(&self, e: &Entry) -> Result<Vec<Obj>> {
+        self.doc(e).map(|d| d.objects)
+    }
+
+    /// The objects and the crop of `e`.
+    pub fn doc(&self, e: &Entry) -> Result<crate::objects::Doc> {
         match std::fs::read_to_string(e.annotations()) {
-            Ok(t) => crate::objects::from_json(&t),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Ok(t) => crate::objects::from_json_doc(&t),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Default::default()),
             Err(err) => Err(err.into()),
         }
     }
@@ -1064,14 +1112,27 @@ impl Store {
     }
 }
 
-/// The thumbnail of a screenshot: the original with its objects, fitted
-/// into 200 × 140.
-pub fn thumbnail(original: &PixBuf, objects: &[Obj]) -> PixBuf {
-    if objects.is_empty() {
-        return crate::scale::fit(original, THUMB_W, THUMB_H);
+/// The thumbnail of a screenshot as it exports ([`render`]).
+pub fn thumbnail_doc(original: &PixBuf, objects: &[Obj], crop: Option<crate::objects::FRect>, mask: Option<&[crate::objects::Pt]>) -> PixBuf {
+    crate::scale::fit(&render(original, objects, crop, mask), THUMB_W, THUMB_H)
+}
+
+/// The picture as it exports: `original` with `objects`, transparent
+/// outside the lasso `mask`, cut to `crop`.
+pub fn render(original: &PixBuf, objects: &[Obj], crop: Option<crate::objects::FRect>, mask: Option<&[crate::objects::Pt]>) -> PixBuf {
+    let mut img = if objects.is_empty() {
+        original.clone()
+    } else {
+        let font = crate::text::AnnotFont::load();
+        crate::editor::bake_objects(original, objects, font.as_ref())
+    };
+    if let Some(m) = mask {
+        crate::objects::mask::apply(&mut img, m, crate::objects::Pt::new(0.0, 0.0));
     }
-    let font = crate::text::AnnotFont::load();
-    crate::scale::fit(&crate::editor::bake_objects(original, objects, font.as_ref()), THUMB_W, THUMB_H)
+    match crop {
+        Some(c) => crate::objects::mask::crop(&img, c),
+        None => img,
+    }
 }
 
 /// The saved files of `entries` that are still there: how many, their

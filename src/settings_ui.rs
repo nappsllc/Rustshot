@@ -74,6 +74,9 @@ const RENDERERS: [(&str, &str); 2] = [("GDI", "gdi"), ("Software", "software")];
 const FORMATS: [(&str, &str); 3] = [("PNG", "png"), ("JPG", "jpg"), ("BMP", "bmp")];
 /// Capture › Accept on select (`accept_on_select`).
 pub const ACCEPTS: [(&str, &str); 3] = [("Off", "off"), ("Copy", "copy"), ("Save", "save")];
+/// Capture › Copy text (copy_text_mode): the overlay's button copies all,
+/// or opens Text mode to pick words (the hotkey always copies all).
+pub const COPY_TEXT: [(&str, &str); 2] = [("Copy all at once", "all"), ("Let me select", "select")];
 const DEFAULT_FILENAME: &str = "%F_%H-%M";
 /// Capture › History: how long and how much it keeps (value, label).
 pub const HISTORY_DAYS: [(u32, &str); 4] = [(7, "7 days"), (30, "30 days"), (90, "90 days"), (365, "1 year")];
@@ -247,6 +250,8 @@ pub struct Form {
     pub magnifier_square: bool,
     pub accept: usize,
     pub hints: bool,
+    /// Capture › Overlay: the Copy text button ([COPY_TEXT] index).
+    pub copy_text: usize,
 }
 
 impl Form {
@@ -291,6 +296,7 @@ impl Form {
             magnifier_square: cfg.magnifier_square,
             accept: ACCEPTS.iter().position(|a| cfg.accept_on_select.trim().eq_ignore_ascii_case(a.1)).unwrap_or(0),
             hints: cfg.overlay_hints,
+            copy_text: COPY_TEXT.iter().position(|a| cfg.copy_text_mode.trim() == a.1).unwrap_or(1),
         }
     }
 
@@ -432,6 +438,9 @@ impl Form {
         }
         if self.hints != was.hints {
             c.overlay_hints = self.hints;
+        }
+        if self.copy_text != was.copy_text && let Some(a) = COPY_TEXT.get(self.copy_text) {
+            c.copy_text_mode = a.1.into();
         }
         let changed: Vec<Action> = Action::ALL.into_iter().filter(|a| self.keys.chords(*a) != was.keys.chords(*a)).collect();
         if !changed.is_empty() {
