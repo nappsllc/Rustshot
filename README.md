@@ -59,6 +59,11 @@ screenshots, editing and video capture.** Windows, Linux and macOS.
   strikethrough and alignment.
 - Annotations stay editable objects. Select, move, resize, restyle,
   restack and duplicate them, with snapping and unlimited undo.
+- Image edits in the Edit window, all undoable and non-destructive:
+  rotate, flip, resize (Lanczos-3 or area average, with a file size
+  estimate) and a canvas (padding, a solid color or a soft "presentation"
+  gradient, rounded corners, a drop shadow). Text stays upright when the
+  picture turns.
 - Right-click opens a color ring.
 
 **Record**
@@ -74,6 +79,9 @@ screenshots, editing and video capture.** Windows, Linux and macOS.
   into another app.
 - An optional border (any color, 1 to 8 px) around everything you copy,
   save, upload or pin.
+- *Save at*: screen pixels, 1× (a high-DPI capture at its logical size) or
+  a percent, for everything you copy, save or upload. Pins and History keep
+  the full capture.
 - Upload to Imgur, or to your own S3-compatible bucket (Amazon S3,
   Cloudflare R2, MinIO, …), with the link copied for you. Images and MP4
   recordings can be uploaded, and you can delete an upload later
@@ -230,6 +238,13 @@ off in Rustshot, and Windows uses the Snipping Tool again. More detail:
 | Accept / Cancel | <kbd>Enter</kbd> / <kbd>Esc</kbd> |
 | Move / resize the selection | arrow keys / <kbd>Shift</kbd>+arrow keys |
 | Square, circle or 45° line | hold <kbd>Shift</kbd> while drawing |
+
+| In the Edit window | Keys |
+|---|---|
+| Rotate left / right | <kbd>Ctrl</kbd>+<kbd>L</kbd> / <kbd>Ctrl</kbd>+<kbd>R</kbd> |
+| Flip horizontal / vertical | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> |
+| Resize… / Canvas… | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>K</kbd> |
+| Reset image edits | (unbound; the Image menu) |
 
 On macOS, <kbd>⌘</kbd> works wherever <kbd>Ctrl</kbd> is listed. Every key
 can be remapped in Settings › Shortcuts. The

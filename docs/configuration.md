@@ -82,6 +82,8 @@ overlay_hints = true              # the key card when the overlay opens
 trim_margins = false              # trim each new region or window to its content (Shift+A by hand)
 border_width = 0                  # a border around every export, 1-8 logical px (0 = none)
 border_color = "#000000"          # its color
+save_scale = "screen"             # Save at: "screen" (pixels as captured), "logical" (1x) or "custom"
+save_scale_percent = 50           # the custom percent, 10-100
 hdr_screenshots = "tonemap"       # Windows HDR displays (screenshots and recordings): "tonemap" to SDR or "keep" as captured
 screenclip_hint = true            # Windows: remind how to pick Rustshot for Win+Shift+S
 show_thumbnail = true             # the thumbnail card after a copied or saved capture
@@ -202,7 +204,7 @@ The action ids:
 | UI size | `ui_bigger`, `ui_smaller`, `ui_reset` |
 | Selected objects | `delete_object`, `duplicate`, `bring_front`, `send_back` |
 | While typing | `text_bold`, `text_italic`, `text_underline` |
-| Edit window | `zoom_in`, `zoom_out`, `zoom_fit`, `zoom_actual` |
+| Edit window | `zoom_in`, `zoom_out`, `zoom_fit`, `zoom_actual`, `rotate_left`, `rotate_right`, `flip_horizontal`, `flip_vertical`, `image_resize`, `image_canvas`, `image_reset` |
 | While recording (global) | `rec_pause`, `rec_mute`, `rec_hide_pill` |
 
 On layouts where `=`, `-` or `0` need a modifier or sit elsewhere (AZERTY,

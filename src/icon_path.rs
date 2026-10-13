@@ -120,6 +120,37 @@ pub const ICONS: &[(&str, &[Shape])] = &[
     ]),
     // Crop, Freeform (lasso) and Quick Redact (eye-off).
     ("crop", &[Path("M6 2v14a2 2 0 0 0 2 2h14"), Path("M18 22V8a2 2 0 0 0-2-2H2")]), // crop
+    // The Edit window's image menu.
+    ("image", &[ // image
+        Rect { x: 3.0, y: 3.0, w: 18.0, h: 18.0, r: 2.0 },
+        Circle(9.0, 9.0, 2.0),
+        Path("m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"),
+    ]),
+    ("rotate-ccw", &[Path("M3 12a9 9 0 1 0 9-9a9.75 9.75 0 0 0-6.74 2.74L3 8"), Path("M3 3v5h5")]), // rotate-ccw
+    ("rotate-cw", &[Path("M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"), Path("M21 3v5h-5")]), // rotate-cw
+    ("flip-h", &[ // flip-horizontal-2
+        Path("m3 7 5 5-5 5V7"),
+        Path("m21 7-5 5 5 5V7"),
+        Path("M12 20v2"),
+        Path("M12 14v2"),
+        Path("M12 8v2"),
+        Path("M12 2v2"),
+    ]),
+    ("flip-v", &[ // flip-vertical-2
+        Path("m17 3-5 5-5-5h10"),
+        Path("m17 21-5-5-5 5h10"),
+        Path("M4 12H2"),
+        Path("M10 12H8"),
+        Path("M16 12h-2"),
+        Path("M22 12h-2"),
+    ]),
+    ("scaling", &[ // scaling
+        Path("M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"),
+        Path("M14 15H9v-5"),
+        Path("M16 3h5v5"),
+        Path("M21 3 9 15"),
+    ]),
+    ("frame", &[Path("M22 6H2"), Path("M22 18H2"), Path("M6 2v20"), Path("M18 2v20")]), // frame
     ("lasso", &[ // lasso
         Path("M7 22a5 5 0 0 1-2-4"),
         // Its `s` curves written out as `C`.

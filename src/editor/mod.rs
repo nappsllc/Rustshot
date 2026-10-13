@@ -35,6 +35,7 @@ mod select;
 mod input;
 mod assist;
 mod snip;
+mod imgedit;
 mod trim_sel;
 pub use assist::AcceptOn;
 // The editor in a normal window: the Edit window's canvas.
@@ -500,6 +501,10 @@ struct FinishJob {
     cfg: Config,
     /// What the history keeps of it (history on).
     hist: Option<Box<HistShot>>,
+    /// Pin to screen with Save at below 100 %: the pin's own picture at
+    /// the screen's pixels (with the border) and its top-left; `None`:
+    /// the pin shows `img`.
+    pin: Option<(PixBuf, (i32, i32))>,
 }
 
 /// A capture for the history: the plain selection, its objects in its
@@ -1599,14 +1604,22 @@ impl App {
         // image's top-left moves out by it (a pin stays in place).
         // Copy text (OCR) reads the capture alone.
         let framed = tasks.iter().any(|t| !matches!(t, Task::Text | Task::Geometry));
-        let b = export::border(&edit.cfg, edit.shot.scale).filter(|_| framed).map_or(0, |(b, _)| b as i32);
-        let img = if framed { export::with_border(img, &edit.cfg, edit.shot.scale) } else { img };
+        // Settings › Saving "Save at" too (the history keeps the capture
+        // at the screen's pixels, and a pin shows it at screen size).
+        let b = if framed { export::output_border(&edit.cfg, edit.shot.scale) as i32 } else { 0 };
+        let scaled = framed && export::save_factor(&edit.cfg, edit.shot.scale) < 0.999;
+        let pin = (scaled && tasks.contains(&Task::Pin)).then(|| {
+            let pb = export::border(&edit.cfg, edit.shot.scale).map_or(0, |(b, _)| b as i32);
+            (export::with_border(img.clone(), &edit.cfg, edit.shot.scale), (g.0 - pb, g.1 - pb))
+        });
+        let img = if framed { export::for_output(img, &edit.cfg, edit.shot.scale, false) } else { img };
         self.st = State::Finish(Box::new(FinishJob {
             img,
             sel_global: (g.0 - b, g.1 - b),
             tasks,
             cfg: edit.cfg.clone(),
             hist,
+            pin,
         }));
     }
 
@@ -1646,8 +1659,13 @@ impl App {
         self.upload_entry = entry.clone().filter(|_| res.upload.is_some());
         self.last_entry = entry.clone();
         let img = Arc::new(job.img);
-        // Pin to screen: the image where it was captured.
-        if job.tasks.contains(&Task::Pin) && !crate::pin::open(img.clone(), job.sel_global, th) {
+        // Pin to screen: the image where it was captured (at the screen's
+        // pixels whatever Save at says).
+        let (pin_img, pin_at) = match job.pin {
+            Some((p, at)) => (Arc::new(p), at),
+            None => (img.clone(), job.sel_global),
+        };
+        if job.tasks.contains(&Task::Pin) && !crate::pin::open(pin_img, pin_at, th) {
             eprintln!("rustshot: pin to screen is not available here");
             if self.kind == RunKind::Daemon {
                 crate::tray::notify("Pin to screen is not available here");
@@ -2208,6 +2226,9 @@ fn act_of(a: Action) -> Option<Act> {
         Action::UiBigger | Action::UiSmaller | Action::UiReset => return None,
         Action::RecPause | Action::RecMute | Action::RecHidePill => return None,
         Action::ZoomIn | Action::ZoomOut | Action::ZoomFit | Action::ZoomActual => return None,
+        // The Edit window's own (its image menu).
+        Action::RotateLeft | Action::RotateRight | Action::FlipHorizontal | Action::FlipVertical => return None,
+        Action::ImageResize | Action::ImageCanvas | Action::ImageReset => return None,
     })
 }
 
@@ -3038,6 +3059,11 @@ impl Edit {
         let ch = &mut self.snip.crop_hist;
         ch.resize(self.hi + 1, crop);
         ch.push(crop);
+        // So do its image edits.
+        let ed = self.snip.edits;
+        let eh = &mut self.snip.edits_hist;
+        eh.resize(self.hi + 1, ed);
+        eh.push(ed);
         self.sel_hist.resize(self.hi + 1, None);
         self.sel_hist.push(None);
         self.hi = self.hist.len() - 1;
@@ -3046,12 +3072,18 @@ impl Edit {
             let excess = self.hist.len() - limit;
             self.hist.drain(0..excess);
             self.snip.crop_hist.drain(0..excess.min(self.snip.crop_hist.len()));
+            self.snip.edits_hist.drain(0..excess.min(self.snip.edits_hist.len()));
             self.sel_hist.drain(0..excess.min(self.sel_hist.len()));
             self.hi -= excess;
         }
     }
 
     fn undo(&mut self) {
+        // The Edit window: text being typed is a step of its own first
+        // (restoring a step never pushes one).
+        if self.host.is_some() && self.text.is_some() {
+            self.commit_text();
+        }
         if self.hi > 0 {
             if let Some(Some((before, _))) = self.sel_hist.get(self.hi) {
                 let was = self.sel;
@@ -3061,6 +3093,7 @@ impl Edit {
             self.hi -= 1;
             self.objects = self.hist[self.hi].clone();
             self.snip.crop = self.snip.crop_hist.get(self.hi).copied().flatten();
+            self.restore_edits();
             self.dirty = true;
         }
     }
@@ -3075,6 +3108,7 @@ impl Edit {
             }
             self.objects = self.hist[self.hi].clone();
             self.snip.crop = self.snip.crop_hist.get(self.hi).copied().flatten();
+            self.restore_edits();
             self.dirty = true;
         }
     }

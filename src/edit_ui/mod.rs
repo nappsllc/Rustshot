@@ -27,6 +27,7 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
 pub mod draw;
+pub mod image;
 mod window;
 
 /// Default and minimum size, logical px.
@@ -215,17 +216,18 @@ impl Saved {
 /// replacing the file there (Overwrite) all at once; then the entry gets
 /// its objects, Edited and the file. A file written for an entry deleted
 /// meanwhile is still a save.
-pub fn write(store: &Store, id: &str, img: &crate::pixbuf::PixBuf, objects: &[crate::objects::Obj], crop: Option<crate::objects::FRect>, path: &Path, cfg: &Config) -> Result<Saved, String> {
+pub fn write(store: &Store, id: &str, img: &crate::pixbuf::PixBuf, doc: &crate::objects::Doc, path: &Path, cfg: &Config) -> Result<Saved, String> {
     crate::export::save_image(img, path, cfg.jpeg_quality).map_err(|e| format!("{e:#}"))?;
     let bytes = std::fs::metadata(path).map_or(0, |m| m.len());
-    let recorded = record_save(store, id, objects, crop, path, bytes);
+    let recorded = record_save(store, id, doc, path, bytes);
     Ok(Saved { path: path.to_path_buf(), bytes, recorded })
 }
 
-/// Entry `id` was saved to `path`: its objects, Edited and the file.
-/// False when the entry is gone.
-pub fn record_save(store: &Store, id: &str, objects: &[crate::objects::Obj], crop: Option<crate::objects::FRect>, path: &Path, bytes: u64) -> bool {
-    match store.save_edit_doc(id, objects, crop, Some((path.to_path_buf(), bytes))) {
+/// Entry `id` was saved to `path`: its document (objects, crop and image
+/// edits, in the original's pixels), Edited and the file. False when the
+/// entry is gone.
+pub fn record_save(store: &Store, id: &str, doc: &crate::objects::Doc, path: &Path, bytes: u64) -> bool {
+    match store.save_edit_doc(id, &doc.objects, doc.crop, &doc.edits, Some((path.to_path_buf(), bytes))) {
         Ok(_) => {
             crate::history::changed();
             true
@@ -428,8 +430,9 @@ fn run(id: &str, rx: std::sync::mpsc::Receiver<Msg>, unsaved: Arc<AtomicBool>) {
         return;
     }
     let mut canvas = Canvas::new(img, doc.objects, cfg.clone(), th);
-    // Its crop and a freeform capture's lasso.
+    // Its crop, a freeform capture's lasso and its image edits.
     canvas.set_doc(doc.crop, e.meta.mask.clone());
+    canvas.set_edits(doc.edits);
     let title = format!("Edit \u{2014} {}", crate::history::title(&e.meta));
     // Pruning leaves the entry alone while it is open.
     let held = crate::history::hold_open(&e.id, &e.dir);
@@ -483,11 +486,90 @@ pub struct Edit {
     pub quitting: bool,
     /// The entry is held open (never pruned meanwhile).
     pub held: Option<crate::history::OpenGuard>,
+    /// The Image menu is open (from the status bar's size chip).
+    pub img_menu: bool,
+    /// Resize… or Canvas… is open, with the picture it works on (before
+    /// the resize and the canvas) and that picture fitted for the preview
+    /// (and its scale).
+    pub img_dialog: Option<image::ImgDialog>,
+    pub dlg_pic: Option<(crate::pixbuf::PixBuf, (crate::pixbuf::PixBuf, f32))>,
 }
 
 impl Edit {
     pub fn new(store: Store, entry: Entry, canvas: Canvas, cfg: Config) -> Edit {
-        Edit { store, entry, canvas, cfg, flow: Flow::default(), collapsed: false, rail_drag: None, toast: None, closing: false, quitting: false, held: None }
+        Edit {
+            store,
+            entry,
+            canvas,
+            cfg,
+            flow: Flow::default(),
+            collapsed: false,
+            rail_drag: None,
+            toast: None,
+            closing: false,
+            quitting: false,
+            held: None,
+            img_menu: false,
+            img_dialog: None,
+            dlg_pic: None,
+        }
+    }
+
+    /// An Image menu row (or its key).
+    pub fn image_act(&mut self, a: image::ImgAct) {
+        use image::{CanvasForm, ImgAct, ImgDialog, ResizeForm};
+        self.img_menu = false;
+        if self.flow.dialog.is_some() {
+            return;
+        }
+        match a {
+            ImgAct::RotateLeft => self.canvas.rotate(false),
+            ImgAct::RotateRight => self.canvas.rotate(true),
+            ImgAct::FlipH => self.canvas.flip(true),
+            ImgAct::FlipV => self.canvas.flip(false),
+            ImgAct::Reset => self.canvas.reset_image(),
+            ImgAct::Resize | ImgAct::Canvas => {
+                self.canvas.commit_drafts();
+                let pic = self.canvas.export_picture();
+                let (w, h) = pic.dimensions();
+                let fit = crate::scale::fit_size(w, h, 400, 240);
+                let k = fit.0 as f32 / w.max(1) as f32;
+                let small = crate::imgedit::resample::resize(&pic, fit.0, fit.1, crate::imgedit::Filter::Area);
+                let e = self.canvas.edits();
+                let src = self.canvas.source_size();
+                self.img_dialog = Some(if a == ImgAct::Resize {
+                    let mut f = ResizeForm::new(src, e.resize);
+                    f.canvas = e.canvas;
+                    ImgDialog::Resize(f)
+                } else {
+                    let mut f = CanvasForm::new(e.canvas);
+                    f.src = Some(e.resize_to(src));
+                    ImgDialog::Canvas(f)
+                });
+                self.dlg_pic = Some((pic, (small, k)));
+            }
+        }
+    }
+
+    /// The open image dialog was answered.
+    pub fn image_answer(&mut self, out: image::DlgOut) {
+        use image::{DlgOut, ImgDialog};
+        let Some(d) = self.img_dialog.as_ref() else { return };
+        match (d, out) {
+            (_, DlgOut::Cancel) => {}
+            (ImgDialog::Resize(f), DlgOut::Apply) => match f.result() {
+                Some(r) => self.canvas.set_resize(r),
+                None => return,
+            },
+            (ImgDialog::Resize(_), DlgOut::Remove) => self.canvas.set_resize(None),
+            (ImgDialog::Canvas(f), DlgOut::Apply) => match f.result() {
+                Some(p) => self.canvas.set_canvas(Some(p)),
+                None => return,
+            },
+            (ImgDialog::Canvas(_), DlgOut::Remove) => self.canvas.set_canvas(None),
+        }
+        self.img_dialog = None;
+        self.dlg_pic = None;
     }
 
     /// The daemon is quitting: ask about unsaved edits (else close).
@@ -561,10 +643,12 @@ impl Edit {
                 let path = target(choice, self.entry.meta.saved.as_deref(), &self.cfg);
                 // Text being typed is part of what is saved.
                 self.canvas.commit_drafts();
-                let img = crate::export::with_border(self.canvas.export(), &self.cfg, self.entry.meta.scale);
+                // Save at (unless resized on purpose) and the border.
+                let resized = self.canvas.edits().resize.is_some();
+                let img = crate::export::for_output(self.canvas.export(), &self.cfg, self.entry.meta.scale, resized);
                 let objs = self.canvas.objects().to_vec();
-                let crop = self.canvas.crop();
-                match write(&self.store, &self.entry.id, &img, &objs, crop, &path, &self.cfg) {
+                let doc = self.canvas.doc();
+                match write(&self.store, &self.entry.id, &img, &doc, &path, &self.cfg) {
                     Ok(s) => {
                         self.saved(objs, &s);
                         let kind = if s.recorded { crate::editor::style::ToastKind::Success } else { crate::editor::style::ToastKind::Info };

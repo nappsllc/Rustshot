@@ -132,11 +132,18 @@ pub fn blank_outside(img: &mut PixBuf, crop: Option<FRect>, mask: Option<&[Pt]>)
     let Some(c) = crop else { return };
     let (w, h) = img.dimensions();
     let keep = crop_px(c, (w, h));
-    for (i, px) in img.as_raw_mut().as_chunks_mut::<4>().0.iter_mut().enumerate() {
-        let (x, y) = ((i % w as usize) as u32, (i / w as usize) as u32);
-        let inside = keep.is_some_and(|(kx, ky, kw, kh)| x >= kx && x < kx + kw && y >= ky && y < ky + kh);
-        if !inside {
-            *px = [255, 255, 255, 0];
+    // Row by row: the spans left and right of the crop, whole rows above
+    // and below it.
+    for (y, row) in img.as_raw_mut().chunks_exact_mut((w as usize * 4).max(1)).enumerate() {
+        let px = row.as_chunks_mut::<4>().0;
+        let (a, b) = match keep {
+            Some((kx, ky, kw, kh)) if (y as u32) >= ky && (y as u32) < ky + kh => (kx as usize, (kx + kw) as usize),
+            _ => (0, 0),
+        };
+        let (left, rest) = px.split_at_mut(a);
+        let right = &mut rest[b.max(a) - a..];
+        for p in left.iter_mut().chain(right.iter_mut()) {
+            *p = [255, 255, 255, 0];
         }
     }
 }

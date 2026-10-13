@@ -698,6 +698,17 @@ fn saving(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) {
         ui.width(200.0).slider("quality", &mut f.quality, 1, 100);
     });
     ui.enabled = on;
+    srow(ui, tok, "Save at", Some("Not pins; History keeps the original"), |ui| {
+        let on = ui.enabled;
+        ui.enabled = on && f.save_at == 2;
+        let w = ui.text_w(12.0, "%").ceil();
+        let r = ui.alloc(Some(w), CTL);
+        let c = if ui.enabled { tok.tx2 } else { tok.tx3 };
+        ui.text_at(12.0, "%", r.x, r.y + r.h / 2.0, c, false);
+        ui.width(110.0).slider("save_pct", &mut f.save_pct, 10, 100);
+        ui.enabled = on;
+        ui.seg("save_at", &labels(&SAVE_AT), &mut f.save_at, tok);
+    });
     image_rows(ui, f, tok);
 }
 
@@ -870,22 +881,25 @@ pub const TOOL_ROWS: [(&str, &[Action]); 7] = [
     ("Undo \u{b7} Redo \u{b7} Select all", &[Action::Undo, Action::Redo, Action::SelectAll]),
 ];
 
-/// Shortcuts › Overlay actions: (label, actions).
+/// Shortcuts › Overlay actions: (label, actions). The Edit window's own
+/// keys (zoom, image edits) end the list.
 pub const ACTION_ROWS: [(&str, &[Action]); 7] = [
-    ("Copy \u{b7} Save \u{b7} Upload", &[Action::Copy, Action::Save, Action::Upload]),
-    ("Copy text \u{b7} Copy color", &[Action::CopyText, Action::CopyColor]),
-    ("Accept \u{b7} Cancel", &[Action::Accept, Action::Cancel]),
-    ("Save As \u{b7} Save to Desktop \u{b7} Open with", &[Action::SaveAs, Action::SaveDesktop, Action::OpenWith]),
+    ("Copy \u{b7} Save \u{b7} Upload \u{b7} Copy text \u{b7} color", &[Action::Copy, Action::Save, Action::Upload, Action::CopyText, Action::CopyColor]),
+    ("Save As \u{b7} Desktop \u{b7} Open with", &[Action::SaveAs, Action::SaveDesktop, Action::OpenWith]),
     SEND_ROW,
     ("UI size + \u{b7} - \u{b7} Auto", &[Action::UiBigger, Action::UiSmaller, Action::UiReset]),
     ("Edit window zoom + \u{b7} - \u{b7} Fit \u{b7} 1:1", &[Action::ZoomIn, Action::ZoomOut, Action::ZoomFit, Action::ZoomActual]),
+    ("Rotate left \u{b7} right \u{b7} Flip H \u{b7} V", &[Action::RotateLeft, Action::RotateRight, Action::FlipHorizontal, Action::FlipVertical]),
+    ("Resize \u{b7} Canvas \u{b7} Reset image", &[Action::ImageResize, Action::ImageCanvas, Action::ImageReset]),
 ];
 
-/// Share (with a share sheet: not on Linux), Pin to screen, Record.
+/// Share (with a share sheet: not on Linux), Pin to screen, Record, and
+/// Accept · Cancel.
 #[cfg(not(target_os = "linux"))]
-const SEND_ROW: (&str, &[Action]) = ("Share \u{b7} Pin to screen \u{b7} Record", &[Action::Share, Action::Pin, Action::Record]);
+const SEND_ROW: (&str, &[Action]) =
+    ("Share \u{b7} Pin \u{b7} Record \u{b7} Accept \u{b7} Cancel", &[Action::Share, Action::Pin, Action::Record, Action::Accept, Action::Cancel]);
 #[cfg(target_os = "linux")]
-const SEND_ROW: (&str, &[Action]) = ("Pin to screen \u{b7} Record", &[Action::Pin, Action::Record]);
+const SEND_ROW: (&str, &[Action]) = ("Pin \u{b7} Record \u{b7} Accept \u{b7} Cancel", &[Action::Pin, Action::Record, Action::Accept, Action::Cancel]);
 
 /// The while-recording rows of Shortcuts › Recording: (label, action).
 pub const REC_ROWS: [(&str, Action); 3] = [

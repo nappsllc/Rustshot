@@ -58,6 +58,40 @@ pub enum Hit {
     Collapse,
     Row(usize),
     Dialog(Btn),
+    /// The status bar's size chip (opens the Image menu).
+    ImgChip,
+    /// A row of the Image menu ([`super::image::MENU`]), or its padding.
+    ImgItem(usize),
+    ImgMenu,
+}
+
+/// The status bar's size chip: "1180 × 760" (and "→ 590 × 380" when the
+/// export's size differs), its rect (logical px).
+pub fn chip(ui: &Ui, e: &Edit, lay: &Lay) -> (String, FRect) {
+    let (iw, ih) = e.canvas.size();
+    let out = e.canvas.edits().finish_size(e.canvas.source_size());
+    let label = if out == (iw, ih) { format!("{iw} \u{d7} {ih}") } else { format!("{iw} \u{d7} {ih} \u{2192} {} \u{d7} {}", out.0, out.1) };
+    let w = 8.0 + 14.0 + 6.0 + ui.text_w(11.0, &label) + 6.0 + 10.0 + 8.0;
+    let s = lay.status;
+    (label, FRect { x: 6.0, y: s.y + 3.0, w: w.ceil(), h: s.h - 6.0 })
+}
+
+/// The Image menu's rows above the chip: (rect, row index); its rect.
+pub fn img_menu_lay(ui: &Ui, e: &Edit, lay: &Lay) -> (FRect, Vec<(FRect, usize)>) {
+    let (_, c) = chip(ui, e, lay);
+    let seps = 3.0;
+    let h = super::image::MENU.len() as f32 * super::image::MENU_ROW + seps * 9.0 + 12.0;
+    let r = FRect { x: c.x, y: (c.y - 6.0 - h).max(BAR_H + 4.0), w: super::image::MENU_W, h };
+    let mut y = r.y + 6.0;
+    let mut rows = Vec::new();
+    for i in 0..super::image::MENU.len() {
+        rows.push((FRect { x: r.x + 6.0, y, w: r.w - 12.0, h: super::image::MENU_ROW }, i));
+        y += super::image::MENU_ROW;
+        if matches!(i, 0 | 4 | 5) {
+            y += 9.0;
+        }
+    }
+    (r, rows)
 }
 
 fn zoom_lay(right: f32, cy: f32, h: f32) -> ZoomLay {
@@ -126,6 +160,21 @@ fn inside(r: FRect, x: f32, y: f32) -> bool {
 pub fn hit(ui: &Ui, e: &Edit, lay: &Lay, x: f32, y: f32) -> Option<Hit> {
     if e.flow.dialog.is_some() {
         return dialog_lay(ui, e, lay).1.into_iter().find(|(r, _)| inside(*r, x, y)).map(|(_, b)| Hit::Dialog(b));
+    }
+    if e.img_dialog.is_some() {
+        return None;
+    }
+    if e.img_menu {
+        let (m, rows) = img_menu_lay(ui, e, lay);
+        if let Some((_, i)) = rows.iter().find(|(r, _)| inside(*r, x, y)) {
+            return Some(Hit::ImgItem(*i));
+        }
+        if inside(m, x, y) {
+            return Some(Hit::ImgMenu);
+        }
+    }
+    if inside(chip(ui, e, lay).1, x, y) {
+        return Some(Hit::ImgChip);
     }
     let z = &lay.zoom;
     for (r, h) in [(z.minus, Hit::ZoomOut), (z.plus, Hit::ZoomIn), (z.fit, Hit::Fit), (z.actual, Hit::Actual), (lay.collapse, Hit::Collapse)] {
@@ -320,14 +369,20 @@ pub fn paint_rail(ui: &mut Ui, e: &Edit, lay: &Lay, t: &WTok, hover: Option<Hit>
     }
 }
 
-pub fn paint_status(ui: &mut Ui, e: &Edit, lay: &Lay, t: &WTok) {
+pub fn paint_status(ui: &mut Ui, e: &Edit, lay: &Lay, t: &WTok, hover: Option<Hit>) {
     let s = lay.status;
     fill(ui, s, 0.0, t.win);
     line_h(ui, 0.0, s.y, s.w, t.sep);
     let cy = s.y + s.h / 2.0;
-    let (iw, ih) = e.canvas.size();
-    let mut x = 14.0;
-    x += text(ui, 11.0, &format!("{iw} \u{d7} {ih}"), x, cy, t.tx, false) + 14.0;
+    // The size chip: the Image menu.
+    let (label, c) = chip(ui, e, lay);
+    let on = e.img_menu;
+    btn_bg(ui, c, t, on, hover == Some(Hit::ImgChip), 6.0);
+    let ic = if on { t.acfg } else if hover == Some(Hit::ImgChip) { t.ich } else { t.ic };
+    icon(ui, "image", c.x + 8.0, cy - 7.0, 14.0, ic);
+    let lw = text(ui, 11.0, &label, c.x + 28.0, cy, if on { t.acfg } else { t.tx }, false);
+    icon(ui, "chevron", c.x + 28.0 + lw + 5.0, cy - 5.0, 10.0, ic);
+    let mut x = c.x1() + 8.0;
     x += text(ui, 11.0, "\u{b7}", x, cy, t.tx3, false) + 14.0;
     x += text(ui, 11.0, &format!("{}%", (e.canvas.zoom() * 100.0).round() as i32), x, cy, t.tx2, false) + 14.0;
     let unsaved = e.canvas.unsaved();
@@ -361,6 +416,39 @@ pub fn paint_status(ui: &mut Ui, e: &Edit, lay: &Lay, t: &WTok) {
         }
         let w = ui.text_w(11.0, &g);
         text(ui, 11.0, &g, right - w, cy, t.tx2, false);
+    }
+}
+
+/// The Image menu over the canvas, above its chip.
+pub fn paint_img_menu(ui: &mut Ui, e: &Edit, lay: &Lay, t: &WTok, hover: Option<Hit>) {
+    if !e.img_menu {
+        return;
+    }
+    let (r, rows) = img_menu_lay(ui, e, lay);
+    let k = ui.k;
+    paint::shadow(&mut ui.fb, t, paint::px(r, k), 10.0 * k, k, &[0, 1, 2, 3]);
+    fill(ui, r, 10.0, t.win);
+    ring(ui, r, 10.0, t.bd);
+    let edits = e.canvas.edits();
+    for (rr, i) in rows {
+        let (act, label, ic, action) = super::image::MENU[i];
+        let hov = hover == Some(Hit::ImgItem(i));
+        let off = act == super::image::ImgAct::Reset && edits.is_empty();
+        if hov && !off {
+            fill(ui, rr, 6.0, t.hv);
+        }
+        let cy = rr.y + rr.h / 2.0;
+        let c = if off { t.tx3 } else if hov { t.ich } else { t.ic };
+        icon(ui, ic, rr.x + 8.0, cy - 8.0, 16.0, c);
+        text(ui, 12.0, label, rr.x + 32.0, cy, if off { t.tx3 } else { t.tx }, false);
+        if let Some(ch) = e.canvas.keymap().chords(action).first() {
+            let cap = ch.label();
+            let w = ui.text_w(11.0, &cap);
+            text(ui, 11.0, &cap, rr.x1() - 8.0 - w, cy, t.tx3, false);
+        }
+        if matches!(i, 0 | 4 | 5) {
+            line_h(ui, r.x + 10.0, rr.y1() + 4.0, r.w - 20.0, t.sep);
+        }
     }
 }
 

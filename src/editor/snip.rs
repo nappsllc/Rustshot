@@ -143,6 +143,13 @@ pub(super) struct Snip {
     /// step with the objects' (`Edit::hist`).
     pub crop: Option<FRect>,
     pub crop_hist: Vec<Option<FRect>>,
+    /// The Edit window's image edits and their undo history, in step too
+    /// ([`super::imgedit`]); the picture as captured (the size and the
+    /// lasso the edits start from).
+    pub edits: crate::imgedit::Edits,
+    pub edits_hist: Vec<crate::imgedit::Edits>,
+    pub doc_size: (u32, u32),
+    pub doc_mask: Option<Vec<Pt>>,
     /// The next selection is a lasso.
     pub freeform: bool,
     /// The lasso being drawn.

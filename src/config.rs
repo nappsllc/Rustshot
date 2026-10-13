@@ -230,6 +230,12 @@ pub struct Config {
     /// in logical px (0 = no border, 1-8), around every exported image.
     pub border_color: String,
     pub border_width: u32,
+    /// Settings › Saving "Save at": "screen" (the screen's pixels, as
+    /// captured), "logical" (1×: a high-DPI capture scaled down by its
+    /// scale, area-averaged) or "custom" (`save_scale_percent`, 10-100 %).
+    /// Copy, Save and Upload get it; a pin and History keep the original size.
+    pub save_scale: String,
+    pub save_scale_percent: u32,
     /// Windows: the daemon reminds how to pick Rustshot for Win+Shift+S
     /// while it is offered but not chosen (false: "Don't show again").
     pub screenclip_hint: bool,
@@ -363,6 +369,8 @@ impl Default for Config {
             hdr_screenshots: "tonemap".into(),
             border_color: "#000000".into(),
             border_width: 0,
+            save_scale: "screen".into(),
+            save_scale_percent: 50,
             screenclip_hint: true,
             tray_off_mode_seen: false,
             history: true,
@@ -1144,6 +1152,11 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
                 cfg.border_width =
                     as_u64(val).ok().filter(|w| *w <= BORDER_MAX as u64).ok_or_else(|| bad("number (0-8)", val))? as u32
             }
+            "save_scale" => cfg.save_scale = one_of(val, &["screen", "logical", "custom"]).map_err(|e| bad("value", &e))?,
+            "save_scale_percent" => {
+                cfg.save_scale_percent =
+                    as_u64(val).ok().filter(|p| (10..=100).contains(p)).ok_or_else(|| bad("number (10-100)", val))? as u32
+            }
             "screenclip_hint" => cfg.screenclip_hint = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "tray_off_mode_seen" => cfg.tray_off_mode_seen = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "history" => cfg.history = as_bool(val).map_err(|e| bad("boolean", &e))?,
@@ -1441,6 +1454,7 @@ pub fn to_toml(c: &Config) -> String {
         q(&c.border_color),
         c.border_width
     ));
+    out.push_str(&format!("save_scale = {}\nsave_scale_percent = {}\n", q(&c.save_scale), c.save_scale_percent));
     out.push_str(&format!(
         "launcher_source = {}\nlauncher_delay = {}\nlauncher_after = {}\n",
         q(&c.launcher_source),
@@ -2081,6 +2095,23 @@ bogus = 1
             assert!(parse_config(bad).is_err(), "{bad}");
         }
         assert_eq!(parse_config("border_width = 8").unwrap().border_width, 8);
+    }
+
+    /// Settings › Saving "Save at": screen pixels by default, kept.
+    #[test]
+    fn save_scale_keys() {
+        let d = Config::default();
+        assert_eq!((d.save_scale.as_str(), d.save_scale_percent), ("screen", 50));
+        for (mode, pct) in [("logical", 50), ("custom", 75), ("custom", 10), ("screen", 100)] {
+            let c = Config { save_scale: mode.into(), save_scale_percent: pct, ..Config::default() };
+            let text = to_toml(&c);
+            assert!(text.contains(&format!("save_scale = \"{mode}\"\nsave_scale_percent = {pct}\n")), "{text}");
+            assert_eq!(parse_config(&text).unwrap(), c);
+            assert!(!rewrite_loses(&text));
+        }
+        for bad in ["save_scale = \"2x\"", "save_scale_percent = 5", "save_scale_percent = 150", "save_scale_percent = \"50\""] {
+            assert!(parse_config(bad).is_err(), "{bad}");
+        }
     }
 
     /// The Win+Shift+S guide's "Don't show again": on by default, kept.

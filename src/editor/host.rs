@@ -124,8 +124,12 @@ pub struct Canvas {
     bake_excl: Vec<usize>,
     /// A move's ghost and held objects, rendered once.
     sprites: Option<Sprites>,
-    /// The crop as last saved.
+    /// The crop and the image edits as last saved (the objects and the
+    /// crop in the frame of those edits' orientation).
     saved_crop: Option<FRect>,
+    saved_edits: crate::imgedit::Edits,
+    /// The orientation the view and the lasso's coverage were made for.
+    orient_seen: crate::imgedit::Orient,
     /// A freeform capture's lasso (the picture's px) and its coverage of
     /// the picture: outside it is hidden and exports transparent.
     mask: Option<(Vec<Pt>, Vec<u8>)>,
@@ -147,6 +151,8 @@ impl Canvas {
         e.objects = objects.clone();
         e.tool = Some(Tool::Select);
         e.host = Some(Host { s: 1.0 });
+        e.snip.doc_size = size;
+        e.snip.edits_hist = vec![Default::default()];
         // The tools' sizes and colors are the overlay's (remembered alike).
         e.cfg_path = (!cfg!(test)).then(config::config_path);
         Canvas {
@@ -167,7 +173,95 @@ impl Canvas {
             bake_excl: Vec::new(),
             sprites: None,
             saved_crop: None,
+            saved_edits: Default::default(),
+            orient_seen: Default::default(),
             mask: None,
+        }
+    }
+
+    /// The document's image edits (after [`Self::set_doc`]): the picture
+    /// turned as they say, the objects and the crop with it; as saved.
+    #[cfg_attr(target_os = "macos", allow(dead_code))] // no Edit window there yet
+    pub fn set_edits(&mut self, e: crate::imgedit::Edits) {
+        self.e.load_edits(e);
+        self.saved = self.e.objects.clone();
+        self.saved_crop = self.e.snip.crop;
+        self.saved_edits = e;
+        self.after_input();
+    }
+
+    /// A text or a callout is being typed in (the Edit window's image keys
+    /// wait: they would end the typing and turn the picture under it).
+    pub fn typing(&self) -> bool {
+        self.e.text.is_some() || self.e.obj.cedit.is_some()
+    }
+
+    /// The image edits now.
+    pub fn edits(&self) -> crate::imgedit::Edits {
+        self.e.image_edits()
+    }
+
+    /// What Save writes: the objects and the crop in the original's
+    /// pixels, and the image edits.
+    pub fn doc(&self) -> crate::objects::Doc {
+        crate::objects::Doc { objects: self.e.doc_objects(), crop: self.e.doc_crop(), edits: self.e.image_edits() }
+    }
+
+    /// The picture's size before the resize and the canvas: the crop, turned.
+    pub fn source_size(&self) -> (u32, u32) {
+        self.e.crop_size()
+    }
+
+    /// Rotate left / right, Flip horizontal / vertical, Reset image edits
+    /// (each one undo step).
+    pub fn rotate(&mut self, cw: bool) {
+        self.e.rotate_image(cw);
+        self.after_input();
+    }
+
+    pub fn flip(&mut self, horizontal: bool) {
+        self.e.flip_image(horizontal);
+        self.after_input();
+    }
+
+    pub fn reset_image(&mut self) {
+        self.e.reset_image();
+        self.after_input();
+    }
+
+    /// Resize… and Canvas… answered (one undo step each; `None` removes it).
+    pub fn set_resize(&mut self, r: Option<crate::imgedit::Resize>) {
+        let e = self.e.image_edits();
+        self.e.set_image_edits(crate::imgedit::Edits { resize: r, ..e });
+        self.after_input();
+    }
+
+    pub fn set_canvas(&mut self, c: Option<crate::imgedit::Pad>) {
+        let e = self.e.image_edits();
+        self.e.set_image_edits(crate::imgedit::Edits { canvas: c.filter(|c| !c.is_noop()), ..e });
+        self.after_input();
+    }
+
+    /// The picture turned (Rotate, Flip, an undo of them): the lasso's
+    /// coverage and the view follow.
+    fn sync_orient(&mut self) {
+        let o = self.e.snip.edits.orient;
+        if o == self.orient_seen {
+            return;
+        }
+        self.orient_seen = o;
+        let size = self.size();
+        self.mask = self.e.snip.mask.clone().filter(|m| crate::objects::mask::is_shape(m)).map(|m| {
+            let cov = crate::objects::mask::coverage(&m, size.0, size.1, Pt::new(0.0, 0.0));
+            (m, cov)
+        });
+        self.cache = None;
+        self.sprites = None;
+        self.bake_excl.clear();
+        if self.fit {
+            self.zoom_fit();
+        } else {
+            self.clamp_view();
         }
     }
 
@@ -184,6 +278,8 @@ impl Canvas {
         // inside it.
         self.e.snip.mask = mask.clone().filter(|m| crate::objects::mask::is_shape(m));
         self.e.snip.mask_sel = self.e.sel;
+        self.e.snip.doc_size = size;
+        self.e.snip.doc_mask = self.e.snip.mask.clone();
         self.mask = mask.filter(|m| crate::objects::mask::is_shape(m)).map(|m| {
             let cov = crate::objects::mask::coverage(&m, size.0, size.1, Pt::new(0.0, 0.0));
             (m, cov)
@@ -217,8 +313,14 @@ impl Canvas {
         &self.e.objects
     }
 
-    /// The capture with its objects (what Save writes).
+    /// The capture with its objects and its image edits (what Save writes).
     pub fn export(&mut self) -> PixBuf {
+        let e = self.e.image_edits();
+        crate::imgedit::finish(self.export_picture(), &e)
+    }
+
+    /// [`Self::export`] before the resize and the canvas (what Copy text reads).
+    pub fn export_picture(&mut self) -> PixBuf {
         if self.e.dirty || self.e.spots_stale() {
             let d = self.e.rebuild();
             self.cache_damage(d);
@@ -226,7 +328,8 @@ impl Canvas {
         // A crop or a lasso: baked again over the picture with what they
         // leave out blanked (a magnifier inside never shows it), then cut.
         let crop = self.crop();
-        let mask = self.mask.as_ref().map(|(m, _)| m.as_slice());
+        // (The lasso as the editor has it now, in the picture's current turn.)
+        let mask = self.e.snip.mask.as_deref().filter(|m| crate::objects::mask::is_shape(m));
         if crop.is_some() || mask.is_some() {
             return crate::history::render(&self.e.base, &self.e.objects, crop, mask);
         }
@@ -235,13 +338,18 @@ impl Canvas {
 
     /// The objects differ from the last save, or text is being typed.
     pub fn unsaved(&self) -> bool {
-        self.e.objects != self.saved || self.e.snip.crop != self.saved_crop || self.e.text.as_ref().is_some_and(|t| !t.text.trim().is_empty())
+        // (Same edits: the same orientation, so the same frame.)
+        self.e.snip.edits != self.saved_edits
+            || self.e.objects != self.saved
+            || self.e.snip.crop != self.saved_crop
+            || self.e.text.as_ref().is_some_and(|t| !t.text.trim().is_empty())
     }
 
     /// `objects` were saved (what [`Self::objects`] was when the save began).
     pub fn mark_saved_as(&mut self, objects: Vec<Obj>) {
         self.saved = objects;
         self.saved_crop = self.e.snip.crop;
+        self.saved_edits = self.e.snip.edits;
     }
 
     /// Text being typed (a text box, a callout's text) becomes an object.
@@ -509,6 +617,7 @@ impl Canvas {
 
     /// What a finished capture step asks the window to do.
     fn after_input(&mut self) {
+        self.sync_orient();
         if !self.e.done {
             return;
         }

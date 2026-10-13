@@ -17,7 +17,7 @@ pub mod mask;
 
 pub use callout::Style as CalloutStyle;
 #[allow(unused_imports)]
-pub use json::{from_json, from_json_doc, to_json, to_json_doc, Doc};
+pub use json::{from_json, from_json_doc, to_json, to_json_doc, to_json_full, Doc};
 
 use crate::text::AnnotFont;
 pub use crate::text::TextFmt;
