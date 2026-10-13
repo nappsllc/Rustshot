@@ -619,7 +619,7 @@ pub fn parse_sums(text: &str) -> HashMap<String, [u8; 32]> {
 }
 
 /// Like `parse_sums`, also returning the names that conflict.
-fn parse_sums_checked(text: &str) -> (HashMap<String, [u8; 32]>, Vec<String>) {
+pub(crate) fn parse_sums_checked(text: &str) -> (HashMap<String, [u8; 32]>, Vec<String>) {
     let mut out: HashMap<String, [u8; 32]> = HashMap::new();
     let mut poisoned: Vec<String> = Vec::new();
     for line in text.lines() {
@@ -645,7 +645,7 @@ fn parse_sums_checked(text: &str) -> (HashMap<String, [u8; 32]>, Vec<String>) {
 }
 
 /// Largest `SHA256SUMS` we accept (a few hundred bytes in practice).
-const SUMS_MAX: u64 = 64 * 1024;
+pub(crate) const SUMS_MAX: u64 = 64 * 1024;
 
 /// Download `SHA256SUMS` and `asset` into `dir`, and verify the asset's
 /// SHA-256. Returns the asset's path and the expected digest (so the

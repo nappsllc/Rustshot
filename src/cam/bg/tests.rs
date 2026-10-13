@@ -457,10 +457,10 @@ fn render_blur_previews() {
             })
             .collect(),
     };
-    // And the embedded model's own mask of the scene, when there is one.
+    // And the real model's own mask of the scene (models/selfie.bin).
     let mut masks = vec![("", m)];
-    if let Some(bytes) = seg::embedded() {
-        let mut net = seg::Net::selfie(bytes).unwrap();
+    if let Ok(bytes) = std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("models/selfie.bin")) {
+        let mut net = seg::Net::selfie(&bytes).unwrap();
         let mut inp = SegInput::default();
         inp.prepare(&raw, 256, 144);
         let mut mm = SqMask::default();

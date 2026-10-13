@@ -609,6 +609,7 @@ impl Edit {
         let names = rp.dev_open.map(|d| (d, rp.dev_names(d)));
         let mic_label = rp.mic_label();
         let cam_label = rp.cam_label();
+        let blur = crate::cam::bg::state();
         let rv = toolbar::RecView {
             format: rp.opts.format,
             mp4: rp.mp4,
@@ -621,7 +622,9 @@ impl Edit {
             cams_looking: rp.cams_looking(),
             shape: rp.opts.cam_shape,
             bg: rp.opts.cam_bg,
-            blur: crate::cam::bg::available(),
+            blur: blur.choosable() && !matches!(blur, crate::cam::bg::Blur::Failed(_)),
+            blur_note: blur.panel_note(),
+            blur_retry: matches!(blur, crate::cam::bg::Blur::Failed(_)),
             source: rp.source,
             countdown: rp.opts.countdown,
             gif_max: rp.opts.gif_max,

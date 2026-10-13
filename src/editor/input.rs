@@ -871,7 +871,12 @@ impl Edit {
             }
             Act::RecShape(sh) => self.rec.opts.cam_shape = sh,
             // Remembered (`rec_camera_bg`); the bubble follows (`sync_bubble`).
+            // A blur chosen (or the failed download's row pressed): the
+            // model is fetched if it is not here; the bubble blurs once it is.
             Act::RecBg(b) if crate::cam::bg::available() => {
+                if b != crate::cam::bg::Bg::Off || matches!(crate::cam::bg::state(), crate::cam::bg::Blur::Failed(_)) {
+                    crate::cam::bg::request_model();
+                }
                 self.rec.opts.cam_bg = b;
                 self.pending.set("rec_camera_bg".into(), Some(config::toml_str(b.key())), Instant::now());
                 self.cfg.rec_camera_bg = b.key().into();

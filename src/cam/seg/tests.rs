@@ -788,10 +788,10 @@ fn seg_bench() {
     }
 }
 
-/// The converted MediaPipe model, when `assets/selfie.bin` is there (read
-/// at run time, so this runs with or without the `selfie_model` feature).
+/// The converted MediaPipe model, `models/selfie.bin` in the source tree
+/// (what the release publishes as [`crate::fetch::MODEL`]).
 fn real_model() -> Option<Vec<u8>> {
-    std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/selfie.bin")).ok()
+    std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("models/selfie.bin")).ok()
 }
 
 /// Synthetic 256x144 RGB inputs (0..1): a gradient, a bright head and
@@ -835,7 +835,7 @@ fn person(u: f32, v: f32) -> bool {
 #[test]
 fn real_model_matches_the_reference() {
     let Some(bytes) = real_model() else {
-        eprintln!("SKIP: no assets/selfie.bin");
+        eprintln!("SKIP: no models/selfie.bin");
         return;
     };
     let model = Model::parse(&bytes).unwrap();
@@ -868,7 +868,7 @@ fn real_model_matches_the_reference() {
 
 /// A stand-in `selfie.bin` (random weights, the landscape model's input
 /// and output, about its size) at `RUSTSHOT_SYNTH_SELFIE`: to build and
-/// try the `selfie_model` feature without the real model.
+/// try the engine without the real model (the blur takes only the real one).
 #[test]
 #[ignore = "writes a synthetic model; set RUSTSHOT_SYNTH_SELFIE"]
 fn write_synthetic_selfie_bin() {
@@ -878,49 +878,47 @@ fn write_synthetic_selfie_bin() {
     println!("wrote {} bytes to {}", bytes.len(), std::path::Path::new(&path).display());
 }
 
-/// The model this build embeds (`selfie_model`): it loads, takes a
-/// 144x256 picture (the landscape model) and gives a probability per
-/// pixel. `cargo test --features selfie_model embedded_model`
-#[cfg(selfie_embedded)]
+
+/// The model the release publishes ([`crate::fetch::MODEL`]) is the
+/// source tree's `models/selfie.bin`: its size and SHA-256, and the asset
+/// is named after the hash (`selfie-<8 hex>.bin`, as release.yml names
+/// it). Reconverting the model: update `MODEL` from what this prints.
 #[test]
-fn embedded_model_loads_and_runs() {
-    let t = std::time::Instant::now();
-    let bytes = embedded().expect("the feature embeds the model");
-    eprintln!(
-        "embedded model: {} -> {} bytes, inflated in {:.2} ms",
-        super::EMBEDDED_Z.len(),
-        bytes.len(),
-        t.elapsed().as_secs_f64() * 1e3
-    );
-    // What build.rs compressed is the file, byte for byte.
-    let file = std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/selfie.bin")).unwrap();
-    assert!(bytes == file.as_slice(), "the embedded model is assets/selfie.bin");
-    assert!(std::ptr::eq(bytes, embedded().unwrap()), "inflated once");
-    // The blur may grow the binary by less than 300 KB: the engine and the
-    // blur are about 76 KB (release, measured against handroll), so the
-    // model must stay under 224 KB (it is 219,338 bytes, embedded
-    // compressed).
-    assert!(bytes.len() <= 224_000, "{} bytes: the binary would grow 300 KB or more", bytes.len());
-    assert!(super::EMBEDDED_Z.len() < bytes.len() * 9 / 10, "compressed by 10 % or more");
-    let mut net = Net::selfie(bytes).expect("assets/selfie.bin loads");
+fn model_manifest_matches_the_file() {
+    let f = &crate::fetch::MODEL;
+    let bytes = real_model().expect("models/selfie.bin is in the source tree");
+    let hex = crate::sha256::hex(&crate::sha256::digest(&bytes));
+    assert_eq!((bytes.len() as u64, hex.as_str()), (f.size, f.sha256), "update fetch::MODEL");
+    assert_eq!(f.asset, format!("selfie-{}.bin", &hex[..8]));
+    assert_eq!(f.rel, "models/selfie.bin");
+    // The engine takes it: 144x256 in, a probability per pixel out.
+    let mut net = Net::selfie(&bytes).expect("models/selfie.bin loads");
     assert_eq!(net.input_size(), (256, 144));
-    let f = CamFrame { w: 1280, h: 720, bgra: (0..1280 * 720 * 4).map(|i| (i * 31 % 251) as u8).collect() };
+    let fr = CamFrame { w: 1280, h: 720, bgra: (0..1280 * 720 * 4).map(|i| (i * 31 % 251) as u8).collect() };
     let mut inp = SegInput::default();
-    inp.prepare(&f, 256, 144);
+    inp.prepare(&fr, 256, 144);
     let mut sq = SqMask::default();
     assert!(net.segment(&inp, &mut sq));
     assert!(sq.n > 0 && sq.v.iter().all(|v| (0.0..=1.0).contains(v)));
 }
 
-/// The plane interleave of `inflate_model` undoes build.rs's split, for odd
-/// and even lengths; a stream that does not inflate to the length is None.
+/// The model file as it is read for the blur: a good one loads; a
+/// missing one, a truncated one and one with another hash do not.
 #[test]
-fn model_planes_round_trip() {
-    for raw in [vec![], vec![1u8], vec![1, 2], (0..1001u32).map(|i| (i * 7) as u8).collect::<Vec<u8>>()] {
-        let mut planes: Vec<u8> = raw.iter().step_by(2).copied().collect();
-        planes.extend(raw.iter().skip(1).step_by(2));
-        let z = crate::deflate::deflate(&planes, crate::deflate::Effort::BEST);
-        assert_eq!(super::inflate_model(&z, raw.len()).unwrap(), raw);
-        assert!(super::inflate_model(&z, raw.len() + 1).is_none());
-    }
+fn model_file_is_checked_on_load() {
+    let f = &crate::fetch::MODEL;
+    let good = real_model().expect("models/selfie.bin");
+    let dir = std::env::temp_dir().join(format!("rustshot-model-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let p = dir.join("selfie.bin");
+    assert!(super::read_model(&p, f).is_none(), "missing");
+    std::fs::write(&p, &good).unwrap();
+    assert_eq!(super::read_model(&p, f).as_deref(), Some(good.as_slice()), "good");
+    std::fs::write(&p, &good[..good.len() / 2]).unwrap();
+    assert!(super::read_model(&p, f).is_none(), "truncated");
+    let mut bad = good.clone();
+    bad[1000] ^= 1;
+    std::fs::write(&p, &bad).unwrap();
+    assert!(super::read_model(&p, f).is_none(), "another hash, same size");
+    let _ = std::fs::remove_dir_all(&dir);
 }

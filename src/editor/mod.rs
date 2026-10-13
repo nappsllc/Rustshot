@@ -372,6 +372,7 @@ pub fn run(
 ) -> i32 {
     // Settings, the update dialog and the notice follow the UI size too.
     publish_ui_size(cfg.ui_scale);
+    crate::fetch::set_allowed(cfg.download_data);
     if cfg.snap_windows && !cfg!(test) {
         crate::snap::warm_up();
     }
@@ -1252,6 +1253,7 @@ impl App {
             crate::tray::set_visible(cfg.show_tray);
         }
         publish_ui_size(cfg.ui_scale);
+        crate::fetch::set_allowed(cfg.download_data);
         self.cfg = cfg;
         // New limits apply at once.
         self.keep_pruned();
@@ -3750,7 +3752,7 @@ fn animating(edit: &Edit, app_notice: Option<&Toast>, now: Instant) -> bool {
     let tip_pending = edit.hover.is_some() && now.saturating_duration_since(edit.hover_at) < Duration::from_millis(500);
     let toast_moving = edit.notice.as_ref().or(app_notice).is_some_and(|t| t.animating(now));
     // The Camera row says "Looking for cameras…" until the list comes.
-    edit.mo.active(now) || tip_pending || toast_moving || edit.rec.cams_looking() || edit.guides_fading(now) || edit.assist.hint_due(now) || edit.slot_hold.is_some() || edit.snip_busy()
+    edit.mo.active(now) || tip_pending || toast_moving || edit.rec.cams_looking() || (edit.rec.opts.camera && crate::cam::bg::downloading()) || edit.guides_fading(now) || edit.assist.hint_due(now) || edit.slot_hold.is_some() || edit.snip_busy()
 }
 
 /// The last frame no longer matches: something animates (or did when it

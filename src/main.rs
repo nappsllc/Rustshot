@@ -8,6 +8,7 @@ mod cam;
 mod capture;
 mod chan;
 mod config;
+mod datadir;
 mod desktop;
 mod deflate;
 // D-Bus client (portals; the StatusNotifierItem tray later). Pure parts tested everywhere.
@@ -15,6 +16,7 @@ mod deflate;
 mod dbus;
 mod editor;
 mod export;
+mod fetch;
 mod fonts;
 mod history;
 // The History window (board 10).

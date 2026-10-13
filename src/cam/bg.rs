@@ -3,7 +3,7 @@
 //!
 //! 1. Now and then ([`Pacer`]) a small copy of the frame goes to the
 //!    segmentation thread ([`seg::SegInput::prepare`]), which finds the
-//!    person in it (the embedded MediaPipe model through [`seg::Net`],
+//!    person in it (the MediaPipe model, downloaded on first use, through [`seg::Net`],
 //!    or macOS's Vision) and hands back the mask of the bubble's square.
 //!    The camera thread never waits for it: until a new mask comes, the
 //!    last one is used.
@@ -81,43 +81,165 @@ impl Bg {
     }
 }
 
-/// The Background row's note when this build cannot blur.
-pub const UNAVAILABLE: &str = "Blur unavailable in this build";
+/// The Background row's note while downloads are off and the model is
+/// not here (Settings says where to put it).
+pub const UNAVAILABLE: &str = "Blur unavailable — downloads are off";
+/// The model file there is not this version's.
+pub const DAMAGED: &str = "Blur unavailable: model file is damaged";
+/// The capture panel's note after a failed download (the row retries).
+pub const FAILED_SHORT: &str = "Couldn't download the model · Retry";
+/// Settings' note after a failed download.
+pub const FAILED: &str = "Blur unavailable — couldn't download the model";
+/// The capture panel's progress notes, by tenth.
+const PROGRESS: [&str; 11] = [
+    "Downloading model… 0%",
+    "Downloading model… 10%",
+    "Downloading model… 20%",
+    "Downloading model… 30%",
+    "Downloading model… 40%",
+    "Downloading model… 50%",
+    "Downloading model… 60%",
+    "Downloading model… 70%",
+    "Downloading model… 80%",
+    "Downloading model… 90%",
+    "Downloading model… 100%",
+];
+
+/// Whether the background can be blurred, and if not, why.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Blur {
+    /// The model is here (or macOS Vision segments).
+    Ready,
+    /// Not here yet: choosing a blur downloads it.
+    Fetchable,
+    /// On its way (percent).
+    Downloading(u8),
+    /// The download failed (why); choosing a blur again retries.
+    Failed(String),
+    /// Downloads are off: the file to put where.
+    Off { asset: &'static str, url: String, path: std::path::PathBuf },
+    /// Downloads are off and the file there does not match.
+    Damaged(std::path::PathBuf),
+}
+
+impl Blur {
+    /// The blur choices are offered.
+    pub fn choosable(&self) -> bool {
+        matches!(self, Blur::Ready | Blur::Fetchable | Blur::Failed(_))
+    }
+
+    /// The capture panel's Background row: its note when the choices are
+    /// not offered (and whether a press retries).
+    pub fn panel_note(&self) -> Option<&'static str> {
+        match self {
+            Blur::Ready | Blur::Fetchable => None,
+            Blur::Downloading(p) => Some(PROGRESS[(*p as usize).min(100) / 10]),
+            Blur::Failed(_) => Some(FAILED_SHORT),
+            Blur::Off { .. } => Some(UNAVAILABLE),
+            Blur::Damaged(_) => Some(DAMAGED),
+        }
+    }
+
+    /// Settings › Recording › Background's note.
+    pub fn settings_note(&self) -> String {
+        match self {
+            Blur::Ready => "Blurs what is behind you".into(),
+            Blur::Fetchable => format!("Blurs what is behind you (first use downloads a {} model from GitHub)", crate::fetch::size_label(crate::fetch::MODEL.size)),
+            Blur::Downloading(p) => format!("Downloading the blur model… {p}%"),
+            Blur::Failed(why) => format!("{FAILED}: {why}"),
+            Blur::Off { asset, url, path } => format!("{UNAVAILABLE}: download {asset} ({url}) and save it as {}", path.display()),
+            Blur::Damaged(p) => format!("{DAMAGED} ({})", p.display()),
+        }
+    }
+}
 
 #[cfg(test)]
 thread_local! {
-    static AVAILABLE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+    static STATE: std::cell::RefCell<Option<Blur>> = const { std::cell::RefCell::new(None) };
 }
 
-/// Tests: pretend the blur is (`Some(true)`) or is not available.
+/// Tests: pretend the model is here (`Some(true)`), or downloads are off
+/// and it is not (`Some(false)`).
 #[cfg(test)]
 pub fn set_available(v: Option<bool>) {
-    AVAILABLE.with(|a| a.set(v));
+    set_state(v.map(|on| if on { Blur::Ready } else { Blur::Off { asset: crate::fetch::MODEL.asset, url: String::new(), path: "models/selfie.bin".into() } }));
 }
 
-/// Whether the background can be blurred here: a model is embedded
-/// (`selfie_model`), or macOS has Vision's person segmentation (12+).
-pub fn available() -> bool {
+/// Tests: pretend the blur is in this state.
+#[cfg(test)]
+pub fn set_state(v: Option<Blur>) {
+    STATE.with(|a| *a.borrow_mut() = v);
+}
+
+/// Where the blur stands: macOS Vision (12+) always blurs; otherwise the
+/// model file ([`crate::fetch::MODEL`]).
+pub fn state() -> Blur {
     #[cfg(test)]
-    if let Some(v) = AVAILABLE.with(|a| a.get()) {
+    if let Some(v) = STATE.with(|a| a.borrow().clone()) {
         return v;
     }
     #[cfg(target_os = "macos")]
     if super::seg_macos::available() {
-        return true;
+        return Blur::Ready;
     }
-    seg::HAS_EMBEDDED
+    let f = &crate::fetch::MODEL;
+    match crate::fetch::state(f) {
+        crate::fetch::State::Ready(_) => Blur::Ready,
+        crate::fetch::State::Missing => Blur::Fetchable,
+        crate::fetch::State::Downloading { got, total } => Blur::Downloading((got * 100 / total.max(1)).min(100) as u8),
+        crate::fetch::State::Failed(e) => Blur::Failed(e),
+        crate::fetch::State::Off(path) => Blur::Off { asset: f.asset, url: f.url(env!("CARGO_PKG_VERSION")), path },
+        crate::fetch::State::Damaged(p) => Blur::Damaged(p),
+    }
 }
 
-/// The segmenter of this build (`None`: there is none, or the model does
-/// not load: said once on stderr).
+/// Whether a blur can be chosen ([`Blur::choosable`]).
+pub fn available() -> bool {
+    state().choosable()
+}
+
+/// Whether the model is on its way (windows showing its progress poll).
+pub fn downloading() -> bool {
+    matches!(state(), Blur::Downloading(_))
+}
+
+/// A blur was chosen: get the model if it is not here (in the background;
+/// the bubble blurs once it is). A failed download is tried again.
+pub fn request_model() {
+    #[cfg(test)]
+    if STATE.with(|a| a.borrow().is_some()) {
+        return;
+    }
+    #[cfg(target_os = "macos")]
+    if super::seg_macos::available() {
+        return;
+    }
+    let f = &crate::fetch::MODEL;
+    crate::fetch::ensure(f.asset, f.rel, |r| {
+        if let Err(e) = r {
+            eprintln!("rustshot: camera blur: {e}");
+        }
+    });
+}
+
+/// Whether the segmenter can be made now (the model is here).
+fn engine_ready() -> bool {
+    #[cfg(target_os = "macos")]
+    if super::seg_macos::available() {
+        return true;
+    }
+    matches!(crate::fetch::state(&crate::fetch::MODEL), crate::fetch::State::Ready(_))
+}
+
+/// The segmenter of this build (`None`: the model is not here or does not
+/// load: said on stderr).
 pub fn default_engine() -> Option<Box<dyn Segment>> {
     #[cfg(target_os = "macos")]
     if let Some(v) = super::seg_macos::Vision::new() {
         return Some(Box::new(v));
     }
-    let bytes = seg::embedded()?;
-    match seg::Net::selfie(bytes) {
+    let bytes = seg::model_bytes()?;
+    match seg::Net::selfie(&bytes) {
         Ok(n) => Some(Box::new(n)),
         Err(e) => {
             eprintln!("rustshot: camera blur: {e}");
@@ -684,17 +806,22 @@ pub struct Effect {
     stale: bool,
     mask: Vec<u8>,
     scratch: Scratch,
+    /// Whether the segmenter can be made yet (the model may still be on
+    /// its way: the picture stays as it is meanwhile).
+    ready: Option<fn() -> bool>,
+    /// The model was asked for (once per bubble; a retry is the user's).
+    asked: bool,
 }
 
 impl Default for Effect {
     fn default() -> Effect {
-        Effect::with_maker(Box::new(default_engine))
+        Effect { ready: Some(engine_ready), ..Effect::with_maker(Box::new(default_engine)) }
     }
 }
 
 impl Effect {
     pub fn with_maker(make: Maker) -> Effect {
-        Effect { make: Some(make), worker: None, pacer: Pacer::default(), smooth: Smooth::default(), stale: false, mask: Vec::new(), scratch: Scratch::default() }
+        Effect { make: Some(make), worker: None, pacer: Pacer::default(), smooth: Smooth::default(), stale: false, mask: Vec::new(), scratch: Scratch::default(), ready: None, asked: false }
     }
 
     /// `pic` (the bubble's square of `raw`) with its background blurred
@@ -714,6 +841,14 @@ impl Effect {
             return;
         }
         if self.worker.is_none() {
+            if let Some(ready) = self.ready
+                && !ready()
+            {
+                if !std::mem::replace(&mut self.asked, true) {
+                    request_model();
+                }
+                return;
+            }
             self.worker = Some(self.make.take().and_then(Worker::start));
         }
         if matches!(&self.worker, Some(Some(w)) if w.failed()) {

@@ -3,8 +3,7 @@
 //! max length, the 3-2-1 countdown, on Linux the MP4 encoder with a line
 //! saying what is installed, then system sound and the microphone with its
 //! device; Camera: the bubble's device, shape, size, mirror, background
-//! (blurred or not; "Blur unavailable in this build" without a
-//! segmentation model) and ring). The record hotkey is in Shortcuts ›
+//! (blurred or not; the model's download, or why it cannot be had) and ring). The record hotkey is in Shortcuts ›
 //! Recording.
 //!
 //! [`RecForm`] is the part of the settings form this tab edits (every
@@ -421,11 +420,22 @@ pub fn camera(ui: &mut Ui, s: &mut super::Settings, tok: &Tok) {
     srow(ui, tok, "Mirror", Some("Like a mirror, as most video calls show you"), |ui| {
         ui.switch("rec_camera_mirror", &mut f.mirror, tok);
     });
-    let blur = crate::cam::bg::available();
+    let state = crate::cam::bg::state();
+    let blur = state.choosable();
     ui.enabled = on && !no_cams && blur;
-    let note = if blur { "Blurs what is behind you" } else { crate::cam::bg::UNAVAILABLE };
-    srow(ui, tok, "Background", Some(note), |ui| {
+    let note = state.settings_note();
+    srow(ui, tok, "Background", Some(&note), |ui| {
+        // A blur chosen: the model comes (if it is not here) while the
+        // window stays responsive; a failed download is retried.
+        let was = f.bg;
         ui.seg("rec_camera_bg", &labels(&BACKGROUNDS), &mut f.bg, tok);
+        let failed = matches!(state, crate::cam::bg::Blur::Failed(_));
+        if f.bg != was && BACKGROUNDS[f.bg].1 != "off" {
+            crate::cam::bg::request_model();
+        }
+        if failed && ui.clink("rec_camera_bg_retry", "Retry", 12.0, false, tok) {
+            crate::cam::bg::request_model();
+        }
     });
     ui.enabled = on && !no_cams;
     srow(ui, tok, "Ring", Some("Color and width of the outline"), |ui| {

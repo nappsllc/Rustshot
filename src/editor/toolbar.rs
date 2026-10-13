@@ -383,9 +383,13 @@ pub struct RecView<'a> {
     /// The cameras are still being listed (the row says so, disabled).
     pub cams_looking: bool,
     pub shape: Shape,
-    /// The camera's background, and whether this build can blur it.
+    /// The camera's background; whether a blur can be chosen; if not,
+    /// the row's note (the model downloading, off, damaged; a failed
+    /// download, when a press of the row retries).
     pub bg: crate::cam::bg::Bg,
     pub blur: bool,
+    pub blur_note: Option<&'static str>,
+    pub blur_retry: bool,
     /// The chosen microphone's name ("Default microphone" for the default).
     pub mic_label: &'a str,
     /// The chosen camera's name ("Default camera" for the first).

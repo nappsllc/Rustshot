@@ -324,6 +324,7 @@ pub struct Form {
     /// handler, Windows); `None` hides it (other systems, MSIX).
     pub screenclip: Option<bool>,
     pub check_updates: bool,
+    pub download_data: bool,
     pub show_tray: bool,
     pub copy_after: bool,
     pub shutter: bool,
@@ -393,6 +394,7 @@ impl Form {
             autostart,
             screenclip: None,
             check_updates: cfg.check_updates,
+            download_data: cfg.download_data,
             show_tray: cfg.show_tray,
             copy_after: cfg.copy_after_capture,
             shutter: cfg.shutter_sound,
@@ -489,6 +491,9 @@ impl Form {
         }
         if self.check_updates != was.check_updates {
             c.check_updates = self.check_updates;
+        }
+        if self.download_data != was.download_data {
+            c.download_data = self.download_data;
         }
         if self.show_tray != was.show_tray {
             c.show_tray = self.show_tray;
@@ -962,6 +967,9 @@ pub struct Settings {
     /// The hotkeys the daemon could not register as saved
     /// ([`hotkey::outstanding`]).
     pub hotkey_failures: Vec<hotkey::Failure>,
+    /// [`crate::fetch::generation`] when last drawn (a download's progress
+    /// or end redraws).
+    pub data_gen: u64,
     /// The tools' sizes and colors were reset (a note says so).
     tools_reset: bool,
     /// The Recording section's device lists and encoder status.
@@ -1004,6 +1012,7 @@ impl Settings {
             no_background: crate::tray::hidden_means_no_daemon(),
             folder_probe: None,
             hotkey_failures: Vec::new(),
+            data_gen: 0,
             tools_reset: false,
             rec_lists: recording::Lists::default(),
             upload: upload::State::default(),
@@ -2232,6 +2241,12 @@ impl Driver for Window {
                 let failures = hotkey::outstanding();
                 if failures != self.s.hotkey_failures {
                     self.s.hotkey_failures = failures;
+                    changed = true;
+                }
+                // A data file's download moved on or ended.
+                let g = crate::fetch::generation();
+                if g != self.s.data_gen {
+                    self.s.data_gen = g;
                     changed = true;
                 }
                 // The Recording section's devices were listed.

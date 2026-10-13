@@ -208,8 +208,9 @@ pub fn layout(inp: &Input, rv: &RecView) -> Toolbar {
     // build without a segmentation model says it cannot).
     if cam_on {
         let r = FRect { x: x0, y, w: inner, h: SMALL_ROW_H };
-        let value = (!rv.blur).then_some(crate::cam::bg::UNAVAILABLE);
-        local.push(Item { kind: Kind::Row { act: Act::RecBg(rv.bg), icon: "", label: "Background", value, dim: !rv.blur }, r, disabled: true });
+        let value = if rv.blur { None } else { Some(rv.blur_note.unwrap_or(crate::cam::bg::UNAVAILABLE)) };
+        let retry = !rv.blur && rv.blur_retry;
+        local.push(Item { kind: Kind::Row { act: Act::RecBg(rv.bg), icon: "", label: "Background", value, dim: !rv.blur && !retry }, r, disabled: !retry });
         if rv.blur {
             use crate::cam::bg::Bg;
             let segs = [(Bg::Off, "Off"), (Bg::Light, "Blur light"), (Bg::Strong, "Blur strong")].map(|(b, l)| (Act::RecBg(b), l, "", rv.bg == b, false));
@@ -384,6 +385,8 @@ mod tests {
             shape: crate::cam::Shape::Circle,
             bg: crate::cam::bg::Bg::Off,
             blur: true,
+            blur_note: None,
+            blur_retry: false,
             mic_label: "Default microphone",
             cam_label: "Default camera",
             devs: None,
@@ -627,6 +630,7 @@ mod tests {
         assert!(inside_panel(&tb));
         // Without a model: the note, no choices.
         v.blur = false;
+        v.blur_note = Some(UNAVAILABLE);
         let tb = panel(sel, &v);
         let row = find(&tb, |k| matches!(k, Kind::Row { act: Act::RecBg(_), .. }));
         assert!(matches!(row.kind, Kind::Row { value: Some(UNAVAILABLE), dim: true, .. }));
