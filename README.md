@@ -148,7 +148,8 @@ section:
   GIF), frame rate (MP4 30 or 60, GIF 10, 15 or 24 fps), MP4 quality, a
   GIF's max length (15, 30 or 60 s), the 3-2-1 countdown, system sound,
   microphone and its device, the camera bubble (camera, shape, size 120,
-  160, 200 or 240 px, mirror, ring color and width); on Linux also the MP4 encoder (Auto,
+  160, 200 or 240 px, mirror, background Off / Blur light / Blur strong,
+  ring color and width); on Linux also the MP4 encoder (Auto,
   ffmpeg or OpenH264) with what is installed ("ffmpeg found at
   /usr/bin/ffmpeg", "OpenH264 downloaded", or not available).
 - **Key bindings:** the global hotkeys, every editor shortcut (see
@@ -599,6 +600,11 @@ under the selection, offers:
   itself at its max length, 15, 30 or 60 s).
 - The countdown (0 or 3 s) and the camera's shape and ring (width and
   color, in the Camera row's palette).
+- The camera's **Background** (under the Camera row): Off, Blur light or
+  Blur strong. The person is found in each picture on your computer (the
+  embedded MediaPipe Selfie Segmentation model, or Vision on macOS 12 and
+  later) and what is behind them is blurred; nothing leaves the machine.
+  A build without the model says *Blur unavailable in this build*.
 
 The camera bubble is a real window on the screen, so it is in the
 recording: drag it anywhere (it is see-through while dragged and drops
@@ -759,6 +765,7 @@ rec_camera_size = "m"             # "s", "m", "l" or "xl" (120, 160, 200, 240 px
 rec_camera_mirror = true
 rec_camera_ring_color = ""        # "" = the accent, or "#rrggbb"
 rec_camera_ring_width = 2         # 0 (no ring) to 16
+rec_camera_bg = "off"             # the bubble's background: "off", "light" or "strong" (blurred)
 rec_countdown = true              # 3-2-1 before the first frame
 rec_linux_encoder = "auto"        # Linux MP4: "auto", "ffmpeg" or "openh264"
 ```
@@ -844,6 +851,17 @@ Requires Rust 1.87+ (edition 2024). On Linux also install the X11 headers
 cargo build --release          # target/release/rustshot(.exe)
 cargo test                     # unit tests
 cargo test -- --ignored        # live display / clipboard / network tests
+```
+
+The camera's background blur needs the person-segmentation model (on
+Windows and Linux; macOS 12+ uses Vision without it). Convert MediaPipe's
+`selfie_segmentation_landscape.tflite` (Apache-2.0) once and build with the
+`selfie_model` feature:
+
+```bash
+cargo run --manifest-path tools/convert-selfie/Cargo.toml -- \
+    selfie_segmentation_landscape.tflite assets/selfie.bin
+cargo build --release --features selfie_model
 ```
 
 Packaging scripts live in [`packaging/`](packaging) (NSIS, MSIX, `.app`/dmg,

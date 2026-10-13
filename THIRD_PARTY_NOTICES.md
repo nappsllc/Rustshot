@@ -104,6 +104,22 @@ Butler), Apache-2.0.
 | windows-threading 0.2.1 | MIT OR Apache-2.0 |
 | zlib-rs 0.6.8 | Zlib |
 
+## MediaPipe Selfie Segmentation model — Apache License 2.0
+
+Builds with the `selfie_model` feature embed the weights of MediaPipe's
+Selfie Segmentation model (landscape, 144×256), converted from
+`selfie_segmentation_landscape.tflite` to Rustshot's own format
+(`assets/selfie.bin`, by `tools/convert-selfie`: the same weights stored
+as 16-bit floats, the graph as a list of operators). The camera bubble's
+background blur runs it (Rustshot's own inference code; no MediaPipe or
+TensorFlow code is included).
+
+Copyright The MediaPipe Authors. Licensed under the Apache License,
+Version 2.0 (https://www.apache.org/licenses/LICENSE-2.0). Source:
+https://github.com/google-ai-edge/mediapipe. Modification: converted to
+another file format (no retraining; float32 weights, if any, rounded to
+float16).
+
 ## Optional libraries loaded at run time (Linux, not shipped)
 
 Rustshot does not ship or link these; it loads them with `dlopen` when they

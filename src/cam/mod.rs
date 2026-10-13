@@ -15,9 +15,11 @@
 //! portal and PipeWire (`rec::linux::pipewire`) on Wayland and in Flatpak,
 //! and an X11 ARGB window (`x11.rs`). macOS: an `AVCaptureSession` and a
 //! transparent panel (`macos.rs`). The camera is opened only while the
-//! bubble is shown and released when it closes. Background effects are
-//! the OS's (Windows Studio Effects, macOS Center Stage and Portrait apply
-//! to the feed by themselves); Rustshot adds none.
+//! bubble is shown and released when it closes. The OS's own effects
+//! (Windows Studio Effects, macOS Center Stage and Portrait) apply to the
+//! feed by themselves; Rustshot can blur the background behind the person
+//! itself ([`bg`]: `rec_camera_bg`, segmented by the embedded model
+//! ([`seg`]) or, on macOS 12+, by Vision).
 //!
 //! Position memory is in-memory (process lifetime, not in the config):
 //! the corner the bubble was last dropped at and its offset from that
