@@ -80,12 +80,16 @@ screenshots, editing and video capture.** Windows, Linux and macOS.
   and macOS, or `tesseract` on Linux. Nothing is uploaded.
 - Text mode: the toolbar's Copy text shows the words it found. Drag across
   them to select (double-click a word, triple-click a line, <kbd>Ctrl</kbd>+<kbd>A</kbd>
-  all), then <kbd>Ctrl</kbd>+<kbd>C</kbd> or **Copy**; **Copy all** copies everything.
-  The Copy text hotkey still copies all at once (Settings › Capture › Copy
-  text picks the button's way too).
+  all), then <kbd>Ctrl</kbd>+<kbd>C</kbd> or **Copy**; with nothing selected <kbd>Ctrl</kbd>+<kbd>C</kbd>
+  copies all the text, and **Copy all** does too. <kbd>Esc</kbd> leaves Text mode
+  (then <kbd>Ctrl</kbd>+<kbd>C</kbd> copies the picture as before). The Copy text hotkey
+  still copies all at once (Settings › Capture › Copy text picks the
+  button's way too).
 - Quick Redact (<kbd>Shift</kbd>+<kbd>R</kbd>): e-mail addresses, phone and card numbers,
-  IBANs, IP addresses, URLs with tokens and passwords get a blur, all in one
-  undo step. Long-press Copy text to choose which kinds.
+  IBANs, IP addresses, URLs with tokens, keys, passwords and JWTs are
+  covered with an opaque fill in the surrounding color, all in one undo
+  step (Settings › Capture › Redact style: Solid, or Blur). Long-press
+  Copy text to choose which kinds.
 
 **Pin**
 - Pin a capture on top of every window. Zoom it, fade it and compare

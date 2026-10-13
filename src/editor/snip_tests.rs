@@ -125,6 +125,10 @@ fn text_mode_selects_words_in_reading_order_and_copies_them() {
     // but clears the selection; Esc leaves Text mode (not the overlay).
     click(&mut a, Pt::new(SEL.x + 300.0, SEL.y + 250.0));
     assert!(edit_of(&mut a).snip.text.as_ref().unwrap().sel.is_none());
+    // Ctrl+C with nothing selected copies every word.
+    key(&mut a, 'C' as u32, CTRL);
+    assert_eq!(copied(), ["Hello Rustshot world\nmail jane@example.com 4111 1111 1111 1111"]);
+    assert_eq!(notice(&mut a), "Copied all text");
     key(&mut a, wind::key::ESCAPE, NONE);
     assert!(edit_of(&mut a).snip.text.is_none() && matches!(a.st, State::Edit(_)));
     crate::ocr::FAKE_LINES.with(|f| f.set(None));

@@ -953,8 +953,13 @@ impl Edit {
         }
         let plain_ctrl = mods.ctrl && !mods.alt && !mods.shift;
         if (plain_ctrl && vk == 'C' as u32) || enter {
-            if !self.copy_selected() && enter {
+            // Nothing selected: every word ("Copied all text"); Esc first
+            // and Ctrl+C copies the picture as always.
+            if !self.copy_selected() {
                 self.copy_all();
+                if self.notice.as_ref().is_some_and(|n| n.kind == ToastKind::Success) {
+                    self.notice = Some(Toast::new("Copied all text", ToastKind::Success));
+                }
             }
             return true;
         }

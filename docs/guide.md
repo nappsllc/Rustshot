@@ -76,7 +76,9 @@ transparency (`CF_DIBV5` and PNG on Windows; PNG elsewhere). The mode is
 remembered (`selection_mode = "freeform"`); press
 <kbd>Shift</kbd>+<kbd>F</kbd> again for rectangles. History keeps the lasso
 with the capture (`mask` in its `meta.json`), so the Edit window opens it
-the same way.
+the same way; its `original.png` is cut by the lasso too, so nothing
+outside it is kept (an older Rustshot shows it transparent as well). A
+lasso that cannot be read is not shown at all.
 
 **Crop** (<kbd>C</kbd>) shows a frame with handles inside the selection:
 drag its handles or move it (a drag outside it starts a new frame), then
@@ -279,31 +281,50 @@ pointer is an I-beam over them, and you select words as in a document:
 | Extend the selection | <kbd>Shift</kbd>+click |
 | A word / its line / everything | double-click / triple-click / <kbd>Ctrl</kbd>+<kbd>A</kbd> |
 | Copy the words selected (line breaks kept) | <kbd>Ctrl</kbd>+<kbd>C</kbd>, <kbd>Enter</kbd> or the **Copy** pill by them |
-| Copy everything | **Copy all** in the bar at the bottom of the area |
-| Leave Text mode | <kbd>Esc</kbd>, Copy text again, or a tool |
+| Copy everything | <kbd>Ctrl</kbd>+<kbd>C</kbd> with nothing selected (*Copied all text*), or **Copy all** in the bar |
+| Leave Text mode | <kbd>Esc</kbd>, Copy text again, or a tool (then <kbd>Ctrl</kbd>+<kbd>C</kbd> copies the picture) |
 
 The notice says *Copied text · 3 lines* (or *No text found*). Settings ›
 Capture › *Copy text* picks **Copy all at once** instead (the old
 behavior: the overlay closes and the text is copied;
 `copy_text_mode = "all"`). <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd>
-always copies everything straight from an area pick.
+always copies everything straight from an area pick. Text mode reads only
+what the capture keeps (inside a lasso, inside the Edit window's crop);
+text in columns is read column by column.
 
 A **long press** on Copy text opens its menu: *Select text*, *Copy all
 text*, *Redact sensitive text*, and the kinds Quick Redact looks for.
 
 **Quick Redact** (<kbd>Shift</kbd>+<kbd>R</kbd>, or the menu) recognizes
-the selection and blurs what looks sensitive: e-mail addresses, phone
-numbers (`+` and 7 to 15 digits, or grouped national numbers), card
-numbers (13 to 19 digits that pass the Luhn check), IBAN-like account
-numbers (mod 97), IPv4 addresses, URLs whose query names a token, key,
-secret or signature, and the value after labels such as `password:` or
-`api key:`. Each find becomes an ordinary Blur object over its words
-(2 px around them), all in one undo step, so you can delete or adjust any
-of them; the notice says *Redacted 3 items* or *Nothing sensitive found*.
+the selection and covers what looks sensitive: e-mail addresses (Unicode
+ones too), phone numbers (`+` and 7 to 15 digits, or grouped national
+numbers), card numbers (13 to 19 digits that pass the Luhn check),
+IBAN-like account numbers (mod 97), IPv4 addresses, URLs whose query names
+a token, key, secret, signature or session, webhook URLs (Slack, Discord,
+Telegram bots) and token-like path segments, JSON Web Tokens, `Bearer`
+tokens and `Authorization:` headers, `.env` lines whose key names a
+SECRET, TOKEN, KEY, PASS or PWD, the value after `api key:` / `token:`,
+and the whole rest of the line after `password:` or `passphrase:`.
+
+Each find becomes an ordinary object over its words (padded by 3 px or
+15 % of their height, whichever is more), all in one undo step, so you can
+delete or adjust any of them; the notice says *Redacted 3 items* or
+*Nothing sensitive found*. Settings › Capture › *Redact style*:
+
+- **Solid** (the default, `redact_style = "solid"`): an opaque fill in the
+  color around the words (the median of the box's edge), so it blends in.
+  Nothing can be read back from it, and older builds draw it too.
+- **Blur** (`"blur"`): a mosaic whose cells are twice the text's height
+  (each cell averages whole letters across the line), then a blur of one
+  cell on top. It looks softer, but only Solid is a guaranteed redaction.
+
 The menu's checkboxes (Emails, Phone numbers, Card numbers, IDs (IBAN),
 URLs, tokens & passwords, IP addresses) are remembered
 (`redact_kinds = "all"`, or e.g. `"emails,phones"`). In Text mode with
-words selected, Redact (the bar's *Redact selected*) blurs exactly those.
+words selected, Redact (the bar's *Redact selected*) covers exactly those.
+Copy, Save, Upload, Pin and Enter wait while Redact is still reading
+(*Redacting…*), so a capture never goes out without its covers; moving
+the selection meanwhile reads the new area again.
 
 Lines come top to bottom; small areas are read at twice their size.
 Nothing is bundled or downloaded, and the image never leaves your machine:

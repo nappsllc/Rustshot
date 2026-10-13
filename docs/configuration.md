@@ -93,6 +93,7 @@ launcher_after = "edit"           # "edit", "copy", "save" or "pin"
 # Copy text, Quick Redact, selection (remembered choices)
 copy_text_mode = "select"         # the Copy text button: "select" (pick words) or "all"
 redact_kinds = "all"              # or a list: "emails,phones,cards,ids,urls,ips"
+redact_style = "solid"            # Quick Redact: "solid" (opaque fill) or "blur" (mosaic + blur)
 selection_mode = "rect"           # the last selection mode: "rect" or "freeform"
 
 # History
