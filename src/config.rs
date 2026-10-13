@@ -204,6 +204,17 @@ pub struct Config {
     pub accept_on_select: String,
     /// The hint card when the overlay opens (Settings › General).
     pub overlay_hints: bool,
+    /// Settings › Capture "Trim margins automatically": every new region
+    /// or window selection is tightened to its content (`trim`).
+    pub trim_margins: bool,
+    /// Settings › Capture "HDR screenshots" (Windows): "tonemap" (an HDR
+    /// monitor is read in FP16 and tone-mapped to SDR) or "keep" (as the
+    /// system hands it over).
+    pub hdr_screenshots: String,
+    /// Settings › Capture "Add a border": its color (`#rrggbb`) and width
+    /// in logical px (0 = no border, 1-8), around every exported image.
+    pub border_color: String,
+    pub border_width: u32,
     /// Windows: the daemon reminds how to pick Rustshot for Win+Shift+S
     /// while it is offered but not chosen (false: "Don't show again").
     pub screenclip_hint: bool,
@@ -212,6 +223,9 @@ pub struct Config {
     /// one-time notice an older file with `show_tray = false` gets).
     pub tray_off_mode_seen: bool,
 }
+
+/// The widest export border (logical px).
+pub const BORDER_MAX: u32 = 8;
 
 /// The drawing tools whose size and color are remembered
 /// (`tool_<id>_size`, `tool_<id>_color`).
@@ -330,6 +344,10 @@ impl Default for Config {
             magnifier_square: false,
             accept_on_select: "off".into(),
             overlay_hints: true,
+            trim_margins: false,
+            hdr_screenshots: "tonemap".into(),
+            border_color: "#000000".into(),
+            border_width: 0,
             screenclip_hint: true,
             tray_off_mode_seen: false,
             history: true,
@@ -1092,6 +1110,17 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
                 cfg.accept_on_select = one_of(val, &["off", "copy", "save"]).map_err(|e| bad("value", &e))?
             }
             "overlay_hints" => cfg.overlay_hints = as_bool(val).map_err(|e| bad("boolean", &e))?,
+            "trim_margins" => cfg.trim_margins = as_bool(val).map_err(|e| bad("boolean", &e))?,
+            "hdr_screenshots" => cfg.hdr_screenshots = one_of(val, &["tonemap", "keep"]).map_err(|e| bad("value", &e))?,
+            "border_color" => {
+                let v = as_string(val).map_err(|e| bad("string", &e))?;
+                parse_color(&v).ok_or_else(|| bad("color (#rrggbb)", &v))?;
+                cfg.border_color = v.trim().to_string();
+            }
+            "border_width" => {
+                cfg.border_width =
+                    as_u64(val).ok().filter(|w| *w <= BORDER_MAX as u64).ok_or_else(|| bad("number (0-8)", val))? as u32
+            }
             "screenclip_hint" => cfg.screenclip_hint = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "tray_off_mode_seen" => cfg.tray_off_mode_seen = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "history" => cfg.history = as_bool(val).map_err(|e| bad("boolean", &e))?,
@@ -1376,6 +1405,13 @@ pub fn to_toml(c: &Config) -> String {
     ));
     out.push_str(&format!("screenclip_hint = {}\n", c.screenclip_hint));
     out.push_str(&format!("tray_off_mode_seen = {}\n", c.tray_off_mode_seen));
+    out.push_str(&format!(
+        "trim_margins = {}\nhdr_screenshots = {}\nborder_color = {}\nborder_width = {}\n",
+        c.trim_margins,
+        q(&c.hdr_screenshots),
+        q(&c.border_color),
+        c.border_width
+    ));
     out.push_str(&format!(
         "launcher_source = {}\nlauncher_delay = {}\nlauncher_after = {}\n",
         q(&c.launcher_source),
@@ -1991,6 +2027,24 @@ bogus = 1
         assert!(!rewrite_loses(&text));
         assert!(!rewrite_loses("accept_on_select = \"copy\"\nmagnifier_square = true\n"), "hand-written keys survive");
         assert!(parse_config("accept_on_select = \"maybe\"").is_err());
+    }
+
+    /// Trim margins, HDR screenshots and the export border: defaults,
+    /// round trip, and values out of range refused.
+    #[test]
+    fn capture_extras_roundtrip() {
+        let d = Config::default();
+        assert!(!d.trim_margins && d.hdr_screenshots == "tonemap" && d.border_width == 0 && d.border_color == "#000000");
+        let c = Config { trim_margins: true, hdr_screenshots: "keep".into(), border_color: "#ff8800".into(), border_width: 3, ..Config::default() };
+        let text = to_toml(&c);
+        assert!(text.contains("trim_margins = true\n") && text.contains("hdr_screenshots = \"keep\"\n"), "{text}");
+        assert!(text.contains("border_color = \"#ff8800\"\n") && text.contains("border_width = 3\n"), "{text}");
+        assert_eq!(parse_config(&text).unwrap(), c);
+        assert!(!rewrite_loses(&text));
+        for bad in ["border_width = 9", "border_width = -1", "border_color = \"red\"", "hdr_screenshots = \"hdr\""] {
+            assert!(parse_config(bad).is_err(), "{bad}");
+        }
+        assert_eq!(parse_config("border_width = 8").unwrap().border_width, 8);
     }
 
     /// The Win+Shift+S guide's "Don't show again": on by default, kept.

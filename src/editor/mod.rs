@@ -34,6 +34,7 @@ mod mini;
 mod select;
 mod input;
 mod assist;
+mod trim_sel;
 pub use assist::AcceptOn;
 // The editor in a normal window: the Edit window's canvas.
 pub mod host;
@@ -371,6 +372,11 @@ pub fn run(
     publish_ui_size(cfg.ui_scale);
     if cfg.snap_windows && !cfg!(test) {
         crate::snap::warm_up();
+    }
+    // DXGI's first load (~40 ms) off the first capture's path.
+    #[cfg(windows)]
+    if !cfg!(test) {
+        crate::hdr::win::warm_up();
     }
     // A forced daemon is relaunched forced by an update.
     if kind == RunKind::Daemon && bg == Background::Forced {
@@ -1575,9 +1581,16 @@ impl App {
                 scale: edit.shot.scale,
             })
         });
+        // Settings › Capture "Add a border": around what is exported
+        // (the history keeps the capture without it); the exported
+        // image's top-left moves out by it (a pin stays in place).
+        // Copy text (OCR) reads the capture alone.
+        let framed = tasks.iter().any(|t| !matches!(t, Task::Text | Task::Geometry));
+        let b = export::border(&edit.cfg, edit.shot.scale).filter(|_| framed).map_or(0, |(b, _)| b as i32);
+        let img = if framed { export::with_border(img, &edit.cfg, edit.shot.scale) } else { img };
         self.st = State::Finish(Box::new(FinishJob {
             img,
-            sel_global: g,
+            sel_global: (g.0 - b, g.1 - b),
             tasks,
             cfg: edit.cfg.clone(),
             hist,
@@ -1934,6 +1947,9 @@ impl Driver for App {
             return Cursor::IBeam;
         }
         let p = Pt::new(self.mouse.0 as f32, self.mouse.1 as f32);
+        if edit.on_label(p) && matches!(edit.interact, Interact::None) {
+            return Cursor::Arrow;
+        }
         if edit.in_cedit(p) {
             return Cursor::IBeam;
         }
@@ -1989,6 +2005,8 @@ fn grab(cfg: &Config, th: &Theme, screen: Option<u32>) -> anyhow::Result<(Shot, 
 
 #[cfg_attr(test, allow(dead_code))]
 fn grab_screen(cfg: &Config, th: &Theme, screen: Option<u32>) -> anyhow::Result<(Shot, Option<gdi::GdiScreen>)> {
+    // Settings › Capture "HDR screenshots" (recordings follow it too).
+    crate::hdr::configure(cfg);
     #[cfg(windows)]
     if cfg.use_gdi() {
         let shot = capture::plan_edit(screen, cfg.capture_active_monitor)?;
@@ -2061,9 +2079,10 @@ fn video_key(edit: &Edit, vk: u32, mods: Mods) -> Option<Act> {
 /// Esc: close a device list or the ring's palette, drop the current
 /// tool / draft / palette, or cancel the capture (video mode's Close).
 fn cancel_key(edit: &mut Edit) {
-    if edit.save_menu || edit.slot_menu {
+    if edit.save_menu || edit.slot_menu || edit.size_menu {
         edit.save_menu = false;
         edit.slot_menu = false;
+        edit.size_menu = false;
         return;
     }
     if edit.obj.cedit.is_some() {
@@ -2157,6 +2176,7 @@ fn act_of(a: Action) -> Option<Act> {
         Action::OpenWith => Act::OpenWith,
         Action::Upload => Act::Upload,
         Action::Pin => Act::Pin,
+        Action::Trim => Act::Trim,
         Action::Undo => Act::Undo,
         Action::Redo => Act::Redo,
         Action::TogglePalette => Act::Palette,
@@ -2703,6 +2723,10 @@ struct Edit {
     objects: Vec<Obj>,
     hist: Vec<Vec<Obj>>,
     hi: usize,
+    /// The selection change of each undo step that made one (Trim to
+    /// content): before and after; `None` (or past the end) for the
+    /// others.
+    sel_hist: Vec<Option<(Option<FRect>, FRect)>>,
     sel: Option<FRect>,
     tool: Option<Tool>,
     draft: Option<Obj>,
@@ -2734,6 +2758,10 @@ struct Edit {
     /// The Blur / Invert button's menu is open; the button held since
     /// (a long press opens it, a click picks Blur).
     slot_menu: bool,
+    /// The selection's size label menu is open (Trim to content).
+    size_menu: bool,
+    /// Where the size label was drawn last (a press there opens its menu).
+    label_at: Option<FRect>,
     slot_hold: Option<Instant>,
     rec: RecPop,
     done: bool,
@@ -2804,6 +2832,7 @@ impl Edit {
             objects: Vec::new(),
             hist: vec![Vec::new()],
             hi: 0,
+            sel_hist: Vec::new(),
             sel: None,
             tool: None,
             draft: None,
@@ -2824,6 +2853,8 @@ impl Edit {
             palette_open: false,
             save_menu: false,
             slot_menu: false,
+            size_menu: false,
+            label_at: None,
             slot_hold: None,
             rec,
             done: false,
@@ -2972,17 +3003,23 @@ impl Edit {
     fn push_history(&mut self) {
         self.hist.truncate(self.hi + 1);
         self.hist.push(self.objects.clone());
+        self.sel_hist.resize(self.hi + 1, None);
+        self.sel_hist.push(None);
         self.hi = self.hist.len() - 1;
         let limit = self.cfg.undo_limit.max(1);
         if self.hist.len() > limit {
             let excess = self.hist.len() - limit;
             self.hist.drain(0..excess);
+            self.sel_hist.drain(0..excess.min(self.sel_hist.len()));
             self.hi -= excess;
         }
     }
 
     fn undo(&mut self) {
         if self.hi > 0 {
+            if let Some(Some((before, _))) = self.sel_hist.get(self.hi) {
+                self.sel = *before;
+            }
             self.hi -= 1;
             self.objects = self.hist[self.hi].clone();
             self.dirty = true;
@@ -2992,6 +3029,9 @@ impl Edit {
     fn redo(&mut self) {
         if self.hi + 1 < self.hist.len() {
             self.hi += 1;
+            if let Some(Some((_, after))) = self.sel_hist.get(self.hi) {
+                self.sel = Some(*after);
+            }
             self.objects = self.hist[self.hi].clone();
             self.dirty = true;
         }
@@ -3435,6 +3475,11 @@ fn end_interaction(edit: &mut Edit) {
                 // source was (Window, Screen).
                 edit.rec.source = rec_ui::RecSource::Region;
             }
+            // Settings › Capture "Trim margins automatically": a new
+            // region or window, not the whole screen of a plain click.
+            if window && edit.cfg.trim_margins && edit.host.is_none() && !edit.rec.open {
+                edit.trim_selection(false);
+            }
             if edit.accept_on_select {
                 edit.done = true;
                 edit.cancelled = false;
@@ -3819,6 +3864,8 @@ mod ocr_tests;
 mod pin_tests;
 #[cfg(test)]
 mod history_tests;
+#[cfg(test)]
+mod trim_tests;
 
 #[cfg(test)]
 mod tests {
