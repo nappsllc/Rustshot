@@ -142,6 +142,13 @@ impl B {
         self.op(Kind::TransposeConv { stride: [s, s], pad: [pt, pl] }, act, vec![x, w, b], vec![1, oh, ow, oc])
     }
 
+    /// Zeros around (rows above, below, columns left, right), then a
+    /// VALID convolution: what TensorFlow exports for an asymmetric SAME.
+    pub fn pad(&mut self, x: u16, pad: [u32; 4]) -> u16 {
+        let d = self.dims(x);
+        self.op(Kind::Pad { pad }, Act::None, vec![x], vec![1, d[1] + pad[0] + pad[1], d[2] + pad[2] + pad[3], d[3]])
+    }
+
     pub fn concat(&mut self, parts: &[u16]) -> u16 {
         let d = self.dims(parts[0]);
         let c: u32 = parts.iter().map(|&p| self.dims(p)[3]).sum();
@@ -318,6 +325,16 @@ pub(crate) fn reference(m: &Model, input: &[f32]) -> Vec<f32> {
                     }
                 }
             }
+            Kind::Pad { pad } => {
+                let x = get(0);
+                for y in 0..xd[1] {
+                    for xx in 0..xd[2] {
+                        for c in 0..xd[3] {
+                            out[at(od, y + pad[0] as usize, xx + pad[2] as usize, c)] = act(op.act, x[at(xd, y, xx, c)]);
+                        }
+                    }
+                }
+            }
             Kind::Sigmoid | Kind::Relu | Kind::Relu6 | Kind::HardSwish | Kind::Reshape => {
                 let x = get(0);
                 for k in 0..n {
@@ -401,6 +418,14 @@ fn every_operator_matches_the_reference() {
         ("conv 3x3 s1 valid", (9, 11), Box::new(|b, x| b.conv_full(x, 5, (3, 3), (1, 1), (1, 1), false, true, Act::None))),
         ("conv 5x3 dilated", (12, 14), Box::new(|b, x| b.conv_full(x, 8, (5, 3), (1, 2), (2, 1), true, false, Act::Relu))),
         ("conv tanh", (6, 7), Box::new(|b, x| b.conv(x, 6, 3, 1, Act::Tanh))),
+        (
+            "pad then a valid stride-2 conv",
+            (10, 13),
+            Box::new(|b, x| {
+                let p = b.pad(x, [0, 1, 1, 2]);
+                b.conv_full(p, 7, (3, 3), (2, 2), (1, 1), false, true, Act::Relu)
+            }),
+        ),
         (
             "pointwise 4x8 blocks and tails",
             (7, 9),
@@ -556,12 +581,27 @@ fn bad_models_are_refused() {
         assert!(Model::parse(&bytes[..n]).is_err(), "truncated at {n}");
     }
     let mut b = B::new(9);
-    for _ in 0..300 {
+    for _ in 0..3000 {
         let mut c = bytes.clone();
         let i = ((b.rnd() * 0.5 + 0.5) * c.len() as f32) as usize % c.len();
         c[i] ^= 1 << (((b.rnd() * 0.5 + 0.5) * 8.0) as u32 % 8);
-        if let Ok(m) = Model::parse(&c) {
-            let _ = Net::from_model(m);
+        // What loads runs within its checked shapes.
+        if let Ok(m) = Model::parse(&c)
+            && let Ok(mut n) = Net::with_helpers(m, 1)
+        {
+            n.run();
+        }
+    }
+    // The same for a graph with every kind of operator in it.
+    let mobile = mobile_model(18, 32, 2, 4).to_bytes();
+    for _ in 0..600 {
+        let mut c = mobile.clone();
+        let i = ((b.rnd() * 0.5 + 0.5) * c.len() as f32) as usize % c.len();
+        c[i] ^= 1 << (((b.rnd() * 0.5 + 0.5) * 8.0) as u32 % 8);
+        if let Ok(m) = Model::parse(&c)
+            && let Ok(mut n) = Net::with_helpers(m, 1)
+        {
+            n.run();
         }
     }
     let with = |f: &dyn Fn(&mut Model)| {
@@ -699,4 +739,22 @@ fn seg_bench() {
     for (k, ms, n) in tot {
         println!("BENCH   {k:<14} x{n:<3} {ms:.3} ms");
     }
+}
+
+/// The model this build embeds (`selfie_model`): it loads, takes a
+/// 144x256 picture (the landscape model) and gives a probability per
+/// pixel. `cargo test --features selfie_model embedded_model`
+#[cfg(feature = "selfie_model")]
+#[test]
+fn embedded_model_loads_and_runs() {
+    let bytes = EMBEDDED.expect("the feature embeds the model");
+    assert!(bytes.len() < 300 * 1024, "{} bytes (the binary may grow less than 300 KB)", bytes.len());
+    let mut net = Net::selfie(bytes).expect("assets/selfie.bin loads");
+    assert_eq!(net.input_size(), (256, 144));
+    let f = CamFrame { w: 1280, h: 720, bgra: (0..1280 * 720 * 4).map(|i| (i * 31 % 251) as u8).collect() };
+    let mut inp = SegInput::default();
+    inp.prepare(&f, 256, 144);
+    let mut sq = SqMask::default();
+    assert!(net.segment(&inp, &mut sq));
+    assert!(sq.n > 0 && sq.v.iter().all(|v| (0.0..=1.0).contains(v)));
 }

@@ -92,6 +92,10 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 /// the team costs more).
 const PAR_WORK: usize = 250_000;
 
+/// The most activation values a model may have (all its tensors; the
+/// selfie model at 144x256 has about 3 million).
+const MAX_ACTIVATIONS: usize = 24 << 20;
+
 /// One part's work: its output rows, those rows of the output, scratch.
 type RowFn<'a> = dyn Fn((usize, usize), &mut [f32], &mut Vec<f32>) + Sync + 'a;
 
@@ -265,10 +269,17 @@ impl Net {
                         return Err(e("sizes"));
                     }
                 }
+                Kind::Pad { pad } => {
+                    need(1)?;
+                    let x = sh(0);
+                    if od[1] != x[1] + pad[0] as usize + pad[1] as usize || od[2] != x[2] + pad[2] as usize + pad[3] as usize || od[3] != x[3] {
+                        return Err(e("output size"));
+                    }
+                }
             }
             ready[out] = true;
-            // A reshape's shape input (a constant) is not read.
-            let inputs = if op.kind == Kind::Reshape { ins[..1].to_vec() } else { ins };
+            // A reshape's or pad's shape input (a constant) is not read.
+            let inputs = if matches!(op.kind, Kind::Reshape | Kind::Pad { .. }) { ins[..1].to_vec() } else { ins };
             steps.push(Step { kind: op.kind, act: op.act, inputs, output: out, prep, hswish: false });
         }
         if !ready[output] || output == input {
@@ -305,6 +316,11 @@ impl Net {
         written[input] = true;
         for s in &steps {
             written[s.output] = true;
+        }
+        // (A damaged file must not ask for gigabytes.)
+        let total: usize = shapes.iter().zip(&written).filter(|(_, w)| **w).map(|(s, _)| s.iter().product::<usize>()).sum();
+        if total > MAX_ACTIVATIONS {
+            return Err(bad(format!("{total} activation values (at most {MAX_ACTIVATIONS})")));
         }
         let bufs = shapes.iter().zip(&written).map(|(s, &w)| if w { vec![0.0; s.iter().product()] } else { Vec::new() }).collect();
         let team = Team::new(helpers);
@@ -483,6 +499,10 @@ impl Net {
                     }
                     ops::activate(st.act, o);
                 });
+            }
+            (Kind::Pad { pad }, _) => {
+                ops::pad(get(0), xd, (pad[0] as usize, pad[2] as usize), out, od);
+                ops::activate(st.act, out);
             }
             (Kind::Concat, _) => {
                 let parts: Vec<(&[f32], usize)> = (0..st.inputs.len()).map(|k| (get(k), self.shapes[st.inputs[k]][3])).collect();

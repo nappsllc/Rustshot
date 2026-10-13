@@ -74,6 +74,9 @@ pub enum Kind {
     Concat,
     /// The same values under another shape.
     Reshape,
+    /// Zeros around the picture: rows above and below, columns left and
+    /// right (channels are not padded).
+    Pad { pad: [u32; 4] },
 }
 
 impl Kind {
@@ -93,6 +96,7 @@ impl Kind {
             Kind::HardSwish => 12,
             Kind::Concat => 13,
             Kind::Reshape => 14,
+            Kind::Pad { .. } => 15,
         }
     }
 
@@ -104,6 +108,7 @@ impl Kind {
             Kind::AvgPool { stride, pad, size } => v(&[stride[0], stride[1], pad[0], pad[1], size[0], size[1]]),
             Kind::Resize { align, half } => vec![align as i32, half as i32],
             Kind::TransposeConv { stride, pad } => v(&[stride[0], stride[1], pad[0], pad[1]]),
+            Kind::Pad { pad } => v(&pad),
             _ => Vec::new(),
         }
     }
@@ -126,6 +131,7 @@ impl Kind {
             12 => Kind::HardSwish,
             13 => Kind::Concat,
             14 => Kind::Reshape,
+            15 => Kind::Pad { pad: [u(0)?, u(1)?, u(2)?, u(3)?] },
             _ => return None,
         })
     }

@@ -795,3 +795,11 @@ pub fn concat(parts: &[(&[f32], usize)], pixels: usize, out: &mut [f32]) {
         }
     }
 }
+
+/// `x` placed at (`top`, `left`) in a zero `od` picture.
+pub fn pad(x: &[f32], (ih, iw, c): Dim, (top, left): (usize, usize), out: &mut [f32], (oh, ow, _): Dim) {
+    out[..oh * ow * c].fill(0.0);
+    for y in 0..ih {
+        out[((y + top) * ow + left) * c..][..iw * c].copy_from_slice(&x[y * iw * c..][..iw * c]);
+    }
+}
