@@ -1,14 +1,18 @@
-//! The Settings window (the Settings board, 680 × 520): a rail with
-//! **General** (theme, accent, start at login, tray icon, copy after
-//! capture, shutter sound, where and how captures are saved),
-//! **Capture** (daily subfolders, the file-name pattern editor, Save As,
-//! format and JPEG quality, the overlay's UI size, snapping and renderer,
-//! "Reset tool sizes & colors"), **Recording** (the Record popover's
-//! defaults: [`recording`]), **Key bindings** (the global hotkeys and the
-//! overlay keymap), **Upload** (Imgur) and **About**, with a footer of
-//! **OK** / **Cancel** / **Apply** (the board leaves it out; the window
-//! keeps its explicit save). Drawn in [`draw`]. Opened from the tray
-//! ("Settings…") and by `rustshot settings` ([`show`], [`run_here`]).
+//! The Settings window (the Settings board, 680 × 520): a rail of short
+//! sections, each fitting the body without scrolling ([`SECTIONS`]):
+//! **General** (theme, accent, launch at login, tray icon, update
+//! checks), **Capture** (Win+Shift+S, snapping, Accept on select, what
+//! happens after a capture), **Overlay** (magnifier, hints, UI size,
+//! renderer, "Reset tool sizes & colors"), **Saving** (folder, Save As,
+//! format and JPEG quality), **File names** (daily subfolders and the
+//! file-name pattern editor), **History**, **Recording** and **Camera**
+//! (the Record popover's defaults: [`recording`]), **Upload** (Imgur),
+//! then under *Shortcuts* **Global**, **Recording** (the record hotkey and
+//! the while-recording keys), **Overlay tools**, **Overlay actions**, and
+//! **About**, with a footer of **OK** / **Cancel** / **Apply** (the board
+//! leaves it out; the window keeps its explicit save). Drawn in [`draw`].
+//! Opened from the tray ("Settings…") and by `rustshot settings`
+//! ([`show`], [`run_here`]).
 //!
 //! The form ([`Form`]) is a plain copy of the settings it edits; saving
 //! writes only the values the user changed onto the file as it is on disk
@@ -51,22 +55,72 @@ pub const H: u32 = 520;
 pub(crate) mod draw;
 mod recording;
 
-/// The rail's sections (icon, name); About sits at the bottom.
-pub const SECTIONS: [(&str, &str); 6] = [
+/// The rail's sections (icon, name); About sits at the bottom. Each one
+/// fits the body without scrolling (`every_section_fits`).
+pub const SECTIONS: [(&str, &str); 14] = [
     ("set-sliders", "General"),
     ("set-camera", "Capture"),
+    ("region", "Overlay"),
+    ("set-folder", "Saving"),
+    ("text", "File names"),
+    ("history", "History"),
     ("video", "Recording"),
-    ("set-keyboard", "Key bindings"),
+    ("round", "Camera"),
     ("cloud", "Upload"),
+    ("set-keyboard", "Global"),
+    ("film", "Recording"),
+    ("pencil", "Overlay tools"),
+    ("copy", "Overlay actions"),
     ("info", "About"),
+];
+/// The header's title of each section: the rail's name, with its group
+/// for the shortcut sections.
+pub const TITLES: [&str; SECTIONS.len()] = [
+    "General",
+    "Capture",
+    "Overlay",
+    "Saving",
+    "File names",
+    "History",
+    "Recording",
+    "Camera",
+    "Upload",
+    "Shortcuts \u{b7} Global",
+    "Shortcuts \u{b7} Recording",
+    "Shortcuts \u{b7} Overlay tools",
+    "Shortcuts \u{b7} Overlay actions",
+    "About",
 ];
 /// Section indices.
 pub const GENERAL: usize = 0;
 pub const CAPTURE: usize = 1;
-pub const RECORDING: usize = 2;
-pub const KEYS: usize = 3;
-pub const UPLOAD: usize = 4;
-pub const ABOUT: usize = 5;
+pub const OVERLAY: usize = 2;
+pub const SAVING: usize = 3;
+pub const FILE_NAMES: usize = 4;
+pub const HISTORY: usize = 5;
+pub const RECORDING: usize = 6;
+pub const CAMERA: usize = 7;
+pub const UPLOAD: usize = 8;
+/// The shortcut sections: the global hotkeys, the record hotkey and the
+/// while-recording keys, the overlay's tool keys, its action keys.
+pub const KEYS_GLOBAL: usize = 9;
+pub const KEYS_RECORDING: usize = 10;
+pub const KEYS_TOOLS: usize = 11;
+pub const KEYS_ACTIONS: usize = 12;
+pub const ABOUT: usize = 13;
+/// The rail's group labels: (first section, label).
+pub const RAIL_GROUPS: [(usize, &str); 1] = [(KEYS_GLOBAL, "Shortcuts")];
+
+/// One of the shortcut sections (key rows, Reset to defaults).
+pub fn is_keys(section: usize) -> bool {
+    (KEYS_GLOBAL..=KEYS_ACTIONS).contains(&section)
+}
+
+/// The section that lists global hotkey `slot` (see [`GLOBALS`]): the
+/// record hotkey is with the while-recording keys.
+pub fn section_of_slot(slot: usize) -> usize {
+    if slot == 2 { KEYS_RECORDING } else { KEYS_GLOBAL }
+}
 
 /// (label, config value)
 const THEMES: [(&str, &str); 3] = [("System", "auto"), ("Dark", "dark"), ("Light", "light")];
@@ -703,8 +757,8 @@ pub struct Settings {
     pub form: Form,
     /// The rail's section ([`SECTIONS`] index).
     pub section: usize,
-    /// Each section's scroll offset and content height (logical px).
-    scroll: [f32; SECTIONS.len()],
+    /// Each section's content height as last drawn (logical px; it fits
+    /// the body, nothing scrolls).
     content_h: [f32; SECTIONS.len()],
     modal: Option<Modal>,
     /// The rewrite question was answered (or the file is ours now).
@@ -745,7 +799,6 @@ impl Settings {
             screenclip: None,
             screenclip_wait: false,
             section: GENERAL,
-            scroll: [0.0; SECTIONS.len()],
             content_h: [0.0; SECTIONS.len()],
             modal: None,
             confirmed: false,
@@ -1160,7 +1213,7 @@ pub fn tell_daemon_reload() {
 }
 
 /// Open the window at `section` (History's "History settings" link goes
-/// to Capture), or bring the open one there.
+/// to [`HISTORY`]), or bring the open one there.
 pub fn show_at(section: usize) {
     #[cfg(not(target_os = "macos"))]
     {

@@ -203,6 +203,12 @@ impl FocusState {
         self.rects.get(&id_of(id)).copied()
     }
 
+    /// Tests: where every focusable control was last drawn (physical px).
+    #[cfg(test)]
+    pub fn all_rects(&self) -> Vec<FRect> {
+        self.rects.values().copied().collect()
+    }
+
     /// Whether `id` is recording a shortcut.
     #[cfg(test)]
     pub fn is_recording(&self, id: &str) -> bool {
@@ -492,11 +498,6 @@ impl<'a> Ui<'a> {
             }
         }
         out
-    }
-
-    /// Ask for another frame (something changed after drawing).
-    pub fn request_redraw(&mut self) {
-        self.redraw = true;
     }
 
     /// Logical → physical px.

@@ -174,14 +174,14 @@ pub struct Config {
     /// (`action id -> "Ctrl+Shift+S"`; see `keymap`).
     pub shortcuts: BTreeMap<String, String>,
     /// The overlay's pixel magnifier and crosshair while a region is
-    /// being picked (Settings › Capture "Show magnifier").
+    /// being picked (Settings › Overlay "Show magnifier").
     pub magnifier: bool,
     /// The magnifier is square (default: round).
     pub magnifier_square: bool,
     /// Releasing the mouse on a new region runs this at once and closes:
     /// "off", "copy" or "save" (Shift while releasing skips it).
     pub accept_on_select: String,
-    /// The hint card when the overlay opens (Settings › General).
+    /// The hint card when the overlay opens (Settings › Overlay).
     pub overlay_hints: bool,
 }
 

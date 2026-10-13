@@ -1,8 +1,9 @@
-//! Settings → **Recording**: the defaults video mode's panel starts from
-//! (format, frame rate, MP4 quality, a GIF's max length, system sound and
-//! microphone with its device, the camera bubble's device, shape, size,
-//! mirror and ring), the 3-2-1 countdown and, on Linux, the MP4 encoder with a line saying what
-//! is installed (the record hotkey is in Key bindings).
+//! Settings → **Recording** and **Camera**: the defaults video mode's
+//! panel starts from (Recording: format, frame rate, MP4 quality, a GIF's
+//! max length, the 3-2-1 countdown, on Linux the MP4 encoder with a line
+//! saying what is installed, then system sound and the microphone with its
+//! device; Camera: the bubble's device, shape, size, mirror and ring). The
+//! record hotkey is in Shortcuts › Recording.
 //!
 //! [`RecForm`] is the part of the settings form this tab edits (every
 //! `rec_*` key and `record_hotkey`); [`Lists`] holds the microphones and
@@ -330,7 +331,7 @@ fn labels<T: Copy, const N: usize>(list: &[(&'static str, T); N]) -> [&'static s
 /// Device dropdowns' width (logical px).
 const DEVICE_W: f32 = 210.0;
 
-/// The Recording section (the board's rows).
+/// The Recording section (the board's rows): the video, then the sound.
 pub fn section(ui: &mut Ui, s: &mut super::Settings, tok: &Tok) {
     s.rec_lists.start();
     let lists = &s.rec_lists;
@@ -339,11 +340,8 @@ pub fn section(ui: &mut Ui, s: &mut super::Settings, tok: &Tok) {
     let status = found.map(|f| encoder_status(s.form.rec.encoder, f.ffmpeg.as_deref(), f.openh264));
     let f = &mut s.form.rec;
     let mics = device_items(DEFAULT_MIC, found.map(|f| f.mics.as_slice()), &f.mic_dev);
-    let cams = device_items(DEFAULT_CAM, found.map(|f| f.cams.as_slice()), &f.cam_dev);
-    let no_cams = found.is_some_and(|f| f.cams.is_empty());
     let on = ui.enabled;
     let gif = f.gif();
-    ui.sec("Video", tok);
     srow(ui, tok, "Format", None, |ui| {
         ui.seg("rec_format", &labels(&FORMATS), &mut f.format, tok);
     });
@@ -384,7 +382,16 @@ pub fn section(ui: &mut Ui, s: &mut super::Settings, tok: &Tok) {
         device_dropdown(ui, "rec_mic_device", DEVICE_W, mics, &mut f.mic_dev);
     });
     ui.enabled = on;
+}
 
+/// The Camera section: the bubble a recording shows.
+pub fn camera(ui: &mut Ui, s: &mut super::Settings, tok: &Tok) {
+    s.rec_lists.start();
+    let found = s.rec_lists.found.as_ref();
+    let f = &mut s.form.rec;
+    let cams = device_items(DEFAULT_CAM, found.map(|f| f.cams.as_slice()), &f.cam_dev);
+    let no_cams = found.is_some_and(|f| f.cams.is_empty());
+    let on = ui.enabled;
     ui.sec("Camera bubble", tok);
     ui.enabled = on && !no_cams;
     srow(ui, tok, "Camera", no_cams.then_some("No camera found"), |ui| {
