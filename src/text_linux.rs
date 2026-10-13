@@ -61,9 +61,9 @@ pub const EM_RATIO: f32 = 2384.0 / 2048.0;
 /// The font dropdown's name for `f`.
 pub fn family_label(f: Family) -> &'static str {
     match f {
-        Family::Sans => "Sans",
-        Family::Serif => "Serif",
-        Family::Mono => "Mono",
+        Family::Sans => tr!("font.sans"),
+        Family::Serif => tr!("font.serif"),
+        Family::Mono => tr!("font.mono"),
     }
 }
 

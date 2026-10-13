@@ -831,9 +831,9 @@ fn button(f: &mut Fb, ui: &Ui, it: &Item, act: Act, (hovered, pressed): (bool, b
         }
         Act::Accept => {
             let (icon, gap) = (ui.px(20.0), ui.px(6.0));
-            let x0 = cx - (icon + gap + tw(ui, 12.0, "OK")) / 2.0;
+            let x0 = cx - (icon + gap + tw(ui, 12.0, tr!("common.ok"))) / 2.0;
             draw_icon(f, "check", x0, cy - icon / 2.0, icon, fg);
-            text(f, ui, 12.0, "OK", x0 + icon + gap, cy, fg);
+            text(f, ui, 12.0, tr!("common.ok"), x0 + icon + gap, cy, fg);
         }
         _ => {
             let icon = ui.px(if pressed { 19.2 } else { 20.0 });

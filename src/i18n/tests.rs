@@ -96,6 +96,199 @@ fn catalogs_agree_with_english() {
     }
 }
 
+/// The code with the test modules cut off (`#[cfg(test)] mod ...` to the
+/// end of the file, as the crate writes them).
+fn non_test(src: &str) -> String {
+    let mut out = String::new();
+    let mut lines = src.lines().peekable();
+    while let Some(l) = lines.next() {
+        if l.trim() == "#[cfg(test)]" {
+            // Past further attributes: a module is cut to its end (the
+            // file's end: the crate puts test modules last).
+            let mut look = lines.clone();
+            while look.peek().is_some_and(|n| n.trim_start().starts_with("#[")) {
+                look.next();
+            }
+            if look.peek().is_some_and(|n| {
+                let t = n.trim_start();
+                t.starts_with("mod ") || t.starts_with("pub mod ") || t.starts_with("pub(crate) mod ")
+            }) {
+                break;
+            }
+        }
+        out.push_str(l);
+        out.push('\n');
+    }
+    out
+}
+
+/// Words that are the same in every language: product, format and
+/// codec names, key caps.
+const SAME_EVERYWHERE: &[&str] = &[
+    "Rustshot", "PNG", "JPG", "BMP", "MP4", "GIF", "GDI", "ffmpeg", "OpenH264", "Imgur", "Ctrl", "Alt", "Shift", "Win", "Cmd", "Super", "Tab", "Enter",
+    "Esc", "Space", "Segoe UI", "Georgia", "Consolas", "Helvetica", "Times", "Menlo", "Aa", "Auto", "px", "powernapps.net",
+];
+
+/// UI text passed straight to a drawing, control or notice call is a
+/// `tr!`, never a literal: every UI code path is scanned for literals in
+/// those shapes (`text(ui, 12.0, "…"`, `.cbutton("id", "…"`, `Toast::new("…"`,
+/// `label: "…"`, `=> "…"` arms of `label`/`tip` functions ...).
+#[test]
+fn no_untranslated_ui_literals() {
+    // (what comes before, arguments to skip): the literal follows.
+    const SHAPES: &[(&str, usize)] = &[
+        ("text(ui, ", 1),
+        ("text(f, ui, ", 1),
+        (".text_at(", 1),
+        ("text_w(", 1),
+        ("tw(ui, ", 1),
+        ("tw(&ui, ", 1),
+        ("draw_text(", 2),
+        ("Toast::new(", 0),
+        ("Note::plain(", 0),
+        ("Note::new(", 0),
+        ("notify(", 0),
+        ("say(", 0),
+        (".cbutton(", 1),
+        (".cbutton_ex(", 1),
+        (".clink(", 1),
+        (".clink_in(", 1),
+        (".checkbox(", 1),
+        (".button(", 1),
+        ("button(ui, ", 1),
+        ("srow(ui, tok, ", 0),
+        ("srow_ex(ui, tok, ", 0),
+        (".sec(", 0),
+        (".label(", 0),
+        (".note(", 0),
+        (".heading(", 0),
+        (".paragraph(", 0),
+        (".cbutton_width(", 0),
+        (".button_width(", 0),
+        ("Kind::Label(", 0),
+        ("label: ", 0),
+        ("tip: ", 0),
+        ("title: ", 0),
+        ("caption: ", 0),
+        ("group(ui, ", 0),
+    ];
+    // The string literal at the start of `s` (after spaces), if any.
+    fn literal(s: &str) -> Option<&str> {
+        let s = s.trim_start();
+        let body = s.strip_prefix('"')?;
+        let mut esc = false;
+        for (i, c) in body.char_indices() {
+            match c {
+                '\\' if !esc => esc = true,
+                '"' if !esc => return Some(&body[..i]),
+                _ => esc = false,
+            }
+        }
+        None
+    }
+    // `s` after `n` top-level commas (quotes and brackets respected).
+    fn skip_args(s: &str, n: usize) -> Option<&str> {
+        let (mut depth, mut quote, mut esc, mut left) = (0i32, false, false, n);
+        if n == 0 {
+            return Some(s);
+        }
+        for (i, c) in s.char_indices() {
+            match c {
+                '\\' if quote && !esc => {
+                    esc = true;
+                    continue;
+                }
+                '"' if !esc => quote = !quote,
+                '(' | '[' | '{' if !quote => depth += 1,
+                ')' | ']' | '}' if !quote => {
+                    depth -= 1;
+                    if depth < 0 {
+                        return None;
+                    }
+                }
+                ',' if !quote && depth == 0 => {
+                    left -= 1;
+                    if left == 0 {
+                        return Some(&s[i + 1..]);
+                    }
+                }
+                _ => {}
+            }
+            esc = false;
+        }
+        None
+    }
+    let words = |s: &str| {
+        let mut run = 0;
+        s.chars().any(|c| {
+            run = if c.is_ascii_alphabetic() { run + 1 } else { 0 };
+            run >= 2
+        })
+    };
+    let label_fns = ["fn label(", "fn fixed_label(", "fn tip(", "fn title("];
+    let mut bad = Vec::new();
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut stack = vec![root.clone()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            let p = e.path();
+            let name = p.file_name().unwrap().to_string_lossy().into_owned();
+            if p.is_dir() {
+                if name != "tests" {
+                    stack.push(p);
+                }
+                continue;
+            }
+            if !name.ends_with(".rs") || name.contains("test") {
+                continue;
+            }
+            let src = std::fs::read_to_string(&p).unwrap();
+            let mut in_label_fn = false;
+            let code = non_test(&src);
+            for (i, line) in code.lines().enumerate() {
+                let t = line.trim_start();
+                if t.starts_with("//") {
+                    continue;
+                }
+                if t.contains("fn ") && (t.starts_with("fn ") || t.starts_with("pub") || t.starts_with("const fn ")) {
+                    in_label_fn = label_fns.iter().any(|f| t.contains(f));
+                }
+                let mut found: Vec<&str> = Vec::new();
+                for &(needle, skip) in SHAPES {
+                    for (at, _) in line.match_indices(needle) {
+                        // A whole word: `text(` is not `context(`.
+                        let before = line[..at].chars().next_back();
+                        if !needle.starts_with(['.', ' ']) && before.is_some_and(|c| c.is_alphanumeric() || c == '_') {
+                            continue;
+                        }
+                        if let Some(l) = skip_args(&line[at + needle.len()..], skip).and_then(literal) {
+                            found.push(l);
+                        }
+                        // A row's help: `srow(ui, tok, label, Some("…")`.
+                        if needle.starts_with("srow")
+                            && let Some(help) = skip_args(&line[at + needle.len()..], 1).and_then(|r| r.trim_start().strip_prefix("Some("))
+                        {
+                            found.extend(literal(help));
+                        }
+                    }
+                }
+                if in_label_fn {
+                    for (at, _) in line.match_indices("=> ") {
+                        found.extend(literal(&line[at + 3..]));
+                    }
+                }
+                for f in found {
+                    let rest: String = SAME_EVERYWHERE.iter().fold(f.to_string(), |s, w| s.replace(w, ""));
+                    if words(&rest) {
+                        bad.push(format!("{}:{}: \"{f}\"", p.strip_prefix(&root).unwrap().display(), i + 1));
+                    }
+                }
+            }
+        }
+    }
+    assert!(bad.is_empty(), "{} UI literals not through tr!:\n{}", bad.len(), bad.join("\n"));
+}
+
 #[test]
 fn plurals_pick_forms() {
     let one = trn!("test.files", 1);
