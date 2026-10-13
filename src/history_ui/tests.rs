@@ -496,7 +496,7 @@ fn uploaded_filter_and_card_menu() {
     let shown: Vec<String> = h.shown().iter().map(|(i, _)| history::title(&h.entries[*i].meta)).collect();
     assert_eq!(shown, ["Slack \u{2014} #design-review"]);
     assert_eq!(h.groups().len(), 1);
-    assert_eq!(draw::FILTERS[3], (Filter::Uploaded, "Uploaded"));
+    assert_eq!((draw::FILTERS[3].0, draw::FILTERS[3].1.get()), (Filter::Uploaded, "Uploaded"));
     let up = h.entries.iter().find(|e| e.meta.uploaded.is_some()).unwrap().clone();
     let plain = h.entries.iter().find(|e| e.meta.uploaded.is_none() && !e.meta.kind.is_recording()).unwrap().clone();
     let rec = h.entries.iter().find(|e| e.meta.kind.is_recording()).unwrap().clone();

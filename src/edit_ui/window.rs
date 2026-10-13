@@ -260,7 +260,7 @@ impl Window {
             #[cfg(test)]
             let at = (0, 0);
             if !crate::pin::open(std::sync::Arc::new(img), at, *self.e.canvas.theme()) {
-                self.e.note("Pin to screen is not available here", ToastKind::Error);
+                self.e.note(tr!("editor.pin_unavailable"), ToastKind::Error);
             }
             return;
         }
@@ -273,7 +273,7 @@ impl Window {
             _ => Task::Copy,
         };
         if r == Request::Upload {
-            self.e.note("Uploading\u{2026}", ToastKind::Info);
+            self.e.note(tr!("history.uploading"), ToastKind::Info);
         }
         if r == Request::CopyText {
             let tx = self.done.0.clone();
@@ -291,8 +291,8 @@ impl Window {
             let owner = Some(self.hwnd.0 as usize);
             let (tx, cfg) = (self.done.0.clone(), self.e.cfg.clone());
             crate::busy::spawn(move || {
-                let what = if r == Request::Share { "Share" } else { "Open with" };
-                let res = crate::open_with::file_for(&img, None, &cfg).map_err(|e| format!("{what} failed: {e:#}"));
+                let what = if r == Request::Share { tr!("history.share") } else { tr!("history.open_with") };
+                let res = crate::open_with::file_for(&img, None, &cfg).map_err(|e| tr!("history.what_failed", what, e = format!("{e:#}")));
                 let hand = |p: std::path::PathBuf| if r == Request::Share { crate::share::share_now(&p, owner) } else { crate::open_with::open_now(&p, owner) };
                 let text = match res.and_then(hand) {
                     Ok(()) => String::new(),
@@ -597,10 +597,10 @@ fn export_done(res: crate::export::ExportResult, saves: bool, store: &crate::his
     match res.upload.map(|rx| rx.recv()) {
         Some(Ok(Ok(url))) => {
             let copied = cfg.copy_url_after_upload && crate::export::copy_text_to_clipboard(&url).is_ok();
-            Done { uploaded: Some(url), ..plain(if copied { "Uploaded \u{2014} link copied".into() } else { "Uploaded".into() }, ToastKind::Success) }
+            Done { uploaded: Some(url), ..plain(if copied { tr!("editor.uploaded_copied").into() } else { tr!("editor.uploaded").into() }, ToastKind::Success) }
         }
-        Some(Ok(Err(e))) => plain(format!("Upload failed: {e}"), ToastKind::Error),
-        Some(Err(_)) => plain("Upload failed".into(), ToastKind::Error),
+        Some(Ok(Err(e))) => plain(tr!("editor.upload_failed", e), ToastKind::Error),
+        Some(Err(_)) => plain(tr!("history.upload_failed").into(), ToastKind::Error),
         None => match crate::notice::compose(&res.done, false) {
             Some(n) => plain(n.text, n.kind),
             None => plain(String::new(), ToastKind::Info),

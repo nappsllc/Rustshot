@@ -453,7 +453,7 @@ impl Window {
                             crate::actions::open_path(&f);
                             super::Done { text: String::new(), ..super::ok_done() }
                         }
-                        Err(err) => super::fail_done(format!("Could not open the capture: {err:#}")),
+                        Err(err) => super::fail_done(tr!("history.open_failed", e = format!("{err:#}"))),
                     });
                 }
             }
@@ -461,7 +461,7 @@ impl Window {
                 if let Some(e) = self.h.entry(&id) {
                     match super::file_of(&store, e) {
                         Ok(f) => crate::notice::show_in_folder(&f),
-                        Err(err) => self.h.note(format!("Could not show the capture: {err:#}"), crate::editor::style::ToastKind::Error),
+                        Err(err) => self.h.note(tr!("history.show_failed", e = format!("{err:#}")), crate::editor::style::ToastKind::Error),
                     }
                 }
             }
@@ -470,21 +470,21 @@ impl Window {
                     let f = match super::file_of(&store, e) {
                         Ok(f) => f,
                         Err(err) => {
-                            self.h.note(format!("Copy failed: {err:#}"), crate::editor::style::ToastKind::Error);
+                            self.h.note(tr!("ocr.copy_failed", e = format!("{err:#}")), crate::editor::style::ToastKind::Error);
                             return;
                         }
                     };
                     match crate::export::copy_text_to_clipboard(&f.display().to_string()) {
-                        Ok(()) => self.h.note("File path copied", crate::editor::style::ToastKind::Success),
-                        Err(e) => self.h.note(format!("Copy failed: {e:#}"), crate::editor::style::ToastKind::Error),
+                        Ok(()) => self.h.note(tr!("history.path_copied"), crate::editor::style::ToastKind::Success),
+                        Err(e) => self.h.note(tr!("ocr.copy_failed", e = format!("{e:#}")), crate::editor::style::ToastKind::Error),
                     }
                 }
             }
             Act::CopyLink(id) => {
                 if let Some(u) = self.h.entry(&id).and_then(|e| e.meta.uploaded.clone()) {
                     match crate::export::copy_text_to_clipboard(&u) {
-                        Ok(()) => self.h.note("Link copied", crate::editor::style::ToastKind::Success),
-                        Err(e) => self.h.note(format!("Copy failed: {e:#}"), crate::editor::style::ToastKind::Error),
+                        Ok(()) => self.h.note(tr!("history.link_copied"), crate::editor::style::ToastKind::Success),
+                        Err(e) => self.h.note(tr!("ocr.copy_failed", e = format!("{e:#}")), crate::editor::style::ToastKind::Error),
                     }
                 }
             }
@@ -497,7 +497,7 @@ impl Window {
             Act::Save(id) => self.spawn(move || super::run_export(&store, &id, crate::export::Task::Save { path: None, ask: false }, &cfg)),
             Act::SaveAs(id) => self.spawn(move || super::run_export(&store, &id, crate::export::Task::Save { path: None, ask: true }, &cfg)),
             Act::Upload(id) => {
-                self.h.note("Uploading\u{2026}", crate::editor::style::ToastKind::Info);
+                self.h.note(tr!("history.uploading"), crate::editor::style::ToastKind::Info);
                 self.spawn(move || super::run_export(&store, &id, crate::export::Task::Upload, &cfg))
             }
             Act::Pin(id) => self.spawn(move || super::run_export(&store, &id, crate::export::Task::Pin, &cfg)),
@@ -514,7 +514,7 @@ impl Window {
                 self.spawn(move || super::share(&store, &id, &cfg, owner))
             }
             Act::DeleteUpload(id) => {
-                self.h.note("Deleting upload\u{2026}", crate::editor::style::ToastKind::Info);
+                self.h.note(tr!("history.deleting_upload"), crate::editor::style::ToastKind::Info);
                 self.spawn(move || {
                     let del = |h: &str, p: &str, hd: &[(&str, &str)]| delete_http(h, p, hd);
                     let s3 = crate::uploads::s3_delete_with(&cfg);
@@ -526,7 +526,7 @@ impl Window {
                 crate::history::changed();
                 self.h.sel.retain(|s| !ids.contains(s));
                 self.h.reload();
-                self.h.note(format!("Deleted {n} capture{}", if n == 1 { "" } else { "s" }), crate::editor::style::ToastKind::Info);
+                self.h.note(trn!("history.deleted", n), crate::editor::style::ToastKind::Info);
             }
             Act::SaveToFolder(ids) => {
                 let tx = self.picked.0.clone();
@@ -550,7 +550,7 @@ impl Window {
                 crate::history::changed();
                 self.h.sel.clear();
                 self.h.reload();
-                self.h.note(format!("Cleared {n} capture{}", if n == 1 { "" } else { "s" }), crate::editor::style::ToastKind::Info);
+                self.h.note(trn!("history.cleared", n), crate::editor::style::ToastKind::Info);
             }
             Act::OpenFolder => {
                 let root = self.h.store.root.clone();
@@ -566,7 +566,7 @@ impl Window {
                         crate::settings_ui::tell_daemon_reload();
                         self.h.reload();
                     }
-                    Err(e) => self.h.note(format!("Could not turn History on: {e}"), crate::editor::style::ToastKind::Error),
+                    Err(e) => self.h.note(tr!("history.turn_on_failed", e), crate::editor::style::ToastKind::Error),
                 }
             }
         }

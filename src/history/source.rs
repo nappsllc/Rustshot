@@ -106,7 +106,7 @@ pub fn monitor_name(_x: i32, _y: i32) -> String {
 
 /// "Built-in Display (2×)", "DELL U2720Q (1.5×)", "DELL U2720Q".
 pub fn monitor_text(name: &str, scale: f32) -> String {
-    let n = if name.trim().is_empty() { "Display" } else { name.trim() };
+    let n = if name.trim().is_empty() { tr!("history.display") } else { name.trim() };
     if (scale - 1.0).abs() < 0.01 || !scale.is_finite() || scale <= 0.0 {
         n.to_string()
     } else {

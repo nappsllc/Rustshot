@@ -59,14 +59,14 @@ impl Quick {
     /// The tooltip: label and key.
     pub fn tip(self) -> (&'static str, &'static str) {
         match self {
-            Quick::Edit => ("Edit", "E"),
-            Quick::Copy => ("Copy", "Ctrl+C"),
-            Quick::Save => ("Save", "Ctrl+S"),
-            Quick::Upload => ("Upload", "Ctrl+U"),
-            Quick::Pin => ("Pin to screen", "P"),
-            Quick::Open => ("Open", "Enter"),
-            Quick::Folder => ("Show in folder", ""),
-            Quick::More => ("More", ""),
+            Quick::Edit => (tr!("history.edit"), "E"),
+            Quick::Copy => (tr!("common.copy"), "Ctrl+C"),
+            Quick::Save => (tr!("common.save"), "Ctrl+S"),
+            Quick::Upload => (tr!("history.upload"), "Ctrl+U"),
+            Quick::Pin => (tr!("history.pin"), "P"),
+            Quick::Open => (tr!("history.open"), "Enter"),
+            Quick::Folder => (tr!("history.show_in_folder"), ""),
+            Quick::More => (tr!("history.more"), ""),
         }
     }
 }
@@ -130,17 +130,17 @@ pub enum MenuAct {
 impl MenuAct {
     pub fn label(self) -> &'static str {
         match self {
-            MenuAct::Clear => "Clear history\u{2026}",
-            MenuAct::OpenFolder => "Open history folder",
-            MenuAct::Settings => "Settings\u{2026}",
-            MenuAct::SaveAs => "Save As\u{2026}",
-            MenuAct::OpenWith => "Open with\u{2026}",
-            MenuAct::Share => "Share\u{2026}",
-            MenuAct::CopyLink => "Copy link",
-            MenuAct::DeleteUpload => "Delete upload\u{2026}",
-            MenuAct::ShowInFolder => "Show in folder",
-            MenuAct::CopyPath => "Copy file path",
-            MenuAct::Delete => "Delete",
+            MenuAct::Clear => tr!("history.menu.clear_history"),
+            MenuAct::OpenFolder => tr!("history.menu.open_history_folder"),
+            MenuAct::Settings => tr!("history.menu.settings"),
+            MenuAct::SaveAs => tr!("history.menu.save_as"),
+            MenuAct::OpenWith => tr!("history.menu.open_with"),
+            MenuAct::Share => tr!("history.menu.share"),
+            MenuAct::CopyLink => tr!("history.menu.copy_link"),
+            MenuAct::DeleteUpload => tr!("history.menu.delete_upload"),
+            MenuAct::ShowInFolder => tr!("history.menu.show_in_folder"),
+            MenuAct::CopyPath => tr!("history.menu.copy_file_path"),
+            MenuAct::Delete => tr!("history.menu.delete"),
         }
     }
 }
@@ -201,7 +201,12 @@ impl Lay {
 }
 
 /// The filter labels.
-pub const FILTERS: [(Filter, &str); 4] = [(Filter::All, "All"), (Filter::Shots, "Screenshots"), (Filter::Recordings, "Recordings"), (Filter::Uploaded, "Uploaded")];
+pub const FILTERS: [(Filter, crate::i18n::Key); 4] = [
+    (Filter::All, key!("history.filter.all")),
+    (Filter::Shots, key!("history.filter.shots")),
+    (Filter::Recordings, key!("history.filter.recordings")),
+    (Filter::Uploaded, key!("history.filter.uploaded")),
+];
 
 fn seg_item_w(ui: &Ui, label: &str) -> f32 {
     (ui.text_w(11.5, label) + 18.0).ceil()
@@ -219,7 +224,7 @@ pub fn layout(ui: &Ui, h: &History, w: f32, hh: f32) -> Lay {
     let cy = HDR_H / 2.0;
     // Header, left to right: title, search, filter, view; right: slider,
     // the panel toggle, ⋯.
-    let title_w = ui.text_w(14.0, "History") + 6.0;
+    let title_w = ui.text_w(14.0, tr!("history.title")) + 6.0;
     let mut x = 18.0 + title_w + 10.0;
     let more = FRect { x: w - 14.0 - IB, y: cy - IB / 2.0, w: IB, h: IB };
     let mut right = more.x - 10.0;
@@ -244,7 +249,7 @@ pub fn layout(ui: &Ui, h: &History, w: f32, hh: f32) -> Lay {
         x += sw + 10.0;
         let mut sx = x + 3.0;
         for (f, l) in FILTERS {
-            let iw = seg_item_w(ui, l);
+            let iw = seg_item_w(ui, l.get());
             filters.push((FRect { x: sx, y: cy - 11.0, w: iw, h: 22.0 }, f));
             sx += iw + 2.0;
         }
@@ -379,9 +384,9 @@ pub fn panel_lay(p: FRect) -> PanelLay {
 /// The multi-select bar (window coordinates): the bar, Copy, Save to
 /// folder…, Delete, ×.
 pub fn bar_lay(ui: &Ui, lay: &Lay, n: usize) -> (FRect, [FRect; 4], String) {
-    let label = format!("{n} selected");
+    let label = tr!("history.selected", n);
     let bw = |l: &str| (ui.text_w(12.0, l) + 24.0 + 22.0).ceil();
-    let (c, s, d) = (bw("Copy"), bw("Save to folder\u{2026}"), bw("Delete"));
+    let (c, s, d) = (bw(tr!("common.copy")), bw(tr!("history.save_to_folder")), bw(tr!("history.delete")));
     let lw = ui.text_w(12.5, &label).ceil() + 4.0;
     let w = 14.0 + lw + 8.0 + c + 8.0 + s + 8.0 + d + 8.0 + IB + 6.0;
     let r = FRect { x: lay.area.x + (lay.area.w - w) / 2.0, y: lay.area.y1() - 16.0 - 40.0, w, h: 40.0 };
@@ -453,7 +458,7 @@ pub fn dialog_lay(ui: &Ui, lay: &Lay, h: &History) -> (FRect, FRect, FRect, FRec
     let by = r.y1() - 20.0 - 28.0;
     let cw = (ui.text_w(12.0, okl) + 24.0).ceil();
     let ok = FRect { x: r.x1() - 20.0 - cw, y: by, w: cw, h: 28.0 };
-    let kw = (ui.text_w(12.0, "Cancel") + 24.0).ceil();
+    let kw = (ui.text_w(12.0, tr!("common.cancel")) + 24.0).ceil();
     let cancel = FRect { x: ok.x - 8.0 - kw, y: by, w: kw, h: 28.0 };
     (r, cb, cancel, ok)
 }
@@ -463,16 +468,16 @@ pub fn empty_lay(ui: &Ui, lay: &Lay, h: &History) -> FRect {
     let a = lay.area;
     let cy = a.y + a.h / 2.0;
     if !h.on() {
-        let tw = ui.text_w(12.5, "Keep a history of captures");
+        let tw = ui.text_w(12.5, tr!("settings.history.keep_a_history_of_captures"));
         let w = 32.0 + 10.0 + tw;
         return FRect { x: a.x + (a.w - w) / 2.0, y: cy + 30.0, w, h: 18.0 };
     }
-    let lw = ui.text_w(12.0, "History settings");
+    let lw = ui.text_w(12.0, tr!("history.settings"));
     FRect { x: a.x + (a.w - lw) / 2.0, y: cy + 46.0, w: lw, h: 18.0 }
 }
 
 /// The off state's caption.
-const OFF_CAPTION: &str = "Captures aren't kept after you close them. Saved and uploaded files are not affected.";
+const OFF_CAPTION: crate::i18n::Key = key!("history.off_caption");
 
 /// The off state's "N captures still kept · Clear history…" while the
 /// history still holds captures (they expire as usual): the text's left
@@ -483,10 +488,10 @@ pub fn off_kept_lay(ui: &Ui, lay: &Lay, h: &History) -> Option<(String, f32, f32
         return None;
     }
     let a = lay.area;
-    let lines = crate::ui::controls::wrap(OFF_CAPTION, a.w - 48.0, |s| ui.text_w(12.0, s)).len() as f32;
+    let lines = crate::ui::controls::wrap(OFF_CAPTION.get(), a.w - 48.0, |s| ui.text_w(12.0, s)).len() as f32;
     let cy = empty_lay(ui, lay, h).y1() + 18.0 + lines * 18.0 + 12.0;
-    let pre = format!("{n} capture{} still kept \u{b7} ", if n == 1 { "" } else { "s" });
-    let link = "Clear history\u{2026}";
+    let pre = format!("{} ", trn!("history.still_kept", n));
+    let link = tr!("settings.history.clear_history_2");
     let (pw, lw) = (ui.text_w(12.0, &pre), ui.text_w(12.0, link));
     let x = a.x + (a.w - pw - lw) / 2.0;
     Some((pre, x, cy, FRect { x: x + pw, y: cy - 9.0, w: lw, h: 18.0 }))
@@ -700,7 +705,7 @@ fn paint_header(ui: &mut Ui, h: &mut History, lay: &Lay, t: &WTok, hover: Option
     let cy = HDR_H / 2.0;
     fill(ui, lay.hdr, 0.0, t.win);
     line_h(ui, 0.0, HDR_H - 1.0, lay.w, t.sep);
-    text(ui, 14.0, "History", 18.0, cy, t.tx, true);
+    text(ui, 14.0, tr!("history.title"), 18.0, cy, t.tx, true);
     let dim = h.on() && h.entries.is_empty();
     let k = if dim { 0.5 } else { 1.0 };
     if let Some(s) = lay.search {
@@ -732,7 +737,7 @@ fn paint_header(ui: &mut Ui, h: &mut History, lay: &Lay, t: &WTok, hover: Option
             h.scroll = 0.0;
         }
         if h.search.text.is_empty() {
-            text(ui, 12.0, "Search by window or date\u{2026}", s.x + 34.0, cy, t.tx3.fade(k), false);
+            text(ui, 12.0, tr!("history.search"), s.x + 34.0, cy, t.tx3.fade(k), false);
         } else {
             let hov = hover == Some(&Target::SearchClear);
             icon(ui, "x", s.x1() - 23.0, cy - 7.0, 14.0, if hov { t.ich } else { t.ic });
@@ -748,8 +753,8 @@ fn paint_header(ui: &mut Ui, h: &mut History, lay: &Lay, t: &WTok, hover: Option
             btn_bg(ui, *r, t, on, hov && !dim, 5.0);
             let c = if on { t.acfg } else if hov { t.ich } else { t.ic };
             let l = FILTERS[i].1;
-            let tw = ui.text_w(11.5, l);
-            text(ui, 11.5, l, r.x + (r.w - tw) / 2.0, cy, c.fade(k), false);
+            let tw = ui.text_w(11.5, l.get());
+            text(ui, 11.5, l.get(), r.x + (r.w - tw) / 2.0, cy, c.fade(k), false);
         }
     }
     if let (Some(first), Some(last)) = (lay.views.first(), lay.views.last()) {
@@ -869,7 +874,7 @@ fn paint_body(ui: &mut Ui, h: &mut History, lay: &Lay, t: &WTok, hover: Option<&
         }
     }
     if lay.items.is_empty() {
-        let msg = if h.query().is_empty() { "Nothing here yet" } else { "No captures match" };
+        let msg = if h.query().is_empty() { tr!("history.nothing_yet") } else { tr!("history.no_match") };
         let tw = ui.text_w(12.0, msg);
         text(ui, 12.0, msg, a.x + (a.w - tw) / 2.0, a.y + 80.0, t.tx3, false);
     }
@@ -877,7 +882,7 @@ fn paint_body(ui: &mut Ui, h: &mut History, lay: &Lay, t: &WTok, hover: Option<&
     if !h.query().is_empty() && list {
         let y = a.y + lay.content_h - 12.0 - scroll + 14.0;
         if y < a.y1() - 10.0 {
-            let note = "Searches window title, app name, file name and date.";
+            let note = tr!("history.search_note");
             {
                 text(ui, 11.5, note, PAD_X, y + 8.0, t.tx3, false);
             }
@@ -979,11 +984,11 @@ fn paint_card(ui: &mut Ui, h: &mut History, lay: &Lay, it: &ItemLay, e: &Entry, 
         }
     }
     if e.meta.edited {
-        let tw = ui.text_w(10.5, "Edited");
+        let tw = ui.text_w(10.5, tr!("history.edited"));
         let b = FRect { x: th.x1() - 8.0 - tw - 14.0, y: th.y + 8.0, w: tw + 14.0, h: 20.0 };
         fill(ui, b, 5.0, t.acbg);
         ring(ui, b, 5.0, t.acrg);
-        text(ui, 10.5, "Edited", b.x + 7.0, b.y + 10.0, t.acfg, true);
+        text(ui, 10.5, tr!("history.edited"), b.x + 7.0, b.y + 10.0, t.acfg, true);
     }
     if e.meta.kind.is_recording() && (multi || !hovered) {
         let d = history::duration_text(e.meta.duration_ms);
@@ -1004,7 +1009,7 @@ fn paint_card(ui: &mut Ui, h: &mut History, lay: &Lay, it: &ItemLay, e: &Entry, 
                 fill(ui, r, 6.0, if hov { t.acbg_hover } else { t.acbg });
                 ring(ui, r, 6.0, t.acrg);
                 icon(ui, "pencil", r.x + 7.0, r.y + 6.0, 14.0, t.acfg);
-                text(ui, 11.5, "Edit", r.x + 26.0, r.y + 13.0, t.acfg, true);
+                text(ui, 11.5, tr!("history.edit"), r.x + 26.0, r.y + 13.0, t.acfg, true);
             } else {
                 if hov {
                     fill(ui, r, 6.0, C4::new(255, 255, 255, 30));
@@ -1104,12 +1109,12 @@ fn paint_row(ui: &mut Ui, h: &mut History, lay: &Lay, it: &ItemLay, e: &Entry, t
     let dim_x = time_x - 14.0 - 90.0;
     let ty_x = dim_x - 14.0 - 92.0;
     let title = history::title(&e.meta);
-    let edited_w = if e.meta.edited { ui.text_w(10.5, "Edited") + 6.0 } else { 0.0 };
+    let edited_w = if e.meta.edited { ui.text_w(10.5, tr!("history.edited")) + 6.0 } else { 0.0 };
     let name = ui.fit_text(12.5, &title, (ty_x - 14.0 - x - edited_w).max(20.0));
     highlighted(ui, &name, &it.hl, x, cy, 12.5, t);
     if e.meta.edited {
         let nw = ui.text_w(12.5, &name);
-        text(ui, 10.5, "Edited", x + nw + 6.0, cy, t.acfg, true);
+        text(ui, 10.5, tr!("history.edited"), x + nw + 6.0, cy, t.acfg, true);
     }
     let rec = e.meta.kind.is_recording();
     icon(ui, if rec { "video" } else { "camera" }, ty_x, cy - 7.0, 14.0, t.tx2);
@@ -1142,7 +1147,7 @@ fn paint_panel(ui: &mut Ui, h: &mut History, pr: FRect, t: &WTok, hover: Option<
     line_v(ui, pr.x, pr.y, pr.h, t.sep);
     let Some(e) = h.single().cloned() else { return };
     let pl = panel_lay(pr);
-    text(ui, 12.5, "Details", pr.x + 16.0, pr.y + 20.0, t.tx, true);
+    text(ui, 12.5, tr!("history.details"), pr.x + 16.0, pr.y + 20.0, t.tx, true);
     let hov = hover == Some(&Target::PanelClose);
     btn_bg(ui, pl.close, t, false, hov, 7.0);
     icon(ui, "x", pl.close.x + 6.0, pl.close.y + 6.0, 16.0, if hov { t.ich } else { t.ic });
@@ -1158,14 +1163,14 @@ fn paint_panel(ui: &mut Ui, h: &mut History, pr: FRect, t: &WTok, hover: Option<
     };
     let saved = e.meta.saved.as_ref().or(e.meta.file.as_ref()).map_or("\u{2014}".to_string(), |p| history::tilde(p));
     let mut rows: Vec<(&str, String)> = vec![
-        ("Captured", history::captured_text(&e.meta.captured, today)),
-        ("Size", size),
-        ("Monitor", if e.meta.monitor.is_empty() { "\u{2014}".into() } else { e.meta.monitor.clone() }),
-        ("Source", src),
-        ("Saved to", saved),
+        (tr!("history.row.captured"), history::captured_text(&e.meta.captured, today)),
+        (tr!("history.row.size"), size),
+        (tr!("history.row.monitor"), if e.meta.monitor.is_empty() { "\u{2014}".into() } else { e.meta.monitor.clone() }),
+        (tr!("history.row.source"), src),
+        (tr!("history.row.saved_to"), saved),
     ];
     if e.meta.kind.is_recording() {
-        rows.insert(2, ("Length", history::duration_text(e.meta.duration_ms)));
+        rows.insert(2, (tr!("history.row.length"), history::duration_text(e.meta.duration_ms)));
     }
     let mut y = pl.rows_y;
     for (k, v) in &rows {
@@ -1175,7 +1180,7 @@ fn paint_panel(ui: &mut Ui, h: &mut History, pr: FRect, t: &WTok, hover: Option<
         y += 24.0;
     }
     if let Some(u) = &e.meta.uploaded {
-        text(ui, 11.5, "Uploaded", pr.x + 16.0, y + 12.0, t.tx3, false);
+        text(ui, 11.5, tr!("history.row.uploaded"), pr.x + 16.0, y + 12.0, t.tx3, false);
         let shown = u.trim_start_matches("https://").trim_start_matches("http://");
         let v = ui.fit_text(11.5, shown, pr.w - 32.0 - 98.0 - 28.0);
         let vw = text(ui, 11.5, &v, pr.x + 16.0 + 98.0, y + 12.0, t.acfg, false);
@@ -1188,7 +1193,7 @@ fn paint_panel(ui: &mut Ui, h: &mut History, pr: FRect, t: &WTok, hover: Option<
     if !e.meta.kind.is_recording() {
         y += 12.0;
         let n = e.meta.objects.len();
-        let head = format!("Annotations \u{b7} {n} object{}", if n == 1 { "" } else { "s" });
+        let head = trn!("history.annotations", n);
         caps(ui, 10.5, &head, pr.x + 16.0, y + 6.0, t.tx3);
         y += 16.0;
         let mut x = pr.x + 16.0;
@@ -1209,8 +1214,8 @@ fn paint_panel(ui: &mut Ui, h: &mut History, pr: FRect, t: &WTok, hover: Option<
     line_h(ui, pr.x, pl.edit.y - 14.0, pr.w, t.sep);
     let rec = e.meta.kind.is_recording();
     let (hov_e, hov_o, hov_d) = (hover == Some(&Target::PanelEdit), hover == Some(&Target::PanelOpen), hover == Some(&Target::PanelDelete));
-    button(ui, pl.edit, if rec { "Open" } else { "Edit" }, Some(if rec { "play" } else { "pencil" }), Style::Pri, hov_e, t);
-    button(ui, pl.open, if rec { "Show in folder" } else { "Open file" }, Some("folder"), Style::Plain, hov_o, t);
+    button(ui, pl.edit, if rec { tr!("history.open") } else { tr!("history.edit") }, Some(if rec { "play" } else { "pencil" }), Style::Pri, hov_e, t);
+    button(ui, pl.open, if rec { tr!("history.show_in_folder") } else { tr!("history.open_file") }, Some("folder"), Style::Plain, hov_o, t);
     button(ui, pl.delete, "", Some("trash"), Style::Danger, hov_d, t);
 }
 
@@ -1258,9 +1263,9 @@ fn paint_bar(ui: &mut Ui, h: &History, lay: &Lay, t: &WTok, hover: Option<&Targe
     fill(ui, r, 12.0, t.pop);
     ring(ui, r, 12.0, t.bd);
     text(ui, 12.5, &label, r.x + 14.0, r.y + 20.0, t.tx, true);
-    button(ui, b[0], "Copy", Some("copy"), Style::Plain, hover == Some(&Target::BarCopy), t);
-    button(ui, b[1], "Save to folder\u{2026}", Some("folder"), Style::Plain, hover == Some(&Target::BarSave), t);
-    button(ui, b[2], "Delete", Some("trash"), Style::Danger, hover == Some(&Target::BarDelete), t);
+    button(ui, b[0], tr!("common.copy"), Some("copy"), Style::Plain, hover == Some(&Target::BarCopy), t);
+    button(ui, b[1], tr!("history.save_to_folder"), Some("folder"), Style::Plain, hover == Some(&Target::BarSave), t);
+    button(ui, b[2], tr!("history.delete"), Some("trash"), Style::Danger, hover == Some(&Target::BarDelete), t);
     let hov = hover == Some(&Target::BarClear);
     btn_bg(ui, b[3], t, false, hov, 7.0);
     icon(ui, "x", b[3].x + 6.0, b[3].y + 6.0, 16.0, if hov { t.ich } else { t.ic });
@@ -1325,7 +1330,7 @@ fn paint_dialog(ui: &mut Ui, h: &History, lay: &Lay, t: &WTok, hover: Option<&Ta
         let check = ui.fit_text(12.0, &check, cb.w - 24.0);
         text(ui, 12.0, &check, cb.x + 24.0, cb.y + 9.0, t.tx, false);
     }
-    button(ui, cancel, "Cancel", None, Style::Plain, hover == Some(&Target::ClearCancel), t);
+    button(ui, cancel, tr!("common.cancel"), None, Style::Plain, hover == Some(&Target::ClearCancel), t);
     let style = if h.ask_delete.is_some() || h.ask_unupload.is_some() { Style::Danger } else { Style::Solid };
     button(ui, ok, okl, None, style, hover == Some(&Target::ClearOk), t);
 }
@@ -1363,16 +1368,17 @@ fn paint_empty(ui: &mut Ui, h: &History, lay: &Lay, t: &WTok, hover: Option<&Tar
     let cx = a.x + a.w / 2.0;
     let cy = a.y + a.h / 2.0;
     icon(ui, "history", cx - 28.0, cy - 80.0, 56.0, t.tx3);
-    let tt = "No captures yet";
+    let tt = tr!("history.empty_title");
     text(ui, 14.0, tt, cx - ui.text_w(14.0, tt) / 2.0, cy - 8.0, t.tx, true);
     let caps_ = hotkey_caps(&h.cfg.capture_hotkey);
-    let (pre, post) = ("Press", "to take your first screenshot");
+    let (pre, post) = tr!("history.empty_press").split_once("{keys}").unwrap_or((tr!("history.empty_press"), ""));
+    let (pre, post) = (pre.trim_end(), post.trim_start());
     let capw: f32 = caps_.iter().map(|k| (ui.text_w(10.5, k) + 10.0).max(18.0) + 4.0).sum::<f32>();
     let total = ui.text_w(12.0, pre) + 5.0 + capw + 1.0 + ui.text_w(12.0, post);
     let mut x = cx - total / 2.0;
     let ly = cy + 18.0;
     if caps_.is_empty() {
-        let s = "Pick a capture region from the tray to take your first screenshot";
+        let s = tr!("history.empty_tray");
         text(ui, 12.0, s, cx - ui.text_w(12.0, s) / 2.0, ly, t.tx2, false);
     } else {
         x += text(ui, 12.0, pre, x, ly, t.tx2, false) + 5.0;
@@ -1381,7 +1387,7 @@ fn paint_empty(ui: &mut Ui, h: &History, lay: &Lay, t: &WTok, hover: Option<&Tar
     }
     let link = empty_lay(ui, lay, h);
     let hov = hover == Some(&Target::Settings);
-    let w = text(ui, 12.0, "History settings", link.x, link.y + 9.0, t.acfg, true);
+    let w = text(ui, 12.0, tr!("history.settings"), link.x, link.y + 9.0, t.acfg, true);
     if hov {
         line_h(ui, link.x, link.y + 16.0, w, t.acfg);
     }
@@ -1392,7 +1398,7 @@ fn paint_off(ui: &mut Ui, h: &History, lay: &Lay, t: &WTok, hover: Option<&Targe
     let cx = a.x + a.w / 2.0;
     let cy = a.y + a.h / 2.0;
     icon(ui, "history-off", cx - 28.0, cy - 70.0, 56.0, t.tx3);
-    let tt = "History is off";
+    let tt = tr!("history.off_title");
     text(ui, 14.0, tt, cx - ui.text_w(14.0, tt) / 2.0, cy + 2.0, t.tx, true);
     let sw = empty_lay(ui, lay, h);
     let tr = FRect { x: sw.x, y: sw.y, w: 32.0, h: 18.0 };
@@ -1402,8 +1408,8 @@ fn paint_off(ui: &mut Ui, h: &History, lay: &Lay, t: &WTok, hover: Option<&Targe
     let k = ui.k;
     ui.fb.fill_circle((tr.x + 9.0) * k, (tr.y + 9.0) * k + 0.5 * k, 7.5 * k, C4::new(0, 0, 0, 80));
     ui.fb.fill_circle((tr.x + 9.0) * k, (tr.y + 9.0) * k, 7.0 * k, C4::rgb(255, 255, 255));
-    text(ui, 12.5, "Keep a history of captures", tr.x + 42.0, tr.y + 9.0, t.tx, false);
-    let lines = crate::ui::controls::wrap(OFF_CAPTION, a.w - 48.0, |s| ui.text_w(12.0, s));
+    text(ui, 12.5, tr!("settings.history.keep_a_history_of_captures"), tr.x + 42.0, tr.y + 9.0, t.tx, false);
+    let lines = crate::ui::controls::wrap(OFF_CAPTION.get(), a.w - 48.0, |s| ui.text_w(12.0, s));
     let mut y = sw.y1() + 18.0;
     for l in lines {
         text(ui, 12.0, &l, cx - ui.text_w(12.0, &l) / 2.0, y, t.tx3, false);
@@ -1411,7 +1417,7 @@ fn paint_off(ui: &mut Ui, h: &History, lay: &Lay, t: &WTok, hover: Option<&Targe
     }
     if let Some((pre, x, cy, link)) = off_kept_lay(ui, lay, h) {
         text(ui, 12.0, &pre, x, cy, t.tx2, false);
-        let w = text(ui, 12.0, "Clear history\u{2026}", link.x, cy, t.acfg, true);
+        let w = text(ui, 12.0, tr!("settings.history.clear_history_2"), link.x, cy, t.acfg, true);
         if hover == Some(&Target::OffClear) {
             line_h(ui, link.x, cy + 7.0, w, t.acfg);
         }
