@@ -79,6 +79,10 @@ magnifier = true                  # zoomed pixels and a crosshair while picking 
 magnifier_square = false          # square instead of round
 accept_on_select = "off"          # "copy" or "save": a drawn region is exported at once
 overlay_hints = true              # the key card when the overlay opens
+trim_margins = false              # trim each new region or window to its content (Shift+A by hand)
+border_width = 0                  # a border around every export, 1-8 logical px (0 = none)
+border_color = "#000000"          # its color
+hdr_screenshots = "tonemap"       # Windows HDR displays (screenshots and recordings): "tonemap" to SDR or "keep" as captured
 screenclip_hint = true            # Windows: remind how to pick Rustshot for Win+Shift+S
 show_thumbnail = true             # the thumbnail card after a copied or saved capture
 shutter_sound = false             # a short click when a capture is taken
@@ -89,6 +93,12 @@ tray_off_mode_seen = false        # Windows: the "no longer runs in the backgrou
 launcher_source = "region"        # "region", "screen" or "window"
 launcher_delay = 0                # seconds (0-60)
 launcher_after = "edit"           # "edit", "copy", "save" or "pin"
+
+# Copy text, Quick Redact, selection (remembered choices)
+copy_text_mode = "select"         # the Copy text button: "select" (pick words) or "all"
+redact_kinds = "all"              # or a list: "emails,phones,cards,ids,urls,ips"
+redact_style = "solid"            # Quick Redact: "solid" (opaque fill) or "blur" (mosaic + blur)
+selection_mode = "rect"           # the last selection mode: "rect" or "freeform"
 
 # History
 history = true                    # keep a history of captures (History, Edit)
@@ -185,8 +195,9 @@ The action ids:
 
 | Group | Actions |
 |---|---|
-| Tools | `tool_select`, `tool_pencil`, `tool_line`, `tool_arrow`, `tool_rectangle`, `tool_circle`, `tool_marker`, `tool_text`, `tool_callout`, `tool_counter`, `tool_pixelate`, `tool_invert`, `tool_spotlight`, `tool_magnify`, `tool_blur`, `size_down`, `size_up` |
-| Output | `copy`, `copy_text`, `copy_color`, `save`, `save_as`, `save_desktop`, `open_with`, `upload`, `pin` |
+| Tools | `tool_select`, `tool_pencil`, `tool_line`, `tool_arrow`, `tool_rectangle`, `tool_circle`, `tool_marker`, `tool_text`, `tool_callout`, `tool_counter`, `tool_pixelate`, `tool_invert`, `tool_spotlight`, `tool_magnify`, `tool_blur`, `tool_crop`, `size_down`, `size_up` |
+| Output | `copy`, `copy_text`, `redact`, `copy_color`, `save`, `save_as`, `save_desktop`, `open_with`, `share`, `upload`, `pin` |
+| Selection | `trim` (Trim to content, <kbd>Shift</kbd>+<kbd>A</kbd>), `select_freeform` |
 | Editing | `undo`, `redo`, `select_all`, `toggle_palette`, `accept`, `cancel`, `record` |
 | UI size | `ui_bigger`, `ui_smaller`, `ui_reset` |
 | Selected objects | `delete_object`, `duplicate`, `bring_front`, `send_back` |

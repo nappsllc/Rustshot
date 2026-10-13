@@ -27,6 +27,30 @@ fn windows_ocr_reads_the_baked_font() {
     }
 }
 
+/// Each word comes with its own box, in the picture's pixels (the ×2
+/// upscale undone): left to right, inside the text's place.
+#[test]
+fn windows_ocr_gives_word_boxes() {
+    let img = rendered("Hello Rustshot 123", 32.0);
+    match recognize_lines(&img) {
+        Err(OcrError::NoLanguage) => eprintln!("skipped: no Windows OCR language is installed"),
+        Err(e) => panic!("OCR failed: {e:?}"),
+        Ok(lines) => {
+            let lines = ordered(lines);
+            assert_eq!(lines.len(), 1);
+            let w = &lines[0].words;
+            assert_eq!(w.iter().map(|w| w.text.as_str()).collect::<Vec<_>>(), ["Hello", "Rustshot", "123"]);
+            for p in w.windows(2) {
+                assert!(p[0].x + p[0].w <= p[1].x + 1.0, "{p:?}");
+            }
+            for b in w {
+                assert!(b.x >= 16.0 && b.x + b.w <= img.width() as f32 - 16.0 && b.y >= 8.0 && b.y + b.h <= img.height() as f32, "{b:?}");
+                assert!(b.h > 12.0 && b.h < 48.0, "{b:?}");
+            }
+        }
+    }
+}
+
 #[test]
 fn windows_ocr_finds_nothing_on_a_blank_area() {
     let img = PixBuf::from_pixel(120, 40, [255, 255, 255, 255]);

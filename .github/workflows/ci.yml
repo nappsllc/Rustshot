@@ -44,7 +44,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p "$RUNNER_TEMP/test-logs"
-          timeout 300 xvfb-run -a -s "-screen 0 1600x900x24"             cargo test --bin rustshot -- --ignored --test-threads=1 --nocapture             live_monitor_capture live_desktop_capture live_window_lifecycle             interactive_window_renders_rect window_smoke             2>&1 | tee "$RUNNER_TEMP/test-logs/xvfb.log"
+          timeout 300 xvfb-run -a -s "-screen 0 1600x900x24"             cargo test --bin rustshot -- --ignored --skip manual_ --test-threads=1 --nocapture             live_monitor_capture live_desktop_capture live_window_lifecycle             interactive_window_renders_rect window_smoke             2>&1 | tee "$RUNNER_TEMP/test-logs/xvfb.log"
       # Screen recording on X11: XShm frames of the Xvfb screen to MP4
       # through ffmpeg (ffprobe checks the duration: 2 s +- 0.3) and to GIF;
       # with sound: the test plays a tone (paplay) into a PulseAudio null
@@ -65,7 +65,7 @@ jobs:
           pactl load-module module-null-source source_name=rec_mic || true
           pactl set-default-source rec_mic || true
           pactl list short sources || true
-          timeout 300 xvfb-run -a -s "-screen 0 1600x900x24"             cargo test --bin rustshot -- --ignored --test-threads=1 --nocapture live_rec_linux_             2>&1 | tee "$RUNNER_TEMP/test-logs/xvfb-rec.log"
+          timeout 300 xvfb-run -a -s "-screen 0 1600x900x24"             cargo test --bin rustshot -- --ignored --skip manual_ --test-threads=1 --nocapture live_rec_linux_             2>&1 | tee "$RUNNER_TEMP/test-logs/xvfb-rec.log"
           grep -o "FFPROBE .*duration=.*\|SKIP:.*" "$RUNNER_TEMP/test-logs/xvfb-rec.log" | while read -r line; do
             echo "::notice title=Linux recording::$line"
           done
@@ -94,7 +94,7 @@ jobs:
           export RUSTSHOT_FFMPEG="$RUNNER_TEMP/ffmpeg7/bin/ffmpeg"
           "$RUSTSHOT_FFMPEG" -hide_banner -version | head -n1
           pactl info >/dev/null || echo "::warning::PulseAudio is not running"
-          timeout 400 xvfb-run -a -s "-screen 0 1600x900x24"             cargo test --bin rustshot -- --ignored --test-threads=1 --nocapture live_rec_linux_             2>&1 | tee "$RUNNER_TEMP/test-logs/xvfb-rec7.log"
+          timeout 400 xvfb-run -a -s "-screen 0 1600x900x24"             cargo test --bin rustshot -- --ignored --skip manual_ --test-threads=1 --nocapture live_rec_linux_             2>&1 | tee "$RUNNER_TEMP/test-logs/xvfb-rec7.log"
           grep -o "FFPROBE .*duration=.*\|SKIP:.*" "$RUNNER_TEMP/test-logs/xvfb-rec7.log" | while read -r line; do
             echo "::notice title=Linux recording (ffmpeg 7)::$line"
           done
@@ -118,7 +118,7 @@ jobs:
           set -o pipefail
           mkdir -p "$RUNNER_TEMP/test-logs"
           export XDG_DATA_HOME="$RUNNER_TEMP/xdg"
-          timeout 300 cargo test --bin rustshot -- --ignored --test-threads=1 --nocapture live_oh264_ 2>&1 | tee "$RUNNER_TEMP/test-logs/oh264.log"
+          timeout 300 cargo test --bin rustshot -- --ignored --skip manual_ --test-threads=1 --nocapture live_oh264_ 2>&1 | tee "$RUNNER_TEMP/test-logs/oh264.log"
           sha256sum "$XDG_DATA_HOME"/rustshot/openh264/*.so
           stat -c '%a %n' "$XDG_DATA_HOME/rustshot/openh264"
           grep -o "OH264 .*\|PULSE .*" "$RUNNER_TEMP/test-logs/oh264.log" "$RUNNER_TEMP/test-logs/xvfb-rec.log" | while read -r line; do
@@ -134,7 +134,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p "$RUNNER_TEMP/test-logs"
-          dbus-run-session -- cargo test --bin rustshot -- --ignored --test-threads=1 --nocapture live_dbus_ 2>&1 | tee "$RUNNER_TEMP/test-logs/dbus.log"
+          dbus-run-session -- cargo test --bin rustshot -- --ignored --skip manual_ --test-threads=1 --nocapture live_dbus_ 2>&1 | tee "$RUNNER_TEMP/test-logs/dbus.log"
           grep -o "DBUS .*" "$RUNNER_TEMP/test-logs/dbus.log" | while read -r line; do
             echo "::notice title=D-Bus::$line"
           done
@@ -413,7 +413,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p "$RUNNER_TEMP/test-logs"
-          cargo test --bin rustshot -- --ignored --test-threads=1 --nocapture             live_monitor_capture live_desktop_capture live_window_lifecycle             interactive_window_renders_rect window_smoke present_colors_round_trip             live_icon_added_and_removed live_clipboard_roundtrip             2>&1 | tee "$RUNNER_TEMP/test-logs/live-desktop.log"
+          cargo test --bin rustshot -- --ignored --skip manual_ --test-threads=1 --nocapture             live_monitor_capture live_desktop_capture live_window_lifecycle             interactive_window_renders_rect window_smoke present_colors_round_trip             live_icon_added_and_removed live_clipboard_roundtrip             2>&1 | tee "$RUNNER_TEMP/test-logs/live-desktop.log"
       # Screen recording on the real desktop: a test window recorded to MP4
       # (Media Foundation) and GIF, the GDI fallback, WASAPI loopback (each
       # skips with a "SKIP:" line, turned into a warning, when the runner has
@@ -424,7 +424,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p "$RUNNER_TEMP/test-logs"
-          timeout 400 cargo test --bin rustshot -- --ignored --test-threads=1 --nocapture live_rec_             2>&1 | tee "$RUNNER_TEMP/test-logs/live-rec.log"
+          timeout 400 cargo test --bin rustshot -- --ignored --skip manual_ --test-threads=1 --nocapture live_rec_             2>&1 | tee "$RUNNER_TEMP/test-logs/live-rec.log"
           # A skipped test passes; make it visible on the run.
           if grep -q "SKIP:" "$RUNNER_TEMP/test-logs/live-rec.log"; then
             grep -o "SKIP:.*" "$RUNNER_TEMP/test-logs/live-rec.log" | sort -u | while read -r line; do
@@ -433,6 +433,8 @@ jobs:
           fi
       # The e2e suite drives the release exe with posted input. Its daemons
       # use their own instance name, and every launch its own APPDATA.
+      # Manual tests (named manual_*: a system sheet that waits for a
+      # person) never run in CI: every ignored run here skips them.
       - name: End-to-end
         timeout-minutes: 10
         shell: bash
@@ -443,7 +445,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p "$RUNNER_TEMP/test-logs" "$(cygpath -u "$APPDATA")"
-          cargo test --test e2e -- --include-ignored --test-threads=1 --nocapture             2>&1 | tee "$RUNNER_TEMP/test-logs/e2e.log"
+          cargo test --test e2e -- --include-ignored --skip manual_ --test-threads=1 --nocapture             2>&1 | tee "$RUNNER_TEMP/test-logs/e2e.log"
       - name: Upload test logs
         if: failure()
         uses: actions/upload-artifact@v4

@@ -78,6 +78,18 @@ pub struct Config {
     /// The Edit window's Save: "" asks (Overwrite the original / Save as
     /// new file), "overwrite" or "new" once "Don't ask again" was ticked.
     pub edit_save: String,
+    /// The overlay's Copy text button: "select" (Text mode: pick words,
+    /// then copy) or "all" (copy everything at once). The global Copy
+    /// text hotkey always copies all.
+    pub copy_text_mode: String,
+    /// Quick Redact's kinds ("all", or a list such as "emails,phones";
+    /// [`crate::ocr::redact::parse_kinds`]); the Redact menu remembers them.
+    pub redact_kinds: String,
+    /// What Quick Redact puts over a find: "solid" (an opaque fill in the
+    /// surrounding color) or "blur" (a coarse mosaic under a strong blur).
+    pub redact_style: String,
+    /// The last selection mode: "rect" or "freeform" (a lasso).
+    pub selection_mode: String,
     /// Palette shown in the color picker.
     pub user_colors: Vec<String>,
     /// Imgur client id used for uploads.
@@ -207,6 +219,17 @@ pub struct Config {
     pub accept_on_select: String,
     /// The hint card when the overlay opens (Settings › General).
     pub overlay_hints: bool,
+    /// Settings › Capture "Trim margins automatically": every new region
+    /// or window selection is tightened to its content (`trim`).
+    pub trim_margins: bool,
+    /// Settings › Capture "HDR screenshots" (Windows): "tonemap" (an HDR
+    /// monitor is read in FP16 and tone-mapped to SDR) or "keep" (as the
+    /// system hands it over).
+    pub hdr_screenshots: String,
+    /// Settings › Capture "Add a border": its color (`#rrggbb`) and width
+    /// in logical px (0 = no border, 1-8), around every exported image.
+    pub border_color: String,
+    pub border_width: u32,
     /// Windows: the daemon reminds how to pick Rustshot for Win+Shift+S
     /// while it is offered but not chosen (false: "Don't show again").
     pub screenclip_hint: bool,
@@ -215,6 +238,9 @@ pub struct Config {
     /// one-time notice an older file with `show_tray = false` gets).
     pub tray_off_mode_seen: bool,
 }
+
+/// The widest export border (logical px).
+pub const BORDER_MAX: u32 = 8;
 
 /// The drawing tools whose size and color are remembered
 /// (`tool_<id>_size`, `tool_<id>_color`).
@@ -333,6 +359,10 @@ impl Default for Config {
             magnifier_square: false,
             accept_on_select: "off".into(),
             overlay_hints: true,
+            trim_margins: false,
+            hdr_screenshots: "tonemap".into(),
+            border_color: "#000000".into(),
+            border_width: 0,
             screenclip_hint: true,
             tray_off_mode_seen: false,
             history: true,
@@ -340,6 +370,10 @@ impl Default for Config {
             history_max_mb: 2048,
             history_hotkey: "Shift+Meta+H".into(),
             edit_save: String::new(),
+            copy_text_mode: "select".into(),
+            redact_kinds: "all".into(),
+            redact_style: "solid".into(),
+            selection_mode: "rect".into(),
             user_colors: [
                 "#f04438", "#ff8a1f", "#ffc532", "#2dc06f", "#19b5d6", "#3b82f6", "#8b5cf6",
                 "#ec4899", "#ffffff", "#111318",
@@ -688,6 +722,8 @@ pub fn copy_key(from: &Config, to: &mut Config, key: &str) {
         "rec_camera_bg" => to.rec_camera_bg = from.rec_camera_bg.clone(),
         "ui_scale" => to.ui_scale = from.ui_scale,
         "snap_tab_hint" => to.snap_tab_hint = from.snap_tab_hint,
+        "redact_kinds" => to.redact_kinds = from.redact_kinds.clone(),
+        "selection_mode" => to.selection_mode = from.selection_mode.clone(),
         "tool_callout_style" => to.callout_style = from.callout_style.clone(),
         k if fmt_key(k).is_some() => {
             let (id, what) = fmt_key(k).expect("a style key");
@@ -1097,6 +1133,17 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
                 cfg.accept_on_select = one_of(val, &["off", "copy", "save"]).map_err(|e| bad("value", &e))?
             }
             "overlay_hints" => cfg.overlay_hints = as_bool(val).map_err(|e| bad("boolean", &e))?,
+            "trim_margins" => cfg.trim_margins = as_bool(val).map_err(|e| bad("boolean", &e))?,
+            "hdr_screenshots" => cfg.hdr_screenshots = one_of(val, &["tonemap", "keep"]).map_err(|e| bad("value", &e))?,
+            "border_color" => {
+                let v = as_string(val).map_err(|e| bad("string", &e))?;
+                parse_color(&v).ok_or_else(|| bad("color (#rrggbb)", &v))?;
+                cfg.border_color = v.trim().to_string();
+            }
+            "border_width" => {
+                cfg.border_width =
+                    as_u64(val).ok().filter(|w| *w <= BORDER_MAX as u64).ok_or_else(|| bad("number (0-8)", val))? as u32
+            }
             "screenclip_hint" => cfg.screenclip_hint = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "tray_off_mode_seen" => cfg.tray_off_mode_seen = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "history" => cfg.history = as_bool(val).map_err(|e| bad("boolean", &e))?,
@@ -1110,6 +1157,10 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
             }
             "history_hotkey" => cfg.history_hotkey = as_string(val).map_err(|e| bad("string", &e))?,
             "edit_save" => cfg.edit_save = one_of(val, &["", "overwrite", "new"]).map_err(|e| bad("value", &e))?,
+            "copy_text_mode" => cfg.copy_text_mode = one_of(val, &["select", "all"]).map_err(|e| bad("value", &e))?,
+            "redact_kinds" => cfg.redact_kinds = as_string(val).map_err(|e| bad("string", &e))?,
+            "redact_style" => cfg.redact_style = one_of(val, &["solid", "blur"]).map_err(|e| bad("value", &e))?,
+            "selection_mode" => cfg.selection_mode = one_of(val, &["rect", "freeform"]).map_err(|e| bad("value", &e))?,
             "upload_client_id" => {
                 cfg.upload_client_id = as_string(val).map_err(|e| bad("string", &e))?
             }
@@ -1384,6 +1435,13 @@ pub fn to_toml(c: &Config) -> String {
     out.push_str(&format!("screenclip_hint = {}\n", c.screenclip_hint));
     out.push_str(&format!("tray_off_mode_seen = {}\n", c.tray_off_mode_seen));
     out.push_str(&format!(
+        "trim_margins = {}\nhdr_screenshots = {}\nborder_color = {}\nborder_width = {}\n",
+        c.trim_margins,
+        q(&c.hdr_screenshots),
+        q(&c.border_color),
+        c.border_width
+    ));
+    out.push_str(&format!(
         "launcher_source = {}\nlauncher_delay = {}\nlauncher_after = {}\n",
         q(&c.launcher_source),
         c.launcher_delay,
@@ -1408,6 +1466,13 @@ pub fn to_toml(c: &Config) -> String {
         c.history_max_mb,
         q(&c.history_hotkey),
         q(&c.edit_save)
+    ));
+    out.push_str(&format!(
+        "copy_text_mode = {}\nredact_kinds = {}\nredact_style = {}\nselection_mode = {}\n",
+        q(&c.copy_text_mode),
+        q(&c.redact_kinds),
+        q(&c.redact_style),
+        q(&c.selection_mode)
     ));
     for id in TOOL_IDS {
         if let Some(v) = c.tool_sizes.get(id) {
@@ -2000,6 +2065,24 @@ bogus = 1
         assert!(parse_config("accept_on_select = \"maybe\"").is_err());
     }
 
+    /// Trim margins, HDR screenshots and the export border: defaults,
+    /// round trip, and values out of range refused.
+    #[test]
+    fn capture_extras_roundtrip() {
+        let d = Config::default();
+        assert!(!d.trim_margins && d.hdr_screenshots == "tonemap" && d.border_width == 0 && d.border_color == "#000000");
+        let c = Config { trim_margins: true, hdr_screenshots: "keep".into(), border_color: "#ff8800".into(), border_width: 3, ..Config::default() };
+        let text = to_toml(&c);
+        assert!(text.contains("trim_margins = true\n") && text.contains("hdr_screenshots = \"keep\"\n"), "{text}");
+        assert!(text.contains("border_color = \"#ff8800\"\n") && text.contains("border_width = 3\n"), "{text}");
+        assert_eq!(parse_config(&text).unwrap(), c);
+        assert!(!rewrite_loses(&text));
+        for bad in ["border_width = 9", "border_width = -1", "border_color = \"red\"", "hdr_screenshots = \"hdr\""] {
+            assert!(parse_config(bad).is_err(), "{bad}");
+        }
+        assert_eq!(parse_config("border_width = 8").unwrap().border_width, 8);
+    }
+
     /// The Win+Shift+S guide's "Don't show again": on by default, kept.
     #[test]
     fn tray_off_mode_seen_roundtrip() {
@@ -2080,6 +2163,13 @@ record_hotkey = \"Ctrl+Shift+R\"
         assert_eq!(parse_config(&to_toml(&h)).unwrap(), h);
         assert!(!rewrite_loses(&to_toml(&h)));
         assert!(parse_config("history_days = 0").is_err() && parse_config("edit_save = \"maybe\"").is_err());
+        // Copy text lets the user select; Redact finds every kind; regions.
+        assert!(d.copy_text_mode == "select" && d.redact_kinds == "all" && d.selection_mode == "rect");
+        assert_eq!(d.redact_style, "solid");
+        let s = Config { copy_text_mode: "all".into(), redact_kinds: "emails,ips".into(), redact_style: "blur".into(), selection_mode: "freeform".into(), ..Config::default() };
+        assert_eq!(parse_config(&to_toml(&s)).unwrap(), s);
+        assert!(!rewrite_loses(&to_toml(&s)));
+        assert!(parse_config("copy_text_mode = \"some\"").is_err() && parse_config("selection_mode = \"circle\"").is_err());
         let w = hotkey_warnings(&Config { history_hotkey: "Nope+".into(), ..Config::default() });
         assert!(w.len() == 1 && w[0].starts_with("history_hotkey"), "{w:?}");
         let w = hotkey_warnings(&Config { repeat_hotkey: "Nope+".into(), ..Config::default() });

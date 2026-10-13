@@ -8,7 +8,11 @@
 //!   (`win.rs`), in the user's profile languages.
 //! - macOS: Vision's `VNRecognizeTextRequest` (`macos.rs`).
 //! - Linux: the `tesseract` command when it is on `PATH` (`linux.rs`),
-//!   PNG on stdin, text on stdout; never installed for the user.
+//!   PNG on stdin, text on stdout (`tsv` for the words' boxes, `tsv.rs`);
+//!   never installed for the user.
+//!
+//! The words' boxes ([`recognize_lines`]) drive Copy text's Text mode
+//! (select words, [`textsel`]) and Quick Redact ([`redact`]).
 
 use crate::editor::style::ToastKind;
 use crate::notice::Note;
@@ -24,6 +28,9 @@ mod linux;
 
 #[cfg(all(test, windows))]
 mod win_tests;
+pub mod redact;
+pub mod textsel;
+mod tsv;
 
 /// Why no text came back.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -46,7 +53,6 @@ pub enum OcrError {
 pub const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// One recognized word and its box (image px, top-left origin).
-#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))] // tesseract gives plain text
 #[derive(Clone, Debug, PartialEq)]
 pub struct Word {
     pub text: String,
@@ -57,13 +63,11 @@ pub struct Word {
 }
 
 /// One line as the engine returned it: its words in reading order.
-#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))] // tesseract gives plain text
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Line {
     pub words: Vec<Word>,
 }
 
-#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))] // tesseract gives plain text
 impl Line {
     /// The line's top and left edge (its words' smallest y and x).
     fn top_left(&self) -> (f32, f32) {
@@ -73,18 +77,61 @@ impl Line {
     }
 }
 
-/// The text of `lines`: top to bottom (then left to right where two lines
-/// start at the same height), words joined with single spaces in the
-/// engine's order, one line per row; lines without text are left out.
-#[cfg_attr(not(any(windows, target_os = "macos")), allow(dead_code))] // tesseract gives plain text
-pub fn join_lines(mut lines: Vec<Line>) -> String {
-    lines.retain(|l| l.words.iter().any(|w| !w.text.trim().is_empty()));
+/// `lines` in reading order: top to bottom (then left to right where two
+/// lines start at the same height), each word's text trimmed, words and
+/// lines without text left out. Copy all, Text mode's selection and
+/// Redact all see the lines in this order.
+pub fn ordered(mut lines: Vec<Line>) -> Vec<Line> {
+    for l in &mut lines {
+        l.words.retain(|w| !w.text.trim().is_empty());
+        for w in &mut l.words {
+            if w.text.trim().len() != w.text.len() {
+                w.text = w.text.trim().to_string();
+            }
+        }
+    }
+    lines.retain(|l| !l.words.is_empty());
     lines.sort_by(|a, b| {
         let (at, al) = a.top_left();
         let (bt, bl) = b.top_left();
         at.total_cmp(&bt).then(al.total_cmp(&bl))
     });
-    lines
+    // Columns: a line joins the one column it overlaps across (by half
+    // the narrower width); none, or a line across several (a heading, a
+    // footer), starts a column of its own. Columns read in the order
+    // they start, each top to bottom.
+    let span = |l: &Line| {
+        let x0 = l.words.iter().map(|w| w.x).fold(f32::INFINITY, f32::min);
+        let x1 = l.words.iter().map(|w| w.x + w.w).fold(f32::NEG_INFINITY, f32::max);
+        (x0, x1)
+    };
+    let overlaps = |a: (f32, f32), b: (f32, f32)| {
+        let o = a.1.min(b.1) - a.0.max(b.0);
+        o > 0.0 && o >= 0.5 * (a.1 - a.0).min(b.1 - b.0)
+    };
+    let mut cols: Vec<((f32, f32), Vec<Line>)> = Vec::new();
+    for l in lines {
+        let s = span(&l);
+        let hits: Vec<usize> = cols.iter().enumerate().filter(|(_, c)| overlaps(c.0, s)).map(|(i, _)| i).collect();
+        match hits[..] {
+            [i] => {
+                let c = &mut cols[i];
+                // Matched against its last line (a heading leads on into the
+                // column under it, not into both).
+                c.0 = s;
+                c.1.push(l);
+            }
+            _ => cols.push((s, vec![l])),
+        }
+    }
+    cols.into_iter().flat_map(|c| c.1).collect()
+}
+
+/// The text of `lines`: top to bottom (then left to right where two lines
+/// start at the same height), words joined with single spaces in the
+/// engine's order, one line per row; lines without text are left out.
+pub fn join_lines(lines: Vec<Line>) -> String {
+    ordered(lines)
         .iter()
         .map(|l| l.words.iter().map(|w| w.text.trim()).filter(|t| !t.is_empty()).collect::<Vec<_>>().join(" "))
         .collect::<Vec<_>>()
@@ -154,15 +201,29 @@ pub fn prepare(img: &PixBuf, max_side: Option<u32>) -> (PixBuf, u32) {
     }
 }
 
+/// Recognize the words of `img` with their boxes (blocking; off the UI
+/// thread): the lines as the engine found them ([`ordered`] sorts them).
+#[cfg_attr(test, allow(dead_code))] // tests fake it (Linux: no engine test)
+pub fn recognize_lines(img: &PixBuf) -> Result<Vec<Line>, OcrError> {
+    if img.width() == 0 || img.height() == 0 {
+        return Ok(Vec::new());
+    }
+    #[cfg(windows)]
+    return win::recognize_lines(img);
+    #[cfg(target_os = "macos")]
+    return macos::recognize_lines(img);
+    #[cfg(not(any(windows, target_os = "macos")))]
+    return linux::recognize_lines(img);
+}
+
 /// Recognize the text in `img` (blocking; call it off the UI thread).
 pub fn recognize(img: &PixBuf) -> Result<String, OcrError> {
     if img.width() == 0 || img.height() == 0 {
         return Ok(String::new());
     }
-    #[cfg(windows)]
-    return win::recognize(img);
-    #[cfg(target_os = "macos")]
-    return macos::recognize(img);
+    #[cfg(any(windows, target_os = "macos"))]
+    return recognize_lines(img).map(join_lines);
+    // tesseract's own text (its reading order of columns and blocks).
     #[cfg(not(any(windows, target_os = "macos")))]
     return linux::recognize(img);
 }
@@ -171,9 +232,14 @@ pub fn recognize(img: &PixBuf) -> Result<String, OcrError> {
 #[cfg(test)]
 pub type Fake = fn(&PixBuf) -> Result<String, OcrError>;
 
+/// Tests: what word recognition returns.
+#[cfg(test)]
+pub type FakeLines = fn(&PixBuf) -> Result<Vec<Line>, OcrError>;
+
 #[cfg(test)]
 thread_local! {
     pub static FAKE: std::cell::Cell<Option<Fake>> = const { std::cell::Cell::new(None) };
+    pub static FAKE_LINES: std::cell::Cell<Option<FakeLines>> = const { std::cell::Cell::new(None) };
     /// Tests: what [`copy`] put on the "clipboard".
     pub static COPIED: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
 }
@@ -191,6 +257,28 @@ pub fn spawn(img: PixBuf) -> Receiver<Result<String, OcrError>> {
             #[cfg(not(test))]
             let r = recognize(&img);
             let _ = tx.send(r);
+        }
+    });
+    if let Err(e) = spawned {
+        let _ = tx.send(Err(OcrError::Failed(format!("cannot start a thread: {e}"))));
+    }
+    rx
+}
+
+/// Recognize the words on a worker thread (Text mode, Redact): the lines
+/// in reading order ([`ordered`]) arrive on the receiver.
+pub fn spawn_lines(img: PixBuf) -> Receiver<Result<Vec<Line>, OcrError>> {
+    let (tx, rx) = mpsc::channel();
+    #[cfg(test)]
+    let fake = FAKE_LINES.with(|f| f.get());
+    let spawned = std::thread::Builder::new().name("rustshot-ocr".into()).spawn({
+        let tx = tx.clone();
+        move || {
+            #[cfg(test)]
+            let r = fake.map_or_else(|| Err(OcrError::Failed("no recognizer in tests".into())), |f| f(&img));
+            #[cfg(not(test))]
+            let r = recognize_lines(&img);
+            let _ = tx.send(r.map(ordered));
         }
     });
     if let Err(e) = spawned {

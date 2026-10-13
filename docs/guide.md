@@ -9,6 +9,7 @@ remapped (see [configuration.md](configuration.md#remapping-editor-shortcuts)).
 - [Saving](#saving)
 - [The launcher and delayed captures](#the-launcher-and-delayed-captures)
 - [Open with](#open-with)
+- [Share](#share)
 - [Pins and the thumbnail](#pins-and-the-thumbnail)
 - [History and the Edit window](#history-and-the-edit-window)
 - [Copy text (OCR)](#copy-text-ocr)
@@ -64,6 +65,42 @@ When the overlay opens, a card shows the main keys (as remapped) for three
 seconds or until the pointer moves or a key is pressed (*Show hints in the
 overlay*, `overlay_hints`).
 
+**Freeform** (<kbd>Shift</kbd>+<kbd>F</kbd>, or the lasso button right of
+the Screenshot / Video switch) makes the next selection a lasso: drag
+around what you want and let go, the path closes by itself. The lasso's
+bounding box is the selection (the toolbar, tools, handles and arrow keys
+work as usual; moving or resizing the box takes the lasso along), and what
+lies outside the lasso is dimmed. The capture is that box: transparent
+outside the lasso in a PNG (an anti-aliased edge), white in a JPG or BMP;
+annotations are cut to the lasso too. The clipboard gets it with its
+transparency (`CF_DIBV5` and PNG on Windows; PNG elsewhere). The mode is
+remembered (`selection_mode = "freeform"`); press
+<kbd>Shift</kbd>+<kbd>F</kbd> again for rectangles. History keeps the lasso
+with the capture (`mask` in its `meta.json`), so the Edit window opens it
+the same way; its `original.png` is cut by the lasso too, so nothing
+outside it is kept (an older Rustshot shows it transparent as well). A
+lasso that cannot be read is not shown at all.
+
+**Crop** (<kbd>C</kbd>) shows a frame with handles inside the selection:
+drag its handles or move it (a drag outside it starts a new frame), then
+<kbd>Enter</kbd> makes the frame the selection; <kbd>Esc</kbd> cancels.
+It is most useful after a window click or a full-screen capture. In the
+Edit window it crops the picture (see below).
+
+**Trim to content** (<kbd>Shift</kbd>+<kbd>A</kbd>, or click the `W × H`
+readout above the selection and pick *Trim to content*) tightens the
+selection to what is in it: each edge moves inward while its row or column
+is the edge's color (within 6 levels per channel, for at least 98 % of its
+pixels, so JPEG noise and a stray pixel still count as margin), and 2 px of
+the margin are kept. A window selected by a click whose own edges are not
+uniform (its title bar) trims its client area instead when that has
+margins, and otherwise stays whole (Windows). With a drawing tool chosen, a
+press on the readout draws as anywhere else; Trim is not offered in video
+mode. Annotations are ignored; <kbd>Ctrl</kbd>+<kbd>Z</kbd> puts the
+selection back. *Trim margins automatically* (Settings › Capture,
+`trim_margins = true`) trims every new region or window as you select it
+(not a click that selects the whole screen).
+
 ## Annotating
 
 The tools: select (<kbd>V</kbd>), pencil (<kbd>P</kbd>), line
@@ -101,8 +138,8 @@ size apply to the selection too. Every edit is one undo step.
   strength. It shares a toolbar button with **invert**: a click picks blur,
   holding the button down opens a menu with both.
 
-Save As, Save to Desktop and Open with… are in the menu of the Save
-button's chevron. Object actions (<kbd>Del</kbd>, <kbd>Ctrl</kbd>+<kbd>D</kbd>,
+Save As, Save to Desktop, Open with… and Share… are in the menu of the
+Save button's chevron. Object actions (<kbd>Del</kbd>, <kbd>Ctrl</kbd>+<kbd>D</kbd>,
 …) win over the other keys while objects are selected.
 
 ## Saving
@@ -121,6 +158,12 @@ with that folder and name; the format follows the extension you pick), and
 *Ask where to save* makes <kbd>Ctrl</kbd>+<kbd>S</kbd> ask too. The
 clipboard and uploads stay PNG. With *Copy to clipboard after capture* on,
 a save (or an upload) also copies the image.
+
+**Add a border** (Settings › Capture, `border_width` 1-8 logical px and
+`border_color`): a frame of that color around every exported image (copy,
+save, upload, pin, Open with, and the same from History and the Edit
+window), outside the capture so nothing is covered; the overlay previews it
+as a band around the selection. The History keeps the capture without it.
 
 The folder, subfolder pattern, file-name pattern, format and JPEG quality
 (1-100, default 90) are in Settings › General and Settings › Capture; the
@@ -150,6 +193,22 @@ saved opens as that file; otherwise it is written to a private
 `rustshot-open` folder first (`%TEMP%` on Windows, `$XDG_RUNTIME_DIR` on
 Linux, 0700 with 0600 files), whose files are removed once they are a day
 old, when the daemon starts.
+
+## Share
+
+**Share…** (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd>, also in the Edit
+window; in the overlay it is in the Save button's chevron menu, in History
+in a card's ⋯ menu) opens the system's share sheet with the capture: on Windows
+the Share window (titled "Rustshot capture"; a picture goes as a file and
+as an image, a recording as its MP4 or GIF file), on macOS the share menu
+at the pointer. The file is the same as Open with's: the saved file, else a
+PNG in the private `rustshot-open` folder. One sheet at a time: while one
+is open, Share says "A share sheet is already open". The overlay closes at
+once; Rustshot keeps running (also for a one-off capture without the tray)
+until the share is done: the sheet closed or the target took it, at most
+10 minutes (60 s after a target was chosen, or when Windows cannot tell
+when the share ends). Linux has no standard share sheet, so Share is not
+offered there.
 
 ## Pins and the thumbnail
 
@@ -204,9 +263,9 @@ Recordings or Uploaded. <kbd>Ctrl</kbd>/<kbd>Shift</kbd>+click or a drag
 on empty space selects several (Copy, Save to folder…, Delete). Hovering a
 card offers Edit, Copy, Save, Upload, Pin and more; a double-click (or
 <kbd>Enter</kbd>, <kbd>E</kbd>) edits; <kbd>Del</kbd> removes from History
-only. A card's ⋯ menu has Save As…, Open with…, Show in folder and Copy
-file path, and for an uploaded capture **Copy link** and **Delete
-upload…**.
+only. A card's ⋯ menu has Save As…, Open with…, Share… (Windows, macOS),
+Show in folder and Copy file path, and for an uploaded capture **Copy
+link** and **Delete upload…**.
 
 Every upload's link, where it went (Imgur and its *deletehash*, the key
 that deletes it; or the S3 bucket, the object's key and the access key id
@@ -236,23 +295,86 @@ asks first. `original.png` is never changed, so a capture can always be
 edited again. On macOS the History and Edit windows are not available yet
 (the history folder opens instead).
 
+**Crop** in the Edit window (the crop button after the tools, or
+<kbd>C</kbd>) puts a frame over the whole picture; <kbd>Enter</kbd> crops
+to it, <kbd>Esc</kbd> cancels, and undo takes a crop back like any edit.
+The crop is not destructive: the objects outside it are kept (just
+hidden), and opening the frame again shows the whole picture, so it can be
+widened later. It is saved in `annotations.json` as `"crop":[x,y,w,h]`;
+for older builds (0.2, 0.3), which know nothing of it, opaque fills over
+everything outside the crop are written after the objects
+(`"stands_for":"crop"`), so what a crop hides stays hidden there too.
+Every export (Save, Copy, Upload, History's own Copy) is the cropped part. What a crop or a lasso leaves out is blanked before the objects are drawn, so a magnifier (or a blur, an invert) inside never shows it; for older builds a magnifier that reads from outside the crop gets its loupe covered too.
+
 ## Copy text (OCR)
 
 **Copy text** (the toolbar's T-in-a-frame button, <kbd>O</kbd> or
-<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> in the overlay) recognizes
-the text in the selection and copies it as plain text; the notice says
-*Copied text · 3 lines* (or *No text found*).
-<kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> does the same straight from an
-area pick. Lines come top to bottom; small areas are read at twice their
-size. Nothing is bundled or downloaded, and the image never leaves your
-machine:
+<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> in the overlay and the Edit
+window) recognizes the text in the selection and opens **Text mode**: the
+words it found are tinted over the picture (the rest dimmed a little), the
+pointer is an I-beam over them, and you select words as in a document:
+
+| Do | How |
+|---|---|
+| Select a range (in reading order, across lines) | drag from one word to another |
+| Extend the selection | <kbd>Shift</kbd>+click |
+| A word / its line / everything | double-click / triple-click / <kbd>Ctrl</kbd>+<kbd>A</kbd> |
+| Copy the words selected (line breaks kept) | <kbd>Ctrl</kbd>+<kbd>C</kbd>, <kbd>Enter</kbd> or the **Copy** pill by them |
+| Copy everything | <kbd>Ctrl</kbd>+<kbd>C</kbd> with nothing selected (*Copied all text*), or **Copy all** in the bar |
+| Leave Text mode | <kbd>Esc</kbd>, Copy text again, or a tool (then <kbd>Ctrl</kbd>+<kbd>C</kbd> copies the picture) |
+
+The notice says *Copied text · 3 lines* (or *No text found*). Settings ›
+Capture › *Copy text* picks **Copy all at once** instead (the old
+behavior: the overlay closes and the text is copied;
+`copy_text_mode = "all"`). <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd>
+always copies everything straight from an area pick. Text mode reads only
+what the capture keeps (inside a lasso, inside the Edit window's crop);
+text in columns is read column by column.
+
+A **long press** on Copy text opens its menu: *Select text*, *Copy all
+text*, *Redact sensitive text*, and the kinds Quick Redact looks for.
+
+**Quick Redact** (<kbd>Shift</kbd>+<kbd>R</kbd>, or the menu) recognizes
+the selection and covers what looks sensitive: e-mail addresses (Unicode
+ones too), phone numbers (`+` and 7 to 15 digits, or grouped national
+numbers), card numbers (13 to 19 digits that pass the Luhn check),
+IBAN-like account numbers (mod 97), IPv4 addresses, URLs whose query names
+a token, key, secret, signature or session, webhook URLs (Slack, Discord,
+Telegram bots) and token-like path segments, JSON Web Tokens, `Bearer`
+tokens and `Authorization:` headers, `.env` lines whose key names a
+SECRET, TOKEN, KEY, PASS or PWD, the value after `api key:` / `token:`,
+and the whole rest of the line after `password:` or `passphrase:`.
+
+Each find becomes an ordinary object over its words (padded by 3 px or
+15 % of their height, whichever is more), all in one undo step, so you can
+delete or adjust any of them; the notice says *Redacted 3 items* or
+*Nothing sensitive found*. Settings › Capture › *Redact style*:
+
+- **Solid** (the default, `redact_style = "solid"`): an opaque fill in the
+  color around the words (the median of the box's edge), so it blends in.
+  Nothing can be read back from it, and older builds draw it too.
+- **Blur** (`"blur"`): a mosaic whose cells are twice the text's height
+  (each cell averages whole letters across the line), then a blur of one
+  cell on top. It looks softer, but only Solid is a guaranteed redaction.
+
+The menu's checkboxes (Emails, Phone numbers, Card numbers, IDs (IBAN),
+URLs, tokens & passwords, IP addresses) are remembered
+(`redact_kinds = "all"`, or e.g. `"emails,phones"`). In Text mode with
+words selected, Redact (the bar's *Redact selected*) covers exactly those.
+Copy, Save, Upload, Pin and Enter wait while Redact is still reading
+(*Redacting…*), so a capture never goes out without its covers; moving
+the selection meanwhile reads the new area again.
+
+Lines come top to bottom; small areas are read at twice their size.
+Nothing is bundled or downloaded, and the image never leaves your machine:
 
 - **Windows** uses the built-in Windows OCR (`Windows.Media.Ocr`) in your
   profile's languages; add an OCR language under *Settings › Time &
   language › Language & region* if the notice says none is installed.
 - **macOS** uses Vision's text recognition.
 - **Linux** runs `tesseract` when it is on `PATH` (e.g. `apt install
-  tesseract-ocr`).
+  tesseract-ocr`); Text mode and Redact read its `tsv` output for the
+  words' boxes.
 
 ## Recording
 
@@ -520,8 +642,9 @@ on the left picks the section:
   quality, the file-name pattern editor, the overlay's UI size (Auto
   follows each display's scaling; 75-200 % on top of it), *Snap to
   windows*, the magnifier, *Accept on select*, *Use Win+Shift+S and Print
-  Screen* (Windows), the renderer (Windows), History limits and *Reset tool
-  sizes & colors*.
+  Screen* (Windows), the renderer (Windows), *Reset tool sizes & colors*,
+  then *Image*: *Trim margins automatically*, *Add a border* (width and
+  color) and *HDR screenshots* (Windows), and the History limits.
 - **Recording:** video mode's defaults (format, frame rate, quality, GIF
   length, countdown, sound, microphone, camera bubble and its
   background); on Linux also the
@@ -572,6 +695,22 @@ GitHub account or release; builds are not code-signed yet.
 - **Windows 10/11:** everything in this guide. The overlay paints with GDI
   by default (`renderer = "gdi"`), which repaints only the pixels that
   changed and keeps memory low; `renderer = "software"` is the fallback.
+- **HDR displays (Windows):** a monitor in HDR is read as FP16 (scRGB)
+  through Desktop Duplication and tone-mapped to SDR: the SDR content
+  brightness (Settings › Display) becomes white, so SDR content (white
+  pages included) comes out exactly as on an SDR monitor, with no seam
+  where a capture spans both kinds; highlights brighter than that go to
+  white, keeping their hue where they can; then the sRGB curve. Very
+  saturated wide-gamut colors are clipped to sRGB. Rustshot keeps a
+  duplication of each HDR display open, so a capture of a still desktop
+  takes at most about 60 ms more per HDR display. Recordings do the same
+  on the CPU for what changed in each frame, on up to four threads (MP4s
+  of an HDR display convert to NV12 on the CPU too): fine for windows and
+  regions, while a whole 4K HDR screen that changes everywhere at once
+  drops frames (about 40 ms a frame for the tone mapping alone). *HDR
+  screenshots: Keep as captured* (`hdr_screenshots = "keep"`) turns it off
+  for screenshots and recordings. SDR monitors are never affected; Linux
+  and macOS hand over SDR pixels, so there is nothing to do there.
 - **Linux:** X11 sessions get every feature. In a Wayland session the
   overlay runs through XWayland and the screen comes from the
   xdg-desktop-portal (Screenshot and ScreenCast); window snapping is off

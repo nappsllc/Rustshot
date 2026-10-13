@@ -290,7 +290,7 @@ fn max_side(statics: &Com) -> Option<u32> {
     statics.get::<u32>(6, "MaxImageDimension").ok().filter(|m| *m > 0)
 }
 
-pub fn recognize(img: &PixBuf) -> Result<String, OcrError> {
+pub fn recognize_lines(img: &PixBuf) -> Result<Vec<Line>, OcrError> {
     let _apt = Apartment::enter();
     let statics = factory("Windows.Media.Ocr.OcrEngine", &IID_OCR_ENGINE_STATICS)?;
     let max = max_side(&statics);
@@ -311,9 +311,9 @@ pub fn recognize(img: &PixBuf) -> Result<String, OcrError> {
     };
     check(hr, "RecognizeAsync")?;
     let op = Com::new(op).ok_or_else(|| fail("no operation"))?;
-    let Some(result) = wait(&op)? else { return Ok(String::new()) };
+    let Some(result) = wait(&op)? else { return Ok(Vec::new()) };
     // IOcrResult::Lines (6) → IOcrLine::Words (6) → IOcrWord::BoundingRect (6), Text (7).
-    let Some(lines) = result.get_obj(6, "Lines")? else { return Ok(String::new()) };
+    let Some(lines) = result.get_obj(6, "Lines")? else { return Ok(Vec::new()) };
     let mut out = Vec::new();
     for l in lines.items()? {
         let mut line = Line::default();
@@ -326,5 +326,5 @@ pub fn recognize(img: &PixBuf) -> Result<String, OcrError> {
         }
         out.push(line);
     }
-    Ok(super::join_lines(out))
+    Ok(out)
 }

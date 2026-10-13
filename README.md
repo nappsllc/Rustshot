@@ -37,10 +37,20 @@ screenshots, editing and video capture.** Windows, Linux and macOS.
   outline it, then click to take exactly that window, menu or tooltip.
   <kbd>Tab</kbd> steps into its panels and fields.
 - Resize handles, arrow-key nudging and a live `W × H` readout.
+- *Freeform*: draw a lasso instead of a rectangle (<kbd>Shift</kbd>+<kbd>F</kbd>, or the
+  lasso by the mode switch). Outside it the PNG is transparent (white in a
+  JPG or BMP).
+- Crop (<kbd>C</kbd>): a frame inside the selection, or inside the picture in the
+  Edit window, where the crop can be undone or widened again later.
 - A pixel magnifier shows the position and color under the pointer.
   <kbd>H</kbd> copies the color as `#rrggbb`.
 - *Accept on select*: copy or save the moment you release the mouse.
+- *Trim to content*: <kbd>Shift</kbd>+<kbd>A</kbd> (or click the `W × H`
+  readout) cuts the uniform margins off the selection. Settings can trim
+  every new region or window for you.
 - Works across multiple monitors. The UI follows each display's scaling.
+- On Windows, HDR displays are tone-mapped to SDR, so screenshots and
+  recordings look as they do on screen instead of washed out.
 
 **Annotate & edit**
 - Pencil, line, arrow, rectangle, ellipse, marker, text, callout,
@@ -59,8 +69,11 @@ screenshots, editing and video capture.** Windows, Linux and macOS.
 **Share**
 - Copy to the clipboard, or save as PNG, JPEG or BMP into dated folders
   with your own file-name pattern.
-- Save As, Save to Desktop, **Open with…** any app, or (on Windows) drag
-  the thumbnail into another app.
+- Save As, Save to Desktop, **Open with…** any app, **Share…** through the
+  system's share sheet (Windows, macOS), or (on Windows) drag the thumbnail
+  into another app.
+- An optional border (any color, 1 to 8 px) around everything you copy,
+  save, upload or pin.
 - Upload to Imgur, or to your own S3-compatible bucket (Amazon S3,
   Cloudflare R2, MinIO, …), with the link copied for you. Images and MP4
   recordings can be uploaded, and you can delete an upload later
@@ -75,6 +88,18 @@ screenshots, editing and video capture.** Windows, Linux and macOS.
 **OCR**
 - Copy the text from any area. Rustshot uses the OCR built into Windows
   and macOS, or `tesseract` on Linux. Nothing is uploaded.
+- Text mode: the toolbar's Copy text shows the words it found. Drag across
+  them to select (double-click a word, triple-click a line, <kbd>Ctrl</kbd>+<kbd>A</kbd>
+  all), then <kbd>Ctrl</kbd>+<kbd>C</kbd> or **Copy**; with nothing selected <kbd>Ctrl</kbd>+<kbd>C</kbd>
+  copies all the text, and **Copy all** does too. <kbd>Esc</kbd> leaves Text mode
+  (then <kbd>Ctrl</kbd>+<kbd>C</kbd> copies the picture as before). The Copy text hotkey
+  still copies all at once (Settings › Capture › Copy text picks the
+  button's way too).
+- Quick Redact (<kbd>Shift</kbd>+<kbd>R</kbd>): e-mail addresses, phone and card numbers,
+  IBANs, IP addresses, URLs with tokens, keys, passwords and JWTs are
+  covered with an opaque fill in the surrounding color, all in one undo
+  step (Settings › Capture › Redact style: Solid, or Blur). Long-press
+  Copy text to choose which kinds.
 
 **Pin**
 - Pin a capture on top of every window. Zoom it, fade it and compare
@@ -191,11 +216,15 @@ off in Rustshot, and Windows uses the Snipping Tool again. More detail:
 | Stroke size − / + | <kbd>[</kbd> / <kbd>]</kbd> or the mouse wheel |
 | Copy / Save / Save As / Upload | <kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>Ctrl</kbd>+<kbd>S</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> / <kbd>Ctrl</kbd>+<kbd>U</kbd> |
 | Save to Desktop / Open with… / Pin | <kbd>Ctrl</kbd>+<kbd>D</kbd> / <kbd>Ctrl</kbd>+<kbd>O</kbd> / <kbd>Ctrl</kbd>+<kbd>P</kbd> |
+| Share… (Windows, macOS) | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd> |
 | Copy text (OCR) / Copy color under pointer | <kbd>O</kbd> (or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd>) / <kbd>H</kbd> |
+| Crop / Quick Redact / Freeform selection | <kbd>C</kbd> / <kbd>Shift</kbd>+<kbd>R</kbd> / <kbd>Shift</kbd>+<kbd>F</kbd> |
+| Text mode: copy the words / select all / leave | <kbd>Ctrl</kbd>+<kbd>C</kbd> (or <kbd>Enter</kbd>) / <kbd>Ctrl</kbd>+<kbd>A</kbd> / <kbd>Esc</kbd> |
 | Undo / Redo | <kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> (or <kbd>Ctrl</kbd>+<kbd>Y</kbd>) |
 | Delete / Duplicate selected objects | <kbd>Del</kbd> / <kbd>Ctrl</kbd>+<kbd>D</kbd> |
 | Bring to front / Send to back | <kbd>Ctrl</kbd>+<kbd>]</kbd> / <kbd>Ctrl</kbd>+<kbd>[</kbd> |
 | Select the whole screen / Toggle the palette | <kbd>Ctrl</kbd>+<kbd>A</kbd> / <kbd>Space</kbd> |
+| Trim the selection to its content | <kbd>Shift</kbd>+<kbd>A</kbd> |
 | Screenshot / Video mode | <kbd>1</kbd> / <kbd>2</kbd> |
 | Bigger / Smaller UI / Auto | <kbd>Ctrl</kbd>+<kbd>=</kbd> / <kbd>Ctrl</kbd>+<kbd>-</kbd> / <kbd>Ctrl</kbd>+<kbd>0</kbd> |
 | Accept / Cancel | <kbd>Enter</kbd> / <kbd>Esc</kbd> |

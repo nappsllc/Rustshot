@@ -238,6 +238,8 @@ fn text_tool_types_and_accepts() {
 #[ignore = "live display access; may replace the clipboard's text"]
 fn copy_text_key_recognizes_the_area() {
     let root = config_root("ocr", &renderer());
+    // All at once (the default lets you select words: `text_mode_*`).
+    append_config(&root, "copy_text_mode = \"all\"\n");
     let mut child = rustshot(&root)
         .env("RUSTSHOT_INSTANCE", format!("e2e-ocr-{}", std::process::id()))
         .env("LOCALAPPDATA", &*root)
@@ -259,6 +261,152 @@ fn copy_text_key_recognizes_the_area() {
         Some(1) => assert!(line.contains("language"), "only a missing language may fail: {out:?}"),
         c => panic!("unexpected exit {c:?}: {out:?}"),
     }
+}
+
+fn append_config(root: &Path, text: &str) {
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new().append(true).open(root.join("rustshot").join("config.toml")).expect("config");
+    f.write_all(text.as_bytes()).expect("config");
+}
+
+/// A one-shot overlay with its own instance, config and history (nothing
+/// of the user's is read or written).
+fn isolated(tag: &str, extra: &str, args: &[&str]) -> (Child, HWND, TempRoot) {
+    let root = config_root(tag, &renderer());
+    append_config(&root, extra);
+    let child = rustshot(&root)
+        .env("RUSTSHOT_INSTANCE", format!("e2e-{tag}-{}", std::process::id()))
+        .env("LOCALAPPDATA", &*root)
+        .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn rustshot");
+    let hwnd = wait_window(&child, 8000).expect("editor window");
+    (child, hwnd, root)
+}
+
+/// Copy text (O) with "Let me select": the overlay stays up in Text mode
+/// (whatever OCR finds on screen), Esc leaves it, a second Esc cancels.
+#[test]
+#[ignore = "live display access"]
+fn text_mode_keeps_the_overlay_until_escape() {
+    let (mut child, hwnd, _root) = isolated("textmode", "", &["gui", "--region", "800x600+20+20"]);
+    key(hwnd, 'O' as u32);
+    assert_eq!(wait_exit(&mut child, 3000), None, "Text mode: the overlay stays");
+    key(hwnd, 0x1B);
+    key(hwnd, 0x1B);
+    assert_eq!(wait_exit(&mut child, 5000), Some(2), "Esc leaves Text mode, then cancels");
+}
+
+/// Freeform (`selection_mode = "freeform"`): a lasso drawn with the mouse,
+/// Enter saves its box with the outside transparent.
+#[test]
+#[ignore = "live display access"]
+fn freeform_lasso_saves_a_transparent_outside() {
+    let out = std::env::temp_dir().join(format!("{ROOT_PREFIX}{}-lasso.png", std::process::id()));
+    let _ = std::fs::remove_file(&out);
+    let path = out.to_string_lossy().into_owned();
+    let (mut child, hwnd, _root) = isolated("lasso", "selection_mode = \"freeform\"\nsnap_windows = false\n", &["gui", "--path", &path]);
+    let pts = [(300, 200), (700, 200), (500, 600), (300, 200)];
+    mouse_move(hwnd, pts[0].0, pts[0].1);
+    mouse_down(hwnd, pts[0].0, pts[0].1);
+    for w in pts.windows(2) {
+        for i in 1..=20 {
+            let (x, y) = (w[0].0 + (w[1].0 - w[0].0) * i / 20, w[0].1 + (w[1].1 - w[0].1) * i / 20);
+            mouse_move(hwnd, x, y);
+        }
+    }
+    mouse_up(hwnd, pts[0].0, pts[0].1);
+    key(hwnd, 0x0D);
+    assert_eq!(wait_exit(&mut child, 8000), Some(0), "saved");
+    let bytes = std::fs::read(&out).expect("the PNG");
+    let _ = std::fs::remove_file(&out);
+    let mut dec = png::Decoder::new(std::io::Cursor::new(bytes));
+    dec.set_transformations(png::Transformations::EXPAND);
+    let mut r = dec.read_info().expect("png");
+    let mut buf = vec![0; r.output_buffer_size()];
+    let info = r.next_frame(&mut buf).expect("frame");
+    assert_eq!((info.width, info.height), (400, 400), "the lasso's box");
+    assert_eq!(info.color_type, png::ColorType::Rgba);
+    let a = |x: usize, y: usize| buf[(y * 400 + x) * 4 + 3];
+    assert_eq!(a(200, 100), 255, "inside");
+    assert_eq!((a(5, 395), a(395, 395)), (0, 0), "outside: transparent");
+}
+/// The window classes of process `pid`'s visible top-level windows.
+fn window_classes(pid: u32) -> Vec<String> {
+    use windows::Win32::UI::WindowsAndMessaging::GetClassNameW;
+    struct Acc {
+        pid: u32,
+        out: Vec<String>,
+    }
+    unsafe extern "system" fn cb(hwnd: HWND, l: LPARAM) -> BOOL {
+        unsafe {
+            let acc = &mut *(l.0 as *mut Acc);
+            let mut p = 0u32;
+            let _ = GetWindowThreadProcessId(hwnd, Some(&mut p));
+            if p == acc.pid && IsWindowVisible(hwnd).as_bool() {
+                let mut buf = [0u16; 128];
+                let n = GetClassNameW(hwnd, &mut buf) as usize;
+                acc.out.push(String::from_utf16_lossy(&buf[..n]));
+            }
+            BOOL(1)
+        }
+    }
+    let mut acc = Acc { pid, out: Vec::new() };
+    unsafe {
+        let _ = EnumWindows(Some(cb), LPARAM(&mut acc as *mut Acc as isize));
+    }
+    acc.out
+}
+
+/// Manual: Share in a one-shot capture (its key rebound to F9: posted keys
+/// carry no Ctrl/Shift; only the test's own overlay gets a message). The
+/// overlay closes, the share sheet comes up with the capture, and the
+/// process stays. Press Esc on the sheet: the share ends (`done: true`)
+/// and the process exits 0, long before the 120 s limit. Nothing is
+/// shared. No input is sent to the sheet or the desktop.
+///
+///     cargo test --test e2e manual_share -- --ignored --nocapture
+#[test]
+#[ignore = "manual: opens a system sheet; press Esc"]
+fn manual_share_keeps_a_one_shot_capture_alive_until_esc() {
+    let root = config_root("share", &renderer());
+    let cfg = root.join("rustshot").join("config.toml");
+    let mut text = std::fs::read_to_string(&cfg).unwrap();
+    text.push_str("\n[shortcuts]\nshare = \"F9\"\n");
+    std::fs::write(&cfg, text).unwrap();
+    let mut child = rustshot(&root)
+        .env("RUSTSHOT_INSTANCE", format!("e2e-share-{}", std::process::id()))
+        .env("LOCALAPPDATA", &*root)
+        .env("RUSTSHOT_SHARE_TRACE", "1")
+        .env("RUSTSHOT_SHARE_MAX_SECS", "120")
+        .args(["gui", "--region", "400x300+40+40"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn rustshot");
+    let hwnd = wait_window(&child, 8000).expect("editor window");
+    key(hwnd, 0x78); // VK_F9
+    let t0 = Instant::now();
+    // The overlay goes at once; the process waits for the sheet.
+    std::thread::sleep(Duration::from_millis(2500));
+    // Left: only the invisible owner window of the sheet.
+    let classes = window_classes(child.id());
+    assert_eq!(classes, ["RustshotShareOwner"], "the overlay closed, the owner stays");
+    assert!(child.try_wait().unwrap().is_none(), "still running while the sheet is up");
+    eprintln!("Press Esc on the share sheet now.");
+    let code = wait_exit(&mut child, 130_000);
+    let mut err = String::new();
+    use std::io::Read;
+    child.stderr.take().unwrap().read_to_string(&mut err).unwrap();
+    eprintln!("{err}");
+    assert_eq!(code, Some(0), "{err}");
+    assert!(err.contains("share: sheet shown for") && err.contains(".png"), "{err}");
+    assert!(err.contains("share: package filled"), "{err}");
+    assert!(err.contains("share: ended (asked: true, done: true"), "Esc ended it: {err}");
+    assert!(!err.contains("target chosen: true"), "nothing shared: {err}");
+    assert!(t0.elapsed() < Duration::from_secs(115), "not the time limit");
 }
 
 /// Run locally, this briefly shows the tray icon of its own named daemon
@@ -640,10 +788,12 @@ const NO_OTHER_HOTKEYS: &str =
 /// bold · italic · underline (3), Copy · Save · Upload (3), Copy text ·
 /// Copy color (2), then Accept.
 const ACCEPT_TABS: usize = 8 + 11 + 4 + 4 + 2 + 3 + 3 + 2 + 1;
-/// From Accept's cap to the footer's OK: the 17 overlay caps after it (the Edit window's zoom: 4),
-/// the 3 While recording rows, the header's Reset to defaults, then Open
-/// config file, Apply, Cancel, OK.
-const ACCEPT_TO_OK: usize = 17 + 3 + 1 + 4;
+/// From Accept's cap to the footer's OK: the 19 overlay caps after it
+/// (Cancel; Save As · Save to Desktop · Open with · Share: 4; Trim to
+/// content: 1; … the Edit window's zoom: 4), the 3 While recording rows,
+/// the header's Reset to defaults, then Open config file, Apply, Cancel,
+/// OK.
+const ACCEPT_TO_OK: usize = 19 + 3 + 1 + 4;
 /// Tab presses from the rail to General's Save to field: Theme, the
 /// four accent swatches, Launch at login, Show icon in tray, Copy after
 /// capture, Play shutter sound, Show thumbnail after capture, Show hints

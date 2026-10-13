@@ -76,6 +76,8 @@ pub enum Act {
     CopyLink(String),
     /// Open the capture with an app the user picks.
     OpenWith(String),
+    /// Hand the capture (or the recording) to the share sheet.
+    Share(String),
     /// Delete the upload (after "Delete upload?").
     DeleteUpload(String),
     Delete(Vec<String>),
@@ -452,13 +454,18 @@ pub fn open_edit(id: &str) {
 /// broken file, or one from a newer build), it is an error, never the
 /// original without the annotations (they may hide something).
 pub fn picture(store: &Store, e: &Entry) -> anyhow::Result<PixBuf> {
-    let objs = store.objects(e).map_err(|err| anyhow::anyhow!("its annotations cannot be read, so it is not shown without them ({err:#})"))?;
-    let orig = store.original(e)?;
-    if objs.is_empty() {
-        return Ok(orig);
+    let doc = store.doc(e).map_err(|err| anyhow::anyhow!("its annotations cannot be read, so it is not shown without them ({err:#})"))?;
+    if crate::history::mask_unreadable(&e.meta) {
+        anyhow::bail!("its lasso cannot be read, so it is not shown");
     }
-    let font = crate::text::AnnotFont::load();
-    Ok(crate::editor::bake_objects(&orig, &objs, font.as_ref()))
+    let orig = store.original(e)?;
+    if let Some(c) = doc.crop
+        && crate::objects::mask::crop_rect(c, orig.dimensions()).is_none()
+    {
+        anyhow::bail!("its crop lies outside the picture, so it is not shown");
+    }
+    // Its crop and lasso too (what they leave out is never shown).
+    Ok(crate::history::render(&orig, &doc.objects, doc.crop, e.meta.mask.as_deref()))
 }
 
 /// The file a capture opens as: the saved one (or the recording) when it
@@ -520,7 +527,7 @@ pub fn run_export(store: &Store, id: &str, task: crate::export::Task, cfg: &Conf
         };
     }
     let img = match picture(store, &e) {
-        Ok(i) => i,
+        Ok(i) => crate::export::with_border(i, cfg, e.meta.scale),
         Err(err) => return fail(format!("Could not read the capture: {err:#}")),
     };
     if task == Task::Pin {
@@ -564,26 +571,37 @@ pub fn run_export(store: &Store, id: &str, task: crate::export::Task, cfg: &Conf
 /// "Open with…" for entry `id`: its saved file (or the recording) when
 /// that is still what it looks like, else the picture as a temporary file.
 pub fn open_with(store: &Store, id: &str, cfg: &Config, owner: Option<usize>) -> Done {
-    let Some(e) = store.get(id) else { return fail("That capture is gone") };
+    match file_to_hand(store, id, cfg, "Open with") {
+        Ok(f) => crate::open_with::open_now(&f, owner).map_or_else(fail, |()| ok("")),
+        Err(d) => d,
+    }
+}
+
+/// "Share…" for entry `id`: the same file as Open with (its saved file
+/// or the recording, else a temporary PNG), to the share sheet over
+/// window `owner`.
+pub fn share(store: &Store, id: &str, cfg: &Config, owner: Option<usize>) -> Done {
+    match file_to_hand(store, id, cfg, "Share") {
+        Ok(f) => crate::share::share_now(&f, owner).map_or_else(fail, |()| ok("")),
+        Err(d) => d,
+    }
+}
+
+/// The file Open with / Share hands over for entry `id`: its saved file
+/// (or the recording) when that is still what it looks like, else the
+/// picture as a temporary file. `Err`: the failure to show.
+fn file_to_hand(store: &Store, id: &str, cfg: &Config, what: &str) -> Result<std::path::PathBuf, Done> {
+    let Some(e) = store.get(id) else { return Err(fail("That capture is gone")) };
     let as_is = e.meta.kind.is_recording() || (!e.meta.edited && e.meta.saved.as_ref().is_some_and(|p| p.is_file()));
     if as_is {
-        let f = match file_of(store, &e) {
-            Ok(f) => f,
-            Err(err) => return fail(format!("Could not read the capture: {err:#}")),
-        };
+        let f = file_of(store, &e).map_err(|err| fail(format!("Could not read the capture: {err:#}")))?;
         if !f.is_file() {
-            return fail("The file is gone");
+            return Err(fail("The file is gone"));
         }
-        return crate::open_with::open_now(&f, owner).map_or_else(fail, |()| ok(""));
+        return Ok(f);
     }
-    let img = match picture(store, &e) {
-        Ok(i) => i,
-        Err(err) => return fail(format!("Could not read the capture: {err:#}")),
-    };
-    match crate::open_with::file_for(&img, None, cfg) {
-        Ok(p) => crate::open_with::open_now(&p, owner).map_or_else(fail, |()| ok("")),
-        Err(err) => fail(format!("Open with failed: {err:#}")),
-    }
+    let img = picture(store, &e).map_err(|err| fail(format!("Could not read the capture: {err:#}")))?;
+    crate::open_with::file_for(&img, None, cfg).map_err(|err| fail(format!("{what} failed: {err:#}")))
 }
 
 /// Delete entry `id`'s upload where it went (Imgur over `http`, S3

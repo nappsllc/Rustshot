@@ -56,6 +56,8 @@ fn daemon_ocr(fake: crate::ocr::Fake, start: impl FnOnce(&mut App)) -> (App, Vec
     let mut a = app(Some(r(100.0, 80.0, 300.0, 200.0)));
     a.kind = RunKind::Daemon;
     a.cfg.shutter_sound = true;
+    // The button copies everything at once (Text mode: `text_mode_*`).
+    edit_of(&mut a).cfg.copy_text_mode = "all".into();
     start(&mut a);
     assert!(hidden(&a), "the overlay closed at once");
     settle(&mut a);

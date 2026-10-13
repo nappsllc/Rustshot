@@ -419,6 +419,8 @@ mod tests {
             pick: None,
             save_menu: None,
             slot_menu: None,
+            copy_menu: None,
+            freeform: None,
         }
     }
 

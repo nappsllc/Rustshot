@@ -70,6 +70,8 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Direct3D11",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
+    # HDR screenshots: each display's SDR white level (DisplayConfig).
+    "Win32_Devices_Display",
     "Win32_Media",
     "Win32_Media_Audio",
     "Win32_Media_MediaFoundation",
