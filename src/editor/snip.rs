@@ -24,10 +24,17 @@ use crate::uifb::Fb;
 use crate::ocr::textsel::{self, Pos};
 use crate::ocr::{self, Line, OcrError, redact};
 
-/// Quick Redact's blur strength (a light one: the words are small).
-pub const REDACT_SIGMA: f32 = 8.0;
-/// Around each matched word box.
-pub const REDACT_PAD: f32 = 2.0;
+/// Around each matched word box: at least this, else 15 % of its height
+/// (accents, descenders and a tight OCR box stay covered).
+pub const REDACT_PAD: f32 = 3.0;
+pub const REDACT_PAD_K: f32 = 0.15;
+/// The Blur style (`redact_style = "blur"`): a mosaic whose cells are
+/// twice the text's height (each cell averages whole letters across the
+/// line, so a glyph's shape is gone before the blur), then a Gaussian
+/// blur of standard deviation one cell over it. Solid (an opaque fill)
+/// is the default: the only style nothing can be read back from.
+pub const REDACT_CELL_K: f32 = 2.0;
+pub const REDACT_CELL_MIN: f32 = 16.0;
 /// Clicks closer than this in time and space count together (double,
 /// triple click).
 const MULTI_CLICK: Duration = Duration::from_millis(450);
@@ -212,14 +219,15 @@ pub fn offset_lines(lines: Vec<Line>, origin: Pt) -> Vec<Line> {
 }
 
 /// The blurs Quick Redact makes: per hit, its words' boxes on its line
-/// joined and padded [`REDACT_PAD`], clamped to `bounds`.
+/// joined and padded (`max(REDACT_PAD, REDACT_PAD_K × height)`),
+/// clamped to `bounds`.
 pub fn redact_rects(lines: &[Line], hits: &[redact::Hit], bounds: FRect) -> Vec<FRect> {
     let mut out = Vec::new();
     for h in hits {
         let Some(l) = lines.get(h.line) else { continue };
         let boxes: Vec<textsel::Box4> = h.words.clone().filter_map(|wi| textsel::word_box(std::slice::from_ref(l), (0, wi))).collect();
         let Some(u) = boxes.into_iter().map(fr).reduce(toolbar::union) else { continue };
-        let g = grow(u, REDACT_PAD);
+        let g = grow(u, REDACT_PAD.max(REDACT_PAD_K * u.h).ceil());
         let x0 = g.x.max(bounds.x);
         let y0 = g.y.max(bounds.y);
         let x1 = g.x1().min(bounds.x1());
@@ -231,7 +239,37 @@ pub fn redact_rects(lines: &[Line], hits: &[redact::Hit], bounds: FRect) -> Vec<
     out
 }
 
-/// The words `a`..=`b` as hits (Redact selected words: one per line).
+/// The Blur style's mosaic cell and blur for a box h px high.
+pub fn redact_blur_params(h: f32) -> (f32, f32) {
+    let cell = (REDACT_CELL_K * h).max(REDACT_CELL_MIN).round().min(100.0);
+    (cell, cell.min(50.0))
+}
+
+/// The median color of img's outermost pixels (the box's surroundings),
+/// opaque; None for an empty picture.
+pub fn border_median(img: &PixBuf) -> Option<C4> {
+    let (w, h) = img.dimensions();
+    if w == 0 || h == 0 {
+        return None;
+    }
+    let mut px = Vec::new();
+    for x in 0..w {
+        px.push(img.get_pixel(x, 0));
+        px.push(img.get_pixel(x, h - 1));
+    }
+    for y in 1..h.saturating_sub(1) {
+        px.push(img.get_pixel(0, y));
+        px.push(img.get_pixel(w - 1, y));
+    }
+    let mut ch = |i: usize| {
+        let mut v: Vec<u8> = px.iter().map(|p| p[i]).collect();
+        v.sort_unstable();
+        v[v.len() / 2]
+    };
+    Some(C4::rgb(ch(0), ch(1), ch(2)))
+}
+
+/// The words ..= as hits (Redact selected words: one per line).
 pub fn selection_hits(lines: &[Line], a: Pos, b: Pos) -> Vec<redact::Hit> {
     textsel::per_line(lines, a, b).into_iter().map(|(li, w0, w1)| redact::Hit { kind: redact::Kind::Url, line: li, words: w0..w1 + 1 }).collect()
 }
@@ -369,6 +407,19 @@ impl Edit {
         }
     }
 
+    /// What hides `r`: an opaque fill in the color around it (the median
+    /// of its border pixels, so it blends in; black when unknown), or with
+    /// `redact_style = "blur"` a coarse mosaic under a strong blur. Both
+    /// are ordinary objects (editable, deletable; older builds draw them).
+    pub(super) fn redact_objects(&self, r: FRect) -> Vec<Obj> {
+        if self.cfg.redact_style.trim() == "blur" {
+            let (cell, sigma) = redact_blur_params(r.h);
+            return vec![Obj::Pixelate { r, cell }, Obj::Blur { r, sigma }];
+        }
+        let color = border_median(&self.export(r)).unwrap_or(C4::rgb(0, 0, 0));
+        vec![Obj::RectFill { r, color, width: 0.5 }]
+    }
+
     /// The kinds Quick Redact looks for (`redact_kinds`).
     pub(super) fn redact_kinds(&self) -> Vec<redact::Kind> {
         redact::parse_kinds(&self.cfg.redact_kinds)
@@ -385,7 +436,8 @@ impl Edit {
         let n = rects.len();
         if n > 0 {
             self.finish_callout_edit();
-            self.objects.extend(rects.into_iter().map(|r| Obj::Blur { r, sigma: REDACT_SIGMA }));
+            let objs: Vec<Obj> = rects.iter().flat_map(|r| self.redact_objects(*r)).collect();
+            self.objects.extend(objs);
             self.push_history();
             self.dirty = true;
             self.obj.sel.clear();
@@ -1057,16 +1109,31 @@ mod tests {
         let hits = redact::find(&lines, &redact::Kind::ALL);
         let bounds = FRect { x: 0.0, y: 0.0, w: 1000.0, h: 1000.0 };
         let r = redact_rects(&lines, &hits, bounds);
-        assert_eq!(r, vec![FRect { x: 88.0, y: 18.0, w: 314.0, h: 18.0 }, FRect { x: 88.0, y: 48.0, w: 74.0, h: 18.0 }]);
+        assert_eq!(r, vec![FRect { x: 87.0, y: 17.0, w: 316.0, h: 20.0 }, FRect { x: 87.0, y: 47.0, w: 76.0, h: 20.0 }]);
         // Clamped to the area.
         let r = redact_rects(&lines, &hits, FRect { x: 0.0, y: 0.0, w: 200.0, h: 40.0 });
-        assert_eq!(r, vec![FRect { x: 88.0, y: 18.0, w: 112.0, h: 18.0 }]);
+        assert_eq!(r, vec![FRect { x: 87.0, y: 17.0, w: 113.0, h: 20.0 }]);
         assert_eq!(redact_note(0).0, "Nothing sensitive found");
         assert_eq!(redact_note(1).0, "Redacted 1 item");
         assert_eq!(redact_note(3).0, "Redacted 3 items");
         // Selected words: one blur per line.
         let s = selection_hits(&lines, (0, 3), (1, 0));
         assert_eq!(redact_rects(&lines, &s, bounds).len(), 2);
+    }
+
+    #[test]
+    fn redact_fills_take_the_surrounding_color() {
+        // A white box with dark text inside and one stray dark border pixel.
+        let mut img = PixBuf::from_pixel(20, 10, [250, 250, 250, 255]);
+        for x in 5..15 {
+            img.as_raw_mut()[(5 * 20 + x) * 4..][..4].copy_from_slice(&[0, 0, 0, 255]);
+        }
+        img.as_raw_mut()[..4].copy_from_slice(&[0, 0, 0, 255]);
+        assert_eq!(border_median(&img), Some(C4::rgb(250, 250, 250)));
+        assert_eq!(border_median(&PixBuf::default()), None);
+        assert_eq!(redact_blur_params(12.0), (24.0, 24.0));
+        assert_eq!(redact_blur_params(4.0), (16.0, 16.0), "at least 16 px cells");
+        assert_eq!(redact_blur_params(60.0), (100.0, 50.0), "the tools' ranges");
     }
 
     #[test]

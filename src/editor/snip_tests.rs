@@ -171,9 +171,21 @@ fn quick_redact_blurs_the_sensitive_words_in_one_step() {
     assert_eq!(notice(&mut a), "Looking for sensitive text\u{2026}");
     settle_ocr(&mut a);
     let e = edit_of(&mut a);
-    let blurs: Vec<FRect> = e.objects.iter().filter_map(|o| if let Obj::Blur { r, sigma } = o { assert_eq!(*sigma, snip::REDACT_SIGMA); Some(*r) } else { None }).collect();
-    // The e-mail and the card (its four words), padded 2 px.
-    assert_eq!(blurs, vec![r(188.0, 138.0, 64.0, 22.0), r(258.0, 138.0, 274.0, 22.0)]);
+    // Opaque fills in the color around them (old builds draw them too).
+    let fills: Vec<FRect> = e
+        .objects
+        .iter()
+        .map(|o| match o {
+            Obj::RectFill { r, color, .. } => {
+                assert_eq!(color.a, 255, "opaque");
+                assert_eq!(Some(*color), snip::border_median(&e.export(*r)), "the surroundings' median");
+                *r
+            }
+            o => panic!("not a fill: {o:?}"),
+        })
+        .collect();
+    // The e-mail and the card (its four words), padded max(3 px, 15 %).
+    assert_eq!(fills, vec![r(187.0, 137.0, 66.0, 24.0), r(257.0, 137.0, 276.0, 24.0)]);
     assert_eq!(e.hist.len(), hist + 1, "one undo step");
     assert_eq!(notice(&mut a), "Redacted 2 items");
     key(&mut a, 'Z' as u32, CTRL);
@@ -188,6 +200,14 @@ fn quick_redact_blurs_the_sensitive_words_in_one_step() {
     settle_ocr(&mut a);
     assert_eq!(edit_of(&mut a).objects.len(), 1);
     assert_eq!(notice(&mut a), "Redacted 1 item");
+    // The Blur style: a mosaic of cells twice the text height, then a
+    // blur of one cell, over each find.
+    key(&mut a, 'Z' as u32, CTRL);
+    edit_of(&mut a).cfg.redact_style = "blur".into();
+    key(&mut a, 'R' as u32, SHIFT);
+    settle_ocr(&mut a);
+    let q = r(257.0, 137.0, 276.0, 24.0);
+    assert_eq!(edit_of(&mut a).objects, vec![Obj::Pixelate { r: q, cell: 48.0 }, Obj::Blur { r: q, sigma: 48.0 }]);
     crate::ocr::FAKE_LINES.with(|f| f.set(None));
 }
 
@@ -198,7 +218,7 @@ fn redact_selected_words_in_text_mode() {
     drag(&mut a, word(0, 1), word(0, 2));
     key(&mut a, 'R' as u32, SHIFT);
     let e = edit_of(&mut a);
-    assert_eq!(e.objects, vec![Obj::Blur { r: r(188.0, 98.0, 134.0, 22.0), sigma: snip::REDACT_SIGMA }]);
+    assert!(matches!(e.objects[..], [Obj::RectFill { r: q, .. }] if q == r(187.0, 97.0, 136.0, 24.0)), "{:?}", e.objects);
     assert!(e.snip.text.as_ref().is_some_and(|t| t.sel.is_none()), "Text mode stays, the selection is used up");
     // Nothing sensitive: said so, nothing added.
     crate::ocr::FAKE_LINES.with(|f| f.set(Some(|_| Ok(vec![Line { words: vec![Word { text: "hello".into(), x: 0.0, y: 0.0, w: 9.0, h: 9.0 }] }]))));

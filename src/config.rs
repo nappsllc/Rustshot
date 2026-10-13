@@ -85,6 +85,9 @@ pub struct Config {
     /// Quick Redact's kinds ("all", or a list such as "emails,phones";
     /// [`crate::ocr::redact::parse_kinds`]); the Redact menu remembers them.
     pub redact_kinds: String,
+    /// What Quick Redact puts over a find: "solid" (an opaque fill in the
+    /// surrounding color) or "blur" (a coarse mosaic under a strong blur).
+    pub redact_style: String,
     /// The last selection mode: "rect" or "freeform" (a lasso).
     pub selection_mode: String,
     /// Palette shown in the color picker.
@@ -327,6 +330,7 @@ impl Default for Config {
             edit_save: String::new(),
             copy_text_mode: "select".into(),
             redact_kinds: "all".into(),
+            redact_style: "solid".into(),
             selection_mode: "rect".into(),
             user_colors: [
                 "#f04438", "#ff8a1f", "#ffc532", "#2dc06f", "#19b5d6", "#3b82f6", "#8b5cf6",
@@ -1091,6 +1095,7 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
             "edit_save" => cfg.edit_save = one_of(val, &["", "overwrite", "new"]).map_err(|e| bad("value", &e))?,
             "copy_text_mode" => cfg.copy_text_mode = one_of(val, &["select", "all"]).map_err(|e| bad("value", &e))?,
             "redact_kinds" => cfg.redact_kinds = as_string(val).map_err(|e| bad("string", &e))?,
+            "redact_style" => cfg.redact_style = one_of(val, &["solid", "blur"]).map_err(|e| bad("value", &e))?,
             "selection_mode" => cfg.selection_mode = one_of(val, &["rect", "freeform"]).map_err(|e| bad("value", &e))?,
             "upload_client_id" => {
                 cfg.upload_client_id = as_string(val).map_err(|e| bad("string", &e))?
@@ -1369,9 +1374,10 @@ pub fn to_toml(c: &Config) -> String {
         q(&c.edit_save)
     ));
     out.push_str(&format!(
-        "copy_text_mode = {}\nredact_kinds = {}\nselection_mode = {}\n",
+        "copy_text_mode = {}\nredact_kinds = {}\nredact_style = {}\nselection_mode = {}\n",
         q(&c.copy_text_mode),
         q(&c.redact_kinds),
+        q(&c.redact_style),
         q(&c.selection_mode)
     ));
     for id in TOOL_IDS {
@@ -2047,7 +2053,8 @@ record_hotkey = \"Ctrl+Shift+R\"
         assert!(parse_config("history_days = 0").is_err() && parse_config("edit_save = \"maybe\"").is_err());
         // Copy text lets the user select; Redact finds every kind; regions.
         assert!(d.copy_text_mode == "select" && d.redact_kinds == "all" && d.selection_mode == "rect");
-        let s = Config { copy_text_mode: "all".into(), redact_kinds: "emails,ips".into(), selection_mode: "freeform".into(), ..Config::default() };
+        assert_eq!(d.redact_style, "solid");
+        let s = Config { copy_text_mode: "all".into(), redact_kinds: "emails,ips".into(), redact_style: "blur".into(), selection_mode: "freeform".into(), ..Config::default() };
         assert_eq!(parse_config(&to_toml(&s)).unwrap(), s);
         assert!(!rewrite_loses(&to_toml(&s)));
         assert!(parse_config("copy_text_mode = \"some\"").is_err() && parse_config("selection_mode = \"circle\"").is_err());

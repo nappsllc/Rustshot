@@ -78,6 +78,9 @@ pub const ACCEPTS: [(&str, &str); 3] = [("Off", "off"), ("Copy", "copy"), ("Save
 /// Capture › Copy text (copy_text_mode): the overlay's button copies all,
 /// or opens Text mode to pick words (the hotkey always copies all).
 pub const COPY_TEXT: [(&str, &str); 2] = [("Copy all at once", "all"), ("Let me select", "select")];
+/// Capture › Redact style (`redact_style`): an opaque fill, or a mosaic
+/// under a blur.
+pub const REDACT_STYLES: [(&str, &str); 2] = [("Solid", "solid"), ("Blur", "blur")];
 const DEFAULT_FILENAME: &str = "%F_%H-%M";
 /// Capture › History: how long and how much it keeps (value, label).
 pub const HISTORY_DAYS: [(u32, &str); 4] = [(7, "7 days"), (30, "30 days"), (90, "90 days"), (365, "1 year")];
@@ -274,6 +277,8 @@ pub struct Form {
     pub hints: bool,
     /// Capture › Overlay: the Copy text button ([COPY_TEXT] index).
     pub copy_text: usize,
+    /// Capture › Overlay: Quick Redact's style ([`REDACT_STYLES`] index).
+    pub redact_style: usize,
 }
 
 impl Form {
@@ -319,6 +324,7 @@ impl Form {
             accept: ACCEPTS.iter().position(|a| cfg.accept_on_select.trim().eq_ignore_ascii_case(a.1)).unwrap_or(0),
             hints: cfg.overlay_hints,
             copy_text: COPY_TEXT.iter().position(|a| cfg.copy_text_mode.trim() == a.1).unwrap_or(1),
+            redact_style: REDACT_STYLES.iter().position(|a| cfg.redact_style.trim() == a.1).unwrap_or(0),
         }
     }
 
@@ -463,6 +469,9 @@ impl Form {
         }
         if self.copy_text != was.copy_text && let Some(a) = COPY_TEXT.get(self.copy_text) {
             c.copy_text_mode = a.1.into();
+        }
+        if self.redact_style != was.redact_style && let Some(a) = REDACT_STYLES.get(self.redact_style) {
+            c.redact_style = a.1.into();
         }
         let changed: Vec<Action> = Action::ALL.into_iter().filter(|a| self.keys.chords(*a) != was.keys.chords(*a)).collect();
         if !changed.is_empty() {

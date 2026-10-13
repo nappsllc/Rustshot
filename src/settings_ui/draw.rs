@@ -736,6 +736,9 @@ fn capture(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) 
     srow(ui, tok, "Copy text", Some("The toolbar's Copy text button; the Copy text hotkey always copies all"), |ui| {
         ui.seg("copy_text_mode", &labels(&COPY_TEXT), &mut f.copy_text, tok);
     });
+    srow(ui, tok, "Redact style", Some("What Quick Redact puts over sensitive text; Solid can never be read back"), |ui| {
+        ui.seg("redact_style", &labels(&REDACT_STYLES), &mut f.redact_style, tok);
+    });
     if let Some(on) = f.screenclip.as_mut() {
         srow_ex(ui, tok, "Use Win+Shift+S and Print Screen", Some(SCREENCLIP_HELP), false, ROW_H, |ui| {
             ui.switch("screenclip", on, tok);

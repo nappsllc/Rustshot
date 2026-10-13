@@ -740,6 +740,11 @@ fn overlay_helper_settings_are_saved() {
     s.form.copy_text = 0;
     assert!(matches!(&s.on(Click::Apply)[..], [Act::Saved(c)] if c.copy_text_mode == "all"));
     assert_eq!(settings_at(&p).form.copy_text, 0);
+    // Redact style: Solid by default; Blur is saved.
+    let mut s = settings_at(&p);
+    assert_eq!(REDACT_STYLES[s.form.redact_style].1, "solid");
+    s.form.redact_style = 1;
+    assert!(matches!(&s.on(Click::Apply)[..], [Act::Saved(c)] if c.redact_style == "blur"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
