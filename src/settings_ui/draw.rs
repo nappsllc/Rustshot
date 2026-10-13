@@ -24,9 +24,9 @@ pub const BODY_BOTTOM: f32 = 12.0;
 /// A row's height and its controls' height.
 pub const ROW_H: f32 = 36.0;
 pub const CTL: f32 = 28.0;
-/// The Win+Shift+S row's helper line, and its note until Windows uses us.
+/// The Win+Shift+S row's helper line (the line under it says which app
+/// Windows opens: [`crate::screenclip_win::state_line`]).
 pub const SCREENCLIP_HELP: &str = "Replaces the Snipping Tool; works even when Rustshot isn't running";
-pub const SCREENCLIP_WAIT: &str = "Windows asks at the next Win+Shift+S: choose Rustshot, Always";
 /// The field width of Save to and the like.
 pub const FIELD_W: f32 = 228.0;
 
@@ -169,6 +169,33 @@ pub fn note_line(ui: &mut Ui, tok: &Tok, text: &str, err: bool, left: Option<f32
     ui.space(18.0 + 2.0);
 }
 
+/// The Win+Shift+S row's state line, right-aligned like [`note_line`]:
+/// green when it opens Rustshot, red (a link that opens the guide) when
+/// it is set to a missing app. Returns whether that link was clicked.
+pub fn screenclip_line(ui: &mut Ui, tok: &Tok, text: &str, tone: crate::screenclip_win::Tone) -> bool {
+    use crate::screenclip_win::Tone;
+    let b = ui.bounds();
+    let y = ui.cursor_y();
+    let fit = ui.fit_text(11.0, text, b.w - 30.0);
+    let tw = ui.text_w(11.0, &fit).ceil();
+    let mut clicked = false;
+    match tone {
+        Tone::Bad => {
+            let saved = ui.ctl_h;
+            ui.ctl_h = 14.0;
+            clicked = ui.place(FRect { x: b.x1() - tw, y, w: tw, h: 14.0 }).clink_in("screenclip_fix", &fit, 11.0, false, tok.er);
+            ui.ctl_h = saved;
+        }
+        Tone::Good | Tone::Plain => {
+            let c = if tone == Tone::Good { ui.theme.success } else { tok.tx2 };
+            let (x, cy) = (ui.px(b.x1() - tw), ui.px(y + 7.0));
+            ui.text_at(11.0, &fit, x, cy, c, false);
+        }
+    }
+    ui.space(18.0 + 2.0);
+    clicked
+}
+
 /// A section heading indented `x` (Key bindings: 8).
 fn sec_at(ui: &mut Ui, tok: &Tok, s: &str, x: f32) {
     if x <= 0.0 {
@@ -221,11 +248,31 @@ pub fn paint(ui: &mut Ui, s: &mut Settings) -> Option<Click> {
         ui.radius = 8.0;
         ui.ctl_h = crate::ui::layout::H;
         ui.field_fill = None;
-        if let Some(c) = question(ui, &m) {
+        if let Some(c) = question(ui, s, &m) {
             click = Some(c);
         }
     }
+    toast(ui, s);
     click
+}
+
+/// The toast over the footer ([`Settings::toast`]): fades in, holds,
+/// fades out.
+fn toast(ui: &mut Ui, s: &Settings) {
+    let Some((msg, at)) = &s.toast else { return };
+    let age = at.elapsed().as_secs_f32() * 1000.0;
+    let k = crate::anim::ease_out(age / 120.0).min((1.0 - (age - (TOAST_MS as f32 - 150.0)) / 150.0).clamp(0.0, 1.0));
+    toast_at(ui, msg, k);
+}
+
+/// The toast with opacity `k` (tests draw it fully shown).
+pub fn toast_at(ui: &mut Ui, msg: &str, k: f32) {
+    if k <= 0.0 {
+        return;
+    }
+    let cu = crate::editor::style::Ui { th: ui.theme, s: ui.k, font: Some(&crate::fonts::UI) };
+    let area = phys(ui, FRect { x: RAIL_W, y: 0.0, w: W as f32 - RAIL_W, h: H as f32 - FOOT_H + 16.0 });
+    crate::editor::style::toast(&mut ui.fb, &cu, msg, crate::editor::style::ToastKind::Success, area, k);
 }
 
 /// The scrolled section body.
@@ -326,12 +373,95 @@ fn footer(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) {
     });
 }
 
-/// The question, error or broken-file state, centred over the dimmed form.
-fn question(ui: &mut Ui, m: &Modal) -> Option<Click> {
+/// What a [`dialog`] shows: the window's one card style for questions,
+/// errors (a hotkey that did not register) and messages.
+pub struct Dialog<'a> {
+    pub icon: &'a str,
+    pub icon_color: C4,
+    /// A bold line over the text.
+    pub title: Option<&'a str>,
+    pub text: &'a str,
+    /// (id, label, click); the first is the default (primary) one.
+    pub buttons: &'a [(&'a str, &'a str, Click)],
+    /// A checkbox left of the buttons: (id, label, ticked, its click).
+    pub check: Option<(&'a str, &'a str, bool, Click)>,
+    /// The card's least width (logical px).
+    pub min_w: f32,
+    /// The tallest the text may grow before it is cut.
+    pub max_text_h: f32,
+}
+
+/// Paint `d` centred over the dimmed form; returns the click.
+pub fn dialog(ui: &mut Ui, d: &Dialog) -> Option<Click> {
     use crate::ui::layout::{GAP, H as QROW};
     let b = ui.bounds();
+    let tok = Tok::of(ui.theme);
+    let (cp, icon_w) = (24.0f32, 24.0 + 12.0);
+    let check_w = d.check.map_or(0.0, |(_, l, _, _)| 16.0 + 8.0 + ui.text_w(12.0, l) + 2.0 * GAP);
+    let total: f32 = d.buttons.iter().map(|b| ui.button_width(b.1)).sum::<f32>() + GAP * (d.buttons.len() as f32 - 1.0);
+    let cw = (total + check_w + 2.0 * cp).max(d.min_w);
+    let text_w = cw - 2.0 * cp - icon_w;
+    let title_h = if d.title.is_some() { 24.0 } else { 0.0 };
+    let th = ui.paragraph_height(d.text, text_w).clamp(24.0, d.max_text_h);
+    let ch = cp + title_h + th + 24.0 + QROW + cp;
+    let card = FRect { x: ((b.w - cw) / 2.0).round(), y: ((b.h - ch) / 2.0).round(), w: cw, h: ch };
+    ui.modal_card(card);
+    ui.area(FRect { x: card.x + cp, y: card.y + cp, w: 24.0, h: 24.0 }, |ui| ui.icon(d.icon, 24.0, d.icon_color));
+    let tx = card.x + cp + icon_w;
+    if let Some(t) = d.title {
+        let fit = ui.fit_text(14.0, t, text_w);
+        let (x, cy) = (ui.px(tx), ui.px(card.y + cp + 12.0));
+        ui.text_at(14.0, &fit, x, cy, tok.tx, true);
+    }
+    let ty = card.y + cp + title_h + if title_h == 0.0 && th <= 24.0 { 2.0 } else { 0.0 };
+    ui.area(FRect { x: tx, y: ty, w: text_w, h: th }, |ui| ui.height(th).paragraph(d.text, false));
+    let bar = FRect { x: card.x + cp, y: card.y1() - cp - QROW, w: cw - 2.0 * cp, h: QROW };
+    let mut click = None;
+    if let Some((id, label, mut on, c)) = d.check {
+        ui.area(bar, |ui| {
+            ui.row(|ui| {
+                if ui.checkbox(id, label, &mut on, &tok) {
+                    click = Some(c);
+                }
+            })
+        });
+    }
+    ui.area(bar, |ui| {
+        ui.row(|ui| {
+            ui.space(bar.w - total);
+            for (i, &(id, label, c)) in d.buttons.iter().enumerate() {
+                if ui.button(id, label, i == 0) {
+                    click = Some(c);
+                }
+            }
+        })
+    });
+    click
+}
+
+/// The question, error, broken-file state or guide, as a [`dialog`].
+fn question(ui: &mut Ui, s: &Settings, m: &Modal) -> Option<Click> {
+    if let Modal::Guide { broken, dont_show } = *m {
+        use crate::screenclip_win::{GUIDE_DONT_SHOW, GUIDE_LATER, GUIDE_OPEN};
+        let (title, text) = s.guide_texts(broken);
+        let icon_color = if broken { ui.theme.error } else { ui.theme.accent_fg };
+        return dialog(
+            ui,
+            &Dialog {
+                icon: if broken { "alert" } else { "info" },
+                icon_color,
+                title: Some(title),
+                text: &text,
+                buttons: &[("q_open_default_apps", GUIDE_OPEN, Click::OpenDefaultApps), ("q_later", GUIDE_LATER, Click::RemindLater)],
+                check: Some(("q_dont_show", GUIDE_DONT_SHOW, dont_show, Click::DontShow)),
+                min_w: 500.0,
+                max_text_h: 260.0,
+            },
+        );
+    }
     type Btns = &'static [(&'static str, &'static str, Click)];
     let (icon, text, btns): (&str, String, Btns) = match m {
+        Modal::Guide { .. } => unreachable!("drawn above"),
         Modal::Rewrite { .. } => {
             ("info", REWRITE.into(), &[("q_save", "Save", Click::Save), ("q_cancel", "Cancel", Click::Back)])
         }
@@ -347,31 +477,8 @@ fn question(ui: &mut Ui, m: &Modal) -> Option<Click> {
         ),
         Modal::Reset(_) => ("alert", RESET.into(), &[("q_replace", "Replace", Click::Replace), ("q_cancel", "Cancel", Click::Back)]),
     };
-    let (cp, icon_w) = (24.0f32, 24.0 + 12.0);
-    let total: f32 = btns.iter().map(|b| ui.button_width(b.1)).sum::<f32>() + GAP * (btns.len() as f32 - 1.0);
-    let cw = (total + 2.0 * cp).max(420.0);
-    let text_w = cw - 2.0 * cp - icon_w;
-    let th = ui.paragraph_height(&text, text_w).clamp(24.0, 160.0);
-    let ch = cp + th + 24.0 + QROW + cp;
-    let card = FRect { x: ((b.w - cw) / 2.0).round(), y: ((b.h - ch) / 2.0).round(), w: cw, h: ch };
-    ui.modal_card(card);
-    let col = if matches!(m, Modal::Rewrite { .. }) { ui.theme.accent_fg } else { ui.theme.error };
-    ui.area(FRect { x: card.x + cp, y: card.y + cp, w: 24.0, h: 24.0 }, |ui| ui.icon(icon, 24.0, col));
-    let tr = FRect { x: card.x + cp + icon_w, y: card.y + cp + if th <= 24.0 { 2.0 } else { 0.0 }, w: text_w, h: th };
-    ui.area(tr, |ui| ui.height(th).paragraph(&text, false));
-    let bar = FRect { x: card.x + cp, y: card.y1() - cp - QROW, w: cw - 2.0 * cp, h: QROW };
-    let mut click = None;
-    ui.area(bar, |ui| {
-        ui.row(|ui| {
-            ui.space(bar.w - total);
-            for (i, &(id, label, c)) in btns.iter().enumerate() {
-                if ui.button(id, label, i == 0) {
-                    click = Some(c);
-                }
-            }
-        })
-    });
-    click
+    let icon_color = if matches!(m, Modal::Rewrite { .. }) { ui.theme.accent_fg } else { ui.theme.error };
+    dialog(ui, &Dialog { icon, icon_color, title: None, text: &text, buttons: btns, check: None, min_w: 420.0, max_text_h: 160.0 })
 }
 
 // --- Sections ---------------------------------------------------------------
@@ -474,7 +581,8 @@ fn capture(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) 
     let wayland = wayland();
     let show_renderer = s.renderer;
     let done = s.tools_reset;
-    let screenclip_wait = s.screenclip_wait || s.screenclip != Some(true);
+    // Which app Win+Shift+S opens, once the toggle is saved on.
+    let clip_line = (s.screenclip == Some(true)).then(|| crate::screenclip_win::state_line(&s.handler));
     let f = &mut s.form;
     let mut target = s.pattern;
     let mut token = None;
@@ -578,8 +686,11 @@ fn capture(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) 
         srow_ex(ui, tok, "Use Win+Shift+S and Print Screen", Some(SCREENCLIP_HELP), false, ROW_H, |ui| {
             ui.switch("screenclip", on, tok);
         });
-        if *on && screenclip_wait {
-            note_line(ui, tok, SCREENCLIP_WAIT, false, None);
+        if *on
+            && let Some((text, tone)) = &clip_line
+            && screenclip_line(ui, tok, text, *tone)
+        {
+            *click = Some(Click::FixScreenclip);
         }
     }
     if show_renderer {

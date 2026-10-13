@@ -183,6 +183,9 @@ pub struct Config {
     pub accept_on_select: String,
     /// The hint card when the overlay opens (Settings › General).
     pub overlay_hints: bool,
+    /// Windows: the daemon reminds how to pick Rustshot for Win+Shift+S
+    /// while it is offered but not chosen (false: "Don't show again").
+    pub screenclip_hint: bool,
 }
 
 /// The drawing tools whose size and color are remembered
@@ -302,6 +305,7 @@ impl Default for Config {
             magnifier_square: false,
             accept_on_select: "off".into(),
             overlay_hints: true,
+            screenclip_hint: true,
             history: true,
             history_days: 30,
             history_max_mb: 2048,
@@ -958,6 +962,7 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
                 cfg.accept_on_select = one_of(val, &["off", "copy", "save"]).map_err(|e| bad("value", &e))?
             }
             "overlay_hints" => cfg.overlay_hints = as_bool(val).map_err(|e| bad("boolean", &e))?,
+            "screenclip_hint" => cfg.screenclip_hint = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "history" => cfg.history = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "history_days" => {
                 cfg.history_days =
@@ -1229,6 +1234,7 @@ pub fn to_toml(c: &Config) -> String {
         q(&c.accept_on_select),
         c.overlay_hints
     ));
+    out.push_str(&format!("screenclip_hint = {}\n", c.screenclip_hint));
     out.push_str(&format!(
         "launcher_source = {}\nlauncher_delay = {}\nlauncher_after = {}\n",
         q(&c.launcher_source),
@@ -1766,6 +1772,19 @@ bogus = 1
         assert!(!rewrite_loses(&text));
         assert!(!rewrite_loses("accept_on_select = \"copy\"\nmagnifier_square = true\n"), "hand-written keys survive");
         assert!(parse_config("accept_on_select = \"maybe\"").is_err());
+    }
+
+    /// The Win+Shift+S guide's "Don't show again": on by default, kept.
+    #[test]
+    fn screenclip_hint_roundtrip() {
+        assert!(Config::default().screenclip_hint);
+        let c = Config { screenclip_hint: false, ..Config::default() };
+        let text = to_toml(&c);
+        assert!(text.contains("screenclip_hint = false\n"), "{text}");
+        assert_eq!(parse_config(&text).unwrap(), c);
+        assert!(!rewrite_loses(&text));
+        assert!(!parse_config("screenclip_hint = false").unwrap().screenclip_hint);
+        assert!(parse_config("screenclip_hint = 2").is_err());
     }
 
     #[test]
