@@ -333,8 +333,16 @@ pub enum Tone {
     Bad,
 }
 
-/// The Settings row's line for `h`.
-pub fn state_line(h: &Handler) -> (String, Tone) {
+/// The Settings row's line when the tray icon is off and Windows does not
+/// open Rustshot: no shortcut reaches Rustshot then.
+pub const NO_SHORTCUT: &str = "Set up Win+Shift+S \u{2014} otherwise Rustshot can't be opened by a shortcut";
+
+/// The Settings row's line for `h`; `show_tray`: the tray icon is on
+/// (off, anything but Rustshot is [`NO_SHORTCUT`], a link to the guide).
+pub fn state_line(h: &Handler, show_tray: bool) -> (String, Tone) {
+    if !show_tray && *h != Handler::Ours {
+        return (NO_SHORTCUT.into(), Tone::Bad);
+    }
     match h {
         Handler::Ours => ("Opens Rustshot".into(), Tone::Good),
         Handler::Other { name, .. } => (format!("Opens {name}"), Tone::Plain),
@@ -660,6 +668,24 @@ pub fn handler() -> Handler {
     Handler::None
 }
 
+/// Public entry for other flows (the tray-off confirmation): which app
+/// Win+Shift+S opens now. Same as [`handler`].
+pub fn handler_state() -> Handler {
+    handler()
+}
+
+/// Public entry for other flows: show "One more step to use
+/// Win+Shift+S" — the Settings window opens at Capture with the guide
+/// over it (or the open window shows it). The guide needs the
+/// registration on (`state() == Some(true)`) and Windows not opening
+/// Rustshot yet; otherwise only Capture shows (where the toggle is).
+/// `owner` is accepted for callers that have a window; the guide lives in
+/// the Settings window, so it is not used.
+pub fn show_setup_guide(owner: Option<crate::wind::Hwnd>) {
+    let _ = owner;
+    crate::settings_ui::show_guide();
+}
+
 /// At daemon start: registered, but Windows does not open Rustshot, and
 /// the user did not say "Don't show again" — the Settings window opens
 /// on the guide. Named (test) instances never do it.
@@ -667,8 +693,8 @@ pub fn remind_on_start(hint: bool) {
     if !hint || cfg!(test) || crate::instance::instance_name().is_some() || state() != Some(true) {
         return;
     }
-    if handler() != Handler::Ours {
-        crate::settings_ui::show_guide();
+    if handler_state() != Handler::Ours {
+        show_setup_guide(None);
     }
 }
 
@@ -922,10 +948,18 @@ mod tests {
         assert!(broken.ends_with(&plain));
         assert!(guide_text(false, true).contains("MS-SCREENCLIP") && !guide_text(false, true).contains("Scroll"));
         assert!(guide_text(true, true).starts_with(GUIDE_BROKEN));
-        assert_eq!(state_line(&Handler::Ours), ("Opens Rustshot".into(), Tone::Good));
-        assert_eq!(state_line(&Handler::Other { progid: SNIP.into(), name: "Snipping Tool".into() }), ("Opens Snipping Tool".into(), Tone::Plain));
-        assert_eq!(state_line(&Handler::Broken { progid: SNIP.into() }), ("Set to a missing app \u{2014} click to fix".into(), Tone::Bad));
-        assert_eq!(state_line(&Handler::None), ("Not set".into(), Tone::Plain));
+        let other = Handler::Other { progid: SNIP.into(), name: "Snipping Tool".into() };
+        let broken = Handler::Broken { progid: SNIP.into() };
+        assert_eq!(state_line(&Handler::Ours, true), ("Opens Rustshot".into(), Tone::Good));
+        assert_eq!(state_line(&other, true), ("Opens Snipping Tool".into(), Tone::Plain));
+        assert_eq!(state_line(&broken, true), ("Set to a missing app \u{2014} click to fix".into(), Tone::Bad));
+        assert_eq!(state_line(&Handler::None, true), ("Not set".into(), Tone::Plain));
+        // The tray icon off: anything but Rustshot leaves no way in.
+        let no_way = ("Set up Win+Shift+S \u{2014} otherwise Rustshot can't be opened by a shortcut".to_string(), Tone::Bad);
+        for h in [&other, &broken, &Handler::None] {
+            assert_eq!(state_line(h, false), no_way);
+        }
+        assert_eq!(state_line(&Handler::Ours, false), ("Opens Rustshot".into(), Tone::Good));
     }
 
     #[test]

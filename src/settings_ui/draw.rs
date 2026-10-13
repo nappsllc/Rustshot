@@ -582,7 +582,8 @@ fn capture(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) 
     let show_renderer = s.renderer;
     let done = s.tools_reset;
     // Which app Win+Shift+S opens, once the toggle is saved on.
-    let clip_line = (s.screenclip == Some(true)).then(|| crate::screenclip_win::state_line(&s.handler));
+    // (With the tray icon off, red unless it is Rustshot: no other way in.)
+    let clip_line = (s.screenclip == Some(true)).then(|| crate::screenclip_win::state_line(&s.handler, s.form.show_tray));
     let f = &mut s.form;
     let mut target = s.pattern;
     let mut token = None;

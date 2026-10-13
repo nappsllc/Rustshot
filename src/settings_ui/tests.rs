@@ -423,6 +423,17 @@ fn screenclip_row_line() {
         reveal(&mut s, &mut focus, "screenclip");
         assert!(focus.rect_of("screenclip_fix").is_none());
     }
+    // The tray icon off and another app chosen: the red line, a link.
+    set_fake(1);
+    let mut s = sample().with_screenclip(Some(true), fake_handler());
+    s.read_handler = fake_handler;
+    s.form.show_tray = false;
+    s.section = CAPTURE;
+    let mut focus = FocusState::default();
+    reveal(&mut s, &mut focus, "screenclip");
+    assert_eq!(click(&mut s, &mut focus, "screenclip_fix", 1.0), Some(Click::FixScreenclip));
+    s.on(Click::FixScreenclip);
+    assert_eq!(s.modal, Some(Modal::Guide { broken: false, dont_show: false }));
     // Saved off, turned on in the form: no line until applied.
     let mut s = sample().with_screenclip(Some(false), Handler::Broken { progid: "AppXgone".into() });
     s.form.screenclip = Some(true);
@@ -1032,6 +1043,12 @@ fn preview_settings_pngs() {
                 let (img, _) = render(&mut s, th, k, &Input::default(), &mut FocusState::default());
                 preview::save(&png(name, tname, k), &img);
             }
+            let mut s = sample().with_screenclip(Some(true), Handler::None);
+            s.form.show_tray = false;
+            s.section = CAPTURE;
+            s.scroll[CAPTURE] = 1e6;
+            let (img, _) = render(&mut s, th, k, &Input::default(), &mut FocusState::default());
+            preview::save(&png("capture-screenclip-no-tray", tname, k), &img);
             // The guide (the plain page's steps and the app page's), and
             // the toast once Rustshot is chosen.
             for (name, broken, app_page, dont_show) in
