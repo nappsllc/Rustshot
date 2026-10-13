@@ -1618,6 +1618,85 @@ fn language_row_shows_the_download() {
     }
 }
 
+//// A right-to-left language mirrors the window: the rail on the right
+/// (its selected item where the English one is, mirrored), while a long
+/// left-to-right language does not move it; a click lands on the control
+/// drawn under it.
+#[test]
+fn right_to_left_mirrors_the_window() {
+    let shot = |lang: &str| {
+        crate::i18n::with_lang(lang, || {
+            let mut s = sample();
+            s.section = GENERAL;
+            render(&mut s, &DARK, 1.0, &Input::default(), &mut FocusState::default()).0
+        })
+    };
+    let (en, qps, rtl) = (shot("en"), shot("qps"), shot("qps-rtl"));
+    let px = |img: &PixBuf, x: u32, y: u32| img.get_pixel(x, y);
+    // The selected rail item's fill, left of its icon.
+    let (x, y) = (14, 64);
+    assert_eq!(px(&en, x, y), px(&qps, x, y));
+    assert_eq!(px(&en, x, y), px(&rtl, W - 1 - x, y), "mirrored");
+    assert_ne!(px(&en, x, y), px(&rtl, x, y));
+    // The pointer is mirrored too: a press where the Theme control is
+    // drawn (left in a right-to-left window) reaches it.
+    crate::i18n::with_lang("qps-rtl", || {
+        let mut s = sample();
+        s.section = GENERAL;
+        let mut focus = FocusState::default();
+        render(&mut s, &DARK, 1.0, &Input::default(), &mut focus);
+        let r = focus.rect_of("language").expect("the language dropdown");
+        let screen_x = W as i32 - 1 - (r.x + r.w / 2.0) as i32;
+        let ev = crate::ui::rtl_ev(crate::wind::Ev::Down { x: screen_x, y: (r.y + r.h / 2.0) as i32 }, W);
+        let crate::wind::Ev::Down { x, .. } = ev else { unreachable!() };
+        assert!((x as f32) >= r.x && (x as f32) < r.x1(), "{x} in {r:?}");
+    });
+}
+
+/// Every question and message of the window fits it in English and the
+/// long pseudo-languages: its buttons and checkbox inside the window,
+/// none over another (RUSTSHOT_PREVIEW_DIR: each, in each language).
+#[test]
+fn dialogs_fit_in_long_languages() {
+    let modals = || {
+        [
+            Modal::Rewrite { close: false },
+            Modal::Error("Could not save C:\\Users\\someone\\AppData\\Roaming\\rustshot\\config.toml: access is denied".into()),
+            Modal::Hotkeys { text: "Win+Shift+S is used by another app.".into(), field: None },
+            Modal::HideTray,
+            Modal::TrayOffNotice,
+            Modal::Broken("line 3: expected key = value".into()),
+            Modal::Reset("line 3".into()),
+            Modal::Guide { broken: true, dont_show: false },
+        ]
+    };
+    for lang in ["en", "qps", "qps-rtl"] {
+        crate::i18n::with_lang(lang, || {
+            for k in [1.0f32, 2.0] {
+                for (n, m) in modals().into_iter().enumerate() {
+                    let mut s = sample();
+                    s.modal = Some(m);
+                    let mut focus = FocusState::default();
+                    let (img, _) = render(&mut s, &DARK, k, &Input::default(), &mut focus);
+                    if k == 1.0 {
+                        preview::save(&format!("settings-dialog-{n}-{lang}.png"), &img);
+                    }
+                    let rects: Vec<FRect> = focus.all_rects().into_iter().map(|r| FRect { x: r.x / k, y: r.y / k, w: r.w / k, h: r.h / k }).collect();
+                    assert!(!rects.is_empty(), "{lang} dialog {n}: no buttons");
+                    for (a, ra) in rects.iter().enumerate() {
+                        assert!(ra.x >= 0.0 && ra.y >= 0.0 && ra.x1() <= W as f32 + 0.5 && ra.y1() <= H as f32 + 0.5, "{lang} dialog {n} at {k}: {ra:?}");
+                        for rb in &rects[a + 1..] {
+                            let ow = ra.x1().min(rb.x1()) - ra.x.max(rb.x);
+                            let oh = ra.y1().min(rb.y1()) - ra.y.max(rb.y);
+                            assert!(ow <= 1.0 || oh <= 1.0, "{lang} dialog {n} at {k}: {ra:?} and {rb:?} overlap");
+                        }
+                    }
+                }
+            }
+        });
+    }
+}
+
 /// Every section in the pseudo-languages (RUSTSHOT_PREVIEW_DIR).
 #[test]
 fn preview_settings_pseudo_pngs() {

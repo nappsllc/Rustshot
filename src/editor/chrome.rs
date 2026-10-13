@@ -1312,7 +1312,7 @@ pub fn tooltip(f: &mut Fb, ui: &Ui, at: TipAt, label: &str, keys: &[String], k: 
 }
 
 /// Where `tooltip` puts its panel.
-fn tooltip_rect(ui: &Ui, at: TipAt, label: &str, keys: &[String]) -> FRect {
+pub(crate) fn tooltip_rect(ui: &Ui, at: TipAt, label: &str, keys: &[String]) -> FRect {
     let TipAt { anchor, area, below } = at;
     let (h, gap, kgap) = (ui.px(26.0), ui.px(8.0), ui.px(4.0));
     let keys_w: f32 = keys.iter().map(|s| key_w(ui, s)).sum::<f32>() + kgap * keys.len().saturating_sub(1) as f32;

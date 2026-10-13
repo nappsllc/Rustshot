@@ -1335,4 +1335,55 @@ mod tests {
         i.busy = true;
         assert!(!layout(&i).items.iter().any(|it| it.kind == Kind::Btn(Act::Pin)));
     }
+
+    /// A right-to-left language runs the toolbar right to left: the same
+    /// buttons in the same bar, mirrored within it (the tools start at the
+    /// right), in the overlay and docked in the Edit window.
+    #[test]
+    fn right_to_left_runs_the_toolbar_backwards() {
+        let sel = r(600.0, 300.0, 700.0, 400.0);
+        let btns = |t: &Toolbar| t.items.iter().filter(|i| matches!(i.kind, Kind::Btn(_))).map(|i| (i.kind, i.r)).collect::<Vec<_>>();
+        let en = layout(&inp(sel));
+        let rtl = crate::i18n::with_lang("qps-rtl", || layout(&inp(sel)));
+        assert_eq!(en.bar, rtl.bar);
+        let (a, b) = (btns(&en), btns(&rtl));
+        assert_eq!(a.len(), b.len());
+        for ((ka, ra), (kb, rb)) in a.iter().zip(&b) {
+            assert_eq!(ka, kb);
+            assert!(((ra.x - en.bar.x) - (en.bar.x1() - rb.x1())).abs() < 0.01, "{ka:?}: {ra:?} vs {rb:?}");
+        }
+        assert!(b[0].1.x > b[b.len() - 1].1.x, "the first tool is rightmost");
+        let strip = r(0.0, 0.0, 1200.0, 44.0);
+        let d_en = layout_docked(&inp(sel), strip);
+        let d_rtl = crate::i18n::with_lang("qps-rtl", || layout_docked(&inp(sel), strip));
+        let (a, b) = (btns(&d_en), btns(&d_rtl));
+        assert!(((a[0].1.x - strip.x) - (strip.x1() - b[0].1.x1())).abs() < 1.0, "docked: from the right end");
+        assert!(b.iter().all(|(_, r)| r.x >= strip.x && r.x1() <= strip.x1()));
+    }
+
+    /// Every toolbar button's tooltip fits the monitor in the long
+    /// pseudo-languages (accented and right to left), on a small screen.
+    #[test]
+    fn tooltips_fit_in_long_languages() {
+        let small = FRect { x: 0.0, y: 0.0, w: 1280.0, h: 720.0 };
+        let km = crate::keymap::Keymap::defaults();
+        for lang in ["en", "qps", "qps-rtl"] {
+            crate::i18n::with_lang(lang, || {
+                for s in [1.0f32, 1.5] {
+                    let mut i = inp(r(100.0, 100.0, 1080.0, 500.0));
+                    i.area = small;
+                    i.s = s;
+                    let tb = layout(&i);
+                    let ui = crate::editor::chrome::Ui { th: &crate::theme::DARK, s, font: Some(crate::fonts::ui_font()) };
+                    for it in &tb.items {
+                        let Kind::Btn(a) = it.kind else { continue };
+                        let (label, keys) = crate::editor::chrome::act_tip(a, &km);
+                        let at = crate::editor::chrome::TipAt { anchor: it.r, area: small, below: false };
+                        let t = crate::editor::chrome::tooltip_rect(&ui, at, label, &keys);
+                        assert!(t.x >= small.x && t.x1() <= small.x1() + 0.5 && t.y >= small.y && t.y1() <= small.y1(), "{lang} {a:?} at {s}: {t:?}");
+                    }
+                }
+            });
+        }
+    }
 }
