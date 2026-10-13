@@ -71,11 +71,22 @@ impl R {
 pub struct Node {
     pub r: R,
     pub kids: Vec<Node>,
+    /// A top-level window's client area (global px), when the platform
+    /// tells it apart from the frame (Windows): what "Trim to content"
+    /// tries when the frame itself has nothing to trim.
+    pub client: Option<R>,
 }
 
 impl Node {
     pub fn new(r: R, kids: Vec<Node>) -> Node {
-        Node { r, kids }
+        Node { r, kids, client: None }
+    }
+
+    /// With its client area `client` (global px).
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn with_client(mut self, client: Option<R>) -> Node {
+        self.client = client;
+        self
     }
 }
 
@@ -91,6 +102,8 @@ pub struct Snapshot {
     rects: Vec<R>,
     kids: Vec<Vec<u32>>,
     tops: Vec<u32>,
+    /// Each top's client area (image px, clipped to it), by `tops` index.
+    clients: Vec<Option<R>>,
 }
 
 impl Snapshot {
@@ -115,8 +128,19 @@ impl Snapshot {
             s.add_kids(&t.kids, r, d, 1, &mut kids);
             s.kids[id as usize] = kids;
             s.tops.push(id);
+            let client = t.client.map(|c| c.offset(d.0, d.1).intersect(&r)).filter(|c| !c.is_empty() && *c != r);
+            s.clients.push(client);
         }
         s
+    }
+
+    /// The client area of the frontmost window lying inside `sel` (image
+    /// px), when it has one apart from its frame.
+    pub fn client_within(&self, sel: R) -> Option<R> {
+        self.tops.iter().zip(&self.clients).find_map(|(&t, c)| {
+            let r = self.rects[t as usize];
+            (r.intersect(&sel) == r).then_some(*c).flatten()
+        })
     }
 
     fn push(&mut self, r: R) -> u32 {
@@ -554,5 +578,21 @@ mod tests {
         for r in s.window_rects() {
             assert_eq!(r.intersect(&shot), r, "{r:?} inside the shot");
         }
+    }
+
+    /// The client area of the frontmost window inside a selection, in
+    /// image px and clipped to its window; none when it is the frame.
+    #[test]
+    fn client_area_of_the_window_inside_the_selection() {
+        let popup = n(50, 50, 100, 100, vec![]).with_client(Some(rr(50, 50, 100, 100)));
+        let win = n(100, 100, 800, 600, vec![]).with_client(Some(rr(108, 140, 784, 552)));
+        let back = n(0, 0, 1000, 800, vec![]).with_client(Some(rr(10, 30, 980, 760)));
+        let s = Snapshot::build(&[popup, win, back], (20, 20), (1900, 1000));
+        // The shot starts at (20, 20): image px are 20 less.
+        assert_eq!(s.client_within(rr(80, 80, 800, 600)), Some(rr(88, 120, 784, 552)));
+        assert_eq!(s.client_within(rr(70, 70, 900, 700)), Some(rr(88, 120, 784, 552)), "a bit more than the window");
+        assert_eq!(s.client_within(rr(90, 90, 700, 500)), None, "the window is not inside");
+        assert_eq!(s.client_within(rr(0, 0, 1900, 1000)), Some(rr(88, 120, 784, 552)), "the popup has no client area of its own");
+        assert_eq!(Snapshot::build(&[n(0, 0, 10, 10, vec![])], (0, 0), (100, 100)).client_within(rr(0, 0, 100, 100)), None);
     }
 }

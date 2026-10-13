@@ -14,10 +14,11 @@
 
 use super::{win_top_rect, Node, WinInfo, MAX_DEPTH, MAX_NODES, R};
 use windows::core::BOOL;
-use windows::Win32::Foundation::{HWND, LPARAM, RECT};
+use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT};
+use windows::Win32::Graphics::Gdi::ClientToScreen;
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS};
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetClassNameW, GetDesktopWindow, GetLayeredWindowAttributes, GetShellWindow, GetWindow, GetWindowLongW, GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindowVisible, GWL_EXSTYLE, GWL_STYLE,
+    EnumWindows, GetClassNameW, GetClientRect, GetDesktopWindow, GetLayeredWindowAttributes, GetShellWindow, GetWindow, GetWindowLongW, GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindowVisible, GWL_EXSTYLE, GWL_STYLE,
     LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_ALPHA, WS_CAPTION, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
     WS_THICKFRAME, WS_VISIBLE, GW_CHILD, GW_HWNDNEXT,
 };
@@ -29,6 +30,18 @@ fn r_of(rc: RECT) -> R {
 fn window_rect(h: HWND) -> Option<R> {
     let mut rc = RECT::default();
     unsafe { GetWindowRect(h, &mut rc) }.ok().map(|_| r_of(rc))
+}
+
+/// The client area of `h` in global px (`GetClientRect` from its origin).
+fn client_rect(h: HWND) -> Option<R> {
+    let mut rc = RECT::default();
+    unsafe { GetClientRect(h, &mut rc) }.ok()?;
+    let mut p = POINT::default();
+    if !unsafe { ClientToScreen(h, &mut p) }.as_bool() {
+        return None;
+    }
+    let r = R::new(p.x, p.y, p.x + rc.right, p.y + rc.bottom);
+    (!r.is_empty()).then_some(r)
 }
 
 fn class_is(h: HWND, names: &[&str]) -> bool {
@@ -161,7 +174,7 @@ pub fn windows(own_pid: Option<u32>, within: R) -> Option<Vec<Node>> {
     let mut t = Tops { own_pid, shell, within, out: Vec::new() };
     unsafe { EnumWindows(Some(top_cb), LPARAM(&mut t as *mut Tops as isize)) }.ok()?;
     let mut left = MAX_NODES;
-    Some(t.out.into_iter().map(|(h, r)| Node::new(r, kids_of(h, &mut left, 1))).collect())
+    Some(t.out.into_iter().map(|(h, r)| Node::new(r, kids_of(h, &mut left, 1)).with_client(client_rect(h))).collect())
 }
 
 #[cfg(test)]
