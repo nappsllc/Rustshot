@@ -741,6 +741,18 @@ fn seg_bench() {
     }
 }
 
+/// A stand-in `selfie.bin` (random weights, the landscape model's input
+/// and output, about its size) at `RUSTSHOT_SYNTH_SELFIE`: to build and
+/// try the `selfie_model` feature without the real model.
+#[test]
+#[ignore = "writes a synthetic model; set RUSTSHOT_SYNTH_SELFIE"]
+fn write_synthetic_selfie_bin() {
+    let Some(path) = std::env::var_os("RUSTSHOT_SYNTH_SELFIE") else { return };
+    let bytes = mobile_model(144, 256, 8, 3).to_bytes();
+    std::fs::write(&path, &bytes).unwrap();
+    println!("wrote {} bytes to {}", bytes.len(), std::path::Path::new(&path).display());
+}
+
 /// The model this build embeds (`selfie_model`): it loads, takes a
 /// 144x256 picture (the landscape model) and gives a probability per
 /// pixel. `cargo test --features selfie_model embedded_model`
