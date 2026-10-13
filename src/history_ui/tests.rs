@@ -649,7 +649,7 @@ fn history_window_smoke() {
     let (_tx, rx) = std::sync::mpsc::channel();
     let mut w = window::Window::new(history(&st), rx);
     let mut d = crate::wind::AutoClose::new(&mut w, 1000);
-    let spec = crate::wind::WindowSpec { title: "Rustshot History".into(), w: W, h: H, resizable: true, min: MIN };
+    let spec = crate::wind::WindowSpec { title: "Rustshot History".into(), w: W, h: H, resizable: true, min: MIN, controls: crate::wind::Controls::MinMaxClose };
     crate::wind::run_window(spec, &mut d).expect("history window");
     assert!(d.frames > 0, "drew a frame");
 }

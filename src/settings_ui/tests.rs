@@ -1495,7 +1495,7 @@ fn settings_window_smoke() {
     let (_tx, rx) = std::sync::mpsc::channel();
     let mut w = Window::new(s, crate::theme::resolve(&Config::default()), rx);
     let mut d = crate::wind::AutoClose::new(&mut w, 1000);
-    let spec = WindowSpec { title: "Rustshot Settings".into(), w: W, h: H, resizable: false, min: (W, H) };
+    let spec = WindowSpec { title: "Rustshot Settings".into(), w: W, h: H, resizable: false, min: (W, H), controls: wind::Controls::MinClose };
     wind::run_window(spec, &mut d).expect("settings window");
     assert!(d.frames > 0, "drew a frame");
     let _ = std::fs::remove_dir_all(&dir);

@@ -9,3 +9,4 @@ Terminal=false
 Categories=Utility;Graphics;
 Keywords=screenshot;capture;annotate;share;
 StartupNotify=false
+StartupWMClass=rustshot

@@ -1455,7 +1455,7 @@ fn run(rx: Receiver<Msg>) {
         uisize::init(s.loaded.ui_scale);
     }
     let mut w = Window::new(s, th, rx);
-    let spec = WindowSpec { title: "Rustshot Settings".into(), w: W, h: H, resizable: false, min: (W, H) };
+    let spec = WindowSpec { title: "Rustshot Settings".into(), w: W, h: H, resizable: false, min: (W, H), controls: wind::Controls::MinClose };
     if let Err(e) = wind::run_window(spec, &mut w) {
         eprintln!("rustshot: settings window: {e:#}");
     }
@@ -1767,6 +1767,12 @@ impl Driver for Window {
 
     fn cursor(&self) -> Cursor {
         Cursor::Arrow
+    }
+
+    /// The title bar follows the theme the window shows (a Theme click
+    /// recolours it before Apply, as it does the rest of the window).
+    fn frame_colors(&self) -> Option<wind::FrameColors> {
+        Some(crate::ui::paint::WTok::of(&self.th).frame())
     }
 }
 

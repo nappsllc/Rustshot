@@ -606,6 +606,59 @@ struct WinState<'a> {
     resizable: bool,
     style: WINDOW_STYLE,
     ex_style: WINDOW_EX_STYLE,
+    /// The title bar colours last applied (`Driver::frame_colors`).
+    frame: core::cell::Cell<Option<FrameColors>>,
+}
+
+/// The native frame for `controls`: always a caption with a system menu
+/// (close, Alt+F4, Alt+Space); a minimize box and a maximize box where
+/// asked; a sizing border only for resizable windows. On the taskbar and
+/// in Alt+Tab (`WS_EX_APPWINDOW`) with the class icon.
+pub(crate) fn frame_style(controls: Controls, resizable: bool) -> (WINDOW_STYLE, WINDOW_EX_STYLE) {
+    let mut style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU;
+    if controls.minimize() {
+        style |= WS_MINIMIZEBOX;
+    }
+    if controls.maximize() && resizable {
+        style |= WS_MAXIMIZEBOX;
+    }
+    if resizable {
+        style |= WS_THICKFRAME;
+    }
+    (style, WS_EX_APPWINDOW)
+}
+
+/// `0x00BBGGRR` for DWM.
+pub(crate) fn colorref([r, g, b]: [u8; 3]) -> u32 {
+    u32::from_le_bytes([r, g, b, 0])
+}
+
+/// Theme the OS title bar: dark/light caption buttons and text (Windows 10
+/// 2004+ and 11), the caption and border in the design's colours (Windows
+/// 11 22000+; older builds refuse the attribute and keep theirs). `None`:
+/// the OS defaults again.
+unsafe fn apply_frame(hwnd: HWND, c: Option<&FrameColors>) {
+    use windows::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE,
+    };
+    /// DWMWA_COLOR_DEFAULT.
+    const DEFAULT: u32 = 0xFFFF_FFFF;
+    unsafe {
+        let set = |a, v: u32| DwmSetWindowAttribute(hwnd, a, (&raw const v).cast(), 4);
+        let _ = set(DWMWA_USE_IMMERSIVE_DARK_MODE, u32::from(c.is_some_and(|c| c.dark)));
+        let _ = set(DWMWA_CAPTION_COLOR, c.map_or(DEFAULT, |c| colorref(c.caption)));
+        let _ = set(DWMWA_BORDER_COLOR, c.map_or(DEFAULT, |c| colorref(c.border)));
+    }
+}
+
+/// Apply the driver's title bar colours when they changed since the last
+/// time (a theme switch in Settings repaints, so this runs on paint).
+unsafe fn sync_frame(hwnd: HWND, st: &WinState<'_>, drv: &dyn Driver) {
+    let want = drv.frame_colors();
+    if st.frame.get() != want {
+        st.frame.set(want);
+        unsafe { apply_frame(hwnd, want.as_ref()) };
+    }
 }
 
 const WINDOW_CLASS: PCWSTR = w!("rustshot_window");
@@ -732,6 +785,13 @@ unsafe extern "system" fn wndproc_window(hwnd: HWND, msg: u32, wp: WPARAM, lp: L
                 );
                 return LRESULT(0);
             }
+            // DefWindowProc maximizes on any SC_MAXIMIZE, even without a
+            // maximize box (a fixed-size window filling the screen): the
+            // shell's own paths (Win+Up, a title double-click) honour the
+            // style, posted/sent commands from other tools do not.
+            WM_SYSCOMMAND if (wp.0 & 0xFFF0) as u32 == SC_MAXIMIZE && st.style.0 & WS_MAXIMIZEBOX.0 == 0 => {
+                return LRESULT(0);
+            }
             WM_RESIZE_CLIENT => {
                 resize_client(hwnd, st, wp.0 as u32, lp.0 as u32);
                 return LRESULT(0);
@@ -770,6 +830,10 @@ unsafe extern "system" fn wndproc_window(hwnd: HWND, msg: u32, wp: WPARAM, lp: L
                 drv.on_event(Ev::Focus(msg == WM_SETFOCUS));
                 request(hwnd, drv);
                 LRESULT(0)
+            }
+            WM_PAINT => {
+                sync_frame(hwnd, st, drv);
+                common(hwnd, msg, wp, lp, drv).unwrap_or_default()
             }
             // Borders/caption keep their resize/arrow cursors.
             WM_SETCURSOR if (lp.0 & 0xffff) as u32 != HTCLIENT => DefWindowProcW(hwnd, msg, wp, lp),
@@ -829,12 +893,7 @@ unsafe fn window_loop(spec: &WindowSpec, drv: &mut dyn Driver) -> anyhow::Result
         let dpi = if GetDpiForMonitor(mon, MDT_EFFECTIVE_DPI, &mut dx, &mut dy).is_ok() { dx.max(96) } else { 96 };
         // The UI size on top of the monitor's DPI (as `scale` gives it).
         let s = crate::uisize::apply(dpi as f32 / 96.0);
-        let style = if spec.resizable {
-            WS_OVERLAPPEDWINDOW
-        } else {
-            WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX
-        };
-        let ex_style = WS_EX_APPWINDOW;
+        let (style, ex_style) = frame_style(spec.controls, spec.resizable);
         let mut rc = RECT { left: 0, top: 0, right: to_phys(spec.w, s) as i32, bottom: to_phys(spec.h, s) as i32 };
         let _ = AdjustWindowRectExForDpi(&mut rc, style, false, ex_style, dpi);
         let (ow, oh) = (rc.right - rc.left, rc.bottom - rc.top);
@@ -850,6 +909,7 @@ unsafe fn window_loop(spec: &WindowSpec, drv: &mut dyn Driver) -> anyhow::Result
             resizable: spec.resizable,
             style,
             ex_style,
+            frame: core::cell::Cell::new(None),
         };
         let hwnd = CreateWindowExW(
             ex_style,
@@ -866,6 +926,13 @@ unsafe fn window_loop(spec: &WindowSpec, drv: &mut dyn Driver) -> anyhow::Result
             Some(&raw const st as *const core::ffi::c_void),
         )?;
         st.ready.set(true);
+        {
+            // Rounded corners on Windows 11 (the default for a captioned
+            // window, asked for so small dialogs get them too).
+            use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND};
+            let round = DWMWCP_ROUND;
+            let _ = DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, (&raw const round).cast(), 4);
+        }
         (*st.drv).on_create(hwnd);
         if !st.done.get() {
             let mut cr = RECT::default();
@@ -875,6 +942,8 @@ unsafe fn window_loop(spec: &WindowSpec, drv: &mut dyn Driver) -> anyhow::Result
             (*st.drv).on_event(Ev::Resize(size.0, size.1));
         }
         if !st.done.get() {
+            // Themed before it is first shown: no white title bar flash.
+            sync_frame(hwnd, &st, &*st.drv);
             let _ = SetTimer(Some(hwnd), 1, tick_ms(hwnd) as u32, None);
             // Tests never steal the user's focus.
             if cfg!(test) {
@@ -1123,6 +1192,7 @@ mod tests {
             h: 300,
             resizable: true,
             min: (1, 1),
+            controls: Controls::MinMaxClose,
         };
         run_window(spec, &mut d).expect("window loop");
         if let Some(h) = d.helper.take() {
@@ -1182,7 +1252,7 @@ mod tests {
             // The UI size is per thread under test: this window's alone.
             crate::uisize::set(crate::uisize::UiSize::Pct(150));
             let mut d = Sizer { hwnd: HWND::default(), fb: PixBuf::new(1, 1), dpi: 96, sizes: Vec::new(), sized_for: 0.0 };
-            let spec = WindowSpec { title: "rustshot ui size test".into(), w: 400, h: 300, resizable: false, min: (400, 300) };
+            let spec = WindowSpec { title: "rustshot ui size test".into(), w: 400, h: 300, resizable: false, min: (400, 300), controls: Controls::MinClose };
             run_window(spec, &mut d).expect("window loop");
             (d.dpi, d.sizes)
         })
@@ -1347,7 +1417,7 @@ mod tests {
                     ticks: 0,
                 };
                 let title = if idle_again { "rustshot dialog" } else { "rustshot animating" };
-                let spec = WindowSpec { title: title.into(), w: 200, h: 150, resizable: false, min: (0, 0) };
+                let spec = WindowSpec { title: title.into(), w: 200, h: 150, resizable: false, min: (0, 0), controls: Controls::MinClose };
                 run_window(spec, &mut d).expect("window loop");
                 let _ = hw_tx.send((idle_again, d.hwnd.0 as isize));
                 (d.cadence, d.ticks, tick_ms(d.hwnd))
@@ -1442,7 +1512,7 @@ mod tests {
             .and_then(|v| v.parse().ok())
             .map(|ms| std::time::Instant::now() + std::time::Duration::from_millis(ms));
         let mut d = Rect { hwnd: HWND::default(), fb: PixBuf::new(1, 1), deadline, sampled: None, painted: false };
-        let spec = WindowSpec { title: "rustshot window test".into(), w: 400, h: 300, resizable: true, min: (200, 150) };
+        let spec = WindowSpec { title: "rustshot window test".into(), w: 400, h: 300, resizable: true, min: (200, 150), controls: Controls::MinMaxClose };
         let _guard = windows_lock();
         run_window(spec, &mut d).expect("window loop");
         assert!(d.painted);
@@ -1555,5 +1625,451 @@ mod tests {
         }
         assert_eq!(seen.hit, Some(LRESULT(HTCLIENT as isize)), "hit test");
         assert_eq!(MOVE_SIZE_LOOPS.load(std::sync::atomic::Ordering::SeqCst), before, "no move/size loop");
+    }
+
+    #[test]
+    fn frame_styles_per_controls() {
+        let has = |s: WINDOW_STYLE, f: WINDOW_STYLE| s.0 & f.0 == f.0;
+        let (all, ex) = frame_style(Controls::MinMaxClose, true);
+        assert!(has(all, WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_THICKFRAME));
+        assert_eq!(all, WS_OVERLAPPEDWINDOW, "History / Edit: the standard window");
+        assert_eq!(ex, WS_EX_APPWINDOW, "taskbar and Alt+Tab");
+        let (fixed, _) = frame_style(Controls::MinClose, false);
+        assert!(has(fixed, WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX));
+        assert!(!has(fixed, WS_MAXIMIZEBOX) && !has(fixed, WS_THICKFRAME), "Settings: no maximize, no sizing");
+        let (dialog, ex) = frame_style(Controls::Close, false);
+        assert!(has(dialog, WS_CAPTION | WS_SYSMENU), "close and Alt+F4");
+        assert!(!has(dialog, WS_MINIMIZEBOX) && !has(dialog, WS_MAXIMIZEBOX));
+        assert_eq!(ex, WS_EX_APPWINDOW);
+        // A maximize box needs a window that can be resized.
+        assert!(!has(frame_style(Controls::MinMaxClose, false).0, WS_MAXIMIZEBOX));
+    }
+
+    #[test]
+    fn frame_colours_are_colorrefs_of_the_design_tokens() {
+        assert_eq!(colorref([0x1B, 0x1C, 0x20]), 0x0020_1C1B);
+        let dark = crate::ui::paint::WTok::of(&crate::theme::DARK).frame();
+        assert!(dark.dark);
+        assert_eq!(dark.caption, [0x1B, 0x1C, 0x20], "the window surface (--win)");
+        // --bd (white at 9 %) over --win.
+        assert_eq!(dark.border, [0x30, 0x30, 0x34]);
+        let light = crate::ui::paint::WTok::of(&crate::theme::LIGHT).frame();
+        assert!(!light.dark);
+        assert_eq!(light.caption, [0xFA, 0xFA, 0xFC]);
+        assert_eq!(light.border, [0xE6, 0xE6, 0xE8], "--bd (black at 8 %) over --win");
+    }
+
+    /// oleacc's STATE_SYSTEM_INVISIBLE (a title bar button not shown).
+    const STATE_SYSTEM_INVISIBLE: u32 = 0x8000;
+
+    /// Named WM_NCHITTEST answers.
+    type Hits = Vec<(&'static str, isize)>;
+
+    /// WM_GETTITLEBARINFOEX's minimize, maximize and close (state, rect),
+    /// and WM_NCHITTEST at the centre of each visible one, on the title,
+    /// the left edge and the bottom-right corner.
+    unsafe fn caption_probe(hwnd: HWND) -> (Vec<(u32, RECT)>, Hits) {
+        unsafe {
+            let mut tbi = TITLEBARINFOEX { cbSize: std::mem::size_of::<TITLEBARINFOEX>() as u32, ..Default::default() };
+            SendMessageW(hwnd, WM_GETTITLEBARINFOEX, Some(WPARAM(0)), Some(LPARAM(&raw mut tbi as isize)));
+            // rgstate/rgrect: 0 title bar, 2 minimize, 3 maximize, 5 close.
+            let buttons: Vec<(u32, RECT)> = [2, 3, 5].iter().map(|&i| (tbi.rgstate[i], tbi.rgrect[i])).collect();
+            let hit = |x: i32, y: i32| {
+                SendMessageW(hwnd, WM_NCHITTEST, Some(WPARAM(0)), Some(LPARAM(((y as isize) << 16) | (x as isize & 0xffff)))).0
+            };
+            let mid = |r: RECT| ((r.left + r.right) / 2, (r.top + r.bottom) / 2);
+            let mut hits = Vec::new();
+            for (name, (state, r)) in ["minimize", "maximize", "close"].into_iter().zip(buttons.clone()) {
+                if state & STATE_SYSTEM_INVISIBLE == 0 {
+                    let (x, y) = mid(r);
+                    hits.push((name, hit(x, y)));
+                }
+            }
+            let mut wr = RECT::default();
+            let _ = GetWindowRect(hwnd, &mut wr);
+            hits.push(("title", hit(wr.left + 120, mid(buttons[2].1).1)));
+            hits.push(("left edge", hit(wr.left + 2, (wr.top + wr.bottom) / 2)));
+            hits.push(("bottom-right", hit(wr.right - 2, wr.bottom - 2)));
+            (buttons, hits)
+        }
+    }
+
+    unsafe extern "system" fn reference_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+        unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
+    }
+
+    /// [`caption_probe`] on a plain window (DefWindowProc only) with
+    /// `style`, shown without activation at `at` on this thread.
+    unsafe fn reference_probe(style: u32, at: RECT) -> Hits {
+        unsafe {
+            let h = HINSTANCE(module_handle().expect("module"));
+            let class = w!("rustshot_caption_reference");
+            let wc = WNDCLASSEXW {
+                cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+                lpfnWndProc: Some(reference_proc),
+                hInstance: h,
+                lpszClassName: class,
+                ..Default::default()
+            };
+            let _ = RegisterClassExW(&wc); // already registered by an earlier run: fine
+            let win = CreateWindowExW(
+                WS_EX_APPWINDOW,
+                class,
+                w!("rustshot caption reference"),
+                WINDOW_STYLE(style & !WS_VISIBLE.0),
+                at.left,
+                at.top,
+                at.right - at.left,
+                at.bottom - at.top,
+                None,
+                None,
+                Some(h),
+                None,
+            )
+            .expect("reference window");
+            let _ = ShowWindow(win, SW_SHOWNOACTIVATE);
+            let (_, hits) = caption_probe(win);
+            let _ = DestroyWindow(win);
+            hits
+        }
+    }
+
+    /// What the caption test read from a live window.
+    #[derive(Debug, Default)]
+    struct CaptionSeen {
+        /// WM_GETTITLEBARINFOEX: (state, rect) of minimize, maximize, close.
+        buttons: Vec<(u32, RECT)>,
+        /// WM_NCHITTEST at the centre of each visible button, the title,
+        /// and (resizable) the left and bottom-right edges.
+        hits: Vec<(&'static str, isize)>,
+        /// The same hit tests on a plain window with the same style.
+        reference: Vec<(&'static str, isize)>,
+        dark_mode: Option<u32>,
+        minimized: bool,
+        restored: bool,
+        maximized: bool,
+        unmaximized: bool,
+    }
+
+    /// Plays the user on the real caption from a helper thread: reads the
+    /// title bar buttons, hit-tests them, minimizes / restores / maximizes
+    /// with WM_SYSCOMMAND (what the buttons, Win+Down/Up and the system
+    /// menu send), then the close button's WM_CLOSE.
+    struct Captioned {
+        hwnd: HWND,
+        fb: PixBuf,
+        seen: std::sync::Arc<std::sync::Mutex<CaptionSeen>>,
+        helper: Option<std::thread::JoinHandle<()>>,
+        closes: u32,
+    }
+
+    impl Driver for Captioned {
+        fn on_create(&mut self, hwnd: HWND) {
+            self.hwnd = hwnd;
+            let raw = hwnd.0 as usize;
+            let seen = self.seen.clone();
+            self.helper = Some(std::thread::spawn(move || unsafe {
+                use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
+                let hwnd = HWND(raw as *mut core::ffi::c_void);
+                // Physical coordinates, as the window's thread uses them.
+                SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+                // Shown and themed (the loop syncs the frame before ShowWindow).
+                while !IsWindowVisible(hwnd).as_bool() {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                let mut s = CaptionSeen::default();
+                (s.buttons, s.hits) = caption_probe(hwnd);
+                // The same frame on a plain DefWindowProc window: the
+                // reference for what Windows itself answers.
+                let mut wr = RECT::default();
+                let _ = GetWindowRect(hwnd, &mut wr);
+                s.reference = reference_probe(GetWindowLongW(hwnd, GWL_STYLE) as u32, wr);
+                let mut dark = 0u32;
+                if DwmGetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, (&raw mut dark).cast(), 4).is_ok() {
+                    s.dark_mode = Some(dark);
+                }
+                let sys = |c: u32| {
+                    SendMessageW(hwnd, WM_SYSCOMMAND, Some(WPARAM(c as usize)), Some(LPARAM(0)));
+                };
+                sys(SC_MINIMIZE);
+                s.minimized = IsIconic(hwnd).as_bool();
+                sys(SC_RESTORE);
+                s.restored = !IsIconic(hwnd).as_bool();
+                sys(SC_MAXIMIZE);
+                s.maximized = IsZoomed(hwnd).as_bool();
+                sys(SC_RESTORE);
+                s.unmaximized = !IsZoomed(hwnd).as_bool();
+                *seen.lock().unwrap() = s;
+                // The close button / Alt+F4.
+                let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
+            }));
+        }
+        fn on_event(&mut self, ev: Ev) -> bool {
+            match ev {
+                Ev::Resize(w, h) => self.fb = PixBuf::new(w.max(1), h.max(1)),
+                Ev::Close => {
+                    self.closes += 1;
+                    close(self.hwnd);
+                }
+                _ => {}
+            }
+            false
+        }
+        fn frame(&mut self) -> Option<&mut PixBuf> {
+            Some(&mut self.fb)
+        }
+        fn cursor(&self) -> Cursor {
+            Cursor::Arrow
+        }
+        fn frame_colors(&self) -> Option<FrameColors> {
+            Some(FrameColors { dark: true, caption: [0x1B, 0x1C, 0x20], border: [0x30, 0x31, 0x34] })
+        }
+    }
+
+    fn run_captioned(controls: Controls, resizable: bool) -> (CaptionSeen, u32) {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(CaptionSeen::default()));
+        let s2 = seen.clone();
+        let closes = std::thread::spawn(move || {
+            let mut d = Captioned { hwnd: HWND::default(), fb: PixBuf::new(1, 1), seen: s2, helper: None, closes: 0 };
+            let spec = WindowSpec { title: "rustshot caption test".into(), w: 400, h: 300, resizable, min: (200, 150), controls };
+            run_window(spec, &mut d).expect("window loop");
+            d.helper.take().expect("helper").join().expect("helper thread");
+            assert!(unsafe { !IsWindow(Some(d.hwnd)).as_bool() }, "closed by the close button");
+            d.closes
+        })
+        .join()
+        .expect("window thread");
+        let s = std::mem::take(&mut *seen.lock().unwrap());
+        (s, closes)
+    }
+
+    /// The real caption buttons per window kind: resizable windows get
+    /// minimize, maximize/restore and close and sizing edges; fixed-size
+    /// ones minimize and close (maximize disabled); dialogs close only.
+    /// Every hit test answers what Windows answers for a plain window with
+    /// the same frame (the Snap Layouts flyout, Aero snap and dragging are
+    /// the OS's own), minimize/restore/maximize work, the close button
+    /// reaches the driver once, and the dark title bar is applied.
+    #[test]
+    fn run_window_caption_buttons() {
+        let _guard = windows_lock();
+        const INVISIBLE: u32 = STATE_SYSTEM_INVISIBLE;
+        const UNAVAILABLE: u32 = 0x0001; // STATE_SYSTEM_UNAVAILABLE
+        let hits = |s: &CaptionSeen| s.hits.iter().map(|&(n, h)| (n, h as u32)).collect::<Vec<_>>();
+        // Windows 11 answers HTCAPTION over minimize and maximize even on a
+        // plain DefWindowProc window (DWM tracks those two buttons itself,
+        // Snap Layouts included); older builds answer the button.
+        let button = |h: u32, b: u32| h == b || h == HTCAPTION;
+
+        let (s, closes) = run_captioned(Controls::MinMaxClose, true);
+        println!("resizable: {s:?}");
+        assert_eq!(closes, 1);
+        assert_eq!(s.hits, s.reference, "hit tests as on a plain window with this frame");
+        let states: Vec<u32> = s.buttons.iter().map(|b| b.0 & (INVISIBLE | UNAVAILABLE)).collect();
+        assert_eq!(states, [0, 0, 0], "minimize, maximize, close all enabled");
+        let h = hits(&s);
+        assert_eq!(h.iter().map(|x| x.0).collect::<Vec<_>>(), ["minimize", "maximize", "close", "title", "left edge", "bottom-right"]);
+        assert!(button(h[0].1, HTMINBUTTON) && button(h[1].1, HTMAXBUTTON), "{h:?}");
+        assert_eq!(&h[2..], [("close", HTCLOSE), ("title", HTCAPTION), ("left edge", HTLEFT), ("bottom-right", HTBOTTOMRIGHT)]);
+        let w = |r: &RECT| r.right - r.left;
+        assert!(s.buttons.iter().all(|b| w(&b.1) > 0), "visible buttons have rects");
+        assert!(s.minimized && s.restored, "minimize and restore");
+        assert!(s.maximized && s.unmaximized, "maximize and restore");
+        if let Some(d) = s.dark_mode {
+            assert_eq!(d, 1, "immersive dark mode applied");
+        }
+
+        let (s, closes) = run_captioned(Controls::MinClose, false);
+        println!("fixed: {s:?}");
+        assert_eq!(closes, 1);
+        assert_eq!(s.hits, s.reference, "hit tests as on a plain window with this frame");
+        assert_eq!(s.buttons[0].0 & (INVISIBLE | UNAVAILABLE), 0, "minimize enabled");
+        assert_ne!(s.buttons[1].0 & (INVISIBLE | UNAVAILABLE), 0, "maximize disabled or hidden");
+        assert_eq!(s.buttons[2].0 & (INVISIBLE | UNAVAILABLE), 0, "close enabled");
+        let h = hits(&s);
+        assert!(h[0].0 == "minimize" && button(h[0].1, HTMINBUTTON), "{h:?}");
+        assert!(h.contains(&("close", HTCLOSE)) && h.contains(&("title", HTCAPTION)), "{h:?}");
+        assert!(!h.contains(&("left edge", HTLEFT)) && !h.contains(&("bottom-right", HTBOTTOMRIGHT)), "no sizing: {h:?}");
+        assert!(s.minimized && s.restored, "minimize and restore");
+        assert!(!s.maximized, "no maximize (Win+Up, double-click on the title)");
+
+        let (s, closes) = run_captioned(Controls::Close, false);
+        println!("dialog: {s:?}");
+        assert_eq!(closes, 1);
+        assert_eq!(s.hits, s.reference, "hit tests as on a plain window with this frame");
+        assert_ne!(s.buttons[0].0 & INVISIBLE, 0, "no minimize");
+        assert_ne!(s.buttons[1].0 & INVISIBLE, 0, "no maximize");
+        assert_eq!(s.buttons[2].0 & (INVISIBLE | UNAVAILABLE), 0, "close");
+        assert_eq!(hits(&s)[0], ("close", HTCLOSE));
+        assert!(!s.maximized);
+    }
+
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn PrintWindow(hwnd: HWND, hdc: windows::Win32::Graphics::Gdi::HDC, flags: u32) -> i32;
+    }
+
+    #[link(name = "ntdll")]
+    unsafe extern "system" {
+        fn RtlGetVersion(info: *mut windows::Win32::System::SystemInformation::OSVERSIONINFOW) -> i32;
+    }
+
+    /// The Windows build number (RtlGetVersion: no manifest lies).
+    fn os_build() -> u32 {
+        let mut v = windows::Win32::System::SystemInformation::OSVERSIONINFOW {
+            dwOSVersionInfoSize: std::mem::size_of::<windows::Win32::System::SystemInformation::OSVERSIONINFOW>() as u32,
+            ..Default::default()
+        };
+        if unsafe { RtlGetVersion(&mut v) } == 0 { v.dwBuildNumber } else { 0 }
+    }
+
+    /// The whole window as DWM composes it (title bar included), RGBA,
+    /// from its own redirection surface: nothing else on screen is read.
+    unsafe fn print_window(hwnd: HWND) -> PixBuf {
+        unsafe {
+            let mut wr = RECT::default();
+            let _ = GetWindowRect(hwnd, &mut wr);
+            let (w, h) = (wr.right - wr.left, wr.bottom - wr.top);
+            let mut bi: BITMAPINFO = std::mem::zeroed();
+            bi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
+            (bi.bmiHeader.biWidth, bi.bmiHeader.biHeight) = (w, -h);
+            (bi.bmiHeader.biPlanes, bi.bmiHeader.biBitCount) = (1, 32);
+            let dc = CreateCompatibleDC(None);
+            let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
+            let bmp = CreateDIBSection(Some(dc), &bi, DIB_RGB_COLORS, &mut bits, None, 0).expect("DIB");
+            let old = SelectObject(dc, bmp.into());
+            const PW_RENDERFULLCONTENT: u32 = 2;
+            PrintWindow(hwnd, dc, PW_RENDERFULLCONTENT);
+            let _ = GdiFlush();
+            let mut img = PixBuf::new(w as u32, h as u32);
+            img.as_raw_mut().copy_from_slice(std::slice::from_raw_parts(bits as *const u8, (w * h * 4) as usize));
+            swap_rb(img.as_raw_mut());
+            img.as_raw_mut().as_chunks_mut::<4>().0.iter_mut().for_each(|p| p[3] = 255);
+            SelectObject(dc, old);
+            let _ = DeleteObject(bmp.into());
+            let _ = DeleteDC(dc);
+            img
+        }
+    }
+
+    /// Fills its client area with the "design surface" and reports the
+    /// title bar colours for `dark` (flipped from the helper thread).
+    struct Themed {
+        hwnd: HWND,
+        fb: PixBuf,
+        dark: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        helper: Option<std::thread::JoinHandle<Vec<(bool, PixBuf, RECT)>>>,
+    }
+
+    impl Themed {
+        fn colors(dark: bool) -> FrameColors {
+            crate::ui::paint::WTok::of(if dark { &crate::theme::DARK } else { &crate::theme::LIGHT }).frame()
+        }
+    }
+
+    impl Driver for Themed {
+        fn on_create(&mut self, hwnd: HWND) {
+            self.hwnd = hwnd;
+            let raw = hwnd.0 as usize;
+            let dark = self.dark.clone();
+            self.helper = Some(std::thread::spawn(move || unsafe {
+                let hwnd = HWND(raw as *mut core::ffi::c_void);
+                SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+                while !IsWindowVisible(hwnd).as_bool() {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                let mut shots = Vec::new();
+                for d in [true, false, true] {
+                    dark.store(d, std::sync::atomic::Ordering::SeqCst);
+                    // A theme switch repaints; the frame follows on that paint.
+                    let _ = InvalidateRect(Some(hwnd), None, false);
+                    std::thread::sleep(std::time::Duration::from_millis(400));
+                    let mut wr = RECT::default();
+                    let _ = GetWindowRect(hwnd, &mut wr);
+                    let mut tbi = TITLEBARINFOEX { cbSize: std::mem::size_of::<TITLEBARINFOEX>() as u32, ..Default::default() };
+                    SendMessageW(hwnd, WM_GETTITLEBARINFOEX, Some(WPARAM(0)), Some(LPARAM(&raw mut tbi as isize)));
+                    // The title bar in window coordinates (the print's).
+                    // Cropped to the visible frame (no invisible resize borders).
+                    use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS};
+                    let mut vis = wr;
+                    let _ = DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, (&raw mut vis).cast(), 16);
+                    let full = print_window(hwnd);
+                    let (ox, oy) = ((vis.left - wr.left).max(0) as u32, (vis.top - wr.top).max(0) as u32);
+                    let (cw, ch) = ((vis.right - vis.left) as u32, (vis.bottom - vis.top) as u32);
+                    let mut img = PixBuf::new(cw.min(full.width() - ox), ch.min(full.height() - oy));
+                    let (iw, fw) = (img.width() as usize * 4, full.width() as usize * 4);
+                    for (y, row) in img.as_raw_mut().chunks_exact_mut(iw).enumerate() {
+                        let at = (y + oy as usize) * fw + ox as usize * 4;
+                        row.copy_from_slice(&full.as_raw()[at..at + iw]);
+                    }
+                    let t = tbi.rcTitleBar;
+                    let bar = RECT { left: t.left - vis.left, top: t.top - vis.top, right: t.right - vis.left, bottom: t.bottom - vis.top };
+                    shots.push((d, img, bar));
+                }
+                let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
+                shots
+            }));
+        }
+        fn on_event(&mut self, ev: Ev) -> bool {
+            match ev {
+                Ev::Resize(w, h) => self.fb = PixBuf::new(w.max(1), h.max(1)),
+                Ev::Close => close(self.hwnd),
+                _ => {}
+            }
+            false
+        }
+        fn frame(&mut self) -> Option<&mut PixBuf> {
+            let [r, g, b] = Self::colors(self.dark.load(std::sync::atomic::Ordering::SeqCst)).caption;
+            self.fb.as_raw_mut().as_chunks_mut::<4>().0.iter_mut().for_each(|p| *p = [r, g, b, 255]);
+            Some(&mut self.fb)
+        }
+        fn cursor(&self) -> Cursor {
+            Cursor::Arrow
+        }
+        fn frame_colors(&self) -> Option<FrameColors> {
+            Some(Self::colors(self.dark.load(std::sync::atomic::Ordering::SeqCst)))
+        }
+    }
+
+    /// The OS title bar takes the design's surface colour, dark and light,
+    /// and follows a theme switch while the window is open (Windows 11:
+    /// DWMWA_CAPTION_COLOR; older builds keep their own caption, so the
+    /// colour check is skipped there). Writes `caption-*.png` (the whole
+    /// window, frame included) under `RUSTSHOT_PREVIEW_DIR`.
+    #[test]
+    fn run_window_caption_takes_the_design_colours() {
+        let _guard = windows_lock();
+        let shots = std::thread::spawn(|| {
+            let dark = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+            let mut d = Themed { hwnd: HWND::default(), fb: PixBuf::new(1, 1), dark, helper: None };
+            let spec = WindowSpec {
+                title: "Rustshot Settings".into(),
+                w: 480,
+                h: 200,
+                resizable: false,
+                min: (480, 200),
+                controls: Controls::MinClose,
+            };
+            run_window(spec, &mut d).expect("window loop");
+            d.helper.take().expect("helper").join().expect("helper thread")
+        })
+        .join()
+        .expect("window thread");
+        // DWMWA_CAPTION_COLOR arrived with Windows 11 (build 22000).
+        let build = os_build();
+        for (i, (dark, img, bar)) in shots.iter().enumerate() {
+            let name = format!("caption-{}{}.png", if *dark { "dark" } else { "light" }, if i == 2 { "-again" } else { "" });
+            crate::ui::preview::save(&name, img);
+            assert!(bar.bottom > bar.top && bar.right > bar.left, "title bar rect {bar:?}");
+            // Right of the title text, left of the buttons.
+            let (x, y) = ((bar.left + (bar.right - bar.left) * 3 / 5) as u32, ((bar.top + bar.bottom) / 2) as u32);
+            let p = img.get_pixel(x, y);
+            let want = Themed::colors(*dark).caption;
+            println!("{name}: title bar at ({x}, {y}) = {p:?}, want {want:?}, build {build}");
+            if build >= 22000 {
+                let near = p.iter().zip(want).all(|(&a, b)| a.abs_diff(b) <= 3);
+                assert!(near, "{name}: title bar {p:?}, want the design surface {want:?}");
+            }
+        }
     }
 }

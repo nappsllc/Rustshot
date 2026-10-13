@@ -289,6 +289,10 @@ impl Driver for Window {
     fn cursor(&self) -> Cursor {
         Cursor::Arrow
     }
+
+    fn frame_colors(&self) -> Option<wind::FrameColors> {
+        Some(crate::ui::paint::WTok::of(&self.th).frame())
+    }
 }
 
 /// Run the window on this thread until it closes.
@@ -296,7 +300,7 @@ pub fn run(rx: Receiver<()>) {
     let cfg = crate::config::load();
     let th = crate::theme::resolve(&cfg);
     let mut w = Window::new(Form::new(Plan::from_config(&cfg)), th, rx);
-    let spec = WindowSpec { title: "Rustshot Capture".into(), w: W, h: H, resizable: false, min: (W, H) };
+    let spec = WindowSpec { title: "Rustshot Capture".into(), w: W, h: H, resizable: false, min: (W, H), controls: wind::Controls::MinClose };
     if let Err(e) = wind::run_window(spec, &mut w) {
         eprintln!("rustshot: launcher window: {e:#}");
     }
