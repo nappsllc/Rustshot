@@ -190,8 +190,8 @@ impl FocusState {
 
     /// Focus key_capture `id` and start recording, as a click on it does
     /// (call after the frame's controls are drawn: a press this frame
-    /// would otherwise stop the recording again).
-    #[cfg(test)]
+    /// would otherwise stop the recording again). Settings' "Change
+    /// shortcuts…" starts recording in the row that needs a new key.
     pub fn record(&mut self, id: &str) {
         self.set(Some(id_of(id)), false);
         self.recording = Some(id_of(id));

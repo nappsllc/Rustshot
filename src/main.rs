@@ -3,6 +3,7 @@
 mod actions;
 mod anim;
 mod autostart;
+mod busy;
 mod cam;
 mod capture;
 mod config;
@@ -104,8 +105,10 @@ enum Cmd {
     },
     /// Run in the background and wait for the global capture hotkey.
     /// `after_update`: started by an in-app update (hidden `--after-update`):
-    /// never signal a still-running old daemon.
-    Daemon { after_update: bool },
+    /// never signal a still-running old daemon. `force` (`--force`): run
+    /// even with the tray icon off (Windows: no background process then).
+    /// `plain`: started with no command at all (the Start menu, the exe).
+    Daemon { after_update: bool, force: bool, plain: bool },
     /// Check for a newer release and open its download page.
     Update,
     /// Open the History window (in this process); `list`: print the
@@ -170,7 +173,9 @@ Commands:
   full      Capture the whole desktop directly (add --edit for the editor)
   screen    Capture a single monitor (0 = first) directly (add --edit for the editor)
   daemon    Run in the background and wait for the global capture hotkey (default;
-            launching again while it runs triggers a capture)
+            launching again while it runs triggers a capture). Windows, with the
+            tray icon off: nothing runs in the background (a plain launch opens
+            Settings); --force runs it anyway
   update    Check for a newer release and open its download page
   settings  Open the Settings window
   history   Open the History window (captures kept, Edit); --list prints them:
@@ -252,11 +257,15 @@ fn parse_from(args: &[String]) -> Result<Parsed, String> {
             Some(Cmd::Screen { number, args: capture })
         }
         Some("daemon") => {
-            let after_update = rest.first().map(String::as_str) == Some(update_install::AFTER_UPDATE_FLAG);
-            if let Some(a) = rest.get(after_update as usize) {
-                return Err(format!("unexpected argument '{a}'"));
+            let (mut after_update, mut force) = (false, false);
+            for a in rest {
+                match a.as_str() {
+                    f if f == update_install::AFTER_UPDATE_FLAG && !after_update && !force => after_update = true,
+                    "--force" if !force => force = true,
+                    a => return Err(format!("unexpected argument '{a}'")),
+                }
             }
-            Some(Cmd::Daemon { after_update })
+            Some(Cmd::Daemon { after_update, force, plain: false })
         }
         Some("update") => {
             if let Some(a) = rest.first() {
@@ -571,6 +580,55 @@ fn delayed(ms: u32) {
     }
 }
 
+/// What `rustshot daemon` (or a plain `rustshot`) does.
+#[derive(Debug, PartialEq, Eq)]
+enum DaemonStart {
+    Run,
+    /// A plain launch with the tray icon off (Windows): open Settings.
+    Settings,
+    /// The icon is off in a file from before this meant "no background
+    /// process", and nobody said they know: the one-time notice (Settings,
+    /// with Set up Win+Shift+S / Show tray icon again / OK). Also on the
+    /// update's relaunch.
+    Notice,
+    /// `rustshot daemon` with the tray icon off (Windows; the login item):
+    /// nothing runs in the background, so it exits at once.
+    Exit,
+}
+
+/// With `no_bg` ([`tray::hidden_means_no_daemon`]: Windows, not the
+/// Store build) "Show icon in tray" off means no background process
+/// (unless `--force`); elsewhere the daemon is the only way to capture
+/// from a hotkey, so it always runs. `running`: a daemon of this instance
+/// is up (a launch then goes to it as before).
+fn daemon_start(cfg: &Config, force: bool, plain: bool, no_bg: bool, running: impl Fn() -> bool) -> DaemonStart {
+    if !no_bg || cfg.show_tray || force || running() {
+        DaemonStart::Run
+    } else if !cfg.tray_off_mode_seen {
+        DaemonStart::Notice
+    } else if plain {
+        DaemonStart::Settings
+    } else {
+        DaemonStart::Exit
+    }
+}
+
+/// The daemon's run (also an on-demand one, [`editor::Background`]):
+/// until it quits, then the history and an upload in flight finish.
+fn run_background(cfg: Config, pending: Option<Pending>, guard: Option<instance::Guard>, bg: editor::Background) -> i32 {
+    let exit_code = Arc::new(AtomicI32::new(0));
+    let slot: UploadSlot = Arc::new(Mutex::new(None));
+    let mut code = editor::run(cfg.clone(), RunKind::Daemon, pending, exit_code, slot.clone(), guard, bg);
+    history::flush(Duration::from_secs(30));
+    if let Some(rx) = slot.lock().unwrap().take() {
+        match export::wait_upload(rx, cfg.copy_url_after_upload) {
+            Some(url) => uploads::finished(&url, None),
+            None => code = 1,
+        }
+    }
+    code
+}
+
 fn editor_main(cfg: Config, kind: RunKind, pending: Pending) -> i32 {
     editor_run(cfg, kind, Some(pending))
 }
@@ -580,7 +638,7 @@ fn editor_main(cfg: Config, kind: RunKind, pending: Pending) -> i32 {
 fn editor_run(cfg: Config, kind: RunKind, pending: Option<Pending>) -> i32 {
     let exit_code = Arc::new(AtomicI32::new(0));
     let slot: UploadSlot = Arc::new(Mutex::new(None));
-    let mut code = editor::run(cfg.clone(), kind, pending, exit_code, slot.clone(), None);
+    let mut code = editor::run(cfg.clone(), kind, pending, exit_code, slot.clone(), None, editor::Background::Normal);
     // The history thread finishes writing before the process goes.
     history::flush(Duration::from_secs(30));
     if let Some(rx) = slot.lock().unwrap().take() {
@@ -687,7 +745,7 @@ pub fn memlog(phase: &str) {
 fn run() -> Result<()> {
     let argv: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
     let cmd = match parse_args(&argv) {
-        Ok(Parsed::Cmd(c)) => c.unwrap_or(Cmd::Daemon { after_update: false }),
+        Ok(Parsed::Cmd(c)) => c.unwrap_or(Cmd::Daemon { after_update: false, force: false, plain: true }),
         Ok(Parsed::Help(h)) => {
             print!("{h}");
             return Ok(());
@@ -786,7 +844,49 @@ fn run() -> Result<()> {
                 }
             }
         }
-        Cmd::Daemon { after_update } => {
+        Cmd::Daemon { after_update, force, plain } => {
+            // Windows, tray icon off: no background process. Win+Shift+S /
+            // Print Screen start Rustshot on demand; a plain launch opens
+            // Settings (the way back in).
+            // What an earlier update left, on any start (also one that
+            // exits right away: the tray icon is off), unless a daemon or an
+            // update dialog may be downloading into the folder right now.
+            if !instance::daemon_running() && !instance::update_dialog_open() {
+                update_install::cleanup_previous();
+            }
+            // `--force` while an on-demand run (or a daemon) holds the
+            // instance: it becomes the forced daemon.
+            if force && instance::daemon_running() && instance::signal_become_daemon() {
+                return Ok(());
+            }
+            // An older file's former default hotkeys get today's, once
+            // (here too when no daemon runs: Settings then shows them).
+            if !instance::daemon_running() {
+                config::migrate_at(&config::config_path(), &mut config::load());
+            }
+            match daemon_start(&config::load(), force, plain, tray::hidden_means_no_daemon(), instance::daemon_running) {
+                DaemonStart::Run => {}
+                DaemonStart::Notice => {
+                    // An older file with the icon off (it meant a hidden
+                    // daemon then): say once what it means now.
+                    let edit = [("tray_off_mode_seen".to_string(), Some("true".to_string()))];
+                    if let Err(e) = config::edit_top_keys_at(&config::config_path(), &edit) {
+                        eprintln!("rustshot: could not save tray_off_mode_seen: {e}");
+                    }
+                    settings_ui::run_tray_off_notice();
+                    return Ok(());
+                }
+                DaemonStart::Settings => {
+                    if !instance::signal_settings() {
+                        settings_ui::run_here();
+                    }
+                    return Ok(());
+                }
+                DaemonStart::Exit => {
+                    eprintln!("Rustshot: Show icon in tray is off, so nothing runs in the background (Win+Shift+S / Print Screen start Rustshot when it is set up); `rustshot daemon --force` runs it anyway");
+                    return Ok(());
+                }
+            }
             // `_solo` keeps a Solo daemon's lock file locked until the process ends.
             let mut _solo = None;
             // After a portable update: let the old daemon exit first (bounded).
@@ -816,7 +916,9 @@ fn run() -> Result<()> {
             uploads::warm();
             screenclip_win::repoint_on_start();
             rec_ui::warm_mp4();
-            let cfg = config::load();
+            let mut cfg = config::load();
+            // An older file's former default hotkeys get today's, once.
+            config::migrate_at(&config::config_path(), &mut cfg);
             // Offered for Win+Shift+S but not chosen: the guide, once the
             // daemon is up (its Settings window reaches the daemon).
             let hint = cfg.screenclip_hint;
@@ -824,17 +926,8 @@ fn run() -> Result<()> {
                 std::thread::sleep(Duration::from_secs(3));
                 screenclip_win::remind_on_start(hint);
             });
-            let exit_code = Arc::new(AtomicI32::new(0));
-            let slot: UploadSlot = Arc::new(Mutex::new(None));
-            let mut code = editor::run(cfg.clone(), RunKind::Daemon, None, exit_code, slot.clone(), guard);
-            history::flush(Duration::from_secs(30));
-            if let Some(rx) = slot.lock().unwrap().take() {
-                match export::wait_upload(rx, cfg.copy_url_after_upload) {
-                    Some(url) => uploads::finished(&url, None),
-                    None => code = 1,
-                }
-            }
-            exit(code);
+            let bg = if force { editor::Background::Forced } else { editor::Background::Normal };
+            exit(run_background(cfg, None, guard, bg));
         }
         Cmd::Gui(ref args) | Cmd::Full(ref args) | Cmd::Screen { ref args, .. } => {
             let plan = plan_capture(&cmd)?.expect("a capture command");
@@ -873,7 +966,21 @@ fn screenclip(uri: &str) -> Result<()> {
         Mode::Record if rec_ui::supported() => Pending::record(),
         Mode::Record => Pending::editor(),
     };
-    exit(editor_main(config::load(), RunKind::OneShot, pending))
+    // No daemon (the tray icon is off: none runs): this capture runs
+    // like one, without its global hotkeys, until its windows (pins,
+    // Edit, the thumbnail, a recording) are gone.
+    let guard = match instance::try_acquire() {
+        Some(instance::Instance::Primary(g)) => Some(g),
+        _ => None,
+    };
+    if guard.is_some() && !instance::update_dialog_open() {
+        update_install::cleanup_previous();
+    }
+    let mut cfg = config::load();
+    if guard.is_some() {
+        config::migrate_at(&config::config_path(), &mut cfg);
+    }
+    exit(run_background(cfg, Some(pending), guard, editor::Background::OnDemand))
 }
 
 #[cfg(not(windows))]
@@ -894,6 +1001,33 @@ mod cli_tests {
             Parsed::Cmd(c) => c.expect("expected a command"),
             _ => panic!("expected a command, got help"),
         }
+    }
+
+    /// Tray icon off (Windows): `rustshot daemon` exits, a plain launch
+    /// opens Settings, `--force` runs anyway; elsewhere it always runs.
+    #[test]
+    fn daemon_start_follows_the_tray_switch() {
+        let on = Config::default();
+        let off = Config { show_tray: false, tray_off_mode_seen: true, ..Config::default() };
+        let none = || false;
+        assert_eq!(daemon_start(&on, false, false, true, none), DaemonStart::Run);
+        assert_eq!(daemon_start(&on, false, true, true, none), DaemonStart::Run);
+        assert_eq!(daemon_start(&off, true, false, true, none), DaemonStart::Run, "--force");
+        assert_eq!(daemon_start(&off, false, false, true, none), DaemonStart::Exit);
+        assert_eq!(daemon_start(&off, false, true, true, none), DaemonStart::Settings);
+        // A daemon runs (forced, or the Store build): a launch goes to it.
+        assert_eq!(daemon_start(&off, false, true, true, || true), DaemonStart::Run);
+        // The Store build, Linux, macOS: a hidden daemon as before.
+        assert_eq!(daemon_start(&off, false, false, false, none), DaemonStart::Run);
+        assert_eq!(daemon_start(&off, false, true, false, none), DaemonStart::Run);
+        // An older file with the icon off: the one-time notice, on any start
+        // (the login item, a plain launch, the update's relaunch).
+        let old = Config { show_tray: false, ..Config::default() };
+        for plain in [false, true] {
+            assert_eq!(daemon_start(&old, false, plain, true, none), DaemonStart::Notice);
+        }
+        assert_eq!(daemon_start(&old, true, false, true, none), DaemonStart::Run, "--force still runs");
+        assert!(matches!(p(&[]).unwrap(), Parsed::Cmd(None)), "a plain launch has no command");
     }
 
     #[test]
@@ -976,8 +1110,12 @@ mod cli_tests {
     fn config_and_daemon() {
         assert!(matches!(cmd(&["config", "--check"]), Cmd::Config { check: true }));
         assert!(matches!(cmd(&["config"]), Cmd::Config { check: false }));
-        assert!(matches!(cmd(&["daemon"]), Cmd::Daemon { after_update: false }));
-        assert!(matches!(cmd(&["daemon", "--after-update"]), Cmd::Daemon { after_update: true }));
+        assert!(matches!(cmd(&["daemon"]), Cmd::Daemon { after_update: false, force: false, plain: false }));
+        assert!(matches!(cmd(&["daemon", "--after-update"]), Cmd::Daemon { after_update: true, force: false, plain: false }));
+        assert!(matches!(cmd(&["daemon", "--force"]), Cmd::Daemon { after_update: false, force: true, plain: false }));
+        assert!(matches!(cmd(&["daemon", "--after-update", "--force"]), Cmd::Daemon { after_update: true, force: true, .. }));
+        assert!(p(&["daemon", "--force", "--force"]).is_err());
+        assert!(p(&["daemon", "--force", "--after-update"]).is_err(), "--after-update comes first");
         assert!(p(&["daemon", "--after-update", "x"]).is_err());
         assert!(p(&["daemon", "x", "--after-update"]).is_err());
         assert!(p(&["gui", "--after-update"]).is_err());

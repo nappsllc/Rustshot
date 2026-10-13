@@ -719,7 +719,7 @@ pub fn answer(delete: bool, done: impl FnOnce(crate::notice::Note) + Send + 'sta
         return None;
     }
     let cfg = crate::config::load();
-    std::thread::spawn(move || {
+    crate::busy::spawn(move || {
         #[cfg(test)]
         let del = |_: &str, _: &str, _: &[(&str, &str)]| -> Result<(u32, String), String> { Err("no network in tests".into()) };
         #[cfg(not(test))]
