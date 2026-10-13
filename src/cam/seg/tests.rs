@@ -680,7 +680,13 @@ fn seg_bench() {
     for _ in 0..20 {
         net.segment(&inp, &mut sq);
     }
-    println!("BENCH net ({weights} weights, {} ops, {} bytes) {:.3} ms", m.ops.len(), bytes.len(), t.elapsed().as_secs_f64() * 1000.0 / 20.0);
+    println!(
+        "BENCH net ({weights} weights, {} ops, {} bytes, {} threads) {:.3} ms",
+        m.ops.len(),
+        bytes.len(),
+        net.threads(),
+        t.elapsed().as_secs_f64() * 1000.0 / 20.0
+    );
     let mut tot: Vec<(String, f64, usize)> = Vec::new();
     for _ in 0..10 {
         for (k, ms, n) in net.run_timed() {

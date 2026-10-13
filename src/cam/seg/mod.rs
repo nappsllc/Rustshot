@@ -15,7 +15,7 @@
 //! back as a [`SqMask`].
 
 pub mod format;
-mod ops;
+pub(crate) mod ops;
 mod team;
 #[cfg(test)]
 mod tests;
@@ -91,6 +91,9 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 /// Below this many multiply-adds an operator runs on one thread (waking
 /// the team costs more).
 const PAR_WORK: usize = 250_000;
+
+/// One part's work: its output rows, those rows of the output, scratch.
+type RowFn<'a> = dyn Fn((usize, usize), &mut [f32], &mut Vec<f32>) + Sync + 'a;
 
 /// The output size of a convolution or pool along one axis, if `out` is
 /// what SAME or VALID padding gives.
@@ -338,6 +341,7 @@ impl Net {
     }
 
     /// The threads working on the big operators (this one included).
+    #[cfg(test)]
     pub fn threads(&self) -> usize {
         self.team.size()
     }
@@ -350,15 +354,14 @@ impl Net {
 
     /// `f(rows, out)` for each part's rows of `out` (`row_len` values a
     /// row), on the team.
-    fn by_rows(&self, out: &mut [f32], nrows: usize, row_len: usize, parts: usize, f: &(dyn Fn((usize, usize), &mut [f32], &mut Vec<f32>) + Sync)) {
+    fn by_rows(&self, out: &mut [f32], nrows: usize, row_len: usize, parts: usize, f: &RowFn) {
         assert!(out.len() >= nrows * row_len);
         let rows = Rows(out.as_mut_ptr());
         self.team.run(parts, &|p| {
-            let rows = rows;
             let (r0, r1) = split(nrows, parts, p);
             // SAFETY: rows r0..r1 of `out` (asserted to hold them) are this
             // part's alone: the parts' ranges are disjoint.
-            let o = unsafe { std::slice::from_raw_parts_mut(rows.0.add(r0 * row_len), (r1 - r0) * row_len) };
+            let o = unsafe { std::slice::from_raw_parts_mut(rows.get().add(r0 * row_len), (r1 - r0) * row_len) };
             f((r0, r1), o, &mut lock(&self.scratch[p]));
         });
     }
@@ -444,11 +447,10 @@ impl Net {
                 ops::tconv_bias(out, od, b);
                 let at = Rows(out.as_mut_ptr());
                 self.team.run(parts, &|p| {
-                    let at = at;
                     // SAFETY: `out` holds the whole output; part p's input
                     // rows reach only their own output rows (k <= stride,
                     // or one part).
-                    unsafe { ops::transpose_conv_rows(x, xd, w, k, zero, p2(stride), p2(pad), at.0, od, split(xd.0, parts, p), &mut lock(&self.scratch[p])) };
+                    unsafe { ops::transpose_conv_rows(x, xd, w, k, zero, p2(stride), p2(pad), at.get(), od, split(xd.0, parts, p), &mut lock(&self.scratch[p])) };
                 });
                 ops::activate(st.act, &mut out[..od.0 * od.1 * od.2]);
             }

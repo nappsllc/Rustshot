@@ -36,6 +36,9 @@ mod x11;
 #[cfg(target_os = "macos")]
 mod macos;
 
+pub mod bg;
+#[cfg(target_os = "macos")]
+mod seg_macos;
 pub mod seg;
 
 #[cfg(windows)]
@@ -283,6 +286,8 @@ pub struct Look {
     pub ring: Option<C4>,
     /// The ring's width in logical px; 0 = no ring.
     pub ring_w: u8,
+    /// The background behind the person: off, or blurred (light / strong).
+    pub bg: bg::Bg,
 }
 
 impl Look {
@@ -290,7 +295,7 @@ impl Look {
     #[cfg(test)]
     #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub fn new(shape: Shape, size: CamSize) -> Look {
-        Look { shape, size, mirror: true, ring: None, ring_w: crate::config::RING_WIDTH_DEFAULT as u8 }
+        Look { shape, size, mirror: true, ring: None, ring_w: crate::config::RING_WIDTH_DEFAULT as u8, bg: bg::Bg::Off }
     }
 }
 

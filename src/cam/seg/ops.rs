@@ -68,6 +68,34 @@ impl F4 {
         // SAFETY: SSE2.
         F4(unsafe { std::arch::x86_64::_mm_min_ps(self.0, o.0) })
     }
+    /// The four bytes of a pixel as lanes.
+    #[inline(always)]
+    pub fn from_px(p: [u8; 4]) -> F4 {
+        use std::arch::x86_64::*;
+        // SAFETY: SSE2.
+        unsafe {
+            let z = _mm_setzero_si128();
+            F4(_mm_cvtepi32_ps(_mm_unpacklo_epi16(_mm_unpacklo_epi8(_mm_cvtsi32_si128(i32::from_ne_bytes(p)), z), z)))
+        }
+    }
+    /// The lanes rounded to the nearest byte (clamped to 0..=255).
+    #[inline(always)]
+    pub fn to_px(self) -> [u8; 4] {
+        use std::arch::x86_64::*;
+        // SAFETY: SSE2.
+        unsafe {
+            let i = _mm_cvtps_epi32(self.0);
+            let w = _mm_packs_epi32(i, i);
+            _mm_cvtsi128_si32(_mm_packus_epi16(w, w)).to_ne_bytes()
+        }
+    }
+    /// The fourth lane.
+    #[inline(always)]
+    pub fn lane3(self) -> f32 {
+        use std::arch::x86_64::*;
+        // SAFETY: SSE2.
+        unsafe { _mm_cvtss_f32(_mm_shuffle_ps::<0xff>(self.0, self.0)) }
+    }
 }
 
 #[cfg(not(target_arch = "x86_64"))]
@@ -109,6 +137,18 @@ impl F4 {
     #[inline(always)]
     pub fn min(self, o: F4) -> F4 {
         F4(std::array::from_fn(|i| self.0[i].min(o.0[i])))
+    }
+    #[inline(always)]
+    pub fn from_px(p: [u8; 4]) -> F4 {
+        F4(p.map(f32::from))
+    }
+    #[inline(always)]
+    pub fn to_px(self) -> [u8; 4] {
+        self.0.map(|v| v.round_ties_even().clamp(0.0, 255.0) as u8)
+    }
+    #[inline(always)]
+    pub fn lane3(self) -> f32 {
+        self.0[3]
     }
 }
 
@@ -497,33 +537,6 @@ pub fn depthwise_mult(x: &[f32], xd: Dim, w: &[f32], b: Option<&[f32]>, g: Geo, 
             }
         }
     }
-}
-
-/// A transposed convolution: weights from [`pack_tconv`], `b` the padded
-/// bias, `zero` as many zeros as the weights have columns. For each input
-/// row, one [`gemm`] gives every tap's outputs of every pixel, added into
-/// the output (`pad` taken off its top-left).
-#[allow(clippy::too_many_arguments)]
-pub fn transpose_conv(
-    x: &[f32],
-    xd: Dim,
-    w: &[f32],
-    k: (usize, usize),
-    b: &[f32],
-    zero: &[f32],
-    stride: (usize, usize),
-    pad: (usize, usize),
-    act: Act,
-    out: &mut [f32],
-    od: Dim,
-    scratch: &mut Vec<f32>,
-) {
-    let (oh, ow, oc) = od;
-    tconv_bias(out, od, b);
-    // SAFETY: one caller writes all of `out` (oh * ow * oc values, the
-    // slice's own length checked in `tconv_bias`).
-    unsafe { transpose_conv_rows(x, xd, w, k, zero, stride, pad, out.as_mut_ptr(), od, (0, xd.0), scratch) };
-    activate(act, &mut out[..oh * ow * oc]);
 }
 
 /// Every output pixel of a transposed convolution starts at the bias.

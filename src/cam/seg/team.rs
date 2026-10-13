@@ -144,6 +144,14 @@ pub struct Rows(pub *mut f32);
 unsafe impl Send for Rows {}
 unsafe impl Sync for Rows {}
 
+impl Rows {
+    /// The pointer (a method, so a closure captures the whole `Rows`,
+    /// which is `Sync`, not its field).
+    pub fn get(self) -> *mut f32 {
+        self.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
