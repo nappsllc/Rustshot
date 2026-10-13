@@ -33,6 +33,11 @@ pub const TITLE: &str = "Rustshot capture";
 /// How long a share may keep its owner window (and the process) alive.
 pub const MAX_WAIT: Duration = Duration::from_secs(10 * 60);
 
+/// [`MAX_WAIT`], or `RUSTSHOT_SHARE_MAX_SECS` seconds (live tests).
+pub fn max_wait() -> Duration {
+    std::env::var("RUSTSHOT_SHARE_MAX_SECS").ok().and_then(|s| s.parse().ok()).map_or(MAX_WAIT, Duration::from_secs)
+}
+
 /// Whether this OS has a share sheet (Windows, macOS; not Linux).
 pub const fn supported() -> bool {
     cfg!(any(windows, target_os = "macos"))
@@ -121,7 +126,7 @@ pub fn share_now(file: &Path, owner: Option<usize>) -> Result<(), String> {
 
 #[cfg(all(windows, not(test)))]
 fn imp(file: &Path, owner: Option<usize>, kind: Kind) -> Result<(), String> {
-    win::share(file, owner, kind, MAX_WAIT)
+    win::share(file, owner, kind, max_wait())
 }
 
 #[cfg(all(target_os = "macos", not(test)))]

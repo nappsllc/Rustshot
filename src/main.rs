@@ -639,7 +639,7 @@ fn main() {
 /// export crop.
 fn exit(code: i32) -> ! {
     // A share sheet still up keeps the process (its owner window) alive.
-    share::wait_idle(share::MAX_WAIT);
+    share::wait_idle(share::max_wait());
     #[cfg(windows)]
     memlog("exit");
     std::process::exit(code)
