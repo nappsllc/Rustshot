@@ -503,7 +503,7 @@ pub fn stream_rect(s: &StreamInfo, frame: (u32, u32), area: IRect, mons: &[IRect
     let (cx, cy) = (area.0 + area.2 as i32 / 2, area.1 + area.3 as i32 / 2);
     let fits = |m: &&IRect| size.is_some_and(|z| (m.2, m.3) == z) || (m.2, m.3) == frame;
     let mut cands: Vec<&IRect> = mons.iter().filter(fits).collect();
-    cands.sort_by_key(|m| !contains(**m, cx, cy));
+    crate::sort::by_key(&mut cands, |m| !contains(**m, cx, cy));
     if let Some(m) = cands.first() {
         return Some(**m);
     }

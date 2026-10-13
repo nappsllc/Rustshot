@@ -156,7 +156,7 @@ pub fn dominant(img: &PixBuf) -> (C4, C4, f32) {
     if order.is_empty() {
         return (PRESENT_LIGHT.0, PRESENT_LIGHT.1, 1.0);
     }
-    order.sort_by_key(|&k| std::cmp::Reverse(bins[k].0));
+    crate::sort::by_key(&mut order, |&k| std::cmp::Reverse(bins[k].0));
     let a = avg(&bins[order[0]]);
     let dist = |p: C4, q: C4| {
         let d = |u: u8, v: u8| (u as f32 - v as f32).powi(2);

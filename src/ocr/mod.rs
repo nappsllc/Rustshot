@@ -91,7 +91,7 @@ pub fn ordered(mut lines: Vec<Line>) -> Vec<Line> {
         }
     }
     lines.retain(|l| !l.words.is_empty());
-    lines.sort_by(|a, b| {
+    crate::sort::by(&mut lines, |a, b| {
         let (at, al) = a.top_left();
         let (bt, bl) = b.top_left();
         at.total_cmp(&bt).then(al.total_cmp(&bl))

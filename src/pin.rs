@@ -880,7 +880,7 @@ pub(crate) mod tests {
             assert_ne!(c.id(), 0);
             ids.push(c.id());
         }
-        ids.sort();
+        crate::sort::sort(&mut ids);
         ids.dedup();
         assert_eq!(ids.len(), 6 + OPACITIES.len());
         assert_eq!(Cmd::from_id(0), None);

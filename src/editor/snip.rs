@@ -310,7 +310,7 @@ pub fn border_median(img: &PixBuf) -> Option<C4> {
     }
     let ch = |i: usize| {
         let mut v: Vec<u8> = px.iter().map(|p| p[i]).collect();
-        v.sort_unstable();
+        crate::sort::sort(&mut v);
         v[v.len() / 2]
     };
     Some(C4::rgb(ch(0), ch(1), ch(2)))

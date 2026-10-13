@@ -645,7 +645,7 @@ pub fn clear_of(pos: (i32, i32), area: IRect, d: i32, scale: f32, avoid: &[IRect
         .map(|c| place(Rel { corner: c, dx: INSET, dy: INSET }, area, d, scale))
         .filter(|&p| inside((p.0, p.1, du, du), area))
         .collect();
-    corners.sort_by_key(dist);
+    crate::sort::by_key(&mut corners, dist);
     if let Some(p) = corners.into_iter().find(|&p| free(p)) {
         return p;
     }
@@ -662,7 +662,7 @@ pub fn clear_of(pos: (i32, i32), area: IRect, d: i32, scale: f32, avoid: &[IRect
         (r - d, t - inset - d),
     ];
     outside.retain(|&p| inside((p.0, p.1, du, du), screen));
-    outside.sort_by_key(dist);
+    crate::sort::by_key(&mut outside, dist);
     outside.into_iter().find(|&p| free(p)).unwrap_or(pos)
 }
 

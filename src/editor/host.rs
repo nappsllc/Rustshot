@@ -700,7 +700,7 @@ impl Canvas {
                 self.e.obj.sel.remove(p);
             } else {
                 self.e.obj.sel.push(i);
-                self.e.obj.sel.sort_unstable();
+                crate::sort::sort(&mut self.e.obj.sel);
             }
         } else {
             self.e.obj.sel = vec![i];

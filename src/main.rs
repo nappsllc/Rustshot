@@ -70,6 +70,7 @@ mod sha256;
 // "Share…": the system's share sheet (Windows, macOS).
 mod share;
 mod snap;
+mod sort;
 #[cfg(any(target_os = "linux", test))]
 mod sni;
 mod sound;
