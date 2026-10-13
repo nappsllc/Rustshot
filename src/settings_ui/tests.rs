@@ -481,6 +481,12 @@ fn overlay_helper_settings_are_saved() {
     assert_eq!((s.form.magnifier, s.form.magnifier_square, s.form.accept, s.form.hints), (false, true, 1, false));
     s.form.accept = 2;
     assert!(matches!(&s.on(Click::Apply)[..], [Act::Saved(c)] if c.accept_on_select == "save"));
+    // Copy text: "Let me select" by default; "Copy all at once" is saved.
+    let mut s = settings_at(&p);
+    assert_eq!(COPY_TEXT[s.form.copy_text].1, "select");
+    s.form.copy_text = 0;
+    assert!(matches!(&s.on(Click::Apply)[..], [Act::Saved(c)] if c.copy_text_mode == "all"));
+    assert_eq!(settings_at(&p).form.copy_text, 0);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
