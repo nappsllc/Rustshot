@@ -448,9 +448,13 @@ under the selection, offers:
 - The countdown (0 or 3 s) and the camera's shape and ring.
 - The camera's **Background** (under the Camera row): Off, Blur light or
   Blur strong. The person is found in each picture on your computer (the
-  embedded MediaPipe Selfie Segmentation model, or Vision on macOS 12 and
-  later) and what is behind them is blurred; nothing leaves the machine.
-  A build without the model says *Blur unavailable in this build*.
+  MediaPipe Selfie Segmentation model, or Vision on macOS 12 and later)
+  and what is behind them is blurred; no picture leaves the machine. The
+  model (215 KB) is downloaded from this version's GitHub release the
+  first time you choose a blur (the row shows the progress; *Couldn't
+  download the model · Retry* if it fails). With *Download language and
+  blur files* off (Settings › General), Settings › Recording says which
+  file to download and where to save it.
 
 The camera bubble is a real window on the screen, so it is in the
 recording: drag it anywhere (it snaps into the nearest corner when let go

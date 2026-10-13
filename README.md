@@ -300,6 +300,7 @@ filename_pattern = "%F_%H-%M"
 capture_hotkey = "Shift+Meta+X"   # Meta = Win, Cmd or Super
 history_days = 30
 check_updates = true
+download_data = true
 ```
 
 Every key, the file-name tokens and the `[shortcuts]` table are listed in
@@ -329,15 +330,24 @@ cargo test                     # unit tests
 cargo test -- --ignored        # live display / clipboard / network tests
 ```
 
-The camera's background blur uses MediaPipe's Selfie Segmentation model
-(Apache-2.0), converted to `assets/selfie.bin` (source and hash in
-`assets/selfie.bin.txt`); it is embedded whenever that file is there.
-`RUSTSHOT_NO_SELFIE=1` builds without it (macOS 12+ still blurs with
-Vision). To convert the model again:
+Data files are not in the binary: the camera's background-blur model
+(MediaPipe's Selfie Segmentation, Apache-2.0, converted to
+`models/selfie.bin`; source and hash in `models/selfie.bin.txt`) and the
+language files (`lang/<tag>.txt`) are published with each release
+(`selfie-<hash8>.bin`, `lang-<tag>.txt`, listed in `SHA256SUMS`) and
+downloaded when first needed into `%LOCALAPPDATA%\rustshot-data` (Linux
+`~/.local/share/rustshot`, macOS `~/Library/Application Support/rustshot`),
+checked against the SHA-256 the build expects (`src/fetch.rs`; macOS 12+
+blurs with Vision and needs no model). Settings › General › *Download
+language and blur files* (`download_data`) turns this off; Settings then
+says which file to put where. For a local build, point `RUSTSHOT_DATA_DIR`
+at the source tree to use its `models/` and `lang/`. To convert the model
+again (then update `fetch::MODEL`: the test `model_manifest_matches_the_file`
+shows the new size and hash):
 
 ```bash
 cargo run --manifest-path tools/convert-selfie/Cargo.toml -- \
-    selfie_segmentation_landscape.tflite assets/selfie.bin
+    selfie_segmentation_landscape.tflite models/selfie.bin
 ```
 
 Packaging scripts for NSIS, MSIX, `.app`/dmg, deb, AppImage, Flatpak,

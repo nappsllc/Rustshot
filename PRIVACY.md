@@ -73,6 +73,18 @@ Rustshot does not collect, store or transmit personal data or telemetry.
   `objects.githubusercontent.com` / `release-assets.githubusercontent.com`).
   These requests carry no data about you or your screenshots; GitHub sees
   your IP address and a `rustshot/<version>` user agent, as with any download.
+- Data files on demand (every install, store builds included; off with
+  `download_data = false` or Settings › General › *Download language and
+  blur files*): the camera bubble's background-blur model (when you first
+  choose a blur) and a language file (when you choose a language, or on
+  first run when your system language has a translation) are downloaded
+  with that release's `SHA256SUMS` from
+  `github.com/nappsllc/rustshot/releases/download/v<version>/` (GitHub's
+  asset servers as above), checked against the SHA-256 built into
+  Rustshot, and kept in `%LOCALAPPDATA%\rustshot-data\{models,lang}`
+  (Linux: `$XDG_DATA_HOME/rustshot/…`, macOS: `~/Library/Application
+  Support/rustshot/…`). The requests carry nothing but the file's name; no
+  camera picture, screenshot or setting is ever sent.
 - Screen recording: the screen, system sound, microphone and camera are
   captured only while a recording runs, and the camera also while its
   bubble is shown before one (Record popover with Camera on). Sound, the
