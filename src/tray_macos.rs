@@ -142,12 +142,7 @@ unsafe fn dark_bar(st: &State) -> bool {
 /// The glyph as a PNG, `n`x`n` px, in `rgb`.
 fn glyph_png(n: u32, rgb: (u8, u8, u8), recording: bool) -> Option<Vec<u8>> {
     let rgba = tray::tray_glyph_rgba_rec(n, rgb, recording);
-    let mut out = Vec::new();
-    let mut enc = png::Encoder::new(&mut out, n, n);
-    enc.set_color(png::ColorType::Rgba);
-    enc.set_depth(png::BitDepth::Eight);
-    enc.write_header().ok()?.write_image_data(&rgba).ok()?;
-    Some(out)
+    (rgba.len() == (n * n * 4) as usize).then(|| crate::pngfile::encode(n, n, crate::pngfile::Color::Rgba, &rgba))
 }
 
 unsafe fn set_image(st: &State) {

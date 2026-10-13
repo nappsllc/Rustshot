@@ -45,6 +45,7 @@ mod perf;
 mod osrand;
 mod pin;
 mod pixbuf;
+mod pngfile;
 #[cfg(windows)]
 mod proc_win;
 mod raster;

@@ -236,26 +236,11 @@ pub fn follow_scale(hwnd: Hwnd, sized_for: &mut f32, w: u32, h: u32) -> f32 {
 /// an embedded PNG (any 8-bit color type).
 #[cfg(any(target_os = "linux", test))]
 pub(crate) fn icon_argb(png_bytes: &[u8]) -> Option<Vec<u32>> {
-    let mut dec = png::Decoder::new(png_bytes);
-    dec.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
-    let mut reader = dec.read_info().ok()?;
-    let mut buf = vec![0u8; reader.output_buffer_size()];
-    let info = reader.next_frame(&mut buf).ok()?;
-    let (w, h) = (info.width, info.height);
-    let px = |r: u8, g: u8, b: u8, a: u8| (a as u32) << 24 | (r as u32) << 16 | (g as u32) << 8 | b as u32;
-    let data = &buf[..info.buffer_size()];
-    let mut out = Vec::with_capacity(2 + (w * h) as usize);
-    out.extend([w, h]);
-    match info.color_type {
-        png::ColorType::Rgba => out.extend(data.as_chunks::<4>().0.iter().map(|p| px(p[0], p[1], p[2], p[3]))),
-        png::ColorType::Rgb => out.extend(data.as_chunks::<3>().0.iter().map(|p| px(p[0], p[1], p[2], 255))),
-        png::ColorType::GrayscaleAlpha => {
-            out.extend(data.as_chunks::<2>().0.iter().map(|p| px(p[0], p[0], p[0], p[1])))
-        }
-        png::ColorType::Grayscale => out.extend(data.iter().map(|&v| px(v, v, v, 255))),
-        png::ColorType::Indexed => return None, // EXPAND turns palettes into RGB(A)
-    }
-    (out.len() == 2 + (w * h) as usize).then_some(out)
+    let im = crate::pngfile::decode(png_bytes).ok()?;
+    let mut out = Vec::with_capacity(2 + (im.w * im.h) as usize);
+    out.extend([im.w, im.h]);
+    out.extend(im.rgba.as_chunks::<4>().0.iter().map(|p| (p[3] as u32) << 24 | (p[0] as u32) << 16 | (p[1] as u32) << 8 | p[2] as u32));
+    Some(out)
 }
 
 /// `Xft.dpi` from an X resource-manager string (`XResourceManagerString`)

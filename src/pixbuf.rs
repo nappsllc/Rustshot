@@ -74,35 +74,17 @@ impl PixBuf {
         out
     }
 
+    /// The buffer as a PNG file (`Result` for the callers' sake: it does
+    /// not fail).
     pub fn to_png(&self) -> Result<Vec<u8>> {
-        let mut out = Vec::new();
-        {
-            let mut enc = png::Encoder::new(&mut out, self.w, self.h);
-            enc.set_color(png::ColorType::Rgba);
-            enc.set_depth(png::BitDepth::Eight);
-            let mut wr = enc.write_header().context("png header")?;
-            wr.write_image_data(&self.d).context("png data")?;
-        }
-        Ok(out)
+        Ok(crate::pngfile::encode(self.w, self.h, crate::pngfile::Color::Rgba, &self.d))
     }
 
-    /// Decode a PNG (any 8/16-bit color type) into RGBA.
+    /// Decode a PNG (any color type and depth) into RGBA.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))] // the Screenshot portal's file
     pub fn from_png(bytes: &[u8]) -> Result<PixBuf> {
-        let mut dec = png::Decoder::new(std::io::Cursor::new(bytes));
-        dec.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
-        let mut reader = dec.read_info().context("png header")?;
-        let mut buf = vec![0u8; reader.output_buffer_size()];
-        let info = reader.next_frame(&mut buf).context("png data")?;
-        let data = &buf[..info.buffer_size()];
-        let d: Vec<u8> = match info.color_type {
-            png::ColorType::Rgba => data.to_vec(),
-            png::ColorType::Rgb => data.as_chunks::<3>().0.iter().flat_map(|p| [p[0], p[1], p[2], 255]).collect(),
-            png::ColorType::GrayscaleAlpha => data.as_chunks::<2>().0.iter().flat_map(|p| [p[0], p[0], p[0], p[1]]).collect(),
-            png::ColorType::Grayscale => data.iter().flat_map(|&v| [v, v, v, 255]).collect(),
-            png::ColorType::Indexed => anyhow::bail!("png: palette not expanded"),
-        };
-        PixBuf::from_raw(info.width, info.height, d).context("png: bad size")
+        let im = crate::pngfile::decode(bytes)?;
+        PixBuf::from_raw(im.w, im.h, im.rgba).context("png: bad size")
     }
 }
 
@@ -123,7 +105,7 @@ mod tests {
     fn rgb_png_decodes_opaque() {
         let mut out = Vec::new();
         {
-            let mut enc = png::Encoder::new(&mut out, 2, 1);
+            let mut enc = png::Encoder::new(&mut out, 2, 1); // the png crate (a dev-dependency)
             enc.set_color(png::ColorType::Rgb);
             enc.set_depth(png::BitDepth::Eight);
             enc.write_header().unwrap().write_image_data(&[1, 2, 3, 4, 5, 6]).unwrap();

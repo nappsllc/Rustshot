@@ -48,7 +48,7 @@ impl<'a> Bits<'a> {
         Bits { src, pos: 0, buf: 0, n: 0, over: 0 }
     }
 
-    #[inline]
+    #[inline(always)]
     fn refill(&mut self) {
         if self.pos + 8 <= self.src.len() {
             let w = u64::from_le_bytes(self.src[self.pos..self.pos + 8].try_into().unwrap());
@@ -72,7 +72,7 @@ impl<'a> Bits<'a> {
     }
 
     /// `k` <= 32 bits (the buffer must hold them: call `refill` first).
-    #[inline]
+    #[inline(always)]
     fn take(&mut self, k: u32) -> u32 {
         debug_assert!(k <= self.n && k <= 32);
         let v = (self.buf & ((1u64 << k) - 1)) as u32;
@@ -156,7 +156,7 @@ impl Huff {
         Ok(Huff { fast, counts, syms })
     }
 
-    #[inline]
+    #[inline(always)]
     fn decode(&self, b: &mut Bits) -> Result<u16, Error> {
         if b.n < 15 {
             b.refill();
@@ -191,6 +191,9 @@ pub fn inflate(src: &[u8], limit: usize) -> Result<(Vec<u8>, usize), Error> {
 }
 
 fn inflate_into(src: &[u8], limit: usize, out: &mut Vec<u8>) -> Result<usize, Error> {
+    // Room for what the input could give (DEFLATE expands at most 1032:1),
+    // up to the limit: no regrowing on the way.
+    out.reserve(limit.min(src.len().saturating_mul(1032)));
     let mut b = Bits::new(src);
     loop {
         let last = b.bits(1);
@@ -341,8 +344,22 @@ fn codes(b: &mut Bits, lit: &Huff, dist: &Huff, out: &mut Vec<u8>, limit: usize)
 pub fn adler32(a: u32, data: &[u8]) -> u32 {
     const M: u32 = 65521;
     let (mut s1, mut s2) = (a & 0xffff, a >> 16);
+    // 5552 bytes keep the sums in u32. 8 bytes at a time: s2 gains 8 * s1
+    // plus the bytes weighted 8..1, sums done as 16-bit lanes of a u64
+    // (multiplying by a constant adds the lanes, weighted, into the top one).
+    const E: u64 = 0x00ff_00ff_00ff_00ff;
     for chunk in data.chunks(5552) {
-        for &x in chunk {
+        let (words, tail) = chunk.as_chunks::<8>();
+        for w in words {
+            let w = u64::from_le_bytes(*w);
+            let (even, odd) = (w & E, (w >> 8) & E);
+            let sum = ((even + odd).wrapping_mul(0x0001_0001_0001_0001) >> 48) as u32;
+            let weighted = (even.wrapping_mul(0x0008_0006_0004_0002) >> 48)
+                + (odd.wrapping_mul(0x0007_0005_0003_0001) >> 48);
+            s2 += 8 * s1 + weighted as u32;
+            s1 += sum;
+        }
+        for &x in tail {
             s1 += x as u32;
             s2 += s1;
         }
@@ -350,6 +367,17 @@ pub fn adler32(a: u32, data: &[u8]) -> u32 {
         s2 %= M;
     }
     (s2 << 16) | s1
+}
+
+/// The Adler-32 of `a`'s input followed by `b`'s (`b_len` bytes), from
+/// theirs (zlib's `adler32_combine`).
+pub fn adler32_combine(a: u32, b: u32, b_len: usize) -> u32 {
+    const M: u64 = 65521;
+    let rem = b_len as u64 % M;
+    let (a1, a2, b1, b2) = ((a & 0xffff) as u64, (a >> 16) as u64, (b & 0xffff) as u64, (b >> 16) as u64);
+    let s1 = (a1 + b1 + M - 1) % M;
+    let s2 = (rem * a1 % M + a2 + b2 + M - rem) % M;
+    (s2 << 16 | s1) as u32
 }
 
 /// Inflate a zlib stream (header, DEFLATE data, Adler-32), at most `limit`
@@ -386,13 +414,18 @@ pub struct Effort {
     pub nice: usize,
     /// Matches shorter than this try the next position too (lazy matching).
     pub lazy: usize,
+    /// Matches longer than this put only their last positions in the hash
+    /// chains (runs, flat areas: fast, and they rarely matter).
+    pub insert_max: usize,
 }
 
 impl Effort {
-    /// About zlib's default level.
-    pub const DEFAULT: Effort = Effort { chain: 48, nice: 128, lazy: 32 };
+    /// Fast, tuned on screenshots (filtered PNG rows): a 4K one takes about
+    /// as long as the png crate's default did, and comes out less than
+    /// half the size (mostly from the better filters).
+    pub const DEFAULT: Effort = Effort { chain: 8, nice: 64, lazy: 8, insert_max: 16 };
     /// For data compressed once at build time.
-    pub const BEST: Effort = Effort { chain: 4096, nice: 258, lazy: 258 };
+    pub const BEST: Effort = Effort { chain: 4096, nice: 258, lazy: 258, insert_max: 258 };
 }
 
 const WSIZE: usize = 1 << 15;
@@ -411,7 +444,7 @@ struct Out {
 }
 
 impl Out {
-    #[inline]
+    #[inline(always)]
     fn put(&mut self, bits: u32, k: u32) {
         debug_assert!(k <= 32 && (k == 32 || bits >> k == 0));
         self.buf |= (bits as u64) << self.n;
@@ -448,13 +481,13 @@ const LEN_CODE: [u8; 259] = {
     t
 };
 
-#[inline]
+#[inline(always)]
 fn len_code(len: usize) -> usize {
     LEN_CODE[len] as usize
 }
 
 /// Distance (1..=32768) to its code (0..30).
-#[inline]
+#[inline(always)]
 fn dist_code(d: usize) -> usize {
     if d <= 4 {
         d - 1
@@ -562,12 +595,10 @@ fn codes_for(lens: &[u8]) -> Vec<u16> {
 /// A literal (< 256) or a match: `1 << 31 | len << 16 | (dist - 1)`.
 type Tok = u32;
 
-struct Block<'a> {
+struct Block {
     toks: Vec<Tok>,
     lit: [u32; 286],
     dist: [u32; 30],
-    /// The input the tokens cover.
-    raw: &'a [u8],
 }
 
 /// Run-length coded code lengths: (symbol, extra bits value).
@@ -618,7 +649,7 @@ fn cost(freq: &[u32], lens: &[u8]) -> u64 {
     freq.iter().zip(lens).map(|(&f, &l)| f as u64 * l as u64).sum()
 }
 
-fn write_block(o: &mut Out, b: &Block, last: bool) {
+fn write_block(o: &mut Out, b: &Block, raw: &[u8], last: bool) {
     let mut lit = b.lit;
     lit[256] = 1;
     let fixed_l = fixed_lengths();
@@ -650,13 +681,13 @@ fn write_block(o: &mut Out, b: &Block, last: bool) {
         + cost(&b.dist, &dlens)
         + extra_bits(b);
     let stored_cost = {
-        let chunks = b.raw.len().div_ceil(65535).max(1) as u64;
-        8 * b.raw.len() as u64 + chunks * (3 + 7 + 32)
+        let chunks = raw.len().div_ceil(65535).max(1) as u64;
+        8 * raw.len() as u64 + chunks * (3 + 7 + 32)
     };
 
     if stored_cost < fixed_cost.min(dyn_cost) {
-        let mut chunks = b.raw.chunks(65535).peekable();
-        if b.raw.is_empty() {
+        let mut chunks = raw.chunks(65535).peekable();
+        if raw.is_empty() {
             o.put(last as u32, 3);
             o.align();
             o.v.extend_from_slice(&[0, 0, 0xff, 0xff]);
@@ -713,14 +744,14 @@ fn write_block(o: &mut Out, b: &Block, last: bool) {
     o.put(lc[256] as u32, ll[256] as u32);
 }
 
-#[inline]
+#[inline(always)]
 fn hash4(d: &[u8], p: usize) -> usize {
     let v = u32::from_le_bytes([d[p], d[p + 1], d[p + 2], d[p + 3]]);
     (v.wrapping_mul(2654435761) >> (32 - HBITS)) as usize
 }
 
 /// Common prefix length of `d[a..]` and `d[b..]`, at most `max`.
-#[inline]
+#[inline(always)]
 fn match_len(d: &[u8], a: usize, b: usize, max: usize) -> usize {
     let mut n = 0;
     while n + 8 <= max {
@@ -745,7 +776,7 @@ struct Matcher {
 
 impl Matcher {
     /// Insert position `p` (`p + 4 <= len`); positions are stored plus one.
-    #[inline]
+    #[inline(always)]
     fn insert(&mut self, d: &[u8], p: usize) {
         let h = hash4(d, p);
         self.prev[p & WMASK] = self.head[h];
@@ -753,7 +784,7 @@ impl Matcher {
     }
 
     /// The longest match for `p` (already inserted), longer than `have`.
-    #[inline]
+    #[inline(always)]
     fn find(&self, d: &[u8], p: usize, mut chain: u32, nice: usize, have: usize) -> (usize, usize) {
         let max = MAX_MATCH.min(d.len() - p);
         let (mut best, mut dist) = (have, 0);
@@ -787,84 +818,199 @@ impl Matcher {
     }
 }
 
+/// Input kept for matching and the lookahead: once the buffer holds this
+/// much past the window, it is compressed up to the lookahead and slid.
+const SEGMENT: usize = 1 << 20;
+const LOOKAHEAD: usize = MAX_MATCH + MIN_MATCH;
+
+/// A streaming compressor: [`Deflater::write`] any amount, then
+/// [`Deflater::finish`]. The input is compressed a segment at a time
+/// (a 32 KiB window plus up to [`SEGMENT`] bytes buffered).
+pub struct Deflater {
+    e: Effort,
+    zlib: bool,
+    adler: u32,
+    o: Out,
+    m: Matcher,
+    blk: Block,
+    /// Buffered input; positions below are indices into it.
+    buf: Vec<u8>,
+    /// The next position to code, the current block's first one, and the
+    /// first one not yet in the hash chains.
+    p: usize,
+    start: usize,
+    ins: usize,
+}
+
+impl Deflater {
+    /// A raw DEFLATE stream, or a zlib one (header and Adler-32 around it).
+    pub fn new(e: Effort, zlib: bool) -> Deflater {
+        Deflater {
+            e,
+            zlib,
+            adler: 1,
+            o: Out { v: if zlib { vec![0x78, 0x9c] } else { Vec::new() }, buf: 0, n: 0 },
+            m: Matcher { head: vec![0; 1 << HBITS], prev: vec![0; WSIZE] },
+            blk: Block { toks: Vec::with_capacity(BLOCK), lit: [0; 286], dist: [0; 30] },
+            buf: Vec::with_capacity(WSIZE + SEGMENT + LOOKAHEAD),
+            p: 0,
+            start: 0,
+            ins: 0,
+        }
+    }
+
+    pub fn write(&mut self, mut data: &[u8]) {
+        self.adler = adler32(self.adler, data);
+        while !data.is_empty() {
+            let room = (WSIZE + SEGMENT + LOOKAHEAD).saturating_sub(self.buf.len()).max(1);
+            let (now, rest) = data.split_at(room.min(data.len()));
+            self.buf.extend_from_slice(now);
+            data = rest;
+            if self.buf.len() >= WSIZE + SEGMENT + LOOKAHEAD {
+                self.code(self.buf.len() - LOOKAHEAD);
+                self.flush(false);
+                self.slide();
+            }
+        }
+    }
+
+    pub fn finish(mut self) -> Vec<u8> {
+        let n = self.buf.len();
+        self.code(n);
+        self.flush(true);
+        self.o.align();
+        if self.zlib {
+            self.o.v.extend_from_slice(&self.adler.to_be_bytes());
+        }
+        self.o.v
+    }
+
+    /// End a raw part of a stream that other parts continue (`last`:
+    /// none do): byte-aligned with an empty stored block unless last, so
+    /// parts compressed apart can be concatenated. Returns the part and
+    /// the Adler-32 of its input (see [`adler32_combine`]).
+    pub fn finish_part(mut self, last: bool) -> (Vec<u8>, u32) {
+        let n = self.buf.len();
+        self.code(n);
+        self.flush(last);
+        if !last {
+            self.o.put(0, 3);
+            self.o.align();
+            self.o.v.extend_from_slice(&[0, 0, 0xff, 0xff]);
+        }
+        self.o.align();
+        (self.o.v, self.adler)
+    }
+
+    /// Write the tokens so far as a block.
+    fn flush(&mut self, last: bool) {
+        if self.blk.toks.is_empty() && !last {
+            return;
+        }
+        write_block(&mut self.o, &self.blk, &self.buf[self.start..self.p], last);
+        self.start = self.p;
+        self.blk.toks.clear();
+        self.blk.lit = [0; 286];
+        self.blk.dist = [0; 30];
+    }
+
+    /// Drop all but the window before the next position (a whole number of
+    /// windows, so the chains' `& WMASK` slots stay put).
+    fn slide(&mut self) {
+        let delta = (self.p - WSIZE) / WSIZE * WSIZE;
+        if delta == 0 {
+            return;
+        }
+        self.buf.drain(..delta);
+        let d = delta as u32;
+        for v in self.m.head.iter_mut().chain(self.m.prev.iter_mut()) {
+            *v = v.saturating_sub(d);
+        }
+        self.p -= delta;
+        self.start -= delta;
+        self.ins = self.ins.saturating_sub(delta);
+    }
+
+    /// Code the positions up to `limit` (the input may run past it: the
+    /// lookahead for matches).
+    fn code(&mut self, limit: usize) {
+        let e = self.e;
+        let data = &self.buf[..];
+        let n = data.len();
+        let (m, blk) = (&mut self.m, &mut self.blk);
+        let (mut p, mut ins) = (self.p, self.ins);
+        let can_hash = |q: usize| q + MIN_MATCH <= n;
+        while p < limit {
+            let mut tok_len = 1;
+            if can_hash(p) {
+                while ins <= p {
+                    m.insert(data, ins);
+                    ins += 1;
+                }
+                let (mut len, mut dist) = m.find(data, p, e.chain, e.nice, MIN_MATCH - 1);
+                if len >= MIN_MATCH {
+                    while len < e.lazy && can_hash(p + 1) {
+                        if ins <= p + 1 {
+                            m.insert(data, p + 1);
+                            ins = p + 2;
+                        }
+                        let chain = if len >= 16 { e.chain / 4 } else { e.chain };
+                        let (l2, d2) = m.find(data, p + 1, chain.max(1), e.nice, len);
+                        if l2 > len {
+                            blk.toks.push(data[p] as Tok);
+                            blk.lit[data[p] as usize] += 1;
+                            p += 1;
+                            len = l2;
+                            dist = d2;
+                        } else {
+                            break;
+                        }
+                    }
+                    blk.toks.push(1 << 31 | (len as u32) << 16 | (dist - 1) as u32);
+                    blk.lit[257 + len_code(len)] += 1;
+                    blk.dist[dist_code(dist)] += 1;
+                    tok_len = len;
+                }
+            }
+            if tok_len == 1 {
+                blk.toks.push(data[p] as Tok);
+                blk.lit[data[p] as usize] += 1;
+            } else {
+                // Positions inside the match go into the chains.
+                let end = (p + tok_len).min(n.saturating_sub(MIN_MATCH - 1));
+                if tok_len > e.insert_max {
+                    ins = ins.max(end.saturating_sub(MIN_MATCH));
+                }
+                while ins < end {
+                    m.insert(data, ins);
+                    ins += 1;
+                }
+            }
+            p += tok_len;
+            if blk.toks.len() >= BLOCK {
+                write_block(&mut self.o, blk, &data[self.start..p], false);
+                self.start = p;
+                blk.toks.clear();
+                blk.lit = [0; 286];
+                blk.dist = [0; 30];
+            }
+        }
+        (self.p, self.ins) = (p, ins);
+    }
+}
+
 /// Raw DEFLATE of `data`.
 pub fn deflate(data: &[u8], e: Effort) -> Vec<u8> {
-    let mut o = Out { v: Vec::with_capacity(data.len() / 4 + 64), buf: 0, n: 0 };
-    let mut m = Matcher { head: vec![0; 1 << HBITS], prev: vec![0; WSIZE] };
-    let n = data.len();
-    let mut blk = Block { toks: Vec::with_capacity(BLOCK), lit: [0; 286], dist: [0; 30], raw: &data[..0] };
-    let mut start = 0;
-    let mut p = 0;
-    let mut ins = 0; // positions below this are in the hash chains
-    let can_hash = |q: usize| q + MIN_MATCH <= n;
-    while p < n {
-        let mut tok_len = 1;
-        if can_hash(p) {
-            while ins <= p {
-                m.insert(data, ins);
-                ins += 1;
-            }
-            let (mut len, mut dist) = m.find(data, p, e.chain, e.nice, MIN_MATCH - 1);
-            if len >= MIN_MATCH {
-                while len < e.lazy && can_hash(p + 1) {
-                    if ins <= p + 1 {
-                        m.insert(data, p + 1);
-                        ins = p + 2;
-                    }
-                    let chain = if len >= 16 { e.chain / 4 } else { e.chain };
-                    let (l2, d2) = m.find(data, p + 1, chain.max(1), e.nice, len);
-                    if l2 > len {
-                        blk.toks.push(data[p] as Tok);
-                        blk.lit[data[p] as usize] += 1;
-                        p += 1;
-                        len = l2;
-                        dist = d2;
-                    } else {
-                        break;
-                    }
-                }
-                blk.toks.push(1 << 31 | (len as u32) << 16 | (dist - 1) as u32);
-                blk.lit[257 + len_code(len)] += 1;
-                blk.dist[dist_code(dist)] += 1;
-                tok_len = len;
-            }
-        }
-        if tok_len == 1 {
-            blk.toks.push(data[p] as Tok);
-            blk.lit[data[p] as usize] += 1;
-        } else {
-            // Positions inside the match go into the chains.
-            let end = (p + tok_len).min(n.saturating_sub(MIN_MATCH - 1));
-            while ins < end {
-                m.insert(data, ins);
-                ins += 1;
-            }
-        }
-        p += tok_len;
-        if blk.toks.len() >= BLOCK {
-            blk.raw = &data[start..p];
-            write_block(&mut o, &blk, p == n);
-            start = p;
-            blk.toks.clear();
-            blk.lit = [0; 286];
-            blk.dist = [0; 30];
-        }
-    }
-    // Unless the last full block already ended the stream (p == n).
-    if start < n || n == 0 {
-        blk.raw = &data[start..n];
-        write_block(&mut o, &blk, true);
-    }
-    o.align();
-    o.v
+    let mut d = Deflater::new(e, false);
+    d.write(data);
+    d.finish()
 }
 
 /// A zlib stream of `data`.
 pub fn zlib_compress(data: &[u8], e: Effort) -> Vec<u8> {
-    let mut v = vec![0x78, 0x9c];
-    v.extend(deflate(data, e));
-    v.extend_from_slice(&adler32(1, data).to_be_bytes());
-    v
+    let mut d = Deflater::new(e, true);
+    d.write(data);
+    d.finish()
 }
 
 #[cfg(test)]
@@ -904,7 +1050,7 @@ mod tests {
     #[test]
     fn round_trips() {
         for d in samples() {
-            for e in [Effort::DEFAULT, Effort { chain: 1, nice: 8, lazy: 0 }, Effort::BEST] {
+            for e in [Effort::DEFAULT, Effort { chain: 1, nice: 8, lazy: 0, insert_max: 8 }, Effort::BEST] {
                 let z = zlib_compress(&d, e);
                 assert_eq!(zlib_decompress(&z, d.len()).unwrap(), d, "len {}", d.len());
                 let (raw, used) = inflate(&z[2..], d.len()).unwrap();
@@ -954,6 +1100,58 @@ mod tests {
             let junk: Vec<u8> = (0..n).map(|_| rng(&mut s) as u8).collect();
             let _ = inflate(&junk, 1 << 16);
         }
+    }
+
+    #[test]
+    fn parts_concatenate_into_one_stream() {
+        let mut s = 21u64;
+        let d: Vec<u8> = (0..300_000).map(|_| (rng(&mut s) % 6) as u8).collect();
+        let cuts = [0, 1, 70_000, 70_001, 250_000, 300_000];
+        let mut z = vec![0x78, 0x9c];
+        let mut a = 1;
+        for w in cuts.windows(2) {
+            let mut p = Deflater::new(Effort::DEFAULT, false);
+            p.write(&d[w[0]..w[1]]);
+            let (part, pa) = p.finish_part(w[1] == d.len());
+            assert_eq!(pa, adler32(1, &d[w[0]..w[1]]));
+            z.extend_from_slice(&part);
+            a = adler32_combine(a, pa, w[1] - w[0]);
+        }
+        z.extend_from_slice(&a.to_be_bytes());
+        assert_eq!(a, adler32(1, &d));
+        assert_eq!(zlib_decompress(&z, d.len()).unwrap(), d);
+        // Written in pieces: the same stream as at once.
+        let mut p = Deflater::new(Effort::DEFAULT, true);
+        for c in d.chunks(777) {
+            p.write(c);
+        }
+        assert_eq!(p.finish(), zlib_compress(&d, Effort::DEFAULT));
+    }
+
+    #[test]
+    fn adler32_matches_the_byte_loop() {
+        assert_eq!(adler32(1, b"Wikipedia"), 0x11e6_0398);
+        let mut s = 5u64;
+        let d: Vec<u8> = (0..40_000).map(|_| rng(&mut s) as u8).collect();
+        let mut want = 1u32;
+        for n in [0, 1, 7, 8, 9, 5551, 5552, 5553, 20_000, 40_000] {
+            let (mut a, mut b) = (1u32, 0u32);
+            for &x in &d[..n] {
+                a = (a + x as u32) % 65521;
+                b = (b + a) % 65521;
+            }
+            want = b << 16 | a;
+            assert_eq!(adler32(1, &d[..n]), want, "{n}");
+        }
+        assert_eq!(adler32(adler32(1, &d[..12_345]), &d[12_345..]), want, "continued");
+        assert_eq!(adler32(1, &[255; 100_000]), {
+            let (mut a, mut b) = (1u32, 0u32);
+            for _ in 0..100_000 {
+                a = (a + 255) % 65521;
+                b = (b + a) % 65521;
+            }
+            b << 16 | a
+        });
     }
 
     #[test]
