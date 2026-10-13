@@ -135,6 +135,9 @@ pub(super) struct Snip {
     /// the menu, a click is Copy text).
     pub copy_menu: bool,
     pub copy_hold: Option<Instant>,
+    /// The area Text mode's bar was laid out in by the last frame (its
+    /// presses are hit-tested there).
+    pub bar_area: Option<FRect>,
 }
 
 /// One of Text mode's buttons.
@@ -420,6 +423,9 @@ impl Edit {
     /// Copy text (the button, O): Text mode, or everything at once
     /// (`copy_text_mode = "all"`); in Text mode it leaves it.
     pub(super) fn copy_text(&mut self) {
+        if self.rec.open {
+            return; // video mode: no text to copy
+        }
         if self.snip.text.is_some() || self.snip.ocr.as_ref().is_some_and(|o| o.want == Want::Text) {
             self.leave_text_mode();
             return;
@@ -520,6 +526,7 @@ impl Edit {
             if let Some((a, b)) = tm.sel {
                 u.hl = textsel::highlight(&tm.lines, a, b).into_iter().map(fr).collect();
             }
+            self.snip.bar_area = Some(area);
             u.bar = self.text_bar(area, s).map(|mut b| {
                 b.hover = b.act_at(mouse);
                 b
@@ -572,6 +579,9 @@ impl Edit {
     /// Freeform on / off (remembered); a selection there was goes (the
     /// next one is drawn in the new mode).
     pub(super) fn toggle_freeform(&mut self) {
+        if self.host.is_some() || self.rec.open {
+            return; // the Edit window has no selection to draw; video mode its own
+        }
         self.snip.freeform = !self.snip.freeform;
         let v = if self.snip.freeform { "freeform" } else { "rect" };
         self.cfg.selection_mode = v.into();
@@ -648,7 +658,7 @@ impl Edit {
     /// Crop on / off: the frame comes up at the crop (the Edit window) or
     /// the selection.
     pub(super) fn toggle_crop(&mut self) {
-        if self.snip.crop_mode.take().is_some() {
+        if self.snip.crop_mode.take().is_some() || self.rec.open {
             return;
         }
         let Some(bounds) = self.crop_bounds() else { return };
@@ -710,7 +720,7 @@ impl Edit {
     /// Shift extends, two clicks a word, three a line); elsewhere in the
     /// area it clears the selection. False: outside (not taken).
     pub(super) fn text_press(&mut self, p: Pt, mods: Mods) -> bool {
-        let area = self.area_drawn.unwrap_or(FRect { x: 0.0, y: 0.0, w: self.shot.size.0 as f32, h: self.shot.size.1 as f32 });
+        let area = self.snip.bar_area.or(self.area_drawn).unwrap_or(FRect { x: 0.0, y: 0.0, w: self.shot.size.0 as f32, h: self.shot.size.1 as f32 });
         let s = self.ui_scale();
         if let Some(bar) = self.text_bar(area, s)
             && bar.contains(p)
@@ -860,7 +870,7 @@ impl Edit {
             return Some(if hit(c.r, p) { Cursor::Move } else { Cursor::Cross });
         }
         let tm = self.snip.text.as_ref()?;
-        let area = self.area_drawn.unwrap_or(tm.area);
+        let area = self.snip.bar_area.or(self.area_drawn).unwrap_or(tm.area);
         if self.text_bar(area, self.ui_scale()).is_some_and(|b| b.contains(p)) {
             return Some(Cursor::Arrow);
         }
