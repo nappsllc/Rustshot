@@ -304,7 +304,7 @@ widened later. It is saved in `annotations.json` as `"crop":[x,y,w,h]`;
 for older builds (0.2, 0.3), which know nothing of it, opaque fills over
 everything outside the crop are written after the objects
 (`"stands_for":"crop"`), so what a crop hides stays hidden there too.
-Every export (Save, Copy, Upload, History's own Copy) is the cropped part.
+Every export (Save, Copy, Upload, History's own Copy) is the cropped part. What a crop or a lasso leaves out is blanked before the objects are drawn, so a magnifier (or a blur, an invert) inside never shows it; for older builds a magnifier that reads from outside the crop gets its loupe covered too.
 
 ## Copy text (OCR)
 

@@ -219,6 +219,23 @@ pub fn crop_stand_ins(crop: FRect, size: (u32, u32)) -> Vec<Obj> {
         .collect()
 }
 
+/// Every stand-in for `crop` of a `size` picture with `objs`: the fills
+/// over what the crop hides, and over the loupe of every magnifier that
+/// reads from outside the crop (an older build would magnify the hidden
+/// pixels into the visible part).
+pub fn doc_stand_ins(objs: &[Obj], crop: FRect, size: (u32, u32)) -> Vec<Obj> {
+    let mut v = crop_stand_ins(crop, size);
+    let Some(c) = super::mask::crop_rect(crop, size) else { return v };
+    for o in objs {
+        if let Some((src, loupe)) = o.loupe_parts()
+            && !(src.x >= c.x && src.y >= c.y && src.x + src.w <= c.x + c.w && src.y + src.h <= c.y + c.h)
+        {
+            v.push(Obj::RectFill { r: loupe, color: CROP_FILL, width: 1.0 });
+        }
+    }
+    v
+}
+
 /// [`to_json`] with the Edit window's `crop` of a `size` picture: written
 /// as `"crop":[x,y,w,h]` (this build) and, for older builds that know
 /// nothing of it, opaque fills over what it hides (`"stands_for":"crop"`,
@@ -233,7 +250,7 @@ pub fn to_json_doc(objs: &[Obj], crop: Option<FRect>, size: (u32, u32)) -> Strin
         rect(&mut out, c);
     }
     out.push_str(",\"objects\":[");
-    let stand_ins = crop.map_or(Vec::new(), |c| crop_stand_ins(c, size));
+    let stand_ins = crop.map_or(Vec::new(), |c| doc_stand_ins(objs, c, size));
     for (i, o) in objs.iter().chain(&stand_ins).enumerate() {
         out.push_str(if i == 0 { "\n " } else { ",\n " });
         if i >= objs.len() {
@@ -910,11 +927,12 @@ mod tests {
         // v0.3.0's reader: every object as written, then the fills on top.
         let v3 = crate::objects::v030::json::from_json(&s).expect("v0.3.0 reads it");
         assert_eq!(&v3[..objs.len()], &objs[..]);
-        assert_eq!(&v3[objs.len()..], &crop_stand_ins(crop, size)[..], "v0.3.0 draws the stand-ins");
+        assert_eq!(&v3[objs.len()..], &doc_stand_ins(&objs, crop, size)[..], "v0.3.0 draws the stand-ins");
         let old = v020::json::from_json(&s).expect("v0.2.0 reads it");
         let n = objs.len();
-        assert_eq!(old.len(), n + crop_stand_ins(crop, size).len());
-        let fills: Vec<Obj> = old[n..]
+        assert_eq!(old.len(), n + doc_stand_ins(&objs, crop, size).len());
+        // The crop's own fills (the loupe covers come after them).
+        let fills: Vec<Obj> = old[n..n + crop_stand_ins(crop, size).len()]
             .iter()
             .map(|o| match o {
                 v020::Obj::RectFill { r, color, width } => Obj::RectFill { r: *r, color: *color, width: *width },
@@ -940,6 +958,49 @@ mod tests {
         }
     }
 
+    /// A magnifier inside the crop whose source lies outside it: this
+    /// build blanks the hidden part before it magnifies; older builds
+    /// (v0.2.0, v0.3.0 readers) get its loupe covered, so neither shows
+    /// a pixel of what the crop hides.
+    #[test]
+    fn a_magnifier_never_shows_what_the_crop_hides() {
+        let size = (300u32, 200u32);
+        let crop = FRect { x: 100.0, y: 0.0, w: 200.0, h: 200.0 };
+        // Red outside the crop (x < 100), white inside.
+        let mut pic = crate::pixbuf::PixBuf::new(size.0, size.1);
+        for (i, p) in pic.as_raw_mut().as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            *p = if i % size.0 as usize >= 100 { [255, 255, 255, 255] } else { [255, 0, 0, 255] };
+        }
+        let mag = Obj::Magnify { src: Pt::new(50.0, 100.0), dst: Pt::new(200.0, 100.0), radius: 40.0, zoom: 2.0, color: C4::rgb(0, 0, 255), width: 2.0 };
+        let reddish = |p: [u8; 4]| p[3] > 0 && p[0] > 150 && p[1] < 100 && p[2] < 100;
+        let in_loupe = |x: u32, y: u32| (x as f32 - 200.0).hypot(y as f32 - 100.0) < 36.0;
+        // This build: the export.
+        let out = crate::history::render(&pic, std::slice::from_ref(&mag), Some(crop), None);
+        assert_eq!(out.dimensions(), (200, 200));
+        for y in 0..200 {
+            for x in 0..200 {
+                assert!(!reddish(out.get_pixel(x, y)), "({x}, {y}) shows the hidden red");
+            }
+        }
+        // Older builds: their reader, drawn over the whole picture.
+        let s = to_json_doc(std::slice::from_ref(&mag), Some(crop), size);
+        for old in [crate::objects::v030::json::from_json(&s).unwrap()] {
+            let drawn = crate::editor::bake_objects(&pic, &old, None);
+            for y in 0..200 {
+                for x in 100..300 {
+                    if in_loupe(x, y) {
+                        assert!(!reddish(drawn.get_pixel(x, y)), "v0.3: ({x}, {y}) in the loupe shows the hidden red");
+                    }
+                }
+            }
+        }
+        let v2 = crate::objects::v020::json::from_json(&s).unwrap();
+        assert!(matches!(v2.last(), Some(crate::objects::v020::Obj::RectFill { .. })), "v0.2.0 gets the loupe's cover last");
+        assert!(matches!(v2.first(), Some(crate::objects::v020::Obj::Magnify { .. })));
+        // A magnifier reading inside the crop needs no cover.
+        let inside = Obj::Magnify { src: Pt::new(150.0, 100.0), dst: Pt::new(240.0, 100.0), radius: 40.0, zoom: 2.0, color: C4::rgb(0, 0, 255), width: 2.0 };
+        assert_eq!(doc_stand_ins(&[inside], crop, size).len(), crop_stand_ins(crop, size).len());
+    }
     /// What v0.2.0 wrote (version 1, texts without style fields) reads
     /// as plain text; style fields with unknown names fall back.
     #[test]

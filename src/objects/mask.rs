@@ -122,6 +122,25 @@ pub fn apply(img: &mut PixBuf, pts: &[Pt], origin: Pt) {
     }
 }
 
+/// Blank what a capture leaves out before objects are drawn over it
+/// (a magnifier, a blur or an invert then reads nothing hidden): outside
+/// the lasso `mask` and outside `crop`, transparent white.
+pub fn blank_outside(img: &mut PixBuf, crop: Option<FRect>, mask: Option<&[Pt]>) {
+    if let Some(m) = mask {
+        apply(img, m, Pt::new(0.0, 0.0));
+    }
+    let Some(c) = crop else { return };
+    let (w, h) = img.dimensions();
+    let keep = crop_px(c, (w, h));
+    for (i, px) in img.as_raw_mut().as_chunks_mut::<4>().0.iter_mut().enumerate() {
+        let (x, y) = ((i % w as usize) as u32, (i / w as usize) as u32);
+        let inside = keep.is_some_and(|(kx, ky, kw, kh)| x >= kx && x < kx + kw && y >= ky && y < ky + kh);
+        if !inside {
+            *px = [255, 255, 255, 0];
+        }
+    }
+}
+
 /// `img` over white, opaque: what a JPG or BMP shows of a picture with
 /// transparent parts (none: unchanged).
 pub fn flatten_white(img: &PixBuf) -> std::borrow::Cow<'_, PixBuf> {

@@ -223,15 +223,14 @@ impl Canvas {
             let d = self.e.rebuild();
             self.cache_damage(d);
         }
-        let mut img = self.e.composed().clone();
-        // Outside the lasso: transparent; then the crop.
-        if let Some((m, _)) = &self.mask {
-            crate::objects::mask::apply(&mut img, m, Pt::new(0.0, 0.0));
+        // A crop or a lasso: baked again over the picture with what they
+        // leave out blanked (a magnifier inside never shows it), then cut.
+        let crop = self.crop();
+        let mask = self.mask.as_ref().map(|(m, _)| m.as_slice());
+        if crop.is_some() || mask.is_some() {
+            return crate::history::render(&self.e.base, &self.e.objects, crop, mask);
         }
-        match self.crop() {
-            Some(c) => crate::objects::mask::crop(&img, c),
-            None => img,
-        }
+        self.e.composed().clone()
     }
 
     /// The objects differ from the last save, or text is being typed.

@@ -377,6 +377,34 @@ fn freeform_draws_a_lasso_whose_outside_is_transparent() {
     assert!(!e.snip.freeform && e.live_mask().is_none());
 }
 
+/// A magnifier inside the lasso whose source lies outside it magnifies
+/// nothing of the outside: the export blanks it before the objects bake
+/// (the overlay, Text mode's picture, the Edit window).
+#[test]
+fn a_magnifier_never_shows_what_the_lasso_leaves_out() {
+    let mut a = app();
+    key(&mut a, 'F' as u32, SHIFT);
+    draw_lasso(&mut a, &triangle());
+    let e = edit_of(&mut a);
+    let sel = e.sel.unwrap();
+    // Its source in the box's bottom-left corner (outside the triangle),
+    // its loupe in the middle (inside).
+    e.commit_object(Obj::Magnify { src: Pt::new(330.0, 570.0), dst: Pt::new(500.0, 300.0), radius: 40.0, zoom: 2.0, color: C4::rgb(0, 0, 255), width: 2.0 });
+    let blank = |p: [u8; 4]| p[3] == 0 || p[..3] == [255, 255, 255];
+    let img = e.cut_export(sel);
+    let c = img.get_pixel(200, 100);
+    assert!(blank(c), "the loupe's middle shows the outside: {c:?}");
+    // Without the lasso the same loupe shows the capture there.
+    let plain = e.export(sel);
+    assert!(!blank(plain.get_pixel(200, 100)));
+    // The Edit window: the same picture opened with its lasso.
+    let tri: Vec<Pt> = triangle().iter().map(|p| Pt::new(p.x - sel.x, p.y - sel.y)).collect();
+    let (orig, objs) = e.history_shot(sel);
+    let mut c = host::Canvas::new(orig, objs, Config::default(), theme::DARK);
+    c.set_doc(None, Some(tri));
+    assert!(blank(c.export().get_pixel(200, 100)));
+}
+
 #[test]
 fn a_freeform_capture_keeps_its_lasso_in_the_history() {
     use crate::history::{Store, tests::TempRoot};

@@ -406,7 +406,12 @@ impl Edit {
         }
         // Only what the capture keeps: the lasso cuts the picture read
         // (the crop is the area already).
-        let img = self.masked(self.export(area), area);
+        let img = if self.host.is_some() && (self.snip.crop.is_some() || self.live_mask().is_some()) {
+            // The Edit window: the picture as it exports, cut to the area.
+            self.host_cut(area)
+        } else {
+            self.cut_export(area)
+        };
         let origin = Pt::new(area.x.floor().max(0.0), area.y.floor().max(0.0));
         let mask = self.live_mask().map(<[Pt]>::to_vec);
         self.snip.ocr = Some(OcrRun { rx: ocr::spawn_lines(img), want, origin, area, sel: self.sel, mask });
@@ -1022,6 +1027,28 @@ impl Edit {
             return Some(Cursor::IBeam);
         }
         hit(tm.area, p).then_some(Cursor::Arrow)
+    }
+
+    /// The export of selection `sel` as the capture keeps it: with a
+    /// lasso, the plain picture cut first, the objects baked over that (a
+    /// magnifier inside reads nothing outside), then cut again.
+    pub(super) fn cut_export(&self, sel: FRect) -> PixBuf {
+        if self.live_mask().is_none() {
+            return self.export(sel);
+        }
+        let (plain, objs) = self.history_shot(sel);
+        let font = self.font.as_ref();
+        let baked = if objs.is_empty() { plain } else { bake_objects(&plain, &objs, font) };
+        self.masked(baked, sel)
+    }
+
+    /// The Edit window's picture with its crop and lasso, read for `area`
+    /// (the crop): what lies outside is blanked before the objects bake.
+    fn host_cut(&self, area: FRect) -> PixBuf {
+        let crop = self.snip.crop.filter(|_| self.host.is_some());
+        let full = crate::history::render(&self.base, &self.objects, crop, self.live_mask());
+        // `render` cut to the crop already; else the area is the picture.
+        if crop.is_some() { full } else { crop_to_image(&full, area) }
     }
 
     /// The export of selection `sel` with the lasso applied (outside it

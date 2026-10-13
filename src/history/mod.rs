@@ -1134,11 +1134,15 @@ pub fn thumbnail_doc(original: &PixBuf, objects: &[Obj], crop: Option<crate::obj
 /// The picture as it exports: `original` with `objects`, transparent
 /// outside the lasso `mask`, cut to `crop`.
 pub fn render(original: &PixBuf, objects: &[Obj], crop: Option<crate::objects::FRect>, mask: Option<&[crate::objects::Pt]>) -> PixBuf {
+    // What the lasso and the crop leave out is blanked first: a magnifier
+    // (or a blur, an invert) over the rest never reads it.
+    let mut plain = original.clone();
+    crate::objects::mask::blank_outside(&mut plain, crop, mask);
     let mut img = if objects.is_empty() {
-        original.clone()
+        plain
     } else {
         let font = crate::text::AnnotFont::load();
-        crate::editor::bake_objects(original, objects, font.as_ref())
+        crate::editor::bake_objects(&plain, objects, font.as_ref())
     };
     if let Some(m) = mask {
         crate::objects::mask::apply(&mut img, m, crate::objects::Pt::new(0.0, 0.0));

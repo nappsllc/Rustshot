@@ -1563,7 +1563,7 @@ impl App {
         #[cfg(windows)]
         crate::memlog("overlay");
         // A lasso: transparent outside it (white in a JPG or BMP).
-        let img = edit.masked(edit.export(sel), sel);
+        let img = edit.cut_export(sel);
         let g = (
             (sel.x.round() as i32) + edit.shot.origin.0,
             (sel.y.round() as i32) + edit.shot.origin.1,
