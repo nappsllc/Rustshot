@@ -36,6 +36,8 @@ mod x11;
 #[cfg(target_os = "macos")]
 mod macos;
 
+pub mod seg;
+
 #[cfg(windows)]
 pub use bubble::Bubble;
 #[cfg(all(windows, test))]
