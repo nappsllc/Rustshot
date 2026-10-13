@@ -6,10 +6,12 @@ screenshots, editing and video capture.** Windows, Linux and macOS.
 - **About 2 MB, one file.** A single native executable with no runtime, no
   GUI toolkit and no web view. Every pixel of the overlay is drawn by
   Rustshot's own anti-aliased renderer.
-- **Almost no memory.** Waiting in the tray, the daemon uses 2.3 MB of
-  private memory (about 14 MB working set). With the capture overlay open
-  on a 5120 × 1440 desktop it uses under 5 MB. Measured on Windows 11,
-  release build, v0.3.0.
+- **Zero memory when you're not capturing.** Turn the tray icon off and
+  nothing runs in the background at all: **0 MB**. Win+Shift+S or Print
+  Screen starts Rustshot for the capture, and it quits when you're done.
+  With the tray icon on, the daemon uses 2.3 MB of private memory (about
+  14 MB working set), and the capture overlay on a 5120 × 1440 desktop
+  under 5 MB. Measured on Windows 11, release build.
 - **Smooth.** On Windows the overlay repaints only the pixels that changed,
   through GDI dirty rectangles, and draws nothing while it sits idle.
   At 3840 × 2160, drawing a selection with the pixel magnifier takes about
