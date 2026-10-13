@@ -108,6 +108,13 @@ impl DataFile {
     }
 }
 
+/// `rel` (`lang/de.txt`) under `d`, with this OS's separators.
+fn under(d: &Path, rel: &str) -> PathBuf {
+    let mut p = d.to_path_buf();
+    p.extend(rel.split('/'));
+    p
+}
+
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -193,7 +200,7 @@ impl Fetcher {
             return None;
         }
         let f = by_rel(rel);
-        if let Some(p) = self.over.as_ref().map(|d| d.join(rel)).filter(|p| p.is_file()) {
+        if let Some(p) = self.over.as_ref().map(|d| under(d, rel)).filter(|p| p.is_file()) {
             match f {
                 Some(f) if f.strict => {
                     if f.matches(&p) {
@@ -207,7 +214,7 @@ impl Fetcher {
     }
 
     fn find(&self, f: &DataFile) -> Option<PathBuf> {
-        let o = self.over.as_ref().map(|d| d.join(f.rel)).filter(|p| p.is_file());
+        let o = self.over.as_ref().map(|d| under(d, f.rel)).filter(|p| p.is_file());
         if let Some(p) = o
             && (!f.strict || f.matches(&p))
         {
@@ -217,12 +224,12 @@ impl Fetcher {
     }
 
     fn find_in_cache(&self, f: &DataFile) -> Option<PathBuf> {
-        self.cache.as_ref().map(|d| d.join(f.rel)).filter(|p| f.matches(p))
+        self.cache.as_ref().map(|d| under(d, f.rel)).filter(|p| f.matches(p))
     }
 
     /// Where `f` goes in the cache.
     pub fn cache_path(&self, f: &DataFile) -> Option<PathBuf> {
-        self.cache.as_ref().map(|d| d.join(f.rel))
+        self.cache.as_ref().map(|d| under(d, f.rel))
     }
 
     pub fn state(&self, f: &'static DataFile) -> State {
@@ -387,6 +394,47 @@ pub fn set_allowed(on: bool) {
 
 pub fn generation() -> u64 {
     global().generation()
+}
+
+/// `rustshot data [--fetch]`: each data file of this version, where it
+/// is, or what to download from where and where to save it; `fetch`
+/// downloads the missing ones (waiting for them). 0 when every file is
+/// here (or, without `fetch`, always), 1 otherwise.
+pub fn cli(fetch: bool) -> i32 {
+    let g = global();
+    let ver = env!("CARGO_PKG_VERSION");
+    let mut missing = 0;
+    for f in manifest() {
+        let mut st = g.state(f);
+        if fetch && !matches!(st, State::Ready(_)) {
+            let (tx, rx) = crate::chan::channel();
+            g.ensure(f, Box::new(move |r| {
+                let _ = tx.send(r);
+            }));
+            let _ = rx.recv();
+            st = g.state(f);
+            if !g.allowed() && !matches!(st, State::Ready(_)) {
+                eprintln!("{}: not downloaded: {DISABLED} (download_data = false)", f.asset);
+            }
+        }
+        let to = g.cache_path(f).map_or_else(|| f.rel.to_string(), |p| p.display().to_string());
+        match st {
+            State::Ready(p) => println!("{}: {} (SHA-256 verified)", f.asset, p.display()),
+            State::Failed(e) => {
+                missing += 1;
+                println!("{}: couldn't download: {e} (from {}; save it as {to})", f.asset, f.url(ver));
+            }
+            State::Damaged(p) => {
+                missing += 1;
+                println!("{}: {} is damaged (SHA-256 differs); download {} again", f.asset, p.display(), f.url(ver));
+            }
+            _ => {
+                missing += 1;
+                println!("{}: not here; download {} and save it as {to}", f.asset, f.url(ver));
+            }
+        }
+    }
+    i32::from(fetch && missing > 0)
 }
 
 /// "220 KB".

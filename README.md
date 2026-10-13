@@ -275,6 +275,7 @@ rustshot history                  # open the History window
 rustshot history --list           # print captures: captured, kind, WxH, bytes, file (tab-separated)
 rustshot settings                 # open the Settings window
 rustshot update                   # check for a newer release
+rustshot data [--fetch]           # where the blur model / language files are (or what to get from where)
 rustshot config --check           # validate config.toml
 rustshot register-screenclip on   # Windows: Win+Shift+S opens Rustshot ("off" undoes it)
 rustshot --help
