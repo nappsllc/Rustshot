@@ -26,6 +26,35 @@ mod baked {
     include!(concat!(env!("OUT_DIR"), "/font_baked.rs"));
 }
 
+/// The outlines, inflated from [`baked::OUTLINES_Z`] on first use: `ops`
+/// packs 2-bit segment codes four per byte (0 move, 1 line, 2 quad); `pts`
+/// holds the x, y pairs they consume (1, 1 and 2 points), in half font
+/// units.
+struct Outlines {
+    ops: Vec<u8>,
+    pts: Vec<i16>,
+}
+
+fn outlines() -> &'static Outlines {
+    static O: std::sync::OnceLock<Outlines> = std::sync::OnceLock::new();
+    O.get_or_init(|| {
+        let (no, np) = (baked::N_OPS_BYTES, baked::N_PTS);
+        let (b, _) = crate::deflate::inflate(baked::OUTLINES_Z, no + 2 * np).expect("baked font outlines inflate");
+        assert_eq!(b.len(), no + 2 * np, "baked font outlines");
+        let (lo, hi) = b[no..].split_at(np);
+        let mut last = [0i16; 2];
+        let pts = (0..np)
+            .map(|i| {
+                let z = lo[i] as u16 | (hi[i] as u16) << 8;
+                let d = (z >> 1) as i16 ^ -((z & 1) as i16);
+                last[i % 2] = last[i % 2].wrapping_add(d);
+                last[i % 2]
+            })
+            .collect();
+        Outlines { ops: b[..no].to_vec(), pts }
+    })
+}
+
 /// The baked overlay chrome font (Inter Medium).
 pub struct UiFont {
     _private: (),
@@ -144,18 +173,19 @@ fn draw_glyph(g: &G, k: f32, pos: Pt, f: &mut impl FnMut(i32, i32, f32)) {
     let (w, h) = ((max.x - min.x) as usize, (max.y - min.y) as usize);
     let off = Pt::new(pos.x - min.x, pos.y - min.y);
     let mut cov = Coverage::new(w, h);
+    let o = outlines();
     let mut pi = g.pt as usize;
     let mut next = || {
         let p = Pt::new(
-            baked::PTS[2 * pi] as f32 * 0.5 * k + off.x,
-            baked::PTS[2 * pi + 1] as f32 * 0.5 * -k + off.y,
+            o.pts[2 * pi] as f32 * 0.5 * k + off.x,
+            o.pts[2 * pi + 1] as f32 * 0.5 * -k + off.y,
         );
         pi += 1;
         p
     };
     let mut cur = Pt::new(0.0, 0.0);
     for i in g.op as usize..(g.op + g.n_ops) as usize {
-        match (baked::OPS[i / 4] >> (2 * (i % 4))) & 3 {
+        match (o.ops[i / 4] >> (2 * (i % 4))) & 3 {
             0 => cur = next(),
             1 => {
                 let p = next();
@@ -322,9 +352,20 @@ mod tests {
         let bytes = std::mem::size_of_val(&baked::CMAP)
             + std::mem::size_of_val(&baked::GLYPHS)
             + std::mem::size_of_val(&baked::KERN)
-            + std::mem::size_of_val(&baked::OPS)
-            + std::mem::size_of_val(&baked::PTS);
-        eprintln!("baked font tables: {bytes} bytes");
-        assert!(bytes < 24 * 1024, "{bytes} bytes");
+            + baked::OUTLINES_Z.len();
+        eprintln!("baked font tables: {bytes} bytes ({} compressed outline bytes)", baked::OUTLINES_Z.len());
+        assert!(bytes < 12 * 1024, "{bytes} bytes");
+    }
+
+    /// The outlines inflate quickly enough to do at startup.
+    #[test]
+    fn outlines_inflate_fast() {
+        let t = std::time::Instant::now();
+        let (b, _) = crate::deflate::inflate(baked::OUTLINES_Z, 1 << 20).unwrap();
+        let ms = t.elapsed().as_secs_f64() * 1e3;
+        eprintln!("font outlines: {} -> {} bytes in {ms:.3} ms", baked::OUTLINES_Z.len(), b.len());
+        assert_eq!(b.len(), baked::N_OPS_BYTES + 2 * baked::N_PTS);
+        assert!(ms < 5.0 || cfg!(debug_assertions), "{ms} ms");
+        assert_eq!(outlines().pts.len(), baked::N_PTS);
     }
 }

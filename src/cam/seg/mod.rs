@@ -28,11 +28,48 @@ use team::{Rows, Team};
 
 /// The model in this build: `assets/selfie.bin` (converted with
 /// `tools/convert-selfie`), embedded whenever it is there (build.rs sets
-/// `selfie_embedded`; `RUSTSHOT_NO_SELFIE=1` builds without it).
+/// `selfie_embedded`; `RUSTSHOT_NO_SELFIE=1` builds without it). It is
+/// stored DEFLATE-compressed (build.rs) and inflated on the first call,
+/// i.e. when the blur first turns on; then kept.
+pub fn embedded() -> Option<&'static [u8]> {
+    #[cfg(selfie_embedded)]
+    {
+        static M: std::sync::OnceLock<Option<Vec<u8>>> = std::sync::OnceLock::new();
+        M.get_or_init(|| inflate_model(EMBEDDED_Z, EMBEDDED_LEN)).as_deref()
+    }
+    #[cfg(not(selfie_embedded))]
+    None
+}
+
+/// Whether this build embeds the model (without inflating it).
+pub const HAS_EMBEDDED: bool = cfg!(selfie_embedded);
+
 #[cfg(selfie_embedded)]
-pub const EMBEDDED: Option<&[u8]> = Some(include_bytes!("../../../assets/selfie.bin"));
-#[cfg(not(selfie_embedded))]
-pub const EMBEDDED: Option<&[u8]> = None;
+pub(crate) static EMBEDDED_Z: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/selfie.bin.z"));
+#[cfg(selfie_embedded)]
+pub(crate) const EMBEDDED_LEN: usize = include!(concat!(env!("OUT_DIR"), "/selfie_len.rs"));
+
+/// build.rs's `compress_model` undone: inflate, then interleave the two
+/// byte planes (even offsets first) back into the file.
+#[cfg_attr(not(selfie_embedded), allow(dead_code))]
+fn inflate_model(z: &[u8], len: usize) -> Option<Vec<u8>> {
+    let (planes, _) = match crate::deflate::inflate(z, len) {
+        Ok(v) if v.0.len() == len => v,
+        r => {
+            eprintln!("rustshot: camera blur: the embedded model does not inflate ({:?})", r.err());
+            return None;
+        }
+    };
+    let (even, odd) = planes.split_at(len.div_ceil(2));
+    let mut out = Vec::with_capacity(len);
+    for (i, &b) in even.iter().enumerate() {
+        out.push(b);
+        if let Some(&o) = odd.get(i) {
+            out.push(o);
+        }
+    }
+    Some(out)
+}
 
 /// What a convolution keeps ready.
 enum Prep {

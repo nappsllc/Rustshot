@@ -1,13 +1,19 @@
 // Bakes the UI font (Inter subset) into static tables, and embeds the app
 // icon (resource ID 1) and version info into rustshot.exe. The icon is
 // Windows MSVC targets only and never fails the build (a missing rc.exe
-// just means no icon).
+// just means no icon). The embedded data (font outlines, the segmentation
+// model) is DEFLATE-compressed here with the crate's own compressor and
+// inflated on first use.
+#[path = "src/deflate.rs"]
+mod deflate;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::{env, fs};
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=src/deflate.rs");
     // The camera blur's segmentation model is embedded when it is there
     // (`assets/selfie.bin`, converted by tools/convert-selfie); the
     // `selfie_model` feature insists on it, `RUSTSHOT_NO_SELFIE=1` leaves
@@ -22,6 +28,7 @@ fn main() {
     }
     if have && !off {
         println!("cargo:rustc-cfg=selfie_embedded");
+        compress_model();
     }
     println!("cargo:rerun-if-changed=packaging/icons/rustshot.ico");
     println!("cargo:rerun-if-env-changed=RC");
@@ -253,8 +260,41 @@ fn bake_font() {
         .chunks(4)
         .map(|c| c.iter().enumerate().fold(0u8, |acc, (i, &o)| acc | (o << (2 * i))))
         .collect();
-    writeln!(w, "pub static OPS: [u8; {}] = {packed:?};", packed.len()).unwrap();
-    writeln!(w, "pub static PTS: [i16; {}] = {pts:?};", pts.len()).unwrap();
+    // OPS and PTS go in DEFLATE-compressed (fonts.rs inflates them once):
+    // the packed ops, then the points as zigzag deltas from the previous
+    // coordinate of the same axis, low bytes then high bytes.
+    let mut blob = packed.clone();
+    let (mut lo, mut hi) = (Vec::new(), Vec::new());
+    let mut last = [0i16; 2];
+    for (i, &v) in pts.iter().enumerate() {
+        let d = v.wrapping_sub(last[i % 2]);
+        last[i % 2] = v;
+        let z = ((d << 1) ^ (d >> 15)) as u16;
+        lo.push(z as u8);
+        hi.push((z >> 8) as u8);
+    }
+    blob.extend(lo);
+    blob.extend(hi);
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    let z = deflate::deflate(&blob, deflate::Effort::BEST);
+    fs::write(out_dir.join("font_outlines.z"), &z).expect("write font_outlines.z");
+    writeln!(w, "pub const N_OPS_BYTES: usize = {};", packed.len()).unwrap();
+    writeln!(w, "pub const N_PTS: usize = {};", pts.len()).unwrap();
+    writeln!(w, "/// The packed ops, then the point coordinates (see build.rs).").unwrap();
+    writeln!(w, r#"pub static OUTLINES_Z: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/font_outlines.z"));"#).unwrap();
     fs::write(out_dir.join("font_baked.rs"), out).expect("write font_baked.rs");
+}
+
+/// `assets/selfie.bin`, DEFLATE-compressed into `$OUT_DIR/selfie.bin.z`
+/// for `cam::seg`, as two planes: the bytes at even offsets, then at odd
+/// ones (the f16 weights' low bytes, nearly random, apart from their high
+/// bytes, sign and exponent, which compress).
+fn compress_model() {
+    let raw = fs::read("assets/selfie.bin").expect("read assets/selfie.bin");
+    let mut planes: Vec<u8> = raw.iter().step_by(2).copied().collect();
+    planes.extend(raw.iter().skip(1).step_by(2));
+    let z = deflate::deflate(&planes, deflate::Effort::BEST);
+    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    fs::write(out_dir.join("selfie.bin.z"), &z).expect("write selfie.bin.z");
+    fs::write(out_dir.join("selfie_len.rs"), format!("{}", raw.len())).expect("write selfie_len.rs");
 }

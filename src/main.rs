@@ -8,6 +8,7 @@ mod cam;
 mod capture;
 mod config;
 mod desktop;
+mod deflate;
 // D-Bus client (portals; the StatusNotifierItem tray later). Pure parts tested everywhere.
 #[cfg(any(target_os = "linux", test))]
 mod dbus;
