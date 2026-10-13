@@ -76,6 +76,8 @@ function KillAll { Get-Process rustshot -ErrorAction SilentlyContinue | Stop-Pro
 . "$T\v040.ps1"
 # Start menu / desktop shortcut names over 0.1.0's lowercase ones.
 . "$T\shortcuts.ps1"
+# Data files downloaded on demand (0.5.0): ChecksData, NoDataFolders.
+. "$T\data.ps1"
 HotkeyProbe $log
 if (Test-Path "$T\probe-only") { Add-Content $log 'DONE'; return }
 function PortableExe {
@@ -101,6 +103,15 @@ if (Test-Path "$T\v040-only") {
     Add-Content $log 'DONE'
     return
 }
+# <T>\data-only: just the data-file checks.
+if (Test-Path "$T\data-only") {
+    $portable = PortableExe
+    Copy-Item $portable.FullName "$env:TEMP\rustshot.exe"
+    Add-Content $log "      portable exe: $($portable.FullName) $((Get-Item $portable.FullName).Length) B"
+    ChecksData "$env:TEMP\rustshot.exe"
+    Add-Content $log 'DONE'
+    return
+}
 # <T>\rec-only: just the recording checks.
 if (Test-Path "$T\rec-only") {
     $portable = PortableExe
@@ -121,6 +132,7 @@ $inst = "$env:LOCALAPPDATA\rustshot"
 $exe = "$inst\rustshot.exe"
 Check 'nsis: rustshot.exe installed' (Test-Path $exe) $exe
 Check 'nsis: LICENSE + THIRD_PARTY_NOTICES.md installed' ((Test-Path "$inst\LICENSE") -and (Test-Path "$inst\THIRD_PARTY_NOTICES.md"))
+NoDataFolders $inst 'nsis'
 $lnk = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Rustshot\Rustshot.lnk"
 Check 'nsis: Start menu shortcut' (Test-Path $lnk)
 ShortcutChecks $exe
@@ -338,6 +350,7 @@ if ($portable) {
     HistoryChecks "$env:TEMP\rustshot.exe"
     Checks030 "$env:TEMP\rustshot.exe"
     Checks040 "$env:TEMP\rustshot.exe"
+    ChecksData "$env:TEMP\rustshot.exe"
     RecordingChecks "$env:TEMP\rustshot.exe"
     Start-Process "$env:TEMP\rustshot.exe"
     Check 'portable: daemon started for visual tray check' (WaitFor { [W]::TrayWindow() })

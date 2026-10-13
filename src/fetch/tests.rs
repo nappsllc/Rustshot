@@ -189,12 +189,12 @@ fn not_found_offline_and_retry() {
     m.set(&sums_url(), Resp::Body(sums_for(&[(f, DE)])));
     // (no route for the file: 404)
     let e = ensure_wait(&fe, f).unwrap_err();
-    assert!(e.contains("404"), "{e}");
+    assert!(e.contains("does not have the file") && e.contains("404"), "{e}");
     assert!(matches!(fe.state(f), State::Failed(_)));
     // Offline: even SHA256SUMS fails.
     m.set(&sums_url(), Resp::Fail("couldn't connect to github.com".into()));
     let e = ensure_wait(&fe, f).unwrap_err();
-    assert!(e.starts_with("SHA256SUMS: couldn't connect"), "{e}");
+    assert!(e.starts_with("no connection to github.com (SHA256SUMS: couldn't connect"), "{e}");
     // Back online: a retry works and clears the failure.
     m.set(&sums_url(), Resp::Body(sums_for(&[(f, DE)])));
     m.set(&f.url(V), Resp::Body(DE.to_vec()));
@@ -356,4 +356,12 @@ fn manifest_is_consistent() {
         assert!(f.check(&p).is_ok(), "{}", p.display());
     }
     assert_eq!(size_label(MODEL.size), "215 KB");
+}
+
+#[test]
+fn errors_in_words() {
+    assert_eq!(friendly("SHA256SUMS: WinHttpSendRequest: 0x80072EE7"), "no connection to github.com (SHA256SUMS: WinHttpSendRequest: 0x80072EE7)");
+    assert!(friendly("curl: (28) Operation timed out").starts_with("github.com did not answer in time"));
+    assert!(friendly("HTTP 404").starts_with("this version's release does not have the file"));
+    assert_eq!(friendly("lang-de.txt failed its SHA-256 check"), "lang-de.txt failed its SHA-256 check");
 }

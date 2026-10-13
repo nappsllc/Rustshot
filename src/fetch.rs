@@ -286,7 +286,7 @@ impl Fetcher {
         self.bump();
         let me = Arc::clone(self);
         let run = move || {
-            let r = me.download(f);
+            let r = me.download(f).map_err(|e| friendly(&e));
             if let Err(e) = &r {
                 eprintln!("rustshot: couldn't download {}: {e}", f.asset);
                 lock(&me.failed).insert(f.asset, e.clone());
@@ -363,6 +363,26 @@ impl Fetcher {
         }
         r.map(|()| dest)
     }
+}
+
+/// A transport error as the user reads it: no connection, a timeout, or
+/// a file this version's release does not have, in words (the raw
+/// error in parentheses); anything else as it is.
+fn friendly(e: &str) -> String {
+    // WinHTTP's codes (0x80072EE7 and so on) and curl's exit messages.
+    let offline = ["80072ee7", "80072efd", "80072efe", "80072f30", "could not resolve host", "failed to connect", "couldn't connect"];
+    let timeout = ["80072ee2", "timed out", "timeout"];
+    let low = e.to_ascii_lowercase();
+    let why = if offline.iter().any(|k| low.contains(k)) {
+        "no connection to github.com"
+    } else if timeout.iter().any(|k| low.contains(k)) {
+        "github.com did not answer in time"
+    } else if e.contains("HTTP 404") || e.contains("error: 404") || e.contains("returned error: 404") {
+        "this version's release does not have the file"
+    } else {
+        return e.to_string();
+    };
+    format!("{why} ({e})")
 }
 
 /// The app's fetcher: the real cache and transport, this version.
