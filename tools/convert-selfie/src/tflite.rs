@@ -91,6 +91,8 @@ pub struct Summary {
     pub input: Vec<u32>,
     pub output: Vec<u32>,
     pub folded_dequantize: usize,
+    /// One line per operator (`--list`).
+    pub listing: Vec<String>,
 }
 
 impl Summary {
@@ -280,6 +282,33 @@ pub fn convert(file: &[u8]) -> R<(Model, Summary)> {
         let name = if code.0 == CUSTOM { code.1.clone() } else { op_name(code.0) };
         let e = |s: &str| crate::flat::BadFile(format!("operator {k} ({name}): {s}"));
         let need = |n: usize| if ins.len() < n { Err(e(&format!("{} inputs", ins.len()))) } else { Ok(()) };
+        // The listing: each operator, its tensors (name and shape), the
+        // custom options' bytes.
+        {
+            let desc = |i: &i32| c.tensor(*i).map_or_else(|_| format!("#{i}"), |t| format!("{}{:?}", t.name, t.shape));
+            let custom = op.bytes(5)?;
+            let tail = if custom.is_empty() { String::new() } else { format!("  custom options {custom:02x?}") };
+            sum.listing.push(format!("{k:3} {name} [{}] -> {}{tail}", ins.iter().map(desc).collect::<Vec<_>>().join(", "), desc(&out)));
+        }
+        // The options union's tag must be the table the operator reads.
+        let want_tag = match code.0 {
+            CONV_2D => Some(1),
+            DEPTHWISE_CONV_2D => Some(2),
+            AVERAGE_POOL_2D => Some(5),
+            CONCATENATION => Some(10),
+            ADD => Some(11),
+            RESIZE_BILINEAR => Some(15),
+            MUL => Some(21),
+            MEAN => Some(27),
+            TRANSPOSE_CONV => Some(49),
+            _ => None,
+        };
+        if let Some(t) = want_tag
+            && opts.is_some()
+            && op.u8_or(3, 0)? != t
+        {
+            return Err(e(&format!("options of type {} (expected {t})", op.u8_or(3, 0)?)));
+        }
         // Options: absent fields take the schema's defaults.
         let o_u8 = |id, d| opts.map_or(Ok(d), |t| t.u8_or(id, d));
         let o_i8 = |id, d| opts.map_or(Ok(d), |t| t.i8_or(id, d));

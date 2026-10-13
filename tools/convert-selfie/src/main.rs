@@ -16,12 +16,14 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let list = args.iter().any(|a| a == "--list");
+    args.retain(|a| a != "--list");
     let (input, output) = match &args[..] {
         [i] => (PathBuf::from(i), PathBuf::from("assets/selfie.bin")),
         [i, o] => (PathBuf::from(i), PathBuf::from(o)),
         _ => {
-            eprintln!("usage: convert-selfie <selfie_segmentation_landscape.tflite> [out: assets/selfie.bin]");
+            eprintln!("usage: convert-selfie [--list] <selfie_segmentation_landscape.tflite> [out: assets/selfie.bin]");
             return ExitCode::from(2);
         }
     };
@@ -53,6 +55,11 @@ fn main() -> ExitCode {
     println!("input {:?}, output {:?}, {} weights, {} DEQUANTIZE folded", sum.input, sum.output, sum.weights, sum.folded_dequantize);
     for (name, n) in &sum.ops {
         println!("  {name:<28} {n}");
+    }
+    if list {
+        for l in &sum.listing {
+            println!("{l}");
+        }
     }
     ExitCode::SUCCESS
 }

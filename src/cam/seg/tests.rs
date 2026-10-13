@@ -741,6 +741,84 @@ fn seg_bench() {
     }
 }
 
+/// The converted MediaPipe model, when `assets/selfie.bin` is there (read
+/// at run time, so this runs with or without the `selfie_model` feature).
+fn real_model() -> Option<Vec<u8>> {
+    std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/selfie.bin")).ok()
+}
+
+/// Synthetic 256x144 RGB inputs (0..1): a gradient, a bright head and
+/// shoulders (ellipses) on a dark background, the same skin-toned on a
+/// green one (which the model takes for a person: the dark one it does
+/// not), noise.
+fn real_inputs() -> Vec<(&'static str, Vec<f32>)> {
+    let (w, h) = (256usize, 144usize);
+    let px = |f: &dyn Fn(f32, f32) -> [f32; 3]| -> Vec<f32> {
+        (0..w * h).flat_map(|i| f((i % w) as f32 / w as f32, (i / w) as f32 / h as f32)).collect()
+    };
+    let mut s = 12345u32;
+    let noise: Vec<f32> = (0..w * h * 3)
+        .map(|_| {
+            s ^= s << 13;
+            s ^= s >> 17;
+            s ^= s << 5;
+            (s >> 8) as f32 / (1 << 24) as f32
+        })
+        .collect();
+    vec![
+        ("gradient", px(&|u, v| [u, v, 1.0 - u])),
+        ("bright ellipse on dark", px(&|u, v| if person(u, v) { [0.85, 0.7, 0.6] } else { [0.08, 0.1, 0.12] })),
+        ("head and shoulders", px(&|u, v| if person(u, v) { [0.8, 0.6, 0.5] } else { [0.2, 0.7, 0.2] })),
+        ("noise", noise),
+    ]
+}
+
+/// The synthetic person: a head (ellipse) over shoulders (half ellipse),
+/// in the middle of a 16:9 picture (u, v in 0..1).
+fn person(u: f32, v: f32) -> bool {
+    let x = (u - 0.5) * 16.0 / 9.0;
+    let head = (x / 0.16).powi(2) + ((v - 0.38) / 0.22).powi(2) < 1.0;
+    let body = v > 0.62 && (x / 0.42).powi(2) + ((v - 1.05) / 0.45).powi(2) < 1.0;
+    head || body
+}
+
+/// The real graph, the engine against the scalar f64 reference (which
+/// shares nothing with `ops`), on the synthetic inputs; and the mask is
+/// plausible on the head and shoulders.
+#[test]
+fn real_model_matches_the_reference() {
+    let Some(bytes) = real_model() else {
+        eprintln!("SKIP: no assets/selfie.bin");
+        return;
+    };
+    let model = Model::parse(&bytes).unwrap();
+    let mut net = Net::selfie(&bytes).unwrap();
+    assert_eq!((net.input_hw(), net.output_dim()), ((144, 256), (144, 256, 1)));
+    for (name, x) in real_inputs() {
+        net.input_mut().copy_from_slice(&x);
+        let got = net.run().to_vec();
+        let want = reference(&model, &x);
+        let worst = got.iter().zip(&want).fold(0f32, |a, (g, w)| a.max((g - w).abs()));
+        eprintln!("{name}: max |engine - reference| = {worst:e}");
+        assert!(worst < 1e-3, "{name}: {worst}");
+        assert!(got.iter().all(|v| (0.0..=1.0).contains(v)));
+        if name == "head and shoulders" {
+            let (w, h) = (256usize, 144usize);
+            let (mut inside, mut n_in) = (0, 0);
+            for (i, &m) in got.iter().enumerate() {
+                if person((i % w) as f32 / w as f32, (i / w) as f32 / h as f32) {
+                    n_in += 1;
+                    inside += usize::from(m > 0.5);
+                }
+            }
+            let corners = [got[0], got[w - 1], got[(h - 1) * w], got[h * w - 1]];
+            eprintln!("person pixels > 0.5: {inside} of {n_in}; corners {corners:?}");
+            assert!(inside * 10 >= n_in * 8, "most of the person: {inside} of {n_in}");
+            assert!(corners.iter().all(|&c| c < 0.5), "{corners:?}");
+        }
+    }
+}
+
 /// A stand-in `selfie.bin` (random weights, the landscape model's input
 /// and output, about its size) at `RUSTSHOT_SYNTH_SELFIE`: to build and
 /// try the `selfie_model` feature without the real model.

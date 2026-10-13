@@ -1,0 +1,12 @@
+selfie.bin: MediaPipe Selfie Segmentation (landscape, 144x256), converted
+with tools/convert-selfie for the camera bubble's background blur
+(embedded by the `selfie_model` feature).
+
+Source file:  selfie_segmentation_landscape.tflite (249,792 bytes)
+URL:          https://storage.googleapis.com/mediapipe-assets/modules/selfie_segmentation/selfie_segmentation_landscape.tflite?generation=1782183688568628
+SHA-256:      4aafe6223bb8dac6fac8ca8ed56852870a33051ef3f6238822d282a109962894
+              (MediaPipe's pin: com_google_mediapipe_modules_selfie_segmentation_selfie_segmentation_landscape_tflite,
+              third_party/external_files.bzl in https://github.com/google-ai-edge/mediapipe)
+License:      Apache License 2.0, Copyright The MediaPipe Authors (see THIRD_PARTY_NOTICES.md)
+Converted:    cargo run --manifest-path tools/convert-selfie/Cargo.toml -- selfie_segmentation_landscape.tflite assets/selfie.bin
+              219,338 bytes: 106,401 f16 weights, 135 operators (110 DEQUANTIZE folded); same weights, another file format.
