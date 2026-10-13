@@ -607,15 +607,14 @@ fn general(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) 
     if ui.focus.is_focused("filename") {
         s.pattern = Pattern::File;
     }
-    srow(ui, tok, "Save at", Some("Copy, Save, Upload and Pin; History keeps the original"), |ui| {
+    srow_ex(ui, tok, "Save at", Some("History keeps the original"), false, 44.0, |ui| {
         let on = ui.enabled;
         ui.enabled = on && f.save_at == 2;
-        let pct = format!("{} %", f.save_pct);
-        let w = ui.text_w(12.0, "100 %").ceil();
+        let w = ui.text_w(12.0, "%").ceil();
         let r = ui.alloc(Some(w), CTL);
-        let c = if ui.enabled { tok.tx } else { tok.tx3 };
-        ui.text_at(12.0, &pct, r.x, r.y + r.h / 2.0, c, false);
-        ui.width(96.0).slider("save_pct", &mut f.save_pct, 10, 100);
+        let c = if ui.enabled { tok.tx2 } else { tok.tx3 };
+        ui.text_at(12.0, "%", r.x, r.y + r.h / 2.0, c, false);
+        ui.width(110.0).slider("save_pct", &mut f.save_pct, 10, 100);
         ui.enabled = on;
         ui.seg("save_at", &labels(&SAVE_AT), &mut f.save_at, tok);
     });
