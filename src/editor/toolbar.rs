@@ -162,6 +162,20 @@ pub enum Act {
     /// The Save split button's chevron: the menu with Save As and Save
     /// to Desktop.
     SaveMenu,
+    /// The crop frame on / off (C): Enter crops, Esc leaves it.
+    Crop,
+    /// Quick Redact (Shift+R): blur the sensitive text OCR finds (in Text
+    /// mode with words selected: those words).
+    Redact,
+    /// The freeform (lasso) selection on / off (Shift+F).
+    Freeform,
+    /// The Copy text menu: Text mode (select words), copy everything.
+    TextSelect,
+    CopyAll,
+    /// Text mode: copy the words selected.
+    TextCopy,
+    /// The Copy text menu: a kind of sensitive text on / off.
+    RedactKind(crate::ocr::redact::Kind),
     /// Tighten the selection to its content (the size label's menu).
     Trim,
 }
@@ -247,6 +261,11 @@ pub enum Kind {
     /// A row of the save menu: its act, label, and its keys
     /// (`Toolbar::texts[key]`).
     MenuItem { act: Act, label: &'static str, key: usize },
+    /// A checkbox row of a menu (the Copy text menu's kinds).
+    Check { act: Act, label: &'static str, on: bool },
+    /// A small square button with its own surface (the freeform toggle
+    /// next to the mode switch): accent while `on`.
+    Toggle { act: Act, icon: &'static str, on: bool },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -289,7 +308,50 @@ pub struct Input<'a> {
     pub save_menu: Option<&'a [String]>,
     /// The Blur / Invert menu while it is open: their keys.
     pub slot_menu: Option<&'a [String; 2]>,
+    /// The Copy text menu while it is open.
+    pub copy_menu: Option<&'a CopyMenu>,
+    /// The freeform toggle by the mode switch (`Some(on)`: shown).
+    pub freeform: Option<bool>,
 }
+
+/// The Copy text menu (a long press on Copy text): Select text, Copy all
+/// text, Redact sensitive text (their keys), then the kinds to redact.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CopyMenu {
+    pub keys: [String; 3],
+    pub kinds: Vec<crate::ocr::redact::Kind>,
+}
+
+/// The Copy text menu's rows.
+pub const COPY_MENU: [(Act, &str); 3] = [(Act::TextSelect, "Select text"), (Act::CopyAll, "Copy all text"), (Act::Redact, "Redact sensitive text")];
+
+/// The Copy text menu under (or over) its button: the three rows, a
+/// separator, the kinds' checkboxes.
+fn place_copy_menu(cm: &CopyMenu, bar: FRect, above: bool, items: &mut Vec<Item>, inp: &Input) -> FRect {
+    use crate::ocr::redact::Kind as K;
+    let s = inp.s;
+    let rows = COPY_MENU.len() as f32 + K::ALL.len() as f32;
+    let (pw, ph) = (MENU_W * s, (rows * MENU_ROW + 2.0 * PAD + 2.0 * ROW_GAP + 1.0) * s);
+    let anchor = items.iter().find(|it| it.kind == Kind::Btn(Act::CopyText)).map_or(bar, |it| it.r);
+    let (px, py) = place_pop(pw, ph, anchor, bar, above, inp);
+    let row = |y: f32| FRect { x: px + PAD * s, y: py + y * s, w: pw - 2.0 * PAD * s, h: MENU_ROW * s };
+    let mut y = PAD;
+    for (i, (act, label)) in COPY_MENU.into_iter().enumerate() {
+        items.push(Item { kind: Kind::MenuItem { act, label, key: i }, r: row(y), disabled: false });
+        y += MENU_ROW;
+    }
+    y += ROW_GAP;
+    items.push(Item { kind: Kind::SepH, r: FRect { x: px + 2.0 * PAD * s, y: py + y * s, w: pw - 4.0 * PAD * s, h: s.max(1.0) }, disabled: false });
+    y += 1.0 + ROW_GAP;
+    for k in K::ALL {
+        items.push(Item { kind: Kind::Check { act: Act::RedactKind(k), label: k.label(), on: cm.kinds.contains(&k) }, r: row(y), disabled: false });
+        y += MENU_ROW;
+    }
+    FRect { x: px, y: py, w: pw, h: ph }
+}
+
+/// The freeform toggle's side (logical px): the mode switch's height.
+const TOGGLE: f32 = 28.0;
 
 /// What shapes the color picker popover.
 #[derive(Clone, Debug, PartialEq)]
@@ -484,25 +546,49 @@ pub fn layout(inp: &Input) -> Toolbar {
             texts.extend(keys.iter().cloned());
             Some(place_save_menu(bar, above, &mut items, inp))
         }
-        (None, None, None) => inp.slot_menu.map(|keys| {
-            texts.extend(keys.iter().cloned());
-            place_slot_menu(bar, above, &mut items, inp)
-        }),
+        (None, None, None) => match (inp.slot_menu, inp.copy_menu) {
+            (Some(keys), _) => {
+                texts.extend(keys.iter().cloned());
+                Some(place_slot_menu(bar, above, &mut items, inp))
+            }
+            (None, Some(cm)) => {
+                texts.extend(cm.keys.iter().cloned());
+                Some(place_copy_menu(cm, bar, above, &mut items, inp))
+            }
+            (None, None) => None,
+        },
     };
     // The mode switch above the selection (recording works here).
     let mut extra = Vec::new();
-    let mode = (inp.record && inp.top).then(|| {
+    let mut mode = (inp.record && inp.top).then(|| {
         let up = above.then(|| pop.map_or(bar, |p| union(bar, p))).filter(|b| b.y1() <= sel.y + 0.5);
         super::panel::place_top(sel, area, s, false, up, &mut items, &mut extra)
     });
+    // The freeform toggle: right of the mode switch (else above the
+    // selection's left end); the size label follows it.
+    if let (Some(on), true) = (inp.freeform, inp.top) {
+        let h = TOGGLE * s;
+        let r = match mode {
+            Some(m) => FRect { x: m.x1() + 6.0 * s, y: m.y + (m.h - h) / 2.0, w: h, h },
+            None => {
+                let up = sel.y - 8.0 * s - h;
+                let y = if up >= area.y + 4.0 * s { up } else { sel.y + 8.0 * s };
+                FRect { x: sel.x.clamp(area.x, (area.x1() - h).max(area.x)), y, w: h, h }
+            }
+        };
+        items.push(Item { kind: Kind::Toggle { act: Act::Freeform, icon: "lasso", on }, r, disabled: false });
+        extra.push(r);
+        mode = Some(mode.map_or(r, |m| union(m, r)));
+    }
     Toolbar { bar, pop, items, wrapped, above, texts, extra, mode, video: false, docked: false }
 }
 
-/// The Edit window's groups: the overlay's tools, history and size groups,
-/// then Save, Save As, Save to Desktop, Copy, Upload (no Record, Copy
-/// text, Pin or Close: the window has its own).
+/// The Edit window's groups: the overlay's tools and Crop, history and
+/// size groups, then Save, Save As, Save to Desktop, Copy, Upload (no
+/// Record, Copy text, Pin or Close: the window has its own).
 fn docked_groups(inp: &Input) -> [Group; 4] {
-    let [tools, history, size, _] = groups(inp);
+    let [mut tools, history, size, _] = groups(inp);
+    tools.push((Kind::Btn(Act::Crop), false, BTN));
     let out = [Act::Save, Act::SaveAs, Act::SaveDesktop, Act::Copy, Act::Upload].into_iter().map(|a| (Kind::Btn(a), false, BTN)).collect();
     [tools, history, size, out]
 }
@@ -536,10 +622,17 @@ pub fn layout_docked(inp: &Input, bar: FRect) -> Toolbar {
             texts.extend(keys.iter().cloned());
             Some(place_save_menu(bar, false, &mut items, inp))
         }
-        (None, None, None) => inp.slot_menu.map(|keys| {
-            texts.extend(keys.iter().cloned());
-            place_slot_menu(bar, false, &mut items, inp)
-        }),
+        (None, None, None) => match (inp.slot_menu, inp.copy_menu) {
+            (Some(keys), _) => {
+                texts.extend(keys.iter().cloned());
+                Some(place_slot_menu(bar, false, &mut items, inp))
+            }
+            (None, Some(cm)) => {
+                texts.extend(cm.keys.iter().cloned());
+                Some(place_copy_menu(cm, bar, false, &mut items, inp))
+            }
+            (None, None) => None,
+        },
     };
     Toolbar { bar, pop, items, wrapped: false, above: false, texts, extra: Vec::new(), mode: None, video: false, docked: true }
 }
@@ -772,6 +865,8 @@ pub fn layout_picker(pv: &PickView, at: Pt, area: FRect, s: f32) -> Toolbar {
         pick: Some(pv),
         save_menu: None,
         slot_menu: None,
+        copy_menu: None,
+        freeform: None,
     };
     let mut items = Vec::new();
     let pop = place_picker(pv, bar, false, &mut items, &inp);
@@ -804,7 +899,7 @@ impl Toolbar {
             Kind::PickHex => Some(Act::Pick(Part::Hex)),
             Kind::PickAlpha => Some(Act::Pick(Part::Alpha)),
             Kind::Recent { c, .. } => Some(Act::PickColor(c)),
-            Kind::MenuItem { act, .. } => Some(act),
+            Kind::MenuItem { act, .. } | Kind::Check { act, .. } | Kind::Toggle { act, .. } => Some(act),
             Kind::Value
             | Kind::SepV
             | Kind::SepH
@@ -905,6 +1000,8 @@ mod tests {
             pick: None,
             save_menu: None,
             slot_menu: None,
+            copy_menu: None,
+            freeform: None,
         }
     }
 

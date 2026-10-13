@@ -88,18 +88,60 @@ fn rgba_to_dib(img: &PixBuf) -> Vec<u8> {
     out
 }
 
+/// A `CF_DIBV5` payload with straight alpha (a freeform capture's
+/// transparent outside): BITMAPV5HEADER, BI_BITFIELDS with an alpha mask,
+/// sRGB, rows bottom-up.
+pub(crate) fn rgba_to_dibv5(img: &PixBuf) -> Vec<u8> {
+    let (w, h) = img.dimensions();
+    let stride = w as usize * 4;
+    let mut out = Vec::with_capacity(124 + stride * h as usize);
+    let u32le = |o: &mut Vec<u8>, v: u32| o.extend_from_slice(&v.to_le_bytes());
+    u32le(&mut out, 124); // bV5Size
+    out.extend_from_slice(&(w as i32).to_le_bytes());
+    out.extend_from_slice(&(h as i32).to_le_bytes()); // positive = bottom-up
+    out.extend_from_slice(&1u16.to_le_bytes()); // planes
+    out.extend_from_slice(&32u16.to_le_bytes()); // bits per pixel
+    u32le(&mut out, 3); // BI_BITFIELDS
+    u32le(&mut out, (stride * h as usize) as u32);
+    u32le(&mut out, 2835);
+    u32le(&mut out, 2835);
+    u32le(&mut out, 0);
+    u32le(&mut out, 0);
+    for m in [0x00FF_0000u32, 0x0000_FF00, 0x0000_00FF, 0xFF00_0000] {
+        u32le(&mut out, m); // R, G, B, A masks
+    }
+    u32le(&mut out, 0x7352_4742); // LCS_sRGB
+    out.extend_from_slice(&[0u8; 36 + 12]); // endpoints, gammas
+    u32le(&mut out, 4); // LCS_GM_IMAGES
+    out.extend_from_slice(&[0u8; 12]); // profile data, size, reserved
+    let raw = img.as_raw();
+    for y in (0..h).rev() {
+        let row = &raw[y as usize * stride..(y as usize + 1) * stride];
+        for px in row.as_chunks::<4>().0 {
+            out.extend_from_slice(&[px[2], px[1], px[0], px[3]]);
+        }
+    }
+    out
+}
+
 pub fn copy_to_clipboard(img: &PixBuf) -> Result<()> {
     use windows::Win32::System::DataExchange::{EmptyClipboard, RegisterClipboardFormatW};
-    use windows::Win32::System::Ole::CF_DIB;
+    use windows::Win32::System::Ole::{CF_DIB, CF_DIBV5};
     use windows::core::w;
     let png = img.to_png()?;
-    let dib = rgba_to_dib(img);
+    // With transparency: CF_DIBV5 keeps it; CF_DIB (no alpha) gets white.
+    let alpha = crate::objects::mask::has_alpha(img);
+    let dibv5 = alpha.then(|| rgba_to_dibv5(img));
+    let dib = rgba_to_dib(&crate::objects::mask::flatten_white(img));
     with_clipboard(|| unsafe {
         EmptyClipboard().context("empty clipboard")?;
         // "PNG" is the community-standard registered format (CF_PNG).
         let fmt_png = RegisterClipboardFormatW(w!("PNG"));
         if fmt_png != 0 {
             set_clip_data(fmt_png, &png)?;
+        }
+        if let Some(v5) = &dibv5 {
+            set_clip_data(CF_DIBV5.0 as u32, v5)?;
         }
         set_clip_data(CF_DIB.0 as u32, &dib)?;
         Ok(())
@@ -636,6 +678,22 @@ fn extract_json_string(body: &str, key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// CF_DIBV5 keeps a freeform capture's alpha: a 124-byte V5 header
+    /// with an alpha mask, BGRA rows bottom-up.
+    #[test]
+    fn dibv5_carries_alpha() {
+        let mut img = PixBuf::from_pixel(2, 2, [10, 20, 30, 255]);
+        img.as_raw_mut()[..4].copy_from_slice(&[255, 255, 255, 0]);
+        let d = rgba_to_dibv5(&img);
+        assert_eq!(d.len(), 124 + 16);
+        assert_eq!(u32::from_le_bytes(d[0..4].try_into().unwrap()), 124);
+        assert_eq!(u32::from_le_bytes(d[16..20].try_into().unwrap()), 3, "BI_BITFIELDS");
+        assert_eq!(u32::from_le_bytes(d[52..56].try_into().unwrap()), 0xFF00_0000, "alpha mask");
+        // Bottom-up: the top-left pixel is the first of the last row.
+        assert_eq!(&d[124 + 8..124 + 12], &[255, 255, 255, 0]);
+        assert_eq!(&d[124..128], &[30, 20, 10, 255]);
+    }
 
     #[test]
     fn json_extract() {

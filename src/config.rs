@@ -78,6 +78,18 @@ pub struct Config {
     /// The Edit window's Save: "" asks (Overwrite the original / Save as
     /// new file), "overwrite" or "new" once "Don't ask again" was ticked.
     pub edit_save: String,
+    /// The overlay's Copy text button: "select" (Text mode: pick words,
+    /// then copy) or "all" (copy everything at once). The global Copy
+    /// text hotkey always copies all.
+    pub copy_text_mode: String,
+    /// Quick Redact's kinds ("all", or a list such as "emails,phones";
+    /// [`crate::ocr::redact::parse_kinds`]); the Redact menu remembers them.
+    pub redact_kinds: String,
+    /// What Quick Redact puts over a find: "solid" (an opaque fill in the
+    /// surrounding color) or "blur" (a coarse mosaic under a strong blur).
+    pub redact_style: String,
+    /// The last selection mode: "rect" or "freeform" (a lasso).
+    pub selection_mode: String,
     /// Palette shown in the color picker.
     pub user_colors: Vec<String>,
     /// Imgur client id used for uploads.
@@ -355,6 +367,10 @@ impl Default for Config {
             history_max_mb: 2048,
             history_hotkey: "Shift+Meta+H".into(),
             edit_save: String::new(),
+            copy_text_mode: "select".into(),
+            redact_kinds: "all".into(),
+            redact_style: "solid".into(),
+            selection_mode: "rect".into(),
             user_colors: [
                 "#f04438", "#ff8a1f", "#ffc532", "#2dc06f", "#19b5d6", "#3b82f6", "#8b5cf6",
                 "#ec4899", "#ffffff", "#111318",
@@ -701,6 +717,8 @@ pub fn copy_key(from: &Config, to: &mut Config, key: &str) {
         "rec_camera_ring_width" => to.rec_camera_ring_width = from.rec_camera_ring_width,
         "ui_scale" => to.ui_scale = from.ui_scale,
         "snap_tab_hint" => to.snap_tab_hint = from.snap_tab_hint,
+        "redact_kinds" => to.redact_kinds = from.redact_kinds.clone(),
+        "selection_mode" => to.selection_mode = from.selection_mode.clone(),
         "tool_callout_style" => to.callout_style = from.callout_style.clone(),
         k if fmt_key(k).is_some() => {
             let (id, what) = fmt_key(k).expect("a style key");
@@ -1134,6 +1152,10 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
             }
             "history_hotkey" => cfg.history_hotkey = as_string(val).map_err(|e| bad("string", &e))?,
             "edit_save" => cfg.edit_save = one_of(val, &["", "overwrite", "new"]).map_err(|e| bad("value", &e))?,
+            "copy_text_mode" => cfg.copy_text_mode = one_of(val, &["select", "all"]).map_err(|e| bad("value", &e))?,
+            "redact_kinds" => cfg.redact_kinds = as_string(val).map_err(|e| bad("string", &e))?,
+            "redact_style" => cfg.redact_style = one_of(val, &["solid", "blur"]).map_err(|e| bad("value", &e))?,
+            "selection_mode" => cfg.selection_mode = one_of(val, &["rect", "freeform"]).map_err(|e| bad("value", &e))?,
             "upload_client_id" => {
                 cfg.upload_client_id = as_string(val).map_err(|e| bad("string", &e))?
             }
@@ -1437,6 +1459,13 @@ pub fn to_toml(c: &Config) -> String {
         c.history_max_mb,
         q(&c.history_hotkey),
         q(&c.edit_save)
+    ));
+    out.push_str(&format!(
+        "copy_text_mode = {}\nredact_kinds = {}\nredact_style = {}\nselection_mode = {}\n",
+        q(&c.copy_text_mode),
+        q(&c.redact_kinds),
+        q(&c.redact_style),
+        q(&c.selection_mode)
     ));
     for id in TOOL_IDS {
         if let Some(v) = c.tool_sizes.get(id) {
@@ -2127,6 +2156,13 @@ record_hotkey = \"Ctrl+Shift+R\"
         assert_eq!(parse_config(&to_toml(&h)).unwrap(), h);
         assert!(!rewrite_loses(&to_toml(&h)));
         assert!(parse_config("history_days = 0").is_err() && parse_config("edit_save = \"maybe\"").is_err());
+        // Copy text lets the user select; Redact finds every kind; regions.
+        assert!(d.copy_text_mode == "select" && d.redact_kinds == "all" && d.selection_mode == "rect");
+        assert_eq!(d.redact_style, "solid");
+        let s = Config { copy_text_mode: "all".into(), redact_kinds: "emails,ips".into(), redact_style: "blur".into(), selection_mode: "freeform".into(), ..Config::default() };
+        assert_eq!(parse_config(&to_toml(&s)).unwrap(), s);
+        assert!(!rewrite_loses(&to_toml(&s)));
+        assert!(parse_config("copy_text_mode = \"some\"").is_err() && parse_config("selection_mode = \"circle\"").is_err());
         let w = hotkey_warnings(&Config { history_hotkey: "Nope+".into(), ..Config::default() });
         assert!(w.len() == 1 && w[0].starts_with("history_hotkey"), "{w:?}");
         let w = hotkey_warnings(&Config { repeat_hotkey: "Nope+".into(), ..Config::default() });

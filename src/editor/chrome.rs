@@ -103,6 +103,12 @@ pub fn act_icon(a: Act) -> &'static str {
             Tool::Blur => "blur",
         },
         Act::SaveMenu => "chevron",
+        Act::Crop => "crop",
+        Act::Redact => "redact",
+        Act::Freeform => "lasso",
+        Act::TextSelect => "ocr",
+        Act::CopyAll | Act::TextCopy => "copy",
+        Act::RedactKind(_) => "",
         // A menu row (the size label's): no icon.
         Act::Trim => "",
         Act::ObjFront => "front",
@@ -233,6 +239,36 @@ pub fn toolbar(f: &mut Fb, ui: &Ui, tb: &Toolbar, st: &BarState, k: f32) {
                 let keys = tb.texts.get(key).map_or("", String::as_str);
                 let kw = tw(ui, 11.0, keys);
                 text(f, ui, 11.0, keys, r.x1() - ui.px(10.0) - kw, cy, if hovered { ui.th.accent_fg } else { ui.th.text_muted }.fade(kp));
+            }
+            Kind::Check { label, on, .. } => {
+                let r = round(it.r);
+                if hovered {
+                    fill(f, r, ui.px(6.0), ui.th.accent_bg.fade(kp));
+                }
+                let cy = r.y + r.h / 2.0;
+                let bx = round(FRect { x: r.x + ui.px(10.0), y: cy - ui.px(7.0), w: ui.px(14.0), h: ui.px(14.0) });
+                if on {
+                    fill(f, bx, ui.px(4.0), ui.th.accent.fade(kp));
+                    let isz = ui.px(12.0);
+                    draw_icon(f, "check", bx.x + (bx.w - isz) / 2.0, bx.y + (bx.h - isz) / 2.0, isz, C4::rgb(255, 255, 255).fade(kp));
+                } else {
+                    f.stroke_rounded(bx, ui.px(4.0), ui.line(), ui.th.text_muted.fade(kp));
+                }
+                let fg = if hovered { ui.th.accent_fg } else { ui.th.text };
+                text(f, ui, 12.5, label, bx.x1() + ui.px(8.0), cy, fg.fade(kp));
+            }
+            Kind::Toggle { on, icon, .. } => {
+                let r = round(it.r);
+                panel(f, ui, r, 8.0, &ALL_LAYERS, ui.th.surface, ui.th.border, k);
+                if on {
+                    fill(f, r, ui.px(8.0), ui.th.accent_bg.fade(k));
+                    ring(f, ui, r, 8.0, ui.th.accent_ring.fade(k));
+                } else if hovered {
+                    fill(f, r, ui.px(8.0), ui.th.bg_hover.fade(k));
+                }
+                let isz = ui.px(16.0);
+                let fg = if on { ui.th.accent_fg } else if hovered { ui.th.icon_hover } else { ui.th.icon };
+                draw_icon(f, icon, r.x + (r.w - isz) / 2.0, r.y + (r.h - isz) / 2.0, isz, fg.fade(k));
             }
             Kind::SegTrack => {
                 let r = round(it.r);
@@ -1173,6 +1209,13 @@ pub fn act_tip(a: Act, km: &Keymap) -> (&'static str, Vec<String>) {
         Act::ObjStyle(crate::objects::CalloutStyle::Cloud) => "Cloud",
         Act::ObjStyle(crate::objects::CalloutStyle::Ellipse) => "Ellipse",
         Act::SaveMenu => "More ways to save",
+        Act::Crop => "Crop",
+        Act::Redact => "Quick Redact",
+        Act::Freeform => "Freeform selection",
+        Act::TextSelect => "Select text",
+        Act::CopyAll => "Copy all text",
+        Act::TextCopy => "Copy",
+        Act::RedactKind(k) => k.label(),
         Act::ObjFront => "Bring to front",
         Act::ObjBack => "Send to back",
         Act::ObjDup => "Duplicate",
@@ -1551,6 +1594,8 @@ mod tests {
             pick: None,
             save_menu: None,
             slot_menu: None,
+            copy_menu: None,
+            freeform: None,
         });
         let mut d = buf(800, 200, 0);
         let st = BarState {

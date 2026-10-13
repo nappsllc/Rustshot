@@ -89,7 +89,8 @@ pub fn layout(e: &Edit, w: f32, h: f32, bar_w: f32) -> Lay {
     let rail = FRect { x: 0.0, y: BAR_H, w: rw, h: body_h };
     let canvas = FRect { x: rw, y: BAR_H, w: (w - rw).max(1.0), h: body_h.max(1.0) };
     let in_bar = zoom_lay(w - 8.0, BAR_H / 2.0, 32.0);
-    let zoom_in_status = in_bar.r.x < bar_w + 8.0;
+    // The toolbar's buttons end with their 8 px pad: 2 px more apart.
+    let zoom_in_status = in_bar.r.x < bar_w + 2.0;
     let zoom = if zoom_in_status { zoom_lay(w - 8.0, status.y + STATUS_H / 2.0, 24.0) } else { in_bar };
     let collapse = if e.collapsed {
         FRect { x: (RAIL_MIN - 32.0) / 2.0, y: BAR_H + 6.0, w: 32.0, h: 32.0 }

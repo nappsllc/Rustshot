@@ -65,6 +65,28 @@ When the overlay opens, a card shows the main keys (as remapped) for three
 seconds or until the pointer moves or a key is pressed (*Show hints in the
 overlay*, `overlay_hints`).
 
+**Freeform** (<kbd>Shift</kbd>+<kbd>F</kbd>, or the lasso button right of
+the Screenshot / Video switch) makes the next selection a lasso: drag
+around what you want and let go, the path closes by itself. The lasso's
+bounding box is the selection (the toolbar, tools, handles and arrow keys
+work as usual; moving or resizing the box takes the lasso along), and what
+lies outside the lasso is dimmed. The capture is that box: transparent
+outside the lasso in a PNG (an anti-aliased edge), white in a JPG or BMP;
+annotations are cut to the lasso too. The clipboard gets it with its
+transparency (`CF_DIBV5` and PNG on Windows; PNG elsewhere). The mode is
+remembered (`selection_mode = "freeform"`); press
+<kbd>Shift</kbd>+<kbd>F</kbd> again for rectangles. History keeps the lasso
+with the capture (`mask` in its `meta.json`), so the Edit window opens it
+the same way; its `original.png` is cut by the lasso too, so nothing
+outside it is kept (an older Rustshot shows it transparent as well). A
+lasso that cannot be read is not shown at all.
+
+**Crop** (<kbd>C</kbd>) shows a frame with handles inside the selection:
+drag its handles or move it (a drag outside it starts a new frame), then
+<kbd>Enter</kbd> makes the frame the selection; <kbd>Esc</kbd> cancels.
+It is most useful after a window click or a full-screen capture. In the
+Edit window it crops the picture (see below).
+
 **Trim to content** (<kbd>Shift</kbd>+<kbd>A</kbd>, or click the `W × H`
 readout above the selection and pick *Trim to content*) tightens the
 selection to what is in it: each edge moves inward while its row or column
@@ -273,23 +295,86 @@ asks first. `original.png` is never changed, so a capture can always be
 edited again. On macOS the History and Edit windows are not available yet
 (the history folder opens instead).
 
+**Crop** in the Edit window (the crop button after the tools, or
+<kbd>C</kbd>) puts a frame over the whole picture; <kbd>Enter</kbd> crops
+to it, <kbd>Esc</kbd> cancels, and undo takes a crop back like any edit.
+The crop is not destructive: the objects outside it are kept (just
+hidden), and opening the frame again shows the whole picture, so it can be
+widened later. It is saved in `annotations.json` as `"crop":[x,y,w,h]`;
+for older builds (0.2, 0.3), which know nothing of it, opaque fills over
+everything outside the crop are written after the objects
+(`"stands_for":"crop"`), so what a crop hides stays hidden there too.
+Every export (Save, Copy, Upload, History's own Copy) is the cropped part. What a crop or a lasso leaves out is blanked before the objects are drawn, so a magnifier (or a blur, an invert) inside never shows it; for older builds a magnifier that reads from outside the crop gets its loupe covered too.
+
 ## Copy text (OCR)
 
 **Copy text** (the toolbar's T-in-a-frame button, <kbd>O</kbd> or
-<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> in the overlay) recognizes
-the text in the selection and copies it as plain text; the notice says
-*Copied text · 3 lines* (or *No text found*).
-<kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> does the same straight from an
-area pick. Lines come top to bottom; small areas are read at twice their
-size. Nothing is bundled or downloaded, and the image never leaves your
-machine:
+<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> in the overlay and the Edit
+window) recognizes the text in the selection and opens **Text mode**: the
+words it found are tinted over the picture (the rest dimmed a little), the
+pointer is an I-beam over them, and you select words as in a document:
+
+| Do | How |
+|---|---|
+| Select a range (in reading order, across lines) | drag from one word to another |
+| Extend the selection | <kbd>Shift</kbd>+click |
+| A word / its line / everything | double-click / triple-click / <kbd>Ctrl</kbd>+<kbd>A</kbd> |
+| Copy the words selected (line breaks kept) | <kbd>Ctrl</kbd>+<kbd>C</kbd>, <kbd>Enter</kbd> or the **Copy** pill by them |
+| Copy everything | <kbd>Ctrl</kbd>+<kbd>C</kbd> with nothing selected (*Copied all text*), or **Copy all** in the bar |
+| Leave Text mode | <kbd>Esc</kbd>, Copy text again, or a tool (then <kbd>Ctrl</kbd>+<kbd>C</kbd> copies the picture) |
+
+The notice says *Copied text · 3 lines* (or *No text found*). Settings ›
+Capture › *Copy text* picks **Copy all at once** instead (the old
+behavior: the overlay closes and the text is copied;
+`copy_text_mode = "all"`). <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd>
+always copies everything straight from an area pick. Text mode reads only
+what the capture keeps (inside a lasso, inside the Edit window's crop);
+text in columns is read column by column.
+
+A **long press** on Copy text opens its menu: *Select text*, *Copy all
+text*, *Redact sensitive text*, and the kinds Quick Redact looks for.
+
+**Quick Redact** (<kbd>Shift</kbd>+<kbd>R</kbd>, or the menu) recognizes
+the selection and covers what looks sensitive: e-mail addresses (Unicode
+ones too), phone numbers (`+` and 7 to 15 digits, or grouped national
+numbers), card numbers (13 to 19 digits that pass the Luhn check),
+IBAN-like account numbers (mod 97), IPv4 addresses, URLs whose query names
+a token, key, secret, signature or session, webhook URLs (Slack, Discord,
+Telegram bots) and token-like path segments, JSON Web Tokens, `Bearer`
+tokens and `Authorization:` headers, `.env` lines whose key names a
+SECRET, TOKEN, KEY, PASS or PWD, the value after `api key:` / `token:`,
+and the whole rest of the line after `password:` or `passphrase:`.
+
+Each find becomes an ordinary object over its words (padded by 3 px or
+15 % of their height, whichever is more), all in one undo step, so you can
+delete or adjust any of them; the notice says *Redacted 3 items* or
+*Nothing sensitive found*. Settings › Capture › *Redact style*:
+
+- **Solid** (the default, `redact_style = "solid"`): an opaque fill in the
+  color around the words (the median of the box's edge), so it blends in.
+  Nothing can be read back from it, and older builds draw it too.
+- **Blur** (`"blur"`): a mosaic whose cells are twice the text's height
+  (each cell averages whole letters across the line), then a blur of one
+  cell on top. It looks softer, but only Solid is a guaranteed redaction.
+
+The menu's checkboxes (Emails, Phone numbers, Card numbers, IDs (IBAN),
+URLs, tokens & passwords, IP addresses) are remembered
+(`redact_kinds = "all"`, or e.g. `"emails,phones"`). In Text mode with
+words selected, Redact (the bar's *Redact selected*) covers exactly those.
+Copy, Save, Upload, Pin and Enter wait while Redact is still reading
+(*Redacting…*), so a capture never goes out without its covers; moving
+the selection meanwhile reads the new area again.
+
+Lines come top to bottom; small areas are read at twice their size.
+Nothing is bundled or downloaded, and the image never leaves your machine:
 
 - **Windows** uses the built-in Windows OCR (`Windows.Media.Ocr`) in your
   profile's languages; add an OCR language under *Settings › Time &
   language › Language & region* if the notice says none is installed.
 - **macOS** uses Vision's text recognition.
 - **Linux** runs `tesseract` when it is on `PATH` (e.g. `apt install
-  tesseract-ocr`).
+  tesseract-ocr`); Text mode and Redact read its `tsv` output for the
+  words' boxes.
 
 ## Recording
 

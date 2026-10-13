@@ -7,14 +7,17 @@ pub mod blur;
 pub mod callout;
 pub mod edit;
 #[cfg(test)]
-mod v020;
+pub(crate) mod v020;
+#[cfg(test)]
+pub(crate) mod v030;
 // The History / Edit window reads and writes annotations.json next.
 #[allow(dead_code)]
 pub mod json;
+pub mod mask;
 
 pub use callout::Style as CalloutStyle;
 #[allow(unused_imports)]
-pub use json::{from_json, to_json};
+pub use json::{from_json, from_json_doc, to_json, to_json_doc, Doc};
 
 use crate::text::AnnotFont;
 pub use crate::text::TextFmt;

@@ -34,6 +34,7 @@ mod mini;
 mod select;
 mod input;
 mod assist;
+mod snip;
 mod trim_sel;
 pub use assist::AcceptOn;
 // The editor in a normal window: the Edit window's canvas.
@@ -510,6 +511,8 @@ struct HistShot {
     app: String,
     monitor: String,
     scale: f32,
+    /// The freeform selection's lasso (`original`'s pixels).
+    mask: Option<Vec<Pt>>,
 }
 
 /// Whether an export with `tasks` is a capture the history keeps: a
@@ -630,6 +633,13 @@ impl App {
         }
         self.poll_upload();
         self.poll_ocr();
+        // Text mode's words or Quick Redact's finds arrived.
+        // (An export queued behind Redact may finish the capture.)
+        let mut snipped = false;
+        self.edit_tx(|_, e| snipped = e.poll_snip());
+        if snipped {
+            self.repaint();
+        }
         self.poll_delay();
         if let Some(rx) = &self.updates {
             while let Ok(r) = rx.try_recv() {
@@ -1505,6 +1515,7 @@ impl App {
                     app: edit.source.1.clone(),
                     monitor: crate::history::source::monitor_text(&name, edit.shot.scale),
                     scale: edit.shot.scale,
+                    mask: None,
                 })
             });
             wind::hide(self.hwnd);
@@ -1551,7 +1562,8 @@ impl App {
         });
         #[cfg(windows)]
         crate::memlog("overlay");
-        let img = edit.export(sel);
+        // A lasso: transparent outside it (white in a JPG or BMP).
+        let img = edit.cut_export(sel);
         let g = (
             (sel.x.round() as i32) + edit.shot.origin.0,
             (sel.y.round() as i32) + edit.shot.origin.1,
@@ -1579,6 +1591,7 @@ impl App {
                 app: edit.source.1.clone(),
                 monitor: crate::history::source::monitor_text(&name, edit.shot.scale),
                 scale: edit.shot.scale,
+                mask: edit.mask_in(sel),
             })
         });
         // Settings › Capture "Add a border": around what is exported
@@ -1611,6 +1624,7 @@ impl App {
             app: h.app,
             monitor: h.monitor,
             scale: h.scale,
+            mask: h.mask,
             saved,
             ..Default::default()
         };
@@ -1947,6 +1961,9 @@ impl Driver for App {
             return Cursor::IBeam;
         }
         let p = Pt::new(self.mouse.0 as f32, self.mouse.1 as f32);
+        if let Some(c) = edit.snip_cursor(p) {
+            return c;
+        }
         if edit.on_label(p) && matches!(edit.interact, Interact::None) {
             return Cursor::Arrow;
         }
@@ -2162,6 +2179,9 @@ fn act_of(a: Action) -> Option<Act> {
         Action::TextBold => Act::ObjBold,
         Action::TextItalic => Act::ObjItalic,
         Action::TextUnderline => Act::ObjUnderline,
+        Action::ToolCrop => Act::Crop,
+        Action::Redact => Act::Redact,
+        Action::SelectFreeform => Act::Freeform,
         Action::DeleteObject => Act::ObjDelete,
         Action::Duplicate => Act::ObjDup,
         Action::BringFront => Act::ObjFront,
@@ -2295,6 +2315,8 @@ enum Interact {
         cur: Pt,
         base: Vec<usize>,
     },
+    /// A drag of the crop frame or of Text mode's selection (`snip`).
+    Snip,
 }
 
 /// The Record popover in the overlay.
@@ -2799,6 +2821,8 @@ struct Edit {
     host: Option<host::Host>,
     /// The magnifier, color ring, accept on select and hint card.
     assist: assist::Assist,
+    /// Text mode, Quick Redact, the lasso and the crop frame.
+    snip: snip::Snip,
 }
 
 /// More merged dirty rects than this invalidate the whole window (a
@@ -2818,6 +2842,7 @@ impl Edit {
     fn new(shot: Shot, base: PixBuf, cfg: Config, th: Theme, font: Option<AnnotFont>, ui_font: Option<&'static UiFont>, rec: RecPop) -> Edit {
         let style = crate::objects::CalloutStyle::from_id(&cfg.callout_style).unwrap_or_default();
         let assist = assist::Assist::new(&cfg, Instant::now());
+        let snip = snip::Snip { freeform: cfg.selection_mode.trim() == "freeform", crop_hist: vec![None], ..Default::default() };
         Edit {
             mo: Motion::new(Instant::now()),
             shot,
@@ -2880,6 +2905,7 @@ impl Edit {
             source: Default::default(),
             host: None,
             assist,
+            snip,
         }
     }
 
@@ -2917,7 +2943,8 @@ impl Edit {
                 o
             })
             .collect();
-        (self.export_plain(sel), objs)
+        // A lasso cuts the original too: what it left out is never kept.
+        (self.masked(self.export_plain(sel), sel), objs)
     }
 
     /// The area the spotlights dim: the selection, on whole pixels.
@@ -3006,6 +3033,11 @@ impl Edit {
     fn push_history(&mut self) {
         self.hist.truncate(self.hi + 1);
         self.hist.push(self.objects.clone());
+        // The Edit window's crop steps with the objects.
+        let crop = self.snip.crop;
+        let ch = &mut self.snip.crop_hist;
+        ch.resize(self.hi + 1, crop);
+        ch.push(crop);
         self.sel_hist.resize(self.hi + 1, None);
         self.sel_hist.push(None);
         self.hi = self.hist.len() - 1;
@@ -3013,6 +3045,7 @@ impl Edit {
         if self.hist.len() > limit {
             let excess = self.hist.len() - limit;
             self.hist.drain(0..excess);
+            self.snip.crop_hist.drain(0..excess.min(self.snip.crop_hist.len()));
             self.sel_hist.drain(0..excess.min(self.sel_hist.len()));
             self.hi -= excess;
         }
@@ -3021,10 +3054,13 @@ impl Edit {
     fn undo(&mut self) {
         if self.hi > 0 {
             if let Some(Some((before, _))) = self.sel_hist.get(self.hi) {
+                let was = self.sel;
                 self.sel = *before;
+                self.rebind_mask(was);
             }
             self.hi -= 1;
             self.objects = self.hist[self.hi].clone();
+            self.snip.crop = self.snip.crop_hist.get(self.hi).copied().flatten();
             self.dirty = true;
         }
     }
@@ -3033,9 +3069,12 @@ impl Edit {
         if self.hi + 1 < self.hist.len() {
             self.hi += 1;
             if let Some(Some((_, after))) = self.sel_hist.get(self.hi) {
+                let was = self.sel;
                 self.sel = Some(*after);
+                self.rebind_mask(was);
             }
             self.objects = self.hist[self.hi].clone();
+            self.snip.crop = self.snip.crop_hist.get(self.hi).copied().flatten();
             self.dirty = true;
         }
     }
@@ -3463,6 +3502,18 @@ fn end_interaction(edit: &mut Edit) {
             edit.obj_release(it);
         }
         Interact::NewSel { moved, .. } => {
+            // A lasso let go: its box is the selection (too small: none).
+            if edit.snip.freeform && moved {
+                if edit.finish_lasso() {
+                    edit.rec.source = rec_ui::RecSource::Region;
+                    if edit.accept_on_select {
+                        edit.done = true;
+                        edit.cancelled = false;
+                    }
+                }
+                return;
+            }
+            edit.snip.lasso.clear();
             // A window clicked (or a region drawn): accept on select may
             // take it; a plain click that selects everything does not.
             let mut window = moved;
@@ -3492,10 +3543,12 @@ fn end_interaction(edit: &mut Edit) {
         }
         // A window's or a monitor's area moved or resized: a region now.
         Interact::MoveSel { orig, .. } | Interact::Resize { orig, .. } => {
+            edit.snip.mask_drag = None;
             if edit.sel != Some(orig) {
                 edit.rec.source = rec_ui::RecSource::Region;
             }
         }
+        Interact::Snip => edit.snip_release(),
         Interact::Pick(_) | Interact::None => {}
     }
 }
@@ -3663,7 +3716,7 @@ fn animating(edit: &Edit, app_notice: Option<&Toast>, now: Instant) -> bool {
     let tip_pending = edit.hover.is_some() && now.saturating_duration_since(edit.hover_at) < Duration::from_millis(500);
     let toast_moving = edit.notice.as_ref().or(app_notice).is_some_and(|t| t.animating(now));
     // The Camera row says "Looking for cameras…" until the list comes.
-    edit.mo.active(now) || tip_pending || toast_moving || edit.rec.cams_looking() || edit.guides_fading(now) || edit.assist.hint_due(now) || edit.slot_hold.is_some()
+    edit.mo.active(now) || tip_pending || toast_moving || edit.rec.cams_looking() || edit.guides_fading(now) || edit.assist.hint_due(now) || edit.slot_hold.is_some() || edit.snip_busy()
 }
 
 /// The last frame no longer matches: something animates (or did when it
@@ -3867,6 +3920,8 @@ mod ocr_tests;
 mod pin_tests;
 #[cfg(test)]
 mod history_tests;
+#[cfg(test)]
+mod snip_tests;
 #[cfg(test)]
 mod trim_tests;
 

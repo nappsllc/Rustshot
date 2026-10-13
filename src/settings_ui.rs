@@ -76,6 +76,12 @@ const RENDERERS: [(&str, &str); 2] = [("GDI", "gdi"), ("Software", "software")];
 const FORMATS: [(&str, &str); 3] = [("PNG", "png"), ("JPG", "jpg"), ("BMP", "bmp")];
 /// Capture › Accept on select (`accept_on_select`).
 pub const ACCEPTS: [(&str, &str); 3] = [("Off", "off"), ("Copy", "copy"), ("Save", "save")];
+/// Capture › Copy text (copy_text_mode): the overlay's button copies all,
+/// or opens Text mode to pick words (the hotkey always copies all).
+pub const COPY_TEXT: [(&str, &str); 2] = [("Copy all at once", "all"), ("Let me select", "select")];
+/// Capture › Redact style (`redact_style`): an opaque fill, or a mosaic
+/// under a blur.
+pub const REDACT_STYLES: [(&str, &str); 2] = [("Solid", "solid"), ("Blur", "blur")];
 /// Capture › HDR screenshots (`hdr_screenshots`; Windows).
 pub const HDR_MODES: [(&str, &str); 2] = [("Tone-map to SDR", "tonemap"), ("Keep as captured", "keep")];
 /// Capture › Add a border: the width a new border starts at (logical px).
@@ -275,6 +281,10 @@ pub struct Form {
     pub magnifier_square: bool,
     pub accept: usize,
     pub hints: bool,
+    /// Capture › Overlay: the Copy text button ([COPY_TEXT] index).
+    pub copy_text: usize,
+    /// Capture › Overlay: Quick Redact's style ([`REDACT_STYLES`] index).
+    pub redact_style: usize,
     /// Capture › Image: trim margins of new selections (`trim_margins`),
     /// the export border (on, its width 1-8 and color: `border_width`,
     /// `border_color`), HDR screenshots ([`HDR_MODES`] index).
@@ -326,6 +336,8 @@ impl Form {
             magnifier_square: cfg.magnifier_square,
             accept: ACCEPTS.iter().position(|a| cfg.accept_on_select.trim().eq_ignore_ascii_case(a.1)).unwrap_or(0),
             hints: cfg.overlay_hints,
+            copy_text: COPY_TEXT.iter().position(|a| cfg.copy_text_mode.trim() == a.1).unwrap_or(1),
+            redact_style: REDACT_STYLES.iter().position(|a| cfg.redact_style.trim() == a.1).unwrap_or(0),
             trim: cfg.trim_margins,
             border: cfg.border_width > 0,
             border_w: if cfg.border_width > 0 { cfg.border_width.min(config::BORDER_MAX) as u8 } else { BORDER_DEFAULT },
@@ -467,6 +479,12 @@ impl Form {
         }
         if self.hints != was.hints {
             c.overlay_hints = self.hints;
+        }
+        if self.copy_text != was.copy_text && let Some(a) = COPY_TEXT.get(self.copy_text) {
+            c.copy_text_mode = a.1.into();
+        }
+        if self.redact_style != was.redact_style && let Some(a) = REDACT_STYLES.get(self.redact_style) {
+            c.redact_style = a.1.into();
         }
         if self.trim != was.trim {
             c.trim_margins = self.trim;

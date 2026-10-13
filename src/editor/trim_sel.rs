@@ -55,6 +55,8 @@ impl Edit {
         };
         let old = self.sel;
         self.sel = Some(new);
+        // A lasso stays (it is in the capture's pixels; the export cuts it).
+        self.rebind_mask(old);
         // A window's area cut down is a region now.
         self.rec.source = rec_ui::RecSource::Region;
         self.obj.coalesce = None;

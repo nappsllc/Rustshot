@@ -94,6 +94,12 @@ launcher_source = "region"        # "region", "screen" or "window"
 launcher_delay = 0                # seconds (0-60)
 launcher_after = "edit"           # "edit", "copy", "save" or "pin"
 
+# Copy text, Quick Redact, selection (remembered choices)
+copy_text_mode = "select"         # the Copy text button: "select" (pick words) or "all"
+redact_kinds = "all"              # or a list: "emails,phones,cards,ids,urls,ips"
+redact_style = "solid"            # Quick Redact: "solid" (opaque fill) or "blur" (mosaic + blur)
+selection_mode = "rect"           # the last selection mode: "rect" or "freeform"
+
 # History
 history = true                    # keep a history of captures (History, Edit)
 history_days = 30                 # entries older than this go
@@ -188,9 +194,9 @@ The action ids:
 
 | Group | Actions |
 |---|---|
-| Tools | `tool_select`, `tool_pencil`, `tool_line`, `tool_arrow`, `tool_rectangle`, `tool_circle`, `tool_marker`, `tool_text`, `tool_callout`, `tool_counter`, `tool_pixelate`, `tool_invert`, `tool_spotlight`, `tool_magnify`, `tool_blur`, `size_down`, `size_up` |
-| Output | `copy`, `copy_text`, `copy_color`, `save`, `save_as`, `save_desktop`, `open_with`, `share`, `upload`, `pin` |
-| Selection | `trim` (Trim to content, <kbd>Shift</kbd>+<kbd>A</kbd>) |
+| Tools | `tool_select`, `tool_pencil`, `tool_line`, `tool_arrow`, `tool_rectangle`, `tool_circle`, `tool_marker`, `tool_text`, `tool_callout`, `tool_counter`, `tool_pixelate`, `tool_invert`, `tool_spotlight`, `tool_magnify`, `tool_blur`, `tool_crop`, `size_down`, `size_up` |
+| Output | `copy`, `copy_text`, `redact`, `copy_color`, `save`, `save_as`, `save_desktop`, `open_with`, `share`, `upload`, `pin` |
+| Selection | `trim` (Trim to content, <kbd>Shift</kbd>+<kbd>A</kbd>), `select_freeform` |
 | Editing | `undo`, `redo`, `select_all`, `toggle_palette`, `accept`, `cancel`, `record` |
 | UI size | `ui_bigger`, `ui_smaller`, `ui_reset` |
 | Selected objects | `delete_object`, `duplicate`, `bring_front`, `send_back` |

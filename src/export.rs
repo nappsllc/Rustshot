@@ -150,8 +150,9 @@ pub fn with_border(img: PixBuf, cfg: &Config, scale: f32) -> PixBuf {
 pub fn encode(img: &PixBuf, fmt: Format, quality: u8) -> Result<Vec<u8>> {
     match fmt {
         Format::Png => img.to_png(),
-        Format::Jpeg => jpeg_bytes(img, quality),
-        Format::Bmp => bmp_bytes(img),
+        // Transparent parts (a freeform capture's outside) are white.
+        Format::Jpeg => jpeg_bytes(&crate::objects::mask::flatten_white(img), quality),
+        Format::Bmp => bmp_bytes(&crate::objects::mask::flatten_white(img)),
     }
 }
 

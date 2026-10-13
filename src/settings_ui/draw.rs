@@ -733,6 +733,12 @@ fn capture(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) 
     srow(ui, tok, "Accept on select", Some("Copy or save as soon as a region is drawn; hold Alt to adjust"), |ui| {
         ui.seg("accept_on_select", &labels(&ACCEPTS), &mut f.accept, tok);
     });
+    srow(ui, tok, "Copy text", Some("The toolbar's Copy text button; the Copy text hotkey always copies all"), |ui| {
+        ui.seg("copy_text_mode", &labels(&COPY_TEXT), &mut f.copy_text, tok);
+    });
+    srow(ui, tok, "Redact style", Some("What Quick Redact puts over sensitive text; Solid can never be read back"), |ui| {
+        ui.seg("redact_style", &labels(&REDACT_STYLES), &mut f.redact_style, tok);
+    });
     if let Some(on) = f.screenclip.as_mut() {
         srow_ex(ui, tok, "Use Win+Shift+S and Print Screen", Some(SCREENCLIP_HELP), false, ROW_H, |ui| {
             ui.switch("screenclip", on, tok);
@@ -826,7 +832,7 @@ fn wayland() -> bool {
 }
 
 /// The overlay rows of Key bindings: (label, actions).
-pub const KEY_ROWS: [(&str, &[Action]); 16] = [
+pub const KEY_ROWS: [(&str, &[Action]); 17] = [
     (
         "Tools",
         &[
@@ -855,6 +861,7 @@ pub const KEY_ROWS: [(&str, &[Action]); 16] = [
     ("Typing: bold \u{b7} italic \u{b7} underline", &[Action::TextBold, Action::TextItalic, Action::TextUnderline]),
     ("Copy \u{b7} Save \u{b7} Upload", &[Action::Copy, Action::Save, Action::Upload]),
     ("Copy text \u{b7} Copy color", &[Action::CopyText, Action::CopyColor]),
+    ("Crop \u{b7} Quick Redact \u{b7} Freeform selection", &[Action::ToolCrop, Action::Redact, Action::SelectFreeform]),
     ("Accept \u{b7} Cancel", &[Action::Accept, Action::Cancel]),
     SAVE_ROW,
     ("Undo \u{b7} Redo", &[Action::Undo, Action::Redo]),
