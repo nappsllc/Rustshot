@@ -64,6 +64,18 @@ When the overlay opens, a card shows the main keys (as remapped) for three
 seconds or until the pointer moves or a key is pressed (*Show hints in the
 overlay*, `overlay_hints`).
 
+**Trim to content** (<kbd>Shift</kbd>+<kbd>A</kbd>, or click the `W × H`
+readout above the selection and pick *Trim to content*) tightens the
+selection to what is in it: each edge moves inward while its row or column
+is the edge's color (within 6 levels per channel, for at least 98 % of its
+pixels, so JPEG noise and a stray pixel still count as margin), and 2 px of
+the margin are kept. A selection whose own edges are not uniform (a window
+with its title bar) tries the window's client area inside it instead
+(Windows). Annotations are ignored; <kbd>Ctrl</kbd>+<kbd>Z</kbd> puts the
+selection back. *Trim margins automatically* (Settings › Capture,
+`trim_margins = true`) trims every new region or window as you select it
+(not a click that selects the whole screen).
+
 ## Annotating
 
 The tools: select (<kbd>V</kbd>), pencil (<kbd>P</kbd>), line
@@ -121,6 +133,12 @@ with that folder and name; the format follows the extension you pick), and
 *Ask where to save* makes <kbd>Ctrl</kbd>+<kbd>S</kbd> ask too. The
 clipboard and uploads stay PNG. With *Copy to clipboard after capture* on,
 a save (or an upload) also copies the image.
+
+**Add a border** (Settings › Capture, `border_width` 1-8 logical px and
+`border_color`): a frame of that color around every exported image (copy,
+save, upload, pin, Open with, and the same from History and the Edit
+window), outside the capture so nothing is covered; the overlay previews it
+as a band around the selection. The History keeps the capture without it.
 
 The folder, subfolder pattern, file-name pattern, format and JPEG quality
 (1-100, default 90) are in Settings › General and Settings › Capture; the
@@ -378,8 +396,9 @@ on the left picks the section:
   quality, the file-name pattern editor, the overlay's UI size (Auto
   follows each display's scaling; 75-200 % on top of it), *Snap to
   windows*, the magnifier, *Accept on select*, *Use Win+Shift+S and Print
-  Screen* (Windows), the renderer (Windows), History limits and *Reset tool
-  sizes & colors*.
+  Screen* (Windows), the renderer (Windows), *Reset tool sizes & colors*,
+  then *Image*: *Trim margins automatically*, *Add a border* (width and
+  color) and *HDR screenshots* (Windows), and the History limits.
 - **Recording:** video mode's defaults (format, frame rate, quality, GIF
   length, countdown, sound, microphone, camera bubble); on Linux also the
   MP4 encoder.
@@ -426,6 +445,15 @@ GitHub account or release; builds are not code-signed yet.
 - **Windows 10/11:** everything in this guide. The overlay paints with GDI
   by default (`renderer = "gdi"`), which repaints only the pixels that
   changed and keeps memory low; `renderer = "software"` is the fallback.
+- **HDR displays (Windows):** a monitor in HDR is read as FP16 (scRGB)
+  through Desktop Duplication and tone-mapped to SDR: the SDR content
+  brightness (Settings › Display) becomes white, highlights brighter than
+  that are rolled off smoothly toward white, then the sRGB curve. A capture
+  with nothing brighter than SDR white comes out as it looks. Recordings do
+  the same on the CPU (MP4s of an HDR display convert to NV12 on the CPU
+  too). *HDR screenshots: Keep as captured* (`hdr_screenshots = "keep"`)
+  turns it off. SDR monitors are never affected; Linux and macOS hand over
+  SDR pixels, so there is nothing to do there.
 - **Linux:** X11 sessions get every feature. In a Wayland session the
   overlay runs through XWayland and the screen comes from the
   xdg-desktop-portal (Screenshot and ScreenCast); window snapping is off
