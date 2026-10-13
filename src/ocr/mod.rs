@@ -317,19 +317,18 @@ pub fn line_count(text: &str) -> usize {
 /// or why it failed.
 pub fn note(res: &Result<String, OcrError>, copied: Result<(), String>) -> Note {
     match res {
-        Ok(t) if t.trim().is_empty() => Note::plain("No text found", ToastKind::Info),
+        Ok(t) if t.trim().is_empty() => Note::plain(tr!("editor.ocr.no_text"), ToastKind::Info),
         Ok(t) => match copied {
             Ok(()) => {
                 let n = line_count(t);
-                let lines = if n == 1 { "1 line".to_string() } else { format!("{n} lines") };
-                Note::plain(format!("Copied text \u{b7} {lines}"), ToastKind::Success)
+                Note::plain(trn!("ocr.copied", n), ToastKind::Success)
             }
-            Err(e) => Note::plain(format!("Copy failed: {e}"), ToastKind::Error),
+            Err(e) => Note::plain(tr!("ocr.copy_failed", e), ToastKind::Error),
         },
-        Err(OcrError::NoTesseract) => Note::plain("Install tesseract for text recognition", ToastKind::Error),
-        Err(OcrError::TimedOut) => Note::plain("Text recognition timed out", ToastKind::Error),
-        Err(OcrError::NoLanguage) => Note::plain("No text recognition language is installed", ToastKind::Error),
-        Err(OcrError::Failed(e)) => Note::plain(format!("Text recognition failed: {e}"), ToastKind::Error),
+        Err(OcrError::NoTesseract) => Note::plain(tr!("ocr.no_tesseract"), ToastKind::Error),
+        Err(OcrError::TimedOut) => Note::plain(tr!("ocr.timed_out"), ToastKind::Error),
+        Err(OcrError::NoLanguage) => Note::plain(tr!("ocr.no_language"), ToastKind::Error),
+        Err(OcrError::Failed(e)) => Note::plain(tr!("ocr.failed", e), ToastKind::Error),
     }
 }
 

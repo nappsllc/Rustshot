@@ -1451,7 +1451,7 @@ fn gif_mode_rows_frame_rate_and_max_length() {
     let tb = ed(&mut a).toolbar.clone().unwrap();
     for act in [Act::RecMic, Act::RecSystem] {
         let row = tb.items.iter().find(|i| matches!(i.kind, toolbar::Kind::Row { act: x, .. } if x == act)).unwrap();
-        assert!(row.disabled && matches!(row.kind, toolbar::Kind::Row { value: Some(rec_ui::NOT_IN_GIF), dim: true, .. }), "{act:?}");
+        assert!(row.disabled && matches!(row.kind, toolbar::Kind::Row { value: Some(v), dim: true, .. } if v == rec_ui::NOT_IN_GIF.get()), "{act:?}");
         let sw = tb.items.iter().find(|i| matches!(i.kind, toolbar::Kind::Switch { act: x, .. } if x == act)).unwrap();
         assert!(sw.disabled && tb.act_at(Pt::new(sw.r.x + 10.0, sw.r.y + 10.0)).is_none());
     }
@@ -1589,13 +1589,13 @@ fn record_panel_without_a_camera() {
     click(&mut a, cx, cy);
     assert!(ed(&mut a).rec.cam.shown.is_none());
     let row = tb.items.iter().find(|i| matches!(i.kind, toolbar::Kind::Row { act: Act::RecCamera, .. })).unwrap();
-    assert!(matches!(row.kind, toolbar::Kind::Row { value: Some(crate::cam::NO_CAMERA), .. }), "the row says so");
+    assert!(matches!(row.kind, toolbar::Kind::Row { value: Some(v), .. } if v == crate::cam::NO_CAMERA.get()), "the row says so");
     mv(&mut a, cx, cy);
     ed(&mut a).hover_at = Instant::now() - Duration::from_secs(2);
     let m = a.mouse;
     ed(&mut a).prepare(None, m, Instant::now());
     let tip = ed(&mut a).scene.as_ref().and_then(|s| s.tip.as_ref()).map(|t| (t.label, t.below));
-    assert_eq!(tip, Some((crate::cam::NO_CAMERA, true)));
+    assert_eq!(tip, Some((crate::cam::NO_CAMERA.get(), true)));
     rec_ui::FAKE_CAMS.with(|c| *c.borrow_mut() = rec_ui::fake_cams());
 }
 
@@ -1708,7 +1708,7 @@ fn record_panel_bubble_scroll_drag_and_handover() {
 #[test]
 fn record_panel_camera_error_is_a_toast() {
     let mut a = app(Some(r(100.0, 100.0, 600.0, 400.0)));
-    fake_camera(&mut a, Some(crate::cam::ACCESS_OFF));
+    fake_camera(&mut a, Some(crate::cam::ACCESS_OFF.get()));
     key(&mut a, '2' as u32);
     let (cx, cy) = item(&mut a, |k| matches!(k, toolbar::Kind::Switch { act: Act::RecCamera, .. }));
     click(&mut a, cx, cy);
@@ -1720,7 +1720,7 @@ fn record_panel_camera_error_is_a_toast() {
     let e = ed(&mut a);
     assert!(!e.rec.opts.camera, "the camera is switched off");
     assert!(e.rec.cam.bubble.is_none() && e.rec.cam.shown.is_none());
-    assert_eq!(e.notice.as_ref().map(|n| n.text.as_str()), Some(crate::cam::ACCESS_OFF));
+    assert_eq!(e.notice.as_ref().map(|n| n.text.as_str()), Some(crate::cam::ACCESS_OFF.get()));
 }
 
 /// Enter in record mode after leaving video mode, with no countdown and

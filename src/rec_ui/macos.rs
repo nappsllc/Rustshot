@@ -193,19 +193,19 @@ fn prepare(spec: &RecSpec, mic_flags: MicFlags, keep: &[u32]) -> Result<Parts> {
     let mut late: Vec<super::worker::Late> = Vec::new();
     match opened.audio {
         Some(Ok(a)) => {
-            late.push(dropped_note("system sound", a.feed.clone()));
+            late.push(dropped_note(key!("rec.what.system_sound"), a.feed.clone()));
             audio.push(Box::new(mic_flags.system(a)));
         }
-        Some(Err(e)) => warnings.push(format!("system sound not recorded: {e}")),
+        Some(Err(e)) => warnings.push(tr!("rec.warn.system_sound", e)),
         None => {}
     }
     if mp4 && let Some(id) = &spec.mic {
         match mic::open(id) {
             Ok(a) => {
-                late.push(dropped_note("microphone", a.feed.clone()));
+                late.push(dropped_note(key!("rec.what.microphone"), a.feed.clone()));
                 audio.push(Box::new(mic_flags.opened(a)));
             }
-            Err(e) => warnings.push(format!("microphone not recorded: {e:#}")),
+            Err(e) => warnings.push(tr!("rec.warn.mic", e = format!("{e:#}"))),
         }
     }
     for w in &warnings {
@@ -221,8 +221,8 @@ fn prepare(spec: &RecSpec, mic_flags: MicFlags, keep: &[u32]) -> Result<Parts> {
 
 /// Said with the saved file when some of `what`'s sound was dropped
 /// (unreadable buffers, unusable timestamps).
-fn dropped_note(what: &'static str, feed: std::sync::Arc<crate::rec::macos::media::PcmFeed>) -> super::worker::Late {
-    Box::new(move || feed.problem().map(|e| format!("{what} partly not recorded: {e}")))
+fn dropped_note(what: crate::i18n::Key, feed: std::sync::Arc<crate::rec::macos::media::PcmFeed>) -> super::worker::Late {
+    Box::new(move || feed.problem().map(|e| tr!("rec.warn.partly", what = what.get(), e)))
 }
 
 /// The windows and the worker of one recording.
@@ -267,7 +267,7 @@ impl Recorder {
             // A camera that stopped meanwhile is said with the file.
             Ok(e) => Some(super::with_camera_error(e, self.bubble.as_ref().and_then(|b| b.error()))),
             Err(mpsc::TryRecvError::Empty) => None,
-            Err(mpsc::TryRecvError::Disconnected) => Some(End::Failed("the recording thread stopped".into())),
+            Err(mpsc::TryRecvError::Disconnected) => Some(End::Failed(tr!("rec.thread_stopped").into())),
         }
     }
 

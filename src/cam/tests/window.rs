@@ -144,7 +144,7 @@ fn bubble_says_why_the_camera_failed() {
     let b = Bubble::show_with(M, "", (0, 0, 800, 600), 1.0, &DARK, HWND::default(), open).unwrap();
     let h = b.hwnd();
     pump(300);
-    assert_eq!(b.error().as_deref(), Some(ACCESS_OFF));
+    assert_eq!(b.error().as_deref(), Some(ACCESS_OFF.get()));
     assert!(!unsafe { IsWindowVisible(h) }.as_bool(), "hidden once the camera failed");
     drop(b);
     assert!(!unsafe { IsWindow(Some(h)) }.as_bool());

@@ -200,7 +200,7 @@ pub fn layout(inp: &Input, rv: &RecView) -> Toolbar {
     // Camera: the device, on/off.
     let cam_on = rv.camera && rv.cams;
     let cam_label = if rv.cams_looking { LOOKING_CAMS.get() } else { tr!("tip.camera") };
-    let cam_value = if rv.cams_looking { Some("") } else if rv.cams { None } else { Some(crate::cam::NO_CAMERA) };
+    let cam_value = if rv.cams_looking { Some("") } else if rv.cams { None } else { Some(crate::cam::NO_CAMERA.get()) };
     row(&mut local, y, Act::RecCamera, "video", cam_label, cam_value, rv.cams.then_some(Dev::Cam), cam_on, !rv.cams, false);
     let cam_row = row_r(y);
     y += ROW_H + GAP;
@@ -219,12 +219,12 @@ pub fn layout(inp: &Input, rv: &RecView) -> Toolbar {
     }
     // Microphone (MP4 only): the device and its level, on/off.
     let mic_on = mp4 && rv.mic;
-    let (mic_icon, mic_value) = if mp4 { ("mic", None) } else { ("mic-off", Some(crate::rec_ui::NOT_IN_GIF)) };
+    let (mic_icon, mic_value) = if mp4 { ("mic", None) } else { ("mic-off", Some(crate::rec_ui::NOT_IN_GIF.get())) };
     row(&mut local, y, Act::RecMic, mic_icon, tr!("tip.microphone"), mic_value, mp4.then_some(Dev::Mic), mic_on, !mp4, mic_on && rv.meter.is_some());
     y += ROW_H + GAP;
     // System audio (MP4 only).
     let sys_on = mp4 && rv.system;
-    let sys_value = if !mp4 { crate::rec_ui::NOT_IN_GIF } else if sys_on { tr!("rec.panel.on") } else { tr!("rec.panel.off") };
+    let sys_value = if !mp4 { crate::rec_ui::NOT_IN_GIF.get() } else if sys_on { tr!("rec.panel.on") } else { tr!("rec.panel.off") };
     row(&mut local, y, Act::RecSystem, "volume", tr!("rec.panel.system_audio"), Some(sys_value), None, sys_on, !mp4, false);
     y += ROW_H + GAP;
     local.push(Item { kind: Kind::SepH, r: FRect { x: x0 + 4.0, y, w: inner - 8.0, h: 1.0 }, disabled: false });
@@ -545,7 +545,7 @@ mod tests {
         assert!(inside_panel(&tb));
         for act in [Act::RecMic, Act::RecSystem] {
             let row = find(&tb, |k| matches!(k, Kind::Row { act: a, .. } if *a == act));
-            assert!(row.disabled && matches!(row.kind, Kind::Row { value: Some(crate::rec_ui::NOT_IN_GIF), dim: true, .. }));
+            assert!(row.disabled && matches!(row.kind, Kind::Row { value: Some(v), dim: true, .. } if v == crate::rec_ui::NOT_IN_GIF.get()));
             assert_eq!(tb.act_at(centre(row.r)), None);
         }
         assert!(!tb.items.iter().any(|i| matches!(i.kind, Kind::Meter { .. } | Kind::DevBox { dev: Dev::Mic, .. })));

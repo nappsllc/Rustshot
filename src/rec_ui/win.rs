@@ -437,13 +437,13 @@ fn prepare(spec: &RecSpec, mic: MicFlags) -> Result<Parts> {
         if spec.system_audio {
             match WasapiLoopback::open() {
                 Ok(a) => audio.push(Box::new(mic.system(a))),
-                Err(e) => warnings.push(format!("system sound not recorded: {e:#}")),
+                Err(e) => warnings.push(tr!("rec.warn.system_sound", e = format!("{e:#}"))),
             }
         }
         if let Some(id) = &spec.mic {
             match WasapiCapture::open(Some(id)) {
                 Ok(a) => audio.push(Box::new(mic.opened(a))),
-                Err(e) => warnings.push(format!("microphone not recorded: {e:#}")),
+                Err(e) => warnings.push(tr!("rec.warn.mic", e = format!("{e:#}"))),
             }
         }
     }
@@ -519,7 +519,7 @@ impl Recorder {
             // A camera that stopped meanwhile is said with the file.
             Ok(e) => Some(super::with_camera_error(e, self.bubble.as_ref().and_then(|b| b.error()))),
             Err(mpsc::TryRecvError::Empty) => None,
-            Err(mpsc::TryRecvError::Disconnected) => Some(End::Failed("the recording thread stopped".into())),
+            Err(mpsc::TryRecvError::Disconnected) => Some(End::Failed(tr!("rec.thread_stopped").into())),
         }
     }
 

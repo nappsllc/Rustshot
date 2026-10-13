@@ -66,7 +66,7 @@ impl MacCam {
     /// Camera `id` ("" = the default one), at `pref` when it offers it.
     pub fn open(id: &str, pref: (u32, u32)) -> Result<MacCam> {
         let m = media::media()?;
-        media::av_access(m.k.AVMediaTypeVideo, crate::rec::macos::CAMERA_DENIED)?;
+        media::av_access(m.k.AVMediaTypeVideo, crate::rec::macos::CAMERA_DENIED.get())?;
         let _pool = objc::Pool::new();
         unsafe {
             let dev = media::device(m.k.AVMediaTypeVideo, id)

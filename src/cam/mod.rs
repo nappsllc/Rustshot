@@ -70,11 +70,11 @@ pub const PORTAL_CAM: &str = "portal";
 /// The capture size asked for first.
 pub const PREF: (u32, u32) = (1280, 720);
 /// The Camera row's tooltip when there is none.
-pub const NO_CAMERA: &str = "No camera found";
-pub const MJPG_ONLY: &str = "This camera only offers MJPG, which Rustshot doesn't support yet";
+pub const NO_CAMERA: crate::i18n::Key = key!("settings.camera.no_camera");
+pub const MJPG_ONLY: crate::i18n::Key = key!("cam.mjpg_only");
 #[cfg_attr(not(windows), allow(dead_code))]
-pub const ACCESS_OFF: &str = "Camera access is off in Windows Settings › Privacy › Camera";
-pub const NO_FORMAT: &str = "This camera offers no picture format Rustshot supports";
+pub const ACCESS_OFF: crate::i18n::Key = key!("cam.access_off");
+pub const NO_FORMAT: crate::i18n::Key = key!("cam.no_format");
 
 /// A camera: its id (Windows: the symbolic link) and friendly name.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -138,7 +138,7 @@ fn linux_list() -> Vec<CamDevice> {
     use crate::rec::linux::portal;
     if portal::needs_portal_now() {
         match portal_camera() {
-            Some(true) => return vec![CamDevice { id: PORTAL_CAM.into(), name: "Camera".into() }],
+            Some(true) => return vec![CamDevice { id: PORTAL_CAM.into(), name: tr!("tip.camera").into() }],
             Some(false) => return Vec::new(),
             // No /dev access in Flatpak without the portal.
             None if portal::in_flatpak() => return Vec::new(),
@@ -471,7 +471,7 @@ pub const INSET: f32 = 24.0;
 /// The bubble's opacity while it is dragged (what is under it shows).
 pub const DRAG_OPACITY: f32 = 0.4;
 /// The grip hint under the bubble while the Record panel is open.
-pub const GRIP_HINT: &str = "Drag \u{b7} scroll to resize";
+pub const GRIP_HINT: crate::i18n::Key = key!("cam.grip_hint");
 /// Within this many logical px of a corner position the bubble snaps to it.
 pub const SNAP: f32 = 24.0;
 
@@ -717,8 +717,8 @@ pub fn pick_mode(modes: &[Mode], pref: (u32, u32)) -> std::result::Result<usize,
         });
     match best {
         Some((i, _)) => Ok(i),
-        None if modes.iter().any(|m| m.fmt == Fmt::Mjpg) => Err(MJPG_ONLY),
-        None => Err(NO_FORMAT),
+        None if modes.iter().any(|m| m.fmt == Fmt::Mjpg) => Err(MJPG_ONLY.get()),
+        None => Err(NO_FORMAT.get()),
     }
 }
 

@@ -759,7 +759,7 @@ fn prepare(spec: &RecSpec, mic: MicFlags, enc: Pick, cast: Option<(Arc<CancelFla
                 match Opus::load() {
                     Ok(o) => Some(o),
                     Err(e) => {
-                        warnings.push(format!("sound not recorded: {e:#} (install libopus)"));
+                        warnings.push(tr!("rec.warn.no_opus", e = format!("{e:#}")));
                         None
                     }
                 }
@@ -817,10 +817,10 @@ fn open_sound(
         let name = if blind { Ok(pulse_list::DEFAULT_MONITOR.into()) } else { pulse_list::system_source(all.as_deref()) };
         match open(name) {
             Ok(a) => {
-                late.push(ended_note("system sound", a.ended()));
+                late.push(ended_note(key!("rec.what.system_sound"), a.ended()));
                 audio.push(Box::new(mic.system(a)));
             }
-            Err(e) => warnings.push(format!("system sound not recorded: {e}")),
+            Err(e) => warnings.push(tr!("rec.warn.system_sound", e)),
         }
     }
     if let Some(id) = &spec.mic {
@@ -831,19 +831,19 @@ fn open_sound(
         };
         match open(name) {
             Ok(a) => {
-                late.push(ended_note("microphone", a.ended()));
+                late.push(ended_note(key!("rec.what.microphone"), a.ended()));
                 audio.push(Box::new(mic.opened(a)));
             }
-            Err(e) => warnings.push(format!("microphone not recorded: {e}")),
+            Err(e) => warnings.push(tr!("rec.warn.mic", e)),
         }
     }
 }
 
 /// The warning for a sound source that stopped mid-recording.
-fn ended_note(what: &'static str, ended: crate::rec::linux::parec::Ended) -> Late {
+fn ended_note(what: crate::i18n::Key, ended: crate::rec::linux::parec::Ended) -> Late {
     Box::new(move || {
         let why = ended.lock().unwrap_or_else(|e| e.into_inner()).clone()?;
-        Some(format!("{what} stopped during the recording: {why}"))
+        Some(tr!("rec.warn.ended", what = what.get(), why))
     })
 }
 
@@ -1010,7 +1010,7 @@ impl Recorder {
         match self.worker.rx.try_recv() {
             Ok(e) => Some(e),
             Err(mpsc::TryRecvError::Empty) => None,
-            Err(mpsc::TryRecvError::Disconnected) => Some(End::Failed("the recording thread stopped".into())),
+            Err(mpsc::TryRecvError::Disconnected) => Some(End::Failed(tr!("rec.thread_stopped").into())),
         }
     }
 

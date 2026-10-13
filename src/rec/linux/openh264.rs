@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 /// The bzip2 used to unpack the download (a fixed path, not `PATH`).
 pub const BZIP2: &str = "/usr/bin/bzip2";
 /// What the user is told without it.
-pub const NO_BZIP2: &str = "bzip2 is needed to unpack OpenH264";
+pub const NO_BZIP2: crate::i18n::Key = key!("codec.no_bzip2");
 
 /// The bzip2 to run: [`BZIP2`], else (in a snap, whose base may lack it)
 /// the one the snap ships, `$SNAP/usr/bin/bzip2` (`snap`: `$SNAP`, an
@@ -985,7 +985,8 @@ mod tests {
         assert_eq!(std::fs::read(&dest).unwrap(), b"the library");
         assert_eq!(std::fs::read(&other).unwrap(), b"attempt 8's", "another attempt's file is left alone");
         let _ = std::fs::remove_dir_all(&d);
-    }
+    }
+
 
     /// Downloads of a process that is gone are swept at start; this
     /// process's, a live one's and other files stay.

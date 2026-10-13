@@ -722,7 +722,7 @@ fn grip(f: &mut Fb, ui: &Ui, r: FRect, k: f32) {
     for (dx, dy) in [(9.0, 7.0), (15.0, 7.0), (9.0, 12.0), (15.0, 12.0), (9.0, 17.0), (15.0, 17.0)] {
         f.fill_circle(x + dx * u, cy + (dy - 12.0) * u, (1.4 * u).max(0.8), th.icon.fade(k));
     }
-    text(f, ui, 11.0, crate::cam::GRIP_HINT, x + ui.px(14.0 + 6.0), cy, th.text.fade(k));
+    text(f, ui, 11.0, crate::cam::GRIP_HINT.get(), x + ui.px(14.0 + 6.0), cy, th.text.fade(k));
 }
 
 /// A row's device: the chosen name (muted, cut to fit) and a chevron

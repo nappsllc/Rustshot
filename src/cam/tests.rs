@@ -322,9 +322,9 @@ fn mode_choice_prefers_smooth_720p_without_mjpg() {
     assert_eq!(pick_mode(&fast, PREF), Ok(0), "60 fps (frames are skipped) before 15");
     let big = [m(Fmt::Nv12, 1920, 1080, 30.0), m(Fmt::Nv12, 960, 540, 30.0)];
     assert_eq!(pick_mode(&big, PREF), Ok(1), "smaller before larger");
-    assert_eq!(pick_mode(&[m(Fmt::Mjpg, 1280, 720, 30.0)], PREF), Err(MJPG_ONLY));
-    assert_eq!(pick_mode(&[m(Fmt::Other, 1280, 720, 30.0)], PREF), Err(NO_FORMAT));
-    assert_eq!(pick_mode(&[], PREF), Err(NO_FORMAT));
+    assert_eq!(pick_mode(&[m(Fmt::Mjpg, 1280, 720, 30.0)], PREF), Err(MJPG_ONLY.get()));
+    assert_eq!(pick_mode(&[m(Fmt::Other, 1280, 720, 30.0)], PREF), Err(NO_FORMAT.get()));
+    assert_eq!(pick_mode(&[], PREF), Err(NO_FORMAT.get()));
 }
 
 /// Known limited-range values: black, white, BT.601 red / blue, grey.
@@ -671,7 +671,7 @@ fn live_cam_opens_and_reads() {
         Ok(c) => c,
         Err(e) => {
             let e = format!("{e:#}");
-            if e.contains(ACCESS_OFF) || e.contains(MJPG_ONLY) {
+            if e.contains(ACCESS_OFF.get()) || e.contains(MJPG_ONLY.get()) {
                 eprintln!("SKIP: {e}");
                 return;
             }
