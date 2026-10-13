@@ -262,7 +262,7 @@ fn window(tag: &str, img: PixBuf, objs: Vec<Obj>, th: Theme, k: f32) -> (TempRoo
     let theme = if th == DARK { "dark" } else { "light" };
     let cfg = Config { theme: theme.into(), ..Config::default() };
     let canvas = Canvas::new(img, objs, cfg.clone(), th);
-    let (_tx, rx) = std::sync::mpsc::channel();
+    let (_tx, rx) = crate::chan::channel();
     let mut w = Window::new(Edit::new(st, e, canvas, cfg), rx);
     w.scale = Some(k);
     w.event(Ev::Resize((W as f32 * k) as u32, (H as f32 * k) as u32));

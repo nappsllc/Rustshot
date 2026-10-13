@@ -4,7 +4,7 @@
 use crate::hotkey::HotEvent;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::Sender;
+use crate::chan::Sender;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuItem {
@@ -995,11 +995,8 @@ mod tests {
                         }
                     }
                 }
-                let f = std::fs::File::create(dir.join(format!("glyph_{size}_{name}.png"))).unwrap();
-                let mut enc = png::Encoder::new(std::io::BufWriter::new(f), w, w);
-                enc.set_color(png::ColorType::Rgb);
-                enc.set_depth(png::BitDepth::Eight);
-                enc.write_header().unwrap().write_image_data(&img).unwrap();
+                let png = crate::pngfile::encode(w, w, crate::pngfile::Color::Rgb, &img).unwrap();
+                std::fs::write(dir.join(format!("glyph_{size}_{name}.png")), png).unwrap();
             }
         }
     }

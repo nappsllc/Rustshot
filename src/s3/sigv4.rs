@@ -65,7 +65,7 @@ pub fn uri_encode(s: &str, keep_slash: bool) -> String {
 /// `uploads=`).
 pub fn canonical_query(q: &[(String, String)]) -> String {
     let mut pairs: Vec<(String, String)> = q.iter().map(|(k, v)| (uri_encode(k, false), uri_encode(v, false))).collect();
-    pairs.sort();
+    crate::sort::sort(&mut pairs);
     pairs.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join("&")
 }
 
@@ -91,7 +91,7 @@ fn canon_value(v: &str) -> String {
 /// sorted, one `name:value\n` line each (repeated names joined by `,`).
 pub fn canonical_headers(h: &[(String, String)]) -> (String, String) {
     let mut v: Vec<(String, String)> = h.iter().map(|(k, x)| (k.trim().to_ascii_lowercase(), canon_value(x))).collect();
-    v.sort_by(|a, b| a.0.cmp(&b.0));
+    crate::sort::by(&mut v, |a, b| a.0.cmp(&b.0));
     let mut merged: Vec<(String, String)> = Vec::new();
     for (k, x) in v {
         match merged.last_mut() {

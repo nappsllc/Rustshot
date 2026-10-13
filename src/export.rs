@@ -2,7 +2,7 @@ use crate::config::Config;
 use crate::pixbuf::PixBuf;
 use anyhow::{anyhow, Context, Result};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver};
+use crate::chan::{self as mpsc, Receiver};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1275,7 +1275,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("meta.json");
         std::fs::write(&f, b"old").unwrap();
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = crate::chan::channel();
         let g = f.clone();
         let reader = std::thread::spawn(move || {
             let open = std::fs::File::open(&g).unwrap();

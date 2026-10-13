@@ -349,7 +349,7 @@ impl Edit {
                     self.obj.sel.retain(|&k| k != i);
                 } else {
                     self.obj.sel.push(i);
-                    self.obj.sel.sort_unstable();
+                    crate::sort::sort(&mut self.obj.sel);
                 }
                 return true;
             }
@@ -544,7 +544,7 @@ impl Edit {
                         sel.push(i);
                     }
                 }
-                sel.sort_unstable();
+                crate::sort::sort(&mut sel);
                 self.obj.sel = sel;
             }
             _ => {}

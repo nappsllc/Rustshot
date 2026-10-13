@@ -177,8 +177,8 @@ impl Drop for Block {
 pub fn completion<T: Send + 'static>(
     arity: usize,
     f: impl Fn(&[usize]) -> T + Send + Sync + 'static,
-) -> (Block, std::sync::mpsc::Receiver<T>) {
-    let (tx, rx) = std::sync::mpsc::channel();
+) -> (Block, crate::chan::Receiver<T>) {
+    let (tx, rx) = crate::chan::channel();
     let tx = std::sync::Mutex::new(Some(tx));
     let b = Block::new(arity, move |a| {
         if let Some(tx) = tx.lock().unwrap_or_else(|e| e.into_inner()).take() {

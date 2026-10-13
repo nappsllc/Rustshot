@@ -2251,7 +2251,7 @@ fn settings_window_smoke() {
     let _guard = crate::wind::test_window_lock();
     let dir = scratch("smoke");
     let s = Settings::new(Config::default(), None, dir.join("config.toml"));
-    let (_tx, rx) = std::sync::mpsc::channel();
+    let (_tx, rx) = crate::chan::channel();
     let mut w = Window::new(s, crate::theme::resolve(&Config::default()), rx);
     let mut d = crate::wind::AutoClose::new(&mut w, 1000);
     let spec = WindowSpec { title: "Rustshot Settings".into(), w: W, h: H, resizable: false, min: (W, H), controls: wind::Controls::MinClose };

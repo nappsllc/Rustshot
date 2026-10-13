@@ -26,7 +26,7 @@ use crate::theme::Theme;
 use anyhow::{bail, Context, Result};
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
-use std::sync::mpsc::{self, Receiver};
+use crate::chan::{self as mpsc, Receiver};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use windows::core::{w, PCWSTR};

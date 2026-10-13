@@ -310,7 +310,7 @@ pub fn border_median(img: &PixBuf) -> Option<C4> {
     }
     let ch = |i: usize| {
         let mut v: Vec<u8> = px.iter().map(|p| p[i]).collect();
-        v.sort_unstable();
+        crate::sort::sort(&mut v);
         v[v.len() / 2]
     };
     Some(C4::rgb(ch(0), ch(1), ch(2)))
@@ -432,8 +432,8 @@ impl Edit {
         let Some(run) = &self.snip.ocr else { return false };
         let res = match run.rx.try_recv() {
             Ok(r) => r,
-            Err(std::sync::mpsc::TryRecvError::Empty) => return false,
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(OcrError::Failed("the recognizer stopped".into())),
+            Err(crate::chan::TryRecvError::Empty) => return false,
+            Err(crate::chan::TryRecvError::Disconnected) => Err(OcrError::Failed("the recognizer stopped".into())),
         };
         let run = self.snip.ocr.take().expect("a run");
         // The selection (or its lasso) changed meanwhile: these words are

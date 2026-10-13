@@ -197,7 +197,7 @@ fn coalesce(rects: Vec<[i32; 4]>, max: usize) -> Vec<[i32; 4]> {
     }
     let mut v: Vec<[i32; 4]> = Vec::with_capacity(rects.len());
     let mut sorted = rects;
-    sorted.sort_by_key(|r| (r[0], r[2], r[1]));
+    crate::sort::by_key(&mut sorted, |r| (r[0], r[2], r[1]));
     for r in sorted {
         match v.last_mut() {
             Some(l) if l[0] == r[0] && l[2] == r[2] && l[3] == r[1] => l[3] = r[3],
@@ -1354,7 +1354,7 @@ mod tests {
     /// cadence (the dialog going idle must not slow the other window).
     #[test]
     fn run_window_cadence_is_per_window() {
-        use std::sync::mpsc;
+        use crate::chan as mpsc;
         use std::time::{Duration, Instant};
         let _guard = windows_lock();
         RETIMES.lock().unwrap_or_else(|e| e.into_inner()).clear();

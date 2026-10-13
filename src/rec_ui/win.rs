@@ -21,7 +21,7 @@ use crate::rec::{AudioSource, RecFormat, RecSpec, VideoEncoder};
 use crate::theme::Theme;
 use anyhow::{bail, Context, Result};
 use std::cell::RefCell;
-use std::sync::mpsc;
+use crate::chan as mpsc;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM};
 use windows::Win32::Graphics::Gdi::{

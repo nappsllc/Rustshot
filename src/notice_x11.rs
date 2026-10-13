@@ -21,7 +21,7 @@ use crate::objects::Pt;
 use crate::rec_ui::x11::{self as x, Disp, Kind, Win};
 use crate::theme::Theme;
 use core::ffi::{c_char, c_int, c_long, c_ulong, c_void};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use crate::chan::{self as mpsc, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 

@@ -7,7 +7,7 @@ use super::*;
 use crate::rec::gif::GifEncoder;
 use crate::rec::{AudioSource, Quality, RecFormat, RecSpec, Session, VideoEncoder};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use crate::chan as mpsc;
 use std::time::{Duration, Instant};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};

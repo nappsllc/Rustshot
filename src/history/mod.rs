@@ -40,7 +40,7 @@ use crate::pixbuf::PixBuf;
 use anyhow::{anyhow, bail, Context, Result};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::sync::mpsc::{Receiver, Sender};
+use crate::chan::{Receiver, Sender};
 
 pub const ORIGINAL: &str = "original.png";
 pub const ANNOTATIONS: &str = "annotations.json";
@@ -364,7 +364,7 @@ pub fn search(e: &Meta, q: &str, today: (i32, u32, u32)) -> Option<Vec<std::ops:
             return None;
         }
     }
-    hits.sort_by_key(|r| r.start);
+    crate::sort::by_key(&mut hits, |r| r.start);
     // Merge overlaps.
     let mut out: Vec<std::ops::Range<usize>> = Vec::new();
     for r in hits {
@@ -896,7 +896,7 @@ impl Store {
     /// Every entry, newest first.
     pub fn list(&self) -> Vec<Entry> {
         let mut out = self.scan(false).entries;
-        out.sort_by(|a, b| b.meta.captured.cmp(&a.meta.captured).then_with(|| b.id.cmp(&a.id)));
+        crate::sort::by(&mut out, |a, b| b.meta.captured.cmp(&a.meta.captured).then_with(|| b.id.cmp(&a.id)));
         out
     }
 
@@ -1082,7 +1082,7 @@ impl Store {
     pub(crate) fn prune_at(&self, today: (i32, u32, u32), days: u32, max_bytes: u64, keep: &[String], now: std::time::SystemTime) -> Vec<String> {
         let t = days_from_civil(today.0, today.1, today.2);
         let Scan { entries: mut all, orphans } = self.scan(true);
-        all.sort_by(|a, b| b.meta.captured.cmp(&a.meta.captured).then_with(|| b.id.cmp(&a.id)));
+        crate::sort::by(&mut all, |a, b| b.meta.captured.cmp(&a.meta.captured).then_with(|| b.id.cmp(&a.id)));
         let kept = |id: &String, dir: &Path| keep.contains(id) || held_elsewhere(dir);
         let mut gone = Vec::new();
         let mut young: u64 = 0;
@@ -1178,7 +1178,7 @@ pub fn saved_files(entries: &[Entry]) -> (usize, u64, Option<PathBuf>) {
             None => dirs.push((d, 1)),
         }
     }
-    dirs.sort_by_key(|d| std::cmp::Reverse(d.1));
+    crate::sort::by_key(&mut dirs, |d| std::cmp::Reverse(d.1));
     (n, bytes, dirs.into_iter().next().map(|d| d.0))
 }
 
@@ -1250,7 +1250,7 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 fn send(job: Job) {
     let mut w = lock(&WORKER);
     let tx = w.get_or_insert_with(|| {
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = crate::chan::channel();
         std::thread::Builder::new().name("rustshot-history".into()).spawn(move || run(rx)).expect("history thread");
         tx
     });
@@ -1395,7 +1395,7 @@ pub fn flush(limit: std::time::Duration) {
     if lock(&WORKER).is_none() {
         return;
     }
-    let (tx, rx) = std::sync::mpsc::channel();
+    let (tx, rx) = crate::chan::channel();
     send(Job::Flush(tx));
     let _ = rx.recv_timeout(limit);
 }

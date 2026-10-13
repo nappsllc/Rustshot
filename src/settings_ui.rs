@@ -47,7 +47,7 @@ use crate::uisize::{self, UiSize};
 use crate::wind::{self, Cursor, Driver, Ev, Hwnd, WindowSpec};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::sync::mpsc::{Receiver, Sender};
+use crate::chan::{Receiver, Sender};
 
 /// Window size, logical px.
 pub const W: u32 = 680;
@@ -1919,7 +1919,7 @@ fn claim() -> Option<Receiver<Msg>> {
     {
         return None;
     }
-    let (tx, rx) = std::sync::mpsc::channel();
+    let (tx, rx) = crate::chan::channel();
     *open = Some(tx);
     Some(rx)
 }
@@ -2011,7 +2011,7 @@ impl Window {
             out: PixBuf::default(),
             rx,
             rechecked: std::time::Instant::now(),
-            picked: std::sync::mpsc::channel(),
+            picked: crate::chan::channel(),
             picking: false,
             closing: false,
             sized_for: 0.0,

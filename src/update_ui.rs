@@ -33,7 +33,7 @@ use crate::wind::{self, Cursor, Driver, Ev, Hwnd, WindowSpec};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::mpsc::{Receiver, Sender};
+use crate::chan::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -579,14 +579,14 @@ const IDLE_QUICK: Duration = Duration::from_millis(250);
 /// gone (or quit meanwhile), so nothing may be installed.
 fn wait_idle(daemon: Option<&Sender<HotEvent>>, tx: &Sender<In>) -> bool {
     let Some(d) = daemon else { return false };
-    let (reply, idle) = std::sync::mpsc::channel();
+    let (reply, idle) = crate::chan::channel();
     if d.send(HotEvent::RestartWhenIdle(reply)).is_err() {
         return false;
     }
     match idle.recv_timeout(IDLE_QUICK) {
         Ok(()) => return true,
-        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return false,
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+        Err(crate::chan::RecvTimeoutError::Disconnected) => return false,
+        Err(crate::chan::RecvTimeoutError::Timeout) => {}
     }
     let _ = tx.send(In::Waiting(true));
     let ok = idle.recv().is_ok();
@@ -640,7 +640,7 @@ fn request(req: Request) {
         {
             return;
         }
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = crate::chan::channel();
         *open = Some(tx.clone());
         drop(open);
         std::thread::spawn(move || run_dialog(req, tx, rx));
@@ -1026,7 +1026,7 @@ mod tests {
             return;
         }
         let _guard = crate::wind::test_window_lock();
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = crate::chan::channel();
         let (m, acts) = Machine::start(Request::Show(DialogState::Available(rel("9.9.9"))));
         assert!(acts.is_empty());
         let mut dlg = Dialog::new(m, crate::theme::resolve(&crate::config::Config::default()), tx, rx);
@@ -1100,7 +1100,7 @@ mod tests {
         m.on(In::Checked(Ok(Some(rel("9.9.9")))));
         assert_eq!(m.on(In::Enter), vec![Act::Download(rel("9.9.9"))]);
         // So does a click anywhere in the window.
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = crate::chan::channel();
         let (m, _) = Machine::start(Request::Offer(DialogState::UpToDate));
         let mut d = Dialog::new(m, crate::theme::DARK, tx, rx);
         d.on_event(Ev::Down { x: 5, y: 5 });
@@ -1181,8 +1181,8 @@ mod tests {
     #[test]
     fn worker_cancelled_after_verify_deletes_the_file() {
         let (dir, file) = fetched_file("wcancel");
-        let (tx, rx) = std::sync::mpsc::channel();
-        let (dtx, drx) = std::sync::mpsc::channel();
+        let (tx, rx) = crate::chan::channel();
+        let (dtx, drx) = crate::chan::channel();
         let applied = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let phase = AtomicU8::new(CANCELLED);
         install(Ok((file.clone(), [0; 32])), &phase, &tx, &installer(Some(dtx), applied.clone()));
@@ -1197,8 +1197,8 @@ mod tests {
     #[test]
     fn worker_installs_only_after_the_daemon_is_idle() {
         let (dir, file) = fetched_file("widle");
-        let (tx, rx) = std::sync::mpsc::channel();
-        let (dtx, drx) = std::sync::mpsc::channel();
+        let (tx, rx) = crate::chan::channel();
+        let (dtx, drx) = crate::chan::channel();
         let applied = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let inst = installer(Some(dtx), applied.clone());
         let f = file.clone();
@@ -1228,10 +1228,10 @@ mod tests {
     fn worker_aborts_without_a_daemon() {
         for gone_while_waiting in [false, true] {
             let (dir, file) = fetched_file(&format!("wgone{gone_while_waiting}"));
-            let (tx, rx) = std::sync::mpsc::channel();
+            let (tx, rx) = crate::chan::channel();
             let applied = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let daemon = if gone_while_waiting {
-                let (dtx, drx) = std::sync::mpsc::channel::<HotEvent>();
+                let (dtx, drx) = crate::chan::channel::<HotEvent>();
                 // The daemon quits: its receiver and the pending reply go.
                 std::thread::spawn(move || drop(drx.recv()));
                 Some(dtx)
@@ -1252,7 +1252,7 @@ mod tests {
     #[test]
     fn worker_installs_standalone() {
         let (dir, file) = fetched_file("wstand");
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = crate::chan::channel();
         let applied = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let inst = Installer { standalone: true, ..installer(None, applied.clone()) };
         install(Ok((file.clone(), [0; 32])), &AtomicU8::new(RUNNING), &tx, &inst);
@@ -1266,8 +1266,8 @@ mod tests {
     #[test]
     fn worker_failed_install_releases_the_daemon() {
         let (dir, file) = fetched_file("wfail");
-        let (tx, rx) = std::sync::mpsc::channel();
-        let (dtx, drx) = std::sync::mpsc::channel();
+        let (tx, rx) = crate::chan::channel();
+        let (dtx, drx) = crate::chan::channel();
         let inst = Installer { daemon: Some(dtx), standalone: false, apply: Box::new(|_, _| Err("denied".into())) };
         let daemon = std::thread::spawn(move || {
             let Ok(HotEvent::RestartWhenIdle(reply)) = drx.recv() else { panic!() };
@@ -1283,7 +1283,7 @@ mod tests {
 
     #[test]
     fn worker_phase_decides_cancel_or_install() {
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = crate::chan::channel();
         let mut d = Dialog::new(avail(), crate::theme::DARK, tx, rx);
         d.phase = Arc::new(AtomicU8::new(RUNNING));
         d.perform(Act::Cancel);
@@ -1318,7 +1318,7 @@ mod tests {
     #[test]
     fn driver_skip_writes_the_config_and_closes() {
         let dir = scratch("skip");
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = crate::chan::channel();
         let mut d = Dialog::new(avail(), crate::theme::DARK, tx, rx);
         d.config = dir.join("config.toml");
         std::fs::write(&d.config, "# keep me\ntheme = \"light\"\n").unwrap();
@@ -1328,7 +1328,7 @@ mod tests {
         let text = std::fs::read_to_string(&d.config).unwrap();
         assert_eq!(text, "# keep me\ntheme = \"light\"\nskip_version = \"9.9.9\"\n");
         // Unwritable (a directory): the error is shown, the window stays.
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = crate::chan::channel();
         let mut d = Dialog::new(avail(), crate::theme::DARK, tx, rx);
         d.config = dir.clone();
         d.queue.push_back(In::Click(Btn::Skip));
@@ -1340,7 +1340,7 @@ mod tests {
 
     #[test]
     fn enter_waits_out_the_grace_after_changes() {
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = crate::chan::channel();
         let mut d = Dialog::new(Machine::new(DialogState::UpToDate), crate::theme::DARK, tx, rx);
         let t0 = d.changed_at;
         assert!(!d.enter_ready(t0 + Duration::from_millis(100)));

@@ -18,7 +18,7 @@ use crate::keymap::Chord;
 use crate::ui::compact::Tok;
 use crate::ui::Ui;
 use std::path::PathBuf;
-use std::sync::mpsc::Receiver;
+use crate::chan::Receiver;
 
 /// (label, config value) tables.
 const FORMATS: [(&str, &str); 2] = [("MP4", "mp4"), ("GIF", "gif")];
@@ -280,7 +280,7 @@ impl Lists {
         }
         #[cfg(not(test))]
         {
-            let (tx, rx) = std::sync::mpsc::channel();
+            let (tx, rx) = crate::chan::channel();
             let spawned = std::thread::Builder::new().name("rec-devices".into()).spawn(move || {
                 let _ = tx.send(find());
             });
@@ -303,8 +303,8 @@ impl Lists {
                 self.rx = None;
                 true
             }
-            Err(std::sync::mpsc::TryRecvError::Empty) => false,
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+            Err(crate::chan::TryRecvError::Empty) => false,
+            Err(crate::chan::TryRecvError::Disconnected) => {
                 self.found = Some(Found::default());
                 self.rx = None;
                 true

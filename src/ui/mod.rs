@@ -311,7 +311,7 @@ fn output_within(mut cmd: std::process::Command, limit: std::time::Duration) -> 
     let mut child = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
     let mut pipe = child.stdout.take()?;
     // Read on a helper thread so a full pipe cannot stall the deadline.
-    let (tx, rx) = std::sync::mpsc::channel();
+    let (tx, rx) = crate::chan::channel();
     std::thread::spawn(move || {
         let mut buf = Vec::new();
         let _ = pipe.read_to_end(&mut buf);

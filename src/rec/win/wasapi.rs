@@ -22,7 +22,7 @@ use crate::rec::AudioSource;
 use anyhow::{anyhow, bail, Context, Result};
 use crate::rec::ring::Ring;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
+use crate::chan as mpsc;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};

@@ -6,8 +6,10 @@ mod autostart;
 mod busy;
 mod cam;
 mod capture;
+mod chan;
 mod config;
 mod desktop;
+mod deflate;
 // D-Bus client (portals; the StatusNotifierItem tray later). Pure parts tested everywhere.
 #[cfg(any(target_os = "linux", test))]
 mod dbus;
@@ -44,6 +46,7 @@ mod perf;
 mod osrand;
 mod pin;
 mod pixbuf;
+mod pngfile;
 #[cfg(windows)]
 mod proc_win;
 mod raster;
@@ -64,6 +67,7 @@ mod sha256;
 // "Share…": the system's share sheet (Windows, macOS).
 mod share;
 mod snap;
+mod sort;
 #[cfg(any(target_os = "linux", test))]
 mod sni;
 mod sound;
@@ -224,6 +228,12 @@ fn parse_args(argv: &[std::ffi::OsString]) -> Result<Parsed, String> {
     parse_from(&args)
 }
 
+/// The parse error for an argument that does not belong (one function for
+/// the dozen places that say it).
+fn unexpected(a: &str) -> String {
+    format!("unexpected argument '{a}'")
+}
+
 /// Hand-rolled argument parser (replaces clap for binary size).
 fn parse_from(args: &[String]) -> Result<Parsed, String> {
     if args.iter().any(|a| a == "-h" || a == "--help")
@@ -249,7 +259,7 @@ fn parse_from(args: &[String]) -> Result<Parsed, String> {
 
     let (name, rest) = match args.first() {
         Some(a) if !a.starts_with('-') => (Some(a.as_str()), &args[1..]),
-        Some(a) => return Err(format!("unexpected argument '{a}'")),
+        Some(a) => return Err(unexpected(a)),
         None => (None, args),
     };
 
@@ -267,47 +277,47 @@ fn parse_from(args: &[String]) -> Result<Parsed, String> {
                 match a.as_str() {
                     f if f == update_install::AFTER_UPDATE_FLAG && !after_update && !force => after_update = true,
                     "--force" if !force => force = true,
-                    a => return Err(format!("unexpected argument '{a}'")),
+                    a => return Err(unexpected(a)),
                 }
             }
             Some(Cmd::Daemon { after_update, force, plain: false })
         }
         Some("update") => {
             if let Some(a) = rest.first() {
-                return Err(format!("unexpected argument '{a}'"));
+                return Err(unexpected(a));
             }
             Some(Cmd::Update)
         }
         Some("history") => {
             let list = rest.first().is_some_and(|a| a == "--list");
             if let Some(a) = rest.get(list as usize) {
-                return Err(format!("unexpected argument '{a}'"));
+                return Err(unexpected(a));
             }
             Some(Cmd::History { list })
         }
         Some("settings") => {
             if let Some(a) = rest.first() {
-                return Err(format!("unexpected argument '{a}'"));
+                return Err(unexpected(a));
             }
             Some(Cmd::Settings)
         }
         Some("launcher") => {
             if let Some(a) = rest.first() {
-                return Err(format!("unexpected argument '{a}'"));
+                return Err(unexpected(a));
             }
             Some(Cmd::Launcher)
         }
         Some("screenclip") => match rest {
             [uri] => Some(Cmd::Screenclip(uri.clone())),
             [] => return Err("missing URI for screenclip".into()),
-            [_, a, ..] => return Err(format!("unexpected argument '{a}'")),
+            [_, a, ..] => return Err(unexpected(a)),
         },
         Some("register-screenclip") => match rest {
             [v] if v == "on" => Some(Cmd::RegisterScreenclip(true)),
             [v] if v == "off" => Some(Cmd::RegisterScreenclip(false)),
             [v] => return Err(format!("expected on or off, got '{v}'")),
             [] => return Err("missing on|off for register-screenclip".into()),
-            [_, a, ..] => return Err(format!("unexpected argument '{a}'")),
+            [_, a, ..] => return Err(unexpected(a)),
         },
         Some("config") => {
             let mut check = false;
@@ -315,7 +325,7 @@ fn parse_from(args: &[String]) -> Result<Parsed, String> {
                 if a == "--check" {
                     check = true;
                 } else {
-                    return Err(format!("unexpected argument '{a}'"));
+                    return Err(unexpected(a));
                 }
             }
             Some(Cmd::Config { check })
@@ -381,7 +391,7 @@ fn parse_capture(args: &[String]) -> Result<CaptureArgs, String> {
                 }
                 "--filename" => out.filename = Some(opt_value(args, &mut i, attached, name)?),
                 "--region" => out.region = Some(opt_value(args, &mut i, attached, name)?),
-                other => return Err(format!("unexpected argument '{other}'")),
+                other => return Err(unexpected(other)),
             }
             i += 1;
             continue;
@@ -415,7 +425,7 @@ fn parse_capture(args: &[String]) -> Result<CaptureArgs, String> {
             i += 1;
             continue;
         }
-        return Err(format!("unexpected argument '{tok}'"));
+        return Err(unexpected(tok));
     }
     Ok(out)
 }
@@ -1009,6 +1019,46 @@ fn screenclip(uri: &str) -> Result<()> {
 #[cfg(not(windows))]
 fn screenclip(_uri: &str) -> Result<()> {
     Err(anyhow!("screenclip is only for Windows"))
+}
+
+/// The app icon that build.rs compiles into rustshot.exe (resource 1).
+#[cfg(test)]
+mod icon_resource_tests {
+    /// Every image below 256 px is a classic 32-bit DIB (BITMAPINFOHEADER):
+    /// Task Manager and other ExtractIcon users do not decode PNG images, so
+    /// a PNG there shows them a wrong icon (19926bf). The 256 px one may be
+    /// PNG.
+    #[test]
+    fn small_icon_images_are_dibs() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        // build.rs hands this very file to rc.exe, unchanged.
+        let build = std::fs::read_to_string(root.join("build.rs")).unwrap();
+        assert!(build.contains(r#"manifest.join("packaging").join("icons").join("rustshot.ico")"#));
+        assert!(build.contains(r#"1 ICON "{ico}""#));
+        let b = std::fs::read(root.join("packaging/icons/rustshot.ico")).unwrap();
+        let u16_at = |i: usize| u16::from_le_bytes([b[i], b[i + 1]]);
+        let u32_at = |i: usize| u32::from_le_bytes(b[i..i + 4].try_into().unwrap()) as usize;
+        assert_eq!((u16_at(0), u16_at(2)), (0, 1), "an icon file");
+        let n = u16_at(4) as usize;
+        assert!(n >= 5);
+        let mut small = 0;
+        for k in 0..n {
+            let e = 6 + 16 * k;
+            let side = if b[e] == 0 { 256 } else { b[e] as usize };
+            let img = &b[u32_at(e + 12)..][..u32_at(e + 8)];
+            if side < 256 {
+                small += 1;
+                assert_eq!(u32_at_slice(img, 0), 40, "{side} px: a BITMAPINFOHEADER DIB, not PNG");
+                assert_eq!(u16::from_le_bytes([img[14], img[15]]), 32, "{side} px: 32 bits a pixel");
+                assert_eq!(u32_at_slice(img, 4), side, "{side} px: its width");
+            }
+        }
+        assert!(small >= 4, "the small sizes are there");
+    }
+
+    fn u32_at_slice(v: &[u8], i: usize) -> usize {
+        u32::from_le_bytes(v[i..i + 4].try_into().unwrap()) as usize
+    }
 }
 
 #[cfg(test)]

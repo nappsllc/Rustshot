@@ -512,7 +512,7 @@ pub fn merge_recent(entries: &[crate::history::Entry], book: Vec<Record>) -> Vec
         })
         .collect();
     all.extend(book);
-    all.sort_by_key(|r| std::cmp::Reverse(r.info.time));
+    crate::sort::by_key(&mut all, |r| std::cmp::Reverse(r.info.time));
     let mut seen = std::collections::HashSet::new();
     all.retain(|r| seen.insert(r.link.clone()));
     all.truncate(RECENT);

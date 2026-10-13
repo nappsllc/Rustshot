@@ -106,7 +106,7 @@ pub fn available() -> bool {
     if super::seg_macos::available() {
         return true;
     }
-    seg::EMBEDDED.is_some()
+    seg::HAS_EMBEDDED
 }
 
 /// The segmenter of this build (`None`: there is none, or the model does
@@ -116,7 +116,7 @@ pub fn default_engine() -> Option<Box<dyn Segment>> {
     if let Some(v) = super::seg_macos::Vision::new() {
         return Some(Box::new(v));
     }
-    let bytes = seg::EMBEDDED?;
+    let bytes = seg::embedded()?;
     match seg::Net::selfie(bytes) {
         Ok(n) => Some(Box::new(n)),
         Err(e) => {

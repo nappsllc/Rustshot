@@ -284,7 +284,7 @@ fn live_rec_linux_ffmpeg_capture_stall_keeps_av_in_step() {
     assert!(!st.failed, "the encoder failed while recording");
     let t = Instant::now();
     // Stop must come back (a deadlock would hang here): bounded by a thread.
-    let (tx, rx) = std::sync::mpsc::channel();
+    let (tx, rx) = crate::chan::channel();
     std::thread::spawn(move || {
         let _ = tx.send(s.stop().map_err(|e| format!("{e:#}")));
     });

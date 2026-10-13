@@ -63,7 +63,7 @@ pub fn parse_kinds(s: &str) -> Vec<Kind> {
         return Kind::ALL.to_vec();
     }
     let mut v: Vec<Kind> = s.split(',').filter_map(Kind::from_id).collect();
-    v.sort();
+    crate::sort::sort(&mut v);
     v.dedup();
     v
 }
@@ -160,7 +160,7 @@ pub fn find_in_text(s: &str, kinds: &[Kind]) -> Vec<(Kind, Range<usize>)> {
             add(Kind::Phone, r, &mut found);
         }
     }
-    found.sort_by_key(|(_, r)| r.start);
+    crate::sort::by_key(&mut found, |(_, r)| r.start);
     found
 }
 
@@ -599,7 +599,7 @@ fn labelled(s: &str) -> Vec<Range<usize>> {
             }
         }
     }
-    out.sort_by_key(|r| (r.start, std::cmp::Reverse(r.end)));
+    crate::sort::by_key(&mut out, |r| (r.start, std::cmp::Reverse(r.end)));
     out
 }
 

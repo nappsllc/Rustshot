@@ -153,7 +153,7 @@ pub fn monitors() -> Result<Vec<MonInfo>> {
             MonInfo { x, y, w, h, scale: k as f32, primary: id == primary }
         })
         .collect();
-    out.sort_by_key(|m| (m.x, m.y));
+    crate::sort::by_key(&mut out, |m| (m.x, m.y));
     Ok(out)
 }
 

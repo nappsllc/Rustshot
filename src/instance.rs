@@ -2,7 +2,7 @@
 //! and listens for "capture" requests; later launches just signal it.
 
 use crate::hotkey::HotEvent;
-use std::sync::mpsc::Sender;
+use crate::chan::Sender;
 
 pub enum Instance {
     Primary(Guard),
@@ -127,7 +127,7 @@ impl Guard {
 #[cfg(windows)]
 mod imp {
     use super::{HotEvent, Instance};
-    use std::sync::mpsc::{self, Sender};
+    use crate::chan::{self as mpsc, Sender};
     use std::sync::{Arc, Mutex};
     use windows::Win32::Foundation::{
         CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, HWND, LPARAM, LRESULT, WPARAM,
@@ -396,7 +396,7 @@ mod imp {
     use std::os::unix::fs::OpenOptionsExt;
     use std::os::unix::net::{UnixListener, UnixStream};
     use std::path::{Path, PathBuf};
-    use std::sync::mpsc::Sender;
+    use crate::chan::Sender;
     use std::time::Duration;
 
     /// Pure path logic: Linux prefers `$XDG_RUNTIME_DIR/rustshot.sock`, otherwise
@@ -617,7 +617,7 @@ mod imp {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use std::sync::mpsc;
+        use crate::chan as mpsc;
         use std::time::{Duration, Instant};
 
         /// The primary at `path` once the last holder let go: polled, since
@@ -752,7 +752,7 @@ mod tests {
     use crate::hotkey::HotEvent;
     use std::io::{BufRead, BufReader};
     use std::process::{Command, Stdio};
-    use std::sync::mpsc;
+    use crate::chan as mpsc;
     use std::time::{Duration, Instant};
 
     /// A fresh instance name (valid: at most 32 of `[A-Za-z0-9_-]`).

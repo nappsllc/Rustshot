@@ -17,7 +17,7 @@
 use crate::editor::style::ToastKind;
 use crate::notice::Note;
 use crate::pixbuf::PixBuf;
-use std::sync::mpsc::{self, Receiver};
+use crate::chan::{self as mpsc, Receiver};
 
 #[cfg(windows)]
 mod win;
@@ -91,7 +91,7 @@ pub fn ordered(mut lines: Vec<Line>) -> Vec<Line> {
         }
     }
     lines.retain(|l| !l.words.is_empty());
-    lines.sort_by(|a, b| {
+    crate::sort::by(&mut lines, |a, b| {
         let (at, al) = a.top_left();
         let (bt, bl) = b.top_left();
         at.total_cmp(&bt).then(al.total_cmp(&bl))

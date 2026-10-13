@@ -267,7 +267,7 @@ fn an_export_waits_for_redact() {
     assert_eq!(objs.iter().filter(|o| matches!(o, Obj::RectFill { .. })).count(), 2, "pinned with the fills: {objs:?}");
     // Enter waits too (a run that never delivers here).
     let mut a = app();
-    let (_tx, rx) = std::sync::mpsc::channel();
+    let (_tx, rx) = crate::chan::channel();
     let e = edit_of(&mut a);
     e.snip.ocr = Some(snip::OcrRun { rx, want: snip::Want::Redact, origin: Pt::new(0.0, 0.0), area: SEL, sel: e.sel, mask: None });
     key(&mut a, wind::key::RETURN, NONE);

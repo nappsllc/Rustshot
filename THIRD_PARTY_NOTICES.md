@@ -73,21 +73,11 @@ Butler), Apache-2.0.
 |---|---|
 | ab_glyph 0.2.32 | Apache-2.0 (build-time; linked on Linux only) |
 | ab_glyph_rasterizer 0.1.10 | Apache-2.0 (build-time; linked on Linux only) |
-| adler2 2.0.1 | 0BSD OR MIT OR Apache-2.0 |
 | anyhow 1.0.104 | MIT OR Apache-2.0 |
-| bitflags 1.3.2 | MIT/Apache-2.0 |
-| cfg-if 1.0.5 | MIT OR Apache-2.0 |
-| crc32fast 1.5.2 | MIT OR Apache-2.0 |
-| fdeflate 0.3.7 | MIT OR Apache-2.0 |
-| flate2 1.1.10 | MIT OR Apache-2.0 |
 | jpeg-encoder 0.6.1 | (MIT OR Apache-2.0) AND IJG |
-| miniz_oxide 0.8.9 | MIT OR Zlib OR Apache-2.0 |
-| miniz_oxide 0.9.1 | MIT OR Zlib OR Apache-2.0 |
 | owned_ttf_parser 0.25.1 | Apache-2.0 (build-time; linked on Linux only) |
-| png 0.17.16 | MIT OR Apache-2.0 |
 | proc-macro2 1.0.107 | MIT OR Apache-2.0 |
 | quote 1.0.47 | MIT OR Apache-2.0 |
-| simd-adler32 0.3.10 | MIT |
 | syn 2.0.119 | MIT OR Apache-2.0 |
 | ttf-parser 0.25.1 | MIT OR Apache-2.0 (build-time; linked on Linux only) |
 | unicode-ident 1.0.26 | (MIT OR Apache-2.0) AND Unicode-3.0 |

@@ -1756,7 +1756,7 @@ fn record_mode_enter_waits_for_the_first_picture() {
 #[test]
 fn record_panel_lists_cameras_in_the_background() {
     let mut a = app(Some(r(100.0, 100.0, 600.0, 400.0)));
-    let (tx, rx) = std::sync::mpsc::channel();
+    let (tx, rx) = crate::chan::channel();
     ed(&mut a).rec.cams_rx = Some(rx);
     key(&mut a, '2' as u32);
     assert!(ed(&mut a).rec.cams_looking());
@@ -1808,7 +1808,7 @@ fn record_hotkey_selects_records_and_stops() {
     assert!(a.on_hot(HotEvent::Capture));
     assert!(a.pending.is_none());
     // The update gate waits for the recording.
-    let (tx, rx) = std::sync::mpsc::channel();
+    let (tx, rx) = crate::chan::channel();
     a.on_hot(HotEvent::RestartWhenIdle(tx));
     a.idle_gate();
     assert!(rx.try_recv().is_err(), "recording: no reply");

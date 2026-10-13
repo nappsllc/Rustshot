@@ -459,7 +459,7 @@ fn render_blur_previews() {
     };
     // And the embedded model's own mask of the scene, when there is one.
     let mut masks = vec![("", m)];
-    if let Some(bytes) = seg::EMBEDDED {
+    if let Some(bytes) = seg::embedded() {
         let mut net = seg::Net::selfie(bytes).unwrap();
         let mut inp = SegInput::default();
         inp.prepare(&raw, 256, 144);

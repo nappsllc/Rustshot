@@ -28,7 +28,7 @@ use crate::theme::Theme;
 use anyhow::{bail, Context, Result};
 use core::ffi::{c_int, c_short};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
-use std::sync::mpsc::{self, Receiver};
+use crate::chan::{self as mpsc, Receiver};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 

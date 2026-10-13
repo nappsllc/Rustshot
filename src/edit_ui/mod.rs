@@ -23,7 +23,7 @@ use crate::editor::host::{Canvas, Request};
 use crate::history::{Entry, Store};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Sender;
+use crate::chan::Sender;
 use std::sync::{Arc, Mutex};
 
 pub mod draw;
@@ -296,7 +296,7 @@ impl Windows {
     #[cfg(test)]
     pub fn add_for_tests(&self, id: &str, unsaved: bool) -> Arc<AtomicBool> {
         let flag = Arc::new(AtomicBool::new(unsaved));
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = crate::chan::channel();
         std::mem::forget(rx);
         lock(&self.list).push(Slot { id: id.into(), tx, unsaved: flag.clone() });
         flag
@@ -372,7 +372,7 @@ pub fn open(id: &str) {
         if open.iter().any(|s| s.id == id && s.tx.send(Msg::Raise).is_ok()) {
             return;
         }
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = crate::chan::channel();
         let unsaved = Arc::new(AtomicBool::new(false));
         open.push(Slot { id: id.to_string(), tx, unsaved: unsaved.clone() });
         drop(open);
@@ -399,7 +399,7 @@ fn load(store: &Store, id: &str) -> Option<Entry> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn run(id: &str, rx: std::sync::mpsc::Receiver<Msg>, unsaved: Arc<AtomicBool>) {
+fn run(id: &str, rx: crate::chan::Receiver<Msg>, unsaved: Arc<AtomicBool>) {
     let store = Store::open_default();
     let cfg = crate::config::load();
     let done = |id: &str| lock(&OPEN.list).retain(|s| s.id != id);

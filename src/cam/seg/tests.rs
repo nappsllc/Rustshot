@@ -884,11 +884,24 @@ fn write_synthetic_selfie_bin() {
 #[cfg(selfie_embedded)]
 #[test]
 fn embedded_model_loads_and_runs() {
-    let bytes = EMBEDDED.expect("the feature embeds the model");
+    let t = std::time::Instant::now();
+    let bytes = embedded().expect("the feature embeds the model");
+    eprintln!(
+        "embedded model: {} -> {} bytes, inflated in {:.2} ms",
+        super::EMBEDDED_Z.len(),
+        bytes.len(),
+        t.elapsed().as_secs_f64() * 1e3
+    );
+    // What build.rs compressed is the file, byte for byte.
+    let file = std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/selfie.bin")).unwrap();
+    assert!(bytes == file.as_slice(), "the embedded model is assets/selfie.bin");
+    assert!(std::ptr::eq(bytes, embedded().unwrap()), "inflated once");
     // The blur may grow the binary by less than 300 KB: the engine and the
     // blur are about 76 KB (release, measured against handroll), so the
-    // model must stay under 224 KB (it is 219,338 bytes).
+    // model must stay under 224 KB (it is 219,338 bytes, embedded
+    // compressed).
     assert!(bytes.len() <= 224_000, "{} bytes: the binary would grow 300 KB or more", bytes.len());
+    assert!(super::EMBEDDED_Z.len() < bytes.len() * 9 / 10, "compressed by 10 % or more");
     let mut net = Net::selfie(bytes).expect("assets/selfie.bin loads");
     assert_eq!(net.input_size(), (256, 144));
     let f = CamFrame { w: 1280, h: 720, bgra: (0..1280 * 720 * 4).map(|i| (i * 31 % 251) as u8).collect() };
@@ -897,4 +910,17 @@ fn embedded_model_loads_and_runs() {
     let mut sq = SqMask::default();
     assert!(net.segment(&inp, &mut sq));
     assert!(sq.n > 0 && sq.v.iter().all(|v| (0.0..=1.0).contains(v)));
+}
+
+/// The plane interleave of `inflate_model` undoes build.rs's split, for odd
+/// and even lengths; a stream that does not inflate to the length is None.
+#[test]
+fn model_planes_round_trip() {
+    for raw in [vec![], vec![1u8], vec![1, 2], (0..1001u32).map(|i| (i * 7) as u8).collect::<Vec<u8>>()] {
+        let mut planes: Vec<u8> = raw.iter().step_by(2).copied().collect();
+        planes.extend(raw.iter().skip(1).step_by(2));
+        let z = crate::deflate::deflate(&planes, crate::deflate::Effort::BEST);
+        assert_eq!(super::inflate_model(&z, raw.len()).unwrap(), raw);
+        assert!(super::inflate_model(&z, raw.len() + 1).is_none());
+    }
 }

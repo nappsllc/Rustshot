@@ -831,10 +831,10 @@ fn trace(what: &str) {
 
 /// Lets the share's caller go, once, with the result, and frees the one
 /// sheet ([`super::Sheet`]) then. Dropped unsent: a failure.
-pub struct Release(Option<(std::sync::mpsc::Sender<Result<(), String>>, super::Sheet)>);
+pub struct Release(Option<(crate::chan::Sender<Result<(), String>>, super::Sheet)>);
 
 impl Release {
-    pub fn new(tx: std::sync::mpsc::Sender<Result<(), String>>, sheet: super::Sheet) -> Release {
+    pub fn new(tx: crate::chan::Sender<Result<(), String>>, sheet: super::Sheet) -> Release {
         Release(Some((tx, sheet)))
     }
 
@@ -1185,7 +1185,7 @@ mod tests {
         let f = dir.join("live.png");
         std::fs::write(&f, crate::pixbuf::PixBuf::from_pixel(64, 48, [30, 120, 220, 255]).to_png().unwrap()).unwrap();
         let sheet = crate::share::Sheet::claim().unwrap();
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = crate::chan::channel();
         let t0 = Instant::now();
         let p = f.clone();
         std::thread::spawn(move || share(&p, None, Kind::Picture, Duration::from_secs(120), Release::new(tx, sheet)));
@@ -1225,7 +1225,7 @@ mod tests {
     /// the sheet is free when it has heard.
     #[test]
     fn release_tells_the_caller_once() {
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = crate::chan::channel();
         let mut r = Release::new(tx, crate::share::Sheet::claim().unwrap());
         assert!(crate::share::Sheet::claim().is_none());
         r.send(Ok(()));
@@ -1233,7 +1233,7 @@ mod tests {
         r.send(Err("late".into()));
         drop(r);
         assert_eq!(rx.try_iter().collect::<Vec<_>>(), [Ok(())]);
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = crate::chan::channel();
         drop(Release::new(tx, crate::share::Sheet::claim().unwrap()));
         assert!(rx.recv().unwrap().is_err());
     }

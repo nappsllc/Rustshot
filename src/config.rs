@@ -790,7 +790,7 @@ pub fn toml_strings(v: &[String]) -> String {
 }
 
 /// One batch of key edits for [`edit_top_keys_at`], and who waits for it.
-type KeyJob = (std::path::PathBuf, Vec<(String, Option<String>)>, Option<std::sync::mpsc::Sender<()>>);
+type KeyJob = (std::path::PathBuf, Vec<(String, Option<String>)>, Option<crate::chan::Sender<()>>);
 
 /// What the writer thread does with one batch.
 type EditFn = fn(&std::path::Path, &[(String, Option<String>)]);
@@ -827,7 +827,7 @@ pub fn queue_key_edits(path: &std::path::Path, edits: Vec<(String, Option<String
 /// The background writer behind [`queue_key_edits`]: one thread, started
 /// on the first batch, applying batches in the order they were sent.
 struct KeyWriter {
-    tx: Option<std::sync::mpsc::Sender<KeyJob>>,
+    tx: Option<crate::chan::Sender<KeyJob>>,
     run: EditFn,
 }
 
@@ -844,10 +844,10 @@ impl KeyWriter {
         path: &std::path::Path,
         edits: Vec<(String, Option<String>)>,
         wait: bool,
-    ) -> Option<std::sync::mpsc::Receiver<()>> {
+    ) -> Option<crate::chan::Receiver<()>> {
         let run = self.run;
         let tx = self.tx.get_or_insert_with(|| {
-            let (tx, rx) = std::sync::mpsc::channel::<KeyJob>();
+            let (tx, rx) = crate::chan::channel::<KeyJob>();
             std::thread::spawn(move || {
                 for (p, e, done) in rx {
                     run(&p, &e);
@@ -858,10 +858,10 @@ impl KeyWriter {
             });
             tx
         });
-        let (dtx, drx) = std::sync::mpsc::channel();
+        let (dtx, drx) = crate::chan::channel();
         match tx.send((path.to_path_buf(), edits, wait.then_some(dtx))) {
             Ok(()) => wait.then_some(drx),
-            Err(std::sync::mpsc::SendError((p, e, _))) => {
+            Err(crate::chan::SendError((p, e, _))) => {
                 self.tx = None;
                 run(&p, &e);
                 None
@@ -871,7 +871,7 @@ impl KeyWriter {
 
     /// Wait up to `timeout` for a batch `send` returned a receiver for;
     /// false when it timed out.
-    fn wait(done: Option<std::sync::mpsc::Receiver<()>>, timeout: std::time::Duration) -> bool {
+    fn wait(done: Option<crate::chan::Receiver<()>>, timeout: std::time::Duration) -> bool {
         done.is_none_or(|rx| rx.recv_timeout(timeout).is_ok())
     }
 }
@@ -2614,7 +2614,7 @@ record_hotkey = \"Ctrl+Shift+R\"
         std::fs::write(&p, "theme = \"dark\"\n").unwrap();
         let other = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(lock_path(&p)).unwrap();
         other.lock().unwrap();
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = crate::chan::channel();
         let q = p.clone();
         let h = std::thread::spawn(move || {
             edit_top_keys_at(&q, &[("tool_line_size".into(), Some("5".into()))]).unwrap();
@@ -2693,7 +2693,7 @@ record_hotkey = \"Ctrl+Shift+R\"
         assert!(KeyWriter::wait(done, long));
         assert_eq!((get("tool_text_size"), get("tool_pencil_size")), (Some("40".into()), Some("2".into())), "in order");
         // The writer is gone (its receiver dropped): written here, at once.
-        let (tx, rx) = std::sync::mpsc::channel::<KeyJob>();
+        let (tx, rx) = crate::chan::channel::<KeyJob>();
         drop(rx);
         w.tx = Some(tx);
         SEEN.lock().unwrap().clear();

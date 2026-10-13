@@ -513,7 +513,7 @@ pub(super) fn backdrop_runs_into(
         }
     }
     let ys = &mut ys[..ny];
-    ys.sort_unstable();
+    crate::sort::sort(ys);
     let mut nu = 0;
     for i in 0..ys.len() {
         if i == 0 || ys[i] != ys[nu - 1] {
@@ -533,7 +533,7 @@ pub(super) fn backdrop_runs_into(
         edges[ne] = (r.x1, 0);
         ne += 1;
         let edges = &mut edges[..ne];
-        edges.sort_unstable();
+        crate::sort::sort(edges);
         let (mut x, mut depth) = (r.x0, 0i32);
         for &(ex, de) in edges.iter() {
             if ex > x {
