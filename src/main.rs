@@ -20,6 +20,9 @@ mod history;
 mod history_ui;
 // The Edit window (board 11).
 mod edit_ui;
+// build.rs's icon repacking, tested here.
+#[cfg(test)]
+mod ico;
 mod hotkey;
 mod icon_path;
 mod imgedit;
