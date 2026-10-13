@@ -402,7 +402,8 @@ pub(crate) fn person_scene(w: u32, h: u32) -> (CamFrame, impl Fn(f32, f32) -> f3
             bgra.extend_from_slice(&[c[0], c[1], c[2], 255]);
         }
     }
-    let soft = move |x: f32, y: f32| (1.0 - (inside(x, y) - 1.0) / 0.08).clamp(0.0, 1.0);
+    // Soft over 8 % of a part's size, centred on its edge.
+    let soft = move |x: f32, y: f32| (0.5 - (inside(x, y) - 1.0) / 0.08).clamp(0.0, 1.0);
     (CamFrame { w, h, bgra }, soft)
 }
 
