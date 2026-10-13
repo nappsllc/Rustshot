@@ -885,7 +885,10 @@ fn write_synthetic_selfie_bin() {
 #[test]
 fn embedded_model_loads_and_runs() {
     let bytes = EMBEDDED.expect("the feature embeds the model");
-    assert!(bytes.len() < 300 * 1024, "{} bytes (the binary may grow less than 300 KB)", bytes.len());
+    // The blur may grow the binary by less than 300 KB: the engine and the
+    // blur are about 76 KB (release, measured against handroll), so the
+    // model must stay under 224 KB (it is 219,338 bytes).
+    assert!(bytes.len() <= 224_000, "{} bytes: the binary would grow 300 KB or more", bytes.len());
     let mut net = Net::selfie(bytes).expect("assets/selfie.bin loads");
     assert_eq!(net.input_size(), (256, 144));
     let f = CamFrame { w: 1280, h: 720, bgra: (0..1280 * 720 * 4).map(|i| (i * 31 % 251) as u8).collect() };
