@@ -24,6 +24,7 @@
 //! rects, ellipses, pixelate, blur, invert, spotlight, magnifier) is
 //! mapped exactly, point by point.
 
+pub mod effects;
 pub mod frame;
 pub mod resample;
 
@@ -249,11 +250,13 @@ pub struct Edits {
     pub orient: Orient,
     pub resize: Option<Resize>,
     pub canvas: Option<Pad>,
+    /// After the canvas: watermark, torn edges, shadow, reflection.
+    pub effects: effects::Effects,
 }
 
 impl Edits {
     pub fn is_empty(&self) -> bool {
-        self.orient.is_identity() && self.resize.is_none() && self.canvas.is_none()
+        self.orient.is_identity() && self.resize.is_none() && self.canvas.is_none() && self.effects.is_empty()
     }
 
     /// The output size for a picture whose crop is `src` (in the
@@ -267,7 +270,7 @@ impl Edits {
     /// it shows): the resize, then the canvas.
     pub fn finish_size(&self, src: (u32, u32)) -> (u32, u32) {
         let r = self.resize_to(src);
-        self.canvas.map_or(r, |c| c.size(r))
+        self.effects.size(self.canvas.map_or(r, |c| c.size(r)))
     }
 
     /// The size the resize gives a `src` picture (turned), clamped so the
@@ -275,7 +278,7 @@ impl Edits {
     pub fn resize_to(&self, src: (u32, u32)) -> (u32, u32) {
         let Some(r) = self.resize else { return src };
         let (mut w, mut h) = r.target(src);
-        let pad = |(w, h): (u32, u32)| self.canvas.map_or((w, h), |c| c.size((w, h)));
+        let pad = |(w, h): (u32, u32)| self.effects.size(self.canvas.map_or((w, h), |c| c.size((w, h))));
         while !within_cap(pad((w, h))) && (w > 1 || h > 1) {
             (w, h) = (((w as f64 * 0.97) as u32).max(1), ((h as f64 * 0.97) as u32).max(1));
         }
@@ -301,10 +304,11 @@ pub fn finish(img: PixBuf, e: &Edits) -> PixBuf {
         }
         None => img,
     };
-    match &e.canvas {
+    let img = match &e.canvas {
         Some(p) if !p.is_noop() => frame::apply(&img, p),
         _ => img,
-    }
+    };
+    if e.effects.is_empty() { img } else { effects::apply(img, &e.effects, 1.0) }
 }
 
 /// What the picture exports as: `original` with `objects` (its pixels),
@@ -352,6 +356,7 @@ pub fn render_thumb(original: &PixBuf, objects: &[Obj], crop: Option<FRect>, mas
         }
         _ => small,
     };
+    let img = if e.effects.is_empty() { img } else { effects::apply(img, &e.effects, k) };
     crate::scale::fit(&img, max_w, max_h)
 }
 

@@ -1136,6 +1136,7 @@ mod tests {
             orient: Orient { rot: 1, flip: true },
             resize: Some(Resize { w: 50, h: 75, from: (100, 150), filter: Filter::Area }),
             canvas: Some(Pad { top: 1, right: 2, bottom: 3, left: 4, bg: Bg::Solid(C4::new(10, 20, 30, 40)), radius: 12.0, shadow: true }),
+            ..Default::default()
         }
     }
 
