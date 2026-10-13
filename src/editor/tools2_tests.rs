@@ -478,7 +478,7 @@ fn new_buttons_have_tooltips_and_shortcuts() {
     if crate::share::supported() {
         assert_eq!(rows, [Act::SaveAs, Act::SaveDesktop, Act::OpenWith, Act::Share]);
         assert_eq!(tb.texts.len(), 4);
-        assert!(tb.texts[3].ends_with('E') && tb.texts[3].contains("Shift"), "{:?}", tb.texts);
+        assert!(tb.texts[3].ends_with('E') && tb.texts[3].contains(chrome::SHIFT),"{:?}", tb.texts);
     } else {
         assert_eq!(rows, [Act::SaveAs, Act::SaveDesktop, Act::OpenWith]);
         assert_eq!(tb.texts.len(), 3);

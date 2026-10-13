@@ -196,7 +196,7 @@ mod tests {
 
     #[test]
     #[ignore = "opens the native folder dialog; pick a folder or cancel"]
-    fn interactive_pick_folder() {
+    fn manual_pick_folder() {
         let r = super::pick_folder(None, &std::env::temp_dir());
         eprintln!("picked: {r:?}");
     }

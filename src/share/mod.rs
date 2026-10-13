@@ -323,6 +323,12 @@ mod tests {
             assert!(SHARED.with(|s| s.borrow().is_empty()), "nothing shown");
             drop(up);
             assert_eq!(share_now(&f, None), Ok(()));
+        } else {
+            // No sheet here (Linux): a share says so before it looks at
+            // the sheet, and shows nothing.
+            assert_eq!(share_now(&f, None), Err("Share is not available here".to_string()));
+            assert!(SHARED.with(|s| s.borrow().is_empty()), "nothing shown");
+            drop(up);
         }
         assert!(Sheet::claim().is_some(), "free after the share");
         let _ = std::fs::remove_dir_all(&dir);
