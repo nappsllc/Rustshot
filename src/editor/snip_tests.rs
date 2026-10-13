@@ -293,6 +293,15 @@ fn a_freeform_capture_keeps_its_lasso_in_the_history() {
     let e = st.get(&id).unwrap();
     let mask = e.meta.mask.clone().expect("the lasso");
     assert_eq!(mask[0], Pt::new(0.0, 0.0), "in original.png's pixels");
+    // original.png itself is cut: an older build (v0.2, v0.3 ignore the
+    // mask) draws it with its objects, and nothing outside shows there.
+    let orig = st.original(&e).unwrap();
+    assert_eq!(orig.get_pixel(5, 395), [255, 255, 255, 0]);
+    assert_eq!(orig.get_pixel(200, 100)[3], 255);
+    let old_doc = crate::objects::v030::json::from_json(&std::fs::read_to_string(e.annotations()).unwrap()).unwrap();
+    let old_pic = crate::editor::bake_objects(&orig, &old_doc, None);
+    assert_eq!(old_pic.get_pixel(5, 395)[3], 0, "v0.3's picture: transparent outside");
+    assert!(crate::objects::v020::json::from_json(&std::fs::read_to_string(e.annotations()).unwrap()).is_ok());
     // The picture as it opens again: transparent outside.
     let pic = crate::history_ui::picture(&st, &e).unwrap();
     assert_eq!(pic.get_pixel(5, 395)[3], 0);

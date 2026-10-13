@@ -482,7 +482,8 @@ pub fn meta_to_json(m: &Meta) -> String {
     if let Some(i) = &m.upload {
         o.push_str(&format!(",\"upload_time\":{}", i.time));
     }
-    if let Some(pts) = m.mask.as_ref().filter(|p| !p.is_empty()) {
+    // An unreadable lasso stays (empty: still unreadable, fail closed).
+    if let Some(pts) = m.mask.as_ref() {
         o.push_str(",\"mask\":[");
         for (i, p) in pts.iter().enumerate() {
             if i > 0 {
@@ -504,12 +505,14 @@ pub fn meta_to_json(m: &Meta) -> String {
     o
 }
 
-/// `meta.json`'s `mask`: points `[x, y]` (a broken one: no mask).
+/// `meta.json`'s `mask`: points `[x, y]`. A mask that is there but cannot
+/// be read is kept as an empty one (fail closed: nothing of the picture
+/// shows, [`mask_unreadable`]).
 fn mask_of(v: Option<&V>) -> Option<Vec<crate::objects::Pt>> {
-    let V::Arr(a) = v? else { return None };
+    let v = v?;
+    let V::Arr(a) = v else { return Some(Vec::new()) };
     let pts: Option<Vec<crate::objects::Pt>> = a
         .iter()
-        .take(json::MAX_POINTS)
         .map(|p| match p {
             V::Arr(xy) if xy.len() == 2 => match (&xy[0], &xy[1]) {
                 (V::Num(x), V::Num(y)) if x.is_finite() && y.is_finite() => Some(crate::objects::Pt::new(*x as f32, *y as f32)),
@@ -518,7 +521,12 @@ fn mask_of(v: Option<&V>) -> Option<Vec<crate::objects::Pt>> {
             _ => None,
         })
         .collect();
-    pts.filter(|p| p.len() >= 3)
+    Some(pts.filter(|p| p.len() <= json::MAX_POINTS && crate::objects::mask::is_shape(p)).unwrap_or_default())
+}
+
+/// The entry has a lasso that cannot be read: its picture is not shown.
+pub fn mask_unreadable(m: &Meta) -> bool {
+    m.mask.as_ref().is_some_and(|p| !crate::objects::mask::is_shape(p))
 }
 
 /// A `meta.json` document. Unknown keys are ignored; a newer version, a

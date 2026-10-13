@@ -453,6 +453,9 @@ pub fn open_edit(id: &str) {
 /// original without the annotations (they may hide something).
 pub fn picture(store: &Store, e: &Entry) -> anyhow::Result<PixBuf> {
     let doc = store.doc(e).map_err(|err| anyhow::anyhow!("its annotations cannot be read, so it is not shown without them ({err:#})"))?;
+    if crate::history::mask_unreadable(&e.meta) {
+        anyhow::bail!("its lasso cannot be read, so it is not shown");
+    }
     let orig = store.original(e)?;
     // Its crop and lasso too (what they leave out is never shown).
     Ok(crate::history::render(&orig, &doc.objects, doc.crop, e.meta.mask.as_deref()))

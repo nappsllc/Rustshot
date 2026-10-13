@@ -406,6 +406,11 @@ fn run(id: &str, rx: std::sync::mpsc::Receiver<Msg>, unsaved: Arc<AtomicBool>) {
         done(id);
         return;
     };
+    if crate::history::mask_unreadable(&e.meta) {
+        crate::tray::notify("Could not open the capture: its lasso cannot be read");
+        done(id);
+        return;
+    }
     let (img, doc) = match (store.original(&e), store.doc(&e)) {
         (Ok(i), Ok(d)) => (i, d),
         (Err(err), _) | (_, Err(err)) => {

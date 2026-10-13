@@ -2904,7 +2904,8 @@ impl Edit {
                 o
             })
             .collect();
-        (self.export_plain(sel), objs)
+        // A lasso cuts the original too: what it left out is never kept.
+        (self.masked(self.export_plain(sel), sel), objs)
     }
 
     /// The area the spotlights dim: the selection, on whole pixels.

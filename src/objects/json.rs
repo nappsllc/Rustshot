@@ -907,6 +907,10 @@ mod tests {
         assert!(from_json_doc("{\"version\":1,\"crop\":[1,2],\"objects\":[]}").is_err());
         assert!(from_json_doc("{\"version\":1,\"crop\":[1,2,0,5],\"objects\":[]}").is_err());
 
+        // v0.3.0's reader: every object as written, then the fills on top.
+        let v3 = crate::objects::v030::json::from_json(&s).expect("v0.3.0 reads it");
+        assert_eq!(&v3[..objs.len()], &objs[..]);
+        assert_eq!(&v3[objs.len()..], &crop_stand_ins(crop, size)[..], "v0.3.0 draws the stand-ins");
         let old = v020::json::from_json(&s).expect("v0.2.0 reads it");
         let n = objs.len();
         assert_eq!(old.len(), n + crop_stand_ins(crop, size).len());
