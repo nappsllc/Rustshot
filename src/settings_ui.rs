@@ -638,7 +638,19 @@ impl Form {
     pub fn conflicting(&self) -> Vec<Action> {
         let mut v: Vec<Action> = self.keys.conflicts().into_iter().flat_map(|(_, v)| v).collect();
         v.extend(self.keys.plain_typing());
+        v.extend(Action::ALL.into_iter().filter(|a| self.global_clash(*a).is_some()));
         v
+    }
+
+    /// The global hotkey an Edit window image key shares its chord with
+    /// (the global takes it everywhere, so the key never reaches the
+    /// window): its label.
+    pub fn global_clash(&self, a: Action) -> Option<&'static str> {
+        if !a.image_edit() {
+            return None;
+        }
+        let c = *self.keys.chords(a).first()?;
+        GLOBALS.iter().find(|(_, s)| self.global(*s) == Some(c)).map(|(label, _)| *label)
     }
 
     /// The message under an overlay action in a conflict: "Already used
@@ -647,6 +659,9 @@ impl Form {
     pub fn conflict_note(&self, a: Action) -> Option<String> {
         if self.keys.plain_typing().contains(&a) {
             return Some("Needs Ctrl or Alt: a plain key would type. Choose another.".into());
+        }
+        if let Some(label) = self.global_clash(a) {
+            return Some(format!("Already used by {label}. Choose another."));
         }
         let all = self.keys.conflicts();
         let (_, acts) = all.iter().find(|(c, acts)| acts.contains(&a) && self.keys.chords(a).first() == Some(c))?;

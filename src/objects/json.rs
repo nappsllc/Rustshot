@@ -46,7 +46,11 @@
 //! The objects stay in the original's pixels: an older build ignores the
 //! key and shows the picture unturned, at its size, without the canvas,
 //! with every object (every redaction) where it belongs on it, so nothing
-//! needs a stand-in; turning, resizing and padding hide nothing. This
+//! needs a stand-in; turning, resizing and padding hide nothing. The one
+//! exception is a filled, opaque callout of a turned picture: its outline
+//! (rounded, cloud) in the unturned box is not quite this build's, so an
+//! opaque `rect` under it over its whole box is written for older builds
+//! (`"stands_for":"callout"`, dropped by this reader). This
 //! reader fails closed on a stack it does not know (an unknown op, values
 //! out of range, a turn after a resize).
 
@@ -230,6 +234,8 @@ fn transforms(out: &mut String, e: &crate::imgedit::Edits) {
     if let Some(c) = e.canvas {
         op(out, "canvas");
         let mut w = W(out);
+        // `[top, right, bottom, left]` (CSS order), through the four-number
+        // writer (its x, y, w, h are just the four slots here).
         w.rect("pad", FRect { x: c.top as f32, y: c.right as f32, w: c.bottom as f32, h: c.left as f32 });
         match c.bg {
             Bg::Solid(col) => w.color("bg", col),
@@ -306,6 +312,13 @@ fn transforms_of(v: Option<&V>) -> Result<crate::imgedit::Edits> {
                 stage = 2;
             }
             o => bail!("annotations.json: unknown transform {o:?}"),
+        }
+    }
+    // An output past the pixel cap (a resize with its canvas) fails closed.
+    if let Some(r) = e.resize {
+        let out = e.canvas.map_or((r.w, r.h), |c| c.size((r.w, r.h)));
+        if !crate::imgedit::within_cap(out) {
+            bail!("annotations.json: a resize to {} x {} is past {} pixels", out.0, out.1, crate::imgedit::MAX_PIXELS);
         }
     }
     Ok(e)
@@ -405,6 +418,24 @@ pub fn to_json_full(objs: &[Obj], crop: Option<FRect>, edits: &crate::imgedit::E
                 out.push('}');
             }
             continue;
+        }
+        // A filled, opaque callout of a turned picture: an older build
+        // draws it unturned, its rounded or cloud outline not quite where
+        // this build's falls; an opaque rect under it over its whole box
+        // (`"stands_for":"callout"`, dropped here) covers every pixel the
+        // callout covers in this build's export.
+        if let Obj::Callout { r, color, fill: true, .. } = o
+            && color.a == 255
+            && !edits.orient.is_identity()
+        {
+            out.push_str("{\"type\":\"rect\"");
+            let mut w = W(&mut out);
+            w.rect("r", *r);
+            w.color("color", *color);
+            w.num("width", 1.0);
+            w.bool("fill", true);
+            w.str("stands_for", "callout");
+            out.push_str("},\n ");
         }
         if let Obj::Blur { r, sigma } = o {
             // The stand-in an older build draws (this one drops it).
@@ -852,7 +883,7 @@ fn objects_of(top: &[(String, V)]) -> Result<Vec<Obj>> {
             "line" => Obj::Line { a: f.pt("a")?, b: f.pt("b")?, color: f.color("color")?, width: f.num("width")? },
             "arrow" => Obj::Arrow { a: f.pt("a")?, b: f.pt("b")?, color: f.color("color")?, width: f.num("width")? },
             // A crop's stand-ins (the crop itself is the document's).
-            "rect" if matches!(f.get("stands_for"), Some(V::Str(s)) if s == "crop") => continue,
+            "rect" if matches!(f.get("stands_for"), Some(V::Str(s)) if s == "crop" || s == "callout") => continue,
             "rect" | "ellipse" => {
                 let (r, color, width) = (f.rect("r")?, f.color("color")?, f.num("width")?);
                 match (ty, f.bool_or("fill", false)?) {
@@ -1148,6 +1179,9 @@ mod tests {
             r##"{"version":1,"transforms":[{"op":"resize","w":5,"h":5,"from":[10,10],"filter":"area"},{"op":"rotate","deg":90}],"objects":[]}"##,
             r##"{"version":1,"transforms":[{"op":"resize","w":5,"h":5,"from":[10,10],"filter":"magic"}],"objects":[]}"##,
             r##"{"version":1,"transforms":[{"op":"resize","w":0,"h":5,"from":[10,10],"filter":"area"}],"objects":[]}"##,
+            // Past the pixel cap (200 MP): alone, and with its canvas.
+            r##"{"version":1,"transforms":[{"op":"resize","w":20000,"h":20000,"from":[10,10],"filter":"area"}],"objects":[]}"##,
+            r##"{"version":1,"transforms":[{"op":"resize","w":14000,"h":14000,"from":[10,10],"filter":"area"},{"op":"canvas","pad":[2000,2000,2000,2000],"bg":"#fff","radius":0}],"objects":[]}"##,
             r##"{"version":1,"transforms":[{"op":"resize","w":5.5,"h":5,"from":[10,10],"filter":"area"}],"objects":[]}"##,
             r##"{"version":1,"transforms":[{"op":"canvas","pad":[-1,0,0,0],"bg":"#fff","radius":0}],"objects":[]}"##,
             r##"{"version":1,"transforms":[{"op":"canvas","pad":[1,0,0,0],"bg":"wood","radius":0}],"objects":[]}"##,
@@ -1212,6 +1246,76 @@ mod tests {
             let bare = crate::imgedit::render(&pic, &objs[3..], crop, None, &edits);
             assert!(bare.as_raw().as_chunks::<4>().0.iter().any(|p| red(*p)));
         }
+    }
+
+    /// A filled callout drawn over a secret while the picture is turned
+    /// (fractional box): this build keeps covering it after any turn and
+    /// turn back; v0.2.0 and v0.3.0 draw the callout unturned with an
+    /// opaque stand-in under it over its whole box, so the secret stays
+    /// covered there too.
+    #[test]
+    fn a_filled_callout_drawn_turned_keeps_covering() {
+        use crate::imgedit::{Edits, Orient};
+        use crate::objects::{v020, v030};
+        let size = (300u32, 200u32);
+        // A tall secret (it reads across once the picture is turned).
+        let secret = FRect { x: 120.0, y: 30.0, w: 24.0, h: 130.0 };
+        let mut pic = crate::pixbuf::PixBuf::from_pixel(size.0, size.1, [255, 255, 255, 255]);
+        for y in secret.y as u32..(secret.y + secret.h) as u32 {
+            for x in secret.x as u32..(secret.x + secret.w) as u32 {
+                let i = ((y * size.0 + x) * 4) as usize;
+                pic.as_raw_mut()[i..i + 4].copy_from_slice(&[230, 20, 20, 255]);
+            }
+        }
+        let red = |p: [u8; 4]| p[3] > 0 && p[0] > 150 && p[1] < 90 && p[2] < 90;
+        let any_red = |img: &crate::pixbuf::PixBuf| img.as_raw().as_chunks::<4>().0.iter().any(|p| red(*p));
+        for i in 1..8u8 {
+            let o = Orient { rot: i % 4, flip: i >= 4 };
+            // Drawn on the turned picture over the turned secret (a box a
+            // little bigger, at half and quarter pixels).
+            let s = o.rect(secret, size);
+            let box_t = FRect { x: s.x - 12.5, y: s.y - 12.25, w: s.w + 25.0, h: s.h + 24.5 };
+            let callout = Obj::Callout {
+                r: box_t,
+                tail: Pt::new(box_t.x + 10.0, box_t.y1() + 30.0),
+                text: "covered".into(),
+                color: C4::rgb(40, 40, 40),
+                size: 14.0,
+                style: CalloutStyle::Rounded,
+                fill: true,
+                fmt: TextFmt::default(),
+            };
+            let doc = o.inverse().map_obj(&callout, o.size(size), None);
+            let Obj::Callout { r: d, .. } = &doc else { panic!() };
+            assert_eq!(*d, o.inverse().rect(box_t, o.size(size)), "{o:?}: the box mapped exactly");
+            // Turned and back in this build: the same box.
+            assert_eq!(o.inverse().map_obj(&o.map_obj(&doc, size, None), o.size(size), None), doc, "{o:?}: turn, turn back");
+            let edits = Edits { orient: o, ..Default::default() };
+            let objs = vec![doc.clone()];
+            assert!(!any_red(&crate::imgedit::render(&pic, &objs, None, None, &edits)), "{o:?}: this build shows the secret");
+            for again in [Orient::ID.rotated(true), Orient::ID.flipped_h()] {
+                let e2 = Edits { orient: o.then(again), ..Default::default() };
+                assert!(!any_red(&crate::imgedit::render(&pic, &objs, None, None, &e2)), "{o:?} then {again:?}");
+            }
+            let js = to_json_full(&objs, None, &edits, size);
+            assert!(js.contains("\"stands_for\":\"callout\""), "{js}");
+            assert_eq!(from_json_doc(&js).unwrap().objects, objs, "the stand-in is dropped here");
+            let v3 = v030::json::from_json(&js).unwrap();
+            assert_eq!(v3.len(), 2, "the stand-in, then the callout");
+            assert!(!any_red(&crate::editor::bake_objects(&pic, &v3, None)), "{o:?}: v0.3 shows the secret");
+            let v2 = v020::json::from_json(&js).unwrap();
+            assert!(matches!(&v2[0], v020::Obj::RectFill { r, color, .. } if *r == *d && color.a == 255), "v0.2.0 gets the stand-in under the callout");
+            assert!(matches!(&v2[1], v020::Obj::Callout { .. }));
+        }
+        // Unturned, outlined or see-through: no stand-in.
+        let c = Obj::Callout { r: secret, tail: Pt::new(0.0, 0.0), text: String::new(), color: C4::new(0, 0, 0, 120), size: 14.0, style: CalloutStyle::Rounded, fill: true, fmt: TextFmt::default() };
+        let turned = Edits { orient: Orient::ID.rotated(true), ..Default::default() };
+        assert!(!to_json_full(std::slice::from_ref(&c), None, &turned, size).contains("stands_for"));
+        let mut opaque = c.clone();
+        if let Obj::Callout { color, .. } = &mut opaque {
+            *color = C4::rgb(0, 0, 0);
+        }
+        assert!(!to_json_full(std::slice::from_ref(&opaque), None, &Edits::default(), size).contains("stands_for"));
     }
 
     /// A magnifier inside the crop whose source lies outside it: this

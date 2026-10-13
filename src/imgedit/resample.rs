@@ -84,24 +84,26 @@ impl Axis {
                 let (a, b) = ((c - support * fs).floor() as i64, (c + support * fs).ceil() as i64);
                 (a, (a..b).map(|j| kernel((j as f64 + 0.5 - c) / fs)).collect())
             };
-            // Taps past the edges fold onto the edge pixels.
-            let mut folded = vec![0.0; src];
+            // Taps past the edges fold onto the edge pixels (a window as
+            // long as the taps, not the whole axis).
+            let clamp = |k: usize| (lo + k as i64).clamp(0, src as i64 - 1) as usize;
+            let (base, top) = (clamp(0), clamp(ws.len().saturating_sub(1)));
+            let mut folded = vec![0.0; top - base + 1];
             let (mut first, mut last) = (src, 0);
             for (k, w) in ws.iter().enumerate() {
-                let j = (lo + k as i64).clamp(0, src as i64 - 1) as usize;
-                folded[j] += w;
+                let j = clamp(k);
+                folded[j - base] += w;
                 if *w != 0.0 {
                     first = first.min(j);
                     last = last.max(j);
                 }
             }
             if first > last {
-                let j = ((i as f64 + 0.5) * scale) as usize;
-                first = j.min(src - 1);
-                last = first;
-                folded[first] = 1.0;
+                let j = (((i as f64 + 0.5) * scale) as usize).min(src - 1);
+                rows.push((j, vec![1.0]));
+                continue;
             }
-            rows.push((first, folded[first..=last].to_vec()));
+            rows.push((first, folded[first - base..=last - base].to_vec()));
         }
         let taps = rows.iter().map(|r| r.1.len()).max().unwrap_or(1);
         let mut out = Axis { start: Vec::with_capacity(dst), n: Vec::with_capacity(dst), taps, w: vec![0; dst * taps] };
@@ -126,7 +128,7 @@ impl Axis {
     }
 }
 
-#[cfg(not(target_arch = "x86_64"))]
+#[cfg(any(not(target_arch = "x86_64"), test))]
 fn clamp8(v: i32) -> u8 {
     ((v + (ONE >> 1)) >> BITS).clamp(0, 255) as u8
 }
@@ -160,9 +162,14 @@ fn pass_x(src: &[u8], sw: usize, rows: usize, dst: &mut [u8], dw: usize, ax: &Ax
     });
 }
 
-/// One output pixel: the pixels `px` weighed by `ws`.
+/// Elsewhere than x86-64: the scalar kernels (tests compare them with the
+/// SSE2 ones on x86-64 too).
 #[cfg(not(target_arch = "x86_64"))]
-fn taps_px(px: &[u8], ws: &[i32]) -> [u8; 4] {
+use {column_scalar as column, taps_px_scalar as taps_px};
+
+/// One output pixel: the pixels `px` weighed by `ws`.
+#[cfg(any(not(target_arch = "x86_64"), test))]
+fn taps_px_scalar(px: &[u8], ws: &[i32]) -> [u8; 4] {
     let mut acc = [0i32; 4];
     for (p, &w) in px.as_chunks::<4>().0.iter().zip(ws) {
         acc[0] += p[0] as i32 * w;
@@ -208,8 +215,8 @@ fn taps_px(px: &[u8], ws: &[i32]) -> [u8; 4] {
 
 /// One output row: `out[i]` the bytes `rows[t][i]` weighed by `ws[t]`
 /// (`acc`: scratch as long as the row).
-#[cfg(not(target_arch = "x86_64"))]
-fn column(rows: &[&[u8]], ws: &[i32], acc: &mut [i32], out: &mut [u8]) {
+#[cfg(any(not(target_arch = "x86_64"), test))]
+fn column_scalar(rows: &[&[u8]], ws: &[i32], acc: &mut [i32], out: &mut [u8]) {
     acc.fill(ONE >> 1);
     for (row, &wt) in rows.iter().zip(ws) {
         for (s, &v) in acc.iter_mut().zip(row.iter()) {
@@ -270,11 +277,13 @@ fn pass_y(src: &[u8], w: usize, dst: &mut [u8], dh: usize, ax: &Axis) {
         for (ci, chunk) in dst.chunks_mut(per * n).enumerate() {
             s.spawn(move || {
                 let mut acc = vec![0i32; n];
+                let mut rows: Vec<&[u8]> = Vec::with_capacity(ax.taps);
                 for (r, out) in chunk.chunks_exact_mut(n).enumerate() {
                     let y = ci * per + r;
                     let (a, k) = (ax.start[y], ax.n[y]);
                     let ws = &ax.w[y * ax.taps..y * ax.taps + k];
-                    let rows: Vec<&[u8]> = (0..k).map(|t| &src[(a + t) * n..(a + t + 1) * n]).collect();
+                    rows.clear();
+                    rows.extend((0..k).map(|t| &src[(a + t) * n..(a + t + 1) * n]));
                     column(&rows, ws, &mut acc, out);
                 }
             });
@@ -369,7 +378,7 @@ mod tests {
         ]
     }
 
-    /// The signal sampled at pixel centres of a `w`×`h` picture whose
+    /// The signal sampled at pixel centers of a `w`×`h` picture whose
     /// side `w` stands for `size` units.
     fn sampled(w: u32, h: u32, size: f64) -> PixBuf {
         let k = size / w as f64;
@@ -427,7 +436,7 @@ mod tests {
         let flat = PixBuf::from_pixel(100, 100, [128, 128, 128, 255]);
         for f in [Filter::Lanczos3, Filter::Area] {
             let p = psnr(&resize(&busy, 100, 100, f), &flat);
-            assert!(p > 40.0, "{f:?}: a checkerboard averages to grey: {p:.1}");
+            assert!(p > 40.0, "{f:?}: a checkerboard averages to gray: {p:.1}");
         }
     }
 
@@ -469,6 +478,41 @@ mod tests {
                 let p = out.get_pixel(1, y);
                 assert!(p[3] > 60 && p[3] < 200, "{f:?} half covered: {p:?}");
                 assert!(p[0] > 240 && p[1] < 10, "{f:?} no dark fringe: {p:?}");
+            }
+        }
+    }
+
+    /// The SSE2 kernels (x86-64) give exactly what the scalar ones (every
+    /// other target) do, on random rows and real weights, odd tap counts
+    /// and row tails included.
+    #[test]
+    fn simd_and_scalar_kernels_agree() {
+        let mut s = 0x9e37_79b9u32;
+        let mut rnd = || {
+            s ^= s << 13;
+            s ^= s >> 17;
+            s ^= s << 5;
+            s
+        };
+        for (src, dst, f) in [(1000usize, 333usize, Filter::Lanczos3), (517, 200, Filter::Area), (90, 400, Filter::Lanczos3), (37, 5, Filter::Area)] {
+            let ax = Axis::new(src, dst, f);
+            let row: Vec<u8> = (0..src * 4).map(|_| rnd() as u8).collect();
+            for i in 0..dst {
+                let (a, n) = (ax.start[i], ax.n[i]);
+                let ws = &ax.w[i * ax.taps..i * ax.taps + n];
+                assert_eq!(taps_px(&row[a * 4..(a + n) * 4], ws), taps_px_scalar(&row[a * 4..(a + n) * 4], ws), "{src}->{dst} px {i}");
+            }
+            // Columns: rows of an odd length (a tail past the 16-byte steps).
+            let w = 37;
+            let rows: Vec<Vec<u8>> = (0..src).map(|_| (0..w * 4).map(|_| rnd() as u8).collect()).collect();
+            for i in 0..dst {
+                let (a, n) = (ax.start[i], ax.n[i]);
+                let ws = &ax.w[i * ax.taps..i * ax.taps + n];
+                let rs: Vec<&[u8]> = (a..a + n).map(|j| rows[j].as_slice()).collect();
+                let (mut o1, mut o2, mut acc) = (vec![0u8; w * 4], vec![0u8; w * 4], vec![0i32; w * 4]);
+                column(&rs, ws, &mut acc, &mut o1);
+                column_scalar(&rs, ws, &mut acc, &mut o2);
+                assert_eq!(o1, o2, "{src}->{dst} row {i}");
             }
         }
     }

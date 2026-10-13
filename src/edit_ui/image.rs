@@ -75,9 +75,20 @@ pub struct ResizeForm {
     seen: [String; 3],
     /// The estimate for (w, h, filter): bytes.
     est: Option<((u32, u32, usize), u64)>,
+    /// The canvas round the resized picture (its pixels count toward the cap).
+    pub canvas: Option<Pad>,
 }
 
 impl ResizeForm {
+    /// The fields hold a size, but it is past [`crate::imgedit::MAX_PIXELS`]
+    /// with the canvas.
+    pub fn over_cap(&self) -> bool {
+        match (parse_px(&self.w.text), parse_px(&self.h.text)) {
+            (Some(w), Some(h)) => !crate::imgedit::within_cap(self.canvas.map_or((w, h), |c| c.size((w, h)))),
+            _ => false,
+        }
+    }
+
     pub fn new(src: (u32, u32), cur: Option<Resize>) -> ResizeForm {
         let (w, h) = cur.map_or(src, |r| r.target(src));
         let filter = usize::from(cur.is_some_and(|r| r.filter == Filter::Area));
@@ -91,6 +102,7 @@ impl ResizeForm {
             filter,
             seen: Default::default(),
             est: None,
+            canvas: None,
         };
         f.seen = [f.w.text.clone(), f.h.text.clone(), f.pct.text.clone()];
         f.w.select_all();
@@ -142,7 +154,7 @@ impl ResizeForm {
     pub fn size(&self) -> Option<(u32, u32)> {
         let ok = |v: u32| (1..=crate::imgedit::MAX_SIDE).contains(&v);
         let (w, h) = (parse_px(&self.w.text)?, parse_px(&self.h.text)?);
-        (ok(w) && ok(h)).then_some((w, h))
+        (ok(w) && ok(h) && !self.over_cap()).then_some((w, h))
     }
 
     pub fn filter(&self) -> Filter {
@@ -186,7 +198,7 @@ pub fn estimate_bytes(pic: &PixBuf, (w, h): (u32, u32), f: Filter, fmt: crate::e
     }
     const T: u32 = 256;
     let (tw, th) = (w.min(T), h.min(T));
-    // The source region that becomes the tile, centred.
+    // The source region that becomes the tile, centered.
     let rw = ((tw as f64 * sw as f64 / w as f64).round() as u32).clamp(1, sw);
     let rh = ((th as f64 * sh as f64 / h as f64).round() as u32).clamp(1, sh);
     let (x, y) = ((sw - rw) / 2, (sh - rh) / 2);
@@ -213,6 +225,9 @@ pub struct CanvasForm {
     pub shadow: bool,
     /// The preview for the fields as they were (their key).
     preview: Option<(String, PixBuf)>,
+    /// The picture the canvas goes round (after the resize): its pixels
+    /// count toward the cap.
+    pub src: Option<(u32, u32)>,
 }
 
 /// The solid backgrounds offered as swatches.
@@ -235,6 +250,15 @@ impl CanvasForm {
             radius: p.radius.round().clamp(0.0, 48.0) as u8,
             shadow: p.shadow,
             preview: None,
+            src: None,
+        }
+    }
+
+    /// The padding is a number but the picture with it is past the cap.
+    pub fn over_cap(&self) -> bool {
+        match (self.fields(), self.src) {
+            (Some(p), Some(s)) => !crate::imgedit::within_cap(p.size(s)),
+            _ => false,
         }
     }
 
@@ -248,8 +272,13 @@ impl CanvasForm {
         self.bg = bg;
     }
 
-    /// The canvas asked for (`None`: a field is not a number or a color).
+    /// The canvas asked for (`None`: a field is not a number or a color,
+    /// or the picture with it would be past the cap).
     pub fn result(&self) -> Option<Pad> {
+        self.fields().filter(|_| !self.over_cap())
+    }
+
+    fn fields(&self) -> Option<Pad> {
         let px = |t: &TextState| parse_px(&t.text).filter(|v| *v <= frame::MAX_PAD);
         let [t, r, b, l] = if self.sides {
             [px(&self.side[0])?, px(&self.side[1])?, px(&self.side[2])?, px(&self.side[3])?]
@@ -381,9 +410,10 @@ fn resize_body(ui: &mut Ui, f: &mut ResizeForm, pic: &PixBuf, cfg: &crate::confi
     let fmt = crate::export::Format::from_config(cfg);
     let line = match f.size() {
         Some((w, h)) => {
-            let est = f.estimate(pic, fmt, cfg.jpeg_quality).map(|b| format!(" \u{b7} \u{2248} {} as {}", bytes_text(b), fmt.ext().to_uppercase())).unwrap_or_default();
+            let est = f.estimate(pic, fmt, cfg.jpeg_quality).map(|b| format!(" \u{b7} about {} as {}", bytes_text(b), fmt.ext().to_uppercase())).unwrap_or_default();
             format!("{} \u{d7} {} \u{2192} {w} \u{d7} {h}{est}", f.src.0, f.src.1)
         }
+        None if f.over_cap() => format!("Too large: up to {} megapixels, the canvas included", crate::imgedit::MAX_PIXELS / 1_000_000),
         None => format!("Enter a size from 1 to {} px", crate::imgedit::MAX_SIDE),
     };
     let r = ui.alloc(None, 22.0);
@@ -469,7 +499,7 @@ fn canvas_body(ui: &mut Ui, f: &mut CanvasForm, small: &(PixBuf, f32), tok: &Tok
         ui.switch("cv_shadow", &mut f.shadow, tok);
         unit(ui, "24 px blur, 25 %", tok);
     });
-    // The preview, centred in its box.
+    // The preview, centered in its box.
     let pb = ui.alloc(None, 170.0);
     let k = ui.k;
     let bx = FRect { x: pb.x, y: pb.y, w: pb.w, h: pb.h };
@@ -488,7 +518,12 @@ fn canvas_body(ui: &mut Ui, f: &mut CanvasForm, small: &(PixBuf, f32), tok: &Tok
             }
         }
         None => {
-            ui.text_at(12.0, "Enter the padding in px and a color such as #ffffff", bx.x + 12.0 * k, bx.y + bx.h / 2.0, tok.er, false);
+            let msg = if f.over_cap() {
+                format!("Too large: up to {} megapixels with the padding", crate::imgedit::MAX_PIXELS / 1_000_000)
+            } else {
+                "Enter the padding in px and a color such as #ffffff".to_string()
+            };
+            ui.text_at(12.0, &msg, bx.x + 12.0 * k, bx.y + bx.h / 2.0, tok.er, false);
         }
     }
     ui.space(4.0);
@@ -544,6 +579,15 @@ mod tests {
         assert_eq!(f.result(), None, "not a size");
         f.w.set("0");
         assert_eq!(f.result(), None);
+        // Past 200 MP (with the canvas): refused, and said so.
+        f.w.set("20000");
+        f.h.set("20000");
+        assert!(f.over_cap() && f.size().is_none());
+        f.w.set("14000");
+        f.h.set("14000");
+        assert!(f.size().is_some());
+        f.canvas = Some(Pad::uniform(2000, Bg::Presentation, 12.0, true));
+        assert!(f.over_cap() && f.size().is_none(), "the canvas counts");
         // Opened again on a resize: its size and filter.
         let g = ResizeForm::new((1920, 1080), Some(Resize { w: 640, h: 360, from: (1920, 1080), filter: Filter::Area }));
         assert_eq!((g.w.text.as_str(), g.h.text.as_str(), g.filter), ("640", "360", 1));
@@ -594,6 +638,13 @@ mod tests {
         let small = PixBuf::from_pixel(40, 30, [200, 30, 30, 255]);
         let a = f.preview(&small, 0.5).unwrap().dimensions();
         assert_eq!(a, (40 + 1 + 2, 30 + 2 + 1), "the padding at half size: {a:?}");
+        // Round a picture near the cap: padding past it is refused.
+        f.sides = false;
+        f.pad.set("2000");
+        f.src = Some((14_000, 10_000));
+        assert!(f.over_cap() && f.result().is_none());
+        f.pad.set("10");
+        assert!(!f.over_cap() && f.result().is_some());
         // Back on a saved canvas.
         let g = CanvasForm::new(Some(Pad { top: 5, right: 6, bottom: 7, left: 8, bg: Bg::Solid(C4::new(1, 2, 3, 0)), radius: 4.0, shadow: false }));
         assert!(g.sides && g.color.text == "#01020300" && g.radius == 4);

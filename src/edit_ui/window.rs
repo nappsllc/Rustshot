@@ -342,7 +342,8 @@ impl Window {
             return true;
         }
         let act = self.e.canvas.keymap().resolve_edit_window(vk, mods);
-        if let Some(a) = act.and_then(super::image::act_of) {
+        // (Not while typing: the chord is the text's then, e.g. a typing key.)
+        if let Some(a) = act.and_then(super::image::act_of).filter(|_| !self.e.canvas.typing()) {
             self.image_act(a);
             return true;
         }

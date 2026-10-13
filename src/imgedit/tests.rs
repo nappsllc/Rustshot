@@ -163,6 +163,21 @@ fn redactions_cover_the_same_pixels_when_turned() {
         Obj::RectFill { r: FRect { x: 8.0, y: 5.0, w: 20.0, h: 12.0 }, color: black, width: 1.0 },
         Obj::Pixelate { r: FRect { x: 30.0, y: 20.0, w: 24.0, h: 24.0 }, cell: 8.0 },
         Obj::Blur { r: FRect { x: 2.0, y: 30.0, w: 20.0, h: 14.0 }, sigma: 6.0 },
+        // Fractional rects (half and quarter pixels) hide the same pixels too.
+        Obj::RectFill { r: FRect { x: 40.5, y: 3.5, w: 10.25, h: 7.5 }, color: black, width: 1.0 },
+        Obj::Pixelate { r: FRect { x: 52.5, y: 2.25, w: 9.5, h: 15.75 }, cell: 4.0 },
+        Obj::Blur { r: FRect { x: 25.5, y: 22.5, w: 6.5, h: 9.5 }, sigma: 3.0 },
+        // A filled callout: mapped exactly, it covers the same pixels.
+        Obj::Callout {
+            r: FRect { x: 4.5, y: 20.25, w: 18.0, h: 7.5 },
+            tail: Pt::new(6.0, 4.0),
+            text: String::new(),
+            color: black,
+            size: 12.0,
+            style: crate::objects::CalloutStyle::Rounded,
+            fill: true,
+            fmt: Default::default(),
+        },
     ];
     let baked = crate::editor::bake_objects(&img, &objs, None);
     for o in all() {
@@ -186,19 +201,19 @@ fn redactions_cover_the_same_pixels_when_turned() {
 }
 
 /// The upright rule: a text keeps its size, its glyphs are not turned,
-/// its box's centre goes where the picture takes it.
+/// its box's center goes where the picture takes it.
 #[test]
-fn text_stays_upright_and_its_centre_follows() {
+fn text_stays_upright_and_its_center_follows() {
     let Some(font) = AnnotFont::load() else { return };
     let size = (300, 200);
     let t = Obj::Text { pos: Pt::new(40.0, 30.0), text: "Upright".into(), color: C4::rgb(0, 0, 0), size: 20.0, fmt: Default::default() };
     let (w, h, _) = font.measure("Upright", 20.0);
-    let centre = Pt::new(40.0 + w / 2.0, 30.0 + h / 2.0);
+    let center = Pt::new(40.0 + w / 2.0, 30.0 + h / 2.0);
     for o in all() {
         let Obj::Text { pos, size: px, text, .. } = o.map_obj(&t, size, Some(&font)) else { panic!() };
         assert_eq!((px, text.as_str()), (20.0, "Upright"), "same size and text");
         let c = Pt::new(pos.x + w / 2.0, pos.y + h / 2.0);
-        assert!(close(c, o.pt(centre, size)), "{o:?}: centre {c:?}");
+        assert!(close(c, o.pt(center, size)), "{o:?}: center {c:?}");
     }
     // Drawn on the turned picture it reads left to right: its ink is wider than tall.
     let r = Orient::ID.rotated(true);
@@ -214,10 +229,41 @@ fn text_stays_upright_and_its_centre_follows() {
         }
     }
     assert!(x1 > x0 && x1 - x0 > 2 * (y1 - y0), "upright ink: {}x{}", x1 - x0, y1 - y0);
-    // A callout's box keeps its size.
-    let co = &kinds()[14];
-    let Obj::Callout { r: q, .. } = r.map_obj(co, size, None) else { panic!() };
-    assert_eq!((q.w, q.h), (80.0, 40.0));
+    // An outlined callout's box keeps its size; a filled one covers the
+    // same pixels (its sides swap on a quarter turn).
+    let mut co = kinds()[14].clone();
+    let Obj::Callout { r: q, .. } = r.map_obj(&co, size, None) else { panic!() };
+    assert_eq!((q.w, q.h), (40.0, 80.0), "filled: mapped exactly");
+    if let Obj::Callout { fill, .. } = &mut co {
+        *fill = false;
+    }
+    let Obj::Callout { r: q, .. } = r.map_obj(&co, size, None) else { panic!() };
+    assert_eq!((q.w, q.h), (80.0, 40.0), "outlined: upright");
+}
+
+#[test]
+fn the_pixel_cap_holds() {
+    // A resize asking for 30000 x 30000 with a canvas: clamped at export.
+    let huge = Edits {
+        resize: Some(Resize { w: 30_000, h: 30_000, from: (100, 100), filter: Filter::Area }),
+        canvas: Some(Pad::uniform(2000, Bg::Solid(C4::rgb(255, 255, 255)), 0.0, false)),
+        ..Default::default()
+    };
+    let out = huge.finish_size((100, 100));
+    assert!(within_cap(out) && out.0 > 10_000, "{out:?}");
+    let (rw, rh) = huge.resize_to((100, 100));
+    assert_eq!(rw, rh, "the aspect kept");
+    assert!(within_cap((200_000, 1000)) && !within_cap((20_000, 10_001)));
+    // The thumbnail never makes the full-size export.
+    let img = coded(80, 60);
+    let e = Edits { resize: Some(Resize { w: 20_000, h: 15_000, from: (80, 60), filter: Filter::Lanczos3 }), canvas: Some(Pad::presentation()), ..Default::default() };
+    let t = render_thumb(&img, &[], None, None, &e, 200, 140);
+    let want = crate::scale::fit_size(e.finish_size((80, 60)).0, e.finish_size((80, 60)).1, 200, 140);
+    assert!(t.width().abs_diff(want.0) <= 1 && t.height().abs_diff(want.1) <= 1, "{:?} vs {want:?}", t.dimensions());
+    let plain = Edits { canvas: Some(Pad::presentation()), ..Default::default() };
+    let a = render_thumb(&img, &[], None, None, &plain, 200, 140);
+    let b = crate::scale::fit(&render(&img, &[], None, None, &plain), 200, 140);
+    assert!(a.width().abs_diff(b.width()) <= 1 && a.height().abs_diff(b.height()) <= 1, "the size of the real export's thumbnail");
 }
 
 #[test]
@@ -248,6 +294,14 @@ fn render_applies_the_stack_in_order() {
         let e = Edits { orient: o, ..Default::default() };
         let out = render(&img, &objs, Some(crop), None, &e);
         assert_eq!(out, o.image(&plain), "{o:?}: cropping then turning");
+    }
+    // A crop on half pixels (a hand-edited file) rounds the same way in
+    // every orientation.
+    let half = FRect { x: 10.5, y: 5.5, w: 40.0, h: 30.0 };
+    let plain_half = crate::history::render(&img, &objs, Some(half), None);
+    for o in all() {
+        let out = render(&img, &objs, Some(half), None, &Edits { orient: o, ..Default::default() });
+        assert_eq!(out, o.image(&plain_half), "{o:?}: a half-pixel crop");
     }
     let e = Edits {
         orient: Orient::ID.rotated(false),

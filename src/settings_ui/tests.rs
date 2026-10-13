@@ -803,6 +803,25 @@ fn image_rows_write_their_keys() {
     assert!(c.trim_margins && c.border_width == u32::from(BORDER_DEFAULT));
 }
 
+/// An Edit window image key on a global hotkey's chord (an old file's
+/// Ctrl+Shift+R record hotkey) or on an overlay action's is shown as a
+/// conflict.
+#[test]
+fn image_keys_clash_with_globals_and_overlay_actions() {
+    let cfg = Config { record_hotkey: "Ctrl+Shift+R".into(), ..Config::default() };
+    let f = Form::new(&cfg, None);
+    assert_eq!(f.global_clash(Action::ImageResize), Some("Record video"));
+    assert!(f.conflicting().contains(&Action::ImageResize));
+    assert_eq!(f.conflict_note(Action::ImageResize).as_deref(), Some("Already used by Record video. Choose another."));
+    assert_eq!(f.global_clash(Action::RotateLeft), None);
+    assert_eq!(f.global_clash(Action::Redo), None, "only the image keys");
+    let mut f = Form::new(&Config::default(), None);
+    assert!(f.conflicting().is_empty());
+    f.keys.set(Action::Redo, vec![crate::keymap::Chord::parse("Ctrl+R").unwrap()]);
+    assert!(f.conflicting().contains(&Action::RotateRight) && f.conflicting().contains(&Action::Redo));
+    assert_eq!(f.conflict_note(Action::Redo).as_deref(), Some("Already used by Rotate right. Choose another."));
+}
+
 /// Saving "Save at": screen pixels by default; 1× and a custom
 /// percent are written and read back; the percent slider is live only
 /// for Custom.

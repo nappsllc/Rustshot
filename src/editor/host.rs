@@ -190,6 +190,12 @@ impl Canvas {
         self.after_input();
     }
 
+    /// A text or a callout is being typed in (the Edit window's image keys
+    /// wait: they would end the typing and turn the picture under it).
+    pub fn typing(&self) -> bool {
+        self.e.text.is_some() || self.e.obj.cedit.is_some()
+    }
+
     /// The image edits now.
     pub fn edits(&self) -> crate::imgedit::Edits {
         self.e.image_edits()
@@ -322,7 +328,8 @@ impl Canvas {
         // A crop or a lasso: baked again over the picture with what they
         // leave out blanked (a magnifier inside never shows it), then cut.
         let crop = self.crop();
-        let mask = self.mask.as_ref().map(|(m, _)| m.as_slice());
+        // (The lasso as the editor has it now, in the picture's current turn.)
+        let mask = self.e.snip.mask.as_deref().filter(|m| crate::objects::mask::is_shape(m));
         if crop.is_some() || mask.is_some() {
             return crate::history::render(&self.e.base, &self.e.objects, crop, mask);
         }

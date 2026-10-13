@@ -13,12 +13,16 @@
 //!
 //! **The upright rule.** Text stays upright after a rotation or a flip:
 //! its anchor turns with the picture, the glyphs do not. For a text the
-//! anchor is the centre of its box (its pos moves so that the box's centre
-//! lands where the old centre went; the box keeps its size); a callout's
-//! box keeps its size and orientation too, its centre and tail point
-//! move; a number's disc moves with its centre (its digit stays upright).
-//! Everything else (strokes, rects, ellipses, pixelate, blur, invert,
-//! spotlight, magnifier) is mapped exactly, point by point.
+//! anchor is the center of its box (its pos moves so that the box's center
+//! lands where the old center went; the box keeps its size); an outlined
+//! callout's box keeps its size and orientation too, its center and tail
+//! point move; a number's disc moves with its center (its digit stays
+//! upright, the disc covers the same pixels). A *filled* callout covers
+//! what is under it, so its box is mapped exactly (a quarter turn swaps
+//! its sides and the text wraps again inside): it keeps covering the same
+//! pixels however often the picture turns. Everything else (strokes,
+//! rects, ellipses, pixelate, blur, invert, spotlight, magnifier) is
+//! mapped exactly, point by point.
 
 pub mod frame;
 pub mod resample;
@@ -93,7 +97,7 @@ impl Orient {
         FRect::from_pts(self.pt(Pt::new(r.x, r.y), size), self.pt(Pt::new(r.x1(), r.y1()), size))
     }
 
-    /// A box that stays upright: its centre moves, its size stays.
+    /// A box that stays upright: its center moves, its size stays.
     fn upright(self, r: FRect, size: (u32, u32)) -> FRect {
         let c = self.pt(Pt::new(r.x + r.w / 2.0, r.y + r.h / 2.0), size);
         FRect { x: c.x - r.w / 2.0, y: c.y - r.h / 2.0, ..r }
@@ -141,8 +145,9 @@ impl Orient {
                     *t = p(*t);
                 }
             }
-            Obj::Callout { r: q, tail, .. } => {
-                *q = self.upright(*q, size);
+            Obj::Callout { r: q, tail, fill, .. } => {
+                // A filled box covers: mapped exactly (see the module).
+                *q = if *fill { r(*q) } else { self.upright(*q, size) };
                 *tail = p(*tail);
             }
             Obj::Magnify { src, dst, .. } => {
@@ -217,6 +222,16 @@ pub struct Resize {
 /// The largest side a resize may ask for (px).
 pub const MAX_SIDE: u32 = 30_000;
 
+/// The most pixels an export may have, the canvas included (200 MP: a
+/// 4-byte buffer of 800 MB): the dialogs refuse more, the reader fails
+/// closed on a stack that asks for more, and an export clamps the resize.
+pub const MAX_PIXELS: u64 = 200_000_000;
+
+/// Whether a `w`×`h` picture is within [`MAX_PIXELS`].
+pub fn within_cap((w, h): (u32, u32)) -> bool {
+    w as u64 * h as u64 <= MAX_PIXELS
+}
+
 impl Resize {
     /// The output size for a `src` picture.
     pub fn target(&self, src: (u32, u32)) -> (u32, u32) {
@@ -251,8 +266,20 @@ impl Edits {
     /// The output size for a picture already turned (`src`: the crop as
     /// it shows): the resize, then the canvas.
     pub fn finish_size(&self, src: (u32, u32)) -> (u32, u32) {
-        let r = self.resize.map_or(src, |r| r.target(src));
+        let r = self.resize_to(src);
         self.canvas.map_or(r, |c| c.size(r))
+    }
+
+    /// The size the resize gives a `src` picture (turned), clamped so the
+    /// output with its canvas stays within [`MAX_PIXELS`].
+    pub fn resize_to(&self, src: (u32, u32)) -> (u32, u32) {
+        let Some(r) = self.resize else { return src };
+        let (mut w, mut h) = r.target(src);
+        let pad = |(w, h): (u32, u32)| self.canvas.map_or((w, h), |c| c.size((w, h)));
+        while !within_cap(pad((w, h))) && (w > 1 || h > 1) {
+            (w, h) = (((w as f64 * 0.97) as u32).max(1), ((h as f64 * 0.97) as u32).max(1));
+        }
+        (w, h)
     }
 
     /// The edits for the picture turned or flipped to `to`: a resize keeps
@@ -269,7 +296,7 @@ impl Edits {
 pub fn finish(img: PixBuf, e: &Edits) -> PixBuf {
     let img = match e.resize {
         Some(r) => {
-            let (w, h) = r.target(img.dimensions());
+            let (w, h) = e.resize_to(img.dimensions());
             if (w, h) == img.dimensions() { img } else { resample::resize(&img, w, h, r.filter) }
         }
         None => img,
@@ -284,17 +311,48 @@ pub fn finish(img: PixBuf, e: &Edits) -> PixBuf {
 /// cut by the lasso `mask` and `crop` (its pixels too), then the edits:
 /// turned, baked, resized, on its canvas.
 pub fn render(original: &PixBuf, objects: &[Obj], crop: Option<FRect>, mask: Option<&[Pt]>, e: &Edits) -> PixBuf {
+    finish(render_picture(original, objects, crop, mask, e), e)
+}
+
+/// [`render`] before the resize and the canvas: cropped, turned, baked.
+pub fn render_picture(original: &PixBuf, objects: &[Obj], crop: Option<FRect>, mask: Option<&[Pt]>, e: &Edits) -> PixBuf {
     if e.orient.is_identity() {
-        return finish(crate::history::render(original, objects, crop, mask), e);
+        return crate::history::render(original, objects, crop, mask);
     }
     let size = original.dimensions();
     let o = e.orient;
     let font = objects.iter().any(|x| matches!(x, Obj::Text { .. })).then(AnnotFont::load).flatten();
     let pic = o.image(original);
     let objs: Vec<Obj> = objects.iter().map(|x| o.map_obj(x, size, font.as_ref())).collect();
-    let crop = crop.map(|c| o.rect(c, size));
+    // On whole pixels before it turns (a half pixel rounds the same way
+    // in every orientation); one that misses the picture is kept as it is
+    // (the cut then fails closed).
+    let crop = crop.map(|c| crate::objects::mask::crop_rect(c, size).unwrap_or(c)).map(|c| o.rect(c, size));
     let mask: Option<Vec<Pt>> = mask.map(|m| m.iter().map(|p| o.pt(*p, size)).collect());
-    finish(crate::history::render(&pic, &objs, crop, mask.as_deref()), e)
+    crate::history::render(&pic, &objs, crop, mask.as_deref())
+}
+
+/// The export of [`render`] fitted into `max_w`×`max_h` (a thumbnail),
+/// without ever making the full-size resize or canvas: the picture is
+/// shrunk to the thumbnail's scale first, then resized and put on its
+/// canvas at that scale.
+pub fn render_thumb(original: &PixBuf, objects: &[Obj], crop: Option<FRect>, mask: Option<&[Pt]>, e: &Edits, max_w: u32, max_h: u32) -> PixBuf {
+    let pic = render_picture(original, objects, crop, mask, e);
+    let out = e.finish_size(pic.dimensions());
+    let fit = crate::scale::fit_size(out.0, out.1, max_w, max_h);
+    let k = (fit.0 as f32 / out.0.max(1) as f32).min(1.0);
+    let (rw, rh) = e.resize_to(pic.dimensions());
+    let (sw, sh) = (((rw as f32 * k).round() as u32).max(1), ((rh as f32 * k).round() as u32).max(1));
+    let small = if (sw, sh) == pic.dimensions() { pic } else { resample::resize(&pic, sw, sh, Filter::Area) };
+    let img = match &e.canvas {
+        Some(p) if !p.is_noop() => {
+            let s = |v: u32| (v as f32 * k).round() as u32;
+            let q = Pad { top: s(p.top), right: s(p.right), bottom: s(p.bottom), left: s(p.left), radius: p.radius * k, ..*p };
+            frame::apply_at(&small, &q, k)
+        }
+        _ => small,
+    };
+    crate::scale::fit(&img, max_w, max_h)
 }
 
 #[cfg(test)]

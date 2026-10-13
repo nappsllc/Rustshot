@@ -536,10 +536,15 @@ impl Edit {
                 let k = fit.0 as f32 / w.max(1) as f32;
                 let small = crate::imgedit::resample::resize(&pic, fit.0, fit.1, crate::imgedit::Filter::Area);
                 let e = self.canvas.edits();
+                let src = self.canvas.source_size();
                 self.img_dialog = Some(if a == ImgAct::Resize {
-                    ImgDialog::Resize(ResizeForm::new(self.canvas.source_size(), e.resize))
+                    let mut f = ResizeForm::new(src, e.resize);
+                    f.canvas = e.canvas;
+                    ImgDialog::Resize(f)
                 } else {
-                    ImgDialog::Canvas(CanvasForm::new(e.canvas))
+                    let mut f = CanvasForm::new(e.canvas);
+                    f.src = Some(e.resize_to(src));
+                    ImgDialog::Canvas(f)
                 });
                 self.dlg_pic = Some((pic, (small, k)));
             }

@@ -204,7 +204,7 @@ fn erf(x: f32) -> f32 {
 }
 
 /// The share of a Gaussian (sigma `s`) blur of the span `[a, b)` that
-/// lands on the pixel centred at `x`.
+/// lands on the pixel centered at `x`.
 fn blurred_span(x: f32, a: f32, b: f32, s: f32) -> f32 {
     let k = std::f32::consts::SQRT_2 * s;
     0.5 * (erf((x - a) / k) - erf((x - b) / k))

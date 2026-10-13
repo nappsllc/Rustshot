@@ -45,11 +45,18 @@ impl Edit {
 
     /// Typing, Text mode, the crop frame, the object selection and a drag
     /// end before the picture changes under them.
-    fn settle_for_image_edit(&mut self) {
-        if self.text.is_some() {
-            self.commit_text();
+    /// `commit`: typing becomes an object (an undo step); else (inside an
+    /// undo or a redo, which must never push a step) it is dropped.
+    fn settle_for_image_edit(&mut self, commit: bool) {
+        if commit {
+            if self.text.is_some() {
+                self.commit_text();
+            }
+            self.finish_callout_edit();
+        } else {
+            self.text = None;
+            self.obj.cedit = None;
         }
-        self.finish_callout_edit();
         self.leave_text_mode();
         self.snip.crop_mode = None;
         self.obj.sel.clear();
@@ -63,7 +70,7 @@ impl Edit {
         if new == self.snip.edits {
             return;
         }
-        self.settle_for_image_edit();
+        self.settle_for_image_edit(true);
         let from = self.snip.edits.orient;
         if new.orient != from {
             let rel = from.inverse().then(new.orient);
@@ -83,7 +90,7 @@ impl Edit {
     pub(super) fn restore_edits(&mut self) {
         let Some(e) = self.snip.edits_hist.get(self.hi).copied() else { return };
         if e != self.snip.edits {
-            self.settle_for_image_edit();
+            self.settle_for_image_edit(false);
             self.turn_picture(e.orient);
             self.snip.edits = e;
         }

@@ -3079,6 +3079,11 @@ impl Edit {
     }
 
     fn undo(&mut self) {
+        // The Edit window: text being typed is a step of its own first
+        // (restoring a step never pushes one).
+        if self.host.is_some() && self.text.is_some() {
+            self.commit_text();
+        }
         if self.hi > 0 {
             if let Some(Some((before, _))) = self.sel_hist.get(self.hi) {
                 let was = self.sel;

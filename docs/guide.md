@@ -163,7 +163,9 @@ a save (or an upload) also copies the image.
 `border_color`): a frame of that color around every exported image (copy,
 save, upload, pin, Open with, and the same from History and the Edit
 window), outside the capture so nothing is covered; the overlay previews it
-as a band around the selection. The History keeps the capture without it.
+as a band around the selection. The History keeps the capture without it
+(the direct captures, `rustshot full` and the others, too: before this
+version they recorded the bordered picture).
 
 **Save at** (Settings › Saving, `save_scale`): *Screen pixels*
 (the default: the capture as the screen has it), *1×* (a capture from a
@@ -328,9 +330,11 @@ of the status bar for the **Image** menu, or use the keys.
 | Reset image edits | the menu (no key; bind `image_reset`) |
 
 - **Rotate** and **Flip** turn the picture and every object with it.
-  Text stays upright: its box's centre moves where the picture takes it
-  and the letters are not turned (callouts and numbers alike); strokes,
-  shapes, redactions and magnifiers follow exactly.
+  Text stays upright: its box's center moves where the picture takes it
+  and the letters are not turned (outlined callouts and numbers alike); a
+  filled callout keeps covering exactly what it covered (a quarter turn
+  swaps its sides and its text wraps again); strokes, shapes, redactions
+  and magnifiers follow exactly.
 - **Resize…** takes a width and height in px or a percent, *Keep aspect
   ratio*, and the resampling: *Lanczos-3* (sharp) or *Area average*
   (smooth). It shows the new size and about how large the file will be

@@ -207,6 +207,13 @@ impl Action {
         )
     }
 
+    /// An Edit window image key (rotate, flip, Resize…, Canvas…, Reset):
+    /// asked there before the editor, so it must not share a chord with
+    /// an overlay action (checked in [`Keymap::conflicts`]).
+    pub fn image_edit(self) -> bool {
+        self.edit_window() && !matches!(self, Action::ZoomIn | Action::ZoomOut | Action::ZoomFit | Action::ZoomActual)
+    }
+
     /// A typing key (the text style): active only while a text or a
     /// callout is typed in, and then before every other action.
     pub fn while_typing(self) -> bool {
@@ -466,6 +473,16 @@ impl Keymap {
         out.extend(self.conflicts_in(2));
         out.extend(self.conflicts_in(3));
         out.extend(self.conflicts_in(4));
+        // The Edit window asks its image keys before the editor's: one on
+        // an overlay action's chord would take it there (the zoom keys
+        // share the UI size's on purpose).
+        for a in Action::ALL.into_iter().filter(|a| a.image_edit()) {
+            for c in self.chords(a) {
+                if let Some(o) = Action::ALL.into_iter().find(|o| !o.while_recording() && !o.on_objects() && !o.edit_window() && !o.while_typing() && self.chords(*o).contains(c)) {
+                    out.push((*c, vec![a, o]));
+                }
+            }
+        }
         // The Edit window asks its zoom keys first, typing or not.
         for a in Action::ALL.into_iter().filter(|a| a.while_typing()) {
             for c in self.chords(a) {
@@ -690,6 +707,12 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert_eq!(out["redo"], "Ctrl+R, F4");
         assert_eq!(Keymap::from_config(&out).0, km);
+        // Ctrl+R is Rotate right's in the Edit window (asked first there):
+        // a conflict; the zoom keys and the UI size share theirs on purpose.
+        let ctrl_r = Chord::parse("Ctrl+R").unwrap();
+        assert!(km.conflicts().contains(&(ctrl_r, vec![Action::RotateRight, Action::Redo])), "{:?}", km.conflicts());
+        assert!(Keymap::defaults().conflicts().is_empty());
+        assert!(Action::RotateRight.image_edit() && !Action::ZoomIn.image_edit());
     }
 
     #[test]

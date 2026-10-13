@@ -1128,7 +1128,7 @@ impl Store {
 
 /// The thumbnail of a screenshot as it exports ([`render`]).
 pub fn thumbnail_doc(original: &PixBuf, objects: &[Obj], crop: Option<crate::objects::FRect>, mask: Option<&[crate::objects::Pt]>, edits: &crate::imgedit::Edits) -> PixBuf {
-    crate::scale::fit(&crate::imgedit::render(original, objects, crop, mask, edits), THUMB_W, THUMB_H)
+    crate::imgedit::render_thumb(original, objects, crop, mask, edits, THUMB_W, THUMB_H)
 }
 
 /// The picture as it exports: `original` with `objects`, transparent
