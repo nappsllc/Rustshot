@@ -13,6 +13,8 @@
 //! wait for the encoder, and encoders stream to disk.
 
 pub mod gif;
+// Trim before save: MP4 without re-encoding, GIF by frames.
+pub mod cut;
 // Show clicks and keystrokes: drawn into the recorded frames.
 pub mod marks;
 pub mod mp4;

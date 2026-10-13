@@ -81,6 +81,16 @@ impl<W: Write + Seek> GifEncoder<W> {
         })
     }
 
+    /// Finish the stream (as [`VideoEncoder::finish`]) and hand back the
+    /// writer (the trim takes a frame's bytes from it).
+    pub fn into_inner(mut self) -> Result<W> {
+        if self.poisoned {
+            bail!("the GIF is incomplete after a write error");
+        }
+        self.end()?;
+        Ok(self.w)
+    }
+
     /// The nominal frame time in centiseconds.
     fn frame_cs(&self) -> u64 {
         ((100 + self.fps as u64 / 2) / self.fps as u64).max(MIN_DELAY_CS)
