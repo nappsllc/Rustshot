@@ -57,7 +57,14 @@ fn catalogs_agree_with_english() {
     let en: std::collections::HashMap<&str, usize> = table::KEYS.iter().enumerate().map(|(i, k)| (*k, i)).collect();
     for d in &table::LANGS {
         assert!(!d.name.is_empty() && d.name != d.code, "{}: @name", d.code);
-        let text = std::fs::read_to_string(dir.join(format!("{}.txt", d.code))).unwrap();
+        let mut text = String::new();
+        for e in std::fs::read_dir(&dir).unwrap().flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.ends_with(".txt") && name.split('.').next() == Some(d.code) {
+                text += &std::fs::read_to_string(e.path()).unwrap();
+                text.push('\n');
+            }
+        }
         for line in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with('@')) {
             let (k, v) = line.split_once('=').unwrap();
             let base = k.trim().split('[').next().unwrap();

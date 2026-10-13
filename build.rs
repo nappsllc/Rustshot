@@ -332,7 +332,8 @@ fn unescape(v: &str, at: &str) -> String {
 }
 
 fn read_catalog(path: &Path) -> Catalog {
-    let code = path.file_stem().unwrap().to_string_lossy().into_owned();
+    let stem = path.file_stem().unwrap().to_string_lossy().into_owned();
+    let code = stem.split('.').next().unwrap_or_default().to_string();
     let text = fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let mut cat = Catalog { code, meta: Default::default(), entries: Vec::new() };
     let mut seen = std::collections::HashSet::new();
@@ -404,7 +405,21 @@ fn pack_i18n() {
     for f in &files {
         println!("cargo:rerun-if-changed={}", f.display());
     }
-    let mut cats: Vec<Catalog> = files.iter().map(|p| read_catalog(p)).collect();
+    // `<lang>.<part>.txt` is more of `<lang>.txt`.
+    let mut cats: Vec<Catalog> = Vec::new();
+    for c in files.iter().map(|p| read_catalog(p)) {
+        match cats.iter_mut().find(|o| o.code == c.code) {
+            Some(o) => {
+                for e in c.entries {
+                    let dup = o.entries.iter().any(|x| x.0 == e.0 && x.1 == e.1);
+                    assert!(!dup, "i18n/{}*.txt: duplicate key {}", c.code, e.0);
+                    o.entries.push(e);
+                }
+                o.meta.extend(c.meta);
+            }
+            None => cats.push(c),
+        }
+    }
     let en_i = cats.iter().position(|c| c.code == "en").expect("i18n/en.txt");
     let en = cats.remove(en_i);
     cats.insert(0, en);
