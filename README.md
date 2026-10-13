@@ -7,8 +7,9 @@ screenshots, editing and video capture.** Windows, Linux and macOS.
   GUI toolkit and no web view. Every pixel of the overlay is drawn by
   Rustshot's own anti-aliased renderer.
 - **Zero memory when you're not capturing.** Turn the tray icon off and
-  nothing runs in the background at all: **0 MB**. Win+Shift+S or Print
-  Screen starts Rustshot for the capture, and it quits when you're done.
+  nothing runs in the background at all: **0 MB**. Rustshot replaces the
+  Snipping Tool: Win+Shift+S or Print Screen starts Rustshot for the
+  capture, and it quits when you're done.
   With the tray icon on, the daemon uses 2.3 MB of private memory (about
   14 MB working set), and the capture overlay on a 5120 × 1440 desktop
   under 5 MB. Measured on Windows 11, release build.
