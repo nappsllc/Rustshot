@@ -183,6 +183,11 @@ impl FocusState {
         self.focused == Some(id_of(id))
     }
 
+    /// The focused control's id ([`id_of`] its name), if any.
+    pub fn focused_id(&self) -> Option<u64> {
+        self.focused
+    }
+
     /// Focus control `id` (with the focus ring, as if tabbed to).
     pub fn focus(&mut self, id: &str) {
         self.set(Some(id_of(id)), true);

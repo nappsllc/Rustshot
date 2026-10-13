@@ -781,24 +781,49 @@ fn wait_pid_window(pid: u32, ms: u64) -> Option<HWND> {
 const NO_OTHER_HOTKEYS: &str =
     "record_hotkey = \"\"\ncapture_full_hotkey = \"\"\ncapture_window_hotkey = \"\"\nrepeat_hotkey = \"\"\ncapture_text_hotkey = \"\"\n";
 
-/// Tab presses from the Settings rail to Accept's key cap in Key bindings:
-/// the eight global rows, then the overlay rows (`KEY_ROWS` in
-/// src/settings_ui/draw.rs): Tools (11 caps), Select · Callout ·
-/// Spotlight · Magnify (4), Selected objects (4), Stroke size (2), Typing
-/// bold · italic · underline (3), Copy · Save · Upload (3), Copy text ·
-/// Copy color (2), then Accept.
-const ACCEPT_TABS: usize = 8 + 11 + 4 + 4 + 2 + 3 + 3 + 2 + 1;
-/// From Accept's cap to the footer's OK: the 19 overlay caps after it
-/// (Cancel; Save As · Save to Desktop · Open with · Share: 4; Trim to
-/// content: 1; … the Edit window's zoom: 4), the 3 While recording rows,
-/// the header's Reset to defaults, then Open config file, Apply, Cancel,
-/// OK.
-const ACCEPT_TO_OK: usize = 19 + 3 + 1 + 4;
-/// Tab presses from the rail to General's Save to field: Theme, the
-/// four accent swatches, Launch at login, Show icon in tray, Copy after
-/// capture, Play shutter sound, Show thumbnail after capture, Show hints
-/// in the overlay, Change…, then the field.
-const FOLDER_TABS: usize = 13;
+/// A control id as the Settings window names it (`crate::ui::id_of`:
+/// FNV-1a of the name).
+fn ui_id(name: &str) -> u64 {
+    name.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3))
+}
+
+/// The focused control the Settings window last reported
+/// (`RUSTSHOT_TEST_FOCUS_FILE`): its id, `none`, or nothing yet.
+fn reported_focus(file: &Path) -> Option<String> {
+    std::fs::read_to_string(file).ok()
+}
+
+/// Wait until the window has reported a focus other than `old`.
+fn wait_focus_change(file: &Path, old: &Option<String>, ms: u64) -> Option<String> {
+    let deadline = Instant::now() + Duration::from_millis(ms);
+    loop {
+        let now = reported_focus(file);
+        if now.is_some() && now != *old {
+            return now;
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(15));
+    }
+}
+
+/// Tab until control `name` has the focus, each press waited for (the
+/// window reports its focus), so neither the rows before it nor the
+/// machine's speed matter. Panics after `max` presses.
+fn tab_to(hwnd: HWND, file: &Path, name: &str, max: usize) {
+    const TAB: u32 = 0x09;
+    let want = ui_id(name).to_string();
+    let mut seen = reported_focus(file);
+    for _ in 0..max {
+        if seen.as_deref() == Some(want.as_str()) {
+            return;
+        }
+        key(hwnd, TAB);
+        seen = Some(wait_focus_change(file, &seen, 3000).unwrap_or_else(|| panic!("Tab moved no focus on the way to {name}")));
+    }
+    assert_eq!(seen.as_deref(), Some(want.as_str()), "{name} not reached in {max} Tab presses");
+}
 
 /// Keys posted one by one with a short pause (each is its own frame).
 fn keys(hwnd: HWND, vks: &[u32]) {
@@ -819,8 +844,8 @@ fn keys(hwnd: HWND, vks: &[u32]) {
 #[test]
 #[ignore = "live display access"]
 fn settings_window_saves_and_the_daemon_reloads() {
-    const TAB: u32 = 0x09;
     const RET: u32 = 0x0D;
+    const DOWN: u32 = 0x28;
     const MODS: u32 = 1 | 2 | 4; // Alt+Ctrl+Shift
     const F9: u32 = 0x78;
     const F11: u32 = 0x7A;
@@ -830,9 +855,11 @@ fn settings_window_saves_and_the_daemon_reloads() {
     let base = format!("check_updates = false\ncapture_hotkey = \"Ctrl+Alt+Shift+F11\"\nquit_hotkey = \"Ctrl+Alt+Shift+F10\"\n{NO_OTHER_HOTKEYS}");
     std::fs::write(&cfg, format!("# e2e\n{base}")).unwrap();
     let instance = format!("e2e-set-{}", std::process::id());
+    // The Settings window reports its focused control here (by id).
+    let focus = root.join("focus.txt");
     let run = |args: &[&str]| {
         let mut c = rustshot(&root);
-        c.env("RUSTSHOT_INSTANCE", &instance).args(args).stdout(Stdio::null()).stderr(Stdio::null());
+        c.env("RUSTSHOT_INSTANCE", &instance).env("RUSTSHOT_TEST_FOCUS_FILE", &focus).args(args).stdout(Stdio::null()).stderr(Stdio::null());
         c
     };
     let mut daemon = run(&["daemon"]).spawn().expect("spawn daemon");
@@ -848,7 +875,7 @@ fn settings_window_saves_and_the_daemon_reloads() {
         let w = wait_pid_window(pid, 5000).expect("settings window in the daemon");
         std::thread::sleep(Duration::from_millis(500));
         // The rail, then General's Save to field: End, clear, type.
-        keys(w, &[TAB; 1 + FOLDER_TABS]);
+        tab_to(w, &focus, "folder", 60);
         keys(w, &[0x23]);
         keys(w, &[0x08; 120]); // clear the folder
         for ch in shots.display().to_string().chars() {
@@ -856,7 +883,8 @@ fn settings_window_saves_and_the_daemon_reloads() {
         }
         std::thread::sleep(Duration::from_millis(200));
         // The PNG / JPG choice: JPG.
-        keys(w, &[TAB, 0x27]);
+        tab_to(w, &focus, "format", 5);
+        keys(w, &[0x27]);
         // Meanwhile the file gets a new capture hotkey (as if edited by hand):
         // the window's untouched values follow the file.
         std::fs::write(&cfg, format!("# e2e\n{}", base.replace("F11", "F9"))).unwrap();
@@ -873,14 +901,16 @@ fn settings_window_saves_and_the_daemon_reloads() {
         assert!(hotkey_free(MODS, F11), "the old capture hotkey is released");
         assert!(!hotkey_free(MODS, F9), "the new one is registered");
         // Session 2: Shortcuts tab, Accept → J.
+        let _ = std::fs::remove_file(&focus);
         assert_eq!(wait_exit(&mut run(&["settings"]).spawn().unwrap(), 5000), Some(0));
         let w = wait_pid_window(pid, 5000).expect("settings window again");
         std::thread::sleep(Duration::from_millis(500));
         // The rail → Key bindings; Accept's cap: record J; then OK.
-        keys(w, &[TAB, 0x28, 0x28, 0x28]);
-        keys(w, &[TAB; ACCEPT_TABS]);
+        tab_to(w, &focus, "rail", 5);
+        keys(w, &[DOWN, DOWN, DOWN]);
+        tab_to(w, &focus, "key_accept", 200);
         keys(w, &[RET, 'J' as u32]);
-        keys(w, &[TAB; ACCEPT_TO_OK]);
+        tab_to(w, &focus, "ok", 200);
         keys(w, &[RET]);
         assert!(wait_gone(pid, 5000), "OK closes the window");
         let text = std::fs::read_to_string(&cfg).unwrap();

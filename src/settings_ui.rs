@@ -1890,6 +1890,8 @@ struct Window {
     closing: bool,
     /// The UI scale the window was sized for (0 = not known yet).
     sized_for: f32,
+    /// What [`Window::report_focus`] last wrote.
+    reported: Option<String>,
 }
 
 impl Window {
@@ -1908,6 +1910,7 @@ impl Window {
             picking: false,
             closing: false,
             sized_for: 0.0,
+            reported: None,
         }
     }
 
@@ -1962,6 +1965,29 @@ impl Window {
     /// Draw a frame from the current input; repeat while it produced a
     /// click (the content changes) or the kit asks for it.
     fn render(&mut self) {
+        self.render_frames();
+        self.report_focus();
+    }
+
+    /// End-to-end tests: `RUSTSHOT_TEST_FOCUS_FILE` gets the focused
+    /// control's id ([`crate::ui::id_of`] its name, decimal; `none`) after
+    /// every render, so a test can Tab to a control by name instead of
+    /// counting the rows before it.
+    fn report_focus(&mut self) {
+        static PATH: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+        let Some(path) = PATH.get_or_init(|| std::env::var_os("RUSTSHOT_TEST_FOCUS_FILE").map(PathBuf::from)) else { return };
+        let now = self.focus.focused_id().map_or_else(|| "none".to_string(), |id| id.to_string());
+        if self.reported.as_deref() != Some(now.as_str()) {
+            // A temporary file renamed over the old one: a reader never
+            // sees half a number.
+            let tmp = path.with_extension("tmp");
+            if std::fs::write(&tmp, &now).and_then(|()| std::fs::rename(&tmp, path)).is_ok() {
+                self.reported = Some(now);
+            }
+        }
+    }
+
+    fn render_frames(&mut self) {
         for _ in 0..4 {
             if self.closing || self.canvas.width() == 0 {
                 return;
