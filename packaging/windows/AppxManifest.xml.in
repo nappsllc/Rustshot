@@ -35,6 +35,12 @@
         </uap3:Extension>
       </Extensions>
     </Application>
+    <!-- Start menu "Rustshot Settings": the way in with the tray icon off. -->
+    <Application Id="RustshotSettings" Executable="rustshot.exe" EntryPoint="Windows.FullTrustApplication" uap10:Parameters="settings">
+      <uap:VisualElements DisplayName="Rustshot Settings" Description="Rustshot's settings"
+        BackgroundColor="transparent" Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png" />
+    </Application>
     <!-- Hidden second entry: the hotkey daemon, started at sign-in. -->
     <Application Id="RustshotDaemon" Executable="rustshot.exe" EntryPoint="Windows.FullTrustApplication" uap10:Parameters="daemon">
       <uap:VisualElements DisplayName="Rustshot hotkeys" Description="Global screenshot hotkeys"

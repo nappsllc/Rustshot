@@ -64,7 +64,7 @@ Download the latest build from
 
 | Platform | File | Notes |
 |---|---|---|
-| Windows 10/11 | `rustshot-<v>-setup.exe` | Per-user installer, no admin needed; optional desktop shortcut and start-with-Windows. |
+| Windows 10/11 | `rustshot-<v>-setup.exe` | Per-user installer, no admin needed; Start menu *Rustshot* and *Rustshot Settings* (`rustshot settings`), optional desktop shortcut and start-with-Windows. An install over an old one replaces its shortcuts (0.1.0 left them lowercase). The Store (MSIX) build lists *Rustshot Settings* too. |
 | Windows (portable) | `rustshot-<v>-windows-x86_64.exe` | Single executable. |
 | macOS 11+ | `rustshot-<v>-macos-universal.dmg` | Universal (Apple Silicon + Intel). Drag to Applications. |
 | Debian / Ubuntu | `rustshot-<v>-amd64.deb` | `sudo apt install ./rustshot-<v>-amd64.deb` |

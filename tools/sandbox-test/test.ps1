@@ -71,6 +71,8 @@ function KillAll { Get-Process rustshot -ErrorAction SilentlyContinue | Stop-Pro
 . "$T\history.ps1"
 # 0.3.0 (launcher, delayed capture, accept on select, Open with, new keys): Checks030.
 . "$T\v030.ps1"
+# Start menu / desktop shortcut names over 0.1.0's lowercase ones.
+. "$T\shortcuts.ps1"
 HotkeyProbe $log
 if (Test-Path "$T\probe-only") { Add-Content $log 'DONE'; return }
 function PortableExe {
@@ -99,14 +101,17 @@ if (Test-Path "$T\rec-only") {
 
 # ---------------------------------------------------------------- NSIS installer
 $setup = Get-ChildItem "$T\in" -Recurse -Filter '*-setup.exe' | Select-Object -First 1
+# What 0.1.0 left: lowercase Start menu folder and shortcuts, a desktop one.
+OldShortcuts "$env:LOCALAPPDATA\rustshot\rustshot.exe"
 $p = Start-Process $setup.FullName -ArgumentList '/S' -Wait -PassThru
 Check 'nsis: silent install exits 0' ($p.ExitCode -eq 0) "exit=$($p.ExitCode) ($($setup.Name))"
 $inst = "$env:LOCALAPPDATA\rustshot"
 $exe = "$inst\rustshot.exe"
 Check 'nsis: rustshot.exe installed' (Test-Path $exe) $exe
 Check 'nsis: LICENSE + THIRD_PARTY_NOTICES.md installed' ((Test-Path "$inst\LICENSE") -and (Test-Path "$inst\THIRD_PARTY_NOTICES.md"))
-$lnk = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\rustshot\rustshot.lnk"
+$lnk = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Rustshot\Rustshot.lnk"
 Check 'nsis: Start menu shortcut' (Test-Path $lnk)
+ShortcutChecks $exe
 $run = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue).rustshot
 Check 'nsis: start-with-Windows Run value' ([bool]$run) "$run"
 $un = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\rustshot' -ErrorAction SilentlyContinue
@@ -207,6 +212,7 @@ $gone = WaitFor { -not (Test-Path $exe) } 15
 Check 'uninstall: exe removed' $gone
 Check 'uninstall: Run value removed' (-not (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue).rustshot)
 Check 'uninstall: Start menu folder removed' (-not (Test-Path (Split-Path $lnk)))
+ShortcutsGone
 Check 'uninstall: Apps & features entry removed' (-not (Test-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\rustshot'))
 Check 'uninstall: install folder removed (History is not in it)' (-not (Test-Path $inst)) "$(if (Test-Path $inst) { (Get-ChildItem $inst -Recurse -Name) -join ', ' })"
 $histRoot = "$env:LOCALAPPDATA\rustshot-data\history"

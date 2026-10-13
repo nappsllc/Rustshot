@@ -29,6 +29,24 @@ InstallDir "$LOCALAPPDATA\${PRODUCT_NAME}"
 InstallDirRegKey HKCU "Software\${PRODUCT_NAME}" "InstallDir"
 RequestExecutionLevel user
 
+; Whether a desktop shortcut existed before this install (.onInit).
+Var HadDesktop
+
+; Every Start menu / desktop shortcut any version made, the old lowercase
+; names included (Delete and RMDir ignore case; both spellings are listed
+; so the intent is plain). RMDir only removes an empty folder.
+!macro RemoveShortcuts
+  Delete "$SMPROGRAMS\${PRODUCT_NAME}\${PRODUCT_NAME}.lnk"
+  Delete "$SMPROGRAMS\${PRODUCT_NAME}\Uninstall.lnk"
+  Delete "$SMPROGRAMS\${PRODUCT_DISPLAY}\${PRODUCT_DISPLAY}.lnk"
+  Delete "$SMPROGRAMS\${PRODUCT_DISPLAY}\${PRODUCT_DISPLAY} Settings.lnk"
+  Delete "$SMPROGRAMS\${PRODUCT_DISPLAY}\Uninstall.lnk"
+  RMDir "$SMPROGRAMS\${PRODUCT_NAME}"
+  RMDir "$SMPROGRAMS\${PRODUCT_DISPLAY}"
+  Delete "$DESKTOP\${PRODUCT_NAME}.lnk"
+  Delete "$DESKTOP\${PRODUCT_DISPLAY}.lnk"
+!macroend
+
 Page directory
 Page components
 Page instfiles
@@ -54,9 +72,20 @@ Section "${PRODUCT_DISPLAY} (required)" SecMain
   File "..\THIRD_PARTY_NOTICES.md"
   WriteUninstaller "$INSTDIR\uninstall.exe"
   WriteRegStr HKCU "Software\${PRODUCT_NAME}" "InstallDir" "$INSTDIR"
+  ; Start menu. 0.1.x made "rustshot\rustshot.lnk" (lowercase, no icon);
+  ; Windows paths ignore case, so writing "Rustshot\Rustshot.lnk" over it
+  ; would keep the old names (Start shows "rustshot"). Remove the old
+  ; shortcuts and folder first, then make them fresh, the icon explicit.
+  !insertmacro RemoveShortcuts
   CreateDirectory "$SMPROGRAMS\${PRODUCT_DISPLAY}"
-  CreateShortcut "$SMPROGRAMS\${PRODUCT_DISPLAY}\${PRODUCT_DISPLAY}.lnk" "$INSTDIR\${PRODUCT_EXE}"
-  CreateShortcut "$SMPROGRAMS\${PRODUCT_DISPLAY}\Uninstall.lnk" "$INSTDIR\uninstall.exe"
+  CreateShortcut "$SMPROGRAMS\${PRODUCT_DISPLAY}\${PRODUCT_DISPLAY}.lnk" "$INSTDIR\${PRODUCT_EXE}" "" "$INSTDIR\${PRODUCT_EXE}" 0
+  ; The way to Settings with the tray icon off (no background process).
+  CreateShortcut "$SMPROGRAMS\${PRODUCT_DISPLAY}\${PRODUCT_DISPLAY} Settings.lnk" "$INSTDIR\${PRODUCT_EXE}" "settings" "$INSTDIR\${PRODUCT_EXE}" 0
+  CreateShortcut "$SMPROGRAMS\${PRODUCT_DISPLAY}\Uninstall.lnk" "$INSTDIR\uninstall.exe" "" "$INSTDIR\uninstall.exe" 0
+  ; A desktop shortcut that was there (any case) comes back, renamed.
+  ${If} $HadDesktop == 1
+    CreateShortcut "$DESKTOP\${PRODUCT_DISPLAY}.lnk" "$INSTDIR\${PRODUCT_EXE}" "" "$INSTDIR\${PRODUCT_EXE}" 0
+  ${EndIf}
   ; Settings > Apps > Installed apps. The key name stays "rustshot", so an
   ; install or update over any older version (the in-app update runs this
   ; section too) rewrites every value here.
@@ -78,7 +107,8 @@ Section "${PRODUCT_DISPLAY} (required)" SecMain
 SectionEnd
 
 Section "Desktop shortcut" SecDesktop
-  CreateShortcut "$DESKTOP\${PRODUCT_DISPLAY}.lnk" "$INSTDIR\${PRODUCT_EXE}"
+  Delete "$DESKTOP\${PRODUCT_NAME}.lnk" ; an old lowercase one (the same file)
+  CreateShortcut "$DESKTOP\${PRODUCT_DISPLAY}.lnk" "$INSTDIR\${PRODUCT_EXE}" "" "$INSTDIR\${PRODUCT_EXE}" 0
 SectionEnd
 
 Section "Start daemon with Windows" SecStartup
@@ -88,6 +118,10 @@ SectionEnd
 
 ; Silent installs only; interactive installs are unchanged.
 Function .onInit
+  StrCpy $HadDesktop 0
+  ${If} ${FileExists} "$DESKTOP\${PRODUCT_DISPLAY}.lnk"
+    StrCpy $HadDesktop 1
+  ${EndIf}
   ${If} ${Silent}
     ; An update keeps the user's choices: over an existing install the
     ; optional sections run again only if their shortcut / Run value exists.
@@ -146,10 +180,7 @@ Section "-un.Main"
   Delete "$LOCALAPPDATA\${PRODUCT_NAME}\update\*"
   RMDir "$LOCALAPPDATA\${PRODUCT_NAME}\update"
   RMDir "$INSTDIR"
-  Delete "$SMPROGRAMS\${PRODUCT_DISPLAY}\${PRODUCT_DISPLAY}.lnk"
-  Delete "$SMPROGRAMS\${PRODUCT_DISPLAY}\Uninstall.lnk"
-  RMDir "$SMPROGRAMS\${PRODUCT_DISPLAY}"
-  Delete "$DESKTOP\${PRODUCT_DISPLAY}.lnk"
+  !insertmacro RemoveShortcuts
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCT_NAME}"
   DeleteRegKey HKCU "${UNINST_KEY}"
   DeleteRegKey HKCU "Software\${PRODUCT_NAME}"
