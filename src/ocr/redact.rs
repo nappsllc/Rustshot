@@ -164,35 +164,42 @@ pub fn find_in_text(s: &str, kinds: &[Kind]) -> Vec<(Kind, Range<usize>)> {
     found
 }
 
-fn is_local(c: u8) -> bool {
-    c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b'%' | b'+' | b'-')
+/// A local part's character (Unicode letters and digits: IDN addresses).
+fn is_local(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '.' | '_' | '%' | '+' | '-')
 }
 
-fn is_domain(c: u8) -> bool {
-    c.is_ascii_alphanumeric() || matches!(c, b'.' | b'-')
+fn is_domain(c: char) -> bool {
+    c.is_alphanumeric() || matches!(c, '.' | '-')
 }
 
-/// `name@domain.tld`.
+/// `name@domain.tld` (Unicode names and domains too: `jöhn@bücher.de`).
 fn emails(s: &str) -> Vec<Range<usize>> {
-    let b = s.as_bytes();
     let mut out = Vec::new();
     for (at, _) in s.match_indices('@') {
+        // Every index below comes from `char_indices`: on char boundaries.
         let mut a = at;
-        while a > 0 && is_local(b[a - 1]) {
-            a -= 1;
+        for (i, c) in s[..at].char_indices().rev() {
+            if !is_local(c) {
+                break;
+            }
+            a = i;
         }
-        while a < at && matches!(b[a], b'.' | b'-' | b'+') {
+        while a < at && s[a..].starts_with(['.', '-', '+']) {
             a += 1;
         }
         let mut e = at + 1;
-        while e < b.len() && is_domain(b[e]) {
-            e += 1;
+        for (i, c) in s[at + 1..].char_indices() {
+            if !is_domain(c) {
+                break;
+            }
+            e = at + 1 + i + c.len_utf8();
         }
-        while e > at + 1 && matches!(b[e - 1], b'.' | b'-') {
+        while e > at + 1 && s[..e].ends_with(['.', '-']) {
             e -= 1;
         }
         let domain = &s[at + 1..e];
-        let tld_ok = domain.rsplit_once('.').is_some_and(|(host, tld)| !host.is_empty() && tld.len() >= 2 && tld.bytes().all(|c| c.is_ascii_alphabetic()));
+        let tld_ok = domain.rsplit_once('.').is_some_and(|(host, tld)| !host.is_empty() && tld.chars().count() >= 2 && tld.chars().all(char::is_alphabetic));
         if a < at && tld_ok && !domain.contains("..") {
             out.push(a..e);
         }
@@ -412,91 +419,187 @@ fn ipv4s(s: &str) -> Vec<Range<usize>> {
 fn secret_param(name: &str) -> bool {
     let n = name.to_ascii_lowercase();
     let n = n.trim_matches(|c: char| !c.is_ascii_alphanumeric());
-    matches!(n, "token" | "key" | "secret" | "sig" | "signature" | "apikey" | "password" | "pwd" | "auth" | "code" | "access_key" | "client_secret")
-        || n.ends_with("token")
+    matches!(
+        n,
+        "token" | "key" | "secret" | "sig" | "signature" | "apikey" | "password" | "pass" | "pwd" | "auth" | "code" | "access_key" | "client_secret" | "session" | "sid" | "jwt" | "sessionid" | "session_id"
+    ) || n.ends_with("token")
         || n.ends_with("_key")
         || n.ends_with("-key")
         || n.ends_with("secret")
         || n.ends_with("_sig")
+        || n.ends_with("session")
 }
 
-/// A URL (`scheme://…` or `www.…`) whose query or fragment names a
-/// token, key, secret or signature: the whole URL.
+/// Webhook and bot URLs whose path is the secret.
+const SECRET_HOSTS: [&str; 4] = ["hooks.slack.com/services/", "discord.com/api/webhooks/", "discordapp.com/api/webhooks/", "api.telegram.org/bot"];
+
+/// A path segment that looks like a token: 24 characters or more of
+/// base64 / hex, with letters and digits mixed (not a slug of words).
+fn token_segment(seg: &str) -> bool {
+    let b = seg.as_bytes();
+    let digits = b.iter().filter(|c| c.is_ascii_digit()).count();
+    let letters = b.iter().filter(|c| c.is_ascii_alphabetic()).count();
+    let dashes = b.iter().filter(|c| **c == b'-').count();
+    b.len() >= 24 && b.iter().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'=' | b'+')) && digits >= 3 && letters >= 3 && dashes <= 2
+}
+
+/// Characters that end a URL in running text (closing quotes and brackets).
+const URL_TAIL: [char; 14] = ['.', ',', ')', ']', '}', '"', '\'', '>', ';', '!', '\u{201d}', '\u{2019}', '\u{bb}', '\u{203a}'];
+
+/// Where a URL starts in `tok` (a word): its scheme, `www.`, or a bare
+/// `host.tld/` (byte index, on a char boundary).
+fn url_start(tok: &str) -> Option<usize> {
+    if let Some(i) = tok.find("://") {
+        let start = tok[..i].char_indices().rev().take_while(|(_, c)| c.is_ascii_alphanumeric()).last().map_or(i, |(j, _)| j);
+        return (start < i).then_some(start);
+    }
+    if let Some(i) = tok.to_ascii_lowercase().find("www.") {
+        return Some(i);
+    }
+    // example.com/x?key=…: a host with a dot and a letters-only TLD.
+    let start = tok.char_indices().find(|(_, c)| c.is_ascii_alphanumeric())?.0;
+    let slash = tok[start..].find('/')? + start;
+    let host = &tok[start..slash];
+    let ok = host.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'-'))
+        && host.rsplit_once('.').is_some_and(|(h, tld)| !h.is_empty() && tld.len() >= 2 && tld.bytes().all(|c| c.is_ascii_alphabetic()));
+    ok.then_some(start)
+}
+
+/// A URL whose query or fragment names a token, key, secret, signature or
+/// session, a webhook URL, or one with a token-like path segment: the
+/// whole URL.
 fn token_urls(s: &str) -> Vec<Range<usize>> {
     let mut out = Vec::new();
-    let mut at = 0;
-    for tok in s.split(' ') {
-        let start = at;
-        at += tok.len() + 1;
-        let lower = tok.to_ascii_lowercase();
-        let url_at = lower.find("://").map(|i| lower[..i].rfind(|c: char| !c.is_ascii_alphanumeric()).map_or(0, |j| j + 1)).or_else(|| lower.find("www."));
-        let Some(u) = url_at else { continue };
-        let url = tok[u..].trim_end_matches(['.', ',', ')', ']', '"', '\'', '>']);
-        let Some(q) = url.find(['?', '#']) else { continue };
-        let has = url[q + 1..].split(['&', ';', '#', '?']).any(|kv| {
+    for (start, tok) in words(s) {
+        let Some(u) = url_start(tok) else { continue };
+        let url = tok[u..].trim_end_matches(URL_TAIL);
+        let lower = url.to_ascii_lowercase();
+        let (head, query) = match url.find(['?', '#']) {
+            Some(q) => (&url[..q], &url[q + 1..]),
+            None => (url, ""),
+        };
+        let path = head.find("://").map_or(head, |i| &head[i + 3..]);
+        let path = path.split_once('/').map_or("", |(_, p)| p);
+        let by_query = query.split(['&', ';', '#', '?']).any(|kv| {
             let (k, v) = kv.split_once('=').unwrap_or((kv, ""));
             !v.is_empty() && secret_param(k)
         });
-        if has {
+        let by_path = SECRET_HOSTS.iter().any(|h| lower.contains(h)) || path.split('/').any(token_segment);
+        if by_query || by_path {
             out.push(start + u..start + u + url.len());
         }
     }
     out
 }
 
-/// The labels whose value is a secret ("password: hunter2").
-const LABELS: [&str; 12] = [
-    "password",
-    "passwd",
-    "pwd",
-    "passcode",
-    "api key",
-    "api_key",
-    "apikey",
-    "api-key",
-    "secret",
-    "token",
-    "access token",
-    "private key",
-];
+/// The words of `s` (split at whitespace) with their byte offsets.
+fn words(s: &str) -> impl Iterator<Item = (usize, &str)> {
+    s.split_whitespace().map(move |w| (w.as_ptr() as usize - s.as_ptr() as usize, w))
+}
 
-/// The value after a label and `:` or `=` (the rest of its word, or the
-/// next word).
+/// Labels whose value is the rest of the line (passphrases, headers).
+const LINE_LABELS: [&str; 6] = ["password", "passphrase", "passwd", "pwd", "passcode", "authorization"];
+/// Labels whose value is the next word.
+const WORD_LABELS: [&str; 8] = ["api key", "api_key", "apikey", "api-key", "secret", "token", "access token", "private key"];
+
+/// Where a label's value starts: after the label at `i` (`len` bytes), a
+/// few more letters ("API Key", "Secret Key") and `:` or `=`.
+fn label_value(s: &str, i: usize, len: usize) -> Option<usize> {
+    let b = s.as_bytes();
+    // The label starts a word.
+    if s[..i].chars().next_back().is_some_and(char::is_alphanumeric) {
+        return None;
+    }
+    let mut j = i + len;
+    while j < b.len() && j < i + len + 6 && (b[j] == b' ' || b[j].is_ascii_alphabetic()) {
+        // One more word may follow ("key"), not a sentence.
+        if b[j].is_ascii_alphabetic() && !s[i + len..j + 1].trim().bytes().all(|c| c.is_ascii_alphabetic()) {
+            break;
+        }
+        j += 1;
+    }
+    if j >= b.len() || !(b[j] == b':' || b[j] == b'=') {
+        return None;
+    }
+    j += 1;
+    while j < b.len() && b[j] == b' ' {
+        j += 1;
+    }
+    (j < b.len()).then_some(j)
+}
+
+/// The end of the word starting at `v0`.
+fn word_end(s: &str, v0: usize) -> usize {
+    s[v0..].find(char::is_whitespace).map_or(s.len(), |k| v0 + k)
+}
+
+/// Values after secret labels: a passphrase or a header to the end of the
+/// line, an API key or a token one word; `Bearer <token>`; `.env` lines
+/// (`AWS_SECRET_ACCESS_KEY=…`, a key naming SECRET, TOKEN, KEY, PASS or
+/// PWD); JSON Web Tokens (`eyJ….….…`).
 fn labelled(s: &str) -> Vec<Range<usize>> {
     let lower = s.to_ascii_lowercase();
-    let b = s.as_bytes();
     let mut out = Vec::new();
-    for label in LABELS {
-        for (i, _) in lower.match_indices(label) {
-            // The label starts a word.
-            if i > 0 && b[i - 1].is_ascii_alphanumeric() {
-                continue;
-            }
-            let mut j = i + label.len();
-            // "API Key:", "password :", "Secret Key="
-            while j < b.len() && (b[j] == b' ' || b[j].is_ascii_alphabetic()) && j < i + label.len() + 6 && b[j] != b':' && b[j] != b'=' {
-                if b[j].is_ascii_alphabetic() && !lower[i + label.len()..j + 1].trim().chars().all(|c| c.is_ascii_alphabetic()) {
-                    break;
+    for (labels, line) in [(&LINE_LABELS[..], true), (&WORD_LABELS[..], false)] {
+        for label in labels {
+            for (i, _) in lower.match_indices(label) {
+                let Some(v0) = label_value(s, i, label.len()) else { continue };
+                let end = if line { s.trim_end().len().max(v0) } else { word_end(s, v0) };
+                if end > v0 {
+                    out.push(v0..end);
                 }
-                j += 1;
-            }
-            if j >= b.len() || !(b[j] == b':' || b[j] == b'=') {
-                continue;
-            }
-            j += 1;
-            while j < b.len() && b[j] == b' ' {
-                j += 1;
-            }
-            let v0 = j;
-            while j < b.len() && b[j] != b' ' {
-                j += 1;
-            }
-            if j > v0 {
-                out.push(v0..j);
             }
         }
     }
-    out.sort_by_key(|r| r.start);
+    // Bearer <token>.
+    for (i, _) in lower.match_indices("bearer ") {
+        if s[..i].chars().next_back().is_some_and(char::is_alphanumeric) {
+            continue;
+        }
+        let v0 = i + "bearer ".len();
+        let v0 = v0 + (s[v0..].len() - s[v0..].trim_start().len());
+        let end = word_end(s, v0);
+        if end >= v0 + 8 {
+            out.push(v0..end);
+        }
+    }
+    for (at, w) in words(s) {
+        // KEY=value (and KEY: value with an env-style key).
+        let (key, val, val_at) = match w.split_once('=') {
+            Some((k, v)) => (k, v, at + k.len() + 1),
+            None => ("", "", 0),
+        };
+        let env_key = |k: &str| {
+            let u = k.to_ascii_uppercase();
+            // An env-style name (SNAKE_CASE or UPPER), or the secret word itself.
+            let named = k.contains('_') || k.bytes().all(|c| !c.is_ascii_lowercase()) || matches!(u.as_str(), "TOKEN" | "KEY" | "SECRET" | "PASSWORD" | "PASS" | "PASSWD" | "PWD" | "APIKEY");
+            named && !k.is_empty() && k.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'.' | b'-')) && ["SECRET", "TOKEN", "KEY", "PASS", "PWD"].iter().any(|n| u.contains(n))
+        };
+        if env_key(key) && !val.is_empty() {
+            out.push(val_at..at + w.len());
+        }
+        if let Some(k) = w.strip_suffix(':')
+            && env_key(k)
+            && (k.contains('_') || k.bytes().all(|c| !c.is_ascii_lowercase()))
+        {
+            let v0 = at + w.len();
+            let v0 = v0 + (s[v0..].len() - s[v0..].trim_start().len());
+            let end = word_end(s, v0);
+            if end > v0 {
+                out.push(v0..end);
+            }
+        }
+        // A JSON Web Token: three base64url parts, the first `eyJ`.
+        if let Some(p) = w.find("eyJ") {
+            let t = w[p..].trim_end_matches(URL_TAIL);
+            let parts: Vec<&str> = t.split('.').collect();
+            let b64 = |x: &str| x.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_'));
+            if parts.len() == 3 && parts[0].len() >= 10 && parts[1].len() >= 4 && parts.iter().all(|x| b64(x)) {
+                out.push(at + p..at + p + t.len());
+            }
+        }
+    }
+    out.sort_by_key(|r| (r.start, std::cmp::Reverse(r.end)));
     out
 }
 
@@ -702,6 +805,70 @@ mod tests {
         assert_eq!(kinds_text(&Kind::ALL), "all");
         assert_eq!(kinds_text(&[Kind::Ip, Kind::Email]), "emails,ips");
         assert_eq!(kinds_text(&[]), "");
+    }
+
+    /// URLs in typographic quotes and after non-ASCII letters used to
+    /// slice mid-character (a panic: the process aborts in release).
+    #[test]
+    fn unicode_around_urls_never_panics() {
+        assert_eq!(one("\u{201c}https://x.io/?token=abc\u{201d}", Kind::Url), "https://x.io/?token=abc");
+        assert_eq!(one("\u{ab}https://x.io/a?token=abc\u{bb}", Kind::Url), "https://x.io/a?token=abc");
+        // No ASCII scheme before "://": no URL, the token label still holds.
+        assert_eq!(one("\u{fc}://x?token=a", Kind::Url), "a");
+    }
+
+    /// Random text of mixed scripts, emoji, combining marks, quotes and
+    /// the matchers' own punctuation: no panic, every range on char
+    /// boundaries, and `find` maps them to words.
+    #[test]
+    fn fuzzed_unicode_never_panics() {
+        const POOL: &[&str] = &[
+            "a", "Z", "0", "7", "4111", " ", "  ", ".", ",", ":", "=", "/", "?", "&", "#", "@", "+", "-", "_", "(", ")", "\u{201c}", "\u{201d}", "\u{ab}", "\u{bb}", "\u{fc}",
+            "\u{e9}", "\u{0438}", "\u{4f60}", "\u{597d}", "\u{1f600}", "\u{1f469}\u{200d}\u{1f4bb}", "\u{301}", "\u{5d0}", "\u{627}", "\u{e01}", "\u{fe0f}", "\t", "https://", "www.", "token=", "password:",
+            "Bearer ", "eyJ", "api key", "SECRET_KEY=", "DE89", "192.168.", "+1 ", "@b\u{fc}cher.de", "hooks.slack.com/services/",
+        ];
+        let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for _ in 0..20_000 {
+            let n = (next() % 40) as usize;
+            let s: String = (0..n).map(|_| POOL[(next() % POOL.len() as u64) as usize]).collect();
+            for (_, r) in find_in_text(&s, &Kind::ALL) {
+                assert!(s.is_char_boundary(r.start) && s.is_char_boundary(r.end) && r.start < r.end, "{s:?}: {r:?}");
+            }
+            let words: Vec<&str> = s.split(' ').filter(|w| !w.is_empty()).collect();
+            let _ = find(&[line(&words)], &Kind::ALL);
+        }
+    }
+
+    #[test]
+    fn more_secrets() {
+        assert_eq!(one("Authorization: Bearer eyJhbGciOi.eyJzdWIi.c2ln", Kind::Url), "Bearer eyJhbGciOi.eyJzdWIi.c2ln");
+        assert_eq!(one("curl -H bearer abcdef1234567890", Kind::Url), "abcdef1234567890");
+        assert_eq!(one("jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sflKxwRJSMeKKF2QT4fw", Kind::Url), "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sflKxwRJSMeKKF2QT4fw");
+        assert_eq!(one("AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG", Kind::Url), "wJalrXUtnFEMI/K7MDENG");
+        assert_eq!(one("export OPENAI_KEY=sk-abc123", Kind::Url), "sk-abc123");
+        assert_eq!(one("db_pass=hunter2", Kind::Url), "hunter2");
+        assert_eq!(one("GITHUB_TOKEN: ghp_abcdef", Kind::Url), "ghp_abcdef");
+        assert_eq!(one("Password: correct horse battery staple", Kind::Url), "correct horse battery staple");
+        assert_eq!(one("Passphrase: open sesame now", Kind::Url), "open sesame now");
+        assert_eq!(one("https://hooks.slack.com/services/T000/B000/XXXX", Kind::Url), "https://hooks.slack.com/services/T000/B000/XXXX");
+        assert_eq!(one("https://discord.com/api/webhooks/123/abc", Kind::Url), "https://discord.com/api/webhooks/123/abc");
+        assert_eq!(one("see https://files.example.com/d/a8f3k29dk3l2m4n5b6v7c8x9z0q1w2", Kind::Url), "https://files.example.com/d/a8f3k29dk3l2m4n5b6v7c8x9z0q1w2");
+        assert_eq!(one("https://app.example.com/home?session=abc123", Kind::Url), "https://app.example.com/home?session=abc123");
+        assert_eq!(one("https://a.io/?sid=9f8e7d", Kind::Url), "https://a.io/?sid=9f8e7d");
+        assert_eq!(one("https://a.io/x?auth=zzz", Kind::Url), "https://a.io/x?auth=zzz");
+        assert_eq!(one("example.com/x?key=abc", Kind::Url), "example.com/x?key=abc");
+        assert_eq!(one("write to j\u{f6}hn@b\u{fc}cher.de", Kind::Email), "j\u{f6}hn@b\u{fc}cher.de");
+        // Not secrets: a slug, a plain path, words.
+        none("https://blog.example.com/how-to-set-up-your-account-today-please");
+        none("https://example.com/docs/getting-started");
+        none("monkey=banana");
+        none("Keyboard: US");
     }
 
     fn line(words: &[&str]) -> Line {
