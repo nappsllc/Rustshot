@@ -636,6 +636,7 @@ mod window {
             data: *const u8,
             nelements: c_int,
         ) -> c_int;
+        fn XDeleteProperty(dpy: *mut c_void, w: c_ulong, property: c_ulong) -> c_int;
         fn XSetWMProtocols(dpy: *mut c_void, w: c_ulong, protocols: *mut c_ulong, count: c_int) -> c_int;
         fn XSetWMNormalHints(dpy: *mut c_void, w: c_ulong, hints: *mut XSizeHints);
         fn XSetWMHints(dpy: *mut c_void, w: c_ulong, hints: *mut XWMHints) -> c_int;
@@ -769,6 +770,28 @@ mod window {
         unsafe { XInternAtom(dpy, name.as_ptr(), 0) }
     }
 
+    const XA_STRING: c_ulong = 31;
+    /// `WM_CLASS`: instance then class, each NUL-terminated.
+    const WM_CLASS: &[u8] = b"rustshot\0rustshot\0";
+
+    /// `_GTK_THEME_VARIANT` ("dark" / "light"): Mutter, KWin (Breeze) and
+    /// other GTK-aware window managers draw the title bar to match.
+    /// `None` removes it (the WM's default).
+    unsafe fn set_theme_variant(dpy: *mut c_void, win: c_ulong, c: Option<FrameColors>) {
+        unsafe {
+            let prop = atom(dpy, c"_GTK_THEME_VARIANT");
+            match c {
+                Some(c) => {
+                    let v: &[u8] = if c.dark { b"dark" } else { b"light" };
+                    XChangeProperty(dpy, win, prop, atom(dpy, c"UTF8_STRING"), 8, PROP_MODE_REPLACE, v.as_ptr(), v.len() as c_int);
+                }
+                None => {
+                    XDeleteProperty(dpy, win, prop);
+                }
+            }
+        }
+    }
+
     /// Format-32 property data travels as C longs (64-bit on LP64).
     unsafe fn set_prop32(dpy: *mut c_void, win: c_ulong, prop: c_ulong, ty: c_ulong, data: &[c_ulong]) {
         unsafe {
@@ -851,8 +874,20 @@ mod window {
                 let data: Vec<c_ulong> = icon.iter().map(|&v| v as c_ulong).collect();
                 set_prop32(dpy, win, atom(dpy, c"_NET_WM_ICON"), XA_CARDINAL, &data);
             }
-            let normal = atom(dpy, c"_NET_WM_WINDOW_TYPE_NORMAL");
-            set_prop32(dpy, win, atom(dpy, c"_NET_WM_WINDOW_TYPE"), XA_ATOM, &[normal]);
+            // A normal window the WM decorates (title bar, its own buttons);
+            // a close-only question is a dialog.
+            let kind = atom(
+                dpy,
+                if spec.controls == Controls::Close { c"_NET_WM_WINDOW_TYPE_DIALOG" } else { c"_NET_WM_WINDOW_TYPE_NORMAL" },
+            );
+            set_prop32(dpy, win, atom(dpy, c"_NET_WM_WINDOW_TYPE"), XA_ATOM, &[kind]);
+            // Instance and class (the .desktop file's StartupWMClass): the
+            // taskbar groups the windows under the app's icon and name.
+            XChangeProperty(dpy, win, atom(dpy, c"WM_CLASS"), XA_STRING, 8, PROP_MODE_REPLACE, WM_CLASS.as_ptr(), WM_CLASS.len() as c_int);
+            // Which buttons and actions the WM offers (no maximize/resize
+            // on a fixed-size window, no minimize on a dialog).
+            let mwm = atom(dpy, c"_MOTIF_WM_HINTS");
+            set_prop32(dpy, win, mwm, mwm, &motif_hints(spec.controls, spec.resizable).map(|v| v as c_ulong));
             // Ours: window snapping leaves it out of a capture's windows.
             set_prop32(dpy, win, atom(dpy, c"_NET_WM_PID"), XA_CARDINAL, &[std::process::id() as c_ulong]);
             let wm_protocols = atom(dpy, c"WM_PROTOCOLS");
@@ -879,7 +914,11 @@ mod window {
             if !quit() {
                 driver.on_event(Ev::Resize(pw, ph));
             }
+            let mut frame = None;
             if !quit() {
+                // Themed before it is mapped (the WM reads it when framing).
+                frame = driver.frame_colors();
+                set_theme_variant(dpy, win, frame);
                 XMapRaised(dpy, win);
                 XFlush(dpy);
             }
@@ -939,6 +978,14 @@ mod window {
                 let mut present_req = false;
                 with_slot(Hwnd(win), |s| present_req = core::mem::take(&mut s.present));
                 repaint |= present_req;
+                if repaint && !quit() {
+                    // A theme switch (Settings) recolours the title bar too.
+                    let want = driver.frame_colors();
+                    if want != frame {
+                        frame = want;
+                        set_theme_variant(dpy, win, frame);
+                    }
+                }
                 if repaint
                     && !quit()
                     && let Some(fb) = driver.frame()

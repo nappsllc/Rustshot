@@ -502,6 +502,10 @@ mod imp {
             Cursor::Arrow
         }
 
+        fn frame_colors(&self) -> Option<wind::FrameColors> {
+            Some(crate::ui::paint::WTok::of(&self.th).frame())
+        }
+
         fn on_quit(&mut self) {
             self.cancel.store(true, Ordering::SeqCst);
         }
@@ -514,7 +518,7 @@ mod imp {
         let th = crate::theme::resolve(&cfg);
         let os = std::fs::read_to_string("/etc/os-release").or_else(|_| std::fs::read_to_string("/usr/lib/os-release")).unwrap_or_default();
         let mut d = Dialog::new(install_command(&os), th);
-        let spec = WindowSpec { title: "Rustshot".into(), w: W, h: H, resizable: false, min: (W, H) };
+        let spec = WindowSpec { title: "Rustshot".into(), w: W, h: H, resizable: false, min: (W, H), controls: wind::Controls::Close };
         if let Err(e) = wind::run_window(spec, &mut d) {
             eprintln!("rustshot: encoder dialog: {e:#}");
         }
@@ -545,7 +549,7 @@ mod imp {
             let _guard = wind::test_window_lock();
             let mut dlg = Dialog::new(Some("sudo apt install ffmpeg"), crate::theme::resolve(&crate::config::Config::default()));
             let mut d = wind::AutoClose::new(&mut dlg, 1000);
-            let spec = WindowSpec { title: "Rustshot".into(), w: W, h: H, resizable: false, min: (W, H) };
+            let spec = WindowSpec { title: "Rustshot".into(), w: W, h: H, resizable: false, min: (W, H), controls: wind::Controls::Close };
             wind::run_window(spec, &mut d).expect("encoder dialog");
             assert!(d.frames > 0, "drew a frame");
         }

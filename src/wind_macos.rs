@@ -757,8 +757,9 @@ mod window {
             let m = f64::from(crate::uisize::mult());
             let (w, h) = (spec.w.max(1) as f64 * m, spec.h.max(1) as f64 * m);
             let content = CGRect { origin: CGPoint { x: 0.0, y: 0.0 }, size: CGSize { width: w, height: h } };
-            // Titled | Closable | Miniaturizable (| Resizable)
-            let style: u64 = 1 | 2 | 4 | if spec.resizable { 8 } else { 0 };
+            // Titled | Closable (| Miniaturizable) (| Resizable): the traffic
+            // lights; a button the window does not have shows disabled.
+            let style: u64 = 1 | 2 | if spec.controls.minimize() { 4 } else { 0 } | if spec.resizable { 8 } else { 0 };
             let win: *mut c_void = msg0(class, objc_sel(c"alloc"));
             let win: *mut c_void = msg4(
                 win,
@@ -809,7 +810,11 @@ mod window {
             if !quit() {
                 driver.on_event(Ev::Resize(size.0, size.1));
             }
+            let mut frame = None;
             if !quit() {
+                // Themed before it is first shown.
+                frame = driver.frame_colors();
+                apply_frame(win, frame);
                 let _: () = msg1(app, objc_sel(c"activateIgnoringOtherApps:"), 1i64);
                 let _: () = msg1(win, objc_sel(c"makeKeyAndOrderFront:"), core::ptr::null_mut::<c_void>());
             }
@@ -883,6 +888,13 @@ mod window {
                     repaint |= driver.on_event(Ev::Timer);
                 }
                 with_slot(hwnd, |v| repaint |= core::mem::take(&mut v.present));
+                if repaint && !quit() {
+                    let want = driver.frame_colors();
+                    if want != frame {
+                        frame = want;
+                        apply_frame(win, frame);
+                    }
+                }
                 if repaint
                     && !quit()
                     && let Some(fb) = driver.frame()
@@ -903,6 +915,36 @@ mod window {
             let _: () = msg0(win, objc_sel(c"release"));
             WINDOWED.with(|c| c.set(prev));
             Ok(())
+        }
+    }
+
+    /// The title bar in the design's colours: transparent over a window
+    /// background of the caption colour, in the dark or light appearance
+    /// (traffic lights and title text to match). The content view stays
+    /// below the title bar (no full-size content: the boards leave the
+    /// title bar to the OS). `None`: AppKit's defaults.
+    unsafe fn apply_frame(win: *mut c_void, c: Option<FrameColors>) {
+        unsafe {
+            let _: () = msg1(win, objc_sel(c"setTitlebarAppearsTransparent:"), i64::from(c.is_some()));
+            let appearance: *mut c_void = match c {
+                Some(c) => msg1(
+                    objc_cls(c"NSAppearance"),
+                    objc_sel(c"appearanceNamed:"),
+                    ns_string(if c.dark { "NSAppearanceNameDarkAqua" } else { "NSAppearanceNameAqua" }),
+                ),
+                None => core::ptr::null_mut(),
+            };
+            let _: () = msg1(win, objc_sel(c"setAppearance:"), appearance);
+            let bg: *mut c_void = match c {
+                Some(c) => {
+                    let [r, g, b] = c.caption.map(|v| f64::from(v) / 255.0);
+                    msg4(objc_cls(c"NSColor"), objc_sel(c"colorWithSRGBRed:green:blue:alpha:"), r, g, b, 1.0f64)
+                }
+                None => msg0(objc_cls(c"NSColor"), objc_sel(c"windowBackgroundColor")),
+            };
+            if !bg.is_null() {
+                let _: () = msg1(win, objc_sel(c"setBackgroundColor:"), bg);
+            }
         }
     }
 

@@ -161,7 +161,7 @@ enum Parsed {
 }
 
 const HELP: &str = "\
-Rustshot: screenshot and annotation tool (Flameshot-style, written in Rust)
+Rustshot: tiny yet powerful, beautiful, open-source and cross-platform tool for screenshots, editing and video capture
 
 Usage: rustshot [COMMAND] [OPTIONS]
 
@@ -817,6 +817,13 @@ fn run() -> Result<()> {
             screenclip_win::repoint_on_start();
             rec_ui::warm_mp4();
             let cfg = config::load();
+            // Offered for Win+Shift+S but not chosen: the guide, once the
+            // daemon is up (its Settings window reaches the daemon).
+            let hint = cfg.screenclip_hint;
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_secs(3));
+                screenclip_win::remind_on_start(hint);
+            });
             let exit_code = Arc::new(AtomicI32::new(0));
             let slot: UploadSlot = Arc::new(Mutex::new(None));
             let mut code = editor::run(cfg.clone(), RunKind::Daemon, None, exit_code, slot.clone(), guard);
