@@ -390,6 +390,26 @@ impl DxgiSource {
         }
     }
 
+    /// Tests: output `i` turns HDR (FP16, tone-mapped) as after a lost
+    /// access, or its device is re-created (`hdr` false): what the GPU
+    /// path then has to give up before the next copy.
+    #[cfg(test)]
+    pub(crate) fn test_output_changes(&mut self, i: usize, hdr: bool) {
+        let o = &mut self.outs[i];
+        if hdr {
+            o.hdr = Some(crate::hdr::ToneMap::new(200.0));
+            // The duplication stays BGRA: D3D refuses the copy into the
+            // FP16 texture, which then maps as black (the tone-mapping
+            // into the canvas still runs).
+            o.staging = crate::hdr::win::fp16_staging(&o.device, o.isect.2, o.isect.3).ok();
+        } else if let Ok((d, c)) = create_device(&o.adapter) {
+            (o.device, o.ctx) = (d, c);
+            o.staging = None;
+            o.dup = None;
+            o.retry_at = Instant::now();
+        }
+    }
+
     /// The desktop image of the area so far (no pointer).
     #[cfg(test)]
     pub(crate) fn canvas(&self) -> &[u8] {
@@ -402,8 +422,22 @@ impl DxgiSource {
         self.work / self.frames.max(1) as u32
     }
 
+    /// Whether output `i` can feed the GPU canvas: the same device, and
+    /// BGRA (an HDR output is FP16, tone-mapped on the CPU).
+    fn gpu_takes(&self, i: usize) -> bool {
+        let o = &self.outs[i];
+        self.gpu.as_ref().is_some_and(|g| g.device.as_raw() == o.device.as_raw() && o.hdr.is_none())
+    }
+
     /// Wait up to `timeout_ms` for output `i` to present; take what it has.
     fn poll(&mut self, i: usize, timeout_ms: u32) {
+        // An output the GPU canvas cannot take any more (its device was
+        // re-created, or it came back in HDR): back to the CPU canvas
+        // before anything is copied into it.
+        if self.gpu.is_some() && !self.gpu_takes(i) {
+            let why = if self.outs[i].hdr.is_some() { "the display is in HDR now" } else { "the display device was re-created" };
+            self.stop_gpu(why);
+        }
         let area = self.area;
         let o = &mut self.outs[i];
         let Some(dup) = o.dup.clone() else {
@@ -438,11 +472,11 @@ impl DxgiSource {
         }
         let t0 = Instant::now();
         let mut copied = false;
-        // The GPU canvas takes the image straight from the duplication; an
-        // output whose device was re-created (device removed) cannot, nor
-        // one that came back in HDR (FP16).
+        // The GPU canvas takes the image straight from the duplication
+        // (checked above: same device, not HDR).
         let gpu = self.gpu.as_ref().filter(|g| g.device.as_raw() == o.device.as_raw() && o.hdr.is_none());
-        let gpu_lost = self.gpu.is_some() && gpu.is_none();
+        // HDR: only what changed is tone-mapped (`None`: all of it).
+        let mut changed: Option<Vec<RECT>> = None;
         #[cfg(test)]
         if info.LastPresentTime != 0 {
             FRESH_FRAMES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -470,6 +504,9 @@ impl DxgiSource {
             } else if let Some(stg) = &o.staging {
                 unsafe { o.ctx.CopySubresourceRegion(stg, 0, 0, 0, 0, &tex, 0, Some(&bx)) };
                 copied = true;
+                if o.hdr.is_some() && o.seen {
+                    changed = changed_rects(&dup, info.TotalMetadataBufferSize);
+                }
             }
         }
         let p = &mut self.pointer;
@@ -508,28 +545,45 @@ impl DxgiSource {
                 let stride = area.2 as usize * 4;
                 let row = iw as usize * 4;
                 let x = (ix - area.0) as usize * 4;
-                for r in 0..ih as usize {
-                    let at = (iy - area.1) as usize * stride + r * stride + x;
-                    let line = unsafe { (m.pData as *const u8).add(r * m.RowPitch as usize) };
-                    match &o.hdr {
-                        // FP16 scRGB: 4 halves a pixel, tone-mapped to BGRA.
-                        Some(tm) => {
-                            let src = unsafe { std::slice::from_raw_parts(line as *const u16, iw as usize * 4) };
-                            tm.row(src, &mut self.canvas[at..at + row], true);
+                // The CPU canvas is the whole area (never the empty one of
+                // the GPU path: that was given up above).
+                let fits = self.canvas.len() >= ((iy - area.1) as usize + ih as usize) * stride;
+                match &o.hdr {
+                    // FP16 scRGB: 4 halves a pixel, tone-mapped to BGRA,
+                    // only in what changed, on a few threads.
+                    Some(tm) if fits => {
+                        let src = unsafe { crate::hdr::win::mapped_fp16(&m, iw, ih) };
+                        let pitch = m.RowPitch as usize / 2;
+                        let parts = clip_changed(changed.as_deref(), &o.desk, o.isect);
+                        let base = (iy - area.1) as usize * stride + x;
+                        for (px, py, pw, ph) in parts {
+                            let (px, py, pw, ph) = (px as usize, py as usize, pw as usize, ph as usize);
+                            let rows = self.canvas[base..]
+                                .chunks_mut(stride)
+                                .skip(py)
+                                .take(ph)
+                                .enumerate()
+                                .map(|(k, line)| {
+                                    let s0 = (py + k) * pitch + px * 4;
+                                    (&src[s0..s0 + pw * 4], &mut line[px * 4..(px + pw) * 4])
+                                })
+                                .collect();
+                            tm.rows(rows, true);
                         }
-                        None => {
+                    }
+                    None if fits => {
+                        for r in 0..ih as usize {
+                            let at = (iy - area.1) as usize * stride + r * stride + x;
+                            let line = unsafe { (m.pData as *const u8).add(r * m.RowPitch as usize) };
                             let src = unsafe { std::slice::from_raw_parts(line, row) };
                             self.canvas[at..at + row].copy_from_slice(src);
                         }
                     }
+                    _ => {}
                 }
                 unsafe { o.ctx.Unmap(stg, 0) };
                 o.seen = true;
             }
-        }
-        if gpu_lost {
-            let why = if self.outs[i].hdr.is_some() { "the display is in HDR now" } else { "the display device was re-created" };
-            self.stop_gpu(why);
         }
         self.work += t0.elapsed();
     }
@@ -618,6 +672,42 @@ impl FrameSource for DxgiSource {
     fn size(&self) -> (u32, u32) {
         (self.area.2, self.area.3)
     }
+}
+
+/// What changed in the frame just acquired (output coordinates): the
+/// move destinations and the dirty rects; `None` when DXGI cannot say
+/// (then everything is taken as changed).
+fn changed_rects(dup: &IDXGIOutputDuplication, meta: u32) -> Option<Vec<RECT>> {
+    if meta == 0 {
+        return None;
+    }
+    let n = meta as usize / std::mem::size_of::<RECT>() + 1;
+    let mut moves = vec![DXGI_OUTDUPL_MOVE_RECT::default(); meta as usize / std::mem::size_of::<DXGI_OUTDUPL_MOVE_RECT>() + 1];
+    let mut need = 0u32;
+    let mb = (moves.len() * std::mem::size_of::<DXGI_OUTDUPL_MOVE_RECT>()) as u32;
+    unsafe { dup.GetFrameMoveRects(mb, moves.as_mut_ptr(), &mut need) }.ok()?;
+    moves.truncate(need as usize / std::mem::size_of::<DXGI_OUTDUPL_MOVE_RECT>());
+    let mut dirty = vec![RECT::default(); n];
+    let db = (dirty.len() * std::mem::size_of::<RECT>()) as u32;
+    unsafe { dup.GetFrameDirtyRects(db, dirty.as_mut_ptr(), &mut need) }.ok()?;
+    dirty.truncate(need as usize / std::mem::size_of::<RECT>());
+    dirty.extend(moves.iter().map(|m| m.DestinationRect));
+    Some(dirty)
+}
+
+/// The changed rects (output coordinates, `None`: all) as parts of the
+/// output's piece of the area `isect` (virtual-screen px), in that piece's
+/// own coordinates: x, y, w, h; empty ones dropped.
+fn clip_changed(changed: Option<&[RECT]>, desk: &RECT, isect: IRect) -> Vec<IRect> {
+    let whole = vec![(0, 0, isect.2, isect.3)];
+    let Some(rects) = changed else { return whole };
+    rects
+        .iter()
+        .filter_map(|r| {
+            let g = RECT { left: r.left + desk.left, top: r.top + desk.top, right: r.right + desk.left, bottom: r.bottom + desk.top };
+            intersect(isect, &g).map(|(x, y, w, h)| (x - isect.0, y - isect.1, w, h))
+        })
+        .collect()
 }
 
 /// The part of the area (virtual-screen px) the pointer covers, if any.
@@ -742,6 +832,21 @@ mod tests {
         let mut px = vec![0u8; 4 * 4 * 4];
         draw_pointer(&mut px, (10, 20, 4, 4), &p);
         assert!(px.iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn changed_rects_clip_to_the_piece_of_the_area() {
+        // Output at (1920, 0); the area's piece on it is (2000, 100) 400 x 300.
+        let desk = RECT { left: 1920, top: 0, right: 3840, bottom: 2160 };
+        let isect = (2000, 100, 400, 300);
+        assert_eq!(clip_changed(None, &desk, isect), vec![(0, 0, 400, 300)], "unknown: all of it");
+        let rects = [
+            RECT { left: 0, top: 0, right: 100, bottom: 100 },       // outside the piece
+            RECT { left: 70, top: 90, right: 90, bottom: 120 },      // its top-left corner
+            RECT { left: 450, top: 380, right: 600, bottom: 500 },   // its bottom-right
+        ];
+        assert_eq!(clip_changed(Some(&rects), &desk, isect), vec![(0, 0, 10, 20), (370, 280, 30, 20)]);
+        assert!(clip_changed(Some(&[]), &desk, isect).is_empty(), "nothing changed");
     }
 
     #[test]

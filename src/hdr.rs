@@ -3,13 +3,14 @@
 //!
 //! The mapping, per pixel: scale by the SDR white level (Settings ›
 //! Display › "SDR content brightness", `DisplayConfigGetDeviceInfo`
-//! `DISPLAYCONFIG_SDR_WHITE_LEVEL`), so SDR white is 1.0; then, only when
-//! the picture holds highlights above that white, compress luminance above
-//! [`KNEE`] with an extended Reinhard curve that takes the brightest value
-//! ([`ToneMap::peak`]) to 1.0 (a picture with none is left as it is, SDR
-//! white staying 255); scale the color by the new luminance over the old,
-//! desaturate what still runs past 1.0 toward its luminance (the hue is
-//! kept), and encode with the sRGB OETF.
+//! `DISPLAYCONFIG_SDR_WHITE_LEVEL`), so SDR white is 1.0; everything up
+//! to that white is kept as it is (SDR content, and SDR white itself,
+//! come out exactly as on an SDR display: 255 is 255, on every monitor of
+//! a span, whatever else is in the picture); luminance above it is
+//! clamped to white, and a color that still runs past 1.0 in a channel is
+//! desaturated toward its luminance (its hue is kept); then the sRGB OETF.
+//! Channels below 0 (wide-gamut colors outside BT.709) are clamped to 0,
+//! which shifts very saturated P3 / BT.2020 colors a little.
 //!
 //! The math is here and tested everywhere; reading the monitor (DXGI
 //! Desktop Duplication in FP16, `IDXGIOutput5::DuplicateOutput1`) is in
@@ -24,9 +25,6 @@
 #![cfg_attr(not(windows), allow(dead_code))] // Linux, macOS: the setting only
 
 use std::sync::atomic::{AtomicBool, Ordering};
-
-/// Luminance (in SDR-white units) below which the curve is the identity.
-pub const KNEE: f32 = 0.9;
 
 /// scRGB's 1.0, in nits.
 pub const SCRGB_NITS: f32 = 80.0;
@@ -70,6 +68,12 @@ pub fn f16_to_f32(h: u16) -> f32 {
     f32::from_bits(bits)
 }
 
+/// Every half's f32 (65536 entries, built once).
+fn half_lut() -> &'static [f32] {
+    static LUT: std::sync::OnceLock<Vec<f32>> = std::sync::OnceLock::new();
+    LUT.get_or_init(|| (0..=u16::MAX).map(f16_to_f32).collect())
+}
+
 /// BT.709 luminance of linear RGB.
 pub fn luminance(c: [f32; 3]) -> f32 {
     0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
@@ -95,34 +99,28 @@ fn oetf_lut() -> &'static [u8; LUT_N] {
     })
 }
 
-/// One picture's (or recording's) tone mapping.
+/// One display's tone mapping.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ToneMap {
     /// scRGB value of SDR white (white nits / 80).
     pub white: f32,
-    /// The brightest luminance to keep apart, in SDR-white units (1.0:
-    /// no highlights, the curve is the identity).
-    pub peak: f32,
 }
 
+/// Pixels below which [`ToneMap::rows`] stays on the calling thread.
+const PAR_MIN: usize = 1 << 18;
+
 impl ToneMap {
-    /// For SDR white at `white_nits` and the brightest scRGB luminance
-    /// `peak` (of the picture, or the display's maximum for a recording).
-    pub fn new(white_nits: f32, peak: f32) -> ToneMap {
+    /// For SDR white at `white_nits` (80 when it is not a usable number).
+    pub fn new(white_nits: f32) -> ToneMap {
         let white = (if white_nits.is_finite() && white_nits > 0.0 { white_nits } else { DEFAULT_WHITE_NITS } / SCRGB_NITS).max(0.1);
-        let peak = if peak.is_finite() { (peak / white).max(1.0) } else { 1.0 };
-        ToneMap { white, peak }
+        ToneMap { white }
     }
 
-    /// The luminance curve (SDR-white units in, 0..1 out).
+    #[cfg_attr(not(test), allow(dead_code))]
+    /// The luminance curve (SDR-white units in, 0..1 out): the identity
+    /// up to SDR white, white above it.
     pub fn curve(&self, y: f32) -> f32 {
-        if y <= KNEE || self.peak <= 1.0 {
-            return y.min(1.0);
-        }
-        let x = (y - KNEE) / (1.0 - KNEE);
-        let xw = (self.peak - KNEE) / (1.0 - KNEE);
-        let f = x * (1.0 + x / (xw * xw)) / (1.0 + x);
-        (KNEE + (1.0 - KNEE) * f).min(1.0)
+        y.min(1.0)
     }
 
     /// Linear 0..1 BT.709 of scRGB `c`.
@@ -132,8 +130,7 @@ impl ToneMap {
         if y <= 0.0 {
             return [0.0; 3];
         }
-        let k = self.curve(y) / y;
-        let mut o = v.map(|x| x * k);
+        let mut o = if y > 1.0 { v.map(|x| x / y) } else { v };
         let m = o[0].max(o[1]).max(o[2]);
         if m > 1.0 {
             // Past white in a channel: toward gray at the same luminance.
@@ -153,23 +150,46 @@ impl ToneMap {
     /// Tone-map a row of `R16G16B16A16_FLOAT` pixels into 8-bit pixels,
     /// RGBA (`bgra` false) or BGRA; alpha 255.
     pub fn row(&self, src: &[u16], dst: &mut [u8], bgra: bool) {
-        let lut = oetf_lut();
+        let (lut, half) = (oetf_lut(), half_lut());
+        let k = (LUT_N - 1) as f32 / self.white;
+        let top = (LUT_N - 1) as f32;
         for (s, d) in src.as_chunks::<4>().0.iter().zip(dst.as_chunks_mut::<4>().0) {
-            let l = self.linear([f16_to_f32(s[0]), f16_to_f32(s[1]), f16_to_f32(s[2])]);
-            let q = l.map(|x| lut[(x * (LUT_N - 1) as f32 + 0.5) as usize]);
+            let (r, g, b) = (half[s[0] as usize] * k, half[s[1] as usize] * k, half[s[2] as usize] * k);
+            // Most pixels are SDR (every channel within 0..white): straight
+            // to the OETF table; the rest (highlights, negatives, NaN) take
+            // the full mapping.
+            let q = if (0.0..=top).contains(&r) && (0.0..=top).contains(&g) && (0.0..=top).contains(&b) {
+                [lut[(r + 0.5) as usize], lut[(g + 0.5) as usize], lut[(b + 0.5) as usize]]
+            } else {
+                self.linear([half[s[0] as usize], half[s[1] as usize], half[s[2] as usize]]).map(|x| lut[(x * top + 0.5) as usize])
+            };
             *d = if bgra { [q[2], q[1], q[0], 255] } else { [q[0], q[1], q[2], 255] };
         }
     }
-}
 
-/// The brightest scRGB luminance among `R16G16B16A16_FLOAT` pixels.
-pub fn peak_of(src: &[u16]) -> f32 {
-    src.as_chunks::<4>()
-        .0
-        .iter()
-        .map(|s| luminance([f16_to_f32(s[0]), f16_to_f32(s[1]), f16_to_f32(s[2])]))
-        .filter(|y| y.is_finite())
-        .fold(0.0, f32::max)
+    /// [`ToneMap::row`] over many (source, destination) rows, split
+    /// across up to four threads when there are enough pixels.
+    pub fn rows(&self, rows: Vec<(&[u16], &mut [u8])>, bgra: bool) {
+        let px: usize = rows.iter().map(|r| r.0.len() / 4).sum();
+        let n = std::thread::available_parallelism().map_or(1, |n| n.get()).min(4);
+        if n < 2 || px < PAR_MIN || rows.len() < 2 * n {
+            for (s, d) in rows {
+                self.row(s, d, bgra);
+            }
+            return;
+        }
+        let mut rows = rows;
+        let per = rows.len().div_ceil(n);
+        std::thread::scope(|sc| {
+            for part in rows.chunks_mut(per) {
+                sc.spawn(move || {
+                    for (s, d) in part.iter_mut() {
+                        self.row(s, d, bgra);
+                    }
+                });
+            }
+        });
+    }
 }
 
 #[cfg(windows)]
@@ -211,53 +231,83 @@ mod tests {
     #[test]
     fn sdr_content_maps_exactly_at_the_white_level() {
         // SDR white at 80 nits: scRGB 1.0 is white, 0.5 is sRGB 0.7354.
-        let t = ToneMap::new(80.0, 1.0);
+        let t = ToneMap::new(80.0);
         assert_eq!(t.srgb8([0.0, 0.0, 0.0]), [0, 0, 0]);
         assert_eq!(t.srgb8([1.0, 1.0, 1.0]), [255, 255, 255]);
         assert_eq!(t.srgb8([0.5, 0.5, 0.5]), [188, 188, 188]);
         assert_eq!(t.srgb8([1.0, 0.0, 0.0]), [255, 0, 0]);
         // SDR white at 240 nits (scRGB 3.0): 3.0 is white, 1.5 is linear
-        // 0.5 (sRGB 0.7354 = 188), and the picture's own peak at white
-        // changes nothing.
-        let t = ToneMap::new(240.0, 3.0);
+        // 0.5 (sRGB 0.7354 = 188).
+        let t = ToneMap::new(240.0);
         assert_eq!(t.white, 3.0);
         assert_eq!(t.srgb8([3.0, 3.0, 3.0]), [255, 255, 255]);
         assert_eq!(t.srgb8([1.5, 1.5, 1.5]), [188, 188, 188]);
         assert_eq!(t.srgb8([0.6, 1.2, 2.4]), [124, 170, 231]);
         // Negative (outside BT.709) channels and NaN are black there.
         assert_eq!(t.srgb8([-0.5, 3.0, f32::NAN]), [0, 255, 0]);
+        assert_eq!(ToneMap::new(f32::NAN).white, 1.0);
+    }
+
+    /// Every SDR gray, shown on an HDR monitor (linear x SDR white in
+    /// scRGB), comes back as the 8-bit value an SDR monitor shows: no
+    /// seam where a span crosses from an SDR to an HDR monitor, and the
+    /// same with or without highlights next to it in the row.
+    #[test]
+    fn sdr_values_round_trip_with_and_without_highlights() {
+        let lin = |v: u8| {
+            let c = v as f32 / 255.0;
+            if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+        };
+        for nits in [80.0f32, 200.0, 240.0, 480.0] {
+            let t = ToneMap::new(nits);
+            let mut plain = Vec::new();
+            let mut lit = Vec::new();
+            for v in 0..=255u8 {
+                let x = h(lin(v) * t.white);
+                plain.extend([x, x, x, h(1.0)]);
+                lit.extend([x, x, x, h(1.0)]);
+                lit.extend([h(40.0), h(40.0), h(40.0), h(1.0)]); // a 3200-nit highlight
+            }
+            let mut a = vec![0u8; plain.len()];
+            let mut b = vec![0u8; lit.len()];
+            t.row(&plain, &mut a, false);
+            t.row(&lit, &mut b, false);
+            for v in 0..=255usize {
+                let got = a[v * 4];
+                assert!(got.abs_diff(v as u8) <= 1, "{nits} nits: {v} -> {got}");
+                assert_eq!(b[v * 8..v * 8 + 4], a[v * 4..v * 4 + 4], "the highlight changes nothing next to it");
+                assert_eq!(b[v * 8 + 4..v * 8 + 8], [255, 255, 255, 255], "the highlight is white");
+            }
+            assert_eq!(a[255 * 4..], [255, 255, 255, 255], "SDR white is 255 at {nits} nits");
+        }
     }
 
     #[test]
-    fn highlights_compress_to_white_above_the_knee() {
+    fn highlights_go_to_white_keeping_their_hue() {
         // White 200 nits (2.5), highlights to 1000 nits (12.5 = 5x white).
-        let t = ToneMap::new(200.0, 12.5);
-        assert_eq!(t.peak, 5.0);
-        assert_eq!(t.curve(0.5), 0.5, "below the knee: as is");
-        assert_eq!(t.curve(KNEE), KNEE);
-        assert!((t.curve(5.0) - 1.0).abs() < 1e-6, "the peak is white");
-        assert_eq!(t.curve(9.0), 1.0, "past the peak: white");
-        let w = t.curve(1.0);
-        assert!(w > KNEE && w < 0.96, "SDR white just under 1: {w}");
-        // Monotonic, continuous at the knee.
-        let mut last = 0.0;
-        for i in 0..=600 {
-            let y = i as f32 / 100.0;
-            let c = t.curve(y);
-            assert!(c >= last - 1e-6, "{y}: {c} < {last}");
-            last = c;
-        }
-        assert!((t.curve(KNEE + 1e-4) - KNEE).abs() < 1e-3);
+        let t = ToneMap::new(200.0);
+        assert_eq!(t.curve(0.5), 0.5, "below white: as is");
+        assert_eq!(t.curve(1.0), 1.0, "SDR white stays white");
+        assert_eq!(t.curve(5.0), 1.0, "above white: white");
+        assert_eq!(t.srgb8([2.5, 2.5, 2.5]), [255, 255, 255]);
         assert_eq!(t.srgb8([12.5, 12.5, 12.5]), [255, 255, 255]);
-        assert_eq!(t.srgb8([0.5, 0.5, 0.5]), [124, 124, 124], "dark tones as in SDR");
-        // A bright red keeps its hue: red most, green and blue equal.
-        let [r, g, b] = t.srgb8([12.0, 1.0, 1.0]);
+        assert_eq!(t.srgb8([1.25, 1.25, 1.25]), [188, 188, 188], "mid tones as in SDR");
+        // A bright red (past white in red, under it in luminance) keeps
+        // its hue: red most, green and blue equal; past white in
+        // luminance too it is white.
+        let [r, g, b] = t.srgb8([6.0, 0.5, 0.5]);
+        assert_eq!(t.srgb8([12.0, 1.0, 1.0]), [255, 255, 255]);
         assert!(r == 255 && g == b && g < r, "{r} {g} {b}");
+        // A saturated red under white luminance but past 1.0 in red: red
+        // stays the strongest and the luminance is kept.
+        let o = t.linear([5.0, 0.0, 0.0]);
+        assert!(o[0] == 1.0 && o[1] > 0.0 && (o[1] - o[2]).abs() < 1e-6, "{o:?}");
+        assert!((luminance(o) - luminance([2.0, 0.0, 0.0])).abs() < 1e-4, "{o:?}");
     }
 
     #[test]
     fn rows_match_the_exact_mapping_within_a_level() {
-        let t = ToneMap::new(160.0, 8.0);
+        let t = ToneMap::new(160.0);
         let vals: Vec<f32> = (0..200).map(|i| i as f32 * 0.05).collect();
         let src: Vec<u16> = vals.iter().flat_map(|&v| [h(v), h(v * 0.5), h(v * 0.25), h(1.0)]).collect();
         let mut rgba = vec![0u8; vals.len() * 4];
@@ -273,7 +323,58 @@ mod tests {
             assert_eq!(px[3], 255);
             assert_eq!(bgra[i * 4..i * 4 + 4], [px[2], px[1], px[0], 255]);
         }
-        assert!((peak_of(&src) - luminance([9.95, 4.975, 2.4875])).abs() < 0.02);
+        assert_eq!(half_lut()[0x3C00], 1.0);
+        assert!(half_lut().iter().enumerate().all(|(i, &v)| v.to_bits() == f16_to_f32(i as u16).to_bits()));
+    }
+
+    /// The threaded rows equal the single-thread ones.
+    #[test]
+    fn threaded_rows_match() {
+        let t = ToneMap::new(240.0);
+        let (w, hgt) = (1024usize, 300usize);
+        let src: Vec<u16> = (0..w * hgt).flat_map(|i| {
+            let v = (i % 997) as f32 * 0.01;
+            [h(v), h(v * 0.7), h(v * 0.3), h(1.0)]
+        }).collect();
+        let mut one = vec![0u8; w * hgt * 4];
+        for (s, d) in src.chunks(w * 4).zip(one.chunks_mut(w * 4)) {
+            t.row(s, d, true);
+        }
+        let mut par = vec![0u8; w * hgt * 4];
+        t.rows(src.chunks(w * 4).zip(par.chunks_mut(w * 4)).collect(), true);
+        assert!(one == par);
+    }
+
+    /// Release-build timing of a full 4K FP16 frame (`cargo test --release
+    /// bench_tonemap_4k -- --ignored --nocapture`).
+    #[test]
+    #[ignore = "measurement"]
+    fn bench_tonemap_4k() {
+        let t = ToneMap::new(240.0);
+        let (w, hgt) = (3840usize, 2160usize);
+        let mut dst = vec![0u8; w * hgt * 4];
+        // A desktop: SDR up to 10 % past white (about 9 % highlights);
+        // then a frame of nothing but highlights (the worst case).
+        for (what, over) in [("desktop", 1.1f32), ("all highlights", 8.0)] {
+        let src: Vec<u16> = (0..w * hgt).flat_map(|i| {
+            let v = if over > 2.0 { 3.5 + (i % 4093) as f32 * 0.005 } else { (i % 4093) as f32 / 4093.0 * t.white * over };
+            [h(v), h(v * 0.8), h(v * 0.5), h(1.0)]
+        }).collect();
+        for (label, par) in [("1 thread", false), ("threads", true)] {
+            let t0 = std::time::Instant::now();
+            let n = 5;
+            for _ in 0..n {
+                if par {
+                    t.rows(src.chunks(w * 4).zip(dst.chunks_mut(w * 4)).collect(), true);
+                } else {
+                    for (s, d) in src.chunks(w * 4).zip(dst.chunks_mut(w * 4)) {
+                        t.row(s, d, true);
+                    }
+                }
+            }
+            eprintln!("4K FP16 tone map, {what}, {label}: {:.1} ms a frame", t0.elapsed().as_secs_f64() * 1000.0 / n as f64);
+        }
+        }
     }
 
     #[test]

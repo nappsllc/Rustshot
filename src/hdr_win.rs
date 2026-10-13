@@ -1,15 +1,25 @@
 //! HDR on Windows: which outputs are in HDR (`IDXGIOutput6::GetDesc1`,
 //! color space `DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020`), their SDR
 //! white level (`DisplayConfigGetDeviceInfo`), and a screenshot of their
-//! part of a rect: one frame of Desktop Duplication in FP16
-//! (`IDXGIOutput5::DuplicateOutput1` with `R16G16B16A16_FLOAT`: scRGB),
-//! tone-mapped by [`super::ToneMap`] with the picture's own peak.
-//! Without an HDR output in the rect nothing here runs past the output
-//! list (a DXGI factory and a `GetDesc1` per output).
+//! part of a rect: Desktop Duplication in FP16 (`IDXGIOutput5::
+//! DuplicateOutput1` with `R16G16B16A16_FLOAT`: scRGB), tone-mapped by
+//! [`super::ToneMap`].
+//!
+//! The process keeps one warm duplication per HDR output ([`warm_up`]
+//! makes them at start; a capture makes one for an output that turned HDR
+//! since, and re-makes one whose access was lost) with a GPU copy of the
+//! latest desktop image it delivered. A duplication queues every change
+//! since its last frame, so a capture asks for a new frame for at most
+//! [`WAIT_MS`] and, when none comes (nothing changed: a static desktop),
+//! the copy is current. A capture therefore never waits more than about
+//! [`BUDGET_MS`] per HDR output; an output with no image yet keeps its GDI
+//! pixels (logged). Without an HDR output in the rect nothing here runs
+//! past the output list (a DXGI factory and a `GetDesc1` per output).
 
 use super::ToneMap;
 use crate::capture::IRect;
 use crate::pixbuf::PixBuf;
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use windows::core::Interface;
 use windows::Win32::Devices::Display::{
@@ -17,7 +27,7 @@ use windows::Win32::Devices::Display::{
     DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_DEVICE_INFO_HEADER, DISPLAYCONFIG_MODE_INFO, DISPLAYCONFIG_PATH_INFO,
     DISPLAYCONFIG_SDR_WHITE_LEVEL, DISPLAYCONFIG_SOURCE_DEVICE_NAME, QDC_ONLY_ACTIVE_PATHS,
 };
-use windows::Win32::Foundation::{ERROR_SUCCESS, HMODULE, RECT};
+use windows::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, HMODULE, RECT};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_UNKNOWN;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::{
@@ -26,21 +36,23 @@ use windows::Win32::Graphics::Dxgi::Common::{
 };
 use windows::Win32::Graphics::Dxgi::*;
 
+/// How long a capture waits for a new frame of a warm duplication.
+pub const WAIT_MS: u32 = 50;
+/// The most a capture spends on one HDR output (a new duplication's first
+/// frame included).
+pub const BUDGET_MS: u64 = 60;
+
 /// What an HDR output says about itself.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Hdr {
     /// SDR content's white (nits).
     pub white_nits: f32,
-    /// The display's peak (nits; 0 when it does not say).
-    pub max_nits: f32,
 }
 
 impl Hdr {
-    /// The mapping for a recording: up to the display's peak (fixed, so
-    /// frames do not pump).
+    /// Its mapping: SDR white at the display's SDR content brightness.
     pub fn tone_map(&self) -> ToneMap {
-        let peak = if self.max_nits > 0.0 { self.max_nits } else { 1000.0 };
-        ToneMap::new(self.white_nits, peak / super::SCRGB_NITS)
+        ToneMap::new(self.white_nits)
     }
 }
 
@@ -48,25 +60,40 @@ impl Hdr {
 pub fn output_hdr(output: &IDXGIOutput) -> Option<Hdr> {
     let o6: IDXGIOutput6 = output.cast().ok()?;
     let d = unsafe { o6.GetDesc1() }.ok()?;
-    (d.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020)
-        .then(|| Hdr { white_nits: sdr_white_nits(&d.DeviceName), max_nits: d.MaxLuminance })
+    (d.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020).then(|| Hdr { white_nits: sdr_white_nits(&d.DeviceName) })
+}
+
+/// The active display paths, asked again when the topology changed
+/// between sizing the buffers and filling them.
+fn display_paths() -> Option<Vec<DISPLAYCONFIG_PATH_INFO>> {
+    for _ in 0..4 {
+        unsafe {
+            let (mut np, mut nm) = (0u32, 0u32);
+            if GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &mut np, &mut nm) != ERROR_SUCCESS {
+                return None;
+            }
+            let mut paths = vec![DISPLAYCONFIG_PATH_INFO::default(); np as usize];
+            let mut modes = vec![DISPLAYCONFIG_MODE_INFO::default(); nm as usize];
+            match QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &mut np, paths.as_mut_ptr(), &mut nm, modes.as_mut_ptr(), None) {
+                ERROR_SUCCESS => {
+                    paths.truncate(np as usize);
+                    return Some(paths);
+                }
+                ERROR_INSUFFICIENT_BUFFER => continue,
+                _ => return None,
+            }
+        }
+    }
+    None
 }
 
 /// The SDR white level of the display whose GDI name is `gdi` (nits;
 /// Windows' 80 when it cannot say).
 pub fn sdr_white_nits(gdi: &[u16; 32]) -> f32 {
-    unsafe {
-        let (mut np, mut nm) = (0u32, 0u32);
-        if GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &mut np, &mut nm) != ERROR_SUCCESS {
-            return super::DEFAULT_WHITE_NITS;
-        }
-        let mut paths = vec![DISPLAYCONFIG_PATH_INFO::default(); np as usize];
-        let mut modes = vec![DISPLAYCONFIG_MODE_INFO::default(); nm as usize];
-        if QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &mut np, paths.as_mut_ptr(), &mut nm, modes.as_mut_ptr(), None) != ERROR_SUCCESS {
-            return super::DEFAULT_WHITE_NITS;
-        }
-        let name_len = gdi.iter().position(|&c| c == 0).unwrap_or(gdi.len());
-        for p in paths.iter().take(np as usize) {
+    let Some(paths) = display_paths() else { return super::DEFAULT_WHITE_NITS };
+    let name_len = gdi.iter().position(|&c| c == 0).unwrap_or(gdi.len());
+    for p in &paths {
+        unsafe {
             let mut src = DISPLAYCONFIG_SOURCE_DEVICE_NAME {
                 header: DISPLAYCONFIG_DEVICE_INFO_HEADER {
                     r#type: DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME,
@@ -98,8 +125,8 @@ pub fn sdr_white_nits(gdi: &[u16; 32]) -> f32 {
                 return white.SDRWhiteLevel as f32 / 1000.0 * super::SCRGB_NITS;
             }
         }
-        super::DEFAULT_WHITE_NITS
     }
+    super::DEFAULT_WHITE_NITS
 }
 
 fn intersect(a: IRect, r: &RECT) -> Option<IRect> {
@@ -129,8 +156,7 @@ pub fn device(adapter: &IDXGIAdapter1) -> windows::core::Result<(ID3D11Device, I
     Ok((dev.ok_or_else(windows::core::Error::empty)?, ctx.ok_or_else(windows::core::Error::empty)?))
 }
 
-/// A CPU-readable FP16 texture of `w` x `h`.
-pub fn fp16_staging(device: &ID3D11Device, w: u32, h: u32) -> windows::core::Result<ID3D11Texture2D> {
+fn fp16_texture(device: &ID3D11Device, w: u32, h: u32, staging: bool) -> windows::core::Result<ID3D11Texture2D> {
     let desc = D3D11_TEXTURE2D_DESC {
         Width: w,
         Height: h,
@@ -138,14 +164,19 @@ pub fn fp16_staging(device: &ID3D11Device, w: u32, h: u32) -> windows::core::Res
         ArraySize: 1,
         Format: DXGI_FORMAT_R16G16B16A16_FLOAT,
         SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
-        Usage: D3D11_USAGE_STAGING,
+        Usage: if staging { D3D11_USAGE_STAGING } else { D3D11_USAGE_DEFAULT },
         BindFlags: 0,
-        CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+        CPUAccessFlags: if staging { D3D11_CPU_ACCESS_READ.0 as u32 } else { 0 },
         MiscFlags: 0,
     };
     let mut tex = None;
     unsafe { device.CreateTexture2D(&desc, None, Some(&mut tex)) }?;
     tex.ok_or_else(windows::core::Error::empty)
+}
+
+/// A CPU-readable FP16 texture of `w` x `h`.
+pub fn fp16_staging(device: &ID3D11Device, w: u32, h: u32) -> windows::core::Result<ID3D11Texture2D> {
+    fp16_texture(device, w, h, true)
 }
 
 /// Duplicate `output` in FP16 (scRGB) on `device`; `None` when the system
@@ -158,48 +189,118 @@ pub fn duplicate_fp16(output: &IDXGIOutput, device: &ID3D11Device) -> Option<IDX
     (d.ModeDesc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT && upright).then_some(dup)
 }
 
-/// Read the mapped FP16 staging texture `m` (`w` x `h`) as u16 pixels.
-///
-/// # Safety
-/// `m` is a live mapping of a `R16G16B16A16_FLOAT` texture of that size.
-pub unsafe fn read_fp16(m: &D3D11_MAPPED_SUBRESOURCE, w: u32, h: u32) -> Vec<u16> {
-    let row = w as usize * 4;
-    let mut out = vec![0u16; row * h as usize];
-    for (y, dst) in out.chunks_exact_mut(row.max(1)).enumerate() {
-        let src = unsafe { std::slice::from_raw_parts((m.pData as *const u8).add(y * m.RowPitch as usize) as *const u16, row) };
-        dst.copy_from_slice(src);
-    }
-    out
+/// One HDR output's warm duplication and its latest desktop image.
+struct Warm {
+    name: [u16; 32],
+    desk: RECT,
+    output: IDXGIOutput,
+    dev: ID3D11Device,
+    ctx: ID3D11DeviceContext,
+    dup: Option<IDXGIOutputDuplication>,
+    /// The latest desktop image (FP16, the whole output, on the GPU).
+    last: Option<ID3D11Texture2D>,
+    /// The fallback was logged since the last image.
+    logged: bool,
 }
 
-/// Load DXGI and list the outputs once on a background thread, so the
-/// first capture does not pay for it (~40 ms; ~2 ms after).
-pub fn warm_up() {
-    let _ = std::thread::Builder::new().name("hdr-warm".into()).spawn(|| {
-        if let Ok(f) = unsafe { CreateDXGIFactory1::<IDXGIFactory1>() } {
-            let mut i = 0;
-            while let Ok(a) = unsafe { f.EnumAdapters1(i) } {
-                i += 1;
-                let mut j = 0;
-                while let Ok(o) = unsafe { a.EnumOutputs(j) } {
-                    j += 1;
-                    let _ = output_hdr(&o);
+/// The warm duplications (D3D11 devices are free-threaded; the contexts
+/// and duplications are only used under the lock).
+struct Warms(Vec<Warm>);
+// SAFETY: every use is under `WARM`'s lock, one thread at a time.
+unsafe impl Send for Warms {}
+
+static WARM: Mutex<Warms> = Mutex::new(Warms(Vec::new()));
+
+impl Warm {
+    fn new(adapter: &IDXGIAdapter1, output: IDXGIOutput, name: [u16; 32], desk: RECT) -> Option<Warm> {
+        let (dev, ctx) = device(adapter).ok()?;
+        let dup = duplicate_fp16(&output, &dev)?;
+        Some(Warm { name, desk, output, dev, ctx, dup: Some(dup), last: None, logged: false })
+    }
+
+    /// Take a new frame into `last` if one comes within `wait_ms`
+    /// (re-duplicating after lost access); true when `last` is there.
+    fn update(&mut self, wait_ms: u32) -> bool {
+        if self.dup.is_none() {
+            self.dup = duplicate_fp16(&self.output, &self.dev);
+            self.last = None;
+        }
+        let Some(dup) = self.dup.clone() else { return false };
+        let mut info = DXGI_OUTDUPL_FRAME_INFO::default();
+        let mut res = None;
+        match unsafe { dup.AcquireNextFrame(wait_ms, &mut info, &mut res) } {
+            Ok(()) => {}
+            Err(e) if e.code() == DXGI_ERROR_WAIT_TIMEOUT => return self.last.is_some(),
+            Err(e) => {
+                if e.code() == DXGI_ERROR_ACCESS_LOST {
+                    eprintln!("rustshot: HDR display duplication lost; re-created at the next capture");
                 }
+                self.dup = None;
+                self.last = None;
+                return false;
             }
         }
-    });
+        // Copied out before the frame goes back, and the frame's texture
+        // dropped before it is released.
+        if info.LastPresentTime != 0
+            && let Some(tex) = res.take().and_then(|r| r.cast::<ID3D11Texture2D>().ok())
+        {
+            let (w, h) = ((self.desk.right - self.desk.left) as u32, (self.desk.bottom - self.desk.top) as u32);
+            if self.last.is_none() {
+                self.last = fp16_texture(&self.dev, w, h, false).ok();
+            }
+            if let Some(last) = &self.last {
+                unsafe { self.ctx.CopyResource(last, &tex) };
+            }
+            drop(tex);
+        }
+        drop(res);
+        let _ = unsafe { dup.ReleaseFrame() };
+        self.last.is_some()
+    }
+
+    /// The part `isect` (virtual-screen px) of `last`, tone-mapped (RGBA).
+    fn read(&self, isect: IRect, tm: ToneMap) -> Option<PixBuf> {
+        let last = self.last.as_ref()?;
+        let (ix, iy, iw, ih) = isect;
+        let stg = fp16_staging(&self.dev, iw, ih).ok()?;
+        let bx = D3D11_BOX {
+            left: (ix - self.desk.left) as u32,
+            top: (iy - self.desk.top) as u32,
+            front: 0,
+            right: (ix - self.desk.left) as u32 + iw,
+            bottom: (iy - self.desk.top) as u32 + ih,
+            back: 1,
+        };
+        unsafe { self.ctx.CopySubresourceRegion(&stg, 0, 0, 0, 0, last, 0, Some(&bx)) };
+        let mut m = D3D11_MAPPED_SUBRESOURCE::default();
+        unsafe { self.ctx.Map(&stg, 0, D3D11_MAP_READ, 0, Some(&mut m)) }.ok()?;
+        let mut rgba = vec![0u8; iw as usize * ih as usize * 4];
+        {
+            let src = unsafe { mapped_fp16(&m, iw, ih) };
+            let pitch = m.RowPitch as usize / 2;
+            let rows = rgba.chunks_mut(iw as usize * 4).enumerate().map(|(y, d)| (&src[y * pitch..y * pitch + iw as usize * 4], d)).collect();
+            tm.rows(rows, false);
+        }
+        unsafe { self.ctx.Unmap(&stg, 0) };
+        PixBuf::from_raw(iw, ih, rgba)
+    }
 }
 
-/// The parts of `area` (virtual-screen px) that lie on HDR outputs, read
-/// in FP16 and tone-mapped (RGBA), with where each goes. Empty when
-/// tone-mapping is off ([`super::enabled`]) or no HDR output shows the
-/// area; an output that cannot be read is left out (the caller keeps its
-/// pixels as captured).
-pub fn grab(area: IRect) -> Vec<(IRect, PixBuf)> {
+/// The mapped FP16 texture `m` (`w` x `h`) as halves, row pitch apart.
+///
+/// # Safety
+/// `m` is a live mapping of a `R16G16B16A16_FLOAT` texture of that size,
+/// and the slice is not used after it is unmapped.
+pub unsafe fn mapped_fp16<'a>(m: &D3D11_MAPPED_SUBRESOURCE, w: u32, h: u32) -> &'a [u16] {
+    let pitch = m.RowPitch as usize / 2;
+    let len = if h == 0 { 0 } else { pitch * (h as usize - 1) + w as usize * 4 };
+    unsafe { std::slice::from_raw_parts(m.pData as *const u16, len) }
+}
+
+/// The attached HDR outputs now: (adapter, output, GDI name, rect, HDR).
+fn hdr_outputs() -> Vec<(IDXGIAdapter1, IDXGIOutput, [u16; 32], RECT, Hdr)> {
     let mut out = Vec::new();
-    if !super::enabled() || area.2 == 0 || area.3 == 0 {
-        return out;
-    }
     let Ok(factory) = (unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }) else { return out };
     let mut ai = 0;
     while let Ok(adapter) = unsafe { factory.EnumAdapters1(ai) } {
@@ -207,60 +308,89 @@ pub fn grab(area: IRect) -> Vec<(IRect, PixBuf)> {
         let mut oi = 0;
         while let Ok(output) = unsafe { adapter.EnumOutputs(oi) } {
             oi += 1;
-            let Ok(desc) = (unsafe { output.GetDesc() }) else { continue };
-            let Some(isect) = intersect(area, &desc.DesktopCoordinates).filter(|_| desc.AttachedToDesktop.as_bool()) else { continue };
-            let Some(hdr) = output_hdr(&output) else { continue };
-            match grab_output(&adapter, &output, &desc.DesktopCoordinates, isect, hdr) {
-                Some(img) => out.push((isect, img)),
-                None => eprintln!("rustshot: could not read the HDR display in FP16; captured as is"),
+            let Ok(d) = (unsafe { output.GetDesc() }) else { continue };
+            if !d.AttachedToDesktop.as_bool() {
+                continue;
+            }
+            if let Some(h) = output_hdr(&output) {
+                out.push((adapter.clone(), output, d.DeviceName, d.DesktopCoordinates, h));
             }
         }
     }
     out
 }
 
-fn grab_output(adapter: &IDXGIAdapter1, output: &IDXGIOutput, desk: &RECT, isect: IRect, hdr: Hdr) -> Option<PixBuf> {
-    let (dev, ctx) = device(adapter).ok()?;
-    let dup = duplicate_fp16(output, &dev)?;
-    let (ix, iy, iw, ih) = isect;
-    let stg = fp16_staging(&dev, iw, ih).ok()?;
-    // The first frame of a new duplication is the whole desktop; a
-    // display that presents nothing may take a moment.
-    let until = Instant::now() + Duration::from_millis(500);
-    let px = loop {
-        let mut info = DXGI_OUTDUPL_FRAME_INFO::default();
-        let mut res = None;
-        let left = until.saturating_duration_since(Instant::now()).as_millis() as u32;
-        if unsafe { dup.AcquireNextFrame(left.max(1), &mut info, &mut res) }.is_err() {
-            return None;
+/// Keep `warms` to the HDR outputs there are now (new ones duplicated,
+/// gone ones dropped); with each one's mapping (by name and rect).
+fn refresh(warms: &mut Vec<Warm>) -> Vec<([u16; 32], RECT, ToneMap)> {
+    let now = hdr_outputs();
+    warms.retain(|w| now.iter().any(|(_, _, n, r, _)| *n == w.name && *r == w.desk));
+    let mut maps = Vec::new();
+    for (adapter, output, name, desk, h) in now {
+        if !warms.iter().any(|w| w.name == name && w.desk == desk)
+            && let Some(w) = Warm::new(&adapter, output, name, desk)
+        {
+            warms.push(w);
         }
-        let tex = res.and_then(|r| r.cast::<ID3D11Texture2D>().ok()).filter(|_| info.LastPresentTime != 0);
-        if let Some(tex) = tex {
-            let bx = D3D11_BOX {
-                left: (ix - desk.left) as u32,
-                top: (iy - desk.top) as u32,
-                front: 0,
-                right: (ix - desk.left) as u32 + iw,
-                bottom: (iy - desk.top) as u32 + ih,
-                back: 1,
-            };
-            unsafe { ctx.CopySubresourceRegion(&stg, 0, 0, 0, 0, &tex, 0, Some(&bx)) };
-            let _ = unsafe { dup.ReleaseFrame() };
-            let mut m = D3D11_MAPPED_SUBRESOURCE::default();
-            unsafe { ctx.Map(&stg, 0, D3D11_MAP_READ, 0, Some(&mut m)) }.ok()?;
-            let px = unsafe { read_fp16(&m, iw, ih) };
-            unsafe { ctx.Unmap(&stg, 0) };
-            break px;
+        maps.push((name, desk, h.tone_map()));
+    }
+    maps
+}
+
+/// Duplicate the HDR outputs on a background thread and take their first
+/// images, off the first capture's path (DXGI's first load is ~40 ms; a
+/// new duplication's first frame up to a few hundred ms).
+pub fn warm_up() {
+    let _ = std::thread::Builder::new().name("hdr-warm".into()).spawn(|| {
+        if !super::enabled() {
+            return;
         }
-        let _ = unsafe { dup.ReleaseFrame() };
-        if Instant::now() >= until {
-            return None;
+        let Ok(mut g) = WARM.lock() else { return };
+        refresh(&mut g.0);
+        for w in g.0.iter_mut() {
+            w.update(300);
         }
-    };
-    let tm = ToneMap::new(hdr.white_nits, super::peak_of(&px));
-    let mut rgba = vec![0u8; iw as usize * ih as usize * 4];
-    tm.row(&px, &mut rgba, false);
-    PixBuf::from_raw(iw, ih, rgba)
+    });
+}
+
+/// The parts of `area` (virtual-screen px) that lie on HDR outputs, read
+/// in FP16 and tone-mapped (RGBA), with where each goes. Empty when
+/// tone-mapping is off ([`super::enabled`]) or no HDR output shows the
+/// area; an output with no image within [`BUDGET_MS`] is left out, logged
+/// (the caller keeps its pixels as captured).
+pub fn grab(area: IRect) -> Vec<(IRect, PixBuf)> {
+    let mut out = Vec::new();
+    if !super::enabled() || area.2 == 0 || area.3 == 0 {
+        return out;
+    }
+    let Ok(mut g) = WARM.lock() else { return out };
+    let maps = refresh(&mut g.0);
+    for w in g.0.iter_mut() {
+        let Some(isect) = intersect(area, &w.desk) else { continue };
+        let Some(&(_, _, tm)) = maps.iter().find(|m| m.0 == w.name && m.1 == w.desk) else { continue };
+        let t0 = Instant::now();
+        let wait = if w.last.is_some() { WAIT_MS } else { BUDGET_MS as u32 };
+        let mut have = w.update(wait);
+        // Access lost on the way: one more try in what is left.
+        if !have && w.dup.is_none() {
+            let left = Duration::from_millis(BUDGET_MS).saturating_sub(t0.elapsed()).as_millis() as u32;
+            if left > 5 {
+                have = w.update(left);
+            }
+        }
+        match have.then(|| w.read(isect, tm)).flatten() {
+            Some(img) => {
+                w.logged = false;
+                out.push((isect, img));
+            }
+            None if !w.logged => {
+                w.logged = true;
+                eprintln!("rustshot: the HDR display has no image yet; captured as is (washed out)");
+            }
+            None => {}
+        }
+    }
+    out
 }
 
 /// Copy `img` into `dst` (RGBA, `size`) with its top-left at `at`
@@ -299,17 +429,17 @@ mod tests {
         assert_eq!((dst.get_pixel(0, 1), dst.get_pixel(1, 2)), ([9, 8, 7, 255], [9, 8, 7, 255]));
     }
 
-    /// The SDR white of every display, and each output's HDR state: what
-    /// a live HDR test would need (prints; asserts only sane values).
+    /// Each display's SDR white and HDR state; on an HDR display a
+    /// 64 x 64 capture through the warm duplication, twice (the second
+    /// from a static desktop), each within the budget.
+    ///
+    ///     cargo test live_outputs_report -- --ignored --nocapture
     #[test]
+    #[ignore = "live display access (duplicates an HDR desktop)"]
     fn live_outputs_report_their_hdr_state() {
-        // What every capture pays without an HDR display: the output list.
         let t0 = Instant::now();
         let none = grab((0, 0, 64, 64));
-        eprintln!("grab without HDR: {:?} ({} parts)", t0.elapsed(), none.len());
-        let t1 = Instant::now();
-        let _ = grab((0, 0, 64, 64));
-        eprintln!("again: {:?}", t1.elapsed());
+        eprintln!("grab: {:?} ({} parts)", t0.elapsed(), none.len());
         let Ok(factory) = (unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }) else { return };
         let mut ai = 0;
         while let Ok(adapter) = unsafe { factory.EnumAdapters1(ai) } {
@@ -322,11 +452,16 @@ mod tests {
                 assert!((40.0..=2000.0).contains(&white), "{white}");
                 let hdr = output_hdr(&output);
                 eprintln!("output {}: SDR white {white} nits, HDR {hdr:?}", String::from_utf16_lossy(&d.DeviceName));
-                if let Some(h) = hdr {
-                    // An HDR display here: one FP16 frame, tone-mapped.
+                if hdr.is_some() {
                     let r = d.DesktopCoordinates;
-                    let shots = grab((r.left, r.top, 64, 64));
-                    assert!(shots.iter().all(|(_, p)| p.dimensions() == (64, 64)), "{h:?}");
+                    for i in 0..2 {
+                        let t = Instant::now();
+                        let shots = grab((r.left, r.top, 64, 64));
+                        let ms = t.elapsed().as_millis();
+                        eprintln!("HDR grab {i}: {ms} ms, {} parts", shots.len());
+                        assert!(shots.iter().all(|(_, p)| p.dimensions() == (64, 64)));
+                        assert!(i == 0 || ms <= BUDGET_MS as u128 + 40, "{ms} ms");
+                    }
                 }
             }
         }
