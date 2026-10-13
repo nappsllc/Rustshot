@@ -277,8 +277,13 @@ pub fn app_name(r: &impl RegRead, progid: &str) -> String {
         return s;
     }
     let cmd = classes(&format!(r"{progid}\shell\open\command"), None);
-    if let Some(stem) = cmd.as_deref().and_then(command_exe).and_then(|e| std::path::Path::new(e).file_stem()) {
-        return stem.to_string_lossy().into_owned();
+    // A Windows path, split by hand (tests run everywhere).
+    let stem = cmd.as_deref().and_then(command_exe).map(|e| {
+        let file = e.rsplit(['\\', '/']).next().unwrap_or(e);
+        file.rsplit_once('.').map_or(file, |(s, _)| s).to_string()
+    });
+    if let Some(stem) = stem.filter(|s| !s.is_empty()) {
+        return stem;
     }
     progid.to_string()
 }
