@@ -154,9 +154,9 @@ old, when the daemon starts.
 
 ## Share
 
-**Share…** (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd>; in the overlay
-and the Edit window it is in the Save button's chevron menu, in History in a
-card's ⋯ menu) opens the system's share sheet with the capture: on Windows
+**Share…** (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd>, also in the Edit
+window; in the overlay it is in the Save button's chevron menu, in History
+in a card's ⋯ menu) opens the system's share sheet with the capture: on Windows
 the Share window (titled "Rustshot capture"; a picture goes as a file and
 as an image, a recording as its MP4 or GIF file), on macOS the share menu
 at the pointer. The file is the same as Open with's: the saved file, else a
