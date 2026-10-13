@@ -71,6 +71,9 @@ function KillAll { Get-Process rustshot -ErrorAction SilentlyContinue | Stop-Pro
 . "$T\history.ps1"
 # 0.3.0 (launcher, delayed capture, accept on select, Open with, new keys): Checks030.
 . "$T\v030.ps1"
+# 0.4.0 (tray icon off, on-demand screenclip, register-screenclip, border,
+# image edits, freeform, Text mode, Quick Redact): Checks040.
+. "$T\v040.ps1"
 # Start menu / desktop shortcut names over 0.1.0's lowercase ones.
 . "$T\shortcuts.ps1"
 HotkeyProbe $log
@@ -86,6 +89,15 @@ if (Test-Path "$T\v030-only") {
     Copy-Item $portable.FullName "$env:TEMP\rustshot.exe"
     Add-Content $log "      portable exe: $($portable.FullName) $((Get-Item $portable.FullName).Length) B"
     Checks030 "$env:TEMP\rustshot.exe"
+    Add-Content $log 'DONE'
+    return
+}
+# <T>\v040-only: just the 0.4.0 checks.
+if (Test-Path "$T\v040-only") {
+    $portable = PortableExe
+    Copy-Item $portable.FullName "$env:TEMP\rustshot.exe"
+    Add-Content $log "      portable exe: $($portable.FullName) $((Get-Item $portable.FullName).Length) B"
+    Checks040 "$env:TEMP\rustshot.exe"
     Add-Content $log 'DONE'
     return
 }
@@ -325,6 +337,7 @@ if ($portable) {
     Add-Content $log "SKIP  portable: self-update from a local fixture (the release exe has no test hook: RUSTSHOT_UPDATE_FEED is debug-only, and the sandbox has no network; covered on the host by update_install::tests::live_portable_update)"
     HistoryChecks "$env:TEMP\rustshot.exe"
     Checks030 "$env:TEMP\rustshot.exe"
+    Checks040 "$env:TEMP\rustshot.exe"
     RecordingChecks "$env:TEMP\rustshot.exe"
     Start-Process "$env:TEMP\rustshot.exe"
     Check 'portable: daemon started for visual tray check' (WaitFor { [W]::TrayWindow() })
