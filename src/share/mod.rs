@@ -26,7 +26,8 @@ mod win;
 #[cfg(all(target_os = "macos", not(test)))]
 mod macos;
 
-/// The title the share sheet shows for the package.
+/// The title the share sheet shows for the package (Windows).
+#[cfg_attr(not(windows), allow(dead_code))]
 pub const TITLE: &str = "Rustshot capture";
 
 /// How long a share may keep its owner window (and the process) alive.
