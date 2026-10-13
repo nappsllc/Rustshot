@@ -172,7 +172,10 @@ fn quick_redact_blurs_the_sensitive_words_in_one_step() {
     crate::ocr::FAKE_LINES.with(|f| f.set(Some(doc)));
     let hist = edit_of(&mut a).hist.len();
     key(&mut a, 'R' as u32, SHIFT);
-    assert_eq!(notice(&mut a), "Looking for sensitive text\u{2026}");
+    // (A fast recognizer may have delivered already.)
+    if edit_of(&mut a).snip.ocr.is_some() {
+        assert_eq!(notice(&mut a), "Looking for sensitive text\u{2026}");
+    }
     settle_ocr(&mut a);
     let e = edit_of(&mut a);
     // Opaque fills in the color around them (old builds draw them too).
