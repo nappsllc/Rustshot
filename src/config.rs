@@ -194,6 +194,9 @@ pub struct Config {
     /// in logical px (0 = no border, 1-8), around every exported image.
     pub border_color: String,
     pub border_width: u32,
+    /// Windows: the daemon reminds how to pick Rustshot for Win+Shift+S
+    /// while it is offered but not chosen (false: "Don't show again").
+    pub screenclip_hint: bool,
 }
 
 /// The widest export border (logical px).
@@ -320,6 +323,7 @@ impl Default for Config {
             hdr_screenshots: "tonemap".into(),
             border_color: "#000000".into(),
             border_width: 0,
+            screenclip_hint: true,
             history: true,
             history_days: 30,
             history_max_mb: 2048,
@@ -987,6 +991,7 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
                 cfg.border_width =
                     as_u64(val).ok().filter(|w| *w <= BORDER_MAX as u64).ok_or_else(|| bad("number (0-8)", val))? as u32
             }
+            "screenclip_hint" => cfg.screenclip_hint = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "history" => cfg.history = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "history_days" => {
                 cfg.history_days =
@@ -1258,6 +1263,7 @@ pub fn to_toml(c: &Config) -> String {
         q(&c.accept_on_select),
         c.overlay_hints
     ));
+    out.push_str(&format!("screenclip_hint = {}\n", c.screenclip_hint));
     out.push_str(&format!(
         "trim_margins = {}\nhdr_screenshots = {}\nborder_color = {}\nborder_width = {}\n",
         c.trim_margins,
@@ -1820,6 +1826,19 @@ bogus = 1
             assert!(parse_config(bad).is_err(), "{bad}");
         }
         assert_eq!(parse_config("border_width = 8").unwrap().border_width, 8);
+    }
+
+    /// The Win+Shift+S guide's "Don't show again": on by default, kept.
+    #[test]
+    fn screenclip_hint_roundtrip() {
+        assert!(Config::default().screenclip_hint);
+        let c = Config { screenclip_hint: false, ..Config::default() };
+        let text = to_toml(&c);
+        assert!(text.contains("screenclip_hint = false\n"), "{text}");
+        assert_eq!(parse_config(&text).unwrap(), c);
+        assert!(!rewrite_loses(&text));
+        assert!(!parse_config("screenclip_hint = false").unwrap().screenclip_hint);
+        assert!(parse_config("screenclip_hint = 2").is_err());
     }
 
     #[test]

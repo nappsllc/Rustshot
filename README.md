@@ -159,6 +159,11 @@ the capture and quits afterwards. For <kbd>Print Screen</kbd>, also keep
 **Settings › Accessibility › Keyboard › Use the Print screen key to open
 screen capture** on (it is on by default in Windows 11).
 
+Rustshot walks you through it: turning the option on shows **One more step
+to use Win+Shift+S** with these steps and an **Open Default apps** button,
+and **Settings › Capture** says under the option which app Win+Shift+S
+opens now.
+
 Windows only lets you, not an app, make that choice, which is why step 2
 can't be skipped. If Win+Shift+S shows "This file does not have an app
 associated with it", the Snipping Tool was uninstalled and the old choice

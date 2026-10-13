@@ -590,7 +590,7 @@ fn edit_window_smoke() {
     let (_r, mut w) = window("smoke", img, objects(), DARK, 1.0);
     w.scale = None;
     let mut d = crate::wind::AutoClose::new(&mut w, if big { 3000 } else { 1000 });
-    let spec = crate::wind::WindowSpec { title: "Rustshot Edit".into(), w: W, h: H, resizable: true, min: MIN };
+    let spec = crate::wind::WindowSpec { title: "Rustshot Edit".into(), w: W, h: H, resizable: true, min: MIN, controls: crate::wind::Controls::MinMaxClose };
     crate::wind::run_window(spec, &mut d).expect("edit window");
     assert!(d.frames > 0, "drew a frame");
 }

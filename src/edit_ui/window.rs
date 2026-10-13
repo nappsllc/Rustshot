@@ -538,4 +538,8 @@ impl Driver for Window {
         }
         self.e.canvas.cursor(self.mouse)
     }
+
+    fn frame_colors(&self) -> Option<wind::FrameColors> {
+        Some(WTok::of(self.e.canvas.theme()).frame())
+    }
 }

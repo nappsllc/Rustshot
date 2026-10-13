@@ -36,6 +36,7 @@ use crate::hotkey::{self, HotEvent};
 use crate::keymap::{Action, Chord, Keymap};
 use crate::objects::FRect;
 use crate::pixbuf::PixBuf;
+use crate::screenclip_win::Handler;
 use crate::theme::Theme;
 use crate::ui::{FocusState, Input, TextState, Ui};
 use crate::uisize::{self, UiSize};
@@ -660,6 +661,10 @@ enum Modal {
     Broken(String),
     /// [`RESET`] over [`Modal::Broken`] (its error, to go back to).
     Reset(String),
+    /// How to make Windows open Rustshot for Win+Shift+S
+    /// ([`crate::screenclip_win::GUIDE_TITLE`]); `broken`: the choice
+    /// names an app that is gone; `dont_show`: "Don't show again" ticked.
+    Guide { broken: bool, dont_show: bool },
 }
 
 /// What the user did this frame.
@@ -693,6 +698,14 @@ pub enum Click {
     CheckUpdates,
     /// About: one of [`crate::actions::LINKS`].
     Link(&'static str),
+    /// The Win+Shift+S guide's "Open Default apps".
+    OpenDefaultApps,
+    /// The guide's "Remind me later".
+    RemindLater,
+    /// The guide's "Don't show again" checkbox.
+    DontShow,
+    /// Capture: "Set to a missing app — click to fix" (opens the guide).
+    FixScreenclip,
     /// Esc not taken by a control.
     Escape,
     /// Enter not taken by a control.
@@ -717,6 +730,8 @@ pub enum Act {
     ClearHistory,
     /// Open this About link in the browser.
     Link(&'static str),
+    /// Open Windows' Default apps (the guide's button).
+    OpenDefaultApps,
 }
 
 /// The window's state: the form, what it was loaded from, the section and
@@ -728,9 +743,18 @@ pub struct Settings {
     autostart: Option<bool>,
     /// The Win+Shift+S handler as registered now (`None`: hidden).
     screenclip: Option<bool>,
-    /// Registered, but Windows still opens the Snipping Tool: a note says
-    /// to pick Rustshot when Windows asks.
-    pub screenclip_wait: bool,
+    /// Which app Win+Shift+S opens, as last read (the row's line under
+    /// the toggle; read again when the window gets the focus back).
+    pub handler: Handler,
+    /// The guide's Open Default apps was clicked: when the window gets
+    /// the focus back and Windows now opens Rustshot, a toast says so.
+    guide_away: bool,
+    /// The guide waits for the open question to close.
+    guide_queued: bool,
+    /// Default apps did not open: the guide says so (in red).
+    pub guide_error: Option<String>,
+    /// A short message at the bottom of the window, and when it came.
+    pub toast: Option<(String, std::time::Instant)>,
     pub form: Form,
     /// The rail's section ([`SECTIONS`] index).
     pub section: usize,
@@ -765,7 +789,11 @@ pub struct Settings {
     rec_lists: recording::Lists,
     set_autostart: fn(bool) -> Result<(), String>,
     set_screenclip: fn(bool) -> Result<(), String>,
+    read_handler: fn() -> Handler,
 }
+
+/// How long the toast shows.
+pub const TOAST_MS: u64 = 2500;
 
 impl Settings {
     pub fn new(cfg: Config, autostart: Option<bool>, path: PathBuf) -> Settings {
@@ -774,7 +802,11 @@ impl Settings {
             loaded: cfg,
             autostart,
             screenclip: None,
-            screenclip_wait: false,
+            handler: Handler::None,
+            guide_away: false,
+            guide_queued: false,
+            guide_error: None,
+            toast: None,
             section: GENERAL,
             scroll: [0.0; SECTIONS.len()],
             content_h: [0.0; SECTIONS.len()],
@@ -792,16 +824,142 @@ impl Settings {
             rec_lists: recording::Lists::default(),
             set_autostart: crate::autostart::set,
             set_screenclip: crate::screenclip_win::set,
+            read_handler: crate::screenclip_win::handler,
         }
     }
 
     /// Show the Win+Shift+S toggle at `state` (as the registry has it;
-    /// `None` hides it); `waiting`: Windows has not been told to use us.
-    pub fn with_screenclip(mut self, state: Option<bool>, waiting: bool) -> Settings {
+    /// `None` hides it); `handler`: which app Win+Shift+S opens now.
+    pub fn with_screenclip(mut self, state: Option<bool>, handler: Handler) -> Settings {
         self.screenclip = state;
         self.form.screenclip = state;
-        self.screenclip_wait = waiting;
+        self.handler = handler;
         self
+    }
+
+    /// Show the Win+Shift+S guide (now, or once the open question
+    /// closes); nothing when Windows already opens Rustshot or the toggle
+    /// is not on.
+    pub fn open_guide(&mut self) {
+        if self.screenclip != Some(true) {
+            return;
+        }
+        self.handler = (self.read_handler)();
+        if self.handler == Handler::Ours {
+            return;
+        }
+        let broken = matches!(self.handler, Handler::Broken { .. });
+        match &self.modal {
+            None => {
+                self.modal = Some(Modal::Guide { broken, dont_show: false });
+                self.guide_error = None;
+            }
+            Some(Modal::Guide { .. }) => {}
+            Some(_) => self.guide_queued = true,
+        }
+    }
+
+    /// The guide's text: its title and body.
+    pub fn guide_texts(&self, broken: bool) -> (&'static str, String) {
+        (crate::screenclip_win::GUIDE_TITLE, crate::screenclip_win::guide_text(broken))
+    }
+
+    /// The registration as it is now (another flow may have turned it on:
+    /// [`crate::screenclip_win::show_setup_guide`]); the form's toggle
+    /// follows unless the user changed it.
+    pub fn sync_screenclip(&mut self, state: Option<bool>) {
+        if self.form.screenclip == self.screenclip {
+            self.form.screenclip = state;
+        }
+        self.screenclip = state;
+    }
+
+    /// The red line's click: turn the registration on (as Apply would)
+    /// when it is off, then the guide.
+    fn fix_screenclip(&mut self) {
+        if self.screenclip == Some(false) {
+            match (self.set_screenclip)(true) {
+                Ok(()) => {
+                    self.screenclip = Some(true);
+                    self.form.screenclip = Some(true);
+                }
+                Err(e) => {
+                    self.modal = Some(Modal::Error(format!("Could not change Win+Shift+S: {e}")));
+                    return;
+                }
+            }
+        }
+        self.open_guide();
+    }
+
+    /// Default apps did not open (`text`: [`crate::screenclip_win::open_failed_text`]):
+    /// the guide shows it in red, and nothing waits for the user to come back.
+    pub fn default_apps_failed(&mut self, text: String) {
+        self.guide_away = false;
+        if matches!(self.modal, Some(Modal::Guide { .. })) {
+            self.guide_error = Some(text);
+        } else {
+            self.notify(text);
+        }
+    }
+
+    /// Close the guide however it closes (Remind me later, Esc, the
+    /// window's close button, or Rustshot chosen); a ticked "Don't show
+    /// again" writes `screenclip_hint = false` (that line only). A write
+    /// that fails leaves the error showing.
+    fn close_guide(&mut self) -> Vec<Act> {
+        let Some(Modal::Guide { dont_show, .. }) = self.modal else { return vec![] };
+        self.modal = None;
+        self.guide_away = false;
+        self.guide_error = None;
+        if dont_show {
+            let edit = [("screenclip_hint".to_string(), Some("false".to_string()))];
+            match config::edit_top_keys_at(&self.path, &edit) {
+                Ok(()) => self.loaded.screenclip_hint = false,
+                Err(e) => {
+                    self.modal = Some(Modal::Error(format!("Could not save {}: {e}", self.path.display())));
+                    return vec![];
+                }
+            }
+        }
+        self.show_pending();
+        vec![]
+    }
+
+    /// The window has the focus again (back from Default apps): while the
+    /// guide is up or its Open Default apps was clicked, read which app
+    /// Win+Shift+S opens; once it is Rustshot the guide closes and a toast
+    /// says so. Other focus changes read nothing (the read may load a
+    /// package's resources). Returns whether anything changed.
+    pub fn refocused(&mut self) -> bool {
+        let guide = matches!(self.modal, Some(Modal::Guide { .. }));
+        if self.screenclip != Some(true) || !(guide || self.guide_away) {
+            return false;
+        }
+        let was = std::mem::replace(&mut self.handler, (self.read_handler)());
+        if self.handler == Handler::Ours && was != Handler::Ours {
+            if matches!(self.modal, Some(Modal::Guide { .. })) {
+                self.close_guide();
+            }
+            self.guide_away = false;
+            self.guide_queued = false;
+            self.toast = Some((crate::screenclip_win::NOW_OURS.into(), std::time::Instant::now()));
+            return true;
+        }
+        let broken_now = matches!(self.handler, Handler::Broken { .. });
+        if let Some(Modal::Guide { broken, .. }) = &mut self.modal {
+            *broken = broken_now;
+        }
+        self.handler != was
+    }
+
+    /// The toast is showing (the window animates until it goes).
+    pub fn toast_live(&mut self) -> bool {
+        let live = self.toast.as_ref().is_some_and(|(_, at)| at.elapsed() < std::time::Duration::from_millis(TOAST_MS));
+        if !live {
+            self.toast = None;
+        }
+        live
     }
 
     /// The form for `cfg`, keeping the toggles that are not in the file.
@@ -876,6 +1034,9 @@ impl Settings {
     fn show_pending(&mut self) {
         if self.modal.is_none() && !self.pending.is_empty() {
             self.modal = Some(Modal::Error(std::mem::take(&mut self.pending).join("\n")));
+        }
+        if self.modal.is_none() && std::mem::take(&mut self.guide_queued) {
+            self.open_guide();
         }
     }
 
@@ -956,6 +1117,16 @@ impl Settings {
     pub fn on(&mut self, c: Click) -> Vec<Act> {
         let c = match (c, &self.modal) {
             (Click::Escape, Some(Modal::Broken(_))) => Click::Close,
+            (Click::Escape, Some(Modal::Guide { .. })) => Click::RemindLater,
+            (Click::Enter, Some(Modal::Guide { .. })) => Click::OpenDefaultApps,
+            (Click::Cancel, Some(Modal::Guide { .. })) => {
+                let mut acts = self.close_guide();
+                // "Don't show again" could not be saved: the error stays.
+                if !matches!(self.modal, Some(Modal::Error(_))) {
+                    acts.push(Act::Close);
+                }
+                return acts;
+            }
             (Click::Escape, Some(_)) => Click::Back,
             (Click::Escape, None) => Click::Cancel,
             (Click::Enter, Some(Modal::Rewrite { .. })) => Click::Save,
@@ -1018,6 +1189,22 @@ impl Settings {
             }
             Click::ResetTools => self.reset_tools(),
             Click::ClearHistory => vec![Act::ClearHistory],
+            Click::OpenDefaultApps => {
+                // The guide stays: its steps are still needed over there.
+                self.guide_away = true;
+                vec![Act::OpenDefaultApps]
+            }
+            Click::RemindLater => self.close_guide(),
+            Click::DontShow => {
+                if let Some(Modal::Guide { dont_show, .. }) = &mut self.modal {
+                    *dont_show = !*dont_show;
+                }
+                vec![]
+            }
+            Click::FixScreenclip => {
+                self.fix_screenclip();
+                vec![]
+            }
             Click::Escape | Click::Enter => vec![],
         }
     }
@@ -1067,7 +1254,16 @@ impl Settings {
             match (self.set_screenclip)(on) {
                 Ok(()) => {
                     self.screenclip = Some(on);
-                    self.screenclip_wait = on;
+                    self.handler = (self.read_handler)();
+                    // Turned on: Windows still has to be told, by the
+                    // user. The guide shows (and OK leaves the window
+                    // open for it).
+                    if on {
+                        self.open_guide();
+                        if matches!(self.modal, Some(Modal::Guide { .. })) {
+                            return acts;
+                        }
+                    }
                 }
                 Err(e) => {
                     self.modal = Some(Modal::Error(format!("Could not change Win+Shift+S: {e}")));
@@ -1159,6 +1355,10 @@ enum Msg {
     Note(String),
     /// Go to this section ([`show_at`]).
     Section(usize),
+    /// Show the Win+Shift+S guide ([`show_guide`]).
+    Guide,
+    /// The guide's Open Default apps did not open it (the text to show).
+    DefaultAppsFailed(String),
 }
 
 /// The open window's inbox, if any.
@@ -1208,6 +1408,26 @@ pub fn show_at(section: usize) {
     show();
 }
 
+/// A window opened by [`show_guide`] starts on the guide.
+static START_GUIDE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Open the window at Capture with the Win+Shift+S guide over it (the
+/// daemon's reminder), or show it in the open one.
+pub fn show_guide() {
+    #[cfg(not(target_os = "macos"))]
+    {
+        let open = lock(&OPEN);
+        if let Some(tx) = open.as_ref()
+            && tx.send(Msg::Guide).is_ok()
+        {
+            let _ = tx.send(Msg::Raise);
+            return;
+        }
+        START_GUIDE.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    show_at(CAPTURE);
+}
+
 /// Show `text` in the open Settings window (over the form, with OK);
 /// false when no window is open (the caller tells the user some other way).
 pub fn notify(text: &str) -> bool {
@@ -1252,9 +1472,12 @@ fn claim() -> Option<Receiver<Msg>> {
 fn run(rx: Receiver<Msg>) {
     let autostart = crate::update::managed_install().is_none().then(crate::autostart::is_enabled);
     let mut s = Settings::open(config::config_path(), autostart)
-        .with_screenclip(crate::screenclip_win::state(), crate::screenclip_win::awaiting_choice());
+        .with_screenclip(crate::screenclip_win::state(), crate::screenclip_win::handler());
     s.hotkey_failures = hotkey::outstanding();
     s.section = START_SECTION.swap(GENERAL, std::sync::atomic::Ordering::SeqCst).min(SECTIONS.len() - 1);
+    if START_GUIDE.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        s.open_guide();
+    }
     let th = crate::theme::resolve(&s.loaded);
     // Opened without a daemon (`rustshot settings`): the file's UI size.
     // In the daemon an overlay may have set it and still have the write
@@ -1263,7 +1486,7 @@ fn run(rx: Receiver<Msg>) {
         uisize::init(s.loaded.ui_scale);
     }
     let mut w = Window::new(s, th, rx);
-    let spec = WindowSpec { title: "Rustshot Settings".into(), w: W, h: H, resizable: false, min: (W, H) };
+    let spec = WindowSpec { title: "Rustshot Settings".into(), w: W, h: H, resizable: false, min: (W, H), controls: wind::Controls::MinClose };
     if let Err(e) = wind::run_window(spec, &mut w) {
         eprintln!("rustshot: settings window: {e:#}");
     }
@@ -1275,6 +1498,11 @@ fn run(rx: Receiver<Msg>) {
             Msg::Raise => late = true,
             Msg::Note(t) => notes.push(t),
             Msg::Section(_) => late = true,
+            Msg::Guide => {
+                START_GUIDE.store(true, std::sync::atomic::Ordering::SeqCst);
+                late = true;
+            }
+            Msg::DefaultAppsFailed(t) => notes.push(t),
         }
     }
     *open = None;
@@ -1360,6 +1588,16 @@ impl Window {
             Act::ClearHistory => crate::history_ui::show_clear(),
             Act::Link(u) => {
                 std::thread::spawn(move || crate::actions::open_link(u));
+            }
+            Act::OpenDefaultApps => {
+                std::thread::spawn(|| {
+                    if let Err(e) = crate::screenclip_win::open_default_apps() {
+                        eprintln!("rustshot: opening Default apps: {e}");
+                        if let Some(tx) = lock(&OPEN).as_ref() {
+                            let _ = tx.send(Msg::DefaultAppsFailed(crate::screenclip_win::open_failed_text(&e)));
+                        }
+                    }
+                });
             }
         }
     }
@@ -1471,6 +1709,16 @@ impl Driver for Window {
                             self.s.notify(t);
                             changed = true;
                         }
+                        Msg::Guide => {
+                            self.s.section = CAPTURE;
+                            self.s.sync_screenclip(crate::screenclip_win::state());
+                            self.s.open_guide();
+                            changed = true;
+                        }
+                        Msg::DefaultAppsFailed(t) => {
+                            self.s.default_apps_failed(t);
+                            changed = true;
+                        }
                     }
                 }
                 if raise {
@@ -1495,6 +1743,11 @@ impl Driver for Window {
                 }
                 // The Recording section's devices were listed.
                 changed |= self.s.rec_lists.poll();
+                // The toast fades: frames while it shows, one after.
+                let toast = self.s.toast.is_some();
+                let live = self.s.toast_live();
+                changed |= toast;
+                wind::set_fast_timer(self.hwnd, live);
                 while let Ok(p) = self.picked.1.try_recv() {
                     self.picking = false;
                     if let Some(p) = p {
@@ -1514,6 +1767,14 @@ impl Driver for Window {
                 if !self.closing {
                     wind::invalidate(self.hwnd); // hover changes
                 }
+            }
+            // Back (from Default apps, say): Win+Shift+S's app read again.
+            Ev::Focus(true) => {
+                self.input.feed(&ev);
+                if self.s.refocused() && self.s.toast.is_some() {
+                    wind::set_fast_timer(self.hwnd, true);
+                }
+                self.render();
             }
             _ => {
                 self.input.feed(&ev);
@@ -1537,6 +1798,12 @@ impl Driver for Window {
 
     fn cursor(&self) -> Cursor {
         Cursor::Arrow
+    }
+
+    /// The title bar follows the theme the window shows (a Theme click
+    /// recolours it before Apply, as it does the rest of the window).
+    fn frame_colors(&self) -> Option<wind::FrameColors> {
+        Some(crate::ui::paint::WTok::of(&self.th).frame())
     }
 }
 
