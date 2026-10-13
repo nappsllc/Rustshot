@@ -676,4 +676,8 @@ impl Driver for Window {
     fn cursor(&self) -> Cursor {
         if self.h.cursor_text { Cursor::IBeam } else { Cursor::Arrow }
     }
+
+    fn frame_colors(&self) -> Option<wind::FrameColors> {
+        Some(crate::ui::paint::WTok::of(&crate::theme::resolve(&self.h.cfg)).frame())
+    }
 }

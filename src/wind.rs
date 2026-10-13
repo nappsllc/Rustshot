@@ -118,6 +118,80 @@ pub struct WindowSpec {
     pub resizable: bool,
     /// Minimum client size in logical pixels (only enforced when resizable).
     pub min: (u32, u32),
+    /// Which title-bar buttons the OS frame shows.
+    pub controls: Controls,
+}
+
+/// The title-bar buttons of a `run_window` window. The title bar itself is
+/// the OS's (the design boards: "the OS draws the title bar; everything
+/// inside is ours"), so these are the real caption buttons: Snap Layouts,
+/// Alt+F4, Win+Up/Down, the system menu and the window manager's own
+/// shortcuts all work as in any other app.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(target_os = "macos", allow(dead_code))] // macOS: no decorated windows yet (main thread only)
+pub enum Controls {
+    /// Minimize, maximize/restore and close: resizable windows (History,
+    /// Edit).
+    MinMaxClose,
+    /// Minimize and close: fixed-size windows (Settings, the launcher, the
+    /// update dialog). Windows still shows a disabled maximize button
+    /// between them, as for every fixed-size window with a minimize box.
+    MinClose,
+    /// Close only: modal questions (a dialog to the window manager).
+    Close,
+}
+
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+impl Controls {
+    pub fn minimize(self) -> bool {
+        self != Controls::Close
+    }
+    pub fn maximize(self) -> bool {
+        self == Controls::MinMaxClose
+    }
+}
+
+/// `_MOTIF_WM_HINTS` (flags, functions, decorations, input mode, status)
+/// for `controls`: the X window manager offers (and draws buttons for)
+/// only these actions. Move and close always; minimize unless a dialog;
+/// maximize and resize only for a resizable window.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn motif_hints(controls: Controls, resizable: bool) -> [u32; 5] {
+    const FUNCTIONS: u32 = 1 << 0;
+    const DECORATIONS: u32 = 1 << 1;
+    // MWM_FUNC_* / MWM_DECOR_*.
+    const F_RESIZE: u32 = 1 << 1;
+    const F_MOVE: u32 = 1 << 2;
+    const F_MINIMIZE: u32 = 1 << 3;
+    const F_MAXIMIZE: u32 = 1 << 4;
+    const F_CLOSE: u32 = 1 << 5;
+    const D_BORDER: u32 = 1 << 1;
+    const D_RESIZEH: u32 = 1 << 2;
+    const D_TITLE: u32 = 1 << 3;
+    const D_MENU: u32 = 1 << 4;
+    const D_MINIMIZE: u32 = 1 << 5;
+    const D_MAXIMIZE: u32 = 1 << 6;
+    let (min, max) = (controls.minimize(), controls.maximize() && resizable);
+    let pick = |on: bool, bit: u32| if on { bit } else { 0 };
+    let functions = F_MOVE | F_CLOSE | pick(min, F_MINIMIZE) | pick(max, F_MAXIMIZE) | pick(resizable, F_RESIZE);
+    let decorations = D_BORDER | D_TITLE | D_MENU | pick(min, D_MINIMIZE) | pick(max, D_MAXIMIZE) | pick(resizable, D_RESIZEH);
+    [FUNCTIONS | DECORATIONS, functions, decorations, 0, 0]
+}
+
+/// Colours for the OS-drawn title bar and window border, so the caption
+/// reads as part of the design surface under it (`Driver::frame_colors`).
+/// Windows 11: DWM immersive dark mode plus caption and border colours
+/// (Windows 10: dark mode only); Linux: a dark/light hint to the window
+/// manager (`_GTK_THEME_VARIANT`); macOS: a transparent title bar over the
+/// window background in the matching appearance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub struct FrameColors {
+    pub dark: bool,
+    /// Title bar background (`[r, g, b]`): the window's top surface.
+    pub caption: [u8; 3],
+    /// The 1 px window border.
+    pub border: [u8; 3],
 }
 
 /// Logical size → physical pixels at `scale` (never below 1 px).
@@ -249,6 +323,12 @@ pub trait Driver {
     }
     /// Cursor for WM_SETCURSOR.
     fn cursor(&self) -> Cursor;
+    /// `run_window` only: the title bar and border colours for the current
+    /// theme (asked before every paint, applied when they change), or
+    /// `None` for the OS defaults.
+    fn frame_colors(&self) -> Option<FrameColors> {
+        None
+    }
     /// Window is being destroyed (loop ends after this).
     fn on_quit(&mut self) {}
 }
@@ -449,6 +529,9 @@ impl Driver for AutoClose<'_> {
     fn cursor(&self) -> Cursor {
         self.inner.cursor()
     }
+    fn frame_colors(&self) -> Option<FrameColors> {
+        self.inner.frame_colors()
+    }
     fn on_quit(&mut self) {
         self.inner.on_quit();
     }
@@ -515,6 +598,26 @@ mod tests {
         let code = run(&mut d);
         assert!(d.created);
         assert_eq!(code, 0);
+    }
+
+    /// The buttons each window kind asks the X window manager for.
+    #[test]
+    fn motif_hints_per_controls() {
+        let [flags, f, d, ..] = motif_hints(Controls::MinMaxClose, true);
+        assert_eq!(flags, 0b11, "functions and decorations given");
+        assert_eq!(f, 0b11_1110, "resize, move, minimize, maximize, close");
+        assert_eq!(d, 0b111_1110, "border, resize handles, title, menu, minimize, maximize");
+        let [_, f, d, ..] = motif_hints(Controls::MinClose, false);
+        assert_eq!(f, 0b10_1100, "move, minimize, close: no resize, no maximize");
+        assert_eq!(d, 0b011_1010, "border, title, menu, minimize");
+        let [_, f, d, ..] = motif_hints(Controls::Close, false);
+        assert_eq!(f, 0b10_0100, "move and close only");
+        assert_eq!(d, 0b001_1010);
+        // Maximize needs a resizable window.
+        assert_eq!(motif_hints(Controls::MinMaxClose, false)[1], 0b10_1100);
+        assert!(Controls::MinMaxClose.minimize() && Controls::MinMaxClose.maximize());
+        assert!(Controls::MinClose.minimize() && !Controls::MinClose.maximize());
+        assert!(!Controls::Close.minimize() && !Controls::Close.maximize());
     }
 
     #[test]
@@ -606,7 +709,14 @@ Xft.dpi:	144
             .and_then(|v| v.parse().ok())
             .map(|ms| std::time::Instant::now() + std::time::Duration::from_millis(ms));
         let mut d = Rect { hwnd: Hwnd::default(), fb: PixBuf::new(1, 1), deadline, painted: false };
-        let spec = WindowSpec { title: "rustshot window test".into(), w: 400, h: 300, resizable: true, min: (200, 150) };
+        let spec = WindowSpec {
+            title: "rustshot window test".into(),
+            w: 400,
+            h: 300,
+            resizable: true,
+            min: (200, 150),
+            controls: Controls::MinMaxClose,
+        };
         let _guard = test_window_lock();
         run_window(spec, &mut d).expect("window loop");
         assert!(d.painted);

@@ -654,7 +654,7 @@ fn run_dialog(req: Request, tx: Sender<In>, rx: Receiver<In>) {
     for a in acts {
         d.perform(a);
     }
-    let spec = WindowSpec { title: "Rustshot update".into(), w: W, h: H, resizable: false, min: (W, H) };
+    let spec = WindowSpec { title: "Rustshot update".into(), w: W, h: H, resizable: false, min: (W, H), controls: wind::Controls::MinClose };
     if let Err(e) = wind::run_window(spec, &mut d) {
         eprintln!("rustshot: update dialog: {e:#}");
     }
@@ -986,6 +986,10 @@ impl Driver for Dialog {
         Cursor::Arrow
     }
 
+    fn frame_colors(&self) -> Option<wind::FrameColors> {
+        Some(crate::ui::paint::WTok::of(&self.th).frame())
+    }
+
     fn on_quit(&mut self) {
         self.cancel();
     }
@@ -1027,7 +1031,7 @@ mod tests {
         assert!(acts.is_empty());
         let mut dlg = Dialog::new(m, crate::theme::resolve(&crate::config::Config::default()), tx, rx);
         let mut d = crate::wind::AutoClose::new(&mut dlg, 1000);
-        let spec = WindowSpec { title: "Rustshot update".into(), w: W, h: H, resizable: false, min: (W, H) };
+        let spec = WindowSpec { title: "Rustshot update".into(), w: W, h: H, resizable: false, min: (W, H), controls: wind::Controls::MinClose };
         wind::run_window(spec, &mut d).expect("update dialog");
         assert!(d.frames > 0, "drew a frame");
         dlg.cancel();
