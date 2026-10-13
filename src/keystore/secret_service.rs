@@ -104,6 +104,12 @@ pub fn get(b: &mut dyn Bus, name: &str) -> Result<Option<String>> {
     item_secret(b, &item, &session).map(Some)
 }
 
+/// Whether an item named `name` exists (locked or not; nothing unlocked).
+pub fn has(b: &mut dyn Bus, name: &str) -> Result<bool> {
+    let (unlocked, locked) = search(b, name)?;
+    Ok(!unlocked.is_empty() || !locked.is_empty())
+}
+
 /// The `CreateItem` arguments for `name`.
 pub fn create_args(name: &str, label: &str, secret: &str, session: &str) -> Vec<Value> {
     let props = Value::Dict(
@@ -159,11 +165,13 @@ pub fn delete(b: &mut dyn Bus, name: &str) -> Result<()> {
     Ok(())
 }
 
-/// The session bus's Secret Service.
+/// The session bus's Secret Service (tests use the in-memory store).
 #[cfg(target_os = "linux")]
+#[cfg_attr(test, allow(dead_code))]
 pub struct Session;
 
 #[cfg(target_os = "linux")]
+#[cfg_attr(test, allow(dead_code))]
 impl Session {
     fn with<R>(f: impl FnOnce(&mut dyn Bus) -> Result<R>) -> Result<R, String> {
         let mut c = crate::dbus::Conn::session().map_err(|e| format!("{MISSING} ({e:#})"))?;
@@ -183,6 +191,10 @@ impl super::Store for Session {
 
     fn delete(&self, name: &str) -> Result<(), String> {
         Session::with(|b| delete(b, name))
+    }
+
+    fn has(&self, name: &str) -> Result<bool, String> {
+        Session::with(|b| has(b, name))
     }
 }
 

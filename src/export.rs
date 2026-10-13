@@ -858,7 +858,7 @@ mod curl;
 pub use curl::download_http_exact;
 #[cfg(not(windows))]
 pub use curl::download_to;
-#[cfg(not(windows))]
+#[cfg(all(not(windows), not(test)))]
 pub use curl::http_request;
 
 #[cfg(test)]

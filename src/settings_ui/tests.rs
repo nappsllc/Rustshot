@@ -85,8 +85,8 @@ fn form_writes_what_changed() {
     f.quality = 50;
     f.ask = true;
     f.filename.set("x_%S");
-    f.upload_id.set(" mine ");
-    f.copy_url = false;
+    f.up.client_id.set(" mine ");
+    f.up.copy_url = false;
     f.keys.set(Action::ToolPencil, vec![Chord::parse("Shift+K").unwrap()]);
     f.keys.set(Action::Copy, vec![]);
     let c = f.apply(&cfg, &cfg);
@@ -482,6 +482,92 @@ fn overlay_helper_settings_are_saved() {
     s.form.accept = 2;
     assert!(matches!(&s.on(Click::Apply)[..], [Act::Saved(c)] if c.accept_on_select == "save"));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Upload › S3-compatible: every value saves and reads back; the typed
+/// secret goes to the credential store (here the in-memory one), never
+/// into config.toml, and the field empties.
+#[test]
+fn s3_settings_save_and_the_secret_goes_to_the_store() {
+    let dir = scratch("s3-save");
+    let p = dir.join("config.toml");
+    config::save_at(&p, &Config::default()).unwrap();
+    let mut s = settings_at(&p);
+    assert_eq!(s.form.up.dest, 0, "Imgur by default");
+    let f = &mut s.form.up;
+    f.dest = upload::S3;
+    f.endpoint.set(" https://acc.r2.cloudflarestorage.com ");
+    f.region.set("auto");
+    f.bucket.set("rs-save-test");
+    f.access_key.set("AKIDSAVE");
+    f.secret.set("s3cr3t+Key/forTest");
+    f.public_url.set("https://cdn.example.com");
+    f.prefix.set("shots/%Y/");
+    f.path_style = false;
+    f.auto_rec = true;
+    assert!(s.dirty());
+    assert!(matches!(&s.on(Click::Apply)[..], [Act::Saved(_)]), "{:?}", s.modal);
+    let text = std::fs::read_to_string(&p).unwrap();
+    assert!(!text.contains("s3cr3t"), "never in the file: {text}");
+    let c = config::parse_config(&text).unwrap();
+    assert_eq!(
+        (c.upload_destination.as_str(), c.s3_endpoint.as_str(), c.s3_bucket.as_str(), c.s3_access_key_id.as_str()),
+        ("s3", "https://acc.r2.cloudflarestorage.com", "rs-save-test", "AKIDSAVE")
+    );
+    assert_eq!((c.s3_public_url.as_str(), c.s3_key_prefix.as_str(), c.s3_path_style, c.upload_recordings), ("https://cdn.example.com", "shots/%Y/", false, true));
+    assert_eq!(crate::keystore::os().get("rustshot:s3:rs-save-test").unwrap().as_deref(), Some("s3cr3t+Key/forTest"));
+    assert!(s.form.up.secret.text.is_empty() && !s.dirty(), "the field empties");
+    assert!(s.upload.stored("rs-save-test"));
+    assert!(!format!("{:?}", s.form).contains("s3cr3t"), "never in a Debug print");
+    // Read back into a new window.
+    let s2 = settings_at(&p);
+    assert_eq!((s2.form.up.dest, s2.form.up.bucket.text.as_str(), s2.form.up.path_style), (upload::S3, "rs-save-test", false));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A secret without a bucket is not kept anywhere: the window says why
+/// and keeps it typed.
+#[test]
+fn a_secret_needs_a_bucket() {
+    let dir = scratch("s3-nobucket");
+    let p = dir.join("config.toml");
+    config::save_at(&p, &Config::default()).unwrap();
+    let mut s = settings_at(&p);
+    s.form.up.secret.set("orphan");
+    s.on(Click::Apply);
+    assert!(matches!(&s.modal, Some(Modal::Error(e)) if e.contains("bucket")), "{:?}", s.modal);
+    assert_eq!(s.form.up.secret.text, "orphan");
+    assert!(!std::fs::read_to_string(&p).unwrap().contains("orphan"));
+    assert!(upload::store_secret(crate::keystore::os(), "b", "").is_ok(), "nothing typed: nothing to do");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Test connection runs on a worker with the form's values and says how
+/// it went (tests: never over the network, so it fails and says why).
+#[test]
+fn test_connection_reports_on_the_row() {
+    let mut s = sample();
+    s.section = UPLOAD;
+    s.form.up.dest = upload::S3;
+    let mut focus = FocusState::default();
+    reveal(&mut s, &mut focus, "s3_test");
+    assert!(!upload::probe_help(None).1);
+    assert_eq!(click(&mut s, &mut focus, "s3_test", 1.0), Some(Click::TestUpload));
+    assert_eq!(s.on(Click::TestUpload), vec![]);
+    assert_eq!(s.upload.probe, Some(upload::Probe::Running));
+    s.upload.wait();
+    // No endpoint yet: it says so.
+    assert_eq!(s.upload.probe, Some(upload::Probe::Failed("no endpoint is set".into())));
+    s.form.up.endpoint.set("https://acc.r2.cloudflarestorage.com");
+    s.form.up.bucket.set("rs-probe");
+    s.form.up.access_key.set("AK");
+    s.form.up.secret.set("typed");
+    s.on(Click::TestUpload);
+    s.upload.wait();
+    assert_eq!(s.upload.probe, Some(upload::Probe::Failed("upload failed: no network in tests".into())));
+    let (text, err) = upload::probe_help(s.upload.probe.as_ref());
+    assert_eq!((text.as_str(), err), ("Upload failed: no network in tests", true));
+    assert!(!s.upload.poll(), "answered once");
 }
 
 /// The file breaks while the window is open: Save refuses to write
@@ -880,6 +966,31 @@ fn preview_settings_pngs() {
             let th2 = s.preview_theme();
             let (img, _) = render(&mut s, &th2, k, &Input::default(), &mut FocusState::default());
             preview::save(&png("capture-teal-jpeg", tname, k), &img);
+            // Upload › S3-compatible, filled in, a secret stored and the
+            // test failed; then one being typed.
+            let mut s = sample();
+            s.section = UPLOAD;
+            let f = &mut s.form.up;
+            f.dest = upload::S3;
+            f.endpoint.set("https://4f1c0e.r2.cloudflarestorage.com");
+            f.bucket.set("rs-preview-shots");
+            f.access_key.set("8a1d3c9e2b7f40d6");
+            f.public_url.set("https://cdn.example.com");
+            let _ = crate::keystore::os().set("rustshot:s3:rs-preview-shots", "", "x");
+            s.upload.probe = Some(upload::Probe::Failed("upload failed: Access Denied (AccessDenied)".into()));
+            let (img, _) = render(&mut s, th, k, &Input::default(), &mut FocusState::default());
+            preview::save(&png("upload-s3", tname, k), &img);
+            s.scroll[UPLOAD] = 1e6;
+            let (img, _) = render(&mut s, th, k, &Input::default(), &mut FocusState::default());
+            preview::save(&png("upload-s3-end", tname, k), &img);
+            s.scroll[UPLOAD] = 0.0;
+            s.form.up.secret.set("wJalrXUtnFEMI/K7MDENG");
+            s.upload.probe = Some(upload::Probe::Passed);
+            let mut focus = FocusState::default();
+            render(&mut s, th, k, &Input::default(), &mut focus);
+            focus.focus("s3_secret");
+            let (img, _) = render(&mut s, th, k, &Input::default(), &mut focus);
+            preview::save(&png("upload-s3-typing", tname, k), &img);
             // The questions.
             for (name, m) in [
                 ("rewrite", Modal::Rewrite { close: true }),

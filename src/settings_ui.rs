@@ -50,6 +50,7 @@ pub const H: u32 = 520;
 
 pub(crate) mod draw;
 mod recording;
+mod upload;
 
 /// The rail's sections (icon, name); About sits at the bottom.
 pub const SECTIONS: [(&str, &str); 6] = [
@@ -236,8 +237,9 @@ pub struct Form {
     pub quality: u8,
     pub ask: bool,
     pub filename: TextState,
-    pub upload_id: TextState,
-    pub copy_url: bool,
+    /// The Upload section's values (`upload_*`, `s3_*`,
+    /// `copy_url_after_upload`; the typed S3 secret, never written here).
+    pub up: upload::UpForm,
     pub keys: Keymap,
     /// The Recording section's values (every `rec_*` key, `record_hotkey`).
     pub rec: recording::RecForm,
@@ -283,8 +285,7 @@ impl Form {
             quality: cfg.jpeg_quality.clamp(1, 100),
             ask: cfg.save_dialog,
             filename: TextState::new(&cfg.filename_pattern),
-            upload_id: TextState::new(&cfg.upload_client_id),
-            copy_url: cfg.copy_url_after_upload,
+            up: upload::UpForm::new(cfg),
             keys: Keymap::from_config(&cfg.shortcuts).0,
             rec: recording::RecForm::new(cfg),
             magnifier: cfg.magnifier,
@@ -414,12 +415,7 @@ impl Form {
         if self.filename.text != was.filename.text {
             c.filename_pattern = self.filename.text.clone();
         }
-        if self.upload_id.text.trim() != was.upload_id.text.trim() {
-            c.upload_client_id = self.upload_id.text.trim().to_string();
-        }
-        if self.copy_url != was.copy_url {
-            c.copy_url_after_upload = self.copy_url;
-        }
+        self.up.apply(&was.up, &mut c);
         self.rec.apply(&was.rec, &mut c);
         if self.magnifier != was.magnifier {
             c.magnifier = self.magnifier;
@@ -662,6 +658,8 @@ pub enum Click {
     CheckUpdates,
     /// About: one of [`crate::actions::LINKS`].
     Link(&'static str),
+    /// Upload: "Test connection" (the form's bucket, on a worker).
+    TestUpload,
     /// Esc not taken by a control.
     Escape,
     /// Enter not taken by a control.
@@ -732,6 +730,8 @@ pub struct Settings {
     tools_reset: bool,
     /// The Recording section's device lists and encoder status.
     rec_lists: recording::Lists,
+    /// The Upload section's stored-secret check and Test connection.
+    pub upload: upload::State,
     set_autostart: fn(bool) -> Result<(), String>,
     set_screenclip: fn(bool) -> Result<(), String>,
 }
@@ -759,6 +759,7 @@ impl Settings {
             hotkey_failures: Vec::new(),
             tools_reset: false,
             rec_lists: recording::Lists::default(),
+            upload: upload::State::default(),
             set_autostart: crate::autostart::set,
             set_screenclip: crate::screenclip_win::set,
         }
@@ -913,6 +914,7 @@ impl Settings {
     pub fn dirty(&self) -> bool {
         let now = self.form.apply(&self.loaded, &self.loaded);
         config::to_toml(&now) != config::to_toml(&self.loaded)
+            || !self.form.up.secret.text.is_empty()
             || self.form.autostart != self.autostart
             || self.form.screenclip != self.screenclip
     }
@@ -987,6 +989,10 @@ impl Settings {
             }
             Click::ResetTools => self.reset_tools(),
             Click::ClearHistory => vec![Act::ClearHistory],
+            Click::TestUpload => {
+                self.upload.start_test(&self.form.up);
+                vec![]
+            }
             Click::Escape | Click::Enter => vec![],
         }
     }
@@ -1020,9 +1026,20 @@ impl Settings {
         }
         self.confirmed = true; // the file is ours now
         self.loaded = cfg.clone();
+        // The typed S3 secret goes to the OS credential store, never the file.
+        let secret = std::mem::take(&mut self.form.up.secret.text);
         // The form shows what was saved (merged with the file, trimmed).
         self.form = self.form_for(&cfg);
-        let mut acts = vec![Act::Saved(Box::new(cfg))];
+        let mut acts = vec![Act::Saved(Box::new(cfg.clone()))];
+        if let Err(e) = upload::store_secret(crate::keystore::os(), &cfg.s3_bucket, &secret) {
+            // Kept typed, to try again.
+            self.form.up.secret.set(&secret);
+            self.modal = Some(Modal::Error(e));
+            return acts;
+        }
+        if !secret.is_empty() {
+            self.upload.forget_stored();
+        }
         if let (Some(on), true) = (self.form.autostart, self.form.autostart != self.autostart) {
             match (self.set_autostart)(on) {
                 Ok(()) => self.autostart = Some(on),
@@ -1464,6 +1481,8 @@ impl Driver for Window {
                 }
                 // The Recording section's devices were listed.
                 changed |= self.s.rec_lists.poll();
+                // Upload's Test connection answered.
+                changed |= self.s.upload.poll();
                 while let Ok(p) = self.picked.1.try_recv() {
                     self.picking = false;
                     if let Some(p) = p {

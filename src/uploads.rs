@@ -391,7 +391,7 @@ pub fn book_to_json(recs: &[Record]) -> String {
         json::string(&mut o, r.info.deletehash.reveal());
         o.push_str(&format!(",\"time\":{},\"kind\":\"{}\"", r.info.time, r.info.kind.id()));
         if let Some(obj) = &r.info.s3 {
-            o.push_str(",\"dest\":\"s3\"");
+            o.push_str(&format!(",\"dest\":\"{}\"", r.info.dest()));
             for (k, v) in s3_fields(obj) {
                 o.push(',');
                 json::string(&mut o, k);

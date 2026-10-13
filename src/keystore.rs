@@ -15,6 +15,7 @@
 //! Everything goes through [`Store`]; tests use [`Memory`] (and [`os`] is
 //! one in tests), so they never touch the user's credentials.
 
+#[cfg(test)]
 use std::sync::Mutex;
 
 /// A place secrets are kept.
@@ -24,8 +25,15 @@ pub trait Store: Send + Sync {
     /// Keep `secret` as `name` (replacing one there), `label` the name a
     /// person sees in the store's own app.
     fn set(&self, name: &str, label: &str, secret: &str) -> Result<(), String>;
-    /// Forget `name` (fine when it is not there).
+    /// Forget `name` (fine when it is not there). Rustshot itself only
+    /// replaces secrets; removing one is the store app's (and the tests').
+    #[cfg_attr(not(test), allow(dead_code))]
     fn delete(&self, name: &str) -> Result<(), String>;
+    /// Whether `name` is kept, without reading it (Settings' helper line;
+    /// the Secret Service answers without unlocking anything).
+    fn has(&self, name: &str) -> Result<bool, String> {
+        self.get(name).map(|s| s.is_some_and(|s| !s.is_empty()))
+    }
 }
 
 /// The name of the S3 secret for `bucket`.
@@ -45,20 +53,23 @@ pub fn place() -> &'static str {
     } else if cfg!(target_os = "macos") {
         "the macOS Keychain"
     } else {
-        "the Secret Service (GNOME Keyring, KWallet)"
+        "the Secret Service keyring"
     }
 }
 
 /// An in-memory store (tests; the fake behind [`os`] in tests).
+#[cfg(test)]
 #[derive(Default)]
 pub struct Memory {
     items: Mutex<Vec<(String, String)>>,
 }
 
+#[cfg(test)]
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+#[cfg(test)]
 impl Store for Memory {
     fn get(&self, name: &str) -> Result<Option<String>, String> {
         Ok(lock(&self.items).iter().find(|(n, _)| n == name).map(|(_, s)| s.clone()))

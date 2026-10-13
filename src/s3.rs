@@ -56,6 +56,7 @@ pub enum Body<'a> {
 }
 
 impl Body<'_> {
+    #[cfg_attr(not(windows), allow(dead_code))] // WinHTTP's total length; curl counts itself
     pub fn len(&self) -> u64 {
         match self {
             Body::Empty => 0,
@@ -105,13 +106,16 @@ pub struct HttpReq<'a> {
 }
 
 impl HttpReq<'_> {
-    /// `host` without its port, and the port (443 by default).
+    /// `host` without its port, and the port (443 by default; WinHTTP
+    /// connects to them apart, curl takes the URL).
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub fn host_port(&self) -> (&str, u16) {
         split_port(&self.host)
     }
 }
 
 /// `host[:port]` → (host, port).
+#[cfg_attr(not(any(windows, test)), allow(dead_code))]
 pub fn split_port(h: &str) -> (&str, u16) {
     match h.rsplit_once(':') {
         Some((n, p)) if !n.is_empty() && p.bytes().all(|b| b.is_ascii_digit()) => (n, p.parse().unwrap_or(443)),
@@ -514,6 +518,7 @@ impl Dest {
 }
 
 /// What to upload.
+#[cfg_attr(test, allow(dead_code))] // tests upload bytes only
 pub enum Source<'a> {
     /// An encoded picture named `name`.
     Bytes(&'a [u8], &'a str),
@@ -572,6 +577,7 @@ fn platform_send(r: &HttpReq) -> Result<HttpResp, String> {
 
 /// [`upload`] with the stored secret over the platform's HTTPS; the
 /// object is noted for the upload's record (`crate::uploads::note_s3`).
+#[cfg_attr(test, allow(dead_code))] // tests never upload
 pub fn upload_now(cfg: &Config, src: Source) -> Result<String, String> {
     let secret = stored_secret(cfg.s3_bucket.trim())?;
     let video = matches!(&src, Source::File(p) if p.extension().is_some_and(|e| e.eq_ignore_ascii_case("mp4")));

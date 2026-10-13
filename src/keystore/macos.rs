@@ -18,9 +18,10 @@ unsafe extern "C" {
     static kCFTypeDictionaryValueCallBacks: u8;
     fn CFStringCreateWithBytes(alloc: CFTypeRef, bytes: *const u8, len: isize, enc: u32, external: u8) -> CFStringRef;
     fn CFDataCreate(alloc: CFTypeRef, bytes: *const u8, len: isize) -> CFTypeRef;
-    fn CFDataGetLength(d: CFTypeRef) -> isize;
+    // Declared as the other modules declare them (one signature per symbol).
+    fn CFDataGetLength(d: CFTypeRef) -> i64;
     fn CFDataGetBytePtr(d: CFTypeRef) -> *const u8;
-    fn CFDictionaryCreate(alloc: CFTypeRef, keys: *const CFTypeRef, values: *const CFTypeRef, n: isize, kcb: *const c_void, vcb: *const c_void) -> CFDictionaryRef;
+    fn CFDictionaryCreate(alloc: CFTypeRef, keys: *const CFTypeRef, values: *const CFTypeRef, n: isize, kcb: *const u8, vcb: *const u8) -> CFDictionaryRef;
     fn CFRelease(cf: CFTypeRef);
 }
 
@@ -59,8 +60,8 @@ impl Owned {
         let keys: Vec<CFTypeRef> = pairs.iter().map(|p| p.0).collect();
         let vals: Vec<CFTypeRef> = pairs.iter().map(|p| p.1).collect();
         unsafe {
-            let kcb = &raw const kCFTypeDictionaryKeyCallBacks as *const c_void;
-            let vcb = &raw const kCFTypeDictionaryValueCallBacks as *const c_void;
+            let kcb = &raw const kCFTypeDictionaryKeyCallBacks;
+            let vcb = &raw const kCFTypeDictionaryValueCallBacks;
             self.keep(CFDictionaryCreate(std::ptr::null(), keys.as_ptr(), vals.as_ptr(), pairs.len() as isize, kcb, vcb))
         }
     }

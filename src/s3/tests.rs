@@ -236,7 +236,7 @@ fn multipart_plans_equal_parts() {
     let big = 400 * 1024 * 1024 * 1024u64;
     let p = plan(big);
     assert!(p.len() as u64 <= MAX_PARTS);
-    assert!(p[0].1 > PART_SIZE && p[0].1 % (1024 * 1024) == 0);
+    assert!(p[0].1 > PART_SIZE && p[0].1.is_multiple_of(1024 * 1024));
     assert!(p[..p.len() - 1].iter().all(|x| x.1 == p[0].1));
     assert_eq!(p.iter().map(|x| x.1).sum::<u64>(), big);
 }

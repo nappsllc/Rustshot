@@ -2,11 +2,14 @@ use super::*;
 use crate::dbus::{Kind, Message, Value};
 use std::collections::VecDeque;
 
+/// An item: path, attributes, secret, locked.
+type Item = (String, Vec<(String, String)>, Vec<u8>, bool);
+
 /// A scripted Secret Service: items (path, attributes, secret, locked),
 /// a default collection that may be locked or missing, prompts that are
 /// answered (or dismissed) with a Completed signal.
 struct Fake {
-    items: Vec<(String, Vec<(String, String)>, Vec<u8>, bool)>,
+    items: Vec<Item>,
     collection_locked: bool,
     no_collection: bool,
     no_service: bool,
@@ -134,7 +137,9 @@ impl Bus for Fake {
 fn a_secret_is_kept_found_replaced_and_deleted() {
     let mut f = Fake::new();
     assert_eq!(get(&mut f, "rustshot:s3:shots").unwrap(), None);
+    assert!(!has(&mut f, "rustshot:s3:shots").unwrap());
     set(&mut f, "rustshot:s3:shots", "Label", "s3cr3t/Key+").unwrap();
+    assert!(has(&mut f, "rustshot:s3:shots").unwrap());
     set(&mut f, "rustshot:s3:other", "Label", "other").unwrap();
     assert_eq!(get(&mut f, "rustshot:s3:shots").unwrap().as_deref(), Some("s3cr3t/Key+"));
     set(&mut f, "rustshot:s3:shots", "Label", "new").unwrap();
@@ -153,6 +158,8 @@ fn a_secret_is_kept_found_replaced_and_deleted() {
 fn locked_keyrings_are_unlocked_through_the_prompt() {
     let mut f = Fake::new();
     f.items.push(("/i/1".into(), vec![("application".into(), "rustshot".into()), ("rustshot-name".into(), "n".into())], b"x".to_vec(), true));
+    assert!(has(&mut f, "n").unwrap(), "seen while locked");
+    assert!(!f.calls.iter().any(|c| c.starts_with("Unlock")), "without unlocking");
     assert_eq!(get(&mut f, "n").unwrap().as_deref(), Some("x"));
     assert!(f.calls.iter().any(|c| c.starts_with("Unlock")) && f.calls.iter().any(|c| c.starts_with("Prompt")));
     assert!(f.rules.is_empty(), "the match rule is removed again");

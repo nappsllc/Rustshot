@@ -464,7 +464,7 @@ pub fn meta_to_json(m: &Meta) -> String {
         s("upload_deletehash", i.deletehash.reveal());
         s("upload_kind", i.kind.id());
         if let Some(obj) = &i.s3 {
-            s("upload_dest", "s3");
+            s("upload_dest", i.dest());
             for (k, v) in crate::uploads::s3_fields(obj) {
                 s(&format!("upload_{k}"), &v);
             }
