@@ -81,7 +81,6 @@ impl UiFont {
     }
 
     /// Whether `ch` has its own glyph.
-    #[cfg(test)]
     pub fn has_glyph(&self, ch: char) -> bool {
         self.slot(ch) != 0
     }
@@ -109,6 +108,11 @@ impl UiFont {
     #[cfg(test)]
     pub fn units_per_em(&self) -> u16 {
         baked::UNITS_PER_EM
+    }
+
+    /// The em size at `px` (UI text on the OS stack asks for this em).
+    pub fn em(&self, px: f32) -> f32 {
+        self.k(px) * baked::UNITS_PER_EM as f32
     }
 
     /// Ascent minus descent: `px` up to float rounding.
@@ -141,8 +145,17 @@ impl UiFont {
         pen
     }
 
-    /// Advance width of `s` at `px`.
+    /// Advance width of `s` at `px` (on the OS text stack when the
+    /// baked glyphs do not cover it: `uitext.rs`).
     pub fn width(&self, s: &str, px: f32) -> f32 {
+        if crate::uitext::needed(self, s) {
+            return crate::uitext::width(self, s, px);
+        }
+        self.baked_width(s, px)
+    }
+
+    /// [`UiFont::width`] with the baked glyphs only (.notdef for others).
+    pub fn baked_width(&self, s: &str, px: f32) -> f32 {
         self.layout(s, px, 0.0, |_, _| {})
     }
 
@@ -150,6 +163,14 @@ impl UiFont {
     /// coverage)` for every pixel of each glyph's box (coverage 0..=1, or a
     /// little above 1 where contours overlap). Returns the advance width.
     pub fn draw(&self, s: &str, px: f32, x: f32, y: f32, mut f: impl FnMut(i32, i32, f32)) -> f32 {
+        if crate::uitext::needed(self, s) {
+            return crate::uitext::draw(self, s, px, x, y, &mut f);
+        }
+        self.baked_draw(s, px, x, y, f)
+    }
+
+    /// [`UiFont::draw`] with the baked glyphs only (.notdef for others).
+    pub fn baked_draw(&self, s: &str, px: f32, x: f32, y: f32, mut f: impl FnMut(i32, i32, f32)) -> f32 {
         let k = self.k(px);
         let baseline = y + self.ascent(px);
         let end = self.layout(s, px, x, |g, pen| {
@@ -272,9 +293,9 @@ mod tests {
                     w += sf.h_advance(g);
                     prev = Some(g);
                 }
-                assert_eq!(UI.width(&all, px), w, "width at {px}");
+                assert_eq!(UI.baked_width(&all, px), w, "width at {px}");
                 let old: f32 = all.chars().map(|c| sf.h_advance(f.glyph_id(c))).sum();
-                assert_eq!(UI.width(&all, px), old, "old (kerning-free) width at {px}");
+                assert_eq!(UI.baked_width(&all, px), old, "old (kerning-free) width at {px}");
             }
         }
         assert!(baked::KERN.is_empty(), "the subset gained kerning: compare against kerned widths only");
@@ -308,7 +329,7 @@ mod tests {
 
     fn baked_grid(px: f32, s: &str, x: f32, y: f32, w: usize, h: usize) -> Vec<f32> {
         let mut grid = vec![0.0f32; w * h];
-        UI.draw(s, px, x, y, |sx, sy, c| {
+        UI.baked_draw(s, px, x, y, |sx, sy, c| {
             if sx >= 0 && sy >= 0 && (sx as usize) < w && (sy as usize) < h && c > 0.0 {
                 grid[sy as usize * w + sx as usize] += c;
             }
@@ -331,7 +352,7 @@ mod tests {
                 let px = size * s;
                 for (ox, oy) in [(2.0, 3.0), (2.25, 3.5), (7.6, 1.3)] {
                     for text in samples {
-                        let w = (UI.width(text, px) + 2.0 * px) as usize;
+                        let w = (UI.baked_width(text, px) + 2.0 * px) as usize;
                         let h = (px * 2.0) as usize;
                         let a = ab_glyph_grid(&f, px, text, ox, oy, w, h);
                         let b = baked_grid(px, text, ox, oy, w, h);

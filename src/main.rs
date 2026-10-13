@@ -86,6 +86,8 @@ mod tray_macos;
 #[cfg(windows)]
 mod tray_win;
 mod ui;
+// UI strings the baked font lacks glyphs for, drawn by the OS text stack.
+mod uitext;
 mod uifb;
 mod uisize;
 mod update;

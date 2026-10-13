@@ -54,6 +54,10 @@ fn names(f: Family) -> [&'static [&'static str]; 4] {
 /// Lines and strikes are drawn by `text.rs`.
 pub const NATIVE_DECO: bool = false;
 
+/// DejaVu Sans's line (ascent + descent) per em (UI text matches the
+/// baked font's em size).
+pub const EM_RATIO: f32 = 2384.0 / 2048.0;
+
 /// The font dropdown's name for `f`.
 pub fn family_label(f: Family) -> &'static str {
     match f {
@@ -103,6 +107,10 @@ pub struct Face {
     synth_bold: bool,
     /// Italic drawn sheared (no italic file).
     synth_italic: bool,
+    /// UI text (`Some(right to left)`): characters the face lacks come
+    /// from the font fontconfig picks for them, and lines are put in
+    /// visual order ([`crate::text::visual_order`]).
+    ui: Option<bool>,
 }
 
 /// Faces found so far, by family and style.
@@ -121,6 +129,47 @@ fn found(f: Family, i: usize) -> Option<(FontArc, bool)> {
     }
     let v = find(f, i);
     cache().lock().unwrap_or_else(|e| e.into_inner()).entry((f, i)).or_insert(v).clone()
+}
+
+/// The font fontconfig picks for `c` when the UI face lacks it, with a
+/// number naming it: asked once per 256-codepoint block (then per
+/// character where the block's font lacks one); each file read once.
+fn fallback_font(c: char) -> Option<(usize, FontArc)> {
+    type Fonts = Mutex<(HashMap<u32, Option<usize>>, Vec<(String, FontArc)>)>;
+    static C: OnceLock<Fonts> = OnceLock::new();
+    let cache = C.get_or_init(|| Mutex::new((HashMap::new(), Vec::new())));
+    let lock = || cache.lock().unwrap_or_else(|e| e.into_inner());
+    let has = |id: usize| {
+        let g = lock();
+        let f = g.1[id].1.clone();
+        (f.glyph_id(c).0 != 0).then_some((id, f))
+    };
+    for key in [(c as u32 >> 8) | 1 << 31, c as u32] {
+        let known = lock().0.get(&key).copied();
+        match known {
+            Some(Some(id)) => match has(id) {
+                Some(hit) => return Some(hit),
+                None => continue,
+            },
+            Some(None) => continue,
+            None => {}
+        }
+        // `fc-match` and the file read run without the lock.
+        let found = fc_match(&format!("sans-serif:charset={:x}", c as u32)).and_then(|p| {
+            if let Some(id) = lock().1.iter().position(|(q, _)| *q == p) {
+                return Some(id);
+            }
+            let f = std::fs::read(&p).ok().and_then(|b| FontArc::try_from_vec(b).ok())?;
+            let mut g = lock();
+            g.1.push((p, f));
+            Some(g.1.len() - 1)
+        });
+        lock().0.insert(key, found);
+        if let Some(hit) = found.and_then(has) {
+            return Some(hit);
+        }
+    }
+    None
 }
 
 /// Find every family's faces on a thread of their own (once), so the
@@ -161,7 +210,39 @@ impl Face {
             .or_else(|| found(Family::Sans, 0).map(|(f, _)| (f, false)))
             .unwrap_or_else(|| (FontArc::try_from_slice(INTER).expect("bundled Inter parses"), false));
         let plain = want == 0 || styled;
-        Face { font, synth_bold: bold && !plain, synth_italic: italic && !plain }
+        Face { font, synth_bold: bold && !plain, synth_italic: italic && !plain, ui: None }
+    }
+
+    /// The UI face: per-character fallback fonts and visual order, the
+    /// paragraph right to left when `rtl`.
+    pub fn with_rtl(self, rtl: bool) -> Face {
+        Face { ui: Some(rtl), ..self }
+    }
+
+    /// `line` in visual order as runs of one font each: (fallback font
+    /// number, or None for this face; the font; its scale relative to
+    /// `px`, so every font has this face's em; the characters).
+    fn ui_runs(&self, line: &str, rtl: bool) -> Vec<(Option<usize>, FontArc, f32, Vec<char>)> {
+        let em = |f: &FontArc| f.height_unscaled() / f.units_per_em().unwrap_or(1000.0);
+        let own = em(&self.font);
+        let mut runs: Vec<(Option<usize>, FontArc, f32, Vec<char>)> = Vec::new();
+        for c in crate::text::visual_order(line, rtl) {
+            if c.is_control() {
+                continue;
+            }
+            let fb = if self.font.glyph_id(c).0 != 0 { None } else { fallback_font(c) };
+            match runs.last_mut() {
+                Some((id, _, _, cs)) if *id == fb.as_ref().map(|f| f.0) => cs.push(c),
+                _ => match fb {
+                    Some((id, f)) => {
+                        let k = em(&f) / own;
+                        runs.push((Some(id), f, k, vec![c]))
+                    }
+                    None => runs.push((None, self.font.clone(), 1.0, vec![c])),
+                },
+            }
+        }
+        runs
     }
 
     /// A synthesized bold's offset at `px`.
@@ -175,6 +256,16 @@ impl Face {
     }
 
     pub fn width(&self, line: &str, px: f32) -> f32 {
+        if let Some(rtl) = self.ui {
+            return self
+                .ui_runs(line, rtl)
+                .iter()
+                .map(|(_, font, k, cs)| {
+                    let f = font.as_scaled(PxScale::from(px * k));
+                    cs.iter().map(|&c| f.h_advance(font.glyph_id(c))).sum::<f32>()
+                })
+                .sum();
+        }
         let f = self.font.as_scaled(PxScale::from(px));
         let dx = self.bold_dx(px);
         line.chars().map(|c| f.h_advance(self.font.glyph_id(c)) + dx).sum()
@@ -190,6 +281,28 @@ impl Face {
         f: &mut dyn FnMut(i32, i32, f32),
     ) {
         let (bx0, by0, bx1, by1) = clip;
+        if let Some(rtl) = self.ui {
+            let mut put = |px: i32, py: i32, cov: f32| {
+                if px >= bx0 && py >= by0 && px < bx1 && py < by1 {
+                    f(px, py, cov);
+                }
+            };
+            let y = top.y + ascent;
+            let mut x = top.x;
+            for (_, font, k, cs) in self.ui_runs(line, rtl) {
+                let scale = PxScale::from(px * k);
+                let sf = font.as_scaled(scale);
+                for c in cs {
+                    let gid = font.glyph_id(c);
+                    if let Some(og) = font.outline_glyph(gid.with_scale_and_position(scale, ab_glyph::point(x, y))) {
+                        let b = og.px_bounds();
+                        og.draw(|gx, gy, cov| put(b.min.x.floor() as i32 + gx as i32, b.min.y.floor() as i32 + gy as i32, cov));
+                    }
+                    x += sf.h_advance(gid);
+                }
+            }
+            return;
+        }
         let scale = PxScale::from(px);
         let sf = self.font.as_scaled(scale);
         let y = top.y + ascent;
