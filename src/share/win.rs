@@ -2,19 +2,23 @@
 //! [`crate::ocr`]'s; the `windows` crate supplies only `RoInitialize`,
 //! `RoGetActivationFactory`, `HSTRING`, the GUIDs' type and Win32).
 //!
-//! On its own single-threaded apartment thread: a `StorageFile` from
+//! On its own single-threaded apartment thread: an invisible owner window
+//! (never activated), a `StorageFile` from
 //! `StorageFile.GetFileFromPathAsync` (and, for a picture, a
 //! `RandomAccessStreamReference` of it for the bitmap and the thumbnail),
-//! an invisible owner window, `IDataTransferManagerInterop::GetForWindow`
-//! with a `DataRequested` handler filling the package, then
-//! `ShowShareUIForWindow`. The thread pumps the window's messages until the
-//! package says the share completed (`ShareCompleted`) or was cancelled
-//! (`ShareCanceled`, Windows 10 2004 and later), or `max` passes.
+//! `IDataTransferManagerInterop::GetForWindow` with a `DataRequested`
+//! handler filling the package, then `ShowShareUIForWindow`. The thread
+//! pumps the window's messages until the package says the share completed
+//! (`ShareCompleted`) or was canceled (`ShareCanceled`, Windows 10 2004 and
+//! later). The caller is let go then, or at a time limit ([`Clock`]); the
+//! thread stays (with the owner and the package) until the share ends or
+//! the process does: the sheet may still ask for the data.
 //!
 //! The handlers (`TypedEventHandler<..>` delegates) and the one-item
 //! `IIterable<IStorageItem>` for `SetStorageItems` are small COM objects
-//! made here: a vtable, a reference count, agile (no marshalling). Their
-//! interface ids are the WinRT parameterized ids of their signatures
+//! made here: a vtable, a reference count, agile, with the free-threaded
+//! marshaler aggregated (as windows-rs does) for a caller that marshals.
+//! Their interface ids are the WinRT parameterized ids of their signatures
 //! (tested below). Vtable slots: IUnknown 0-2, IInspectable 3-5, then the
 //! interface's methods from 6 (delegates: Invoke is 3).
 
@@ -31,6 +35,7 @@ use windows::core::{GUID, HRESULT, HSTRING, IInspectable, Interface};
 const IID_UNKNOWN: GUID = GUID::from_u128(0x00000000_0000_0000_c000_000000000046);
 const IID_INSPECTABLE: GUID = GUID::from_u128(0xaf86e2e0_b12d_4c6a_9c5a_d7aa65101e90);
 const IID_AGILE: GUID = GUID::from_u128(0x94ea2b94_e9cc_49e0_c0ff_ee64ca8f5b90);
+const IID_MARSHAL: GUID = GUID::from_u128(0x00000003_0000_0000_c000_000000000046);
 const IID_ASYNC_INFO: GUID = GUID::from_u128(0x00000036_0000_0000_c000_000000000046);
 const IID_INTEROP: GUID = GUID::from_u128(0x3a3dcd6c_3eab_43dc_bcde_45671ce800c8);
 const IID_DATA_TRANSFER_MANAGER: GUID = GUID::from_u128(0xa5caee9b_8708_49d1_8d36_67d25a8da00c);
@@ -60,15 +65,20 @@ const E_BOUNDS: HRESULT = HRESULT(0x8000000B_u32 as i32);
 /// `AsyncStatus`.
 const STARTED: i32 = 0;
 const COMPLETED: i32 = 1;
+const CANCELED: i32 = 2;
 
 // --- interface pointers ----------------------------------------------------------
 
 /// An owned COM interface pointer, released on drop.
 struct Com(*mut c_void);
 
-// The objects used here are agile (WinRT runtime classes, ours).
-unsafe impl Send for Com {}
-unsafe impl Sync for Com {}
+/// A [`Com`] of an agile object (a `StorageFile`, a stream reference,
+/// ours), which any thread may use.
+struct Agile(Com);
+
+// SAFETY: only agile objects are wrapped (see above).
+unsafe impl Send for Agile {}
+unsafe impl Sync for Agile {}
 
 type R<T> = Result<T, String>;
 
@@ -195,8 +205,9 @@ unsafe fn release(p: *mut c_void) -> u32 {
 
 /// An `HSTRING` argument: its handle (borrowed for the call).
 fn hs(h: &HSTRING) -> *mut c_void {
-    // SAFETY: an HSTRING is one handle-sized pointer (null when empty).
-    unsafe { *(h as *const HSTRING as *const *mut c_void) }
+    // SAFETY: an HSTRING is repr(transparent) over its handle (null when
+    // empty); copied without taking a reference.
+    unsafe { core::mem::transmute_copy::<HSTRING, *mut c_void>(h) }
 }
 
 /// The activation factory of runtime class `class`, as interface `iid`.
@@ -210,26 +221,44 @@ fn factory(class: &str, iid: &GUID) -> R<Com> {
 /// Wait for an `IAsyncOperation<T>` (at most `max`) and take its result.
 fn wait(op: &Com, max: Duration, what: &str) -> R<Com> {
     let info = op.query(&IID_ASYNC_INFO, what)?;
+    // IAsyncInfo::Cancel (9), Close (10).
+    let call = |slot: usize| unsafe {
+        let f: unsafe extern "system" fn(*mut c_void) -> HRESULT = info.slot(slot);
+        let _ = f(info.0);
+    };
     let t0 = Instant::now();
     loop {
         let st: i32 = info.get(7, what)?;
         match st {
-            STARTED if t0.elapsed() > max => return Err(format!("{what}: timed out")),
+            STARTED if t0.elapsed() > max => {
+                call(9);
+                call(10);
+                return Err(format!("{what}: timed out"));
+            }
             STARTED => std::thread::sleep(Duration::from_millis(5)),
             COMPLETED => break,
+            CANCELED => {
+                call(10);
+                return Err(format!("{what}: canceled"));
+            }
             _ => {
                 let hr: HRESULT = info.get(8, what)?;
+                call(10);
                 return Err(format!("{what}: {}", hr.message().trim()));
             }
         }
     }
-    op.get_obj(8, what)
+    let r = op.get_obj(8, what);
+    call(10);
+    r
 }
 
 // --- our COM objects -------------------------------------------------------------
 
-/// `QueryInterface` of our objects: IUnknown, IAgileObject and `own`.
-unsafe fn qi(this: *mut c_void, riid: *const GUID, out: *mut *mut c_void, own: &[GUID]) -> HRESULT {
+/// `QueryInterface` of our objects: IUnknown, IAgileObject and `own`;
+/// IMarshal from the aggregated free-threaded marshaler `ftm` (its inner,
+/// non-delegating IUnknown; null when it could not be made).
+unsafe fn qi(this: *mut c_void, riid: *const GUID, out: *mut *mut c_void, own: &[GUID], ftm: *mut c_void) -> HRESULT {
     unsafe {
         if out.is_null() || riid.is_null() {
             return E_POINTER;
@@ -239,10 +268,37 @@ unsafe fn qi(this: *mut c_void, riid: *const GUID, out: *mut *mut c_void, own: &
             add_ref(this);
             *out = this;
             S_OK
+        } else if iid == IID_MARSHAL && !ftm.is_null() {
+            // Its IMarshal counts on (and answers for) `this`.
+            let f: unsafe extern "system" fn(*mut c_void, *const GUID, *mut *mut c_void) -> HRESULT = core::mem::transmute(*(*(ftm as *const *const usize)));
+            f(ftm, riid, out)
         } else {
             *out = core::ptr::null_mut();
             E_NOINTERFACE
         }
+    }
+}
+
+/// The free-threaded marshaler aggregated by `outer` (its inner IUnknown,
+/// released with `outer`), or null.
+fn ftm_for(outer: *mut c_void) -> *mut c_void {
+    use windows::Win32::System::Com::CoCreateFreeThreadedMarshaler;
+    use windows::core::IUnknown;
+    // Borrowed: aggregation takes no reference on the outer object.
+    let o = core::mem::ManuallyDrop::new(unsafe { IUnknown::from_raw(outer) });
+    match unsafe { CoCreateFreeThreadedMarshaler(&*o) } {
+        Ok(inner) => inner.into_raw(),
+        Err(e) => {
+            trace(&format!("no free-threaded marshaler: {}", e.message()));
+            core::ptr::null_mut()
+        }
+    }
+}
+
+/// Let go of an aggregated marshaler (from [`ftm_for`]).
+unsafe fn drop_ftm(ftm: *mut c_void) {
+    if !ftm.is_null() {
+        unsafe { release(ftm) };
     }
 }
 
@@ -255,6 +311,7 @@ struct Delegate {
     refs: AtomicU32,
     iid: GUID,
     f: Box<Invoke>,
+    ftm: *mut c_void,
 }
 
 #[repr(C)]
@@ -269,8 +326,8 @@ static DELEGATE_VT: DelegateVtbl = DelegateVtbl { query: d_query, add_ref: d_add
 
 unsafe extern "system" fn d_query(this: *mut c_void, riid: *const GUID, out: *mut *mut c_void) -> HRESULT {
     unsafe {
-        let iid = (*(this as *const Delegate)).iid;
-        qi(this, riid, out, &[iid])
+        let d = &*(this as *const Delegate);
+        qi(this, riid, out, &[d.iid], d.ftm)
     }
 }
 
@@ -282,7 +339,9 @@ unsafe extern "system" fn d_release(this: *mut c_void) -> u32 {
     unsafe {
         let n = (*(this as *const Delegate)).refs.fetch_sub(1, Ordering::SeqCst) - 1;
         if n == 0 {
-            drop(Box::from_raw(this as *mut Delegate));
+            let d = Box::from_raw(this as *mut Delegate);
+            drop_ftm(d.ftm);
+            drop(d);
         }
         n
     }
@@ -294,8 +353,9 @@ unsafe extern "system" fn d_invoke(this: *mut c_void, sender: *mut c_void, args:
 
 /// A new delegate for interface `iid` calling `f(sender, args)`.
 fn delegate(iid: GUID, f: impl Fn(*mut c_void, *mut c_void) -> HRESULT + Send + Sync + 'static) -> Com {
-    let d = Box::new(Delegate { vt: &DELEGATE_VT, refs: AtomicU32::new(1), iid, f: Box::new(f) });
-    Com(Box::into_raw(d) as *mut c_void)
+    let d = Box::into_raw(Box::new(Delegate { vt: &DELEGATE_VT, refs: AtomicU32::new(1), iid, f: Box::new(f), ftm: core::ptr::null_mut() }));
+    unsafe { (*d).ftm = ftm_for(d as *mut c_void) };
+    Com(d as *mut c_void)
 }
 
 /// A one-item `IIterable<IStorageItem>` (and its iterators).
@@ -304,6 +364,7 @@ struct Items {
     vt: &'static IterableVtbl,
     refs: AtomicU32,
     item: Com,
+    ftm: *mut c_void,
 }
 
 #[repr(C)]
@@ -334,6 +395,7 @@ struct Iter {
     refs: AtomicU32,
     item: Com,
     at: AtomicU32,
+    ftm: *mut c_void,
 }
 
 #[repr(C)]
@@ -391,7 +453,7 @@ unsafe extern "system" fn base_trust(_this: *mut c_void, out: *mut i32) -> HRESU
 }
 
 unsafe extern "system" fn it_query(this: *mut c_void, riid: *const GUID, out: *mut *mut c_void) -> HRESULT {
-    unsafe { qi(this, riid, out, &[IID_INSPECTABLE, IID_ITERABLE_ITEM]) }
+    unsafe { qi(this, riid, out, &[IID_INSPECTABLE, IID_ITERABLE_ITEM], (*(this as *const Items)).ftm) }
 }
 
 unsafe extern "system" fn it_add_ref(this: *mut c_void) -> u32 {
@@ -402,7 +464,9 @@ unsafe extern "system" fn it_release(this: *mut c_void) -> u32 {
     unsafe {
         let n = (*(this as *const Items)).refs.fetch_sub(1, Ordering::SeqCst) - 1;
         if n == 0 {
-            drop(Box::from_raw(this as *mut Items));
+            let b = Box::from_raw(this as *mut Items);
+            drop_ftm(b.ftm);
+            drop(b);
         }
         n
     }
@@ -414,14 +478,15 @@ unsafe extern "system" fn it_first(this: *mut c_void, out: *mut *mut c_void) -> 
     }
     unsafe {
         let item = Com::borrowed((*(this as *const Items)).item.0).expect("an item");
-        let it = Box::new(Iter { vt: &ITERATOR_VT, refs: AtomicU32::new(1), item, at: AtomicU32::new(0) });
-        *out = Box::into_raw(it) as *mut c_void;
+        let it = Box::into_raw(Box::new(Iter { vt: &ITERATOR_VT, refs: AtomicU32::new(1), item, at: AtomicU32::new(0), ftm: core::ptr::null_mut() }));
+        (*it).ftm = ftm_for(it as *mut c_void);
+        *out = it as *mut c_void;
     }
     S_OK
 }
 
 unsafe extern "system" fn iter_query(this: *mut c_void, riid: *const GUID, out: *mut *mut c_void) -> HRESULT {
-    unsafe { qi(this, riid, out, &[IID_INSPECTABLE, IID_ITERATOR_ITEM]) }
+    unsafe { qi(this, riid, out, &[IID_INSPECTABLE, IID_ITERATOR_ITEM], (*(this as *const Iter)).ftm) }
 }
 
 unsafe extern "system" fn iter_add_ref(this: *mut c_void) -> u32 {
@@ -432,7 +497,9 @@ unsafe extern "system" fn iter_release(this: *mut c_void) -> u32 {
     unsafe {
         let n = (*(this as *const Iter)).refs.fetch_sub(1, Ordering::SeqCst) - 1;
         if n == 0 {
-            drop(Box::from_raw(this as *mut Iter));
+            let b = Box::from_raw(this as *mut Iter);
+            drop_ftm(b.ftm);
+            drop(b);
         }
         n
     }
@@ -493,8 +560,9 @@ unsafe extern "system" fn iter_get_many(this: *mut c_void, cap: u32, items: *mut
 
 /// An `IIterable<IStorageItem>` of `item` alone.
 fn one_item(item: Com) -> Com {
-    let b = Box::new(Items { vt: &ITERABLE_VT, refs: AtomicU32::new(1), item });
-    Com(Box::into_raw(b) as *mut c_void)
+    let b = Box::into_raw(Box::new(Items { vt: &ITERABLE_VT, refs: AtomicU32::new(1), item, ftm: core::ptr::null_mut() }));
+    unsafe { (*b).ftm = ftm_for(b as *mut c_void) };
+    Com(b as *mut c_void)
 }
 
 // --- the owner window ------------------------------------------------------------
@@ -504,25 +572,28 @@ mod owner {
     use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITORINFO, MONITOR_DEFAULTTONEAREST, MonitorFromPoint};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos, GetWindowRect, IsWindow, LWA_ALPHA, RegisterClassExW, SW_SHOWNA, SetForegroundWindow, SetLayeredWindowAttributes,
-        ShowWindow, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_POPUP,
+        ASFW_ANY, AllowSetForegroundWindow, CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos, GetWindowRect, IsWindow, LWA_ALPHA, RegisterClassExW, SW_SHOWNA,
+        SetLayeredWindowAttributes, ShowWindow, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_POPUP,
     };
     use windows::core::w;
+
+    /// The owner's size (px): small, centered where the sheet should go.
+    const SIDE: i32 = 64;
 
     unsafe extern "system" fn proc(h: HWND, m: u32, w: WPARAM, l: LPARAM) -> LRESULT {
         unsafe { DefWindowProcW(h, m, w, l) }
     }
 
-    /// Where the sheet goes: over the window that asked, else the work
-    /// area of the pointer's monitor.
-    fn place(asker: Option<usize>) -> RECT {
+    /// The middle of the window that asked, else of the pointer's
+    /// monitor's work area.
+    fn center(asker: Option<usize>) -> (i32, i32) {
         unsafe {
             if let Some(h) = asker.filter(|h| *h != 0).map(|h| HWND(h as *mut core::ffi::c_void))
                 && IsWindow(Some(h)).as_bool()
             {
                 let mut r = RECT::default();
                 if GetWindowRect(h, &mut r).is_ok() && r.right > r.left && r.bottom > r.top {
-                    return r;
+                    return (r.left / 2 + r.right / 2, r.top / 2 + r.bottom / 2);
                 }
             }
             let mut p = POINT::default();
@@ -530,14 +601,16 @@ mod owner {
             let mon = MonitorFromPoint(p, MONITOR_DEFAULTTONEAREST);
             let mut mi = MONITORINFO { cbSize: size_of::<MONITORINFO>() as u32, ..Default::default() };
             if GetMonitorInfoW(mon, &mut mi).as_bool() {
-                return mi.rcWork;
+                let r = mi.rcWork;
+                return (r.left / 2 + r.right / 2, r.top / 2 + r.bottom / 2);
             }
-            RECT { left: p.x - 400, top: p.y - 300, right: p.x + 400, bottom: p.y + 300 }
+            (p.x, p.y)
         }
     }
 
-    /// An invisible, click-through window over `asker` (or the pointer's
-    /// monitor) owning the sheet; destroyed on drop.
+    /// An invisible, click-through window owning the sheet, centered on
+    /// `asker` (or the pointer's monitor); never activated (it takes no
+    /// keys); destroyed on drop.
     pub struct Owner(pub HWND);
 
     impl Owner {
@@ -548,16 +621,16 @@ mod owner {
                 let wc = WNDCLASSEXW { cbSize: size_of::<WNDCLASSEXW>() as u32, lpfnWndProc: Some(proc), hInstance: inst.into(), lpszClassName: class, ..Default::default() };
                 // A second share finds the class registered: fine.
                 let _ = RegisterClassExW(&wc);
-                let r = place(asker);
+                let (cx, cy) = center(asker);
                 let h = CreateWindowExW(
-                    WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT,
+                    WS_EX_TOOLWINDOW | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE,
                     class,
                     w!("Rustshot"),
                     WS_POPUP,
-                    r.left,
-                    r.top,
-                    r.right - r.left,
-                    r.bottom - r.top,
+                    cx - SIDE / 2,
+                    cy - SIDE / 2,
+                    SIDE,
+                    SIDE,
                     None,
                     None,
                     Some(inst.into()),
@@ -565,10 +638,11 @@ mod owner {
                 )
                 .map_err(|e| format!("owner window: {}", e.message()))?;
                 // Fully transparent: shown (the sheet wants a real window),
-                // never seen, never hit.
+                // never seen, never hit, never active. The sheet's host may
+                // come to the front (this process was just clicked).
                 let _ = SetLayeredWindowAttributes(h, windows::Win32::Foundation::COLORREF(0), 0, LWA_ALPHA);
                 let _ = ShowWindow(h, SW_SHOWNA);
-                let _ = SetForegroundWindow(h);
+                let _ = AllowSetForegroundWindow(ASFW_ANY);
                 Ok(Owner(h))
             }
         }
@@ -583,31 +657,74 @@ mod owner {
     }
 }
 
-/// How long the sheet may take to ask for the package. It never asks
-/// when another sheet is already up (that one stays; it outlives its
-/// owner window): then there is nothing to wait for.
+/// How long the sheet may take to ask for the package: longer the first
+/// time in a process (the share host may start cold). It never asks when
+/// another sheet is already up (that one stays; it outlives its owner).
+pub const ASK_WAIT_COLD: Duration = Duration::from_secs(15);
 pub const ASK_WAIT: Duration = Duration::from_secs(5);
 
-/// Whether the pump goes on at `now`: not `done`, before `until`, and
-/// asked for the package (`requested`) or still within [`ASK_WAIT`] of
-/// `t0`.
-pub fn keep_pumping(done: bool, requested: bool, t0: Instant, now: Instant, until: Instant) -> bool {
-    !done && now < until && (requested || now < t0 + ASK_WAIT)
+/// How long the caller waits after the target was chosen, or at all when
+/// the package cannot say when the share ends.
+pub const SHORT_WAIT: Duration = Duration::from_secs(60);
+
+/// What the share thread does next ([`Clock::step`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Step {
+    /// Go on pumping.
+    Pump,
+    /// The sheet never asked for the package: give up (an error).
+    GiveUp,
+    /// Let the caller go (the time limit); go on pumping until the share
+    /// ends or the process does.
+    Release,
 }
 
-/// Pump this thread's messages while [`keep_pumping`].
-fn pump(done: &AtomicBool, requested: &AtomicBool, until: Instant) {
+/// The share's times: when the sheet was shown, asked for the package, a
+/// target was chosen; whether the package says when the share ends
+/// (`tracked`).
+#[derive(Clone, Copy, Debug)]
+pub struct Clock {
+    pub shown: Instant,
+    pub ask_wait: Duration,
+    pub max: Duration,
+    pub asked: Option<Instant>,
+    pub chosen: Option<Instant>,
+    pub tracked: bool,
+}
+
+impl Clock {
+    /// When the caller is let go (asked for the package), else `None`.
+    pub fn release_at(&self) -> Option<Instant> {
+        let asked = self.asked?;
+        // Past what an Instant holds: a year (as good as never).
+        let far = |t: Instant, d: Duration| t.checked_add(d).or_else(|| t.checked_add(Duration::from_secs(365 * 86400))).unwrap_or(t);
+        let mut at = if self.tracked { far(self.shown, self.max) } else { far(asked, SHORT_WAIT.min(self.max)) };
+        if let Some(c) = self.chosen {
+            at = at.min(far(c, SHORT_WAIT));
+        }
+        Some(at)
+    }
+
+    pub fn step(&self, now: Instant) -> Step {
+        match self.release_at() {
+            None if now >= self.shown.checked_add(self.ask_wait).unwrap_or(self.shown) => Step::GiveUp,
+            None => Step::Pump,
+            Some(at) if now >= at => Step::Release,
+            Some(_) => Step::Pump,
+        }
+    }
+}
+
+/// Handle this thread's messages; wait up to 100 ms for more.
+fn pump_once() {
     use windows::Win32::UI::WindowsAndMessaging::{DispatchMessageW, MSG, MsgWaitForMultipleObjects, PM_REMOVE, PeekMessageW, QS_ALLINPUT, TranslateMessage};
     let mut msg = MSG::default();
-    let t0 = Instant::now();
-    while keep_pumping(done.load(Ordering::SeqCst), requested.load(Ordering::SeqCst), t0, Instant::now(), until) {
-        unsafe {
-            while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
-                let _ = TranslateMessage(&msg);
-                DispatchMessageW(&msg);
-            }
-            let _ = MsgWaitForMultipleObjects(None, false, 100, QS_ALLINPUT);
+    unsafe {
+        while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+            let _ = TranslateMessage(&msg);
+            DispatchMessageW(&msg);
         }
+        let _ = MsgWaitForMultipleObjects(None, false, 100, QS_ALLINPUT);
     }
 }
 
@@ -631,48 +748,78 @@ impl Drop for Apartment {
 
 /// What the `DataRequested` handler puts in the package.
 struct Content {
-    item: Com,
+    item: Agile,
     /// The picture's stream (bitmap and thumbnail); none for a recording.
-    bitmap: Option<Com>,
+    bitmap: Option<Agile>,
     description: HSTRING,
 }
 
-/// Fill `request`'s package from `c`; `done` is set when the share ends
-/// (the package says so).
-fn fill(args: *mut c_void, c: &Content, done: &Arc<AtomicBool>) -> R<()> {
+/// What the handlers report to the share thread.
+#[derive(Default)]
+struct Events {
+    /// The share ended (completed or canceled).
+    done: AtomicBool,
+    /// The package says when the share ends (ShareCanceled registered).
+    tracked: AtomicBool,
+    asked: std::sync::Mutex<Option<Instant>>,
+    chosen: std::sync::Mutex<Option<Instant>>,
+    /// Filling the package failed: why (the sheet says so too).
+    failed: std::sync::Mutex<Option<String>>,
+}
+
+fn lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+/// Fill the requested package from `c`. A failure is told to the sheet
+/// (`FailWithDisplayText`), which then closes as canceled.
+fn fill(args: *mut c_void, c: &Content, ev: &Arc<Events>) -> R<()> {
     let args = Com::borrowed(args).ok_or("no request")?;
     let request = args.get_obj(6, "Request")?; // IDataRequestedEventArgs::Request
+    let r = fill_package(&request, c, ev);
+    if let Err(e) = &r {
+        // IDataRequest::FailWithDisplayText (9).
+        let text = HSTRING::from(format!("Rustshot could not share this capture: {e}"));
+        let _ = request.call_ptr(9, hs(&text), "FailWithDisplayText");
+    }
+    r
+}
+
+fn fill_package(request: &Com, c: &Content, ev: &Arc<Events>) -> R<()> {
     let pkg = request.get_obj(6, "Data")?; // IDataRequest::Data
+    // First the end of the share: completed (IDataPackage3) or canceled
+    // (IDataPackage4); the handlers stay with the package.
+    let end = |iid: GUID| {
+        let e = ev.clone();
+        delegate(iid, move |_, _| {
+            e.done.store(true, Ordering::SeqCst);
+            S_OK
+        })
+    };
+    let completed = pkg.query(&IID_DATA_PACKAGE3, "IDataPackage3").and_then(|p| p.add_event(6, &end(IID_H_SHARE_COMPLETED), "ShareCompleted"));
+    let canceled = pkg.query(&IID_DATA_PACKAGE4, "IDataPackage4").and_then(|p| p.add_event(6, &end(IID_H_SHARE_CANCELED), "ShareCanceled"));
+    if let Err(e) = &completed {
+        trace(&format!("ShareCompleted not registered: {e}"));
+    }
+    if let Err(e) = &canceled {
+        trace(&format!("ShareCanceled not registered: {e}"));
+    }
+    ev.tracked.store(canceled.is_ok(), Ordering::SeqCst);
     let props = pkg.get_obj(7, "Properties")?; // IDataPackage::Properties
     let title = HSTRING::from(TITLE);
     props.call_ptr(7, hs(&title), "SetTitle")?;
     props.call_ptr(9, hs(&c.description), "SetDescription")?;
     if let Some(b) = &c.bitmap {
-        let _ = props.call_ptr(11, b.0, "SetThumbnail");
-        pkg.call_ptr(21, b.0, "SetBitmap")?;
+        let _ = props.call_ptr(11, b.0.0, "SetThumbnail");
+        pkg.call_ptr(21, b.0.0, "SetBitmap")?;
     }
-    let items = one_item(Com::borrowed(c.item.0).ok_or("no item")?);
+    let items = one_item(Com::borrowed(c.item.0.0).ok_or("no item")?);
+    // IDataPackage::SetStorageItems(items, readOnly: boolean).
     let hr = unsafe {
-        let f: unsafe extern "system" fn(*mut c_void, *mut c_void, bool) -> HRESULT = pkg.slot(23);
-        f(pkg.0, items.0, true)
+        let f: unsafe extern "system" fn(*mut c_void, *mut c_void, u8) -> HRESULT = pkg.slot(23);
+        f(pkg.0, items.0, 1)
     };
-    check(hr, "SetStorageItems")?;
-    // The end of the share: completed (IDataPackage3) or cancelled
-    // (IDataPackage4). The handlers stay with the package.
-    let end = |iid: GUID| {
-        let d = done.clone();
-        delegate(iid, move |_, _| {
-            d.store(true, Ordering::SeqCst);
-            S_OK
-        })
-    };
-    if let Ok(p3) = pkg.query(&IID_DATA_PACKAGE3, "IDataPackage3") {
-        let _ = p3.add_event(6, &end(IID_H_SHARE_COMPLETED), "ShareCompleted");
-    }
-    if let Ok(p4) = pkg.query(&IID_DATA_PACKAGE4, "IDataPackage4") {
-        let _ = p4.add_event(6, &end(IID_H_SHARE_CANCELED), "ShareCanceled");
-    }
-    Ok(())
+    check(hr, "SetStorageItems")
 }
 
 /// With `RUSTSHOT_SHARE_TRACE` set: say how the share goes (live tests).
@@ -682,91 +829,164 @@ fn trace(what: &str) {
     }
 }
 
-/// Share `file` through a sheet over `asker` (a raw window handle) and
-/// wait until it closes (at most `max`).
-pub fn share(file: &Path, asker: Option<usize>, kind: Kind, max: Duration) -> Result<(), String> {
+/// Lets the share's caller go, once, with the result, and frees the one
+/// sheet ([`super::Sheet`]) then. Dropped unsent: a failure.
+pub struct Release(Option<(std::sync::mpsc::Sender<Result<(), String>>, super::Sheet)>);
+
+impl Release {
+    pub fn new(tx: std::sync::mpsc::Sender<Result<(), String>>, sheet: super::Sheet) -> Release {
+        Release(Some((tx, sheet)))
+    }
+
+    fn send(&mut self, r: Result<(), String>) {
+        if let Some((tx, sheet)) = self.0.take() {
+            drop(sheet);
+            let _ = tx.send(r);
+        }
+    }
+
+    fn sent(&self) -> bool {
+        self.0.is_none()
+    }
+}
+
+impl Drop for Release {
+    fn drop(&mut self) {
+        self.send(Err("Share failed".into()));
+    }
+}
+
+/// The first share of this process (the host may start cold).
+static COLD: AtomicBool = AtomicBool::new(true);
+
+/// What the sheet says when it never asked for the package.
+pub const NOT_OPENED: &str = "The share sheet did not open";
+
+/// Share `file` through a sheet over `asker` (a raw window handle), on
+/// this (new) thread. The caller is let go through `release` when the
+/// share ends, at the time limit ([`Clock`]), or on a failure; the thread
+/// stays while the sheet may still ask for the data.
+pub fn share(file: &Path, asker: Option<usize>, kind: Kind, max: Duration, mut release: Release) {
+    if let Err(e) = run(file, asker, kind, max, &mut release) {
+        trace(&e);
+        release.send(Err(e));
+    }
+}
+
+fn run(file: &Path, asker: Option<usize>, kind: Kind, max: Duration, release: &mut Release) -> R<()> {
+    let failed = |e: String| format!("Share failed: {e}");
     let _apt = Apartment::enter();
+    // The owner first, while this process may still bring a window up.
+    let owner = owner::Owner::new(asker).map_err(failed)?;
+    let hwnd = owner.0;
     let path = HSTRING::from(file.as_os_str());
-    let statics = factory("Windows.Storage.StorageFile", &IID_STORAGE_FILE_STATICS)?;
-    let op = statics.call_ptr_obj(6, hs(&path), "GetFileFromPathAsync")?;
-    let sfile = wait(&op, Duration::from_secs(10), "GetFileFromPathAsync")?;
-    let item = sfile.query(&IID_STORAGE_ITEM, "IStorageItem")?;
+    let statics = factory("Windows.Storage.StorageFile", &IID_STORAGE_FILE_STATICS).map_err(failed)?;
+    let op = statics.call_ptr_obj(6, hs(&path), "GetFileFromPathAsync").map_err(failed)?;
+    let sfile = wait(&op, Duration::from_secs(10), "GetFileFromPathAsync").map_err(failed)?;
+    let item = sfile.query(&IID_STORAGE_ITEM, "IStorageItem").map_err(failed)?;
     let bitmap = match kind {
         Kind::Picture => {
-            let refs = factory("Windows.Storage.Streams.RandomAccessStreamReference", &IID_STREAM_REF_STATICS)?;
-            Some(refs.call_ptr_obj(6, sfile.0, "CreateFromFile")?)
+            let refs = factory("Windows.Storage.Streams.RandomAccessStreamReference", &IID_STREAM_REF_STATICS).map_err(failed)?;
+            Some(Agile(refs.call_ptr_obj(6, sfile.0, "CreateFromFile").map_err(failed)?))
         }
         Kind::File => None,
     };
     let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let content = Arc::new(Content { item, bitmap, description: HSTRING::from(name) });
+    let content = Arc::new(Content { item: Agile(item), bitmap, description: HSTRING::from(name) });
 
-    let owner = owner::Owner::new(asker)?;
-    let hwnd = owner.0;
-    let interop = factory("Windows.ApplicationModel.DataTransfer.DataTransferManager", &IID_INTEROP)?;
+    let interop = factory("Windows.ApplicationModel.DataTransfer.DataTransferManager", &IID_INTEROP).map_err(failed)?;
     // IDataTransferManagerInterop::GetForWindow (3).
     let mut dtm = core::ptr::null_mut();
     let hr = unsafe {
         let f: unsafe extern "system" fn(*mut c_void, *mut c_void, *const GUID, *mut *mut c_void) -> HRESULT = interop.slot(3);
         f(interop.0, hwnd.0, &IID_DATA_TRANSFER_MANAGER, &mut dtm)
     };
-    check(hr, "GetForWindow")?;
-    let dtm = Com::new(dtm).ok_or("GetForWindow: nothing")?;
+    check(hr, "GetForWindow").map_err(failed)?;
+    let dtm = Com::new(dtm).ok_or("GetForWindow: nothing").map_err(|e| failed(e.into()))?;
 
-    let done = Arc::new(AtomicBool::new(false));
-    let failed: Arc<std::sync::Mutex<Option<String>>> = Arc::default();
-    let requested = Arc::new(AtomicBool::new(false));
+    let ev: Arc<Events> = Arc::default();
     let on_request = {
-        let (c, d, failed, asked) = (content.clone(), done.clone(), failed.clone(), requested.clone());
+        let (c, ev) = (content.clone(), ev.clone());
         delegate(IID_H_DATA_REQUESTED, move |_, args| {
-            asked.store(true, Ordering::SeqCst);
-            match fill(args, &c, &d) {
+            *lock(&ev.asked) = Some(Instant::now());
+            match fill(args, &c, &ev) {
                 Ok(()) => trace("package filled"),
                 Err(e) => {
                     trace(&format!("package failed: {e}"));
-                    *failed.lock().unwrap_or_else(|p| p.into_inner()) = Some(e);
-                    d.store(true, Ordering::SeqCst);
+                    *lock(&ev.failed) = Some(format!("Share failed: {e}"));
                 }
             }
             S_OK
         })
     };
-    let chosen = Arc::new(AtomicBool::new(false));
     let on_chosen = {
-        let ch = chosen.clone();
+        let ev = ev.clone();
         delegate(IID_H_TARGET_CHOSEN, move |_, _| {
-            ch.store(true, Ordering::SeqCst);
+            *lock(&ev.chosen) = Some(Instant::now());
             S_OK
         })
     };
-    let t_request = dtm.add_event(6, &on_request, "DataRequested")?;
-    let t_chosen = dtm.add_event(8, &on_chosen, "TargetApplicationChosen").ok();
+    let t_request = dtm.add_event(6, &on_request, "DataRequested").map_err(failed)?;
+    let t_chosen = match dtm.add_event(8, &on_chosen, "TargetApplicationChosen") {
+        Ok(t) => Some(t),
+        Err(e) => {
+            trace(&format!("TargetApplicationChosen not registered: {e}"));
+            None
+        }
+    };
     // IDataTransferManagerInterop::ShowShareUIForWindow (4).
     let hr = unsafe {
         let f: unsafe extern "system" fn(*mut c_void, *mut c_void) -> HRESULT = interop.slot(4);
         f(interop.0, hwnd.0)
     };
     let shown = check(hr, "ShowShareUIForWindow");
+    let ask_wait = if COLD.swap(false, Ordering::SeqCst) { ASK_WAIT_COLD } else { ASK_WAIT };
+    let mut clock = Clock { shown: Instant::now(), ask_wait, max, asked: None, chosen: None, tracked: false };
+    let mut outcome = shown.clone().map_err(failed);
+    let mut said_untracked = false;
     if shown.is_ok() {
         trace(&format!("sheet shown for {}", file.display()));
-        pump(&done, &requested, Instant::now() + max);
+        loop {
+            pump_once();
+            clock.asked = *lock(&ev.asked);
+            clock.chosen = *lock(&ev.chosen);
+            clock.tracked = ev.tracked.load(Ordering::SeqCst);
+            if clock.asked.is_some() && !clock.tracked && !said_untracked {
+                said_untracked = true;
+                eprintln!("rustshot: share: the sheet cannot say when the share ends; waiting at most {} s", SHORT_WAIT.as_secs());
+            }
+            let result = || lock(&ev.failed).clone().map_or(Ok(()), Err);
+            if ev.done.load(Ordering::SeqCst) {
+                release.send(result());
+                break;
+            }
+            match clock.step(Instant::now()) {
+                Step::Pump => {}
+                Step::GiveUp => {
+                    outcome = Err(NOT_OPENED.into());
+                    break;
+                }
+                Step::Release if !release.sent() => {
+                    trace("caller let go; the sheet may still ask for the data");
+                    release.send(result());
+                }
+                Step::Release => {}
+            }
+        }
     }
     dtm.remove_event(7, t_request);
     if let Some(t) = t_chosen {
         dtm.remove_event(9, t);
     }
     trace(&format!(
-        "ended (asked: {}, done: {}, target chosen: {})",
-        requested.load(Ordering::SeqCst),
-        done.load(Ordering::SeqCst),
-        chosen.load(Ordering::SeqCst)
+        "ended (asked: {}, done: {}, tracked: {}, target chosen: {})",
+        clock.asked.is_some(),
+        ev.done.load(Ordering::SeqCst),
+        clock.tracked,
+        clock.chosen.is_some()
     ));
     drop(owner);
-    shown?;
-    match failed.lock().unwrap_or_else(|p| p.into_inner()).take() {
-        Some(e) => Err(e),
-        None => Ok(()),
-    }
+    outcome
 }
 
 #[cfg(test)]
@@ -822,19 +1042,6 @@ mod tests {
         b[6] = (b[6] & 0x0f) | 0x50;
         b[8] = (b[8] & 0x3f) | 0x80;
         GUID::from_u128(u128::from_be_bytes(b))
-    }
-
-    /// The pump stops when the share ends, at the time limit, or when the
-    /// sheet never asks for the package (another one was up).
-    #[test]
-    fn the_pump_stops_in_time() {
-        let t0 = Instant::now();
-        let until = t0 + Duration::from_secs(600);
-        assert!(keep_pumping(false, false, t0, t0 + Duration::from_secs(1), until));
-        assert!(!keep_pumping(false, false, t0, t0 + ASK_WAIT, until), "never asked");
-        assert!(keep_pumping(false, true, t0, t0 + Duration::from_secs(60), until), "asked: until it ends");
-        assert!(!keep_pumping(true, true, t0, t0 + Duration::from_secs(2), until), "ended");
-        assert!(!keep_pumping(false, true, t0, until, until), "time limit");
     }
 
     #[test]
@@ -897,6 +1104,7 @@ mod tests {
             assert!(list.query(&IID_ITERABLE_ITEM, "q").is_ok());
             assert!(list.query(&IID_AGILE, "q").is_ok());
             assert!(list.query(&IID_ITERATOR_ITEM, "q").is_err());
+            assert!(list.query(&IID_MARSHAL, "q").is_ok(), "free-threaded");
             let it = list.get_obj(6, "First").unwrap();
             assert!(it.query(&IID_ITERATOR_ITEM, "q").is_ok());
             assert_eq!(it.get::<u8>(7, "HasCurrent").unwrap(), 1);
@@ -940,6 +1148,12 @@ mod tests {
         assert!(d.query(&IID_H_SHARE_CANCELED, "q").is_ok());
         assert!(d.query(&IID_UNKNOWN, "q").is_ok());
         assert!(d.query(&IID_H_DATA_REQUESTED, "q").is_err());
+        // IMarshal: the aggregated free-threaded marshaler; it holds the
+        // delegate while it lives.
+        let m = d.query(&IID_MARSHAL, "IMarshal").expect("IMarshal");
+        let back = m.query(&IID_H_SHARE_CANCELED, "back to the delegate").unwrap();
+        assert_eq!(back.0, d.0, "its IUnknown is the delegate's");
+        drop((m, back));
         let hr = unsafe {
             let f: unsafe extern "system" fn(*mut c_void, *mut c_void, *mut c_void) -> HRESULT = d.slot(3);
             f(d.0, core::ptr::null_mut(), core::ptr::null_mut())
@@ -951,25 +1165,69 @@ mod tests {
         assert_eq!(Arc::strong_count(&hits), 1, "the closure went with the delegate");
     }
 
-    /// Live: the sheet comes up for a PNG (`RUSTSHOT_SHARE_TRACE=1` says
-    /// "package filled") and the share thread lets go after
-    /// `RUSTSHOT_SHARE_LIVE_SECS` (4) with nothing shared. The sheet itself
-    /// stays until dismissed by hand (Esc or a click elsewhere). Run by
-    /// hand: `cargo test share::win -- --ignored --nocapture`.
+    /// Manual: the sheet comes up for a PNG; press Esc on it. With
+    /// `RUSTSHOT_SHARE_TRACE=1` the trace says "package filled", then
+    /// "ended (asked: true, done: true, …)", and the call returns Ok well
+    /// before the limit. Run by hand:
+    /// `cargo test share::win::tests::manual -- --ignored --nocapture`.
     #[test]
-    #[ignore]
-    fn live_sheet_opens_and_closes() {
+    #[ignore = "manual: opens a system sheet; press Esc"]
+    fn manual_sheet_opens_and_esc_cancels() {
         let dir = std::env::temp_dir().join(format!("rustshot-share-live-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("live.png");
         std::fs::write(&f, crate::pixbuf::PixBuf::from_pixel(64, 48, [30, 120, 220, 255]).to_png().unwrap()).unwrap();
+        let sheet = crate::share::Sheet::claim().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
         let t0 = Instant::now();
-        let secs = std::env::var("RUSTSHOT_SHARE_LIVE_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(4);
-        let r = share(&f, None, Kind::Picture, Duration::from_secs(secs));
-        assert_eq!(r, Ok(()));
-        // Up until the limit, or 5 s when another sheet was already up
-        // (the sheet outlives its owner: dismiss it by hand, Esc).
-        assert!(t0.elapsed() >= Duration::from_secs(secs.min(ASK_WAIT.as_secs()).saturating_sub(1)));
+        let p = f.clone();
+        std::thread::spawn(move || share(&p, None, Kind::Picture, Duration::from_secs(120), Release::new(tx, sheet)));
+        assert_eq!(rx.recv().unwrap(), Ok(()));
+        assert!(t0.elapsed() < Duration::from_secs(110), "Esc ended the share (not the limit)");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The caller goes when the sheet never asks (cold: 15 s, else 5 s);
+    /// asked, at the limit (tracked) or 60 s after (not tracked), sooner
+    /// once a target was chosen; never with an overflow.
+    #[test]
+    fn the_clock_lets_go_in_time() {
+        let t0 = Instant::now();
+        let s = |n: u64| t0 + Duration::from_secs(n);
+        let mut c = Clock { shown: t0, ask_wait: ASK_WAIT_COLD, max: Duration::from_secs(600), asked: None, chosen: None, tracked: true };
+        assert_eq!(c.step(s(14)), Step::Pump, "a cold host gets 15 s");
+        assert_eq!(c.step(s(15)), Step::GiveUp);
+        c.ask_wait = ASK_WAIT;
+        assert_eq!(c.step(s(5)), Step::GiveUp, "later shares 5 s");
+        c.asked = Some(s(1));
+        assert_eq!(c.step(s(300)), Step::Pump, "asked and tracked: until the limit");
+        assert_eq!(c.step(s(600)), Step::Release);
+        c.chosen = Some(s(10));
+        assert_eq!(c.step(s(69)), Step::Pump);
+        assert_eq!(c.step(s(70)), Step::Release, "60 s after a target was chosen");
+        c.chosen = None;
+        c.tracked = false;
+        assert_eq!(c.step(s(60)), Step::Pump);
+        assert_eq!(c.step(s(61)), Step::Release, "no end events: 60 s");
+        c.max = Duration::MAX;
+        c.tracked = true;
+        assert_eq!(c.step(s(10_000)), Step::Pump, "no overflow");
+    }
+
+    /// The caller hears once: the first result; dropped unsent, a failure;
+    /// the sheet is free when it has heard.
+    #[test]
+    fn release_tells_the_caller_once() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut r = Release::new(tx, crate::share::Sheet::claim().unwrap());
+        assert!(crate::share::Sheet::claim().is_none());
+        r.send(Ok(()));
+        assert!(r.sent() && crate::share::Sheet::claim().is_some());
+        r.send(Err("late".into()));
+        drop(r);
+        assert_eq!(rx.try_iter().collect::<Vec<_>>(), [Ok(())]);
+        let (tx, rx) = std::sync::mpsc::channel();
+        drop(Release::new(tx, crate::share::Sheet::claim().unwrap()));
+        assert!(rx.recv().unwrap().is_err());
     }
 }
