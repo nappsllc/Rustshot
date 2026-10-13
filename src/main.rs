@@ -231,6 +231,12 @@ fn parse_args(argv: &[std::ffi::OsString]) -> Result<Parsed, String> {
     parse_from(&args)
 }
 
+/// The parse error for an argument that does not belong (one function for
+/// the dozen places that say it).
+fn unexpected(a: &str) -> String {
+    format!("unexpected argument '{a}'")
+}
+
 /// Hand-rolled argument parser (replaces clap for binary size).
 fn parse_from(args: &[String]) -> Result<Parsed, String> {
     if args.iter().any(|a| a == "-h" || a == "--help")
@@ -256,7 +262,7 @@ fn parse_from(args: &[String]) -> Result<Parsed, String> {
 
     let (name, rest) = match args.first() {
         Some(a) if !a.starts_with('-') => (Some(a.as_str()), &args[1..]),
-        Some(a) => return Err(format!("unexpected argument '{a}'")),
+        Some(a) => return Err(unexpected(a)),
         None => (None, args),
     };
 
@@ -274,47 +280,47 @@ fn parse_from(args: &[String]) -> Result<Parsed, String> {
                 match a.as_str() {
                     f if f == update_install::AFTER_UPDATE_FLAG && !after_update && !force => after_update = true,
                     "--force" if !force => force = true,
-                    a => return Err(format!("unexpected argument '{a}'")),
+                    a => return Err(unexpected(a)),
                 }
             }
             Some(Cmd::Daemon { after_update, force, plain: false })
         }
         Some("update") => {
             if let Some(a) = rest.first() {
-                return Err(format!("unexpected argument '{a}'"));
+                return Err(unexpected(a));
             }
             Some(Cmd::Update)
         }
         Some("history") => {
             let list = rest.first().is_some_and(|a| a == "--list");
             if let Some(a) = rest.get(list as usize) {
-                return Err(format!("unexpected argument '{a}'"));
+                return Err(unexpected(a));
             }
             Some(Cmd::History { list })
         }
         Some("settings") => {
             if let Some(a) = rest.first() {
-                return Err(format!("unexpected argument '{a}'"));
+                return Err(unexpected(a));
             }
             Some(Cmd::Settings)
         }
         Some("launcher") => {
             if let Some(a) = rest.first() {
-                return Err(format!("unexpected argument '{a}'"));
+                return Err(unexpected(a));
             }
             Some(Cmd::Launcher)
         }
         Some("screenclip") => match rest {
             [uri] => Some(Cmd::Screenclip(uri.clone())),
             [] => return Err("missing URI for screenclip".into()),
-            [_, a, ..] => return Err(format!("unexpected argument '{a}'")),
+            [_, a, ..] => return Err(unexpected(a)),
         },
         Some("register-screenclip") => match rest {
             [v] if v == "on" => Some(Cmd::RegisterScreenclip(true)),
             [v] if v == "off" => Some(Cmd::RegisterScreenclip(false)),
             [v] => return Err(format!("expected on or off, got '{v}'")),
             [] => return Err("missing on|off for register-screenclip".into()),
-            [_, a, ..] => return Err(format!("unexpected argument '{a}'")),
+            [_, a, ..] => return Err(unexpected(a)),
         },
         Some("config") => {
             let mut check = false;
@@ -322,7 +328,7 @@ fn parse_from(args: &[String]) -> Result<Parsed, String> {
                 if a == "--check" {
                     check = true;
                 } else {
-                    return Err(format!("unexpected argument '{a}'"));
+                    return Err(unexpected(a));
                 }
             }
             Some(Cmd::Config { check })
@@ -388,7 +394,7 @@ fn parse_capture(args: &[String]) -> Result<CaptureArgs, String> {
                 }
                 "--filename" => out.filename = Some(opt_value(args, &mut i, attached, name)?),
                 "--region" => out.region = Some(opt_value(args, &mut i, attached, name)?),
-                other => return Err(format!("unexpected argument '{other}'")),
+                other => return Err(unexpected(other)),
             }
             i += 1;
             continue;
@@ -422,7 +428,7 @@ fn parse_capture(args: &[String]) -> Result<CaptureArgs, String> {
             i += 1;
             continue;
         }
-        return Err(format!("unexpected argument '{tok}'"));
+        return Err(unexpected(tok));
     }
     Ok(out)
 }
