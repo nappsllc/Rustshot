@@ -129,36 +129,43 @@ section:
   previews it before **Apply**), *Launch at login* (hidden for store
   installs), *Show icon in tray* (off, the daemon runs without an
   icon: the hotkeys and a second `rustshot` launch still capture, and the
-  row warns when no capture hotkey is set), *Copy to clipboard after
+  row warns when no capture hotkey is set) and the daily update check.
+- **Capture:** *Use Win+Shift+S and Print Screen* (Windows: see
+  [Win+Shift+S and Print Screen](#winshifts-and-print-screen-windows)),
+  *Snap to windows*, *Accept on select* (Off, Copy, Save; see
+  [Selecting](#selecting)); after a capture: *Copy to clipboard after
   capture* (a save or upload also copies the image), *Play shutter
   sound*, *Show thumbnail after capture* (see
-  [Pins and the thumbnail](#pins-and-the-thumbnail)), *Show hints in the
-  overlay* (the key card when it opens), *Save to* (with **Change…**) and
-  the file name with an example and PNG / JPG.
-- **Capture:** daily subfolders and their pattern, *Ask where to save*,
-  the format (PNG, JPG or BMP) and JPEG quality, the file-name pattern
-  editor (see [Saving](#saving)), the overlay's UI size (Auto follows each
-  display's scaling; 75-200 % on top of it), *Snap to windows*, *Show
-  magnifier* and *Square magnifier*, *Accept on select* (Off, Copy, Save;
-  see [Selecting](#selecting)), *Use
-  Win+Shift+S and Print Screen* (Windows: see
-  [Win+Shift+S and Print Screen](#winshifts-and-print-screen-windows)), the
-  renderer (Windows) and *Reset tool sizes & colors*.
+  [Pins and the thumbnail](#pins-and-the-thumbnail)).
+- **Overlay:** *Show magnifier* and *Square magnifier*, *Show hints in
+  the overlay* (the key card when it opens), the UI size (Auto follows
+  each display's scaling; 75-200 % on top of it), *Reset tool sizes &
+  colors* and the renderer (Windows).
+- **Saving:** *Save to* (with **Change…**), *Ask where to save*, the
+  format (PNG, JPG or BMP) and JPEG quality.
+- **File names:** daily subfolders and their pattern, and the file-name
+  pattern editor (see [Saving](#saving)).
+- **History:** *Keep a history of captures*, how long and how much it
+  keeps, *Clear history…* (see [History and the Edit window](#history-and-the-edit-window)).
 - **Recording:** what video mode's panel starts with: format (MP4 or
   GIF), frame rate (MP4 30 or 60, GIF 10, 15 or 24 fps), MP4 quality, a
-  GIF's max length (15, 30 or 60 s), the 3-2-1 countdown, system sound,
-  microphone and its device, the camera bubble (camera, shape, size 120,
-  160, 200 or 240 px, mirror, ring color and width); on Linux also the MP4 encoder (Auto,
-  ffmpeg or OpenH264) with what is installed ("ffmpeg found at
-  /usr/bin/ffmpeg", "OpenH264 downloaded", or not available).
-- **Key bindings:** the global hotkeys, every editor shortcut (see
-  below) and the *While recording* chords (see [Recording](#recording)). Click a row (or a key cap) and press the new keys; <kbd>Esc</kbd>
-  cancels, <kbd>Backspace</kbd> unbinds. **Reset to defaults** (top right)
-  puts every key back.
+  GIF's max length (15, 30 or 60 s), the 3-2-1 countdown, on Linux the
+  MP4 encoder (Auto, ffmpeg or OpenH264) with what is installed ("ffmpeg
+  found at /usr/bin/ffmpeg", "OpenH264 downloaded", or not available),
+  system sound, and the microphone with its device.
+- **Camera:** the camera bubble (camera, shape, size 120, 160, 200 or
+  240 px, mirror, ring color and width).
 - **Upload:** the Imgur client id and *Copy link after upload*.
-- **About:** the version with *Check for updates* (the update dialog),
-  the daily update check, and links to the website, the source, the
-  issue tracker, the release notes and the licenses.
+- **Shortcuts › Global** (the global hotkeys), **Shortcuts › Recording**
+  (the record hotkey and the *While recording* chords, see
+  [Recording](#recording)), **Shortcuts › Overlay tools** and **Overlay
+  actions** (every editor shortcut, see below). Click a row (or a key
+  cap) and press the new keys; <kbd>Esc</kbd> cancels,
+  <kbd>Backspace</kbd> unbinds. **Reset to defaults** (top right) puts
+  every key back.
+- **About:** the version with *Check for updates* (the update dialog)
+  and links to the website, the source, the issue tracker, the release
+  notes and the licenses.
 
 *Open config file* (bottom left) opens `config.toml`.
 
@@ -197,9 +204,9 @@ toolbar's Save As button, between Save and Save to Desktop) always asks
 extension you pick), and *Ask where to save* makes
 <kbd>Ctrl</kbd>+<kbd>S</kbd> ask too. The clipboard and uploads stay PNG.
 
-In Settings › General: the folder (with **Change…**) and the file name;
-in Settings › Capture: daily subfolders and their pattern, the format (JPG
-has a quality slider, 1-100, default 90) and the pattern editor. The token
+In Settings › Saving: the folder (with **Change…**), the format (JPG
+has a quality slider, 1-100, default 90); in Settings › File names: daily
+subfolders and their pattern, and the file-name pattern editor. The token
 buttons insert at the caret of the last pattern field you used; the line
 above them shows where the next capture would go. **Restore** brings back
 `%F_%H-%M`, **Clear** empties it. With *Copy to clipboard after capture*
@@ -271,7 +278,7 @@ pointer is on it), in place of the "Copied" / "Saved" toast; errors,
 uploads and recordings keep the toast. Point at it for **Copy**, **Save**
 (to the save folder), **Pin** and **×**; on Windows drag it into another
 app or a folder to drop the PNG file (the saved file, or a temporary copy).
-Turn it off with *Show thumbnail after capture* in Settings › General
+Turn it off with *Show thumbnail after capture* in Settings › Capture
 (`show_thumbnail = false`). When History keeps the capture, the card (and
 the toast, with the thumbnail off) starts with an accent **Edit** that
 opens it in the Edit window.
@@ -287,7 +294,7 @@ what is known about it (when, the size, the file it was saved to, the
 monitor, the window and app it came from, the uploaded link). Recordings
 keep their file's place and a poster. Entries older than 30 days go, then
 the oldest until the history fits in 2 GB (`history_days`,
-`history_max_mb`; Settings › Capture › History), checked when Rustshot
+`history_max_mb`; Settings › History), checked when Rustshot
 starts, every hour and when the limits change. Turning *Keep a history
 of captures* off (`history = false`) keeps nothing new; what is already
 kept still expires (History shows how many and offers **Clear
@@ -374,7 +381,7 @@ left of or above the primary, `0, 0` is the top-left of the whole capture)
 and color (`640, 360 · #1e2027`); a thin accent crosshair runs
 through the pointer across the whole overlay. It flips to stay on screen
 and off the pointer. <kbd>H</kbd> copies that color as `#rrggbb`.
-Settings › Capture *Show magnifier* turns it off, *Square magnifier* makes
+Settings › Overlay *Show magnifier* turns it off, *Square magnifier* makes
 it square (`magnifier`, `magnifier_square`).
 
 **Right-click** anywhere (but on an object with the select tool) opens a
@@ -539,8 +546,8 @@ the menu of the Save button's chevron. Object actions
 while objects are selected.
 
 The keys above (except arrows, <kbd>Tab</kbd>, the mouse wheel and
-hold-while-drawing modifiers) can be remapped in Settings › Key bindings:
-click its key cap, press the new keys (<kbd>Esc</kbd> cancels,
+hold-while-drawing modifiers) can be remapped in Settings › Shortcuts ›
+Overlay tools and Overlay actions: click its key cap, press the new keys (<kbd>Esc</kbd> cancels,
 <kbd>Backspace</kbd> unbinds it), and **Reset to defaults** goes back to the
 defaults. Rebinding sets a single chord; an action with two (Redo's
 <kbd>Ctrl</kbd>+<kbd>Y</kbd>, Copy text's <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd>) gets its second one
@@ -628,7 +635,7 @@ recording**) and on global chords that are registered only while it runs:
 | Mute the microphone | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd> |
 | Hide / show the pill | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd> |
 
-Remap them in Settings › Key bindings › *While recording* (or
+Remap them in Settings › Shortcuts › Recording (or
 `rec_pause`, `rec_mute`, `rec_hide_pill` in `[shortcuts]`); one that
 cannot be registered is reported like any other hotkey. (They are not
 <kbd>Win</kbd>+<kbd>Shift</kbd> chords like the capture hotkeys: on
@@ -766,7 +773,7 @@ rec_linux_encoder = "auto"        # Linux MP4: "auto", "ffmpeg" or "openh264"
 ## Updates
 
 The daemon checks GitHub for a new release once a day (turn it off in
-Settings › About or with `check_updates = false`); the tray's *Check for
+Settings › General or with `check_updates = false`); the tray's *Check for
 updates* (Windows) or `rustshot update` (any platform) checks now. A new
 version opens a dialog with the release notes (on Linux the dialog is
 *(experimental)*; on macOS the daily check only announces it on stderr and
