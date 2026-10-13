@@ -230,6 +230,94 @@ fn redact_selected_words_in_text_mode() {
     crate::ocr::FAKE_LINES.with(|f| f.set(None));
 }
 
+/// An export asked for while Redact runs waits for it: the capture goes
+/// out with its fills, never without.
+#[test]
+fn an_export_waits_for_redact() {
+    use crate::history::{Store, tests::TempRoot};
+    let _ = (crate::pin::take_opened(), crate::notice::take_shown());
+    let root = TempRoot::new("redact-wait");
+    let mut a = app();
+    a.kind = RunKind::Daemon;
+    a.history_root = Some(root.0.clone());
+    crate::ocr::FAKE_LINES.with(|f| f.set(Some(doc)));
+    key(&mut a, 'R' as u32, SHIFT);
+    key(&mut a, 'P' as u32, CTRL);
+    if matches!(a.st, State::Edit(_)) {
+        assert_eq!(notice(&mut a), "Redacting\u{2026} it goes on when done");
+        assert!(edit_of(&mut a).snip.queued.is_some());
+    }
+    let t0 = Instant::now();
+    while matches!(a.st, State::Edit(_)) {
+        assert!(t0.elapsed() < Duration::from_secs(10), "the pin never went out");
+        std::thread::sleep(Duration::from_millis(2));
+        a.on_event(Ev::Timer);
+    }
+    let id = a.last_entry.clone().expect("kept");
+    crate::history::flush(Duration::from_secs(20));
+    let st = Store::new(&root.0);
+    let objs = st.objects(&st.get(&id).unwrap()).unwrap();
+    assert_eq!(objs.iter().filter(|o| matches!(o, Obj::RectFill { .. })).count(), 2, "pinned with the fills: {objs:?}");
+    // Enter waits too (a run that never delivers here).
+    let mut a = app();
+    let (_tx, rx) = std::sync::mpsc::channel();
+    let e = edit_of(&mut a);
+    e.snip.ocr = Some(snip::OcrRun { rx, want: snip::Want::Redact, origin: Pt::new(0.0, 0.0), area: SEL, sel: e.sel, mask: None });
+    key(&mut a, wind::key::RETURN, NONE);
+    assert!(matches!(a.st, State::Edit(_)), "not before the fills");
+    assert_eq!(edit_of(&mut a).snip.queued, Some(snip::Queued::Enter));
+    crate::ocr::FAKE_LINES.with(|f| f.set(None));
+    let _ = crate::pin::take_opened();
+}
+
+/// The selection moved while Redact read it: the old words are dropped
+/// and the new area is read.
+#[test]
+fn redact_reads_again_when_the_selection_moved() {
+    let mut a = app();
+    // Slow enough that the nudge comes first.
+    crate::ocr::FAKE_LINES.with(|f| {
+        f.set(Some(|img| {
+            std::thread::sleep(Duration::from_millis(300));
+            doc(img)
+        }))
+    });
+    key(&mut a, 'R' as u32, SHIFT);
+    // Nudged right by one pixel before the words came.
+    key(&mut a, wind::key::RIGHT, NONE);
+    settle_ocr(&mut a);
+    let e = edit_of(&mut a);
+    let first = e.objects.iter().find_map(|o| if let Obj::RectFill { r, .. } = o { Some(*r) } else { None }).expect("redacted");
+    assert_eq!(first.x, 188.0, "at the new place (one pixel right)");
+    crate::ocr::FAKE_LINES.with(|f| f.set(None));
+}
+
+/// Text mode and Redact see only what the lasso keeps: the picture read
+/// is cut by it, and words outside it are dropped.
+#[test]
+fn ocr_reads_only_inside_the_lasso() {
+    let mut a = app();
+    key(&mut a, 'F' as u32, SHIFT);
+    // A lasso over the first line's first two words only (crop px 20..160
+    // across, 20..38 down; the selection starts at its box).
+    draw_lasso(&mut a, &[Pt::new(110.0, 90.0), Pt::new(270.0, 90.0), Pt::new(270.0, 125.0), Pt::new(110.0, 125.0)]);
+    crate::ocr::FAKE_LINES.with(|f| {
+        f.set(Some(|img| {
+            // The corner outside the lasso is cut (transparent white).
+            let w = img.width() as usize;
+            assert_eq!(img.as_raw()[(17 * w + 80) * 4 + 3], 255, "inside");
+            let l = |y: f32, ws: &[&str]| Line { words: ws.iter().enumerate().map(|(i, t)| Word { text: (*t).into(), x: 10.0 + i as f32 * 70.0, y, w: 60.0, h: 18.0 }).collect() };
+            Ok(vec![l(5.0, &["Hello", "Rustshot", "world"])])
+        }))
+    });
+    key(&mut a, 'O' as u32, NONE);
+    settle_ocr(&mut a);
+    let tm = edit_of(&mut a).snip.text.as_ref().expect("Text mode");
+    let words: Vec<&str> = tm.lines.iter().flat_map(|l| l.words.iter().map(|w| w.text.as_str())).collect();
+    assert_eq!(words, ["Hello", "Rustshot"], "the word outside the lasso is dropped");
+    crate::ocr::FAKE_LINES.with(|f| f.set(None));
+}
+
 /// A triangle lasso (capture px).
 fn triangle() -> [Pt; 3] {
     [Pt::new(300.0, 200.0), Pt::new(700.0, 200.0), Pt::new(500.0, 600.0)]

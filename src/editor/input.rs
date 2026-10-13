@@ -698,6 +698,10 @@ impl Edit {
         if act != Act::SaveMenu {
             self.save_menu = false;
         }
+        // An export waits for a Quick Redact in flight.
+        if snip::exports(act) && self.queue_for_redact(snip::Queued::Act(act)) {
+            return;
+        }
         // A pick from the Blur / Invert menu picks (never toggles off).
         let from_menu = std::mem::take(&mut self.slot_menu);
         // The Copy text menu closes on a pick (a kind's checkbox keeps it).

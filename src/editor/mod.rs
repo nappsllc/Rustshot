@@ -628,9 +628,10 @@ impl App {
         self.poll_upload();
         self.poll_ocr();
         // Text mode's words or Quick Redact's finds arrived.
-        if let State::Edit(e) = &mut self.st
-            && e.poll_snip()
-        {
+        // (An export queued behind Redact may finish the capture.)
+        let mut snipped = false;
+        self.edit_tx(|_, e| snipped = e.poll_snip());
+        if snipped {
             self.repaint();
         }
         self.poll_delay();

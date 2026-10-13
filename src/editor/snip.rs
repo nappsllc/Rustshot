@@ -66,6 +66,23 @@ pub(super) struct OcrRun {
     /// The crop's top-left in the capture, and the area recognized.
     pub origin: Pt,
     pub area: FRect,
+    /// The selection and lasso it read (a change since: read again).
+    pub sel: Option<FRect>,
+    pub mask: Option<Vec<Pt>>,
+}
+
+/// What waits for a Quick Redact in flight (an export never goes out
+/// without its blurs).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(super) enum Queued {
+    Act(Act),
+    /// Enter: accept.
+    Enter,
+}
+
+/// The acts that export the capture: they wait for Redact.
+pub(super) fn exports(a: Act) -> bool {
+    matches!(a, Act::Copy | Act::Save | Act::SaveAs | Act::SaveDesktop | Act::OpenWith | Act::Upload | Act::Pin | Act::Accept)
 }
 
 /// Text mode: the words (capture px, reading order) and the selection.
@@ -145,6 +162,8 @@ pub(super) struct Snip {
     /// The area Text mode's bar was laid out in by the last frame (its
     /// presses are hit-tested there).
     pub bar_area: Option<FRect>,
+    /// An export asked for while Redact runs: done once it finished.
+    pub queued: Option<Queued>,
 }
 
 /// One of Text mode's buttons.
@@ -204,6 +223,22 @@ fn grow(r: FRect, g: f32) -> FRect {
     FRect { x: r.x - g, y: r.y - g, w: r.w + 2.0 * g, h: r.h + 2.0 * g }
 }
 
+/// The words of `lines` whose box centre is inside `area` and the lasso
+/// `mask` (lines left empty go).
+pub fn keep_inside(lines: Vec<Line>, area: FRect, mask: Option<&[Pt]>) -> Vec<Line> {
+    lines
+        .into_iter()
+        .map(|mut l| {
+            l.words.retain(|w| {
+                let c = Pt::new(w.x + w.w / 2.0, w.y + w.h / 2.0);
+                hit(area, c) && mask.is_none_or(|m| mask::contains(m, c))
+            });
+            l
+        })
+        .filter(|l| !l.words.is_empty())
+        .collect()
+}
+
 /// The lines moved by `origin` (the crop's place in the capture).
 pub fn offset_lines(lines: Vec<Line>, origin: Pt) -> Vec<Line> {
     lines
@@ -252,16 +287,21 @@ pub fn border_median(img: &PixBuf) -> Option<C4> {
     if w == 0 || h == 0 {
         return None;
     }
+    let raw = img.as_raw();
+    let at = |x: u32, y: u32| -> [u8; 4] {
+        let i = (y as usize * w as usize + x as usize) * 4;
+        [raw[i], raw[i + 1], raw[i + 2], raw[i + 3]]
+    };
     let mut px = Vec::new();
     for x in 0..w {
-        px.push(img.get_pixel(x, 0));
-        px.push(img.get_pixel(x, h - 1));
+        px.push(at(x, 0));
+        px.push(at(x, h - 1));
     }
     for y in 1..h.saturating_sub(1) {
-        px.push(img.get_pixel(0, y));
-        px.push(img.get_pixel(w - 1, y));
+        px.push(at(0, y));
+        px.push(at(w - 1, y));
     }
-    let mut ch = |i: usize| {
+    let ch = |i: usize| {
         let mut v: Vec<u8> = px.iter().map(|p| p[i]).collect();
         v.sort_unstable();
         v[v.len() / 2]
@@ -364,9 +404,12 @@ impl Edit {
         if self.dirty {
             self.rebuild();
         }
-        let img = self.export(area);
+        // Only what the capture keeps: the lasso cuts the picture read
+        // (the crop is the area already).
+        let img = self.masked(self.export(area), area);
         let origin = Pt::new(area.x.floor().max(0.0), area.y.floor().max(0.0));
-        self.snip.ocr = Some(OcrRun { rx: ocr::spawn_lines(img), want, origin, area });
+        let mask = self.live_mask().map(<[Pt]>::to_vec);
+        self.snip.ocr = Some(OcrRun { rx: ocr::spawn_lines(img), want, origin, area, sel: self.sel, mask });
         let msg = if want == Want::Text { "Recognizing text\u{2026}" } else { "Looking for sensitive text\u{2026}" };
         self.notice = Some(Toast::new(msg, ToastKind::Info));
     }
@@ -381,14 +424,43 @@ impl Edit {
             Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(OcrError::Failed("the recognizer stopped".into())),
         };
         let run = self.snip.ocr.take().expect("a run");
+        // The selection (or its lasso) changed meanwhile: these words are
+        // of another area; read the new one.
+        if run.sel != self.sel || run.mask.as_deref() != self.live_mask() || run.area != self.ocr_area() {
+            self.start_ocr(run.want);
+            return true;
+        }
         self.ocr_done(run.want, run.origin, run.area, res);
+        if run.want == Want::Redact {
+            match self.snip.queued.take() {
+                Some(Queued::Act(a)) => self.apply_act(a, Pt::new(0.0, 0.0)),
+                Some(Queued::Enter) => accept_key(self),
+                None => {}
+            }
+        }
+        true
+    }
+
+    /// Redact runs: an export waits for it (true: `a` was queued).
+    pub(super) fn queue_for_redact(&mut self, q: Queued) -> bool {
+        if !self.snip.ocr.as_ref().is_some_and(|o| o.want == Want::Redact) {
+            return false;
+        }
+        self.snip.queued = Some(q);
+        self.notice = Some(Toast::new("Redacting\u{2026} it goes on when done", ToastKind::Info));
         true
     }
 
     /// What a recognition found, for `want`.
     pub(super) fn ocr_done(&mut self, want: Want, origin: Pt, area: FRect, res: Result<Vec<Line>, OcrError>) {
         let lines = match res {
-            Ok(l) => offset_lines(ocr::ordered(l), origin),
+            Ok(l) => {
+                let lines = offset_lines(ocr::ordered(l), origin);
+                // Words outside what the capture keeps (the lasso, the
+                // area) are dropped.
+                let mask = self.live_mask().map(<[Pt]>::to_vec);
+                keep_inside(lines, area, mask.as_deref())
+            }
             Err(e) => {
                 let n = ocr::note(&Err(e), Ok(()));
                 self.notice = Some(Toast::new(n.text, n.kind));
@@ -855,6 +927,9 @@ impl Edit {
                 return true;
             }
             return false;
+        }
+        if enter && self.queue_for_redact(Queued::Enter) {
+            return true;
         }
         if self.snip.ocr.is_some() && escape {
             self.snip.ocr = None;

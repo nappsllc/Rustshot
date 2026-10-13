@@ -179,6 +179,10 @@ impl Canvas {
         self.e.snip.crop = crop;
         self.e.snip.crop_hist = vec![crop];
         self.saved_crop = crop;
+        // The editor knows the lasso too: Text mode and Redact read only
+        // inside it.
+        self.e.snip.mask = mask.clone().filter(|m| crate::objects::mask::is_shape(m));
+        self.e.snip.mask_sel = self.e.sel;
         self.mask = mask.filter(|m| crate::objects::mask::is_shape(m)).map(|m| {
             let cov = crate::objects::mask::coverage(&m, size.0, size.1, Pt::new(0.0, 0.0));
             (m, cov)
@@ -193,7 +197,10 @@ impl Canvas {
     /// A recognition finished (Text mode, Quick Redact): true when a
     /// frame is due.
     pub fn poll(&mut self) -> bool {
-        self.e.poll_snip()
+        let c = self.e.poll_snip();
+        // A Save or Copy that waited for Redact goes now.
+        self.after_input();
+        c
     }
 
     /// The editor's notice (Text mode, Redact, Crop), for the window's toast.

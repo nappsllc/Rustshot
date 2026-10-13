@@ -45,6 +45,25 @@ pub fn area(pts: &[Pt]) -> f32 {
         / 2.0
 }
 
+/// `p` lies inside the closed polygon `pts` (nonzero winding, as the
+/// coverage fills it).
+pub fn contains(pts: &[Pt], p: Pt) -> bool {
+    let n = pts.len();
+    let mut wind = 0i32;
+    for i in 0..n {
+        let (a, b) = (pts[i], pts[(i + 1) % n]);
+        let cross = (b.x - a.x) * (p.y - a.y) - (p.x - a.x) * (b.y - a.y);
+        if a.y <= p.y {
+            if b.y > p.y && cross > 0.0 {
+                wind += 1;
+            }
+        } else if b.y <= p.y && cross < 0.0 {
+            wind -= 1;
+        }
+    }
+    n >= 3 && wind != 0
+}
+
 /// The bounding box of `pts` (zero-sized for none).
 pub fn bbox(pts: &[Pt]) -> FRect {
     let Some(first) = pts.first() else { return FRect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 } };
