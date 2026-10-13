@@ -552,6 +552,13 @@ static QUIT: Mutex<Option<Sender<HotEvent>>> = Mutex::new(None);
 /// until a cancelled one has cleaned up its files.
 static WORKER: Mutex<()> = Mutex::new(());
 
+/// Whether the window is open in this process (an on-demand run waits
+/// for it before it quits).
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub fn is_open() -> bool {
+    lock(&OPEN).is_some()
+}
+
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -818,8 +825,12 @@ type ApplyFn = Box<dyn Fn(&std::path::Path, [u8; 32]) -> Result<Applied, String>
 
 /// The daemon and the installer, as the worker sees them (stubbed in tests).
 struct Installer {
-    /// The daemon's event sender (`None`: no daemon, nothing installs).
+    /// The daemon's event sender (`None`: no daemon in this process).
     daemon: Option<Sender<HotEvent>>,
+    /// No daemon anywhere, by design (the tray icon is off, this is the
+    /// Settings window of a plain launch): nothing to wait for, so it
+    /// installs at once. Without it, no daemon means nothing installs.
+    standalone: bool,
     apply: ApplyFn,
 }
 
@@ -858,8 +869,10 @@ fn download(rel: Release, tx: Sender<In>, phase: Arc<AtomicU8>) {
         phase.load(Ordering::SeqCst) != CANCELLED
     };
     let fetched = update::fetch_verified(&rel, &asset, &dir, &progress);
+    let daemon = lock(&QUIT).clone();
     let inst = Installer {
-        daemon: lock(&QUIT).clone(),
+        standalone: daemon.is_none() && !crate::instance::daemon_running(),
+        daemon,
         apply: Box::new(move |file, sha| update_install::apply(&kind, file, sha)),
     };
     install(fetched, &phase, &tx, &inst);
@@ -887,7 +900,9 @@ fn install(fetched: Result<(PathBuf, [u8; 32]), String>, phase: &AtomicU8, tx: &
             // have not exited within ~30 s: so no capture may be open from
             // here on, or the user could end up with no Rustshot running.
             let daemon = inst.daemon.as_ref();
-            if !wait_idle(daemon, tx) {
+            // No daemon by design: nothing to wait for.
+            let standalone = daemon.is_none() && inst.standalone;
+            if !standalone && !wait_idle(daemon, tx) {
                 let _ = std::fs::remove_file(&file);
                 let msg = "Install failed: Rustshot is not running in the background any more";
                 let _ = tx.send(In::Installed(Err(msg.into())));
@@ -1153,6 +1168,7 @@ mod tests {
     fn installer(daemon: Option<Sender<HotEvent>>, applied: Arc<std::sync::atomic::AtomicBool>) -> Installer {
         Installer {
             daemon,
+            standalone: false,
             apply: Box::new(move |_, _| {
                 applied.store(true, Ordering::SeqCst);
                 Ok(Applied::RestartingNow)
@@ -1231,13 +1247,28 @@ mod tests {
         }
     }
 
+    /// No daemon by design (the tray icon is off; Settings of a plain
+    /// launch): it installs without waiting for one.
+    #[test]
+    fn worker_installs_standalone() {
+        let (dir, file) = fetched_file("wstand");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let applied = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let inst = Installer { standalone: true, ..installer(None, applied.clone()) };
+        install(Ok((file.clone(), [0; 32])), &AtomicU8::new(RUNNING), &tx, &inst);
+        assert!(applied.load(Ordering::SeqCst), "installed");
+        let last = rx.try_iter().last();
+        assert!(matches!(last, Some(In::Installed(Ok(Applied::RestartingNow)))), "{last:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A failed install lifts the daemon's capture gate.
     #[test]
     fn worker_failed_install_releases_the_daemon() {
         let (dir, file) = fetched_file("wfail");
         let (tx, rx) = std::sync::mpsc::channel();
         let (dtx, drx) = std::sync::mpsc::channel();
-        let inst = Installer { daemon: Some(dtx), apply: Box::new(|_, _| Err("denied".into())) };
+        let inst = Installer { daemon: Some(dtx), standalone: false, apply: Box::new(|_, _| Err("denied".into())) };
         let daemon = std::thread::spawn(move || {
             let Ok(HotEvent::RestartWhenIdle(reply)) = drx.recv() else { panic!() };
             reply.send(()).unwrap();

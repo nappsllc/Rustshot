@@ -327,6 +327,13 @@ static OPEN: Mutex<Option<Sender<()>>> = Mutex::new(None);
 /// A plan for the one-shot editor to count down first (`run_here`).
 static START: Mutex<Option<Plan>> = Mutex::new(None);
 
+/// Whether the window is open in this process (an on-demand run waits
+/// for it before it quits).
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub fn is_open() -> bool {
+    lock(&OPEN).is_some()
+}
+
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }

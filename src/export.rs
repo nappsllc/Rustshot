@@ -812,7 +812,7 @@ fn spawn_upload(png: Vec<u8>, client_id: String) -> Receiver<Result<String, Stri
     let (tx, rx) = mpsc::channel();
     #[cfg(test)]
     let fake = FAKE_UPLOAD.with(|f| f.get());
-    std::thread::spawn(move || {
+    crate::busy::spawn(move || {
         #[cfg(test)]
         let r = {
             let _ = client_id;
