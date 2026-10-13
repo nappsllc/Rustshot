@@ -132,8 +132,8 @@ pub fn caps_of(c: Option<&Chord>, split: bool) -> Vec<String> {
 pub const CSS: f32 = 1.21;
 
 /// The text "Press shortcut…" cap.
-pub const REC_TEXT: &str = "Press shortcut\u{2026}";
-pub const REC_HINT: &str = "Esc to cancel";
+pub const REC_TEXT: crate::i18n::Key = key!("ui.key.press");
+pub const REC_HINT: crate::i18n::Key = key!("ui.key.esc_cancel");
 
 /// A group label's height in the rail (logical px).
 pub const RAIL_LABEL_H: f32 = 24.0;
@@ -552,13 +552,13 @@ impl Ui<'_> {
         let cy = r.y + r.h / 2.0;
         let y = (cy - h / 2.0).round();
         if rec {
-            let w = self.px((self.text_w(11.0, REC_TEXT) + self.text_w(11.0, REC_HINT) + 18.0).max(110.0)).round();
+            let w = self.px((self.text_w(11.0, &REC_TEXT) + self.text_w(11.0, &REC_HINT) + 18.0).max(110.0)).round();
             let cr = FRect { x: r.x1() - w, y, w, h };
             fill(self, cr, 5.0, tok.acbg.fade(k));
             ring(self, cr, 5.0, tok.acrg.fade(k));
             let x = cr.x + self.px(7.0);
-            let w = self.text_at(11.0, REC_TEXT, x, cy, tok.acfg.fade(k), false);
-            self.text_at(11.0, REC_HINT, x + w + self.px(4.0), cy, tok.acfg.fade(0.6 * k), false);
+            let w = self.text_at(11.0, &REC_TEXT, x, cy, tok.acfg.fade(k), false);
+            self.text_at(11.0, &REC_HINT, x + w + self.px(4.0), cy, tok.acfg.fade(0.6 * k), false);
             return vec![cr];
         }
         let ws: Vec<f32> = caps.iter().map(|c| self.px((self.text_w(11.0, &c.text) + 14.0).max(22.0)).round()).collect();
@@ -649,7 +649,7 @@ impl Ui<'_> {
                 continue;
             }
             let width = if rec == Some(i) {
-                self.px((self.text_w(11.0, REC_TEXT) + self.text_w(11.0, REC_HINT) + 18.0).max(110.0)).round()
+                self.px((self.text_w(11.0, &REC_TEXT) + self.text_w(11.0, &REC_HINT) + 18.0).max(110.0)).round()
             } else {
                 let ws: f32 = caps[i].iter().map(|c| self.px((self.text_w(11.0, &c.text) + 14.0).max(22.0)).round()).sum();
                 ws + gap * (caps[i].len().saturating_sub(1)) as f32
@@ -675,7 +675,7 @@ impl Ui<'_> {
         let rec = ids.iter().position(|i| self.focus.recording == Some(*i));
         let cy = r.y + r.h / 2.0;
         let name = match (rec, slots.len()) {
-            (Some(i), n) if n > 1 => format!("{label} \u{b7} {}", names.get(i).copied().unwrap_or("")),
+            (Some(i), n) if n > 1 => tr!("ui.key.row_slot", label, name = names.get(i).copied().unwrap_or("")),
             _ => label.to_string(),
         };
         let size = if h < 32.0 { 12.0 } else { 12.5 };

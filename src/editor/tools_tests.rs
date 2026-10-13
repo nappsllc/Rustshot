@@ -835,7 +835,7 @@ fn background_choice_reaches_the_bubble_and_is_remembered() {
     click(&mut a, mid(rec));
     let cam = item(&mut a, |k| matches!(k, toolbar::Kind::Switch { act: Act::RecCamera, .. }));
     click(&mut a, mid(cam));
-    item(&mut a, |k| matches!(k, toolbar::Kind::Row { act: Act::RecBg(_), value: Some(crate::cam::bg::UNAVAILABLE), .. }));
+    item(&mut a, |k| matches!(k, toolbar::Kind::Row { act: Act::RecBg(_), value: Some(v), .. } if *v == crate::cam::bg::UNAVAILABLE.get()));
     let tb = ed(&mut a).toolbar.clone().unwrap();
     assert!(!tb.items.iter().any(|i| matches!(i.kind, toolbar::Kind::Seg { act: Act::RecBg(_), .. })));
     crate::cam::bg::set_available(None);

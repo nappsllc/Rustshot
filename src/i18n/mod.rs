@@ -171,6 +171,18 @@ impl std::fmt::Display for Key {
     }
 }
 
+impl From<Key> for String {
+    fn from(k: Key) -> String {
+        k.get().to_string()
+    }
+}
+
+impl From<Key> for &'static str {
+    fn from(k: Key) -> &'static str {
+        k.get()
+    }
+}
+
 impl PartialEq<str> for Key {
     fn eq(&self, o: &str) -> bool {
         self.get() == o
@@ -198,6 +210,24 @@ impl PartialEq<Key> for &str {
 impl PartialEq<Key> for String {
     fn eq(&self, o: &Key) -> bool {
         self == o.get()
+    }
+}
+
+/// A label in a table: a [`Key`], or a `&'static str` that is the same in
+/// every language (a format name, a number).
+pub trait Label: Copy {
+    fn text(self) -> &'static str;
+}
+
+impl Label for Key {
+    fn text(self) -> &'static str {
+        self.get()
+    }
+}
+
+impl Label for &'static str {
+    fn text(self) -> &'static str {
+        self
     }
 }
 

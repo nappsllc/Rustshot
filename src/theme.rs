@@ -189,7 +189,7 @@ pub fn resolve_with(cfg: &Config, probe: impl FnOnce() -> Option<bool>) -> Theme
 /// The accent swatches of Settings → General: (name, `ui_color` / dark
 /// shade, light-theme shade). Periwinkle is the theme's own (`ui_color`
 /// empty).
-pub const ACCENTS: [(&str, C4, C4); 2] = [("Teal", rgb(0x5CC8C2), rgb(0x16897F)), ("Amber", rgb(0xF2A65A), rgb(0xB8661A))];
+pub const ACCENTS: [(&str, C4, C4); 2] = [("Teal", rgb(0x5CC8C2), rgb(0x16897F)), ("Amber", rgb(0xF2A65A), rgb(0xB8661A))]; // (the names are ids)
 
 #[cfg(windows)]
 fn os_prefers_dark() -> Option<bool> {

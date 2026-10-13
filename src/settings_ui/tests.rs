@@ -331,7 +331,7 @@ fn screenclip_guide_flow() {
     assert_eq!(s.modal, Some(Modal::Guide { broken: true, dont_show: false }));
     let (title, text) = s.guide_texts(true);
     assert_eq!(title, "One more step to use Win+Shift+S");
-    assert!(text.starts_with(crate::screenclip_win::GUIDE_BROKEN) && text.contains("Choose defaults by link type"));
+    assert!(text.starts_with(crate::screenclip_win::GUIDE_BROKEN.get()) && text.contains("Choose defaults by link type"));
     // Enter is Open Default apps; the guide stays.
     assert_eq!(s.on(Click::Enter), vec![Act::OpenDefaultApps]);
     assert!(s.guide_away && matches!(s.modal, Some(Modal::Guide { .. })));
@@ -982,7 +982,7 @@ fn the_stored_check_is_settled_and_cached() {
 /// No public URL base: a warning, and the copied link is the endpoint's.
 #[test]
 fn an_empty_public_url_warns() {
-    assert_eq!(upload::public_help(" "), (upload::PUBLIC_WARNING, true));
+    assert_eq!(upload::public_help(" "), (upload::PUBLIC_WARNING.get(), true));
     assert!(upload::PUBLIC_WARNING.starts_with("Links won't be public unless the bucket is public"));
     assert!(!upload::public_help("https://cdn.example.com").1);
 }

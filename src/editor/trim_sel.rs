@@ -11,7 +11,7 @@ use super::*;
 use crate::snap::R;
 
 /// The toast when a trim finds nothing to cut.
-pub(super) const NOTHING: &str = "Nothing to trim";
+pub(super) const NOTHING: crate::i18n::Key = key!("editor.nothing_to_trim");
 
 impl Edit {
     /// The selection tightened to its content; `None` when it stays.

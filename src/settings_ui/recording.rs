@@ -19,43 +19,44 @@ use crate::ui::compact::Tok;
 use crate::ui::Ui;
 use std::path::PathBuf;
 use crate::chan::Receiver;
+use crate::i18n::{Key, Label};
 
 /// (label, config value) tables.
 const FORMATS: [(&str, &str); 2] = [("MP4", "mp4"), ("GIF", "gif")];
-const MP4_FPS: [(&str, u32); 2] = [("30 fps", 30), ("60 fps", 60)];
-const GIF_FPS: [(&str, u32); 3] = [("10 fps", 10), ("15 fps", 15), ("24 fps", 24)];
+const MP4_FPS: [(Key, u32); 2] = [(key!("settings.recording.fps30"), 30), (key!("settings.recording.fps60"), 60)];
+const GIF_FPS: [(Key, u32); 3] = [(key!("settings.recording.fps10"), 10), (key!("settings.recording.fps15"), 15), (key!("settings.recording.fps24"), 24)];
 /// A GIF stops by itself at its max length (`rec_gif_max`, seconds).
-const GIF_MAX: [(&str, u32); 3] = [("15 s", 15), ("30 s", 30), ("60 s", 60)];
-const QUALITIES: [(&str, &str); 3] = [("Low", "low"), ("Medium", "medium"), ("High", "high")];
-const SHAPES: [(&str, &str); 3] = [("Circle", "circle"), ("Rounded", "rounded"), ("Square", "square")];
+const GIF_MAX: [(Key, u32); 3] = [(key!("settings.recording.s15"), 15), (key!("settings.recording.s30"), 30), (key!("settings.recording.s60"), 60)];
+const QUALITIES: [(Key, &str); 3] = [(key!("settings.recording.low"), "low"), (key!("settings.recording.medium"), "medium"), (key!("settings.recording.high"), "high")];
+const SHAPES: [(Key, &str); 3] = [(key!("settings.camera.circle"), "circle"), (key!("settings.camera.rounded"), "rounded"), (key!("settings.camera.square"), "square")];
 /// The bubble's side (logical px), as video mode's panel and the wheel
 /// size it: S / M / L / XL.
 const SIZES: [(&str, &str); 4] = [("120", "s"), ("160", "m"), ("200", "l"), ("240", "xl")];
 /// The camera's background (`rec_camera_bg`).
-pub const BACKGROUNDS: [(&str, &str); 3] = [("Off", "off"), ("Blur light", "light"), ("Blur strong", "strong")];
+pub const BACKGROUNDS: [(Key, &str); 3] = [(key!("settings.camera.bg_off"), "off"), (key!("settings.camera.bg_light"), "light"), (key!("settings.camera.bg_strong"), "strong")];
 pub const ENCODERS: [(&str, &str); 3] = [("Auto", "auto"), ("ffmpeg", "ffmpeg"), ("OpenH264", "openh264")];
 /// The ring colors on offer after "Accent" (the default drawing palette).
-const RINGS: [(&str, &str); 10] = [
-    ("Red", "#f04438"),
-    ("Orange", "#ff8a1f"),
-    ("Yellow", "#ffc532"),
-    ("Green", "#2dc06f"),
-    ("Cyan", "#19b5d6"),
-    ("Blue", "#3b82f6"),
-    ("Purple", "#8b5cf6"),
-    ("Pink", "#ec4899"),
-    ("White", "#ffffff"),
-    ("Black", "#111318"),
+const RINGS: [(Key, &str); 10] = [
+    (key!("color.red"), "#f04438"),
+    (key!("color.orange"), "#ff8a1f"),
+    (key!("color.yellow"), "#ffc532"),
+    (key!("color.green"), "#2dc06f"),
+    (key!("color.cyan"), "#19b5d6"),
+    (key!("color.blue"), "#3b82f6"),
+    (key!("color.purple"), "#8b5cf6"),
+    (key!("color.pink"), "#ec4899"),
+    (key!("color.white"), "#ffffff"),
+    (key!("color.black"), "#111318"),
 ];
 
-const DEFAULT_MIC: &str = "Default microphone";
-const DEFAULT_CAM: &str = "Default camera";
+const DEFAULT_MIC: Key = key!("settings.recording.default_mic");
+const DEFAULT_CAM: Key = key!("settings.camera.default_camera");
 
-fn index_of<T: PartialEq + Copy>(list: &[(&str, T)], v: T) -> usize {
+fn index_of<L, T: PartialEq + Copy>(list: &[(L, T)], v: T) -> usize {
     list.iter().position(|(_, x)| *x == v).unwrap_or(0)
 }
 
-fn index_str(list: &[(&str, &str)], v: &str) -> usize {
+fn index_str<L>(list: &[(L, &str)], v: &str) -> usize {
     list.iter().position(|(_, x)| v.trim().eq_ignore_ascii_case(x)).unwrap_or(0)
 }
 
@@ -187,13 +188,13 @@ impl RecForm {
     /// The ring color choices ("Accent", the palette, and the color in
     /// the file when it is none of them) and the current one's index.
     pub fn ring_items(&self) -> (Vec<String>, usize) {
-        let mut items: Vec<String> = std::iter::once("Accent".to_string()).chain(RINGS.iter().map(|(l, _)| l.to_string())).collect();
+        let mut items: Vec<String> = std::iter::once(tr!("settings.recording.ring_accent").to_string()).chain(RINGS.iter().map(|(l, _)| l.to_string())).collect();
         let sel = if self.ring.is_empty() {
             0
         } else if let Some(i) = RINGS.iter().position(|(_, v)| *v == self.ring) {
             i + 1
         } else {
-            items.push(format!("Custom {}", self.ring));
+            items.push(tr!("settings.recording.ring_custom", color = self.ring));
             items.len() - 1
         };
         (items, sel)
@@ -222,7 +223,7 @@ pub fn device_items(default: &str, devs: Option<&[(String, String)]>, cur: &str)
         Some(i) => i,
         None => {
             // Unplugged, or the list is not here yet: the saved id stays.
-            names.push(if devs.is_some() { "Saved device (not connected)".into() } else { "Saved device".into() });
+            names.push(if devs.is_some() { tr!("settings.recording.saved_device_gone").into() } else { tr!("settings.recording.saved_device").into() });
             ids.push(cur.to_string());
             ids.len() - 1
         }
@@ -233,14 +234,14 @@ pub fn device_items(default: &str, devs: Option<&[(String, String)]>, cur: &str)
 /// The Linux encoder line: what `rec_linux_encoder = sel` uses now
 /// (`ffmpeg`: where ffmpeg is; `openh264`: whether the library is there).
 pub fn encoder_status(sel: usize, ffmpeg: Option<&std::path::Path>, openh264: bool) -> String {
-    let ff = ffmpeg.map(|p| format!("ffmpeg found at {}", p.display()));
-    let oh = openh264.then(|| "OpenH264 downloaded".to_string());
+    let ff = ffmpeg.map(|p| tr!("settings.recording.ffmpeg_found", path = p.display()));
+    let oh = openh264.then(|| tr!("settings.recording.openh264_downloaded").to_string());
     let line = match ENCODERS.get(sel).map_or("auto", |e| e.1) {
         "ffmpeg" => ff.or(oh),
         "openh264" => oh.or(ff),
         _ => ff.or(oh),
     };
-    line.unwrap_or_else(|| "Not available: Rustshot asks at the first MP4 recording".into())
+    line.unwrap_or_else(|| tr!("settings.recording.no_encoder").into())
 }
 
 /// What the worker found.
@@ -334,8 +335,8 @@ fn device_dropdown(ui: &mut Ui, id: &str, w: f32, (names, ids, sel): (Vec<String
     }
 }
 
-fn labels<T: Copy, const N: usize>(list: &[(&'static str, T); N]) -> [&'static str; N] {
-    list.map(|(l, _)| l)
+fn labels<L: Label, T: Copy, const N: usize>(list: &[(L, T); N]) -> [&'static str; N] {
+    list.map(|(l, _)| l.text())
 }
 
 /// Device dropdowns' width (logical px).
@@ -349,13 +350,13 @@ pub fn section(ui: &mut Ui, s: &mut super::Settings, tok: &Tok) {
     let show_encoder = lists.linux;
     let status = found.map(|f| encoder_status(s.form.rec.encoder, f.ffmpeg.as_deref(), f.openh264));
     let f = &mut s.form.rec;
-    let mics = device_items(DEFAULT_MIC, found.map(|f| f.mics.as_slice()), &f.mic_dev);
+    let mics = device_items(&DEFAULT_MIC, found.map(|f| f.mics.as_slice()), &f.mic_dev);
     let on = ui.enabled;
     let gif = f.gif();
-    srow(ui, tok, "Format", None, |ui| {
+    srow(ui, tok, tr!("settings.recording.format"), None, |ui| {
         ui.seg("rec_format", &labels(&FORMATS), &mut f.format, tok);
     });
-    srow(ui, tok, "Frame rate", None, |ui| {
+    srow(ui, tok, tr!("settings.recording.frame_rate"), None, |ui| {
         if f.gif() {
             ui.seg("rec_gif_fps", &labels(&GIF_FPS), &mut f.gif_fps, tok);
         } else {
@@ -363,30 +364,32 @@ pub fn section(ui: &mut Ui, s: &mut super::Settings, tok: &Tok) {
         }
     });
     ui.enabled = on && !gif;
-    srow(ui, tok, "Quality", gif.then_some("MP4 only"), |ui| {
+    srow(ui, tok, tr!("settings.recording.quality"), gif.then_some(tr!("settings.recording.mp4_only")), |ui| {
         ui.seg("rec_quality", &labels(&QUALITIES), &mut f.quality, tok);
     });
     ui.enabled = on && gif;
-    srow(ui, tok, "Max length", (!gif).then_some("GIF only: it stops by itself"), |ui| {
+    srow(ui, tok, tr!("settings.recording.max_length"), (!gif).then_some(tr!("settings.recording.gif_only")), |ui| {
         ui.seg("rec_gif_max", &labels(&GIF_MAX), &mut f.gif_max, tok);
     });
     ui.enabled = on;
-    srow(ui, tok, "Countdown", Some("3, 2, 1 before the first frame"), |ui| {
+    srow(ui, tok, tr!("settings.recording.countdown"), Some(tr!("settings.recording.countdown.help")), |ui| {
         ui.switch("rec_countdown", &mut f.countdown, tok);
     });
     if show_encoder {
-        let t = status.as_deref().unwrap_or("Looking\u{2026}");
-        srow(ui, tok, "MP4 encoder", Some(t), |ui| {
-            ui.width(120.0).dropdown("rec_linux_encoder", &labels(&ENCODERS), &mut f.encoder);
+        let t = status.as_deref().unwrap_or(tr!("settings.recording.looking"));
+        srow(ui, tok, tr!("settings.recording.mp4_encoder"), Some(t), |ui| {
+            let mut items = labels(&ENCODERS);
+            items[0] = tr!("settings.recording.encoder_auto");
+            ui.width(120.0).dropdown("rec_linux_encoder", &items, &mut f.encoder);
         });
     }
 
-    ui.sec("Sound", tok);
+    ui.sec(tr!("settings.recording.sound"), tok);
     ui.enabled = on && !gif;
-    srow(ui, tok, "System sound", gif.then_some("GIFs have no sound"), |ui| {
+    srow(ui, tok, tr!("settings.recording.system_sound"), gif.then_some(tr!("settings.recording.gif_no_sound")), |ui| {
         ui.switch("rec_system_audio", &mut f.system, tok);
     });
-    srow(ui, tok, "Microphone", None, |ui| {
+    srow(ui, tok, tr!("settings.recording.microphone"), None, |ui| {
         ui.switch("rec_mic", &mut f.mic, tok);
         ui.enabled = on && !gif && f.mic;
         device_dropdown(ui, "rec_mic_device", DEVICE_W, mics, &mut f.mic_dev);
@@ -399,12 +402,12 @@ pub fn camera(ui: &mut Ui, s: &mut super::Settings, tok: &Tok) {
     s.rec_lists.start();
     let found = s.rec_lists.found.as_ref();
     let f = &mut s.form.rec;
-    let cams = device_items(DEFAULT_CAM, found.map(|f| f.cams.as_slice()), &f.cam_dev);
+    let cams = device_items(&DEFAULT_CAM, found.map(|f| f.cams.as_slice()), &f.cam_dev);
     let no_cams = found.is_some_and(|f| f.cams.is_empty());
     let on = ui.enabled;
-    ui.sec("Camera bubble", tok);
+    ui.sec(tr!("settings.camera.camera_bubble"), tok);
     ui.enabled = on && !no_cams;
-    srow(ui, tok, "Camera", no_cams.then_some("No camera found"), |ui| {
+    srow(ui, tok, tr!("settings.camera.camera"), no_cams.then_some(tr!("settings.camera.no_camera")), |ui| {
         ui.switch("rec_camera", &mut f.camera, tok);
         if !no_cams {
             ui.enabled = on && f.camera;
@@ -412,23 +415,23 @@ pub fn camera(ui: &mut Ui, s: &mut super::Settings, tok: &Tok) {
         }
     });
     ui.enabled = on && !no_cams;
-    srow(ui, tok, "Shape", None, |ui| {
+    srow(ui, tok, tr!("settings.camera.shape"), None, |ui| {
         ui.seg("rec_camera_shape", &labels(&SHAPES), &mut f.shape, tok);
     });
-    srow(ui, tok, "Size", Some("Bubble size in px"), |ui| {
+    srow(ui, tok, tr!("settings.camera.size"), Some(tr!("settings.camera.size.help")), |ui| {
         ui.seg("rec_camera_size", &labels(&SIZES), &mut f.size, tok);
     });
-    srow(ui, tok, "Mirror", Some("Like a mirror, as most video calls show you"), |ui| {
+    srow(ui, tok, tr!("settings.camera.mirror"), Some(tr!("settings.camera.mirror.help")), |ui| {
         ui.switch("rec_camera_mirror", &mut f.mirror, tok);
     });
     let blur = crate::cam::bg::available();
     ui.enabled = on && !no_cams && blur;
-    let note = if blur { "Blurs what is behind you" } else { crate::cam::bg::UNAVAILABLE };
-    srow(ui, tok, "Background", Some(note), |ui| {
+    let note = if blur { tr!("settings.camera.background.help") } else { crate::cam::bg::UNAVAILABLE.get() };
+    srow(ui, tok, tr!("settings.camera.background"), Some(note), |ui| {
         ui.seg("rec_camera_bg", &labels(&BACKGROUNDS), &mut f.bg, tok);
     });
     ui.enabled = on && !no_cams;
-    srow(ui, tok, "Ring", Some("Color and width of the outline"), |ui| {
+    srow(ui, tok, tr!("settings.camera.ring"), Some(tr!("settings.camera.ring.help")), |ui| {
         ui.width(120.0).slider("rec_camera_ring_width", &mut f.ring_w, 0, config::RING_WIDTH_MAX as u8);
         let (items, sel) = f.ring_items();
         let refs: Vec<&str> = items.iter().map(String::as_str).collect();

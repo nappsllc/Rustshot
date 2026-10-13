@@ -702,10 +702,10 @@ impl Ui<'_> {
         let x0 = r.x + self.px(10.0);
         match (recording, chord.as_ref()) {
             (true, _) => {
-                text(self, self.text_px, "Press a shortcut…", x0, cy, th.accent_fg.fade(k));
+                text(self, self.text_px, tr!("ui.key.press_a"), x0, cy, th.accent_fg.fade(k));
             }
             (false, None) => {
-                text(self, self.text_px, "None", x0, cy, th.text_muted.fade(k));
+                text(self, self.text_px, tr!("ui.key.none"), x0, cy, th.text_muted.fade(k));
             }
             (false, Some(c)) => {
                 let mut x = x0;

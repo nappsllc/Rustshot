@@ -111,9 +111,9 @@ pub fn place_top(sel: FRect, area: FRect, s: f32, video: bool, avoid: Option<FRe
 /// The value shown after the Max length label.
 fn max_len_text(n: u32) -> &'static str {
     match n {
-        15 => "15 s \u{b7} then auto-stop",
-        60 => "60 s \u{b7} then auto-stop",
-        _ => "30 s \u{b7} then auto-stop",
+        15 => tr!("rec.panel.max15"),
+        60 => tr!("rec.panel.max60"),
+        _ => tr!("rec.panel.max30"),
     }
 }
 
@@ -159,9 +159,9 @@ pub fn layout(inp: &Input, rv: &RecView) -> Toolbar {
     // Source: Screen | Window | Region (F / W / R).
     let src = |v: RecSource| v == rv.source;
     seg(&mut local, x0, y, inner, SEG_H, SEG_IN, &[
-        (Act::RecSource(RecSource::Screen), "Screen", "monitor", src(RecSource::Screen), false),
-        (Act::RecSource(RecSource::Window), "Window", "window", src(RecSource::Window), false),
-        (Act::RecSource(RecSource::Region), "Region", "region", src(RecSource::Region), false),
+        (Act::RecSource(RecSource::Screen), tr!("rec.panel.screen"), "monitor", src(RecSource::Screen), false),
+        (Act::RecSource(RecSource::Window), tr!("tip.window"), "window", src(RecSource::Window), false),
+        (Act::RecSource(RecSource::Region), tr!("tip.region"), "region", src(RecSource::Region), false),
     ]);
     y += SEG_H + GAP;
     let mp4 = rv.format == RecFormat::Mp4;
@@ -199,7 +199,7 @@ pub fn layout(inp: &Input, rv: &RecView) -> Toolbar {
     };
     // Camera: the device, on/off.
     let cam_on = rv.camera && rv.cams;
-    let cam_label = if rv.cams_looking { LOOKING_CAMS } else { "Camera" };
+    let cam_label = if rv.cams_looking { LOOKING_CAMS.get() } else { tr!("tip.camera") };
     let cam_value = if rv.cams_looking { Some("") } else if rv.cams { None } else { Some(crate::cam::NO_CAMERA) };
     row(&mut local, y, Act::RecCamera, "video", cam_label, cam_value, rv.cams.then_some(Dev::Cam), cam_on, !rv.cams, false);
     let cam_row = row_r(y);
@@ -208,11 +208,11 @@ pub fn layout(inp: &Input, rv: &RecView) -> Toolbar {
     // build without a segmentation model says it cannot).
     if cam_on {
         let r = FRect { x: x0, y, w: inner, h: SMALL_ROW_H };
-        let value = (!rv.blur).then_some(crate::cam::bg::UNAVAILABLE);
-        local.push(Item { kind: Kind::Row { act: Act::RecBg(rv.bg), icon: "", label: "Background", value, dim: !rv.blur }, r, disabled: true });
+        let value = (!rv.blur).then_some(crate::cam::bg::UNAVAILABLE.get());
+        local.push(Item { kind: Kind::Row { act: Act::RecBg(rv.bg), icon: "", label: tr!("rec.panel.background"), value, dim: !rv.blur }, r, disabled: true });
         if rv.blur {
             use crate::cam::bg::Bg;
-            let segs = [(Bg::Off, "Off"), (Bg::Light, "Blur light"), (Bg::Strong, "Blur strong")].map(|(b, l)| (Act::RecBg(b), l, "", rv.bg == b, false));
+            let segs = [(Bg::Off, tr!("settings.camera.bg_off")), (Bg::Light, tr!("settings.camera.bg_light")), (Bg::Strong, tr!("settings.camera.bg_strong"))].map(|(b, l)| (Act::RecBg(b), l, "", rv.bg == b, false));
             seg(&mut local, r.x1() - 6.0 - BG_SEG_W, y + (SMALL_ROW_H - 26.0) / 2.0, BG_SEG_W, 26.0, 2.0, &segs);
         }
         y += SMALL_ROW_H + GAP;
@@ -220,12 +220,12 @@ pub fn layout(inp: &Input, rv: &RecView) -> Toolbar {
     // Microphone (MP4 only): the device and its level, on/off.
     let mic_on = mp4 && rv.mic;
     let (mic_icon, mic_value) = if mp4 { ("mic", None) } else { ("mic-off", Some(crate::rec_ui::NOT_IN_GIF)) };
-    row(&mut local, y, Act::RecMic, mic_icon, "Microphone", mic_value, mp4.then_some(Dev::Mic), mic_on, !mp4, mic_on && rv.meter.is_some());
+    row(&mut local, y, Act::RecMic, mic_icon, tr!("tip.microphone"), mic_value, mp4.then_some(Dev::Mic), mic_on, !mp4, mic_on && rv.meter.is_some());
     y += ROW_H + GAP;
     // System audio (MP4 only).
     let sys_on = mp4 && rv.system;
-    let sys_value = if !mp4 { crate::rec_ui::NOT_IN_GIF } else if sys_on { "On" } else { "Off" };
-    row(&mut local, y, Act::RecSystem, "volume", "System audio", Some(sys_value), None, sys_on, !mp4, false);
+    let sys_value = if !mp4 { crate::rec_ui::NOT_IN_GIF } else if sys_on { tr!("rec.panel.on") } else { tr!("rec.panel.off") };
+    row(&mut local, y, Act::RecSystem, "volume", tr!("rec.panel.system_audio"), Some(sys_value), None, sys_on, !mp4, false);
     y += ROW_H + GAP;
     local.push(Item { kind: Kind::SepH, r: FRect { x: x0 + 4.0, y, w: inner - 8.0, h: 1.0 }, disabled: false });
     y += 1.0 + GAP;
@@ -233,7 +233,7 @@ pub fn layout(inp: &Input, rv: &RecView) -> Toolbar {
     let third = if mp4 { 92.0 } else { 112.0 };
     let col = (inner - third - 2.0 * GAP) / 2.0;
     let cols = [(x0, col), (x0 + col + GAP, col), (x0 + 2.0 * (col + GAP), third)];
-    let captions = ["Camera shape", "Output", if mp4 { "Countdown" } else { "Frame rate" }];
+    let captions = [tr!("tip.camera_shape"), tr!("rec.panel.output"), if mp4 { tr!("tip.countdown") } else { tr!("tip.frame_rate") }];
     for ((cx, cw), cap) in cols.iter().zip(captions) {
         local.push(Item { kind: Kind::Caption(cap), r: FRect { x: cx + 2.0, y, w: *cw, h: CAPTION_H }, disabled: false });
     }
@@ -246,7 +246,7 @@ pub fn layout(inp: &Input, rv: &RecView) -> Toolbar {
     let checking = rv.mp4 == crate::rec_ui::Mp4::Checking;
     let mp4_off = rv.mp4 != crate::rec_ui::Mp4::Yes;
     seg(&mut local, cols[1].0, sy, cols[1].1, SEG_H, SEG_IN, &[
-        (Act::RecFormat(RecFormat::Mp4), if checking { "checking\u{2026}" } else { "MP4" }, "film", mp4, mp4_off),
+        (Act::RecFormat(RecFormat::Mp4), if checking { tr!("rec.panel.checking") } else { "MP4" }, "film", mp4, mp4_off),
         (Act::RecFormat(RecFormat::Gif), "GIF", "gif", !mp4, false),
     ]);
     if mp4 {
@@ -263,7 +263,7 @@ pub fn layout(inp: &Input, rv: &RecView) -> Toolbar {
     // A GIF: Max length 15 / 30 / 60 s, then it stops by itself.
     if !mp4 {
         let r = FRect { x: x0, y, w: inner, h: SMALL_ROW_H };
-        local.push(Item { kind: Kind::Row { act: Act::RecGifMax(rv.gif_max), icon: "", label: "Max length", value: Some(max_len_text(rv.gif_max)), dim: false }, r, disabled: true });
+        local.push(Item { kind: Kind::Row { act: Act::RecGifMax(rv.gif_max), icon: "", label: tr!("tip.max_length"), value: Some(max_len_text(rv.gif_max)), dim: false }, r, disabled: true });
         let sw = 96.0;
         let segs: Vec<(Act, &'static str, &'static str, bool, bool)> =
             crate::rec_ui::GIF_MAX.iter().map(|&n| (Act::RecGifMax(n), len_label(n), "", rv.gif_max == n, false)).collect();
@@ -279,7 +279,7 @@ pub fn layout(inp: &Input, rv: &RecView) -> Toolbar {
         let ph = RING_BTN + 8.0 + rows as f32 * DOT_BTN + (rows - 1) as f32 * DOT_GAP + 12.0;
         FRect { x: cam_row.x1() - 6.0 - pw, y: cam_row.y1() + 2.0, w: pw, h: ph }
     });
-    local.push(Item { kind: Kind::Primary { act: Act::RecStart, label: "Start recording" }, r: FRect { x: x0, y, w: inner, h: START_H }, disabled: false });
+    local.push(Item { kind: Kind::Primary { act: Act::RecStart, label: tr!("tip.start_recording") }, r: FRect { x: x0, y, w: inner, h: START_H }, disabled: false });
     y += START_H + PAD;
     let mut h = y;
     // The open list floats over the rows below its row: drawn (and hit) last.
@@ -629,7 +629,7 @@ mod tests {
         v.blur = false;
         let tb = panel(sel, &v);
         let row = find(&tb, |k| matches!(k, Kind::Row { act: Act::RecBg(_), .. }));
-        assert!(matches!(row.kind, Kind::Row { value: Some(UNAVAILABLE), dim: true, .. }));
+        assert!(matches!(row.kind, Kind::Row { value: Some(v), dim: true, .. } if v == UNAVAILABLE.get()));
         assert!(!tb.items.iter().any(|i| matches!(i.kind, Kind::Seg { act: Act::RecBg(_), .. })));
         assert_eq!(tb.act_at(centre(row.r)), None);
     }

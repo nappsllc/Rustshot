@@ -147,13 +147,13 @@ fn ring_choices() {
 #[test]
 fn device_lists_keep_the_saved_device() {
     let devs = vec![("{a}".to_string(), "Alpha".to_string()), ("{b}".to_string(), "Beta".to_string())];
-    let (n, ids, sel) = device_items(DEFAULT_MIC, Some(&devs), "");
+    let (n, ids, sel) = device_items(&DEFAULT_MIC, Some(&devs), "");
     assert_eq!((n, ids, sel), (vec![DEFAULT_MIC.to_string(), "Alpha".into(), "Beta".into()], vec!["".to_string(), "{a}".into(), "{b}".into()], 0));
-    assert_eq!(device_items(DEFAULT_MIC, Some(&devs), "{b}").2, 2);
-    let (n, ids, sel) = device_items(DEFAULT_MIC, Some(&devs), "{gone}");
+    assert_eq!(device_items(&DEFAULT_MIC, Some(&devs), "{b}").2, 2);
+    let (n, ids, sel) = device_items(&DEFAULT_MIC, Some(&devs), "{gone}");
     assert_eq!((n[3].as_str(), ids[3].as_str(), sel), ("Saved device (not connected)", "{gone}", 3));
     // Not listed yet.
-    let (n, _, sel) = device_items(DEFAULT_CAM, None, "{cam}");
+    let (n, _, sel) = device_items(&DEFAULT_CAM, None, "{cam}");
     assert_eq!((n, sel), (vec![DEFAULT_CAM.to_string(), "Saved device".into()], 1));
 }
 

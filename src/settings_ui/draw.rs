@@ -458,8 +458,8 @@ fn question(ui: &mut Ui, s: &Settings, m: &Modal) -> Option<Click> {
                 icon_color,
                 title: Some(title),
                 text: &text,
-                buttons: &[("q_open_default_apps", GUIDE_OPEN, Click::OpenDefaultApps), ("q_later", GUIDE_LATER, Click::RemindLater)],
-                check: Some(("q_dont_show", GUIDE_DONT_SHOW, dont_show, Click::DontShow)),
+                buttons: &[("q_open_default_apps", GUIDE_OPEN.get(), Click::OpenDefaultApps), ("q_later", GUIDE_LATER.get(), Click::RemindLater)],
+                check: Some(("q_dont_show", GUIDE_DONT_SHOW.get(), dont_show, Click::DontShow)),
                 min_w: 500.0,
                 max_text_h: 260.0,
                 error: s.guide_error.as_deref(),
@@ -657,7 +657,7 @@ fn overlay(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) 
         ui.seg("redact_style", &labels(&REDACT_STYLES), &mut f.redact_style, tok);
     });
     srow(ui, tok, tr!("settings.overlay.ui_size"), Some(tr!("settings.overlay.ui_size.help")), |ui| {
-        ui.width(120.0).dropdown("ui_size", &uisize::LABELS, &mut f.ui_size);
+        ui.width(120.0).dropdown("ui_size", &uisize::LABELS.map(|k| k.get()), &mut f.ui_size);
     });
     let help = if done { tr!("settings.overlay.done_the_next_capture_starts.help") } else { tr!("settings.overlay.tool_sizes.help") };
     srow(ui, tok, tr!("settings.overlay.tool_sizes_colors"), Some(help), |ui| {

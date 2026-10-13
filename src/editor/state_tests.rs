@@ -1767,7 +1767,7 @@ fn record_panel_lists_cameras_in_the_background() {
         tb.items.into_iter().find(|i| matches!(i.kind, toolbar::Kind::Switch { act: Act::RecCamera, .. })).unwrap()
     };
     let it = row(&mut a);
-    assert!(matches!(it.kind, toolbar::Kind::Switch { label: toolbar::LOOKING_CAMS, .. }) && it.disabled);
+    assert!(matches!(it.kind, toolbar::Kind::Switch { label, .. } if label == toolbar::LOOKING_CAMS.get()) && it.disabled);
     assert!(animating(ed(&mut a), None, Instant::now()), "ticks until the list comes");
     let (cx, cy) = ((it.r.x + it.r.w / 2.0) as i32, (it.r.y + it.r.h / 2.0) as i32);
     mv(&mut a, cx, cy);

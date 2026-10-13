@@ -14,7 +14,7 @@ pub const BTN: f32 = 32.0;
 pub const PAD: f32 = 6.0;
 pub const MARGIN: f32 = 12.0;
 /// The Camera row's label while the cameras are being listed.
-pub const LOOKING_CAMS: &str = "Looking for cameras…";
+pub const LOOKING_CAMS: crate::i18n::Key = key!("rec.panel.looking_cams");
 const IN_GAP: f32 = 2.0;
 const GROUP_GAP: f32 = 6.0;
 const SEP_LEN: f32 = 16.0;
@@ -325,7 +325,7 @@ pub struct CopyMenu {
 }
 
 /// The Copy text menu's rows.
-pub const COPY_MENU: [(Act, &str); 3] = [(Act::TextSelect, "Select text"), (Act::CopyAll, "Copy all text"), (Act::Redact, "Redact sensitive text")];
+pub const COPY_MENU: [(Act, crate::i18n::Key); 3] = [(Act::TextSelect, key!("tip.select_text")), (Act::CopyAll, key!("tip.copy_all_text")), (Act::Redact, key!("editor.menu.redact_sensitive"))];
 
 /// The Copy text menu under (or over) its button: the three rows, a
 /// separator, the kinds' checkboxes.
@@ -339,7 +339,7 @@ fn place_copy_menu(cm: &CopyMenu, bar: FRect, above: bool, items: &mut Vec<Item>
     let row = |y: f32| FRect { x: px + PAD * s, y: py + y * s, w: pw - 2.0 * PAD * s, h: MENU_ROW * s };
     let mut y = PAD;
     for (i, (act, label)) in COPY_MENU.into_iter().enumerate() {
-        items.push(Item { kind: Kind::MenuItem { act, label, key: i }, r: row(y), disabled: false });
+        items.push(Item { kind: Kind::MenuItem { act, label: label.get(), key: i }, r: row(y), disabled: false });
         y += MENU_ROW;
     }
     y += ROW_GAP;
@@ -643,7 +643,7 @@ pub fn layout_docked(inp: &Input, bar: FRect) -> Toolbar {
 }
 
 /// The Blur / Invert button's menu (a long press on it): its two tools.
-pub const SLOT_MENU: [(Act, &str); 2] = [(Act::Tool(Tool::Blur), "Blur"), (Act::Tool(Tool::Invert), "Invert")];
+pub const SLOT_MENU: [(Act, crate::i18n::Key); 2] = [(Act::Tool(Tool::Blur), key!("tip.blur")), (Act::Tool(Tool::Invert), key!("tip.invert"))];
 
 /// The Blur / Invert menu under (or over) its button, as the save menu.
 fn place_slot_menu(bar: FRect, above: bool, items: &mut Vec<Item>, inp: &Input) -> FRect {
@@ -653,7 +653,7 @@ fn place_slot_menu(bar: FRect, above: bool, items: &mut Vec<Item>, inp: &Input) 
     let (px, py) = place_pop(pw, ph, anchor, bar, above, inp);
     for (i, (act, label)) in SLOT_MENU.into_iter().enumerate() {
         let r = FRect { x: px + PAD * s, y: py + (PAD + i as f32 * MENU_ROW) * s, w: pw - 2.0 * PAD * s, h: MENU_ROW * s };
-        items.push(Item { kind: Kind::MenuItem { act, label, key: i }, r, disabled: false });
+        items.push(Item { kind: Kind::MenuItem { act, label: label.get(), key: i }, r, disabled: false });
     }
     FRect { x: px, y: py, w: pw, h: ph }
 }
@@ -663,11 +663,11 @@ const SLOT_MENU_W: f32 = 160.0;
 
 /// The save menu's rows (Share last, where there is a share sheet: see
 /// [`save_menu`]).
-pub const SAVE_MENU: [(Act, &str); 4] =
-    [(Act::SaveAs, "Save as\u{2026}"), (Act::SaveDesktop, "Save to Desktop"), (Act::OpenWith, "Open with\u{2026}"), (Act::Share, "Share\u{2026}")];
+pub const SAVE_MENU: [(Act, crate::i18n::Key); 4] =
+    [(Act::SaveAs, key!("tip.save_as")), (Act::SaveDesktop, key!("tip.save_to_desktop")), (Act::OpenWith, key!("tip.open_with")), (Act::Share, key!("tip.share"))];
 
 /// The save menu's rows here: no Share on Linux (no standard sheet).
-pub fn save_menu() -> &'static [(Act, &'static str)] {
+pub fn save_menu() -> &'static [(Act, crate::i18n::Key)] {
     if crate::share::supported() { &SAVE_MENU } else { &SAVE_MENU[..3] }
 }
 
@@ -681,13 +681,13 @@ fn place_save_menu(bar: FRect, above: bool, items: &mut Vec<Item>, inp: &Input) 
     let (px, py) = place_pop(pw, ph, anchor, bar, above, inp);
     for (i, &(act, label)) in rows.iter().enumerate() {
         let r = FRect { x: px + PAD * s, y: py + (PAD + i as f32 * MENU_ROW) * s, w: pw - 2.0 * PAD * s, h: MENU_ROW * s };
-        items.push(Item { kind: Kind::MenuItem { act, label, key: i }, r, disabled: false });
+        items.push(Item { kind: Kind::MenuItem { act, label: label.get(), key: i }, r, disabled: false });
     }
     FRect { x: px, y: py, w: pw, h: ph }
 }
 
 /// The selection size label's menu (a click on the label).
-pub const SIZE_MENU: [(Act, &str); 1] = [(Act::Trim, "Trim to content")];
+pub const SIZE_MENU: [(Act, crate::i18n::Key); 1] = [(Act::Trim, key!("tip.trim_to_content"))];
 /// Its width (logical px).
 const SIZE_MENU_W: f32 = 200.0;
 
@@ -705,7 +705,7 @@ pub fn add_size_menu(tb: &mut Toolbar, label: FRect, key: String, area: FRect, s
     let py = if below + ph <= area.y1() - m { below } else { (label.y - POP_GAP * s - ph).max(area.y + m) };
     for (i, (act, text)) in SIZE_MENU.into_iter().enumerate() {
         let r = FRect { x: px + PAD * s, y: py + (PAD + i as f32 * MENU_ROW) * s, w: pw - 2.0 * PAD * s, h: MENU_ROW * s };
-        tb.items.push(Item { kind: Kind::MenuItem { act, label: text, key: tb.texts.len() }, r, disabled: false });
+        tb.items.push(Item { kind: Kind::MenuItem { act, label: text.get(), key: tb.texts.len() }, r, disabled: false });
     }
     tb.texts.push(key);
     tb.pop = Some(FRect { x: px, y: py, w: pw, h: ph });
@@ -820,12 +820,12 @@ pub(super) fn place_picker(pv: &PickView, bar: FRect, above: bool, items: &mut V
     push(Kind::Btn(Act::Eyedrop), FRect { x: x0 + inner - PICK_ROW, y, w: PICK_ROW, h: PICK_ROW });
     y += PICK_ROW + 12.0;
     if pv.alpha {
-        push(Kind::Label("Opacity"), FRect { x: x0, y, w: 60.0, h: ALPHA_H });
+        push(Kind::Label(tr!("editor.palette.opacity")), FRect { x: x0, y, w: 60.0, h: ALPHA_H });
         // The percentage sits right of the track.
         push(Kind::PickAlpha, FRect { x: x0 + 64.0, y, w: inner - 64.0 - 40.0, h: ALPHA_H });
         y += ALPHA_H + 10.0;
     }
-    push(Kind::Label(if pv.recents.is_empty() { "No recent colors yet" } else { "Recent" }), FRect { x: x0, y, w: inner, h: 16.0 });
+    push(Kind::Label(if pv.recents.is_empty() { tr!("editor.palette.no_recent") } else { tr!("editor.palette.recent") }), FRect { x: x0, y, w: inner, h: 16.0 });
     y += 16.0 + 6.0;
     if !pv.recents.is_empty() {
         for (i, c) in pv.recents.iter().take(crate::config::RECENT_MAX).enumerate() {

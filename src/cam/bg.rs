@@ -82,7 +82,7 @@ impl Bg {
 }
 
 /// The Background row's note when this build cannot blur.
-pub const UNAVAILABLE: &str = "Blur unavailable in this build";
+pub const UNAVAILABLE: crate::i18n::Key = key!("cam.blur_unavailable");
 
 #[cfg(test)]
 thread_local! {

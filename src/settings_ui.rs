@@ -1059,7 +1059,7 @@ impl Settings {
 
     /// The guide's text: its title and body.
     pub fn guide_texts(&self, broken: bool) -> (&'static str, String) {
-        (crate::screenclip_win::GUIDE_TITLE, crate::screenclip_win::guide_text(broken))
+        (crate::screenclip_win::GUIDE_TITLE.get(), crate::screenclip_win::guide_text(broken))
     }
 
     /// The registration as it is now (another flow may have turned it on:

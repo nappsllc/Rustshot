@@ -835,7 +835,7 @@ impl Edit {
             if self.snip.freeform
                 && let Some(first) = parts.first_mut()
             {
-                *first = chrome::HintPart::T(if snap { "Click a window or drag a lasso" } else { "Drag a lasso to select" }.into());
+                *first = chrome::HintPart::T(if snap { tr!("editor.hint.snap_lasso") } else { tr!("editor.hint.lasso") }.into());
             }
             HintUi { area, k: kh, parts }
         });
