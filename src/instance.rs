@@ -53,6 +53,13 @@ pub fn tray_class() -> windows::core::PCWSTR {
     windows::core::PCWSTR(w.as_ptr())
 }
 
+/// A daemon (or an on-demand run) of this instance is up: its window
+/// exists (Windows).
+#[cfg(windows)]
+pub fn daemon_running() -> bool {
+    unsafe { windows::Win32::UI::WindowsAndMessaging::FindWindowW(tray_class(), windows::core::PCWSTR::null()) }.is_ok()
+}
+
 /// Ask a running daemon to open its Settings window; false only when no
 /// daemon is reachable (then the caller opens the window itself). True
 /// means the request was delivered, not that a window opened: a daemon

@@ -318,6 +318,12 @@ fn up_for(note: Note, th: Theme, s: f32, pos: (i32, i32), since: Instant) -> Up 
     Up { note, th, s, pos, since, k: None, layout, hover: None, dirty: false, press: None, frozen: None }
 }
 
+/// A note is up (the window shows one).
+#[cfg_attr(test, allow(dead_code))]
+pub fn showing() -> bool {
+    WIN.with(|w| w.borrow().as_ref().is_some_and(|w| w.up.is_some()))
+}
+
 pub fn show(note: Note, at: (i32, i32), th: Theme) -> bool {
     let (work, s) = monitor_at(at);
     let pos = place_note(work, &note, note_size(&note, s));

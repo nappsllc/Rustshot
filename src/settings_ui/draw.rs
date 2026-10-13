@@ -221,7 +221,8 @@ pub fn paint(ui: &mut Ui, s: &mut Settings) -> Option<Click> {
         ui.radius = 8.0;
         ui.ctl_h = crate::ui::layout::H;
         ui.field_fill = None;
-        if let Some(c) = question(ui, &m) {
+        let tray = (s.hide_tray_text(), s.screenclip_ready() == Some(false));
+        if let Some(c) = question(ui, &m, tray) {
             click = Some(c);
         }
     }
@@ -327,7 +328,10 @@ fn footer(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) {
 }
 
 /// The question, error or broken-file state, centred over the dimmed form.
-fn question(ui: &mut Ui, m: &Modal) -> Option<Click> {
+/// `tray`: the tray-icon-off question's text, and whether Win+Shift+S
+/// still needs setting up (its "Set up…").
+fn question(ui: &mut Ui, m: &Modal, tray: (String, bool)) -> Option<Click> {
+    let (text_for_tray, setup) = tray;
     use crate::ui::layout::{GAP, H as QROW};
     let b = ui.bounds();
     type Btns = &'static [(&'static str, &'static str, Click)];
@@ -336,7 +340,12 @@ fn question(ui: &mut Ui, m: &Modal) -> Option<Click> {
             ("info", REWRITE.into(), &[("q_save", "Save", Click::Save), ("q_cancel", "Cancel", Click::Back)])
         }
         Modal::Error(e) => ("alert", e.clone(), &[("q_ok", "OK", Click::Back)]),
-        Modal::HideTray => ("info", HIDE_TRAY.into(), &[("q_hide", "Hide icon", Click::HideTray), ("q_cancel", "Cancel", Click::KeepTray)]),
+        Modal::HideTray if setup => (
+            "info",
+            text_for_tray,
+            &[("q_hide", "Turn off", Click::HideTray), ("q_setup", "Set up\u{2026}", Click::ScreenclipSetup), ("q_cancel", "Cancel", Click::KeepTray)],
+        ),
+        Modal::HideTray => ("info", text_for_tray, &[("q_hide", "Turn off", Click::HideTray), ("q_cancel", "Cancel", Click::KeepTray)]),
         Modal::Hotkeys { text, .. } => (
             "alert",
             text.clone(),
@@ -435,8 +444,11 @@ fn general(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) 
     }
     let mut hid = false;
     if tray_row {
-        let help = warn.then_some("No capture hotkey: start Rustshot again to capture");
-        srow_ex(ui, tok, "Show icon in tray / menu bar", help, true, ROW_H, |ui| {
+        // Windows: off is no background process at all.
+        let help = if cfg!(windows) { Some(TRAY_HELP) } else { warn.then_some("No capture hotkey: start Rustshot again to capture") };
+        // (Windows: two lines of plain help; elsewhere the warning, red.)
+        let (err, h) = if cfg!(windows) { (false, 44.0) } else { (true, ROW_H) };
+        srow_ex(ui, tok, "Show icon in tray / menu bar", help, err, h, |ui| {
             hid = ui.switch("show_tray", &mut f.show_tray, tok) && !f.show_tray;
         });
     }
@@ -481,6 +493,12 @@ fn general(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) 
 }
 
 fn capture(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) {
+    // "Set up…" (tray icon off): the Win+Shift+S row, focused and in view.
+    if ui.enabled
+        && let Some(id) = s.focus_field.take()
+    {
+        ui.focus.focus(&id);
+    }
     let base = s.loaded.clone();
     let wayland = wayland();
     let show_renderer = s.renderer;

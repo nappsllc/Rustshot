@@ -947,6 +947,15 @@ mod macos;
 
 /// Show `note` near global point `at` (the capture's centre), replacing
 /// the one up; false when there is no notice window here.
+/// A notice (or the thumbnail) is up on this thread (Windows; elsewhere
+/// it is not tracked yet: false).
+pub fn showing() -> bool {
+    #[cfg(all(windows, not(test)))]
+    return win::showing();
+    #[cfg(any(not(windows), test))]
+    false
+}
+
 pub fn show(note: Note, at: (i32, i32), th: Theme) -> bool {
     #[cfg(test)]
     {

@@ -704,6 +704,55 @@ fn hotkey_notes_route_to_dialog_or_balloon() {
     assert_eq!(text, HOTKEY_TEXT);
 }
 
+/// The tray-icon-off question: one more line (and "Set up…") while
+/// Win+Shift+S does not open Rustshot; "Set up…" keeps the icon and goes
+/// to the Win+Shift+S row. Saving the icon on again starts the daemon.
+#[test]
+fn tray_off_question_variants() {
+    // Registered and chosen: the plain text, Turn off / Cancel.
+    let mut s = sample(); // screenclip on, not waiting
+    assert_eq!(s.screenclip_ready(), Some(true));
+    assert_eq!(s.hide_tray_text(), HIDE_TRAY);
+    s.ask_hide_tray();
+    let mut focus = FocusState::default();
+    render(&mut s, &DARK, 1.0, &Input::default(), &mut focus);
+    assert!(focus.rect_of("q_hide").is_some() && focus.rect_of("q_setup").is_none());
+    // Registered but Windows still opens the Snipping Tool, or not
+    // registered: the setup line and its button.
+    for (state, wait) in [(Some(true), true), (Some(false), false)] {
+        let mut s = sample().with_screenclip(state, wait);
+        assert_eq!(s.screenclip_ready(), Some(false));
+        assert_eq!(s.hide_tray_text(), format!("{HIDE_TRAY}\n{HIDE_TRAY_SETUP}"));
+        assert_eq!(HIDE_TRAY_SETUP, "Rustshot isn't set as your screenshot app yet \u{2014} Set up\u{2026}");
+        s.form.show_tray = false;
+        s.ask_hide_tray();
+        let mut focus = FocusState::default();
+        assert_eq!(click(&mut s, &mut focus, "q_setup", 1.0), Some(Click::ScreenclipSetup));
+        s.on(Click::ScreenclipSetup);
+        assert!(s.form.show_tray && s.modal.is_none(), "the icon stays for now");
+        assert_eq!(s.section, CAPTURE);
+        render(&mut s, &DARK, 1.0, &Input::default(), &mut focus);
+        assert!(focus.is_focused("screenclip") && s.focus_field.is_none(), "the Win+Shift+S row");
+    }
+    // Not available here (no handler to set up): nothing extra.
+    let s = sample().with_screenclip(None, false);
+    assert_eq!((s.screenclip_ready(), s.hide_tray_text()), (None, HIDE_TRAY.to_string()));
+    // The row's help.
+    assert_eq!(TRAY_HELP, "Off: no background process; only Win+Shift+S / Print Screen (when set up)");
+    // Saved off, then on again: the daemon is started (Windows).
+    let dir = scratch("trayon");
+    let p = dir.join("config.toml");
+    config::save_at(&p, &Config { show_tray: false, ..Config::default() }).unwrap();
+    let mut s = settings_at(&p);
+    s.confirmed = true;
+    s.form.show_tray = true;
+    let acts = s.on(Click::Apply);
+    assert_eq!(acts.contains(&Act::StartDaemon), cfg!(windows), "{acts:?}");
+    s.form.ask = !s.form.ask;
+    assert!(!s.on(Click::Apply).contains(&Act::StartDaemon), "only when it was turned on");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn apply_and_ok_save_only_when_dirty() {
     let dir = scratch("apply");
@@ -1090,13 +1139,14 @@ fn general_controls_click() {
     assert!(!s.form.copy_after);
     click(&mut s, &mut focus, "show_tray", 1.0);
     assert!(!s.form.show_tray);
-    // Turning the tray icon off asks first, saying how to get back in.
+    // Turning the tray icon off asks first, saying what goes and how to
+    // get back in.
     assert_eq!(s.modal, Some(Modal::HideTray));
-    assert!(HIDE_TRAY.contains("start Rustshot again") && HIDE_TRAY.contains("`rustshot settings`") && HIDE_TRAY.contains("shortcuts keep working"));
+    assert!(HIDE_TRAY.contains("Settings"));
     #[cfg(windows)]
     assert_eq!(
         HIDE_TRAY,
-        "The tray icon will be hidden. To open Settings later, start Rustshot again from the Start menu (or run `rustshot settings`). Your shortcuts keep working."
+        "Rustshot won't run in the background. Win+Shift+S and Print Screen still open it if Rustshot is set as your screenshot app (Settings > Capture); other global shortcuts stop working. To open Settings, start Rustshot from the Start menu."
     );
     let mut qfocus = FocusState::default();
     assert_eq!(click(&mut s, &mut qfocus, "q_cancel", 1.0), Some(Click::KeepTray));

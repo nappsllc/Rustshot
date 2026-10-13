@@ -282,6 +282,44 @@ fn tell_hotkey_failures(failed: &[crate::hotkey::Failure]) {
     }
 }
 
+/// How a daemon run stays in the background.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Background {
+    /// The daemon: until Quit. On Windows it stops by itself once "Show
+    /// icon in tray" is turned off (no background process then).
+    #[default]
+    Normal,
+    /// `rustshot daemon --force`: stays with the tray icon off too.
+    Forced,
+    /// Started for one capture with no daemon around (Win+Shift+S / Print
+    /// Screen with the tray icon off): no global hotkeys but the
+    /// while-recording ones, no update check; it quits once the capture
+    /// and everything it opened (pins, Edit and other windows, the
+    /// thumbnail, a recording, an upload) are gone. Turning the tray icon
+    /// on makes it the daemon.
+    OnDemand,
+}
+
+/// `cfg` without its global hotkeys (an on-demand run registers none;
+/// the while-recording chords stay).
+fn without_globals(cfg: &Config) -> Config {
+    let mut c = cfg.clone();
+    for s in [
+        &mut c.capture_hotkey,
+        &mut c.quit_hotkey,
+        &mut c.record_hotkey,
+        &mut c.capture_full_hotkey,
+        &mut c.capture_window_hotkey,
+        &mut c.repeat_hotkey,
+        &mut c.capture_text_hotkey,
+        &mut c.history_hotkey,
+    ] {
+        s.clear();
+    }
+    c
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     cfg: Config,
     kind: RunKind,
@@ -289,6 +327,7 @@ pub fn run(
     exit_code: Arc<AtomicI32>,
     upload_slot: UploadSlot,
     instance: Option<crate::instance::Guard>,
+    bg: Background,
 ) -> i32 {
     // Settings, the update dialog and the notice follow the UI size too.
     publish_ui_size(cfg.ui_scale);
@@ -296,6 +335,7 @@ pub fn run(
         crate::snap::warm_up();
     }
     let hot = match kind {
+        RunKind::Daemon if bg == Background::OnDemand => Some(Hotkeys::new(&without_globals(&cfg))),
         RunKind::Daemon => Some(Hotkeys::new(&cfg)),
         RunKind::OneShot => None,
     };
@@ -314,6 +354,7 @@ pub fn run(
         crate::launcher::set_daemon(h.sender());
     }
     let updates = match kind {
+        RunKind::Daemon if bg == Background::OnDemand => None,
         RunKind::Daemon => crate::update::spawn_checker(cfg.check_updates),
         RunKind::OneShot => None,
     };
@@ -322,6 +363,8 @@ pub fn run(
     let mut app = App {
         cfg,
         kind,
+        bg,
+        stopping: false,
         hot,
         pending,
         st: State::Hidden,
@@ -428,6 +471,11 @@ fn history_keeps(tasks: &[Task]) -> bool {
 struct App {
     cfg: Config,
     kind: RunKind,
+    /// How a daemon run stays in the background.
+    bg: Background,
+    /// The tray icon was turned off (Windows): the daemon quits once
+    /// nothing it opened is left ([`App::lingering`]).
+    stopping: bool,
     hot: Option<Hotkeys>,
     pending: Option<Pending>,
     st: State,
@@ -606,6 +654,33 @@ impl App {
         if self.restart_due() {
             self.request_exit(0);
         }
+        // On demand, or the tray icon was turned off: gone once the
+        // capture and what it opened are.
+        if self.leaving() && !self.lingering() {
+            self.request_exit(0);
+        }
+    }
+
+    /// This daemon run ends once nothing is left ([`App::lingering`]): an
+    /// on-demand one, or a daemon whose tray icon was turned off.
+    fn leaving(&self) -> bool {
+        self.kind == RunKind::Daemon && (self.bg == Background::OnDemand || self.stopping)
+    }
+
+    /// Something of this process is still up or about to be: a capture,
+    /// recording, export, upload or countdown, a pin, an Edit, History,
+    /// Settings, launcher or update window, the thumbnail or a notice.
+    fn lingering(&self) -> bool {
+        !self.idle()
+            || self.delay.active()
+            || self.quit_pending
+            || self.edits.count() > 0
+            || crate::pin::count() > 0
+            || crate::notice::showing()
+            || crate::settings_ui::is_open()
+            || crate::history_ui::is_open()
+            || crate::launcher::is_open()
+            || crate::update_ui::is_open()
     }
 
     /// Handle one daemon event; false once we are quitting.
@@ -1017,15 +1092,33 @@ impl App {
     /// hotkeys are re-registered and the update checker follows
     /// `check_updates`. An open capture keeps the config it started with.
     fn reload_config(&mut self, cfg: Config) {
+        if self.kind == RunKind::Daemon {
+            match (self.bg, cfg.show_tray) {
+                // The tray icon on again: this run is the daemon now.
+                (Background::OnDemand, true) => {
+                    self.bg = Background::Normal;
+                    self.updates = crate::update::spawn_checker(cfg.check_updates);
+                }
+                // Off (Windows): no background process.
+                (Background::Normal, false) if cfg!(windows) => {
+                    if !self.stopping {
+                        eprintln!("rustshot: Show icon in tray is off: quitting once nothing is open");
+                    }
+                    self.stopping = true;
+                }
+                _ => self.stopping = false,
+            }
+        }
+        let hk = if self.bg == Background::OnDemand { without_globals(&cfg) } else { cfg.clone() };
         if let Some(h) = self.hot.as_mut() {
-            let mut failed = h.reload(&cfg);
+            let mut failed = h.reload(&hk);
             // While recording, its chords follow the new key bindings.
             if self.rec.is_some() {
                 failed.extend(h.set_recording(&cfg, true));
             }
             tell_hotkey_failures(&failed);
         }
-        if cfg.check_updates != self.cfg.check_updates && self.kind == RunKind::Daemon {
+        if cfg.check_updates != self.cfg.check_updates && self.kind == RunKind::Daemon && self.bg != Background::OnDemand {
             // A new checker generation: the old one stops before its next
             // check (and never takes the day's stamp).
             self.updates = crate::update::spawn_checker(cfg.check_updates);
@@ -3838,6 +3931,49 @@ mod tests {
         assert_eq!(opened(), before + 2, "no capture now: Settings, not nothing");
     }
 
+    /// An on-demand run (no daemon, tray icon off) lives while its capture,
+    /// recording or countdown does, then quits; the daemon never does,
+    /// unless the tray icon is turned off (Windows), and then only once
+    /// nothing is open. Turning the icon on makes an on-demand run the daemon.
+    #[test]
+    fn on_demand_runs_quit_once_nothing_is_left() {
+        let mut app = preview_app(theme::DARK, None);
+        app.kind = RunKind::Daemon;
+        app.cfg.check_updates = false;
+        app.st = State::Hidden;
+        assert!(!app.leaving(), "the daemon stays");
+        app.bg = Background::OnDemand;
+        app.pending = Some(Pending::editor());
+        assert!(app.leaving() && app.lingering(), "its capture is about to open");
+        app.pending = None;
+        assert!(!app.lingering(), "done: it quits");
+        // A recording keeps it (its pill stops it; the while-recording keys work).
+        app.rec = Some(rec_ui::Run::fake(false, false, Instant::now()));
+        assert!(app.lingering());
+        app.rec = None;
+        let _ = app.delay.start(crate::launcher::Plan { source: crate::launcher::Source::Region, delay: 3, after: crate::launcher::After::Edit }, Instant::now(), &mut app.delay_show);
+        assert!(app.lingering(), "a countdown");
+        let _ = app.delay.cancel(&mut app.delay_show);
+        assert!(!app.lingering());
+        // The tray icon on again: the daemon from now on.
+        let on = Config { check_updates: false, ..app.cfg.clone() };
+        app.reload_config(Config { show_tray: true, ..on.clone() });
+        assert_eq!(app.bg, Background::Normal);
+        assert!(!app.leaving());
+        // Off (Windows): the daemon stops once nothing is open; --force stays.
+        app.reload_config(Config { show_tray: false, ..on.clone() });
+        assert_eq!(app.leaving(), cfg!(windows));
+        app.reload_config(Config { show_tray: true, ..on.clone() });
+        assert!(!app.leaving(), "on again before it went: stays");
+        app.bg = Background::Forced;
+        app.reload_config(Config { show_tray: false, ..on });
+        assert!(!app.leaving(), "forced");
+        // An on-demand run registers no global hotkeys.
+        let c = without_globals(&Config::default());
+        assert!(crate::hotkey::wanted(&c).iter().all(String::is_empty));
+        assert_eq!(c.shortcuts, Config::default().shortcuts, "the while-recording chords stay");
+    }
+
     /// A capture asked while the worker waits is refused too (it would
     /// keep the daemon busy); a reply nobody reads lifts the gate.
     #[test]
@@ -3884,6 +4020,8 @@ mod tests {
         App {
             cfg,
             kind: RunKind::OneShot,
+            bg: Background::Normal,
+            stopping: false,
             hot: None,
             pending: None,
             st: State::Edit(Box::new(edit)),

@@ -127,9 +127,11 @@ section:
 - **General:** theme (System follows the OS, Dark, Light) and accent
   (Periwinkle, Teal, Amber or any `#rrggbb`: the custom swatch; the window
   previews it before **Apply**), *Launch at login* (hidden for store
-  installs), *Show icon in tray* (off, the daemon runs without an
-  icon: the hotkeys and a second `rustshot` launch still capture, and the
-  row warns when no capture hotkey is set), *Copy to clipboard after
+  installs), *Show icon in tray* (Windows: off means **no background
+  process** — see [No background process](#no-background-process-windows);
+  elsewhere the daemon runs without an icon: the hotkeys and a second
+  `rustshot` launch still capture, and the row warns when no capture
+  hotkey is set), *Copy to clipboard after
   capture* (a save or upload also copies the image), *Play shutter
   sound*, *Show thumbnail after capture* (see
   [Pins and the thumbnail](#pins-and-the-thumbnail)), *Show hints in the
@@ -195,6 +197,33 @@ know, the first save asks before removing them. A `config.toml` with an
 error is never overwritten silently: the window shows the error and offers
 *Open config file* or *Reset to defaults…* (after a second question; the
 old file is kept as `config.toml.bak`, then `.bak.1`, `.bak.2`, ...).
+
+#### No background process (Windows)
+
+With *Show icon in tray* off, nothing of Rustshot runs in the
+background, like a screenshot app Windows starts on demand. Turning it
+off asks first ("Rustshot won't run in the background. Win+Shift+S and
+Print Screen still open it if Rustshot is set as your screenshot app …";
+**Turn off** / **Cancel**, plus **Set up…**, which goes to *Use
+Win+Shift+S and Print Screen*, while Rustshot is not that app yet); the
+running daemon then quits as soon as nothing it opened is left (a
+capture, recording, upload, pin, Edit, History or Settings window, the
+thumbnail). From then on:
+
+- `rustshot daemon` (Launch at login) exits at once with a line on
+  stderr; `rustshot daemon --force` runs it anyway.
+- Starting Rustshot from the Start menu (or `rustshot` with no command)
+  opens Settings.
+- Win+Shift+S / Print Screen (`rustshot screenclip …`) run one capture
+  in a process of its own, without the other global hotkeys (the
+  *While recording* keys and the recording pill work), which stays up
+  while its pins, Edit windows, thumbnail, recording or upload are, then
+  exits.
+- Turning the icon on again starts the daemon.
+
+With a daemon running, starting Rustshot again captures as before, and
+opens Settings when the tray icon is hidden or no capture can start (a
+recording runs, an update installs).
 
 On Linux, *Browse…* needs `zenity` or `kdialog`, and pasting into the text
 fields needs `wl-paste` (Wayland), `xclip` or `xsel`.
@@ -739,7 +768,7 @@ capture_full_hotkey = "Shift+Meta+F"    # every monitor, saved at once
 capture_window_hotkey = "Shift+Meta+E"  # the overlay picking a window
 repeat_hotkey = ""                # the last region again ("" = none)
 capture_text_hotkey = "Shift+Meta+Z"  # pick an area, copy its text (OCR)
-show_tray = true                  # false = no tray icon (hotkeys still work)
+show_tray = true                  # false = no tray icon; Windows: no background process at all
 copy_after_capture = false        # a save or upload also copies the image
 shutter_sound = false             # a short click when a capture is taken
 show_thumbnail = true             # the thumbnail card after a copied or saved capture

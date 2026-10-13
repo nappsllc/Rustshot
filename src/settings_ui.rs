@@ -98,10 +98,15 @@ pub const GLOBALS: [(&str, usize); 8] = [
 ];
 
 /// The question when "Show icon in tray" is turned off: the way back in.
+/// (Windows: off means no background process at all.)
 #[cfg(windows)]
-pub const HIDE_TRAY: &str = "The tray icon will be hidden. To open Settings later, start Rustshot again from the Start menu (or run `rustshot settings`). Your shortcuts keep working.";
+pub const HIDE_TRAY: &str = "Rustshot won't run in the background. Win+Shift+S and Print Screen still open it if Rustshot is set as your screenshot app (Settings > Capture); other global shortcuts stop working. To open Settings, start Rustshot from the Start menu.";
 #[cfg(not(windows))]
 pub const HIDE_TRAY: &str = "The tray icon will be hidden. To open Settings later, start Rustshot again from your applications menu (or run `rustshot settings`). Your shortcuts keep working.";
+/// [`HIDE_TRAY`]'s extra line while Win+Shift+S does not open Rustshot.
+pub const HIDE_TRAY_SETUP: &str = "Rustshot isn't set as your screenshot app yet \u{2014} Set up\u{2026}";
+/// The "Show icon in tray" row's help (Windows).
+pub const TRAY_HELP: &str = "Off: no background process; only Win+Shift+S / Print Screen (when set up)";
 
 /// A global row's note while another app holds its key.
 pub const IN_USE: &str = "In use by another app";
@@ -658,9 +663,11 @@ pub enum Click {
     Back,
     /// The hotkey dialog's "Change shortcuts…".
     ChangeShortcuts,
-    /// The hide-the-tray-icon question's "Hide icon" / "Cancel".
+    /// The tray-icon-off question's "Turn off" / "Cancel".
     HideTray,
     KeepTray,
+    /// Its "Set up…": the Win+Shift+S setup ([`Settings::screenclip_setup`]).
+    ScreenclipSetup,
     Browse,
     OpenConfig,
     Restore,
@@ -706,6 +713,9 @@ pub enum Act {
     ClearHistory,
     /// Open this About link in the browser.
     Link(&'static str),
+    /// "Show icon in tray" was turned on again: start the daemon unless
+    /// one runs (Windows: with it off none did).
+    StartDaemon,
 }
 
 /// The window's state: the form, what it was loaded from, the section and
@@ -748,6 +758,9 @@ pub struct Settings {
     /// The key box to start recording in at the next frame of Key
     /// bindings ("Change shortcuts…").
     pub record_field: Option<String>,
+    /// A control to focus (with the ring, scrolled into view) at the next
+    /// frame of its section.
+    pub focus_field: Option<String>,
     /// The drive (top-level folder) last probed and its note: probed
     /// again only when the root changes, never while typing in it.
     folder_probe: Option<(PathBuf, Option<String>)>,
@@ -783,6 +796,7 @@ impl Settings {
             pending: Vec::new(),
             pending_keys: None,
             record_field: None,
+            focus_field: None,
             folder_probe: None,
             hotkey_failures: Vec::new(),
             tools_reset: false,
@@ -916,6 +930,35 @@ impl Settings {
         if self.modal.is_none() {
             self.modal = Some(Modal::HideTray);
         }
+    }
+
+    /// Win+Shift+S / Print Screen open Rustshot: registered and chosen.
+    /// (`None` where it cannot be: nothing to set up.)
+    pub fn screenclip_ready(&self) -> Option<bool> {
+        self.screenclip.map(|on| on && !self.screenclip_wait)
+    }
+
+    /// The tray-icon-off question: [`HIDE_TRAY`], and while Win+Shift+S
+    /// does not open Rustshot, [`HIDE_TRAY_SETUP`].
+    pub fn hide_tray_text(&self) -> String {
+        match self.screenclip_ready() {
+            Some(false) => format!("{HIDE_TRAY}\n{HIDE_TRAY_SETUP}"),
+            _ => HIDE_TRAY.to_string(),
+        }
+    }
+
+    /// "Set up…": the icon stays for now, and Capture opens at "Use
+    /// Win+Shift+S and Print Screen". The hook for the Win+Shift+S guide
+    /// (branch `screenclip-guide`: call `screenclip_win::show_setup_guide`
+    /// here once it is merged).
+    pub fn screenclip_setup(&mut self) {
+        if matches!(self.modal, Some(Modal::HideTray)) {
+            self.modal = None;
+            self.form.show_tray = true;
+        }
+        self.section = CAPTURE;
+        self.focus_field = Some("screenclip".into());
+        self.show_pending();
     }
 
     /// The dialog's "Change shortcuts…": Key bindings, at the top (the
@@ -1078,6 +1121,10 @@ impl Settings {
                 vec![]
             }
             Click::Replace => self.reset(),
+            Click::ScreenclipSetup => {
+                self.screenclip_setup();
+                vec![]
+            }
             Click::HideTray | Click::KeepTray => {
                 if matches!(self.modal, Some(Modal::HideTray)) {
                     self.modal = None;
@@ -1143,10 +1190,14 @@ impl Settings {
             return vec![];
         }
         self.confirmed = true; // the file is ours now
+        let tray_on = cfg.show_tray && !self.loaded.show_tray;
         self.loaded = cfg.clone();
         // The form shows what was saved (merged with the file, trimmed).
         self.form = self.form_for(&cfg);
         let mut acts = vec![Act::Saved(Box::new(cfg))];
+        if tray_on && cfg!(windows) {
+            acts.push(Act::StartDaemon);
+        }
         if let (Some(on), true) = (self.form.autostart, self.form.autostart != self.autostart) {
             match (self.set_autostart)(on) {
                 Ok(()) => self.autostart = Some(on),
@@ -1262,6 +1313,13 @@ static START_SECTION: std::sync::atomic::AtomicUsize = std::sync::atomic::Atomic
 /// The daemon's event sender: told to reload after a save.
 static DAEMON: Mutex<Option<Sender<HotEvent>>> = Mutex::new(None);
 
+/// Whether the window is open in this process (an on-demand run waits
+/// for it before it quits).
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub fn is_open() -> bool {
+    lock(&OPEN).is_some()
+}
+
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -1275,6 +1333,17 @@ pub fn set_daemon(tx: Sender<HotEvent>) {
 fn reload_daemon() {
     if let Some(d) = lock(&DAEMON).as_ref() {
         let _ = d.send(HotEvent::ReloadConfig);
+    }
+}
+
+/// Start `rustshot daemon` beside this window's process unless one runs.
+fn start_daemon() {
+    #[cfg(windows)]
+    if !crate::instance::daemon_running() {
+        match std::env::current_exe().and_then(|exe| std::process::Command::new(exe).arg("daemon").spawn()) {
+            Ok(_) => {}
+            Err(e) => eprintln!("rustshot: could not start the daemon: {e}"),
+        }
     }
 }
 
@@ -1456,6 +1525,9 @@ impl Window {
                 reload_daemon();
             }
             Act::Reload => reload_daemon(),
+            // In the daemon (or an on-demand run) the reload did it.
+            Act::StartDaemon if lock(&DAEMON).is_none() => start_daemon(),
+            Act::StartDaemon => {}
             Act::Browse if !self.picking => {
                 self.picking = true;
                 let start = PathBuf::from(self.s.form.folder.text.trim());
