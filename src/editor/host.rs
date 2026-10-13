@@ -74,6 +74,7 @@ pub enum Request {
     SaveAs,
     SaveDesktop,
     OpenWith,
+    Share,
     Copy,
     Upload,
     Pin,
@@ -123,6 +124,11 @@ pub struct Canvas {
     bake_excl: Vec<usize>,
     /// A move's ghost and held objects, rendered once.
     sprites: Option<Sprites>,
+    /// The crop as last saved.
+    saved_crop: Option<FRect>,
+    /// A freeform capture's lasso (the picture's px) and its coverage of
+    /// the picture: outside it is hidden and exports transparent.
+    mask: Option<(Vec<Pt>, Vec<u8>)>,
 }
 
 impl Canvas {
@@ -160,7 +166,47 @@ impl Canvas {
             saved: objects,
             bake_excl: Vec::new(),
             sprites: None,
+            saved_crop: None,
+            mask: None,
         }
+    }
+
+    /// The document's crop and the capture's lasso (as saved: no unsaved
+    /// change).
+    #[cfg_attr(target_os = "macos", allow(dead_code))] // no Edit window there yet
+    pub fn set_doc(&mut self, crop: Option<FRect>, mask: Option<Vec<Pt>>) {
+        let size = self.size();
+        let crop = crop.and_then(|c| crate::objects::mask::crop_rect(c, size));
+        self.e.snip.crop = crop;
+        self.e.snip.crop_hist = vec![crop];
+        self.saved_crop = crop;
+        // The editor knows the lasso too: Text mode and Redact read only
+        // inside it.
+        self.e.snip.mask = mask.clone().filter(|m| crate::objects::mask::is_shape(m));
+        self.e.snip.mask_sel = self.e.sel;
+        self.mask = mask.filter(|m| crate::objects::mask::is_shape(m)).map(|m| {
+            let cov = crate::objects::mask::coverage(&m, size.0, size.1, Pt::new(0.0, 0.0));
+            (m, cov)
+        });
+    }
+
+    /// The crop (non-destructive: `Save` writes it with the objects).
+    pub fn crop(&self) -> Option<FRect> {
+        self.e.crop_of_doc()
+    }
+
+    /// A recognition finished (Text mode, Quick Redact): true when a
+    /// frame is due.
+    pub fn poll(&mut self) -> bool {
+        let c = self.e.poll_snip();
+        // A Save or Copy that waited for Redact goes now.
+        self.after_input();
+        c
+    }
+
+    /// The editor's notice (Text mode, Redact, Crop), for the window's toast.
+    pub fn take_notice(&mut self) -> Option<(String, ToastKind)> {
+        self.e.notice.take().map(|t| (t.text, t.kind))
     }
 
     pub fn size(&self) -> (u32, u32) {
@@ -177,17 +223,25 @@ impl Canvas {
             let d = self.e.rebuild();
             self.cache_damage(d);
         }
+        // A crop or a lasso: baked again over the picture with what they
+        // leave out blanked (a magnifier inside never shows it), then cut.
+        let crop = self.crop();
+        let mask = self.mask.as_ref().map(|(m, _)| m.as_slice());
+        if crop.is_some() || mask.is_some() {
+            return crate::history::render(&self.e.base, &self.e.objects, crop, mask);
+        }
         self.e.composed().clone()
     }
 
     /// The objects differ from the last save, or text is being typed.
     pub fn unsaved(&self) -> bool {
-        self.e.objects != self.saved || self.e.text.as_ref().is_some_and(|t| !t.text.trim().is_empty())
+        self.e.objects != self.saved || self.e.snip.crop != self.saved_crop || self.e.text.as_ref().is_some_and(|t| !t.text.trim().is_empty())
     }
 
     /// `objects` were saved (what [`Self::objects`] was when the save began).
     pub fn mark_saved_as(&mut self, objects: Vec<Obj>) {
         self.saved = objects;
+        self.saved_crop = self.e.snip.crop;
     }
 
     /// Text being typed (a text box, a callout's text) becomes an object.
@@ -468,6 +522,7 @@ impl Canvas {
                 Task::Save { .. } => Request::Save,
                 Task::SaveDesktop => Request::SaveDesktop,
                 Task::OpenWith => Request::OpenWith,
+                Task::Share => Request::Share,
                 Task::Upload => Request::Upload,
                 Task::Pin => Request::Pin,
                 Task::Text => Request::CopyText,
@@ -491,6 +546,9 @@ impl Canvas {
         }
         if e.text.is_some() || e.in_cedit(ip) {
             return Cursor::IBeam;
+        }
+        if let Some(c) = e.snip_cursor(ip) {
+            return c;
         }
         if !e.obj.sel.is_empty()
             && let Some(h) = e.obj_handle_at(ip)
@@ -563,7 +621,7 @@ impl Canvas {
     /// Something animates (the caret blinks, guides fade, a tooltip is
     /// due, a popover fades): the window keeps its fast timer.
     pub fn animating(&self, now: Instant) -> bool {
-        super::animating(&self.e, None, now) || self.e.text.is_some() || self.e.obj.cedit.is_some()
+        super::animating(&self.e, None, now) || self.e.text.is_some() || self.e.obj.cedit.is_some() || self.e.snip_busy()
     }
 
     /// Write the tools' remembered sizes and colors (`wait`: now).
@@ -584,7 +642,7 @@ impl Canvas {
         let cur = e.cur_tool();
         let recents = e.recents();
         let pv = e.pick.as_ref().map(|p| toolbar::PickView { ring: false, alpha: p.has_alpha(), recents: &recents });
-        let save_keys = [Act::SaveAs, Act::SaveDesktop, Act::OpenWith].map(|a| chrome::act_tip(a, &e.keys).1.join("+"));
+        let save_keys: Vec<String> = toolbar::save_menu().iter().map(|&(a, _)| chrome::act_tip(a, &e.keys).1.join("+")).collect();
         let slot_keys = toolbar::SLOT_MENU.map(|(a, _)| chrome::act_tip(a, &e.keys).1.join("+"));
         let inp = toolbar::Input {
             sel: e.sel.unwrap_or(FRect { x: 0.0, y: 0.0, w: 1.0, h: 1.0 }),
@@ -602,8 +660,10 @@ impl Canvas {
             colors: tools::has_color(cur) || e.sel_color().is_some(),
             fills: tools::has_fill(cur),
             pick: pv.as_ref(),
-            save_menu: e.save_menu.then_some(&save_keys),
+            save_menu: e.save_menu.then_some(save_keys.as_slice()),
             slot_menu: e.slot_menu.then_some(&slot_keys),
+            copy_menu: None,
+            freeform: None,
         };
         e.toolbar = Some(toolbar::layout_docked(&inp, self.bar));
         e.mo.bar.snap(1.0);
@@ -636,6 +696,8 @@ impl Canvas {
             pick: None,
             save_menu: None,
             slot_menu: None,
+            copy_menu: None,
+            freeform: None,
         };
         toolbar::docked_width(&inp)
     }
@@ -744,6 +806,7 @@ impl Canvas {
         }
         self.blit_picture(f);
         self.paint_drafts(f);
+        self.paint_hidden(f, cv);
         self.paint_chrome(f, now);
     }
 
@@ -879,6 +942,42 @@ impl Canvas {
         }
     }
 
+    /// What the crop and the lasso leave out, in the canvas color (the
+    /// crop frame up: all of the picture shows, the frame dims the rest).
+    fn paint_hidden(&self, f: &mut Fb, cv: C4) {
+        if self.e.snip.crop_mode.is_some() {
+            return;
+        }
+        let v = self.view;
+        let a = self.area;
+        let img = v.image(self.size());
+        let vis = PxRect::new(img.x.max(a.x) as i32, img.y.max(a.y) as i32, img.x1().min(a.x1()) as i32, img.y1().min(a.y1()) as i32);
+        if vis.is_empty() {
+            return;
+        }
+        if let Some((_, cov)) = &self.mask {
+            let (iw, ih) = (self.size().0 as usize, self.size().1 as usize);
+            for y in vis.y0..vis.y1 {
+                let sy = (((y as f32 + 0.5 - v.oy) / v.z) as usize).min(ih - 1);
+                let row = &cov[sy * iw..(sy + 1) * iw];
+                for x in vis.x0..vis.x1 {
+                    let sx = (((x as f32 + 0.5 - v.ox) / v.z) as usize).min(iw - 1);
+                    let c = row[sx];
+                    if c < 255 {
+                        f.blend_px(x, y, cv.with_alpha(255 - c));
+                    }
+                }
+            }
+        }
+        if let Some(c) = self.crop() {
+            let w = v.rect(c);
+            let keep = PxRect::new(w.x.round() as i32, w.y.round() as i32, w.x1().round() as i32, w.y1().round() as i32);
+            for r in vis.minus_iter(&keep) {
+                f.fill_rect(r.x0, r.y0, r.w(), r.h(), cv);
+            }
+        }
+    }
+
     /// The object chrome (selection, handles, guides, marquee, caret,
     /// mini-toolbar and its tips, the text draft, the loupe) mapped to the
     /// window.
@@ -889,10 +988,16 @@ impl Canvas {
         let (_ghost, osel, marquee, caret, mini) = self.e.obj_scene(area_img, s_img);
         let (guides, gk) = self.e.guides_now(now);
         let v = self.view;
+        let mouse_img = v.to_img(self.mouse);
+        let snip = self.e.snip_scene(area_img, s_img, 0, mouse_img);
         let a = self.area;
         let k = self.k;
         let e = &self.e;
         let ui = Ui { th: &e.th, s: k, font: e.ui_font };
+        // Text mode, the crop frame: drawn in window px.
+        if let Some(u) = snip {
+            super::snip::draw(f, &ui, &super::snip::map_ui(&u, &|r| v.rect(r), &|p| v.to_win(p)));
+        }
         if let Some(Obj::Spotlight { r }) = &e.draft {
             super::mini::marquee(f, &ui, v.rect(*r));
         }

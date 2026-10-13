@@ -53,6 +53,42 @@ pub fn tray_class() -> windows::core::PCWSTR {
     windows::core::PCWSTR(w.as_ptr())
 }
 
+/// A daemon (or an on-demand run) of this instance is up: its window
+/// exists (Windows).
+#[cfg(windows)]
+pub fn daemon_running() -> bool {
+    unsafe { windows::Win32::UI::WindowsAndMessaging::FindWindowW(tray_class(), windows::core::PCWSTR::null()) }.is_ok()
+}
+
+/// Elsewhere the tray icon off never means "no daemon": not asked.
+#[cfg(not(windows))]
+pub fn daemon_running() -> bool {
+    false
+}
+
+/// An update dialog is open in some Rustshot process (it may be
+/// downloading into the update folder): Windows.
+#[cfg(windows)]
+pub fn update_dialog_open() -> bool {
+    use windows::core::w;
+    unsafe { windows::Win32::UI::WindowsAndMessaging::FindWindowW(w!("rustshot_window"), w!("Rustshot update")) }.is_ok()
+}
+
+#[cfg(not(windows))]
+pub fn update_dialog_open() -> bool {
+    false
+}
+
+/// `rustshot daemon --force` while an on-demand run holds the instance:
+/// ask it to become the daemon (all its hotkeys, staying); false when
+/// none is reachable. Windows (elsewhere none runs on demand).
+pub fn signal_become_daemon() -> bool {
+    #[cfg(windows)]
+    return imp::signal_capture(imp::BECOME);
+    #[cfg(not(windows))]
+    false
+}
+
 /// Ask a running daemon to open its Settings window; false only when no
 /// daemon is reachable (then the caller opens the window itself). True
 /// means the request was delivered, not that a window opened: a daemon
@@ -82,7 +118,7 @@ pub fn signal_capture(slot: usize) -> bool {
 pub struct Guard(imp::Inner);
 
 impl Guard {
-    /// Start delivering `HotEvent::Capture` to `tx` whenever another launch signals us.
+    /// Start delivering `HotEvent::Relaunch` to `tx` whenever another launch signals us.
     pub fn listen(&self, tx: Sender<HotEvent>) {
         self.0.listen(tx);
     }
@@ -107,6 +143,11 @@ mod imp {
     pub const WM_SETTINGS: u32 = WM_APP + 8;
     /// Posted to the tray window: "open the capture launcher".
     pub const WM_LAUNCHER: u32 = WM_APP + 9;
+    /// `WM_CAPTURE`'s wparam from a second launch ([`HotEvent::Relaunch`]);
+    /// a daemon older than it takes it as a region capture.
+    pub const RELAUNCH: usize = 100;
+    /// `WM_CAPTURE`'s wparam from `daemon --force` ([`super::signal_become_daemon`]).
+    pub const BECOME: usize = 101;
 
     pub fn signal_settings() -> bool {
         unsafe {
@@ -205,6 +246,8 @@ mod imp {
                     // `wparam`: the hotkey slot asked for (`signal_capture`).
                     let ev = match w.0 {
                         2..=4 => crate::hotkey::slot_event(w.0),
+                        RELAUNCH => HotEvent::Relaunch,
+                        BECOME => HotEvent::BecomeDaemon,
                         _ => HotEvent::Capture,
                     };
                     let _ = tx.send(ev);
@@ -304,7 +347,7 @@ mod imp {
                 // The primary may still be creating its window; retry briefly.
                 for _ in 0..20 {
                     if let Ok(hwnd) = FindWindowW(PCWSTR(class.as_ptr()), PCWSTR::null()) {
-                        let _ = PostMessageW(Some(hwnd), WM_CAPTURE, WPARAM(0), LPARAM(0));
+                        let _ = PostMessageW(Some(hwnd), WM_CAPTURE, WPARAM(RELAUNCH), LPARAM(0));
                         return Some(Instance::Signalled);
                     }
                     std::thread::sleep(std::time::Duration::from_millis(100));
@@ -448,7 +491,8 @@ mod imp {
                         continue;
                     }
                     match line.trim() {
-                        "capture" if tx.send(HotEvent::Capture).is_err() => break,
+                        // Sent by a second launch only.
+                        "capture" if tx.send(HotEvent::Relaunch).is_err() => break,
                         "settings" => crate::settings_ui::show(),
                         "launcher" => crate::launcher::show(),
                         _ => {}
@@ -616,7 +660,7 @@ mod imp {
             let (tx, rx) = mpsc::channel();
             g.listen(tx);
             assert!(matches!(acquire_at(&path), Some(Instance::Signalled)));
-            assert!(matches!(rx.recv_timeout(Duration::from_secs(2)), Ok(HotEvent::Capture)));
+            assert!(matches!(rx.recv_timeout(Duration::from_secs(2)), Ok(HotEvent::Relaunch)));
             drop(g);
             assert!(!path.exists());
             // A stale socket file is replaced.
@@ -663,7 +707,7 @@ mod imp {
             // The lock is held, so a second acquire must take the signal path.
             assert!(matches!(try_lock(&lock_path(&path)), Lock::Busy));
             assert!(matches!(acquire_at(&path), Some(Instance::Signalled)));
-            assert!(matches!(rx.recv_timeout(Duration::from_secs(2)), Ok(HotEvent::Capture)));
+            assert!(matches!(rx.recv_timeout(Duration::from_secs(2)), Ok(HotEvent::Relaunch)));
             drop(g);
             // Released with the guard: a new primary can start.
             assert!(matches!(primary_after_release(&path), Instance::Primary(_)));
@@ -757,7 +801,7 @@ mod tests {
         g.listen(tx);
         for i in 0..3 {
             assert!(matches!(imp::acquire_named(&name, true), Some(Instance::Signalled)), "launch {i}");
-            assert!(matches!(rx.recv_timeout(WAIT), Ok(HotEvent::Capture)), "capture {i} delivered");
+            assert!(matches!(rx.recv_timeout(WAIT), Ok(HotEvent::Relaunch)), "capture {i} delivered");
         }
         assert!(rx.try_recv().is_err(), "one capture per launch");
         drop(g);
@@ -775,7 +819,7 @@ mod tests {
         // A real signal after it: exactly one capture arrives, so the try
         // above sent none (delivery is in order).
         assert!(matches!(imp::acquire_named(&name, true), Some(Instance::Signalled)));
-        assert!(matches!(rx.recv_timeout(WAIT), Ok(HotEvent::Capture)));
+        assert!(matches!(rx.recv_timeout(WAIT), Ok(HotEvent::Relaunch)));
         assert!(rx.try_recv().is_err(), "the try sent nothing");
         drop(g);
         let _g = primary_after_release(&name);
@@ -791,10 +835,10 @@ mod tests {
         ga.listen(ta);
         gb.listen(tb);
         assert!(matches!(imp::acquire_named(&b, true), Some(Instance::Signalled)));
-        assert!(matches!(rb.recv_timeout(WAIT), Ok(HotEvent::Capture)));
+        assert!(matches!(rb.recv_timeout(WAIT), Ok(HotEvent::Relaunch)));
         // Then one to `a`: had `b`'s gone there too, it would be first.
         assert!(matches!(imp::acquire_named(&a, true), Some(Instance::Signalled)));
-        assert!(matches!(ra.recv_timeout(WAIT), Ok(HotEvent::Capture)));
+        assert!(matches!(ra.recv_timeout(WAIT), Ok(HotEvent::Relaunch)));
         assert!(ra.try_recv().is_err() && rb.try_recv().is_err(), "one capture each");
     }
 
@@ -867,6 +911,6 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         g.listen(tx);
         assert!(matches!(imp::acquire_named(&name, true), Some(Instance::Signalled)));
-        assert!(matches!(rx.recv_timeout(WAIT), Ok(HotEvent::Capture)), "the new primary answers");
+        assert!(matches!(rx.recv_timeout(WAIT), Ok(HotEvent::Relaunch)), "the new primary answers");
     }
 }

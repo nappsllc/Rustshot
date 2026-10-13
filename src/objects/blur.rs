@@ -230,6 +230,13 @@ fn row_step(o: &mut [u8], a: &mut [u16], add: &[u8], sub: &[u8], dv: Div) {
 /// rows and columns never read each other within a phase, so the result is
 /// exactly the one-thread one. `tmp` is scratch.
 pub fn blur_block(block: &mut [u8], w: usize, h: usize, sigma: f32, tmp: &mut Vec<u8>, acc: &mut Vec<u16>) {
+    blur_block_on(block, w, h, sigma, tmp, acc, 8);
+}
+
+/// [`blur_block`] on at most `max_threads` threads (the camera bubble's
+/// background blur runs on its camera thread alone: starting threads for
+/// every picture would cost more than they save).
+pub fn blur_block_on(block: &mut [u8], w: usize, h: usize, sigma: f32, tmp: &mut Vec<u8>, acc: &mut Vec<u16>, max_threads: usize) {
     if w == 0 || h == 0 || sigma <= 0.0 {
         return;
     }
@@ -248,7 +255,7 @@ pub fn blur_block(block: &mut [u8], w: usize, h: usize, sigma: f32, tmp: &mut Ve
     let bufs = Bufs(block.as_mut_ptr(), tmp.as_mut_ptr());
     static CPUS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     let cpus = *CPUS.get_or_init(|| std::thread::available_parallelism().map_or(1, |p| p.get()));
-    let threads = if w * h >= 60_000 { cpus.min(8) } else { 1 };
+    let threads = if w * h >= 60_000 { cpus.min(max_threads.max(1)) } else { 1 };
     // Column slabs on 16-byte bounds, at least 256 bytes wide; row bands
     // at least 4 rows.
     let k = threads.min(n / 256).min(h / 4).max(1);

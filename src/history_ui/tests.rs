@@ -480,14 +480,14 @@ fn thumbnails_are_bounded_and_follow_edits() {
 fn with_record(st: &Store) -> String {
     let e = st.list().into_iter().find(|e| e.meta.uploaded.is_some()).expect("an uploaded capture");
     st.update(&e.id, |m| {
-        m.upload = Some(crate::uploads::Info { deletehash: crate::uploads::Secret::new("dhKq2"), time: 1, kind: crate::uploads::UpKind::Image, thumb: None })
+        m.upload = Some(crate::uploads::Info { deletehash: crate::uploads::Secret::new("dhKq2"), time: 1, kind: crate::uploads::UpKind::Image, thumb: None, s3: None })
     })
     .unwrap();
     e.id
 }
 
 /// "Uploaded" keeps the captures with a link; their cards' ⋯ menu adds
-/// Copy link, and Delete from Imgur… once the deletehash is kept.
+/// Copy link, and Delete upload… once the deletehash is kept.
 #[test]
 fn uploaded_filter_and_card_menu() {
     let (_r, st) = fixture("uploaded");
@@ -501,19 +501,28 @@ fn uploaded_filter_and_card_menu() {
     let plain = h.entries.iter().find(|e| e.meta.uploaded.is_none() && !e.meta.kind.is_recording()).unwrap().clone();
     let rec = h.entries.iter().find(|e| e.meta.kind.is_recording()).unwrap().clone();
     use draw::MenuAct as M;
-    assert_eq!(draw::card_acts(&h, &plain), [M::SaveAs, M::OpenWith, M::ShowInFolder, M::CopyPath, M::Delete]);
-    assert_eq!(draw::card_acts(&h, &rec), [M::OpenWith, M::ShowInFolder, M::CopyPath, M::Delete]);
+    // Share after Open with where the OS has a share sheet (not Linux).
+    let acts = |e: &crate::history::Entry| -> Vec<M> { draw::card_acts(&h, e).into_iter().filter(|a| *a != M::Share).collect() };
+    for e in [&plain, &rec, &up] {
+        let all = draw::card_acts(&h, e);
+        let ow = all.iter().position(|a| *a == M::OpenWith).unwrap();
+        assert_eq!(all.get(ow + 1) == Some(&M::Share), crate::share::supported(), "{all:?}");
+    }
+    assert_eq!(acts(&plain), [M::SaveAs, M::OpenWith, M::ShowInFolder, M::CopyPath, M::Delete]);
+    assert_eq!(acts(&rec), [M::OpenWith, M::ShowInFolder, M::CopyPath, M::Delete]);
     // Uploaded before records were kept: no deletehash, no delete.
-    assert_eq!(draw::card_acts(&h, &up), [M::SaveAs, M::OpenWith, M::ShowInFolder, M::CopyPath, M::CopyLink, M::Delete]);
+    assert_eq!(acts(&up), [M::SaveAs, M::OpenWith, M::ShowInFolder, M::CopyPath, M::CopyLink, M::Delete]);
     with_record(&st);
     h.reload();
     let up = h.entry(&up.id).unwrap().clone();
-    assert_eq!(draw::card_acts(&h, &up), [M::SaveAs, M::OpenWith, M::ShowInFolder, M::CopyPath, M::CopyLink, M::DeleteUpload, M::Delete]);
-    assert_eq!(M::DeleteUpload.label(), "Delete from Imgur\u{2026}");
+    let acts = |e: &crate::history::Entry| -> Vec<M> { draw::card_acts(&h, e).into_iter().filter(|a| *a != M::Share).collect() };
+    assert_eq!(acts(&up), [M::SaveAs, M::OpenWith, M::ShowInFolder, M::CopyPath, M::CopyLink, M::DeleteUpload, M::Delete]);
+    assert_eq!(M::Share.label(), "Share\u{2026}");
+    assert_eq!(M::DeleteUpload.label(), "Delete upload\u{2026}");
     assert_eq!(M::OpenWith.label(), "Open with\u{2026}");
 }
 
-/// Delete from Imgur… asks first; its button deletes (a fake Imgur):
+/// Delete upload… asks first; its button deletes (a fake Imgur):
 /// the link and record go and the toast says so; a failure says why and
 /// keeps them.
 #[test]
@@ -524,15 +533,16 @@ fn deleting_an_upload_asks_then_deletes() {
     h.ask_unupload = Some(id.clone());
     assert!(h.asking());
     let (title, para, check, ok) = h.dialog_texts();
-    assert_eq!((title.as_str(), check, ok), ("Delete from Imgur?", None, "Delete from Imgur"));
+    assert_eq!((title.as_str(), check, ok), ("Delete upload?", None, "Delete upload"));
     assert!(para.starts_with("rs.sh/a8Kq2 stops working"), "{para}");
     assert_eq!(h.dialog_ok(), [Act::DeleteUpload(id.clone())]);
     assert!(!h.asking());
     h.ask_unupload = Some(id.clone());
     assert!(h.escape() && h.ask_unupload.is_none(), "Esc answers no");
 
+    let no_s3 = |_: &crate::s3::Object| -> Result<(), String> { panic!("an Imgur upload") };
     let refused = |_: &str, _: &str, _: &[(&str, &str)]| Ok((403, r#"{"data":{"error":"Permission denied"},"success":false}"#.to_string()));
-    let d = delete_upload(&st, &id, "cid", &refused);
+    let d = delete_upload(&st, &id, "cid", &refused, &no_s3);
     assert_eq!((d.text.as_str(), d.kind), ("Couldn't delete from Imgur: Permission denied", crate::editor::style::ToastKind::Error));
     assert!(st.get(&id).unwrap().meta.uploaded.is_some(), "kept after a failure");
 
@@ -541,12 +551,12 @@ fn deleting_an_upload_asks_then_deletes() {
         *asked.borrow_mut() = format!("{h}{p}");
         Ok((200, r#"{"data":true,"success":true,"status":200}"#.to_string()))
     };
-    let d = delete_upload(&st, &id, "cid", &ok_http);
+    let d = delete_upload(&st, &id, "cid", &ok_http, &no_s3);
     assert_eq!((d.text.as_str(), d.changed), ("Deleted from Imgur", true));
     assert_eq!(*asked.borrow(), "api.imgur.com/3/image/dhKq2");
     let m = st.get(&id).unwrap().meta;
     assert_eq!((m.uploaded, m.upload), (None, None));
-    assert!(delete_upload(&st, &id, "cid", &ok_http).text.contains("no upload"), "nothing left to delete");
+    assert!(delete_upload(&st, &id, "cid", &ok_http, &no_s3).text.contains("no upload"), "nothing left to delete");
 }
 
 /// The header still fits at the smallest window with the fourth filter.
@@ -591,6 +601,46 @@ fn open_with_picks_the_file() {
     inp.feed(&Ev::Key { vk: 'O' as u32, up: false, repeat: false, mods: Mods { ctrl: true, ..Mods::default() } });
     let (_, acts) = render(&mut h, &DARK, 960, 640, 1.0, &inp);
     assert_eq!(acts, [Act::OpenWith(e.id)]);
+}
+
+/// Share… hands the same file as Open with to the sheet (none comes up
+/// in tests): the saved file of an unedited capture, a recording's file,
+/// else a temporary picture; Ctrl+Shift+E asks for it where there is a
+/// sheet.
+#[test]
+fn share_hands_the_file() {
+    let (_r, st) = fixture("share");
+    let dir = std::env::temp_dir().join(format!("rustshot-hist-share-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let saved = dir.join("kept.png");
+    std::fs::write(&saved, b"png").unwrap();
+    let e = st.list().into_iter().find(|e| !e.meta.edited && !e.meta.kind.is_recording()).unwrap();
+    st.update(&e.id, |m| m.saved = Some(saved.clone())).unwrap();
+    crate::share::SHARED.with(|s| s.borrow_mut().clear());
+    let edited = st.list().into_iter().find(|e| e.meta.edited).unwrap();
+    let ok = crate::editor::style::ToastKind::Success;
+    if crate::share::supported() {
+        assert_eq!(share(&st, &e.id, &Config::default(), None).kind, ok);
+        assert_eq!(share(&st, &edited.id, &Config::default(), None).kind, ok);
+        let shared = crate::share::SHARED.with(|s| s.borrow().clone());
+        assert_eq!(shared[0], saved);
+        assert!(shared[1].starts_with(crate::open_with::temp_dir()) && shared[1].extension().unwrap() == "png");
+        let _ = std::fs::remove_file(&shared[1]);
+    } else {
+        assert_ne!(share(&st, &e.id, &Config::default(), None).kind, ok, "no sheet here");
+    }
+    assert_ne!(share(&st, "missing", &Config::default(), None).kind, ok);
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut h = history(&st);
+    h.sel = vec![e.id.clone()];
+    let mut inp = Input::default();
+    inp.feed(&Ev::Key { vk: 'E' as u32, up: false, repeat: false, mods: Mods { ctrl: true, shift: true, ..Mods::default() } });
+    let (_, acts) = render(&mut h, &DARK, 960, 640, 1.0, &inp);
+    if crate::share::supported() {
+        assert_eq!(acts, [Act::Share(e.id)]);
+    } else {
+        assert!(acts.is_empty(), "{acts:?}");
+    }
 }
 
 #[test]
@@ -649,7 +699,7 @@ fn history_window_smoke() {
     let (_tx, rx) = std::sync::mpsc::channel();
     let mut w = window::Window::new(history(&st), rx);
     let mut d = crate::wind::AutoClose::new(&mut w, 1000);
-    let spec = crate::wind::WindowSpec { title: "Rustshot History".into(), w: W, h: H, resizable: true, min: MIN };
+    let spec = crate::wind::WindowSpec { title: "Rustshot History".into(), w: W, h: H, resizable: true, min: MIN, controls: crate::wind::Controls::MinMaxClose };
     crate::wind::run_window(spec, &mut d).expect("history window");
     assert!(d.frames > 0, "drew a frame");
 }

@@ -60,14 +60,23 @@ fn meta_round_trips() {
             time: 1_791_000_000,
             kind: crate::uploads::UpKind::Video,
             thumb: Some(vec![0x89, b'P', b'N', b'G', 0, 1, 2]),
+            s3: None,
         }),
         duration_ms: 42_000,
         file: Some(PathBuf::from("/home/u/Videos/rec.mp4")),
         edited: true,
         objects: vec!["Arrow".into(), "Number".into(), "Number".into()],
+        mask: Some(vec![crate::objects::Pt::new(1.5, 2.0), crate::objects::Pt::new(40.0, 3.25), crate::objects::Pt::new(20.0, 30.0)]),
     };
     let back = meta_from_json(&meta_to_json(&m)).expect("parses");
     assert_eq!(back, m);
+    assert!(meta_to_json(&m).contains("\"mask\":[[1.5,2],[40,3.25],[20,30]]"));
+    // A broken lasso fails closed: an empty one, the picture not shown.
+    let bad = meta_to_json(&m).replace("[[1.5,2],[40,3.25],[20,30]]", "[[1,2],\"x\"]");
+    let back = meta_from_json(&bad).unwrap();
+    assert_eq!(back.mask, Some(Vec::new()));
+    assert!(mask_unreadable(&back) && !mask_unreadable(&m) && !mask_unreadable(&Meta::default()));
+    assert!(mask_unreadable(&meta_from_json(&meta_to_json(&back)).unwrap()), "still unreadable once written again");
     // The defaults (no saved file, no link) round-trip too.
     let d = Meta { captured: (2025, 1, 31, 23, 59, 59), ..Meta::default() };
     assert_eq!(meta_from_json(&meta_to_json(&d)).unwrap(), d);

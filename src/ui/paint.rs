@@ -149,6 +149,20 @@ impl WTok {
         }
     }
 
+    /// The OS title bar in this theme: the window surface (`win`, what
+    /// every window draws along its top edge) with the board's 1 px
+    /// border (`bd` over `win`), so the caption reads as part of the
+    /// design rather than a white strip over a dark window.
+    pub fn frame(&self) -> crate::wind::FrameColors {
+        let over = |c: C4, o: C4| {
+            let a = u32::from(o.a);
+            let mix = |b: u8, f: u8| ((u32::from(b) * (255 - a) + u32::from(f) * a + 127) / 255) as u8;
+            [mix(c.r, o.r), mix(c.g, o.g), mix(c.b, o.b)]
+        };
+        let w = self.win;
+        crate::wind::FrameColors { dark: self.dark, caption: [w.r, w.g, w.b], border: over(w, self.bd) }
+    }
+
     /// The Edit window's checkerboard (darker in light mode: board 11).
     #[allow(dead_code)] // the Edit window (next)
     pub fn edit_checks(&self) -> (C4, C4) {

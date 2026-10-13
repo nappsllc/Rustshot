@@ -29,6 +29,9 @@ pub enum Task {
     /// [`crate::open_with`]): the file this export saved, else a
     /// temporary one.
     OpenWith,
+    /// Hand the picture to the system's share sheet ([`crate::share`]):
+    /// the file this export saved, else a temporary one.
+    Share,
 }
 
 /// Day of year (1-366) for a civil date.
@@ -110,12 +113,46 @@ impl Format {
     }
 }
 
+/// The Settings › Capture border (`border_width` logical px at `scale`,
+/// at least 1 px when on) and its opaque color; `None` when off.
+pub fn border(cfg: &Config, scale: f32) -> Option<(u32, [u8; 4])> {
+    let w = cfg.border_width.min(crate::config::BORDER_MAX);
+    if w == 0 {
+        return None;
+    }
+    let (r, g, b, _) = crate::config::parse_color(&cfg.border_color).unwrap_or((0, 0, 0, 255));
+    Some((((w as f32 * scale.max(0.25)).round() as u32).max(1), [r, g, b, 255]))
+}
+
+/// `img` with the Settings › Capture border around it ([`border`]), the
+/// image grown by it on every side; `img` itself when there is none.
+/// Applied where an export starts (the overlay, the Edit window, History,
+/// the direct captures), never to what was exported already (the pin's
+/// and the thumbnail's own Copy and Save).
+pub fn with_border(img: PixBuf, cfg: &Config, scale: f32) -> PixBuf {
+    let Some((b, c)) = border(cfg, scale) else { return img };
+    let (w, h) = img.dimensions();
+    let (ow, oh) = (w + 2 * b, h + 2 * b);
+    let mut out = PixBuf::new(ow, oh);
+    let d = out.as_raw_mut();
+    for px in d.as_chunks_mut::<4>().0 {
+        *px = c;
+    }
+    let (row, orow) = (w as usize * 4, ow as usize * 4);
+    for (y, src) in img.as_raw().chunks_exact(row.max(1)).enumerate() {
+        let at = (y + b as usize) * orow + b as usize * 4;
+        d[at..at + row].copy_from_slice(src);
+    }
+    out
+}
+
 /// Encode `img` as `fmt`; `quality` (1-100) only affects JPEG.
 pub fn encode(img: &PixBuf, fmt: Format, quality: u8) -> Result<Vec<u8>> {
     match fmt {
         Format::Png => img.to_png(),
-        Format::Jpeg => jpeg_bytes(img, quality),
-        Format::Bmp => bmp_bytes(img),
+        // Transparent parts (a freeform capture's outside) are white.
+        Format::Jpeg => jpeg_bytes(&crate::objects::mask::flatten_white(img), quality),
+        Format::Bmp => bmp_bytes(&crate::objects::mask::flatten_white(img)),
     }
 }
 
@@ -256,7 +293,7 @@ pub fn format_filename(pattern: &str) -> String {
 }
 
 /// Expand pattern tokens for `now` (`%s` = `epoch`); no sanitising.
-fn expand_pattern(pattern: &str, now: Tm, epoch: u64) -> String {
+pub(crate) fn expand_pattern(pattern: &str, now: Tm, epoch: u64) -> String {
     let (ty, tmo, td, th, tmi, ts) = now;
     let (y, mo, d) = (ty as i64, tmo as i64, td as i64);
     let (h, mi, s) = (th as i64, tmi as i64, ts as i64);
@@ -686,7 +723,7 @@ pub fn run_export(
                         continue;
                     }
                 };
-                upload = Some(spawn_upload(bytes, cfg.upload_client_id.clone()));
+                upload = Some(spawn_upload(bytes, cfg.clone()));
             }
             Task::OpenWith => {
                 let saved = done.iter().rev().find_map(|d| match d {
@@ -701,6 +738,23 @@ pub fn run_export(
                     Err(e) => {
                         messages.push(format!("error: open with: {e:#}"));
                         done.push(Done::Failed("Open with", format!("{e:#}")));
+                        error = true;
+                    }
+                }
+            }
+            Task::Share => {
+                let saved = done.iter().rev().find_map(|d| match d {
+                    Done::Saved(p) | Done::SavedDesktop(p) => Some(p.clone()),
+                    _ => None,
+                });
+                match crate::share::file_for(img, saved.as_deref(), cfg) {
+                    Ok(p) => {
+                        messages.push(format!("share: {}", p.display()));
+                        crate::share::share(&p);
+                    }
+                    Err(e) => {
+                        messages.push(format!("error: share: {e:#}"));
+                        done.push(Done::Failed("Share", format!("{e:#}")));
                         error = true;
                     }
                 }
@@ -808,18 +862,26 @@ thread_local! {
     pub static FAKE_UPLOAD: std::cell::Cell<Option<FakeUpload>> = const { std::cell::Cell::new(None) };
 }
 
-fn spawn_upload(png: Vec<u8>, client_id: String) -> Receiver<Result<String, String>> {
+/// Upload `png` on a worker to the configured destination: Imgur, or
+/// the S3 bucket (named by the file name pattern, `.png`).
+fn spawn_upload(png: Vec<u8>, cfg: Config) -> Receiver<Result<String, String>> {
     let (tx, rx) = mpsc::channel();
     #[cfg(test)]
     let fake = FAKE_UPLOAD.with(|f| f.get());
-    std::thread::spawn(move || {
+    crate::busy::spawn(move || {
         #[cfg(test)]
         let r = {
-            let _ = client_id;
+            let _ = &cfg;
             fake.map_or_else(|| Err("no uploader in tests".to_string()), |f| f(&png))
         };
         #[cfg(not(test))]
-        let r = do_upload(&png, &client_id);
+        let r = match crate::s3::Dest::of(&cfg) {
+            crate::s3::Dest::S3 => {
+                let name = format!("{}.png", format_filename(&cfg.filename_pattern));
+                crate::s3::upload_now(&cfg, crate::s3::Source::Bytes(&png, &name))
+            }
+            crate::s3::Dest::Imgur => do_upload(&png, &cfg.upload_client_id),
+        };
         // The record's thumbnail (the deletehash came with the reply).
         if let Ok(link) = &r {
             crate::uploads::note_thumb(link, crate::uploads::thumb_png(&png));
@@ -850,6 +912,8 @@ mod curl;
 pub use curl::download_http_exact;
 #[cfg(not(windows))]
 pub use curl::download_to;
+#[cfg(all(not(windows), not(test)))]
+pub use curl::http_request;
 
 #[cfg(test)]
 mod tests {
@@ -1200,5 +1264,53 @@ mod tests {
             Err(e) if e.contains("\"code\":\"429\"") => {}
             Err(e) => panic!("upload failed: {e}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod border_tests {
+    use super::*;
+
+    fn cfg(w: u32, c: &str) -> Config {
+        Config { border_width: w, border_color: c.into(), ..Config::default() }
+    }
+
+    #[test]
+    fn the_border_surrounds_the_image_in_physical_px() {
+        let img = PixBuf::from_pixel(3, 2, [10, 20, 30, 255]);
+        // Off: the image as it is.
+        assert_eq!(with_border(img.clone(), &Config::default(), 1.0), img);
+        let out = with_border(img.clone(), &cfg(2, "#ff8000"), 1.0);
+        assert_eq!(out.dimensions(), (7, 6));
+        for y in 0..6 {
+            for x in 0..7 {
+                let inside = (2..5).contains(&x) && (2..4).contains(&y);
+                let want = if inside { [10, 20, 30, 255] } else { [255, 128, 0, 255] };
+                assert_eq!(out.get_pixel(x, y), want, "({x}, {y})");
+            }
+        }
+        // Logical px: 3 at 150 % is 5 (rounded) on each side; 1 at 50 % is 1.
+        assert_eq!(with_border(img.clone(), &cfg(3, "#000"), 1.5).dimensions(), (13, 12));
+        assert_eq!(border(&cfg(1, "#000"), 0.5), Some((1, [0, 0, 0, 255])));
+        assert_eq!(border(&cfg(8, "#123456"), 2.0), Some((16, [0x12, 0x34, 0x56, 255])));
+        // A width past the limit is the limit; a bad color is black.
+        assert_eq!(border(&cfg(20, "nope"), 1.0), Some((8, [0, 0, 0, 255])));
+    }
+
+    /// What is saved and what is encoded carry the border.
+    #[test]
+    fn saved_files_carry_the_border() {
+        let dir = std::env::temp_dir().join(format!("rustshot-border-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("b.png");
+        let img = with_border(PixBuf::from_pixel(4, 4, [255, 255, 255, 255]), &cfg(1, "#00ff00"), 1.0);
+        let c = Config { save_path: dir.display().to_string(), ..cfg(1, "#00ff00") };
+        let res = run_export(&img, (0, 0), &[Task::Save { path: Some(path.clone()), ask: false }], &c);
+        assert!(!res.error, "{:?}", res.messages);
+        let back = PixBuf::from_png(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(back.dimensions(), (6, 6));
+        assert_eq!(back.get_pixel(0, 0), [0, 255, 0, 255]);
+        assert_eq!(back.get_pixel(1, 1), [255, 255, 255, 255]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

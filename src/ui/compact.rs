@@ -401,6 +401,44 @@ impl Ui<'_> {
 
     /// A link (12.5/500, `acfg`), with the external-link glyph when `ext`.
     pub fn clink(&mut self, id: &str, label: &str, size: f32, ext: bool, tok: &Tok) -> bool {
+        self.clink_in(id, label, size, ext, tok.acfg)
+    }
+
+    /// A 16 px checkbox and its 12 px label (as in the Edit window's
+    /// "Don't ask again"). Returns whether it flipped.
+    pub fn checkbox(&mut self, id: &str, label: &str, on: &mut bool, tok: &Tok) -> bool {
+        let w = (16.0 + 8.0 + self.text_w(12.0, label)).ceil();
+        let r = self.alloc(Some(w), self.ctl_h);
+        let id = id_of(id);
+        let focused = self.focusable(id);
+        let (hov, _, mut clicked) = press_logic(self, id, r);
+        clicked |= self.take_key(focused, &[key::SPACE]);
+        if clicked && self.enabled {
+            *on = !*on;
+        }
+        let k = fade(self);
+        let s = self.px(16.0).round();
+        let b = FRect { x: r.x, y: (r.y + (r.h - s) / 2.0).round(), w: s, h: s };
+        if *on {
+            fill(self, b, 4.0, tok.ac.fade(k));
+            let is = self.px(12.0);
+            let o = self.px(2.0);
+            draw_icon(&mut self.fb, "check", b.x + o, b.y + o, is, C4::rgb(0x0E, 0x10, 0x20).fade(k));
+        } else {
+            let lw = (1.5 * self.k).max(1.0);
+            let c = if hov { tok.tx2 } else { tok.tg_off };
+            let inset = FRect { x: b.x + lw / 2.0, y: b.y + lw / 2.0, w: b.w - lw, h: b.h - lw };
+            self.fb.stroke_rounded(inset, 3.25 * self.k, lw, c.fade(k));
+        }
+        if show_focus(self, id) {
+            focus_ring(self, b, 4.0);
+        }
+        self.text_at(12.0, label, b.x + self.px(24.0), r.y + r.h / 2.0, tok.tx2.fade(k), false);
+        clicked && self.enabled
+    }
+
+    /// [`Ui::clink`] in color `c` (a status line that is also a link).
+    pub fn clink_in(&mut self, id: &str, label: &str, size: f32, ext: bool, c: C4) -> bool {
         let w = (self.text_w(size, label) + if ext { 19.0 } else { 0.0 }).ceil();
         let r = self.alloc(Some(w), self.ctl_h);
         let id = id_of(id);
@@ -408,7 +446,7 @@ impl Ui<'_> {
         let (hov, _, mut clicked) = press_logic(self, id, r);
         clicked |= self.take_key(focused, &[key::RETURN, key::SPACE]);
         let k = fade(self);
-        let c = tok.acfg.fade(k);
+        let c = c.fade(k);
         let cy = r.y + r.h / 2.0;
         let tw_ = self.text_at(size, label, r.x, cy, c, false);
         if ext {

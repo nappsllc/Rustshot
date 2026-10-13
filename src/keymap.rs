@@ -43,9 +43,14 @@ pub enum Action {
     SaveDesktop,
     /// Open the capture with an app the user picks (the system's chooser).
     OpenWith,
+    /// Hand the capture to the system's share sheet (Windows, macOS).
+    Share,
     Upload,
     /// Pin the selection to the screen (an always-on-top window).
     Pin,
+    /// Tighten the selection to its content (its uniform margins cut;
+    /// `trim`). Shift+A: A is the arrow.
+    Trim,
     Undo,
     Redo,
     SelectAll,
@@ -86,10 +91,17 @@ pub enum Action {
     TextBold,
     TextItalic,
     TextUnderline,
+    /// The crop frame: in the overlay over the selection, in the Edit
+    /// window over the picture (non-destructive there).
+    ToolCrop,
+    /// Quick Redact: blur the sensitive text the selection's OCR finds.
+    Redact,
+    /// The freeform (lasso) selection on / off (remembered).
+    SelectFreeform,
 }
 
 impl Action {
-    pub const ALL: [Action; 50] = [
+    pub const ALL: [Action; 55] = [
         Action::ToolSelect,
         Action::ToolPencil,
         Action::ToolLine,
@@ -114,8 +126,10 @@ impl Action {
         Action::SaveAs,
         Action::SaveDesktop,
         Action::OpenWith,
+        Action::Share,
         Action::Upload,
         Action::Pin,
+        Action::Trim,
         Action::Undo,
         Action::Redo,
         Action::SelectAll,
@@ -140,6 +154,9 @@ impl Action {
         Action::TextBold,
         Action::TextItalic,
         Action::TextUnderline,
+        Action::ToolCrop,
+        Action::Redact,
+        Action::SelectFreeform,
     ];
 
     /// A while-recording chord: global (Meta allowed), not an overlay key.
@@ -206,8 +223,10 @@ impl Action {
             Action::SaveAs => ("save_as", "Save As", &["Ctrl+Shift+S"]),
             Action::SaveDesktop => ("save_desktop", "Save to Desktop", &["Ctrl+D"]),
             Action::OpenWith => ("open_with", "Open with\u{2026}", &["Ctrl+O"]),
+            Action::Share => ("share", "Share\u{2026}", &["Ctrl+Shift+E"]),
             Action::Upload => ("upload", "Upload", &["Ctrl+U"]),
             Action::Pin => ("pin", "Pin to screen", &["Ctrl+P"]),
+            Action::Trim => ("trim", "Trim to content", &["Shift+A"]),
             Action::Undo => ("undo", "Undo", &["Ctrl+Z"]),
             Action::Redo => ("redo", "Redo", &["Ctrl+Shift+Z", "Ctrl+Y"]),
             Action::SelectAll => ("select_all", "Select whole screen", &["Ctrl+A"]),
@@ -233,6 +252,11 @@ impl Action {
             Action::TextBold => ("text_bold", "Bold (while typing)", &["Ctrl+B"]),
             Action::TextItalic => ("text_italic", "Italic (while typing)", &["Ctrl+I"]),
             Action::TextUnderline => ("text_underline", "Underline (while typing)", &["Ctrl+U"]),
+            // C (Ctrl+C is Copy), Shift+R (R is the rectangle), Shift+F
+            // (F is video mode's Screen source).
+            Action::ToolCrop => ("tool_crop", "Crop", &["C"]),
+            Action::Redact => ("redact", "Quick Redact", &["Shift+R"]),
+            Action::SelectFreeform => ("select_freeform", "Freeform selection", &["Shift+F"]),
         }
     }
 
@@ -502,7 +526,7 @@ mod tests {
     #[test]
     fn defaults_match_spec_table() {
         let km = Keymap::defaults();
-        let want: [(Action, &[&str]); 50] = [
+        let want: [(Action, &[&str]); 52] = [
             (Action::ToolSelect, &["V"]),
             (Action::ToolPencil, &["P"]),
             (Action::ToolLine, &["L"]),
@@ -527,8 +551,10 @@ mod tests {
             (Action::SaveAs, &["Ctrl+Shift+S"]),
             (Action::SaveDesktop, &["Ctrl+D"]),
             (Action::OpenWith, &["Ctrl+O"]),
+            (Action::Share, &["Ctrl+Shift+E"]),
             (Action::Upload, &["Ctrl+U"]),
             (Action::Pin, &["Ctrl+P"]),
+            (Action::Trim, &["Shift+A"]),
             (Action::Undo, &["Ctrl+Z"]),
             (Action::Redo, &["Ctrl+Shift+Z", "Ctrl+Y"]),
             (Action::SelectAll, &["Ctrl+A"]),
@@ -655,6 +681,7 @@ mod tests {
         assert_eq!(km.resolve('P' as u32, NONE), Some(Action::ToolPencil));
         assert_eq!(km.resolve('P' as u32, m(false, true, false)), None);
         assert_eq!(km.resolve('P' as u32, m(true, false, false)), Some(Action::Pin), "Ctrl+P pins, P is the pencil");
+        assert_eq!(km.resolve('A' as u32, m(false, true, false)), Some(Action::Trim), "Shift+A trims, A is the arrow");
         assert_eq!(km.resolve('P' as u32, m(true, true, false)), None);
         assert_eq!(km.resolve('P' as u32, m(false, false, true)), None);
         assert_eq!(km.resolve('S' as u32, m(true, false, false)), Some(Action::Save));
@@ -668,7 +695,9 @@ mod tests {
         assert_eq!(km.resolve('B' as u32, NONE), Some(Action::ToolBlur));
         assert_eq!(km.resolve(key::LBRACKET, NONE), Some(Action::SizeDown));
         assert_eq!(km.resolve(key::RBRACKET, NONE), Some(Action::SizeUp));
-        assert_eq!(km.resolve('C' as u32, NONE), None);
+        assert_eq!(km.resolve('C' as u32, NONE), Some(Action::ToolCrop), "C crops (Ctrl+C copies)");
+        assert_eq!(km.resolve('R' as u32, m(false, true, false)), Some(Action::Redact));
+        assert_eq!(km.resolve('F' as u32, m(false, true, false)), Some(Action::SelectFreeform));
         assert_eq!(km.resolve('O' as u32, NONE), Some(Action::CopyText));
         assert_eq!(km.resolve('H' as u32, NONE), Some(Action::CopyColor));
         assert_eq!(km.resolve('H' as u32, m(true, false, false)), None);

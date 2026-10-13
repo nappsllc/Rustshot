@@ -487,6 +487,35 @@ fn preview_edit_pngs() {
                 at(&mut w, Ev::Char(c));
             }
             crate::ui::preview::save(&name("typing"), w.pixels());
+            // The crop frame, then the crop applied (the rest hidden).
+            let (_r3, mut w) = window(&format!("pv3-{tn}-{k}"), page(1180, 760), objects(), th, k);
+            key(&mut w, 'C' as u32, Mods::default());
+            let v = w.e.canvas.view;
+            drag(&mut w, v.to_win(Pt::new(0.0, 0.0)), v.to_win(Pt::new(220.0, 40.0)));
+            crate::ui::preview::save(&name("crop-frame"), w.pixels());
+            key(&mut w, crate::wind::key::RETURN, Mods::default());
+            crate::ui::preview::save(&name("cropped"), w.pixels());
+            // Text mode over the page's words (a fake recognizer).
+            crate::ocr::FAKE_LINES.with(|f| {
+                f.set(Some(|_| {
+                    let l = |y: f32, ws: &[&str]| crate::ocr::Line {
+                        words: ws.iter().enumerate().map(|(i, t)| crate::ocr::Word { text: (*t).into(), x: 312.0 + i as f32 * 120.0, y, w: 100.0, h: 16.0 }).collect(),
+                    };
+                    Ok(vec![l(84.0, &["Quarterly", "summary", "draft"]), l(274.0, &["Contact", "ops@example.com"])])
+                }))
+            });
+            let (_r4, mut w) = window(&format!("pv4-{tn}-{k}"), page(1180, 760), objects(), th, k);
+            key(&mut w, 'O' as u32, Mods::default());
+            let t0 = std::time::Instant::now();
+            while !w.e.toast.as_ref().is_some_and(|t| t.0.starts_with("Select text")) {
+                assert!(t0.elapsed() < std::time::Duration::from_secs(10), "the words never came");
+                std::thread::sleep(std::time::Duration::from_millis(2));
+                at(&mut w, Ev::Timer);
+            }
+            let v = w.e.canvas.view;
+            drag(&mut w, v.to_win(Pt::new(330.0, 90.0)), v.to_win(Pt::new(450.0, 280.0)));
+            crate::ui::preview::save(&name("text-mode"), w.pixels());
+            crate::ocr::FAKE_LINES.with(|f| f.set(None));
         }
     }
 }
@@ -590,7 +619,7 @@ fn edit_window_smoke() {
     let (_r, mut w) = window("smoke", img, objects(), DARK, 1.0);
     w.scale = None;
     let mut d = crate::wind::AutoClose::new(&mut w, if big { 3000 } else { 1000 });
-    let spec = crate::wind::WindowSpec { title: "Rustshot Edit".into(), w: W, h: H, resizable: true, min: MIN };
+    let spec = crate::wind::WindowSpec { title: "Rustshot Edit".into(), w: W, h: H, resizable: true, min: MIN, controls: crate::wind::Controls::MinMaxClose };
     crate::wind::run_window(spec, &mut d).expect("edit window");
     assert!(d.frames > 0, "drew a frame");
 }

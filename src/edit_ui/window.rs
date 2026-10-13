@@ -82,7 +82,7 @@ impl Window {
     /// A worker's export result, applied as the timer would (tests).
     #[cfg(test)]
     pub fn apply_done_for_tests(&mut self, res: crate::export::ExportResult, saves: bool, objs: Vec<crate::objects::Obj>) {
-        let d = export_done(res, saves, &self.e.store, &self.e.entry.id.clone(), objs, &self.e.cfg);
+        let d = export_done(res, saves, &self.e.store, &self.e.entry.id.clone(), objs, self.e.canvas.crop(), &self.e.cfg);
         let _ = self.done.0.send(d);
         self.tick();
     }
@@ -178,7 +178,7 @@ impl Window {
                         self.e.perform(d);
                     }
                 }
-                Request::SaveAs | Request::SaveDesktop | Request::OpenWith | Request::Copy | Request::Upload | Request::CopyText | Request::Pin => self.export(r),
+                Request::SaveAs | Request::SaveDesktop | Request::OpenWith | Request::Share | Request::Copy | Request::Upload | Request::CopyText | Request::Pin => self.export(r),
             }
         }
     }
@@ -187,8 +187,12 @@ impl Window {
     /// encoding and uploads take a while).
     fn export(&mut self, r: Request) {
         use crate::export::Task;
+        // Settings › Capture "Add a border" (the capture's scale); not on
+        // what Copy text reads.
         let img = self.e.canvas.export();
+        let img = if r == Request::CopyText { img } else { crate::export::with_border(img, &self.e.cfg, self.e.entry.meta.scale) };
         let objs = self.e.canvas.objects().to_vec();
+        let crop = self.e.canvas.crop();
         if r == Request::Pin {
             #[cfg(not(test))]
             let at = crate::capture::cursor_pos();
@@ -212,21 +216,24 @@ impl Window {
         }
         if r == Request::CopyText {
             let tx = self.done.0.clone();
-            std::thread::spawn(move || {
+            crate::busy::spawn(move || {
                 let res = crate::ocr::recognize(&img);
                 let note = crate::ocr::finish(&res);
                 let _ = tx.send(Done { text: note.text, kind: note.kind, uploaded: None, saved: None });
             });
             return;
         }
-        if r == Request::OpenWith {
-            // The chooser is owned by this window, its failure a toast.
+        if r == Request::OpenWith || r == Request::Share {
+            // The chooser (the share sheet) is over this window, its
+            // failure a toast.
             #[allow(clippy::unnecessary_cast)] // a pointer, a u64 or a usize
             let owner = Some(self.hwnd.0 as usize);
             let (tx, cfg) = (self.done.0.clone(), self.e.cfg.clone());
-            std::thread::spawn(move || {
-                let res = crate::open_with::file_for(&img, None, &cfg).map_err(|e| format!("Open with failed: {e:#}"));
-                let text = match res.and_then(|p| crate::open_with::open_now(&p, owner)) {
+            crate::busy::spawn(move || {
+                let what = if r == Request::Share { "Share" } else { "Open with" };
+                let res = crate::open_with::file_for(&img, None, &cfg).map_err(|e| format!("{what} failed: {e:#}"));
+                let hand = |p: std::path::PathBuf| if r == Request::Share { crate::share::share_now(&p, owner) } else { crate::open_with::open_now(&p, owner) };
+                let text = match res.and_then(hand) {
                     Ok(()) => String::new(),
                     Err(e) => e,
                 };
@@ -237,14 +244,17 @@ impl Window {
         let (store, id, cfg) = (self.e.store.clone(), self.e.entry.id.clone(), self.e.cfg.clone());
         let saves = matches!(r, Request::SaveAs | Request::SaveDesktop);
         let tx = self.done.0.clone();
-        std::thread::spawn(move || {
+        crate::busy::spawn(move || {
             let res = crate::export::run_export(&img, (0, 0), std::slice::from_ref(&task), &cfg);
-            let _ = tx.send(export_done(res, saves, &store, &id, objs, &cfg));
+            let _ = tx.send(export_done(res, saves, &store, &id, objs, crop, &cfg));
         });
     }
 
     fn settle(&mut self) {
         self.handle_requests();
+        if let Some((text, kind)) = self.e.canvas.take_notice() {
+            self.e.note(text, kind);
+        }
         self.e.settle_quit();
         if self.e.closing {
             wind::close(self.hwnd);
@@ -457,6 +467,14 @@ impl Window {
             changed = true;
         }
         self.e.canvas.flush(false);
+        // Text mode's words, Quick Redact's blurs; the editor's notices.
+        if self.e.canvas.poll() {
+            changed = true;
+        }
+        if let Some((text, kind)) = self.e.canvas.take_notice() {
+            self.e.note(text, kind);
+            changed = true;
+        }
         let now = Instant::now();
         let toast = self.e.toast.as_ref().is_some_and(|(_, _, at)| at.elapsed() < Duration::from_millis(2500));
         if self.e.toast.is_some() && !toast {
@@ -472,14 +490,14 @@ impl Window {
 /// A worker's export finished: a save (`saves`) that wrote a file is an
 /// edit of the entry (its objects and the file) and saves the edits; a
 /// cancelled or failed one saves nothing.
-fn export_done(res: crate::export::ExportResult, saves: bool, store: &crate::history::Store, id: &str, objs: Vec<crate::objects::Obj>, cfg: &crate::config::Config) -> Done {
+fn export_done(res: crate::export::ExportResult, saves: bool, store: &crate::history::Store, id: &str, objs: Vec<crate::objects::Obj>, crop: Option<crate::objects::FRect>, cfg: &crate::config::Config) -> Done {
     let file = res.done.iter().find_map(|d| match d {
         crate::export::Done::Saved(p) | crate::export::Done::SavedDesktop(p) => Some(p.clone()),
         _ => None,
     });
     if saves && let Some(p) = file {
         let bytes = std::fs::metadata(&p).map_or(0, |m| m.len());
-        let recorded = super::record_save(store, id, &objs, &p, bytes);
+        let recorded = super::record_save(store, id, &objs, crop, &p, bytes);
         let s = super::Saved { path: p, bytes, recorded };
         return Done { text: s.note(), kind: if recorded { ToastKind::Success } else { ToastKind::Info }, uploaded: None, saved: Some((objs, s)) };
     }
@@ -536,5 +554,9 @@ impl Driver for Window {
             return Cursor::Arrow;
         }
         self.e.canvas.cursor(self.mouse)
+    }
+
+    fn frame_colors(&self) -> Option<wind::FrameColors> {
+        Some(WTok::of(self.e.canvas.theme()).frame())
     }
 }

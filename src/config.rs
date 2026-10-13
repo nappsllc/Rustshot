@@ -78,12 +78,45 @@ pub struct Config {
     /// The Edit window's Save: "" asks (Overwrite the original / Save as
     /// new file), "overwrite" or "new" once "Don't ask again" was ticked.
     pub edit_save: String,
+    /// The overlay's Copy text button: "select" (Text mode: pick words,
+    /// then copy) or "all" (copy everything at once). The global Copy
+    /// text hotkey always copies all.
+    pub copy_text_mode: String,
+    /// Quick Redact's kinds ("all", or a list such as "emails,phones";
+    /// [`crate::ocr::redact::parse_kinds`]); the Redact menu remembers them.
+    pub redact_kinds: String,
+    /// What Quick Redact puts over a find: "solid" (an opaque fill in the
+    /// surrounding color) or "blur" (a coarse mosaic under a strong blur).
+    pub redact_style: String,
+    /// The last selection mode: "rect" or "freeform" (a lasso).
+    pub selection_mode: String,
     /// Palette shown in the color picker.
     pub user_colors: Vec<String>,
     /// Imgur client id used for uploads.
     pub upload_client_id: String,
     /// Copy the resulting URL to the clipboard after upload.
     pub copy_url_after_upload: bool,
+    /// Where uploads go: "imgur" or "s3" (an S3-compatible bucket, see
+    /// `crate::s3`).
+    pub upload_destination: String,
+    /// S3: the endpoint (`https://<account>.r2.cloudflarestorage.com`,
+    /// `https://s3.<region>.amazonaws.com`), the signing region ("auto"
+    /// for R2), the bucket and the access key id. The secret access key
+    /// is never here: it is in the OS credential store (`crate::keystore`).
+    pub s3_endpoint: String,
+    pub s3_region: String,
+    pub s3_bucket: String,
+    pub s3_access_key_id: String,
+    /// S3: the public URL base links start with ("" = the object's URL).
+    pub s3_public_url: String,
+    /// S3: the key prefix, with strftime tokens (`%Y/%m/%d/`).
+    pub s3_key_prefix: String,
+    /// S3: path-style URLs (`<endpoint>/<bucket>/<key>`); off,
+    /// virtual-hosted (`<bucket>.<endpoint>/<key>`).
+    pub s3_path_style: bool,
+    /// Upload a recording as soon as it is saved (the toast's Copy link
+    /// then copies at once).
+    pub upload_recordings: bool,
     /// If true, GUI captures only the monitor under the cursor even when
     /// all monitors share the same scale factor.
     pub capture_active_monitor: bool,
@@ -142,6 +175,9 @@ pub struct Config {
     /// Recording: a GIF stops by itself after this many seconds (15, 30
     /// or 60; video mode's panel and Settings › Recording "Max length").
     pub rec_gif_max: u32,
+    /// Recording: the camera bubble's background, "off", "light" or
+    /// "strong" (blurred behind the person).
+    pub rec_camera_bg: String,
     /// The capture launcher's last choices: "region", "screen" or
     /// "window"; the delay in seconds (0-60); "edit", "copy", "save" or
     /// "pin" after the capture.
@@ -183,7 +219,28 @@ pub struct Config {
     pub accept_on_select: String,
     /// The hint card when the overlay opens (Settings › Overlay).
     pub overlay_hints: bool,
+    /// Settings › Capture "Trim margins automatically": every new region
+    /// or window selection is tightened to its content (`trim`).
+    pub trim_margins: bool,
+    /// Settings › Capture "HDR screenshots" (Windows): "tonemap" (an HDR
+    /// monitor is read in FP16 and tone-mapped to SDR) or "keep" (as the
+    /// system hands it over).
+    pub hdr_screenshots: String,
+    /// Settings › Capture "Add a border": its color (`#rrggbb`) and width
+    /// in logical px (0 = no border, 1-8), around every exported image.
+    pub border_color: String,
+    pub border_width: u32,
+    /// Windows: the daemon reminds how to pick Rustshot for Win+Shift+S
+    /// while it is offered but not chosen (false: "Don't show again").
+    pub screenclip_hint: bool,
+    /// Windows: the user knows that with the tray icon off nothing runs in
+    /// the background (they turned it off in this version, or saw the
+    /// one-time notice an older file with `show_tray = false` gets).
+    pub tray_off_mode_seen: bool,
 }
+
+/// The widest export border (logical px).
+pub const BORDER_MAX: u32 = 8;
 
 /// The drawing tools whose size and color are remembered
 /// (`tool_<id>_size`, `tool_<id>_color`).
@@ -302,11 +359,21 @@ impl Default for Config {
             magnifier_square: false,
             accept_on_select: "off".into(),
             overlay_hints: true,
+            trim_margins: false,
+            hdr_screenshots: "tonemap".into(),
+            border_color: "#000000".into(),
+            border_width: 0,
+            screenclip_hint: true,
+            tray_off_mode_seen: false,
             history: true,
             history_days: 30,
             history_max_mb: 2048,
             history_hotkey: "Shift+Meta+H".into(),
             edit_save: String::new(),
+            copy_text_mode: "select".into(),
+            redact_kinds: "all".into(),
+            redact_style: "solid".into(),
+            selection_mode: "rect".into(),
             user_colors: [
                 "#f04438", "#ff8a1f", "#ffc532", "#2dc06f", "#19b5d6", "#3b82f6", "#8b5cf6",
                 "#ec4899", "#ffffff", "#111318",
@@ -316,6 +383,15 @@ impl Default for Config {
             .collect(),
             upload_client_id: "313baf0c7b4d3ff".into(),
             copy_url_after_upload: true,
+            upload_destination: "imgur".into(),
+            s3_endpoint: String::new(),
+            s3_region: crate::s3::DEFAULT_REGION.into(),
+            s3_bucket: String::new(),
+            s3_access_key_id: String::new(),
+            s3_public_url: String::new(),
+            s3_key_prefix: crate::s3::DEFAULT_PREFIX.into(),
+            s3_path_style: true,
+            upload_recordings: false,
             capture_active_monitor: false,
             snap_windows: true,
             snap_tab_hint: true,
@@ -340,6 +416,7 @@ impl Default for Config {
             rec_camera_ring_color: String::new(),
             rec_camera_ring_width: RING_WIDTH_DEFAULT,
             rec_gif_max: 30,
+            rec_camera_bg: "off".into(),
             launcher_source: "region".into(),
             launcher_delay: 0,
             launcher_after: "edit".into(),
@@ -642,8 +719,11 @@ pub fn copy_key(from: &Config, to: &mut Config, key: &str) {
         "recent_colors" => to.recent_colors = from.recent_colors.clone(),
         "rec_camera_ring_color" => to.rec_camera_ring_color = from.rec_camera_ring_color.clone(),
         "rec_camera_ring_width" => to.rec_camera_ring_width = from.rec_camera_ring_width,
+        "rec_camera_bg" => to.rec_camera_bg = from.rec_camera_bg.clone(),
         "ui_scale" => to.ui_scale = from.ui_scale,
         "snap_tab_hint" => to.snap_tab_hint = from.snap_tab_hint,
+        "redact_kinds" => to.redact_kinds = from.redact_kinds.clone(),
+        "selection_mode" => to.selection_mode = from.selection_mode.clone(),
         "tool_callout_style" => to.callout_style = from.callout_style.clone(),
         k if fmt_key(k).is_some() => {
             let (id, what) = fmt_key(k).expect("a style key");
@@ -873,6 +953,101 @@ pub fn hotkey_warnings(cfg: &Config) -> Vec<String> {
         .collect()
 }
 
+/// Global hotkeys whose default moved: (config key, former defaults).
+/// 0.2.0 moved Record off Win+Shift+R and Copy text off Win+Shift+T
+/// (Windows holds both); 0.1.3 moved Capture window off Win+Shift+W.
+pub const FORMER_DEFAULTS: [(&str, &[&str]); 3] = [
+    ("record_hotkey", &["Shift+Meta+R"]),
+    ("capture_text_hotkey", &["Shift+Meta+T"]),
+    ("capture_window_hotkey", &["Shift+Meta+W"]),
+];
+
+/// The global hotkey field of `key` (one of [`FORMER_DEFAULTS`]').
+fn former_field<'a>(cfg: &'a mut Config, key: &str) -> Option<&'a mut String> {
+    match key {
+        "record_hotkey" => Some(&mut cfg.record_hotkey),
+        "capture_text_hotkey" => Some(&mut cfg.capture_text_hotkey),
+        "capture_window_hotkey" => Some(&mut cfg.capture_window_hotkey),
+        _ => None,
+    }
+}
+
+/// Global hotkeys still on a former default ([`FORMER_DEFAULTS`]; the
+/// chord compared, not the text, so "Meta+Shift+R" is "Shift+Meta+R"):
+/// the old file kept the default of its day, so they get today's.
+/// A key that was never a default is left alone. Never a clash: when
+/// another global already has today's default, the first of the slot's
+/// alternates (then the spare keys) no global has is used instead, or
+/// none (unset) when every one is taken. Returns (key, old, new).
+pub fn migrate_old_defaults(cfg: &mut Config) -> Vec<(&'static str, String, String)> {
+    let def = Config::default();
+    let mut out = Vec::new();
+    for (key, olds) in FORMER_DEFAULTS {
+        let new = former_field(&mut def.clone(), key).map(|s| s.clone()).unwrap_or_default();
+        let slot = former_slot(key);
+        let Some(v) = former_field(cfg, key) else { continue };
+        let Some(c) = crate::keymap::Chord::parse(v) else { continue };
+        if !olds.iter().any(|o| crate::keymap::Chord::parse(o) == Some(c)) {
+            continue;
+        }
+        let wanted = crate::hotkey::wanted(cfg);
+        let taken = |s: &str| {
+            let k = crate::keymap::Chord::parse(s);
+            (0..crate::hotkey::SLOTS).any(|j| j != slot && k.is_some() && crate::keymap::Chord::parse(&wanted[j]) == k)
+        };
+        let pick = std::iter::once(new.as_str())
+            .chain(crate::hotkey::alternates(slot).iter().copied())
+            .chain(crate::hotkey::FREE_POOL)
+            .find(|s| !taken(s))
+            .unwrap_or_default()
+            .to_string();
+        let Some(v) = former_field(cfg, key) else { continue };
+        out.push((key, std::mem::replace(v, pick.clone()), pick));
+    }
+    out
+}
+
+/// The hotkey slot of a [`FORMER_DEFAULTS`] key.
+fn former_slot(key: &str) -> usize {
+    match key {
+        "record_hotkey" => 2,
+        "capture_window_hotkey" => 4,
+        _ => 6, // capture_text_hotkey
+    }
+}
+
+/// [`migrate_old_defaults`] for the daemon's `cfg`, read from `path`: the
+/// moved keys are written back to the file (only their lines, atomically)
+/// and logged. A file that cannot be written keeps them for next time;
+/// this run uses the new keys anyway.
+pub fn migrate_at(path: &std::path::Path, cfg: &mut Config) {
+    let moved = migrate_old_defaults(cfg);
+    if moved.is_empty() {
+        return;
+    }
+    let edits: Vec<(String, Option<String>)> = moved.iter().map(|(k, _, new)| (k.to_string(), Some(toml_str(new)))).collect();
+    let res = edit_top_keys_at(path, &edits);
+    let def = crate::hotkey::defaults();
+    for (k, old, new) in &moved {
+        let why = if new.is_empty() {
+            " (today's and every spare key are used by other Rustshot hotkeys: unset; pick one in Settings \u{203a} Key bindings)".to_string()
+        } else if !def.iter().any(|d| crate::hotkey::chord_label(d) == crate::hotkey::chord_label(new)) {
+            " (today's default is another Rustshot hotkey's)".to_string()
+        } else {
+            String::new()
+        };
+        let now = if new.is_empty() { "none".to_string() } else { crate::hotkey::chord_label(new) };
+        eprintln!(
+            "rustshot: {k} {} was an old default; it is {now} now{why}{}",
+            crate::hotkey::chord_label(old),
+            if res.is_ok() { " (config.toml updated)" } else { "" }
+        );
+    }
+    if let Err(e) = res {
+        eprintln!("rustshot: could not update {}: {e}", path.display());
+    }
+}
+
 /// `[shortcuts]` problems: unknown actions, bad chords, and chords bound
 /// to several actions (the first in table order wins).
 pub fn shortcut_warnings(cfg: &Config) -> Vec<String> {
@@ -958,6 +1133,19 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
                 cfg.accept_on_select = one_of(val, &["off", "copy", "save"]).map_err(|e| bad("value", &e))?
             }
             "overlay_hints" => cfg.overlay_hints = as_bool(val).map_err(|e| bad("boolean", &e))?,
+            "trim_margins" => cfg.trim_margins = as_bool(val).map_err(|e| bad("boolean", &e))?,
+            "hdr_screenshots" => cfg.hdr_screenshots = one_of(val, &["tonemap", "keep"]).map_err(|e| bad("value", &e))?,
+            "border_color" => {
+                let v = as_string(val).map_err(|e| bad("string", &e))?;
+                parse_color(&v).ok_or_else(|| bad("color (#rrggbb)", &v))?;
+                cfg.border_color = v.trim().to_string();
+            }
+            "border_width" => {
+                cfg.border_width =
+                    as_u64(val).ok().filter(|w| *w <= BORDER_MAX as u64).ok_or_else(|| bad("number (0-8)", val))? as u32
+            }
+            "screenclip_hint" => cfg.screenclip_hint = as_bool(val).map_err(|e| bad("boolean", &e))?,
+            "tray_off_mode_seen" => cfg.tray_off_mode_seen = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "history" => cfg.history = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "history_days" => {
                 cfg.history_days =
@@ -969,6 +1157,10 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
             }
             "history_hotkey" => cfg.history_hotkey = as_string(val).map_err(|e| bad("string", &e))?,
             "edit_save" => cfg.edit_save = one_of(val, &["", "overwrite", "new"]).map_err(|e| bad("value", &e))?,
+            "copy_text_mode" => cfg.copy_text_mode = one_of(val, &["select", "all"]).map_err(|e| bad("value", &e))?,
+            "redact_kinds" => cfg.redact_kinds = as_string(val).map_err(|e| bad("string", &e))?,
+            "redact_style" => cfg.redact_style = one_of(val, &["solid", "blur"]).map_err(|e| bad("value", &e))?,
+            "selection_mode" => cfg.selection_mode = one_of(val, &["rect", "freeform"]).map_err(|e| bad("value", &e))?,
             "upload_client_id" => {
                 cfg.upload_client_id = as_string(val).map_err(|e| bad("string", &e))?
             }
@@ -1010,6 +1202,15 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
                     .map_err(|_| bad("number", "out of range"))?
             }
             "user_colors" => cfg.user_colors = as_array(val).map_err(|e| bad("array", &e))?,
+            "upload_destination" => cfg.upload_destination = one_of(val, &["imgur", "s3"]).map_err(|e| bad("value", &e))?,
+            "s3_endpoint" => cfg.s3_endpoint = as_string(val).map_err(|e| bad("string", &e))?,
+            "s3_region" => cfg.s3_region = as_string(val).map_err(|e| bad("string", &e))?,
+            "s3_bucket" => cfg.s3_bucket = as_string(val).map_err(|e| bad("string", &e))?,
+            "s3_access_key_id" => cfg.s3_access_key_id = as_string(val).map_err(|e| bad("string", &e))?,
+            "s3_public_url" => cfg.s3_public_url = as_string(val).map_err(|e| bad("string", &e))?,
+            "s3_key_prefix" => cfg.s3_key_prefix = as_string(val).map_err(|e| bad("string", &e))?,
+            "s3_path_style" => cfg.s3_path_style = as_bool(val).map_err(|e| bad("boolean", &e))?,
+            "upload_recordings" => cfg.upload_recordings = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "copy_url_after_upload" => {
                 cfg.copy_url_after_upload =
                     as_bool(val).map_err(|e| bad("boolean", &e))?
@@ -1060,6 +1261,7 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
             }
             // Recorder redesign.
             "rec_gif_max" => cfg.rec_gif_max = fps_of(val, &[15, 30, 60]).map_err(|e| bad("number (15, 30 or 60)", &e))?,
+            "rec_camera_bg" => cfg.rec_camera_bg = one_of(val, &["off", "light", "strong"]).map_err(|e| bad("value", &e))?,
             "recent_colors" => cfg.recent_colors = as_array(val).map_err(|e| bad("array", &e))?,
             "launcher_source" => {
                 cfg.launcher_source = one_of(val, &["region", "screen", "window"]).map_err(|e| bad("value", &e))?
@@ -1221,6 +1423,7 @@ pub fn to_toml(c: &Config) -> String {
     );
     out.push_str(&format!("rec_gif_max = {}
 ", c.rec_gif_max));
+    out.push_str(&format!("rec_camera_bg = {}\n", q(&c.rec_camera_bg)));
     out.push_str(&format!("show_thumbnail = {}\n", c.show_thumbnail));
     out.push_str(&format!(
         "magnifier = {}\nmagnifier_square = {}\naccept_on_select = {}\noverlay_hints = {}\n",
@@ -1229,11 +1432,32 @@ pub fn to_toml(c: &Config) -> String {
         q(&c.accept_on_select),
         c.overlay_hints
     ));
+    out.push_str(&format!("screenclip_hint = {}\n", c.screenclip_hint));
+    out.push_str(&format!("tray_off_mode_seen = {}\n", c.tray_off_mode_seen));
+    out.push_str(&format!(
+        "trim_margins = {}\nhdr_screenshots = {}\nborder_color = {}\nborder_width = {}\n",
+        c.trim_margins,
+        q(&c.hdr_screenshots),
+        q(&c.border_color),
+        c.border_width
+    ));
     out.push_str(&format!(
         "launcher_source = {}\nlauncher_delay = {}\nlauncher_after = {}\n",
         q(&c.launcher_source),
         c.launcher_delay,
         q(&c.launcher_after)
+    ));
+    out.push_str(&format!(
+        "upload_destination = {}\ns3_endpoint = {}\ns3_region = {}\ns3_bucket = {}\ns3_access_key_id = {}\ns3_public_url = {}\ns3_key_prefix = {}\ns3_path_style = {}\nupload_recordings = {}\n",
+        q(&c.upload_destination),
+        q(&c.s3_endpoint),
+        q(&c.s3_region),
+        q(&c.s3_bucket),
+        q(&c.s3_access_key_id),
+        q(&c.s3_public_url),
+        q(&c.s3_key_prefix),
+        c.s3_path_style,
+        c.upload_recordings
     ));
     out.push_str(&format!(
         "history = {}\nhistory_days = {}\nhistory_max_mb = {}\nhistory_hotkey = {}\nedit_save = {}\n",
@@ -1242,6 +1466,13 @@ pub fn to_toml(c: &Config) -> String {
         c.history_max_mb,
         q(&c.history_hotkey),
         q(&c.edit_save)
+    ));
+    out.push_str(&format!(
+        "copy_text_mode = {}\nredact_kinds = {}\nredact_style = {}\nselection_mode = {}\n",
+        q(&c.copy_text_mode),
+        q(&c.redact_kinds),
+        q(&c.redact_style),
+        q(&c.selection_mode)
     ));
     for id in TOOL_IDS {
         if let Some(v) = c.tool_sizes.get(id) {
@@ -1573,6 +1804,72 @@ oops
     }
 
     #[test]
+    fn old_default_hotkeys_migrate_by_chord() {
+        // The user's file: Record on the pre-0.2.0 default, written in
+        // another order; full screen on today's default; window on a key
+        // they chose; Copy text on the old T.
+        let text = "# mine\nrecord_hotkey = \"Meta+Shift+R\"\ncapture_full_hotkey = \"Shift+Meta+F\"\ncapture_window_hotkey = \"Ctrl+Alt+W\"\ncapture_text_hotkey = \"shift+win+t\"\nbogus = 1\n";
+        let mut cfg = parse_config(text).unwrap();
+        let moved = migrate_old_defaults(&mut cfg);
+        assert_eq!(
+            moved,
+            [
+                ("record_hotkey", "Meta+Shift+R".to_string(), "Shift+Meta+G".to_string()),
+                ("capture_text_hotkey", "shift+win+t".to_string(), "Shift+Meta+Z".to_string()),
+            ]
+        );
+        assert_eq!((cfg.record_hotkey.as_str(), cfg.capture_text_hotkey.as_str()), ("Shift+Meta+G", "Shift+Meta+Z"));
+        assert_eq!((cfg.capture_full_hotkey.as_str(), cfg.capture_window_hotkey.as_str()), ("Shift+Meta+F", "Ctrl+Alt+W"), "not former defaults");
+        // Once: nothing moves the second time.
+        assert!(migrate_old_defaults(&mut cfg).is_empty());
+        // Win+Shift+W was Capture window's default.
+        let mut w = parse_config("capture_window_hotkey = \"Shift+Meta+W\"\n").unwrap();
+        assert_eq!(migrate_old_defaults(&mut w).len(), 1);
+        assert_eq!(w.capture_window_hotkey, "Shift+Meta+E");
+        // Today's default is another global's (the user's full screen on
+        // G): the slot's first free alternate instead, never a clash.
+        let mut c = Config { record_hotkey: "Shift+Meta+R".into(), capture_full_hotkey: "Shift+Meta+G".into(), ..Config::default() };
+        assert_eq!(migrate_old_defaults(&mut c), [("record_hotkey", "Shift+Meta+R".to_string(), "Shift+Meta+J".to_string())]);
+        let w = crate::hotkey::wanted(&c);
+        for i in 0..w.len() {
+            for j in 0..i {
+                assert!(w[i].is_empty() || w[i] != w[j], "{w:?}");
+            }
+        }
+        // Every candidate taken: unset.
+        let mut c = Config {
+            capture_hotkey: "Shift+Meta+Z".into(),
+            capture_window_hotkey: "Shift+Meta+Q".into(),
+            capture_full_hotkey: "Shift+Meta+Y".into(),
+            history_hotkey: "Shift+Meta+J".into(),
+            record_hotkey: "Shift+Meta+E".into(),
+            repeat_hotkey: "Shift+Meta+G".into(),
+            capture_text_hotkey: "Shift+Meta+T".into(),
+            ..Config::default()
+        };
+        assert_eq!(migrate_old_defaults(&mut c), [("capture_text_hotkey", "Shift+Meta+T".to_string(), String::new())]);
+        // Unbound, invalid or another former default's key: left alone.
+        let mut c = Config { record_hotkey: String::new(), capture_text_hotkey: "Nope+".into(), capture_window_hotkey: "Shift+Meta+R".into(), ..Config::default() };
+        assert!(migrate_old_defaults(&mut c).is_empty());
+        // The file: only the moved lines change.
+        let dir = scratch("migrate");
+        let p = dir.join("config.toml");
+        std::fs::write(&p, text).unwrap();
+        let mut cfg = read_at(&p).unwrap().unwrap();
+        migrate_at(&p, &mut cfg);
+        assert_eq!(
+            std::fs::read_to_string(&p).unwrap(),
+            "# mine\nrecord_hotkey = \"Shift+Meta+G\"\ncapture_full_hotkey = \"Shift+Meta+F\"\ncapture_window_hotkey = \"Ctrl+Alt+W\"\ncapture_text_hotkey = \"Shift+Meta+Z\"\nbogus = 1\n"
+        );
+        assert_eq!(read_at(&p).unwrap().unwrap(), cfg);
+        // A file with nothing to move is not touched.
+        let before = std::fs::metadata(&p).unwrap().modified().unwrap();
+        migrate_at(&p, &mut cfg);
+        assert_eq!(std::fs::metadata(&p).unwrap().modified().unwrap(), before);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn save_skip_version_edits_the_file_in_place() {
         let dir = scratch("skip");
         let p = dir.join("config.toml");
@@ -1768,6 +2065,47 @@ bogus = 1
         assert!(parse_config("accept_on_select = \"maybe\"").is_err());
     }
 
+    /// Trim margins, HDR screenshots and the export border: defaults,
+    /// round trip, and values out of range refused.
+    #[test]
+    fn capture_extras_roundtrip() {
+        let d = Config::default();
+        assert!(!d.trim_margins && d.hdr_screenshots == "tonemap" && d.border_width == 0 && d.border_color == "#000000");
+        let c = Config { trim_margins: true, hdr_screenshots: "keep".into(), border_color: "#ff8800".into(), border_width: 3, ..Config::default() };
+        let text = to_toml(&c);
+        assert!(text.contains("trim_margins = true\n") && text.contains("hdr_screenshots = \"keep\"\n"), "{text}");
+        assert!(text.contains("border_color = \"#ff8800\"\n") && text.contains("border_width = 3\n"), "{text}");
+        assert_eq!(parse_config(&text).unwrap(), c);
+        assert!(!rewrite_loses(&text));
+        for bad in ["border_width = 9", "border_width = -1", "border_color = \"red\"", "hdr_screenshots = \"hdr\""] {
+            assert!(parse_config(bad).is_err(), "{bad}");
+        }
+        assert_eq!(parse_config("border_width = 8").unwrap().border_width, 8);
+    }
+
+    /// The Win+Shift+S guide's "Don't show again": on by default, kept.
+    #[test]
+    fn tray_off_mode_seen_roundtrip() {
+        assert!(!Config::default().tray_off_mode_seen);
+        let c = Config { tray_off_mode_seen: true, ..Config::default() };
+        let text = to_toml(&c);
+        assert!(text.contains("tray_off_mode_seen = true\n"), "{text}");
+        assert_eq!(parse_config(&text).unwrap(), c);
+        assert!(parse_config("tray_off_mode_seen = 1").is_err());
+    }
+
+    #[test]
+    fn screenclip_hint_roundtrip() {
+        assert!(Config::default().screenclip_hint);
+        let c = Config { screenclip_hint: false, ..Config::default() };
+        let text = to_toml(&c);
+        assert!(text.contains("screenclip_hint = false\n"), "{text}");
+        assert_eq!(parse_config(&text).unwrap(), c);
+        assert!(!rewrite_loses(&text));
+        assert!(!parse_config("screenclip_hint = false").unwrap().screenclip_hint);
+        assert!(parse_config("screenclip_hint = 2").is_err());
+    }
+
     #[test]
     fn redesign_keys_defaults_and_roundtrip() {
         let d = Config::default();
@@ -1825,6 +2163,13 @@ record_hotkey = \"Ctrl+Shift+R\"
         assert_eq!(parse_config(&to_toml(&h)).unwrap(), h);
         assert!(!rewrite_loses(&to_toml(&h)));
         assert!(parse_config("history_days = 0").is_err() && parse_config("edit_save = \"maybe\"").is_err());
+        // Copy text lets the user select; Redact finds every kind; regions.
+        assert!(d.copy_text_mode == "select" && d.redact_kinds == "all" && d.selection_mode == "rect");
+        assert_eq!(d.redact_style, "solid");
+        let s = Config { copy_text_mode: "all".into(), redact_kinds: "emails,ips".into(), redact_style: "blur".into(), selection_mode: "freeform".into(), ..Config::default() };
+        assert_eq!(parse_config(&to_toml(&s)).unwrap(), s);
+        assert!(!rewrite_loses(&to_toml(&s)));
+        assert!(parse_config("copy_text_mode = \"some\"").is_err() && parse_config("selection_mode = \"circle\"").is_err());
         let w = hotkey_warnings(&Config { history_hotkey: "Nope+".into(), ..Config::default() });
         assert!(w.len() == 1 && w[0].starts_with("history_hotkey"), "{w:?}");
         let w = hotkey_warnings(&Config { repeat_hotkey: "Nope+".into(), ..Config::default() });
@@ -1944,6 +2289,26 @@ record_hotkey = \"Ctrl+Shift+R\"
         for ok in ["rec_fps = 60", "rec_gif_fps = 10", "rec_camera_shape = \"circle\"", "rec_linux_encoder = \"auto\""] {
             assert!(parse_config(ok).is_ok(), "{ok}");
         }
+    }
+
+    /// The camera bubble's background: off by default, light or strong,
+    /// written and read back; anything else refused.
+    #[test]
+    fn camera_background_key() {
+        assert_eq!(Config::default().rec_camera_bg, "off");
+        assert!(to_toml(&Config::default()).contains("rec_camera_bg = \"off\"\n"));
+        for v in ["off", "light", "strong"] {
+            let c = parse_config(&format!("rec_camera_bg = \"{v}\"")).unwrap();
+            assert_eq!(c.rec_camera_bg, v);
+            assert_eq!(parse_config(&to_toml(&c)).unwrap(), c);
+        }
+        assert_eq!(parse_config("rec_camera_bg = \"Strong\"").unwrap().rec_camera_bg, "strong");
+        for bad in ["rec_camera_bg = \"blur\"", "rec_camera_bg = 1"] {
+            assert!(parse_config(bad).expect_err(bad).contains("'rec_camera_bg'"), "{bad}");
+        }
+        let mut to = Config::default();
+        copy_key(&Config { rec_camera_bg: "light".into(), ..Config::default() }, &mut to, "rec_camera_bg");
+        assert_eq!(to.rec_camera_bg, "light");
     }
 
     #[test]

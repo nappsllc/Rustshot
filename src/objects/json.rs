@@ -31,6 +31,12 @@
 //! reader drops the stand-in. (Checked against v0.2.0's own reader,
 //! `v020/json.rs`.) Version 2 documents are read as well (none are
 //! written).
+//!
+//! The Edit window's crop is `"crop":[x,y,w,h]` next to `"objects"`
+//! ([`to_json_doc`]): an older build ignores it, so after the objects
+//! come opaque `rect` fills over everything outside the crop
+//! (`"stands_for":"crop"`), which it draws and this reader drops: what
+//! a crop hides stays hidden in v0.2 and v0.3 too.
 
 use super::{CalloutStyle, FRect, Obj, Pt, TextFmt};
 use crate::text::{Align, Family};
@@ -163,10 +169,103 @@ impl W<'_> {
 
 /// The objects as an `annotations.json` document (one object per line).
 pub fn to_json(objs: &[Obj]) -> String {
+    to_json_doc(objs, None, (0, 0))
+}
+
+/// What `annotations.json` holds: the objects, and the Edit window's
+/// crop (image px; `None`: the whole picture).
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct Doc {
+    pub objects: Vec<Obj>,
+    pub crop: Option<FRect>,
+}
+
+/// The color of a crop's stand-in fills.
+const CROP_FILL: C4 = C4 { r: 0, g: 0, b: 0, a: 255 };
+
+/// The stand-ins an older build draws for `crop` of a `size` picture:
+/// opaque filled rects over everything outside it (overlapping at the
+/// joins and past the picture's edges, so no rounded corner leaves a
+/// pixel uncovered).
+pub fn crop_stand_ins(crop: FRect, size: (u32, u32)) -> Vec<Obj> {
+    let Some(c) = super::mask::crop_rect(crop, size) else { return Vec::new() };
+    let (w, h) = (size.0 as f32, size.1 as f32);
+    let g = 2.0;
+    super::mask::outside(c, size)
+        .into_iter()
+        .map(|b| {
+            let mut r = b;
+            if b.y + b.h <= c.y + 0.5 || b.y >= c.y + c.h - 0.5 {
+                // Top / bottom: across the picture and past its edges.
+                r = FRect { x: -g, w: w + 2.0 * g, ..r };
+                if b.y <= 0.5 {
+                    r = FRect { y: -g, h: r.h + g, ..r };
+                }
+                if b.y + b.h >= h - 0.5 {
+                    r.h += g;
+                }
+            } else {
+                // Left / right: over the joins with the bands above and below.
+                r = FRect { y: r.y - g, h: r.h + 2.0 * g, ..r };
+                if b.x <= 0.5 {
+                    r = FRect { x: -g, w: r.w + g, ..r };
+                }
+                if b.x + b.w >= w - 0.5 {
+                    r.w += g;
+                }
+            }
+            Obj::RectFill { r, color: CROP_FILL, width: 1.0 }
+        })
+        .collect()
+}
+
+/// Every stand-in for `crop` of a `size` picture with `objs`: the fills
+/// over what the crop hides, and over the loupe of every magnifier that
+/// reads from outside the crop (an older build would magnify the hidden
+/// pixels into the visible part).
+pub fn doc_stand_ins(objs: &[Obj], crop: FRect, size: (u32, u32)) -> Vec<Obj> {
+    let mut v = crop_stand_ins(crop, size);
+    let Some(c) = super::mask::crop_rect(crop, size) else { return v };
+    for o in objs {
+        if let Some((src, loupe)) = o.loupe_parts()
+            && !(src.x >= c.x && src.y >= c.y && src.x + src.w <= c.x + c.w && src.y + src.h <= c.y + c.h)
+        {
+            v.push(Obj::RectFill { r: loupe, color: CROP_FILL, width: 1.0 });
+        }
+    }
+    v
+}
+
+/// [`to_json`] with the Edit window's `crop` of a `size` picture: written
+/// as `"crop":[x,y,w,h]` (this build) and, for older builds that know
+/// nothing of it, opaque fills over what it hides (`"stands_for":"crop"`,
+/// on top of every object), so a crop that hides something keeps it
+/// hidden there too; this reader drops them.
+pub fn to_json_doc(objs: &[Obj], crop: Option<FRect>, size: (u32, u32)) -> String {
     let mut out = String::new();
-    let _ = write!(out, "{{\"version\":{WRITTEN},\"objects\":[");
-    for (i, o) in objs.iter().enumerate() {
+    let _ = write!(out, "{{\"version\":{WRITTEN}");
+    let crop = crop.and_then(|c| super::mask::crop_rect(c, size)).filter(|c| *c != FRect { x: 0.0, y: 0.0, w: size.0 as f32, h: size.1 as f32 });
+    if let Some(c) = crop {
+        out.push_str(",\"crop\":");
+        rect(&mut out, c);
+    }
+    out.push_str(",\"objects\":[");
+    let stand_ins = crop.map_or(Vec::new(), |c| doc_stand_ins(objs, c, size));
+    for (i, o) in objs.iter().chain(&stand_ins).enumerate() {
         out.push_str(if i == 0 { "\n " } else { ",\n " });
+        if i >= objs.len() {
+            if let Obj::RectFill { r, color, width } = o {
+                out.push_str("{\"type\":\"rect\"");
+                let mut w = W(&mut out);
+                w.rect("r", *r);
+                w.color("color", *color);
+                w.num("width", *width);
+                w.bool("fill", true);
+                w.str("stands_for", "crop");
+                out.push('}');
+            }
+            continue;
+        }
         if let Obj::Blur { r, sigma } = o {
             // The stand-in an older build draws (this one drops it).
             out.push_str("{\"type\":\"pixelate\"");
@@ -565,7 +664,29 @@ impl F<'_> {
 /// ([`super::edit::sanitize`]: sizes in range, rects normalised, points
 /// within a million pixels).
 pub fn from_json(s: &str) -> Result<Vec<Obj>> {
+    from_json_doc(s).map(|d| d.objects)
+}
+
+/// [`from_json`] with the crop (`"crop"`; its stand-ins dropped). A crop
+/// that is not four finite numbers is an error (fail closed).
+pub fn from_json_doc(s: &str) -> Result<Doc> {
     let V::Obj(top) = parse(s)? else { bail!("annotations.json: not an object") };
+    let crop = match top.iter().find(|(n, _)| n == "crop").map(|(_, v)| v) {
+        None | Some(V::Null) => None,
+        Some(_) => {
+            let f = F { ty: "document", fields: &top };
+            let r = f.rect("crop")?;
+            if r.w <= 0.0 || r.h <= 0.0 {
+                bail!("annotations.json: an empty crop");
+            }
+            Some(r)
+        }
+    };
+    let objects = objects_of(&top)?;
+    Ok(Doc { objects, crop })
+}
+
+fn objects_of(top: &[(String, V)]) -> Result<Vec<Obj>> {
     let get = |k: &str| top.iter().find(|(n, _)| n == k).map(|(_, v)| v);
     match get("version") {
         Some(V::Num(v)) if *v >= 1.0 && *v <= VERSION as f64 && v.fract() == 0.0 => {}
@@ -589,6 +710,8 @@ pub fn from_json(s: &str) -> Result<Vec<Obj>> {
             "pencil" => Obj::Path { pts: f.pts("pts")?, color: f.color("color")?, width: f.num("width")? },
             "line" => Obj::Line { a: f.pt("a")?, b: f.pt("b")?, color: f.color("color")?, width: f.num("width")? },
             "arrow" => Obj::Arrow { a: f.pt("a")?, b: f.pt("b")?, color: f.color("color")?, width: f.num("width")? },
+            // A crop's stand-ins (the crop itself is the document's).
+            "rect" if matches!(f.get("stands_for"), Some(V::Str(s)) if s == "crop") => continue,
             "rect" | "ellipse" => {
                 let (r, color, width) = (f.rect("r")?, f.color("color")?, f.num("width")?);
                 match (ty, f.bool_or("fill", false)?) {
@@ -777,6 +900,107 @@ mod tests {
         }
     }
 
+    /// A crop round-trips; an older build (v0.2.0's own reader) reads the
+    /// document and draws opaque fills over every pixel outside it, on
+    /// top of the objects, so nothing the crop hides shows there.
+    #[test]
+    fn crops_round_trip_and_stay_hidden_in_v0_2_0() {
+        use crate::objects::v020;
+        let size = (300, 200);
+        let crop = FRect { x: 40.0, y: 30.0, w: 150.0, h: 100.0 };
+        let mut objs = every_kind();
+        objs.extend(every_v2_kind());
+        let s = to_json_doc(&objs, Some(crop), size);
+        assert!(s.starts_with("{\"version\":1,\"crop\":[40,30,150,100],\"objects\":["), "{s}");
+        let d = from_json_doc(&s).unwrap();
+        assert_eq!(d, Doc { objects: objs.clone(), crop: Some(crop) }, "the stand-ins are dropped");
+        assert_eq!(from_json(&s).unwrap(), objs);
+        assert_eq!(to_json_doc(&d.objects, d.crop, size), s, "stable");
+        // No crop (or the whole picture): as before.
+        assert_eq!(to_json_doc(&objs, None, size), to_json(&objs));
+        assert_eq!(to_json_doc(&objs, Some(FRect { x: 0.0, y: 0.0, w: 300.0, h: 200.0 }), size), to_json(&objs));
+        assert_eq!(from_json_doc(&to_json(&objs)).unwrap().crop, None);
+        // Fail closed on a broken crop.
+        assert!(from_json_doc("{\"version\":1,\"crop\":[1,2],\"objects\":[]}").is_err());
+        assert!(from_json_doc("{\"version\":1,\"crop\":[1,2,0,5],\"objects\":[]}").is_err());
+
+        // v0.3.0's reader: every object as written, then the fills on top.
+        let v3 = crate::objects::v030::json::from_json(&s).expect("v0.3.0 reads it");
+        assert_eq!(&v3[..objs.len()], &objs[..]);
+        assert_eq!(&v3[objs.len()..], &doc_stand_ins(&objs, crop, size)[..], "v0.3.0 draws the stand-ins");
+        let old = v020::json::from_json(&s).expect("v0.2.0 reads it");
+        let n = objs.len();
+        assert_eq!(old.len(), n + doc_stand_ins(&objs, crop, size).len());
+        // The crop's own fills (the loupe covers come after them).
+        let fills: Vec<Obj> = old[n..n + crop_stand_ins(crop, size).len()]
+            .iter()
+            .map(|o| match o {
+                v020::Obj::RectFill { r, color, width } => Obj::RectFill { r: *r, color: *color, width: *width },
+                o => panic!("a stand-in became {o:?}"),
+            })
+            .collect();
+        // Drawn as an older build draws them (same fill as this build's):
+        // every pixel outside the crop is covered, opaque.
+        let mut img = crate::pixbuf::PixBuf::from_pixel(size.0, size.1, [255, 255, 255, 255]);
+        for f in &fills {
+            f.render(&mut img, None);
+        }
+        for y in 0..size.1 {
+            for x in 0..size.0 {
+                let inside = (x as f32) >= crop.x + 1.0 && (x as f32) < crop.x + crop.w - 1.0 && (y as f32) >= crop.y + 1.0 && (y as f32) < crop.y + crop.h - 1.0;
+                let p = img.get_pixel(x, y);
+                if inside {
+                    assert_eq!(p, [255, 255, 255, 255], "({x}, {y}) inside the crop");
+                } else if !((x as f32) >= crop.x && (x as f32) < crop.x + crop.w && (y as f32) >= crop.y && (y as f32) < crop.y + crop.h) {
+                    assert_eq!(p, [0, 0, 0, 255], "({x}, {y}) outside the crop shows");
+                }
+            }
+        }
+    }
+
+    /// A magnifier inside the crop whose source lies outside it: this
+    /// build blanks the hidden part before it magnifies; older builds
+    /// (v0.2.0, v0.3.0 readers) get its loupe covered, so neither shows
+    /// a pixel of what the crop hides.
+    #[test]
+    fn a_magnifier_never_shows_what_the_crop_hides() {
+        let size = (300u32, 200u32);
+        let crop = FRect { x: 100.0, y: 0.0, w: 200.0, h: 200.0 };
+        // Red outside the crop (x < 100), white inside.
+        let mut pic = crate::pixbuf::PixBuf::new(size.0, size.1);
+        for (i, p) in pic.as_raw_mut().as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            *p = if i % size.0 as usize >= 100 { [255, 255, 255, 255] } else { [255, 0, 0, 255] };
+        }
+        let mag = Obj::Magnify { src: Pt::new(50.0, 100.0), dst: Pt::new(200.0, 100.0), radius: 40.0, zoom: 2.0, color: C4::rgb(0, 0, 255), width: 2.0 };
+        let reddish = |p: [u8; 4]| p[3] > 0 && p[0] > 150 && p[1] < 100 && p[2] < 100;
+        let in_loupe = |x: u32, y: u32| (x as f32 - 200.0).hypot(y as f32 - 100.0) < 36.0;
+        // This build: the export.
+        let out = crate::history::render(&pic, std::slice::from_ref(&mag), Some(crop), None);
+        assert_eq!(out.dimensions(), (200, 200));
+        for y in 0..200 {
+            for x in 0..200 {
+                assert!(!reddish(out.get_pixel(x, y)), "({x}, {y}) shows the hidden red");
+            }
+        }
+        // Older builds: their reader, drawn over the whole picture.
+        let s = to_json_doc(std::slice::from_ref(&mag), Some(crop), size);
+        for old in [crate::objects::v030::json::from_json(&s).unwrap()] {
+            let drawn = crate::editor::bake_objects(&pic, &old, None);
+            for y in 0..200 {
+                for x in 100..300 {
+                    if in_loupe(x, y) {
+                        assert!(!reddish(drawn.get_pixel(x, y)), "v0.3: ({x}, {y}) in the loupe shows the hidden red");
+                    }
+                }
+            }
+        }
+        let v2 = crate::objects::v020::json::from_json(&s).unwrap();
+        assert!(matches!(v2.last(), Some(crate::objects::v020::Obj::RectFill { .. })), "v0.2.0 gets the loupe's cover last");
+        assert!(matches!(v2.first(), Some(crate::objects::v020::Obj::Magnify { .. })));
+        // A magnifier reading inside the crop needs no cover.
+        let inside = Obj::Magnify { src: Pt::new(150.0, 100.0), dst: Pt::new(240.0, 100.0), radius: 40.0, zoom: 2.0, color: C4::rgb(0, 0, 255), width: 2.0 };
+        assert_eq!(doc_stand_ins(&[inside], crop, size).len(), crop_stand_ins(crop, size).len());
+    }
     /// What v0.2.0 wrote (version 1, texts without style fields) reads
     /// as plain text; style fields with unknown names fall back.
     #[test]

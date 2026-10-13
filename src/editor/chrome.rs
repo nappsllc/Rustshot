@@ -103,6 +103,14 @@ pub fn act_icon(a: Act) -> &'static str {
             Tool::Blur => "blur",
         },
         Act::SaveMenu => "chevron",
+        Act::Crop => "crop",
+        Act::Redact => "redact",
+        Act::Freeform => "lasso",
+        Act::TextSelect => "ocr",
+        Act::CopyAll | Act::TextCopy => "copy",
+        Act::RedactKind(_) => "",
+        // A menu row (the size label's): no icon.
+        Act::Trim => "",
         Act::ObjFront => "front",
         Act::ObjBack => "back",
         Act::ObjDup => "dup",
@@ -133,6 +141,7 @@ pub fn act_icon(a: Act) -> &'static str {
         Act::SaveAs => "save-as",
         Act::SaveDesktop => "save-desktop",
         Act::OpenWith => "set-external",
+        Act::Share => "share",
         Act::Upload => "cloud",
         Act::Pin => "pin",
         Act::Exit => "x",
@@ -152,6 +161,7 @@ pub fn act_icon(a: Act) -> &'static str {
         | Act::RecDevMenu(_)
         | Act::RecDev(..)
         | Act::RecShape(_)
+        | Act::RecBg(_)
         | Act::Mode(_)
         | Act::RecSource(_)
         | Act::RecCountdown(_)
@@ -230,6 +240,36 @@ pub fn toolbar(f: &mut Fb, ui: &Ui, tb: &Toolbar, st: &BarState, k: f32) {
                 let keys = tb.texts.get(key).map_or("", String::as_str);
                 let kw = tw(ui, 11.0, keys);
                 text(f, ui, 11.0, keys, r.x1() - ui.px(10.0) - kw, cy, if hovered { ui.th.accent_fg } else { ui.th.text_muted }.fade(kp));
+            }
+            Kind::Check { label, on, .. } => {
+                let r = round(it.r);
+                if hovered {
+                    fill(f, r, ui.px(6.0), ui.th.accent_bg.fade(kp));
+                }
+                let cy = r.y + r.h / 2.0;
+                let bx = round(FRect { x: r.x + ui.px(10.0), y: cy - ui.px(7.0), w: ui.px(14.0), h: ui.px(14.0) });
+                if on {
+                    fill(f, bx, ui.px(4.0), ui.th.accent.fade(kp));
+                    let isz = ui.px(12.0);
+                    draw_icon(f, "check", bx.x + (bx.w - isz) / 2.0, bx.y + (bx.h - isz) / 2.0, isz, C4::rgb(255, 255, 255).fade(kp));
+                } else {
+                    f.stroke_rounded(bx, ui.px(4.0), ui.line(), ui.th.text_muted.fade(kp));
+                }
+                let fg = if hovered { ui.th.accent_fg } else { ui.th.text };
+                text(f, ui, 12.5, label, bx.x1() + ui.px(8.0), cy, fg.fade(kp));
+            }
+            Kind::Toggle { on, icon, .. } => {
+                let r = round(it.r);
+                panel(f, ui, r, 8.0, &ALL_LAYERS, ui.th.surface, ui.th.border, k);
+                if on {
+                    fill(f, r, ui.px(8.0), ui.th.accent_bg.fade(k));
+                    ring(f, ui, r, 8.0, ui.th.accent_ring.fade(k));
+                } else if hovered {
+                    fill(f, r, ui.px(8.0), ui.th.bg_hover.fade(k));
+                }
+                let isz = ui.px(16.0);
+                let fg = if on { ui.th.accent_fg } else if hovered { ui.th.icon_hover } else { ui.th.icon };
+                draw_icon(f, icon, r.x + (r.w - isz) / 2.0, r.y + (r.h - isz) / 2.0, isz, fg.fade(k));
             }
             Kind::SegTrack => {
                 let r = round(it.r);
@@ -938,6 +978,38 @@ pub fn outline(f: &mut Fb, ui: &Ui, sr: FRect, k: f32) {
     }
 }
 
+/// Where the export border's preview goes: a band `b` px wide just
+/// outside the selection's outline (the border itself is added on export,
+/// right at the image's edge), 1 px clear of the outline.
+fn border_band(ui: &Ui, sr: FRect, b: f32) -> FRect {
+    let sr = round(sr);
+    let g = (2.0 * ui.line()).ceil() + 1.0;
+    FRect { x: sr.x - g - b, y: sr.y - g - b, w: sr.w + 2.0 * (g + b), h: sr.h + 2.0 * (g + b) }
+}
+
+/// Settings › Capture "Add a border": its preview, a band of the border's
+/// color and width around the selection's outline.
+pub fn border_preview(f: &mut Fb, ui: &Ui, sr: FRect, b: f32, c: C4) {
+    let o = border_band(ui, sr, b);
+    let (x, y, w, h, b) = (o.x as i32, o.y as i32, o.w as i32, o.h as i32, b.round().max(1.0) as i32);
+    f.fill_rect(x, y, w, b, c);
+    f.fill_rect(x, y + h - b, w, b, c);
+    f.fill_rect(x, y + b, b, h - 2 * b, c);
+    f.fill_rect(x + w - b, y + b, b, h - 2 * b, c);
+}
+
+/// What [`border_preview`] covers: its four strips.
+pub fn border_preview_bounds(ui: &Ui, sr: FRect, b: f32) -> Vec<FRect> {
+    let o = border_band(ui, sr, b);
+    let b = b.round().max(1.0) + AA;
+    vec![
+        FRect { x: o.x - AA, y: o.y - AA, w: o.w + 2.0 * AA, h: b + AA },
+        FRect { x: o.x - AA, y: o.y1() - b, w: o.w + 2.0 * AA, h: b + AA },
+        FRect { x: o.x - AA, y: o.y - AA, w: b + AA, h: o.h + 2.0 * AA },
+        FRect { x: o.x1() - b, y: o.y - AA, w: b + AA, h: o.h + 2.0 * AA },
+    ]
+}
+
 /// The [`outline`] plus 8 handles: white 6 ⌀ dot, 2 px accent ring (3
 /// when hot), 1 px halo.
 pub fn selection(f: &mut Fb, ui: &Ui, sr: FRect, hot: Option<usize>, k: f32) {
@@ -961,7 +1033,7 @@ fn label_texts(sr: FRect) -> (String, String) {
 /// Where `size_label` puts its panel.
 /// `at`: what to keep off (the toolbar above), and the mode switch it
 /// follows (10 px right of it, centred on it) when there is one.
-fn size_label_rect(ui: &Ui, sr: FRect, show_pos: bool, area: FRect, at: (Option<FRect>, Option<FRect>)) -> FRect {
+pub(super) fn size_label_rect(ui: &Ui, sr: FRect, show_pos: bool, area: FRect, at: (Option<FRect>, Option<FRect>)) -> FRect {
     let (size, pos) = label_texts(sr);
     let pad = ui.px(8.0);
     let mut w = 2.0 * pad + tw(ui, 12.0, &size);
@@ -1093,9 +1165,9 @@ const ALT: &str = "⌥";
 #[cfg(not(target_os = "macos"))]
 const ALT: &str = "Alt";
 #[cfg(target_os = "macos")]
-const SHIFT: &str = "⇧";
+pub(crate) const SHIFT: &str = "⇧";
 #[cfg(not(target_os = "macos"))]
-const SHIFT: &str = "Shift";
+pub(crate) const SHIFT: &str = "Shift";
 #[cfg(target_os = "macos")]
 const META: &str = "⌘";
 #[cfg(not(target_os = "macos"))]
@@ -1138,6 +1210,13 @@ pub fn act_tip(a: Act, km: &Keymap) -> (&'static str, Vec<String>) {
         Act::ObjStyle(crate::objects::CalloutStyle::Cloud) => "Cloud",
         Act::ObjStyle(crate::objects::CalloutStyle::Ellipse) => "Ellipse",
         Act::SaveMenu => "More ways to save",
+        Act::Crop => "Crop",
+        Act::Redact => "Quick Redact",
+        Act::Freeform => "Freeform selection",
+        Act::TextSelect => "Select text",
+        Act::CopyAll => "Copy all text",
+        Act::TextCopy => "Copy",
+        Act::RedactKind(k) => k.label(),
         Act::ObjFront => "Bring to front",
         Act::ObjBack => "Send to back",
         Act::ObjDup => "Duplicate",
@@ -1163,8 +1242,10 @@ pub fn act_tip(a: Act, km: &Keymap) -> (&'static str, Vec<String>) {
         Act::SaveAs => "Save as\u{2026}",
         Act::SaveDesktop => "Save to Desktop",
         Act::OpenWith => "Open with\u{2026}",
+        Act::Share => "Share\u{2026}",
         Act::Upload => "Upload",
         Act::Pin => "Pin to screen",
+        Act::Trim => "Trim to content",
         Act::Exit => "Close",
         Act::Accept => "Accept",
         Act::Record => "Record video",
@@ -1181,6 +1262,7 @@ pub fn act_tip(a: Act, km: &Keymap) -> (&'static str, Vec<String>) {
         Act::RecMic | Act::RecDevMenu(Dev::Mic) | Act::RecDev(Dev::Mic, _) => "Microphone",
         Act::RecCamera | Act::RecDevMenu(Dev::Cam) | Act::RecDev(Dev::Cam, _) => "Camera",
         Act::RecShape(_) => "Camera shape",
+        Act::RecBg(_) => "Camera background",
         Act::RecStart => "Start recording",
         Act::Wheel | Act::RingWheel => "More colors",
         Act::RingSize(d) if d < 0 => "Thinner ring",
@@ -1514,6 +1596,8 @@ mod tests {
             pick: None,
             save_menu: None,
             slot_menu: None,
+            copy_menu: None,
+            freeform: None,
         });
         let mut d = buf(800, 200, 0);
         let st = BarState {

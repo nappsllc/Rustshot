@@ -1,8 +1,9 @@
 //! macOS: Vision's `VNRecognizeTextRequest` (accurate level, language
 //! correction on) over a `CGImage` of the area, run synchronously with
 //! `-[VNImageRequestHandler performRequests:error:]` on the OCR worker.
-//! Each observation is one line; its normalized bounding box (origin at
-//! the bottom left) gives the line's place.
+//! Each observation is one line; each of its words gets its own box from
+//! `-[VNRecognizedText boundingBoxForRange:error:]` (normalized, origin
+//! at the bottom left), the line's box where that fails.
 
 use super::{Line, OcrError, Word};
 use crate::macos_objc::{Id, Pool, array, dict, error_text, has_method, items, load, msg_big0, string_of};
@@ -78,7 +79,7 @@ unsafe fn cg_image(img: &PixBuf) -> *mut c_void {
     }
 }
 
-pub fn recognize(img: &PixBuf) -> Result<String, OcrError> {
+pub fn recognize_lines(img: &PixBuf) -> Result<Vec<Line>, OcrError> {
     let (img, k) = super::prepare(img, None);
     let (iw, ih) = (img.width() as f64, img.height() as f64);
     let _pool = Pool::new();
@@ -118,11 +119,65 @@ pub fn recognize(img: &PixBuf) -> Result<String, OcrError> {
             let cands: *mut c_void = msg1(obs, objc_sel(c"topCandidates:"), 1usize);
             let Some(best) = items(cands).first().copied() else { continue };
             let text = string_of(msg0(best, objc_sel(c"string")));
-            let r: CGRect = msg_big0(obs, objc_sel(c"boundingBox"));
-            let top = (1.0 - (r.y + r.h)) * ih / s;
-            let word = Word { text, x: (r.x * iw / s) as f32, y: top as f32, w: (r.w * iw / s) as f32, h: (r.h * ih / s) as f32 };
-            lines.push(Line { words: vec![word] });
+            let line_box: CGRect = msg_big0(obs, objc_sel(c"boundingBox"));
+            let to_word = |text: String, r: CGRect| {
+                let top = (1.0 - (r.y + r.h)) * ih / s;
+                Word { text, x: (r.x * iw / s) as f32, y: top as f32, w: (r.w * iw / s) as f32, h: (r.h * ih / s) as f32 }
+            };
+            let mut words = Vec::new();
+            for (word, range) in word_ranges(&text) {
+                let mut err: *mut c_void = core::ptr::null_mut();
+                let rect_obs: *mut c_void = msg2(best, objc_sel(c"boundingBoxForRange:error:"), range, &mut err as *mut *mut c_void);
+                let r = if rect_obs.is_null() { line_box } else { msg_big0::<CGRect>(rect_obs, objc_sel(c"boundingBox")) };
+                words.push(to_word(word, r));
+            }
+            lines.push(Line { words });
         }
-        Ok(super::join_lines(lines))
+        Ok(lines)
+    }
+}
+
+/// An `NSRange` (UTF-16 units).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct NsRange {
+    loc: usize,
+    len: usize,
+}
+
+/// The words of `s` (split at whitespace) with their UTF-16 ranges.
+pub(super) fn word_ranges(s: &str) -> Vec<(String, NsRange)> {
+    let mut out = Vec::new();
+    let mut at = 0usize;
+    let mut cur: Option<(String, usize, usize)> = None;
+    for c in s.chars() {
+        let n = c.len_utf16();
+        if c.is_whitespace() {
+            if let Some((w, loc, len)) = cur.take() {
+                out.push((w, NsRange { loc, len }));
+            }
+        } else {
+            let e = cur.get_or_insert_with(|| (String::new(), at, 0));
+            e.0.push(c);
+            e.2 += n;
+        }
+        at += n;
+    }
+    if let Some((w, loc, len)) = cur {
+        out.push((w, NsRange { loc, len }));
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn words_get_utf16_ranges() {
+        let r = word_ranges("Hi  \u{1F600}x a");
+        let got: Vec<(&str, usize, usize)> = r.iter().map(|(w, n)| (w.as_str(), n.loc, n.len)).collect();
+        assert_eq!(got, [("Hi", 0, 2), ("\u{1F600}x", 4, 3), ("a", 8, 1)]);
+        assert!(word_ranges("   ").is_empty());
     }
 }

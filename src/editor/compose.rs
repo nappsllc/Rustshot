@@ -157,6 +157,9 @@ impl Backdrop for PixBufBackdrop<'_> {
 pub struct SelUi {
     pub sr: FRect,
     pub hot: Option<usize>,
+    /// Settings › Capture "Add a border": its preview around the
+    /// selection (width in image px, color); not part of the capture.
+    pub border: Option<(f32, C4)>,
 }
 
 /// Window snapping: the window (or part) under the pointer, outlined with
@@ -270,6 +273,8 @@ pub struct CaretUi {
 pub(super) enum El {
     Draft,
     Ghost,
+    /// Text mode, the lasso, the crop frame (`snip`).
+    Snip,
     /// The magnifier's crosshair (under the selection chrome and the bar).
     Cross,
     Sel,
@@ -290,10 +295,11 @@ pub(super) enum El {
     Ring,
 }
 
-const N_EL: usize = 19;
+const N_EL: usize = 20;
 const ELS: [El; N_EL] = [
     El::Draft,
     El::Ghost,
+    El::Snip,
     El::Cross,
     El::Sel,
     El::ObjSel,
@@ -353,6 +359,7 @@ pub struct Scene {
     pub marquee: Option<FRect>,
     pub caret: Option<CaretUi>,
     pub mini: Option<super::mini::MiniUi>,
+    pub snip: Option<super::snip::SnipUi>,
     /// Per element (index = `El as usize`): conservative pixel bounds.
     bounds: [Vec<PxRect>; N_EL],
 }
@@ -366,6 +373,7 @@ impl Scene {
         match e {
             El::Draft => self.draft == o.draft,
             El::Ghost => self.ghost == o.ghost,
+            El::Snip => self.snip == o.snip,
             El::ObjSel => self.osel == o.osel,
             El::Guides => self.guides == o.guides && self.guides_k == o.guides_k,
             El::Marquee => self.marquee == o.marquee,
@@ -587,6 +595,7 @@ impl Edit {
     /// `stale()` and rebuilds `composed` when objects changed.
     pub(super) fn prepare(&mut self, app_notice: Option<&Toast>, mouse: (i32, i32), now: Instant) {
         self.slot_long_press(now);
+        self.copy_long_press(now);
         if self.dirty || self.spots_stale() {
             let _p = crate::perf::span(crate::perf::K::Bake);
             self.rebuild();
@@ -611,6 +620,8 @@ impl Edit {
             cams: rp.has_cams(),
             cams_looking: rp.cams_looking(),
             shape: rp.opts.cam_shape,
+            bg: rp.opts.cam_bg,
+            blur: crate::cam::bg::available(),
             source: rp.source,
             countdown: rp.opts.countdown,
             gif_max: rp.opts.gif_max,
@@ -633,8 +644,9 @@ impl Edit {
             recents: &recents,
         });
         let busy = !self.tasks.is_empty();
-        let save_keys = [Act::SaveAs, Act::SaveDesktop, Act::OpenWith].map(|a| chrome::act_tip(a, &self.keys).1.join("+"));
+        let save_keys: Vec<String> = toolbar::save_menu().iter().map(|&(a, _)| chrome::act_tip(a, &self.keys).1.join("+")).collect();
         let slot_keys = toolbar::SLOT_MENU.map(|(a, _)| chrome::act_tip(a, &self.keys).1.join("+"));
+        let copy_menu = self.copy_menu_view();
         if self.pick.is_none() {
             self.assist.pick_at = None;
         }
@@ -663,8 +675,10 @@ impl Edit {
                 colors: tools::has_color(cur),
                 fills: tools::has_fill(cur),
                 pick: pv.as_ref(),
-                save_menu: self.save_menu.then_some(&save_keys),
+                save_menu: self.save_menu.then_some(save_keys.as_slice()),
                 slot_menu: self.slot_menu.then_some(&slot_keys),
+                copy_menu: copy_menu.as_ref(),
+                freeform: (!busy && self.host.is_none()).then_some(self.snip.freeform),
             })
         }).or(standalone);
 
@@ -674,7 +688,7 @@ impl Edit {
         } else {
             self.mo.bar.snap(0.0);
         }
-        if self.palette_open || self.pick.is_some() || self.save_menu || self.slot_menu {
+        if self.palette_open || self.pick.is_some() || self.save_menu || self.slot_menu || self.snip.copy_menu || self.size_menu {
             self.mo.pop.set(1.0, 100, now);
         } else {
             self.mo.pop.snap(0.0);
@@ -688,7 +702,12 @@ impl Edit {
             _ => Arc::new(self.objects.clone()),
         };
 
-        let sel_ui = self.sel.map(|sr| SelUi { sr, hot: self.hot_handle });
+        let border = crate::export::border(&self.cfg, self.shot.scale).map(|(b, c)| (b as f32, C4::rgb(c[0], c[1], c[2])));
+        // The crop frame has its own handles (not two sets at once).
+        let sel_ui = self
+            .sel
+            .filter(|_| self.snip.crop_mode.is_none())
+            .map(|sr| SelUi { sr, hot: self.hot_handle, border: border.filter(|_| self.host.is_none() && !self.rec.open) });
         let snap_r = self.snap_rect();
         let snap = snap_r.map(|r| SnapUi { r, hint: self.cfg.snap_tab_hint && self.hover_win.has_parts(), area });
         let label = self.sel.map(|sr| {
@@ -703,6 +722,23 @@ impl Edit {
             let avoid = if lead.is_some() { close } else { avoid };
             LabelUi { sr, show_pos: !interacting, area, avoid, lead }
         });
+        // The label's menu (Trim to content) hangs off it, part of the
+        // toolbar's popover.
+        self.label_at = label.as_ref().map(|l| {
+            let ui = Ui { th: &self.th, s, font: self.ui_font };
+            chrome::size_label_rect(&ui, l.sr, l.show_pos, l.area, (l.avoid, l.lead))
+        });
+        // A menu that cannot open (video mode, another popover) is not
+        // left open to swallow the next press.
+        if self.size_menu {
+            let key = chrome::act_tip(Act::Trim, &self.keys).1.join("+");
+            self.size_menu = self.host.is_none()
+                && !self.rec.open
+                && match (self.toolbar.as_mut(), self.label_at) {
+                    (Some(tb), Some(at)) => toolbar::add_size_menu(tb, at, key, area, s),
+                    _ => false,
+                };
+        }
         let tfont = self.text_font();
         let text = self.text.as_ref().map(|td| TextUi {
             boxr: text_box_rect(ww, td, self.mem.size(Tool::Text), tfont.as_ref(), s),
@@ -794,6 +830,13 @@ impl Edit {
                     p
                 }
             };
+            // Freeform: the lasso is what a drag draws.
+            let mut parts = parts;
+            if self.snip.freeform
+                && let Some(first) = parts.first_mut()
+            {
+                *first = chrome::HintPart::T(if snap { "Click a window or drag a lasso" } else { "Drag a lasso to select" }.into());
+            }
             HintUi { area, k: kh, parts }
         });
         let label_r: Vec<FRect> = {
@@ -816,6 +859,7 @@ impl Edit {
         };
 
         let (ghost, osel, marquee, caret, mini) = self.obj_scene(area, s);
+        let snip = self.snip_scene(area, s, dim_a.round() as u8, Pt::new(mouse.0 as f32, mouse.1 as f32));
         let (guides, guides_k) = self.guides_now(now);
         // The save menu open: no tip over it from its own chevron.
         if self.save_menu {
@@ -842,6 +886,7 @@ impl Edit {
             marquee,
             caret,
             mini,
+            snip,
             size: self.shot.size,
             s,
             th: self.th,
@@ -884,6 +929,7 @@ impl Edit {
         match e {
             El::Draft => sc.draft.as_ref().and_then(|d| d.bounds(self.font.as_ref())).map_or(Vec::new(), one),
             El::Ghost => sc.ghost.iter().filter_map(|o| o.bounds(self.font.as_ref())).map(px_bounds).collect(),
+            El::Snip => sc.snip.as_ref().map_or(Vec::new(), |u| super::snip::bounds(&ui, u).into_iter().map(px_bounds).collect()),
             El::ObjSel => sc.osel.as_ref().map_or(Vec::new(), |u| super::mini::osel_bounds(&ui, u).into_iter().map(px_bounds).collect()),
             El::Guides => super::mini::guides_bounds(&ui, &sc.guides).into_iter().map(px_bounds).collect(),
             El::Marquee => sc.marquee.map_or(Vec::new(), |r| one(super::mini::marquee_bounds(r))),
@@ -892,7 +938,13 @@ impl Edit {
             El::Sel => sc
                 .sel_ui
                 .as_ref()
-                .map_or(Vec::new(), |u| chrome::selection_bounds(&ui, u.sr).into_iter().map(px_bounds).collect()),
+                .map_or(Vec::new(), |u| {
+                    let mut v = chrome::selection_bounds(&ui, u.sr);
+                    if let Some((b, _)) = u.border {
+                        v.extend(chrome::border_preview_bounds(&ui, u.sr, b));
+                    }
+                    v.into_iter().map(px_bounds).collect()
+                }),
             El::Snap => sc.snap.as_ref().map_or(Vec::new(), |u| {
                 let mut v: Vec<PxRect> = chrome::outline_bounds(&ui, u.r).into_iter().map(px_bounds).collect();
                 v.push(px_bounds(chrome::snap_label_bounds(&ui, u.r, u.hint, u.area)));
@@ -990,6 +1042,11 @@ impl Edit {
         }
         let mut f = Fb::with_origin(out, w, r.x0, r.y0, order);
         let ui = self.ui(sc);
+        if let Some(u) = &sc.snip
+            && hits(El::Snip)
+        {
+            super::snip::draw(&mut f, &ui, u);
+        }
         if let Some(c) = &sc.cross
             && hits(El::Cross)
         {
@@ -1005,6 +1062,9 @@ impl Edit {
             && hits(El::Sel)
         {
             let _p = crate::perf::span(crate::perf::K::Sel);
+            if let Some((b, c)) = u.border {
+                chrome::border_preview(&mut f, &ui, u.sr, b, c);
+            }
             chrome::selection(&mut f, &ui, u.sr, u.hot, 1.0);
         }
         if let Some(u) = &sc.osel

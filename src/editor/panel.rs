@@ -29,6 +29,8 @@ pub const METER_W: f32 = 7.0 * 3.0 + 6.0 * 2.0;
 const CAPTION_H: f32 = 14.0;
 const CAPTION_GAP: f32 = 5.0;
 const SMALL_ROW_H: f32 = 32.0;
+/// The camera's Background choices (three segments).
+const BG_SEG_W: f32 = 216.0;
 const START_H: f32 = 40.0;
 const DEV_ITEM_H: f32 = 26.0;
 /// At most this many devices are listed.
@@ -202,6 +204,19 @@ pub fn layout(inp: &Input, rv: &RecView) -> Toolbar {
     row(&mut local, y, Act::RecCamera, "video", cam_label, cam_value, rv.cams.then_some(Dev::Cam), cam_on, !rv.cams, false);
     let cam_row = row_r(y);
     y += ROW_H + GAP;
+    // The camera on: its background, Off / Blur light / Blur strong (a
+    // build without a segmentation model says it cannot).
+    if cam_on {
+        let r = FRect { x: x0, y, w: inner, h: SMALL_ROW_H };
+        let value = (!rv.blur).then_some(crate::cam::bg::UNAVAILABLE);
+        local.push(Item { kind: Kind::Row { act: Act::RecBg(rv.bg), icon: "", label: "Background", value, dim: !rv.blur }, r, disabled: true });
+        if rv.blur {
+            use crate::cam::bg::Bg;
+            let segs = [(Bg::Off, "Off"), (Bg::Light, "Blur light"), (Bg::Strong, "Blur strong")].map(|(b, l)| (Act::RecBg(b), l, "", rv.bg == b, false));
+            seg(&mut local, r.x1() - 6.0 - BG_SEG_W, y + (SMALL_ROW_H - 26.0) / 2.0, BG_SEG_W, 26.0, 2.0, &segs);
+        }
+        y += SMALL_ROW_H + GAP;
+    }
     // Microphone (MP4 only): the device and its level, on/off.
     let mic_on = mp4 && rv.mic;
     let (mic_icon, mic_value) = if mp4 { ("mic", None) } else { ("mic-off", Some(crate::rec_ui::NOT_IN_GIF)) };
@@ -367,6 +382,8 @@ mod tests {
             cams: true,
             cams_looking: false,
             shape: crate::cam::Shape::Circle,
+            bg: crate::cam::bg::Bg::Off,
+            blur: true,
             mic_label: "Default microphone",
             cam_label: "Default camera",
             devs: None,
@@ -402,6 +419,8 @@ mod tests {
             pick: None,
             save_menu: None,
             slot_menu: None,
+            copy_menu: None,
+            freeform: None,
         }
     }
 
@@ -562,11 +581,12 @@ mod tests {
         let first = tb.items.iter().position(|i| i.kind == Kind::SegTrack).unwrap();
         assert!(matches!(tb.items[first + 1].kind, Kind::Seg { label: "Screen", icon: "monitor", .. }), "Screen first");
         // The camera on: the ring's swatch in its row; its palette (the
-        // width, the colors) below the row, the panel no taller.
+        // width, the colors) below the row, the panel no taller than the
+        // board's but for the Background row.
         let h = tb.bar.h;
         v.camera = true;
         let tb = panel(r(240.0, 110.0, 960.0, 420.0), &v);
-        assert_eq!(tb.bar.h, h, "the board's height");
+        assert_eq!(tb.bar.h, h + SMALL_ROW_H + GAP, "the board's height and the Background row");
         let sw = find(&tb, |k| matches!(k, Kind::Swatch { act: Act::RingPalette, .. }));
         let cam = find(&tb, |k| matches!(k, Kind::Row { act: Act::RecCamera, .. }));
         assert!(sw.r.y >= cam.r.y && sw.r.y1() <= cam.r.y1() && tb.act_at(centre(sw.r)) == Some(Act::RingPalette));
@@ -578,6 +598,40 @@ mod tests {
         let acc = find(&tb, |k| matches!(k, Kind::Swatch { act: Act::RingColor(None), .. }));
         assert!(acc.r.y > plus.r.y1() && tb.act_at(centre(acc.r)) == Some(Act::RingColor(None)));
         assert!(inside_panel(&tb));
+    }
+
+    /// The camera on: a Background row right under its row, Off / Blur
+    /// light / Blur strong (the current one marked, each a press); a build
+    /// that cannot blur says so instead. The camera off: no row.
+    #[test]
+    fn camera_background_row() {
+        use crate::cam::bg::{Bg, UNAVAILABLE};
+        let mut v = rv(RecFormat::Mp4);
+        let sel = r(240.0, 110.0, 960.0, 420.0);
+        let none = |tb: &Toolbar| !tb.items.iter().any(|i| matches!(i.kind, Kind::Row { act: Act::RecBg(_), .. } | Kind::Seg { act: Act::RecBg(_), .. }));
+        assert!(none(&panel(sel, &v)), "camera off");
+        v.camera = true;
+        v.bg = Bg::Light;
+        let tb = panel(sel, &v);
+        let cam = find(&tb, |k| matches!(k, Kind::Row { act: Act::RecCamera, .. }));
+        let row = find(&tb, |k| matches!(k, Kind::Row { act: Act::RecBg(_), .. }));
+        let mic = find(&tb, |k| matches!(k, Kind::Row { act: Act::RecMic, .. }));
+        assert!(row.r.y >= cam.r.y1() && row.r.y1() <= mic.r.y, "between Camera and Microphone");
+        assert!(matches!(row.kind, Kind::Row { label: "Background", value: None, .. }) && row.disabled, "the row itself takes no press");
+        let segs: Vec<Item> = tb.items.iter().filter(|i| matches!(i.kind, Kind::Seg { act: Act::RecBg(_), .. })).copied().collect();
+        assert_eq!(segs.iter().map(|s| if let Kind::Seg { label, on, .. } = s.kind { (label, on) } else { unreachable!() }).collect::<Vec<_>>(), [("Off", false), ("Blur light", true), ("Blur strong", false)]);
+        for (s, b) in segs.iter().zip(Bg::ALL) {
+            assert!(s.r.y >= row.r.y && s.r.y1() <= row.r.y1());
+            assert_eq!(tb.act_at(centre(s.r)), Some(Act::RecBg(b)));
+        }
+        assert!(inside_panel(&tb));
+        // Without a model: the note, no choices.
+        v.blur = false;
+        let tb = panel(sel, &v);
+        let row = find(&tb, |k| matches!(k, Kind::Row { act: Act::RecBg(_), .. }));
+        assert!(matches!(row.kind, Kind::Row { value: Some(UNAVAILABLE), dim: true, .. }));
+        assert!(!tb.items.iter().any(|i| matches!(i.kind, Kind::Seg { act: Act::RecBg(_), .. })));
+        assert_eq!(tb.act_at(centre(row.r)), None);
     }
 
     /// The grip hint: centred under the bubble, 12 px below it.

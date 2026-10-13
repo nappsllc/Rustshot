@@ -1,0 +1,12 @@
+[package]
+name = "convert-selfie"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+publish = false
+description = "Converts MediaPipe's Selfie Segmentation .tflite into Rustshot's selfie.bin"
+
+# Its own workspace: not part of Rustshot's build.
+[workspace]
+
+[dependencies]

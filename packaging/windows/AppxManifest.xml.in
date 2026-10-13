@@ -12,7 +12,7 @@
     <DisplayName>Rustshot</DisplayName>
     <PublisherDisplayName>@PUBLISHER_DISPLAY@</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
-    <Description>Screenshot capture with annotation, upload and global hotkeys</Description>
+    <Description>Tiny yet powerful, beautiful, open-source and cross-platform tool for screenshots, editing and video capture</Description>
   </Properties>
   <Dependencies>
     <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0" />
@@ -22,7 +22,7 @@
   </Resources>
   <Applications>
     <Application Id="Rustshot" Executable="rustshot.exe" EntryPoint="Windows.FullTrustApplication">
-      <uap:VisualElements DisplayName="Rustshot" Description="Capture and annotate a screenshot"
+      <uap:VisualElements DisplayName="Rustshot" Description="Screenshots, editing and video capture"
         BackgroundColor="transparent" Square150x150Logo="Assets\Square150x150Logo.png"
         Square44x44Logo="Assets\Square44x44Logo.png">
         <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" />
@@ -34,6 +34,12 @@
           </uap3:AppExecutionAlias>
         </uap3:Extension>
       </Extensions>
+    </Application>
+    <!-- Start menu "Rustshot Settings": the way in with the tray icon off. -->
+    <Application Id="RustshotSettings" Executable="rustshot.exe" EntryPoint="Windows.FullTrustApplication" uap10:Parameters="settings">
+      <uap:VisualElements DisplayName="Rustshot Settings" Description="Rustshot's settings"
+        BackgroundColor="transparent" Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png" />
     </Application>
     <!-- Hidden second entry: the hotkey daemon, started at sign-in. -->
     <Application Id="RustshotDaemon" Executable="rustshot.exe" EntryPoint="Windows.FullTrustApplication" uap10:Parameters="daemon">

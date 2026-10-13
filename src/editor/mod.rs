@@ -34,6 +34,8 @@ mod mini;
 mod select;
 mod input;
 mod assist;
+mod snip;
+mod trim_sel;
 pub use assist::AcceptOn;
 // The editor in a normal window: the Edit window's canvas.
 pub mod host;
@@ -227,19 +229,137 @@ impl Motion {
     }
 }
 
-/// Hotkeys that did not register: on stderr, and in the Settings window
-/// when it is open, else a tray balloon.
-fn tell_hotkey_failures(failed: &[crate::hotkey::Failure]) {
+/// How the daemon tells hotkey failures: in the Settings window's dialog
+/// (with "Change shortcuts…", to the first row needing a new key), or a
+/// tray balloon (only fallbacks and kept chords: every action still has
+/// a key; a click opens Key bindings).
+#[derive(Debug, PartialEq)]
+pub enum HotkeyNote {
+    Dialog { text: String, field: Option<String> },
+    Balloon(String),
+}
+
+/// The note for `failed` (none when empty). A while-recording chord never
+/// opens the dialog (it would land over the recording): a small note.
+pub fn hotkey_note(failed: &[crate::hotkey::Failure]) -> Option<HotkeyNote> {
     if failed.is_empty() {
-        return;
+        return None;
     }
     let text = failed.iter().map(|f| f.message()).collect::<Vec<_>>().join("\n");
-    eprintln!("rustshot: {text}");
-    if !crate::settings_ui::notify(&text) {
-        crate::tray::notify(&text);
+    Some(match failed.iter().find(|f| f.slot < crate::hotkey::SLOTS && f.needs_action()) {
+        Some(f) => HotkeyNote::Dialog { text, field: Some(f.field_id()) },
+        None => HotkeyNote::Balloon(text),
+    })
+}
+
+/// Open (or raise) the Settings window; tests count the requests instead.
+fn open_settings() {
+    #[cfg(test)]
+    SETTINGS_OPENED.with(|n| n.set(n.get() + 1));
+    #[cfg(not(test))]
+    crate::settings_ui::show();
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Tests: how often this thread asked for the Settings window.
+    pub static SETTINGS_OPENED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Hotkeys that did not register: on stderr, and in the Settings window
+/// when it is open. Otherwise a key the user has to change opens it (at
+/// Key bindings, the dialog over it); a fallback is a tray balloon.
+fn tell_hotkey_failures(failed: &[crate::hotkey::Failure], th: Theme) {
+    let Some(note) = hotkey_note(failed) else { return };
+    match note {
+        HotkeyNote::Dialog { text, field } => {
+            eprintln!("rustshot: {text}");
+            crate::settings_ui::show_hotkeys(&text, field);
+        }
+        HotkeyNote::Balloon(text) => {
+            eprintln!("rustshot: {text}");
+            if !crate::settings_ui::notify_hotkeys(&text, None) {
+                say(&text, ToastKind::Info, th, true);
+            }
+        }
     }
 }
 
+/// Tell the user `text` outside any window: a tray balloon while the icon
+/// shows (`keys`: its click opens Key bindings), else a notice near the
+/// pointer (no icon to show a balloon on; an on-demand run lives while
+/// the notice is up).
+fn say(text: &str, kind: ToastKind, th: Theme, keys: bool) {
+    if crate::tray::is_visible() || cfg!(test) {
+        if keys {
+            crate::tray::notify_keys(text);
+        } else {
+            crate::tray::notify(text);
+        }
+        return;
+    }
+    #[cfg(not(test))]
+    if !crate::notice::show(crate::notice::Note::plain(text.to_string(), kind), capture::cursor_pos(), th) {
+        eprintln!("rustshot: {text}");
+    }
+    #[cfg(test)]
+    let _ = (kind, th);
+}
+
+/// What keeps a leaving run up ([`App::linger`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Linger {
+    /// Nothing: it quits.
+    Gone,
+    /// A capture, window, pin, notice, …
+    Open,
+    /// Only background work.
+    Finishing,
+    /// Background work for longer than [`LINGER_CAP`]: it quits anyway.
+    GaveUp,
+}
+
+/// The longest a leaving run waits for background work alone.
+const LINGER_CAP: Duration = Duration::from_secs(120);
+
+/// How a daemon run stays in the background.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Background {
+    /// The daemon: until Quit. On Windows it stops by itself once "Show
+    /// icon in tray" is turned off (no background process then).
+    #[default]
+    Normal,
+    /// `rustshot daemon --force`: stays with the tray icon off too.
+    Forced,
+    /// Started for one capture with no daemon around (Win+Shift+S / Print
+    /// Screen with the tray icon off): no global hotkeys but the
+    /// while-recording ones, no update check; it quits once the capture
+    /// and everything it opened (pins, Edit and other windows, the
+    /// thumbnail, a recording, an upload) are gone. Turning the tray icon
+    /// on makes it the daemon.
+    OnDemand,
+}
+
+/// `cfg` without its global hotkeys (an on-demand run registers none;
+/// the while-recording chords stay).
+fn without_globals(cfg: &Config) -> Config {
+    let mut c = cfg.clone();
+    for s in [
+        &mut c.capture_hotkey,
+        &mut c.quit_hotkey,
+        &mut c.record_hotkey,
+        &mut c.capture_full_hotkey,
+        &mut c.capture_window_hotkey,
+        &mut c.repeat_hotkey,
+        &mut c.capture_text_hotkey,
+        &mut c.history_hotkey,
+    ] {
+        s.clear();
+    }
+    c
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     cfg: Config,
     kind: RunKind,
@@ -247,13 +367,24 @@ pub fn run(
     exit_code: Arc<AtomicI32>,
     upload_slot: UploadSlot,
     instance: Option<crate::instance::Guard>,
+    bg: Background,
 ) -> i32 {
     // Settings, the update dialog and the notice follow the UI size too.
     publish_ui_size(cfg.ui_scale);
     if cfg.snap_windows && !cfg!(test) {
         crate::snap::warm_up();
     }
+    // DXGI's first load (~40 ms) off the first capture's path.
+    #[cfg(windows)]
+    if !cfg!(test) {
+        crate::hdr::win::warm_up();
+    }
+    // A forced daemon is relaunched forced by an update.
+    if kind == RunKind::Daemon && bg == Background::Forced {
+        crate::update_install::set_forced(true);
+    }
     let hot = match kind {
+        RunKind::Daemon if bg == Background::OnDemand => Some(Hotkeys::new(&without_globals(&cfg))),
         RunKind::Daemon => Some(Hotkeys::new(&cfg)),
         RunKind::OneShot => None,
     };
@@ -272,6 +403,8 @@ pub fn run(
         crate::launcher::set_daemon(h.sender());
     }
     let updates = match kind {
+        // Nothing else checks with the tray icon off: one check, if due.
+        RunKind::Daemon if bg == Background::OnDemand => crate::update::spawn_once(cfg.check_updates),
         RunKind::Daemon => crate::update::spawn_checker(cfg.check_updates),
         RunKind::OneShot => None,
     };
@@ -280,6 +413,10 @@ pub fn run(
     let mut app = App {
         cfg,
         kind,
+        bg,
+        stopping: false,
+        finishing_since: None,
+        finishing_said: false,
         hot,
         pending,
         st: State::Hidden,
@@ -374,6 +511,8 @@ struct HistShot {
     app: String,
     monitor: String,
     scale: f32,
+    /// The freeform selection's lasso (`original`'s pixels).
+    mask: Option<Vec<Pt>>,
 }
 
 /// Whether an export with `tasks` is a capture the history keeps: a
@@ -386,6 +525,15 @@ fn history_keeps(tasks: &[Task]) -> bool {
 struct App {
     cfg: Config,
     kind: RunKind,
+    /// How a daemon run stays in the background.
+    bg: Background,
+    /// The tray icon was turned off (Windows): the daemon quits once
+    /// nothing it opened is left ([`App::lingering`]).
+    stopping: bool,
+    /// Leaving, and only background work is left: since when.
+    finishing_since: Option<Instant>,
+    /// "Finishing in the background" was said.
+    finishing_said: bool,
     hot: Option<Hotkeys>,
     pending: Option<Pending>,
     st: State,
@@ -478,8 +626,20 @@ impl App {
                 return;
             }
         }
+        // The startup registration's failures (and fallbacks).
+        if let Some(h) = self.hot.as_mut() {
+            let news = h.take_news();
+            tell_hotkey_failures(&news, theme::resolve(&self.cfg));
+        }
         self.poll_upload();
         self.poll_ocr();
+        // Text mode's words or Quick Redact's finds arrived.
+        // (An export queued behind Redact may finish the capture.)
+        let mut snipped = false;
+        self.edit_tx(|_, e| snipped = e.poll_snip());
+        if snipped {
+            self.repaint();
+        }
         self.poll_delay();
         if let Some(rx) = &self.updates {
             while let Ok(r) = rx.try_recv() {
@@ -560,6 +720,80 @@ impl App {
         if self.restart_due() {
             self.request_exit(0);
         }
+        // On demand, or the tray icon was turned off: gone once the
+        // capture and what it opened are.
+        if self.leaving() {
+            match self.linger(Instant::now()) {
+                Linger::Gone => self.request_exit(0),
+                Linger::Finishing if !self.finishing_said => {
+                    // Only work in the background is left (an upload from an
+                    // Edit window): it finishes first.
+                    self.finishing_said = true;
+                    say("Rustshot is finishing in the background\u{2026}", ToastKind::Info, theme::resolve(&self.cfg), false);
+                }
+                Linger::GaveUp => {
+                    eprintln!("rustshot: gave up waiting for background work after {} s", LINGER_CAP.as_secs());
+                    self.request_exit(0);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// What keeps a [`App::leaving`] run: something open, or only
+    /// background work ([`crate::busy`], a one-off update check), waited
+    /// for up to [`LINGER_CAP`].
+    fn linger(&mut self, now: Instant) -> Linger {
+        if self.lingering() {
+            self.finishing_since = None;
+            return Linger::Open;
+        }
+        if crate::busy::count() == 0 && !crate::update::checking() {
+            return Linger::Gone;
+        }
+        let since = *self.finishing_since.get_or_insert(now);
+        if now.duration_since(since) >= LINGER_CAP { Linger::GaveUp } else { Linger::Finishing }
+    }
+
+    /// This daemon run ends once nothing is left ([`App::lingering`]): an
+    /// on-demand one, or a daemon whose tray icon was turned off.
+    fn leaving(&self) -> bool {
+        self.kind == RunKind::Daemon && (self.bg == Background::OnDemand || self.stopping)
+    }
+
+    /// Something of this process is still up or about to be: a capture,
+    /// recording, export, upload or countdown, a pin, an Edit, History,
+    /// Settings, launcher or update window, the thumbnail or a notice.
+    fn lingering(&self) -> bool {
+        !self.idle()
+            || self.delay.active()
+            || self.quit_pending
+            || self.edits.count() > 0
+            || crate::pin::count() > 0
+            || crate::notice::showing()
+            || crate::settings_ui::is_open()
+            || crate::history_ui::is_open()
+            || crate::launcher::is_open()
+            || crate::update_ui::is_open()
+    }
+
+    /// `rustshot daemon --force` reached this run: an on-demand one
+    /// becomes the daemon (its global hotkeys, the update check), forced
+    /// (it stays with the tray icon off); a stopping one stays.
+    fn become_daemon(&mut self) {
+        if self.kind != RunKind::Daemon {
+            return;
+        }
+        if self.bg == Background::OnDemand
+            && let Some(h) = self.hot.as_mut()
+        {
+            let failed = h.reload(&self.cfg);
+            tell_hotkey_failures(&failed, theme::resolve(&self.cfg));
+            self.updates = crate::update::spawn_checker(self.cfg.check_updates);
+        }
+        self.bg = Background::Forced;
+        self.stopping = false;
+        crate::update_install::set_forced(true);
     }
 
     /// Handle one daemon event; false once we are quitting.
@@ -574,6 +808,8 @@ impl App {
                 self.request_exit(0);
                 return false;
             }
+            HotEvent::Relaunch => return self.relaunch(crate::tray::is_visible()),
+            HotEvent::BecomeDaemon => self.become_daemon(),
             HotEvent::Restart => self.restart_pending = true,
             HotEvent::RestartWhenIdle(reply) => {
                 self.updating = true;
@@ -665,6 +901,20 @@ impl App {
             HotEvent::Record if !rec_ui::supported() => eprintln!("rustshot: recording is not supported on this platform yet"),
             HotEvent::Record => self.pending = Some(Pending::record()),
         }
+        true
+    }
+
+    /// Rustshot started again (the Start menu, the exe, `rustshot`): a
+    /// capture, as always. With the tray icon hidden it is the only way
+    /// back in, so it opens Settings; it does too when no capture can
+    /// start now (a recording runs, an update installs), rather than
+    /// doing nothing. Returns `on_hot`'s "keep running".
+    fn relaunch(&mut self, tray_visible: bool) -> bool {
+        let busy = self.rec.is_some() || self.updating || self.restart_pending;
+        if tray_visible && !busy {
+            return self.on_hot(HotEvent::Capture);
+        }
+        open_settings();
         true
     }
 
@@ -864,6 +1114,10 @@ impl App {
                 if daemon {
                     let bytes = std::fs::metadata(&path).map_or(0, |m| m.len());
                     let mut note = crate::notice::recording_saved(&path, length, bytes, &warnings, crate::notice::upload_configured(&self.cfg));
+                    // Upload recordings automatically: the link is ready for Copy link.
+                    if self.cfg.upload_recordings && note.actions.contains(&crate::notice::NoteAct::CopyLink) {
+                        crate::rec_upload::start(&path, entry.clone());
+                    }
                     // Copy link files its record with the entry.
                     note.entry = entry;
                     let at = self.rec_area.map_or((0, 0), |a| (a.0 + a.2 as i32 / 2, a.1 + a.3 as i32 / 2));
@@ -948,7 +1202,7 @@ impl App {
     fn rec_hotkeys(&mut self, on: bool) {
         if let Some(h) = self.hot.as_mut() {
             let failed = h.set_recording(&self.cfg, on);
-            tell_hotkey_failures(&failed);
+            tell_hotkey_failures(&failed, theme::resolve(&self.cfg));
         }
     }
 
@@ -956,15 +1210,33 @@ impl App {
     /// hotkeys are re-registered and the update checker follows
     /// `check_updates`. An open capture keeps the config it started with.
     fn reload_config(&mut self, cfg: Config) {
+        if self.kind == RunKind::Daemon {
+            match (self.bg, cfg.show_tray) {
+                // The tray icon on again: this run is the daemon now.
+                (Background::OnDemand, true) => {
+                    self.bg = Background::Normal;
+                    self.updates = crate::update::spawn_checker(cfg.check_updates);
+                }
+                // Off (Windows): no background process.
+                (Background::Normal, false) if crate::tray::hidden_means_no_daemon() => {
+                    if !self.stopping {
+                        eprintln!("rustshot: Show icon in tray is off: quitting once nothing is open");
+                    }
+                    self.stopping = true;
+                }
+                _ => self.stopping = false,
+            }
+        }
+        let hk = if self.bg == Background::OnDemand { without_globals(&cfg) } else { cfg.clone() };
         if let Some(h) = self.hot.as_mut() {
-            let mut failed = h.reload(&cfg);
+            let mut failed = h.reload(&hk);
             // While recording, its chords follow the new key bindings.
             if self.rec.is_some() {
                 failed.extend(h.set_recording(&cfg, true));
             }
-            tell_hotkey_failures(&failed);
+            tell_hotkey_failures(&failed, theme::resolve(&self.cfg));
         }
-        if cfg.check_updates != self.cfg.check_updates && self.kind == RunKind::Daemon {
+        if cfg.check_updates != self.cfg.check_updates && self.kind == RunKind::Daemon && self.bg != Background::OnDemand {
             // A new checker generation: the old one stops before its next
             // check (and never takes the day's stamp).
             self.updates = crate::update::spawn_checker(cfg.check_updates);
@@ -1243,6 +1515,7 @@ impl App {
                     app: edit.source.1.clone(),
                     monitor: crate::history::source::monitor_text(&name, edit.shot.scale),
                     scale: edit.shot.scale,
+                    mask: None,
                 })
             });
             wind::hide(self.hwnd);
@@ -1289,7 +1562,8 @@ impl App {
         });
         #[cfg(windows)]
         crate::memlog("overlay");
-        let img = edit.export(sel);
+        // A lasso: transparent outside it (white in a JPG or BMP).
+        let img = edit.cut_export(sel);
         let g = (
             (sel.x.round() as i32) + edit.shot.origin.0,
             (sel.y.round() as i32) + edit.shot.origin.1,
@@ -1317,11 +1591,19 @@ impl App {
                 app: edit.source.1.clone(),
                 monitor: crate::history::source::monitor_text(&name, edit.shot.scale),
                 scale: edit.shot.scale,
+                mask: edit.mask_in(sel),
             })
         });
+        // Settings › Capture "Add a border": around what is exported
+        // (the history keeps the capture without it); the exported
+        // image's top-left moves out by it (a pin stays in place).
+        // Copy text (OCR) reads the capture alone.
+        let framed = tasks.iter().any(|t| !matches!(t, Task::Text | Task::Geometry));
+        let b = export::border(&edit.cfg, edit.shot.scale).filter(|_| framed).map_or(0, |(b, _)| b as i32);
+        let img = if framed { export::with_border(img, &edit.cfg, edit.shot.scale) } else { img };
         self.st = State::Finish(Box::new(FinishJob {
             img,
-            sel_global: g,
+            sel_global: (g.0 - b, g.1 - b),
             tasks,
             cfg: edit.cfg.clone(),
             hist,
@@ -1342,6 +1624,7 @@ impl App {
             app: h.app,
             monitor: h.monitor,
             scale: h.scale,
+            mask: h.mask,
             saved,
             ..Default::default()
         };
@@ -1678,6 +1961,12 @@ impl Driver for App {
             return Cursor::IBeam;
         }
         let p = Pt::new(self.mouse.0 as f32, self.mouse.1 as f32);
+        if let Some(c) = edit.snip_cursor(p) {
+            return c;
+        }
+        if edit.on_label(p) && matches!(edit.interact, Interact::None) {
+            return Cursor::Arrow;
+        }
         if edit.in_cedit(p) {
             return Cursor::IBeam;
         }
@@ -1733,6 +2022,8 @@ fn grab(cfg: &Config, th: &Theme, screen: Option<u32>) -> anyhow::Result<(Shot, 
 
 #[cfg_attr(test, allow(dead_code))]
 fn grab_screen(cfg: &Config, th: &Theme, screen: Option<u32>) -> anyhow::Result<(Shot, Option<gdi::GdiScreen>)> {
+    // Settings › Capture "HDR screenshots" (recordings follow it too).
+    crate::hdr::configure(cfg);
     #[cfg(windows)]
     if cfg.use_gdi() {
         let shot = capture::plan_edit(screen, cfg.capture_active_monitor)?;
@@ -1805,9 +2096,10 @@ fn video_key(edit: &Edit, vk: u32, mods: Mods) -> Option<Act> {
 /// Esc: close a device list or the ring's palette, drop the current
 /// tool / draft / palette, or cancel the capture (video mode's Close).
 fn cancel_key(edit: &mut Edit) {
-    if edit.save_menu || edit.slot_menu {
+    if edit.save_menu || edit.slot_menu || edit.size_menu {
         edit.save_menu = false;
         edit.slot_menu = false;
+        edit.size_menu = false;
         return;
     }
     if edit.obj.cedit.is_some() {
@@ -1887,6 +2179,9 @@ fn act_of(a: Action) -> Option<Act> {
         Action::TextBold => Act::ObjBold,
         Action::TextItalic => Act::ObjItalic,
         Action::TextUnderline => Act::ObjUnderline,
+        Action::ToolCrop => Act::Crop,
+        Action::Redact => Act::Redact,
+        Action::SelectFreeform => Act::Freeform,
         Action::DeleteObject => Act::ObjDelete,
         Action::Duplicate => Act::ObjDup,
         Action::BringFront => Act::ObjFront,
@@ -1899,8 +2194,12 @@ fn act_of(a: Action) -> Option<Act> {
         Action::SaveAs => Act::SaveAs,
         Action::SaveDesktop => Act::SaveDesktop,
         Action::OpenWith => Act::OpenWith,
+        // No share sheet on Linux: the key does nothing there.
+        Action::Share if !crate::share::supported() => return None,
+        Action::Share => Act::Share,
         Action::Upload => Act::Upload,
         Action::Pin => Act::Pin,
+        Action::Trim => Act::Trim,
         Action::Undo => Act::Undo,
         Action::Redo => Act::Redo,
         Action::TogglePalette => Act::Palette,
@@ -2016,6 +2315,8 @@ enum Interact {
         cur: Pt,
         base: Vec<usize>,
     },
+    /// A drag of the crop frame or of Text mode's selection (`snip`).
+    Snip,
 }
 
 /// The Record popover in the overlay.
@@ -2447,6 +2748,10 @@ struct Edit {
     objects: Vec<Obj>,
     hist: Vec<Vec<Obj>>,
     hi: usize,
+    /// The selection change of each undo step that made one (Trim to
+    /// content): before and after; `None` (or past the end) for the
+    /// others.
+    sel_hist: Vec<Option<(Option<FRect>, FRect)>>,
     sel: Option<FRect>,
     tool: Option<Tool>,
     draft: Option<Obj>,
@@ -2478,6 +2783,10 @@ struct Edit {
     /// The Blur / Invert button's menu is open; the button held since
     /// (a long press opens it, a click picks Blur).
     slot_menu: bool,
+    /// The selection's size label menu is open (Trim to content).
+    size_menu: bool,
+    /// Where the size label was drawn last (a press there opens its menu).
+    label_at: Option<FRect>,
     slot_hold: Option<Instant>,
     rec: RecPop,
     done: bool,
@@ -2512,6 +2821,8 @@ struct Edit {
     host: Option<host::Host>,
     /// The magnifier, color ring, accept on select and hint card.
     assist: assist::Assist,
+    /// Text mode, Quick Redact, the lasso and the crop frame.
+    snip: snip::Snip,
 }
 
 /// More merged dirty rects than this invalidate the whole window (a
@@ -2531,6 +2842,7 @@ impl Edit {
     fn new(shot: Shot, base: PixBuf, cfg: Config, th: Theme, font: Option<AnnotFont>, ui_font: Option<&'static UiFont>, rec: RecPop) -> Edit {
         let style = crate::objects::CalloutStyle::from_id(&cfg.callout_style).unwrap_or_default();
         let assist = assist::Assist::new(&cfg, Instant::now());
+        let snip = snip::Snip { freeform: cfg.selection_mode.trim() == "freeform", crop_hist: vec![None], ..Default::default() };
         Edit {
             mo: Motion::new(Instant::now()),
             shot,
@@ -2548,6 +2860,7 @@ impl Edit {
             objects: Vec::new(),
             hist: vec![Vec::new()],
             hi: 0,
+            sel_hist: Vec::new(),
             sel: None,
             tool: None,
             draft: None,
@@ -2568,6 +2881,8 @@ impl Edit {
             palette_open: false,
             save_menu: false,
             slot_menu: false,
+            size_menu: false,
+            label_at: None,
             slot_hold: None,
             rec,
             done: false,
@@ -2590,6 +2905,7 @@ impl Edit {
             source: Default::default(),
             host: None,
             assist,
+            snip,
         }
     }
 
@@ -2627,7 +2943,8 @@ impl Edit {
                 o
             })
             .collect();
-        (self.export_plain(sel), objs)
+        // A lasso cuts the original too: what it left out is never kept.
+        (self.masked(self.export_plain(sel), sel), objs)
     }
 
     /// The area the spotlights dim: the selection, on whole pixels.
@@ -2716,19 +3033,34 @@ impl Edit {
     fn push_history(&mut self) {
         self.hist.truncate(self.hi + 1);
         self.hist.push(self.objects.clone());
+        // The Edit window's crop steps with the objects.
+        let crop = self.snip.crop;
+        let ch = &mut self.snip.crop_hist;
+        ch.resize(self.hi + 1, crop);
+        ch.push(crop);
+        self.sel_hist.resize(self.hi + 1, None);
+        self.sel_hist.push(None);
         self.hi = self.hist.len() - 1;
         let limit = self.cfg.undo_limit.max(1);
         if self.hist.len() > limit {
             let excess = self.hist.len() - limit;
             self.hist.drain(0..excess);
+            self.snip.crop_hist.drain(0..excess.min(self.snip.crop_hist.len()));
+            self.sel_hist.drain(0..excess.min(self.sel_hist.len()));
             self.hi -= excess;
         }
     }
 
     fn undo(&mut self) {
         if self.hi > 0 {
+            if let Some(Some((before, _))) = self.sel_hist.get(self.hi) {
+                let was = self.sel;
+                self.sel = *before;
+                self.rebind_mask(was);
+            }
             self.hi -= 1;
             self.objects = self.hist[self.hi].clone();
+            self.snip.crop = self.snip.crop_hist.get(self.hi).copied().flatten();
             self.dirty = true;
         }
     }
@@ -2736,7 +3068,13 @@ impl Edit {
     fn redo(&mut self) {
         if self.hi + 1 < self.hist.len() {
             self.hi += 1;
+            if let Some(Some((_, after))) = self.sel_hist.get(self.hi) {
+                let was = self.sel;
+                self.sel = Some(*after);
+                self.rebind_mask(was);
+            }
             self.objects = self.hist[self.hi].clone();
+            self.snip.crop = self.snip.crop_hist.get(self.hi).copied().flatten();
             self.dirty = true;
         }
     }
@@ -3164,6 +3502,18 @@ fn end_interaction(edit: &mut Edit) {
             edit.obj_release(it);
         }
         Interact::NewSel { moved, .. } => {
+            // A lasso let go: its box is the selection (too small: none).
+            if edit.snip.freeform && moved {
+                if edit.finish_lasso() {
+                    edit.rec.source = rec_ui::RecSource::Region;
+                    if edit.accept_on_select {
+                        edit.done = true;
+                        edit.cancelled = false;
+                    }
+                }
+                return;
+            }
+            edit.snip.lasso.clear();
             // A window clicked (or a region drawn): accept on select may
             // take it; a plain click that selects everything does not.
             let mut window = moved;
@@ -3179,6 +3529,11 @@ fn end_interaction(edit: &mut Edit) {
                 // source was (Window, Screen).
                 edit.rec.source = rec_ui::RecSource::Region;
             }
+            // Settings › Capture "Trim margins automatically": a new
+            // region or window, not the whole screen of a plain click.
+            if window && edit.cfg.trim_margins && edit.host.is_none() && !edit.rec.open {
+                edit.trim_selection(false);
+            }
             if edit.accept_on_select {
                 edit.done = true;
                 edit.cancelled = false;
@@ -3188,10 +3543,12 @@ fn end_interaction(edit: &mut Edit) {
         }
         // A window's or a monitor's area moved or resized: a region now.
         Interact::MoveSel { orig, .. } | Interact::Resize { orig, .. } => {
+            edit.snip.mask_drag = None;
             if edit.sel != Some(orig) {
                 edit.rec.source = rec_ui::RecSource::Region;
             }
         }
+        Interact::Snip => edit.snip_release(),
         Interact::Pick(_) | Interact::None => {}
     }
 }
@@ -3359,7 +3716,7 @@ fn animating(edit: &Edit, app_notice: Option<&Toast>, now: Instant) -> bool {
     let tip_pending = edit.hover.is_some() && now.saturating_duration_since(edit.hover_at) < Duration::from_millis(500);
     let toast_moving = edit.notice.as_ref().or(app_notice).is_some_and(|t| t.animating(now));
     // The Camera row says "Looking for cameras…" until the list comes.
-    edit.mo.active(now) || tip_pending || toast_moving || edit.rec.cams_looking() || edit.guides_fading(now) || edit.assist.hint_due(now) || edit.slot_hold.is_some()
+    edit.mo.active(now) || tip_pending || toast_moving || edit.rec.cams_looking() || edit.guides_fading(now) || edit.assist.hint_due(now) || edit.slot_hold.is_some() || edit.snip_busy()
 }
 
 /// The last frame no longer matches: something animates (or did when it
@@ -3563,6 +3920,10 @@ mod ocr_tests;
 mod pin_tests;
 #[cfg(test)]
 mod history_tests;
+#[cfg(test)]
+mod snip_tests;
+#[cfg(test)]
+mod trim_tests;
 
 #[cfg(test)]
 mod tests {
@@ -3755,6 +4116,102 @@ mod tests {
         assert!(app.pending.is_some());
     }
 
+    /// Rustshot started again: a capture while the tray icon shows;
+    /// Settings when it is hidden (the way back in) or when no capture can
+    /// start (an update installs) — never nothing.
+    #[test]
+    fn relaunch_captures_or_opens_settings() {
+        let opened = || super::SETTINGS_OPENED.with(|n| n.get());
+        let mut app = preview_app(theme::DARK, None);
+        app.st = State::Hidden;
+        let before = opened();
+        assert!(app.relaunch(true));
+        assert!(app.pending.is_some(), "tray icon shown: a capture");
+        assert_eq!(opened(), before);
+        app.pending = None;
+        assert!(app.relaunch(false));
+        assert!(app.pending.is_none(), "tray icon hidden: no capture");
+        assert_eq!(opened(), before + 1, "Settings instead");
+        app.updating = true;
+        assert!(app.relaunch(true));
+        assert!(app.pending.is_none());
+        assert_eq!(opened(), before + 2, "no capture now: Settings, not nothing");
+    }
+
+    /// An on-demand run (no daemon, tray icon off) lives while its capture,
+    /// recording or countdown does, then quits; the daemon never does,
+    /// unless the tray icon is turned off (Windows), and then only once
+    /// nothing is open. Turning the icon on makes an on-demand run the daemon.
+    #[test]
+    fn on_demand_runs_quit_once_nothing_is_left() {
+        let mut app = preview_app(theme::DARK, None);
+        app.kind = RunKind::Daemon;
+        app.cfg.check_updates = false;
+        app.st = State::Hidden;
+        assert!(!app.leaving(), "the daemon stays");
+        app.bg = Background::OnDemand;
+        app.pending = Some(Pending::editor());
+        assert!(app.leaving() && app.lingering(), "its capture is about to open");
+        app.pending = None;
+        assert!(!app.lingering(), "done: it quits");
+        // A recording keeps it (its pill stops it; the while-recording keys work).
+        app.rec = Some(rec_ui::Run::fake(false, false, Instant::now()));
+        assert!(app.lingering());
+        app.rec = None;
+        let _ = app.delay.start(crate::launcher::Plan { source: crate::launcher::Source::Region, delay: 3, after: crate::launcher::After::Edit }, Instant::now(), &mut app.delay_show);
+        assert!(app.lingering(), "a countdown");
+        let _ = app.delay.cancel(&mut app.delay_show);
+        assert!(!app.lingering());
+        // The tray icon on again: the daemon from now on.
+        let on = Config { check_updates: false, ..app.cfg.clone() };
+        app.reload_config(Config { show_tray: true, ..on.clone() });
+        assert_eq!(app.bg, Background::Normal);
+        assert!(!app.leaving());
+        // Off (Windows): the daemon stops once nothing is open; --force stays.
+        app.reload_config(Config { show_tray: false, ..on.clone() });
+        assert_eq!(app.leaving(), cfg!(windows));
+        app.reload_config(Config { show_tray: true, ..on.clone() });
+        assert!(!app.leaving(), "on again before it went: stays");
+        app.bg = Background::Forced;
+        app.reload_config(Config { show_tray: false, ..on });
+        assert!(!app.leaving(), "forced");
+        // An on-demand run registers no global hotkeys.
+        let c = without_globals(&Config::default());
+        assert!(crate::hotkey::wanted(&c).iter().all(String::is_empty));
+        assert_eq!(c.shortcuts, Config::default().shortcuts, "the while-recording chords stay");
+    }
+
+    /// Leaving with only background work left (an Edit window's upload):
+    /// it waits, says so once, and gives up after the cap. `--force`
+    /// makes an on-demand run the forced daemon.
+    #[test]
+    fn leaving_waits_for_background_work() {
+        let mut app = preview_app(theme::DARK, None);
+        app.kind = RunKind::Daemon;
+        app.cfg.check_updates = false;
+        app.st = State::Hidden;
+        app.bg = Background::OnDemand;
+        let (go, wait) = std::sync::mpsc::channel::<()>();
+        crate::busy::spawn(move || {
+            let _ = wait.recv();
+        });
+        let t0 = Instant::now();
+        assert_eq!(app.linger(t0), Linger::Finishing);
+        assert_eq!(app.linger(t0 + Duration::from_secs(60)), Linger::Finishing);
+        assert_eq!(app.linger(t0 + LINGER_CAP), Linger::GaveUp);
+        // Something opens meanwhile: the wait starts over.
+        app.pending = Some(Pending::editor());
+        assert_eq!(app.linger(t0 + LINGER_CAP), Linger::Open);
+        assert!(app.finishing_since.is_none());
+        app.pending = None;
+        go.send(()).unwrap();
+        // --force reached it: the forced daemon from now on.
+        app.become_daemon();
+        assert_eq!(app.bg, Background::Forced);
+        assert!(!app.leaving());
+        crate::update_install::set_forced(false);
+    }
+
     /// A capture asked while the worker waits is refused too (it would
     /// keep the daemon busy); a reply nobody reads lifts the gate.
     #[test]
@@ -3801,6 +4258,10 @@ mod tests {
         App {
             cfg,
             kind: RunKind::OneShot,
+            bg: Background::Normal,
+            stopping: false,
+            finishing_since: None,
+            finishing_said: false,
             hot: None,
             pending: None,
             st: State::Edit(Box::new(edit)),
@@ -4198,6 +4659,14 @@ mod tests {
             e.rec.load_cams();
             e.rec.ring_pal = true;
             save(&mut app, &format!("{tn}-video-ring-palette.png"));
+            // The camera's Background row: Blur light; a build without a model.
+            for (name, avail) in [("blur", true), ("noblur", false)] {
+                crate::cam::bg::set_available(Some(avail));
+                let mut app = video(th, vsel);
+                edit_of(&mut app).rec.opts.cam_bg = crate::cam::bg::Bg::Light;
+                save(&mut app, &format!("{tn}-video-camera-{name}.png"));
+            }
+            crate::cam::bg::set_available(None);
             // No room below: above the selection; none above either: inside.
             save(&mut video(th, FRect { x: 240.0, y: 520.0, w: 960.0, h: 340.0 }), &format!("{tn}-video-above.png"));
             save(&mut video(th, FRect { x: 0.0, y: 0.0, w: 1440.0, h: 900.0 }), &format!("{tn}-video-inside.png"));

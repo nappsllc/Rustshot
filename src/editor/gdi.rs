@@ -202,32 +202,41 @@ impl GdiScreen {
             let _ = ReleaseDC(None, screen);
             r.map_err(|e| anyhow!("screen blit failed: {e}"))?;
         }
+        // HDR monitors: their part read in FP16 and tone-mapped instead.
+        for (r, px) in crate::hdr::win::grab((origin.0, origin.1, size.0, size.1)) {
+            s.put((r.0 - origin.0, r.1 - origin.1), &px);
+        }
         s.finish()
     }
 
     /// Same as `capture`, from an in-memory RGBA image (tests, benches).
     #[cfg(test)]
     pub fn from_pixels(img: &crate::pixbuf::PixBuf, dim: C4) -> Result<Self> {
-        let size = img.dimensions();
-        let s = Self::empty(size, dim)?;
-        {
-            let mut sc = s.scratch.borrow_mut();
-            let w = size.0 as usize;
-            for y0 in (0..size.1 as i32).step_by(BAND as usize) {
-                let bh = BAND.min(size.1 as i32 - y0);
-                unsafe { let _ = GdiFlush(); }
-                for i in 0..bh {
-                    let src = &img.as_raw()[((y0 + i) as usize * w) * 4..][..w * 4];
-                    let d = sc.row(i, w);
-                    d.copy_from_slice(src);
-                    crate::wind::swap_rb(d);
-                }
-                unsafe {
-                    let _ = BitBlt(s.plain.dc, 0, y0, w as i32, bh, Some(sc.m.dc), 0, 0, SRCCOPY);
-                }
+        let s = Self::empty(img.dimensions(), dim)?;
+        s.put((0, 0), img);
+        s.finish()
+    }
+
+    /// Write RGBA `img` into `plain` with its top-left at `at` (inside).
+    fn put(&self, at: (i32, i32), img: &crate::pixbuf::PixBuf) {
+        let (w, h) = (img.width() as usize, img.height() as i32);
+        if at.0 < 0 || at.1 < 0 || at.0 as u32 + img.width() > self.size.0 || at.1 + h > self.size.1 as i32 {
+            return;
+        }
+        let mut sc = self.scratch.borrow_mut();
+        for y0 in (0..h).step_by(BAND as usize) {
+            let bh = BAND.min(h - y0);
+            unsafe { let _ = GdiFlush(); }
+            for i in 0..bh {
+                let src = &img.as_raw()[((y0 + i) as usize * w) * 4..][..w * 4];
+                let d = sc.row(i, w);
+                d.copy_from_slice(src);
+                crate::wind::swap_rb(d);
+            }
+            unsafe {
+                let _ = BitBlt(self.plain.dc, at.0, at.1 + y0, w as i32, bh, Some(sc.m.dc), 0, 0, SRCCOPY);
             }
         }
-        s.finish()
     }
 
     fn empty(size: (u32, u32), dim: C4) -> Result<Self> {
