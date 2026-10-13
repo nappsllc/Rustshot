@@ -1580,8 +1580,10 @@ impl App {
         // Settings › Capture "Add a border": around what is exported
         // (the history keeps the capture without it); the exported
         // image's top-left moves out by it (a pin stays in place).
-        let b = export::border(&edit.cfg, edit.shot.scale).map_or(0, |(b, _)| b as i32);
-        let img = export::with_border(img, &edit.cfg, edit.shot.scale);
+        // Copy text (OCR) reads the capture alone.
+        let framed = tasks.iter().any(|t| !matches!(t, Task::Text | Task::Geometry));
+        let b = export::border(&edit.cfg, edit.shot.scale).filter(|_| framed).map_or(0, |(b, _)| b as i32);
+        let img = if framed { export::with_border(img, &edit.cfg, edit.shot.scale) } else { img };
         self.st = State::Finish(Box::new(FinishJob {
             img,
             sel_global: (g.0 - b, g.1 - b),

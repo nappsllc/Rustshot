@@ -82,7 +82,7 @@ overlay_hints = true              # the key card when the overlay opens
 trim_margins = false              # trim each new region or window to its content (Shift+A by hand)
 border_width = 0                  # a border around every export, 1-8 logical px (0 = none)
 border_color = "#000000"          # its color
-hdr_screenshots = "tonemap"       # Windows HDR displays: "tonemap" to SDR or "keep" as captured
+hdr_screenshots = "tonemap"       # Windows HDR displays (screenshots and recordings): "tonemap" to SDR or "keep" as captured
 screenclip_hint = true            # Windows: remind how to pick Rustshot for Win+Shift+S
 show_thumbnail = true             # the thumbnail card after a copied or saved capture
 shutter_sound = false             # a short click when a capture is taken

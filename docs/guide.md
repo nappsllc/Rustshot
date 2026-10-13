@@ -69,9 +69,11 @@ readout above the selection and pick *Trim to content*) tightens the
 selection to what is in it: each edge moves inward while its row or column
 is the edge's color (within 6 levels per channel, for at least 98 % of its
 pixels, so JPEG noise and a stray pixel still count as margin), and 2 px of
-the margin are kept. A selection whose own edges are not uniform (a window
-with its title bar) tries the window's client area inside it instead
-(Windows). Annotations are ignored; <kbd>Ctrl</kbd>+<kbd>Z</kbd> puts the
+the margin are kept. A window selected by a click whose own edges are not
+uniform (its title bar) trims its client area instead when that has
+margins, and otherwise stays whole (Windows). With a drawing tool chosen, a
+press on the readout draws as anywhere else; Trim is not offered in video
+mode. Annotations are ignored; <kbd>Ctrl</kbd>+<kbd>Z</kbd> puts the
 selection back. *Trim margins automatically* (Settings › Capture,
 `trim_margins = true`) trims every new region or window as you select it
 (not a click that selects the whole screen).
@@ -522,13 +524,20 @@ GitHub account or release; builds are not code-signed yet.
   changed and keeps memory low; `renderer = "software"` is the fallback.
 - **HDR displays (Windows):** a monitor in HDR is read as FP16 (scRGB)
   through Desktop Duplication and tone-mapped to SDR: the SDR content
-  brightness (Settings › Display) becomes white, highlights brighter than
-  that are rolled off smoothly toward white, then the sRGB curve. A capture
-  with nothing brighter than SDR white comes out as it looks. Recordings do
-  the same on the CPU (MP4s of an HDR display convert to NV12 on the CPU
-  too). *HDR screenshots: Keep as captured* (`hdr_screenshots = "keep"`)
-  turns it off. SDR monitors are never affected; Linux and macOS hand over
-  SDR pixels, so there is nothing to do there.
+  brightness (Settings › Display) becomes white, so SDR content (white
+  pages included) comes out exactly as on an SDR monitor, with no seam
+  where a capture spans both kinds; highlights brighter than that go to
+  white, keeping their hue where they can; then the sRGB curve. Very
+  saturated wide-gamut colors are clipped to sRGB. Rustshot keeps a
+  duplication of each HDR display open, so a capture of a still desktop
+  takes at most about 60 ms more per HDR display. Recordings do the same
+  on the CPU for what changed in each frame, on up to four threads (MP4s
+  of an HDR display convert to NV12 on the CPU too): fine for windows and
+  regions, while a whole 4K HDR screen that changes everywhere at once
+  drops frames (about 40 ms a frame for the tone mapping alone). *HDR
+  screenshots: Keep as captured* (`hdr_screenshots = "keep"`) turns it off
+  for screenshots and recordings. SDR monitors are never affected; Linux
+  and macOS hand over SDR pixels, so there is nothing to do there.
 - **Linux:** X11 sessions get every feature. In a Wayland session the
   overlay runs through XWayland and the screen comes from the
   xdg-desktop-portal (Screenshot and ScreenCast); window snapping is off
