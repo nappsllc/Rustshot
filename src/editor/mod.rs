@@ -1171,6 +1171,8 @@ impl App {
         }
         #[cfg(not(test))]
         {
+            // Show clicks / keystrokes: the recording's worker takes them.
+            crate::rec::marks::arm(crate::rec::marks::MarkOpts::from_config(cfg));
             let run = rec_ui::Run::start(spec, geom, th, countdown, self.hwnd, bubble).map(|r| r.with_max(opts.max_len()));
             self.recording_started(run);
         }

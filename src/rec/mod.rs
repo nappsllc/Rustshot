@@ -13,6 +13,8 @@
 //! wait for the encoder, and encoders stream to disk.
 
 pub mod gif;
+// Show clicks and keystrokes: drawn into the recorded frames.
+pub mod marks;
 pub mod mp4;
 pub mod openh264_pins;
 pub mod yuv;

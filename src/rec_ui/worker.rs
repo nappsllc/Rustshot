@@ -53,6 +53,10 @@ pub(crate) fn work(spec: RecSpec, open: Opener, rx: Receiver<Cmd>, ready: &Atomi
             return End::Failed(format!("{e:#}"));
         }
     };
+    // Clicks and keys drawn into the frames, when the recording asked.
+    let (src, marks_late) = crate::rec::marks::wrap(src, spec.area);
+    let mut late = late;
+    late.extend(marks_late);
     ready.store(true, Ordering::SeqCst);
     loop {
         match rx.recv() {

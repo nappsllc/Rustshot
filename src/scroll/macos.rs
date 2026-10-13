@@ -16,7 +16,7 @@ struct CGPoint {
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C" {
     fn CGEventCreateScrollWheelEvent2(source: *const c_void, units: u32, count: u32, w1: i32, w2: i32, w3: i32) -> *mut c_void;
-    fn CGEventCreate(source: *const c_void) -> *mut c_void;
+    fn CGEventCreate(source: *mut c_void) -> *mut c_void;
     fn CGEventGetLocation(e: *mut c_void) -> CGPoint;
     fn CGEventPost(tap: u32, e: *mut c_void);
     fn CGWarpMouseCursorPosition(p: CGPoint) -> i32;
@@ -49,7 +49,7 @@ impl MacWheel {
         let at = CGPoint { x: at.0 as f64 / k, y: at.1 as f64 / k };
         // SAFETY: a fresh event to read the pointer from, released.
         let home = unsafe {
-            let e = CGEventCreate(core::ptr::null());
+            let e = CGEventCreate(core::ptr::null_mut());
             let p = CGEventGetLocation(e);
             CFRelease(e);
             p

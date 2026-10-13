@@ -178,6 +178,15 @@ pub struct Config {
     /// Recording: the camera bubble's background, "off", "light" or
     /// "strong" (blurred behind the person).
     pub rec_camera_bg: String,
+    /// Recording: a ring where the pointer clicks, drawn into the frames.
+    pub rec_show_clicks: bool,
+    /// Recording: the last key chords at the bottom centre ("Ctrl + S").
+    pub rec_show_keys: bool,
+    /// With `rec_show_keys`: every key, not only chords with Ctrl, Alt or
+    /// Win (never in a password field where that can be told).
+    pub rec_show_all_keys: bool,
+    /// After Stop: "off" (save at once) or "ask" (the trim window).
+    pub rec_trim: String,
     /// The capture launcher's last choices: "region", "screen" or
     /// "window"; the delay in seconds (0-60); "edit", "copy", "save" or
     /// "pin" after the capture.
@@ -425,6 +434,10 @@ impl Default for Config {
             rec_camera_ring_width: RING_WIDTH_DEFAULT,
             rec_gif_max: 30,
             rec_camera_bg: "off".into(),
+            rec_show_clicks: false,
+            rec_show_keys: false,
+            rec_show_all_keys: false,
+            rec_trim: "off".into(),
             launcher_source: "region".into(),
             launcher_delay: 0,
             launcher_after: "edit".into(),
@@ -1275,6 +1288,10 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
             // Recorder redesign.
             "rec_gif_max" => cfg.rec_gif_max = fps_of(val, &[15, 30, 60]).map_err(|e| bad("number (15, 30 or 60)", &e))?,
             "rec_camera_bg" => cfg.rec_camera_bg = one_of(val, &["off", "light", "strong"]).map_err(|e| bad("value", &e))?,
+            "rec_show_clicks" => cfg.rec_show_clicks = as_bool(val).map_err(|e| bad("boolean", &e))?,
+            "rec_show_keys" => cfg.rec_show_keys = as_bool(val).map_err(|e| bad("boolean", &e))?,
+            "rec_show_all_keys" => cfg.rec_show_all_keys = as_bool(val).map_err(|e| bad("boolean", &e))?,
+            "rec_trim" => cfg.rec_trim = one_of(val, &["off", "ask"]).map_err(|e| bad("value", &e))?,
             "recent_colors" => cfg.recent_colors = as_array(val).map_err(|e| bad("array", &e))?,
             "launcher_source" => {
                 cfg.launcher_source = one_of(val, &["region", "screen", "window"]).map_err(|e| bad("value", &e))?
@@ -1437,6 +1454,13 @@ pub fn to_toml(c: &Config) -> String {
     out.push_str(&format!("rec_gif_max = {}
 ", c.rec_gif_max));
     out.push_str(&format!("rec_camera_bg = {}\n", q(&c.rec_camera_bg)));
+    out.push_str(&format!(
+        "rec_show_clicks = {}\nrec_show_keys = {}\nrec_show_all_keys = {}\nrec_trim = {}\n",
+        c.rec_show_clicks,
+        c.rec_show_keys,
+        c.rec_show_all_keys,
+        q(&c.rec_trim)
+    ));
     out.push_str(&format!("show_thumbnail = {}\n", c.show_thumbnail));
     out.push_str(&format!(
         "magnifier = {}\nmagnifier_square = {}\naccept_on_select = {}\noverlay_hints = {}\n",
@@ -2340,6 +2364,25 @@ record_hotkey = \"Ctrl+Shift+R\"
         let mut to = Config::default();
         copy_key(&Config { rec_camera_bg: "light".into(), ..Config::default() }, &mut to, "rec_camera_bg");
         assert_eq!(to.rec_camera_bg, "light");
+    }
+
+    /// Show clicks / keystrokes / all keys (off by default) and Trim
+    /// after recording (off or ask), written and read back.
+    #[test]
+    fn recording_extras_keys() {
+        let d = Config::default();
+        assert!(!d.rec_show_clicks && !d.rec_show_keys && !d.rec_show_all_keys);
+        assert_eq!(d.rec_trim, "off");
+        let t = to_toml(&d);
+        for line in ["rec_show_clicks = false\n", "rec_show_keys = false\n", "rec_show_all_keys = false\n", "rec_trim = \"off\"\n"] {
+            assert!(t.contains(line), "{line}");
+        }
+        let c = Config { rec_show_clicks: true, rec_show_keys: true, rec_show_all_keys: true, rec_trim: "ask".into(), ..d };
+        assert_eq!(parse_config(&to_toml(&c)).unwrap(), c);
+        assert_eq!(parse_config("rec_trim = \"Ask\"").unwrap().rec_trim, "ask");
+        for bad in ["rec_trim = \"always\"", "rec_show_keys = \"yes please\""] {
+            assert!(parse_config(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]
