@@ -370,7 +370,7 @@ fn bg_frame_bench() {
     let raw = CamFrame { w: 1280, h: 720, bgra: (0..1280 * 720 * 4).map(|i| (i * 31 % 251) as u8).collect() };
     let mut inp = SegInput::default();
     let prep = best(&mut || inp.prepare(&raw, 256, 144));
-    for d in [144u32, 240, 320, 480] {
+    for d in [160u32, 240, 320, 480] {
         let sq = super::super::fit_square(&raw, d);
         let mut m = SqMask::default();
         disk(144, &mut m);
@@ -457,15 +457,26 @@ fn render_blur_previews() {
             })
             .collect(),
     };
+    // And the embedded model's own mask of the scene, when there is one.
+    let mut masks = vec![("", m)];
+    if let Some(bytes) = seg::EMBEDDED {
+        let mut net = seg::Net::selfie(bytes).unwrap();
+        let mut inp = SegInput::default();
+        inp.prepare(&raw, 256, 144);
+        let mut mm = SqMask::default();
+        assert!(net.segment(&inp, &mut mm));
+        masks.push(("-model", mm));
+    }
+    let cases = [(Shape::Circle, CamSize::M), (Shape::Rounded, CamSize::Xl)];
     for (tn, th, bg) in [("dark", &DARK, [38u8, 44, 58]), ("light", &LIGHT, [214, 222, 232])] {
-        for (shape, size) in [(Shape::Circle, CamSize::M), (Shape::Rounded, CamSize::Xl)] {
+        for ((suffix, m), (shape, size)) in masks.iter().flat_map(|m| cases.iter().map(move |c| (m, *c))) {
             let look = Look { shape, size, mirror: true, ring: None, ring_w: 2, bg: Bg::Off };
             let t = template(look, 2.0, th);
             let mut cells = Vec::new();
             for b in Bg::ALL {
                 let mut pic = fit_square(&raw, t.d);
                 let (mut mask, mut s) = (Vec::new(), Scratch::default());
-                refine(&m, &pic, &mut mask, &mut s);
+                refine(m, &pic, &mut mask, &mut s);
                 composite(&mut pic, &mask, b.sigma(), &mut s);
                 let mut out = Vec::new();
                 compose(&t, Some(&pic), look.mirror, &mut out);
@@ -479,7 +490,7 @@ fn render_blur_previews() {
                     sheet[at..at + (cw * 4) as usize].copy_from_slice(&c[(y * cw * 4) as usize..][..(cw * 4) as usize]);
                 }
             }
-            let name = format!("{tn}-bubble-blur-{}-{}@2x.png", shape.key(), size.key());
+            let name = format!("{tn}-bubble-blur-{}-{}{suffix}@2x.png", shape.key(), size.key());
             std::fs::write(dir.join(name), PixBuf::from_raw(cw * n, cw, sheet).unwrap().to_png().unwrap()).unwrap();
         }
     }
