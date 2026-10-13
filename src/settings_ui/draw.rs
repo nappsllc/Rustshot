@@ -336,6 +336,7 @@ fn question(ui: &mut Ui, m: &Modal) -> Option<Click> {
             ("info", REWRITE.into(), &[("q_save", "Save", Click::Save), ("q_cancel", "Cancel", Click::Back)])
         }
         Modal::Error(e) => ("alert", e.clone(), &[("q_ok", "OK", Click::Back)]),
+        Modal::HideTray => ("info", HIDE_TRAY.into(), &[("q_hide", "Hide icon", Click::HideTray), ("q_cancel", "Cancel", Click::KeepTray)]),
         Modal::Hotkeys { text, .. } => (
             "alert",
             text.clone(),
@@ -360,7 +361,7 @@ fn question(ui: &mut Ui, m: &Modal) -> Option<Click> {
     let ch = cp + th + 24.0 + QROW + cp;
     let card = FRect { x: ((b.w - cw) / 2.0).round(), y: ((b.h - ch) / 2.0).round(), w: cw, h: ch };
     ui.modal_card(card);
-    let col = if matches!(m, Modal::Rewrite { .. }) { ui.theme.accent_fg } else { ui.theme.error };
+    let col = if matches!(m, Modal::Rewrite { .. } | Modal::HideTray) { ui.theme.accent_fg } else { ui.theme.error };
     ui.area(FRect { x: card.x + cp, y: card.y + cp, w: 24.0, h: 24.0 }, |ui| ui.icon(icon, 24.0, col));
     let tr = FRect { x: card.x + cp + icon_w, y: card.y + cp + if th <= 24.0 { 2.0 } else { 0.0 }, w: text_w, h: th };
     ui.area(tr, |ui| ui.height(th).paragraph(&text, false));
@@ -432,10 +433,11 @@ fn general(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) 
             ui.switch("autostart", on, tok);
         });
     }
+    let mut hid = false;
     if tray_row {
         let help = warn.then_some("No capture hotkey: start Rustshot again to capture");
         srow_ex(ui, tok, "Show icon in tray / menu bar", help, true, ROW_H, |ui| {
-            ui.switch("show_tray", &mut f.show_tray, tok);
+            hid = ui.switch("show_tray", &mut f.show_tray, tok) && !f.show_tray;
         });
     }
     srow(ui, tok, "Copy to clipboard after capture", Some("Also when saving or uploading"), |ui| {
@@ -471,6 +473,10 @@ fn general(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) 
     });
     if ui.focus.is_focused("filename") {
         s.pattern = Pattern::File;
+    }
+    // Turned off: say how to get back before it goes.
+    if hid {
+        s.ask_hide_tray();
     }
 }
 

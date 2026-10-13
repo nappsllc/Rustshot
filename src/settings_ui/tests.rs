@@ -977,6 +977,7 @@ fn preview_settings_pngs() {
                 ("rewrite", Modal::Rewrite { close: true }),
                 ("error", Modal::Error(r"Could not save C:\Users\denis\AppData\Roaming\rustshot\config.toml: Access is denied. (os error 5)".into())),
                 ("hotkey-failed", Modal::Hotkeys { text: HOTKEY_TEXT.into(), field: Some("global3".into()) }),
+                ("hide-tray", Modal::HideTray),
             ] {
                 let mut s = sample();
                 s.modal = Some(m);
@@ -1089,6 +1090,35 @@ fn general_controls_click() {
     assert!(!s.form.copy_after);
     click(&mut s, &mut focus, "show_tray", 1.0);
     assert!(!s.form.show_tray);
+    // Turning the tray icon off asks first, saying how to get back in.
+    assert_eq!(s.modal, Some(Modal::HideTray));
+    assert!(HIDE_TRAY.contains("start Rustshot again") && HIDE_TRAY.contains("`rustshot settings`") && HIDE_TRAY.contains("shortcuts keep working"));
+    #[cfg(windows)]
+    assert_eq!(
+        HIDE_TRAY,
+        "The tray icon will be hidden. To open Settings later, start Rustshot again from the Start menu (or run `rustshot settings`). Your shortcuts keep working."
+    );
+    let mut qfocus = FocusState::default();
+    assert_eq!(click(&mut s, &mut qfocus, "q_cancel", 1.0), Some(Click::KeepTray));
+    assert_eq!(s.on(Click::KeepTray), vec![]);
+    assert!(s.form.show_tray && s.modal.is_none(), "Cancel: the icon stays");
+    // Esc keeps it too; Hide icon (or Enter) hides it.
+    s.form.show_tray = false;
+    s.ask_hide_tray();
+    s.on(Click::Escape);
+    assert!(s.form.show_tray && s.modal.is_none());
+    s.form.show_tray = false;
+    s.ask_hide_tray();
+    assert_eq!(click(&mut s, &mut qfocus, "q_hide", 1.0), Some(Click::HideTray));
+    s.on(Click::HideTray);
+    assert!(!s.form.show_tray && s.modal.is_none());
+    s.form.show_tray = false;
+    s.ask_hide_tray();
+    s.on(Click::Enter);
+    assert!(!s.form.show_tray && s.modal.is_none());
+    // Turning it back on asks nothing.
+    click(&mut s, &mut focus, "show_tray", 1.0);
+    assert!(s.form.show_tray && s.modal.is_none());
     click(&mut s, &mut focus, "accent_teal", 1.5);
     assert_eq!(s.form.accent, 1);
     s.form.theme = 1; // Dark

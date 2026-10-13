@@ -5,6 +5,10 @@ use std::sync::mpsc::{self, Receiver, Sender};
 #[derive(Debug, Clone)]
 pub enum HotEvent {
     Capture,
+    /// Rustshot was started again while this daemon runs (no command: the
+    /// Start menu, the exe, `rustshot`): a capture, or Settings when the
+    /// tray icon is hidden (or no capture can start now).
+    Relaunch,
     Quit,
     /// An update is about to install: reply on the sender as soon as no
     /// capture, editor or upload is running, and start no new capture from

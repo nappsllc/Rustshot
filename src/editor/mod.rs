@@ -249,6 +249,20 @@ pub fn hotkey_note(failed: &[crate::hotkey::Failure]) -> Option<HotkeyNote> {
     })
 }
 
+/// Open (or raise) the Settings window; tests count the requests instead.
+fn open_settings() {
+    #[cfg(test)]
+    SETTINGS_OPENED.with(|n| n.set(n.get() + 1));
+    #[cfg(not(test))]
+    crate::settings_ui::show();
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Tests: how often this thread asked for the Settings window.
+    pub static SETTINGS_OPENED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
 /// Hotkeys that did not register: on stderr, and in the Settings window
 /// when it is open. Otherwise a key the user has to change opens it (at
 /// Key bindings, the dialog over it); a fallback is a tray balloon.
@@ -606,6 +620,7 @@ impl App {
                 self.request_exit(0);
                 return false;
             }
+            HotEvent::Relaunch => return self.relaunch(crate::tray::is_visible()),
             HotEvent::Restart => self.restart_pending = true,
             HotEvent::RestartWhenIdle(reply) => {
                 self.updating = true;
@@ -697,6 +712,20 @@ impl App {
             HotEvent::Record if !rec_ui::supported() => eprintln!("rustshot: recording is not supported on this platform yet"),
             HotEvent::Record => self.pending = Some(Pending::record()),
         }
+        true
+    }
+
+    /// Rustshot started again (the Start menu, the exe, `rustshot`): a
+    /// capture, as always. With the tray icon hidden it is the only way
+    /// back in, so it opens Settings; it does too when no capture can
+    /// start now (a recording runs, an update installs), rather than
+    /// doing nothing. Returns `on_hot`'s "keep running".
+    fn relaunch(&mut self, tray_visible: bool) -> bool {
+        let busy = self.rec.is_some() || self.updating || self.restart_pending;
+        if tray_visible && !busy {
+            return self.on_hot(HotEvent::Capture);
+        }
+        open_settings();
         true
     }
 
@@ -3785,6 +3814,28 @@ mod tests {
         assert!(app.on_hot(HotEvent::RestartAborted));
         assert!(app.on_hot(HotEvent::Capture));
         assert!(app.pending.is_some());
+    }
+
+    /// Rustshot started again: a capture while the tray icon shows;
+    /// Settings when it is hidden (the way back in) or when no capture can
+    /// start (an update installs) — never nothing.
+    #[test]
+    fn relaunch_captures_or_opens_settings() {
+        let opened = || super::SETTINGS_OPENED.with(|n| n.get());
+        let mut app = preview_app(theme::DARK, None);
+        app.st = State::Hidden;
+        let before = opened();
+        assert!(app.relaunch(true));
+        assert!(app.pending.is_some(), "tray icon shown: a capture");
+        assert_eq!(opened(), before);
+        app.pending = None;
+        assert!(app.relaunch(false));
+        assert!(app.pending.is_none(), "tray icon hidden: no capture");
+        assert_eq!(opened(), before + 1, "Settings instead");
+        app.updating = true;
+        assert!(app.relaunch(true));
+        assert!(app.pending.is_none());
+        assert_eq!(opened(), before + 2, "no capture now: Settings, not nothing");
     }
 
     /// A capture asked while the worker waits is refused too (it would

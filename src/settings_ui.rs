@@ -97,6 +97,12 @@ pub const GLOBALS: [(&str, usize); 8] = [
     ("Quit Rustshot", 1),
 ];
 
+/// The question when "Show icon in tray" is turned off: the way back in.
+#[cfg(windows)]
+pub const HIDE_TRAY: &str = "The tray icon will be hidden. To open Settings later, start Rustshot again from the Start menu (or run `rustshot settings`). Your shortcuts keep working.";
+#[cfg(not(windows))]
+pub const HIDE_TRAY: &str = "The tray icon will be hidden. To open Settings later, start Rustshot again from your applications menu (or run `rustshot settings`). Your shortcuts keep working.";
+
 /// A global row's note while another app holds its key.
 pub const IN_USE: &str = "In use by another app";
 
@@ -631,6 +637,8 @@ enum Modal {
     /// back): OK, and "Change shortcuts…", which goes to Key bindings
     /// with `field`'s key box recording (the first row needing a new key).
     Hotkeys { text: String, field: Option<String> },
+    /// [`HIDE_TRAY`]: "Show icon in tray" was just turned off.
+    HideTray,
     /// `config.toml` does not parse (the error): Open config file, Reset
     /// to defaults…, Close; nothing else until it is fixed.
     Broken(String),
@@ -650,6 +658,9 @@ pub enum Click {
     Back,
     /// The hotkey dialog's "Change shortcuts…".
     ChangeShortcuts,
+    /// The hide-the-tray-icon question's "Hide icon" / "Cancel".
+    HideTray,
+    KeepTray,
     Browse,
     OpenConfig,
     Restore,
@@ -899,6 +910,14 @@ impl Settings {
         }
     }
 
+    /// "Show icon in tray" was just turned off: ask first, saying how to
+    /// get back in ([`HIDE_TRAY`]).
+    pub fn ask_hide_tray(&mut self) {
+        if self.modal.is_none() {
+            self.modal = Some(Modal::HideTray);
+        }
+    }
+
     /// The dialog's "Change shortcuts…": Key bindings, at the top (the
     /// global rows), the row's key box recording.
     fn change_shortcuts(&mut self) {
@@ -1013,6 +1032,7 @@ impl Settings {
             (Click::Escape, Some(_)) => Click::Back,
             (Click::Escape, None) => Click::Cancel,
             (Click::Enter, Some(Modal::Rewrite { .. })) => Click::Save,
+            (Click::Enter, Some(Modal::HideTray)) => Click::HideTray,
             (Click::Enter, Some(Modal::Error(_) | Modal::Hotkeys { .. })) => Click::Back,
             // Nothing happens to a broken file by a stray Enter.
             (Click::Enter, Some(Modal::Broken(_) | Modal::Reset(_))) => return vec![],
@@ -1041,6 +1061,11 @@ impl Settings {
             Click::Back => {
                 self.modal = match self.modal.take() {
                     Some(Modal::Reset(e)) => Some(Modal::Broken(e)),
+                    // Esc on the hide-the-icon question: it stays.
+                    Some(Modal::HideTray) => {
+                        self.form.show_tray = true;
+                        None
+                    }
                     _ => None,
                 };
                 self.show_pending();
@@ -1053,6 +1078,16 @@ impl Settings {
                 vec![]
             }
             Click::Replace => self.reset(),
+            Click::HideTray | Click::KeepTray => {
+                if matches!(self.modal, Some(Modal::HideTray)) {
+                    self.modal = None;
+                    if c == Click::KeepTray {
+                        self.form.show_tray = true;
+                    }
+                }
+                self.show_pending();
+                vec![]
+            }
             Click::ChangeShortcuts => {
                 self.change_shortcuts();
                 vec![]
