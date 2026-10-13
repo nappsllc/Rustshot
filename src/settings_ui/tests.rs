@@ -401,6 +401,59 @@ fn screenclip_guide_later() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Review fixes: a "Don't show again" that cannot be saved keeps the
+/// window open with the error; focus changes read nothing unless the
+/// guide is up (or Default apps was opened); Default apps failing to open
+/// shows in the guide.
+#[test]
+fn screenclip_guide_edges() {
+    let _g = GUIDE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = scratch("guide-edges");
+    let p = dir.join("config.toml");
+    config::save_at(&p, &Config::default()).unwrap();
+    set_fake(1);
+    let mut s = guide_settings(&p);
+    s.form.screenclip = Some(true);
+    s.on(Click::Apply);
+    assert!(matches!(s.modal, Some(Modal::Guide { .. })));
+    s.on(Click::DontShow);
+    // The file broke meanwhile: the hint is not written, the window stays.
+    std::fs::write(&p, "jpeg_quality = high\n").unwrap();
+    let acts = s.on(Click::Cancel);
+    assert!(!acts.contains(&Act::Close), "{acts:?}");
+    assert!(matches!(&s.modal, Some(Modal::Error(e)) if e.contains("Could not save")));
+    // No guide, not away: a focus change reads nothing.
+    s.modal = None;
+    set_fake(3);
+    assert!(!s.refocused());
+    assert_ne!(s.handler, Handler::Ours, "not read");
+    // Default apps opened, the guide closed meanwhile: still read on return.
+    set_fake(1);
+    s.open_guide();
+    s.on(Click::OpenDefaultApps);
+    s.modal = None;
+    set_fake(3);
+    assert!(s.refocused());
+    assert_eq!(s.handler, Handler::Ours);
+    assert!(s.toast.is_some());
+    // Default apps did not open: the guide says so, nothing waits.
+    set_fake(1);
+    s.toast = None;
+    s.open_guide();
+    s.on(Click::OpenDefaultApps);
+    let text = crate::screenclip_win::open_failed_text("Access is denied.");
+    assert_eq!(text, "Couldn't open Default apps (Access is denied). Open Settings > Apps > Default apps yourself.");
+    s.default_apps_failed(text.clone());
+    assert_eq!(s.guide_error.as_deref(), Some(text.as_str()));
+    assert!(!s.guide_away);
+    s.on(Click::RemindLater);
+    assert!(s.guide_error.is_none());
+    // With no guide up it is a message.
+    s.default_apps_failed(text);
+    assert!(matches!(&s.modal, Some(Modal::Error(e)) if e.starts_with("Couldn't open Default apps")));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Capture's Win+Shift+S row: the red "click to fix" line is a link that
 /// opens the guide; the other states are plain text; nothing while the
 /// toggle is off or not applied yet.
@@ -1098,6 +1151,13 @@ fn preview_settings_pngs() {
                 let (img, _) = render(&mut s, th, k, &Input::default(), &mut FocusState::default());
                 preview::save(&png(name, tname, k), &img);
             }
+            let mut s = sample();
+            s.section = CAPTURE;
+            s.scroll[CAPTURE] = 1e6;
+            s.modal = Some(Modal::Guide { broken: false, dont_show: false });
+            s.guide_error = Some(crate::screenclip_win::open_failed_text("The system cannot find the file specified."));
+            let (img, _) = render(&mut s, th, k, &Input::default(), &mut FocusState::default());
+            preview::save(&png("screenclip-guide-error", tname, k), &img);
             let mut s = sample();
             s.section = CAPTURE;
             s.scroll[CAPTURE] = 1e6;

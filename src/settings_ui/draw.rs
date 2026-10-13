@@ -389,6 +389,8 @@ pub struct Dialog<'a> {
     pub min_w: f32,
     /// The tallest the text may grow before it is cut.
     pub max_text_h: f32,
+    /// A red line under the text (something the dialog's button could not do).
+    pub error: Option<&'a str>,
 }
 
 /// Paint `d` centred over the dimmed form; returns the click.
@@ -403,7 +405,9 @@ pub fn dialog(ui: &mut Ui, d: &Dialog) -> Option<Click> {
     let text_w = cw - 2.0 * cp - icon_w;
     let title_h = if d.title.is_some() { 24.0 } else { 0.0 };
     let th = ui.paragraph_height(d.text, text_w).clamp(24.0, d.max_text_h);
-    let ch = cp + title_h + th + 24.0 + QROW + cp;
+    let err_lines = d.error.map_or(Vec::new(), |e| wrap(e, text_w, |s| ui.text_w(12.0, s)));
+    let err_h = if err_lines.is_empty() { 0.0 } else { 8.0 + 16.0 * err_lines.len() as f32 };
+    let ch = cp + title_h + th + err_h + 24.0 + QROW + cp;
     let card = FRect { x: ((b.w - cw) / 2.0).round(), y: ((b.h - ch) / 2.0).round(), w: cw, h: ch };
     ui.modal_card(card);
     ui.area(FRect { x: card.x + cp, y: card.y + cp, w: 24.0, h: 24.0 }, |ui| ui.icon(d.icon, 24.0, d.icon_color));
@@ -415,6 +419,10 @@ pub fn dialog(ui: &mut Ui, d: &Dialog) -> Option<Click> {
     }
     let ty = card.y + cp + title_h + if title_h == 0.0 && th <= 24.0 { 2.0 } else { 0.0 };
     ui.area(FRect { x: tx, y: ty, w: text_w, h: th }, |ui| ui.height(th).paragraph(d.text, false));
+    for (i, l) in err_lines.iter().enumerate() {
+        let (x, cy) = (ui.px(tx), ui.px(ty + th + 8.0 + 8.0 + 16.0 * i as f32));
+        ui.text_at(12.0, l, x, cy, tok.er, false);
+    }
     let bar = FRect { x: card.x + cp, y: card.y1() - cp - QROW, w: cw - 2.0 * cp, h: QROW };
     let mut click = None;
     if let Some((id, label, mut on, c)) = d.check {
@@ -456,6 +464,7 @@ fn question(ui: &mut Ui, s: &Settings, m: &Modal) -> Option<Click> {
                 check: Some(("q_dont_show", GUIDE_DONT_SHOW, dont_show, Click::DontShow)),
                 min_w: 500.0,
                 max_text_h: 260.0,
+                error: s.guide_error.as_deref(),
             },
         );
     }
@@ -478,7 +487,7 @@ fn question(ui: &mut Ui, s: &Settings, m: &Modal) -> Option<Click> {
         Modal::Reset(_) => ("alert", RESET.into(), &[("q_replace", "Replace", Click::Replace), ("q_cancel", "Cancel", Click::Back)]),
     };
     let icon_color = if matches!(m, Modal::Rewrite { .. }) { ui.theme.accent_fg } else { ui.theme.error };
-    dialog(ui, &Dialog { icon, icon_color, title: None, text: &text, buttons: btns, check: None, min_w: 420.0, max_text_h: 160.0 })
+    dialog(ui, &Dialog { icon, icon_color, title: None, text: &text, buttons: btns, check: None, min_w: 420.0, max_text_h: 160.0, error: None })
 }
 
 // --- Sections ---------------------------------------------------------------

@@ -358,16 +358,20 @@ screen, a recording starts video mode, and a delay waits that long.
   (`HKCU\Software\Classes\Rustshot.ScreenClip`,
   `HKCU\Software\Rustshot\Capabilities` and a `Rustshot` value under
   `HKCU\Software\RegisteredApplications`).
-- Windows lets no app make itself the default: the next
-  <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> asks which app to use; choose
-  **Rustshot** and **Always**.
+- Windows lets no app make itself the default; you pick it under
+  *Settings › Apps › Default apps › Choose defaults by link type ›
+  MS-SCREENCLIP*. (If Windows instead asks which app to use at the next
+  <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd>, choose **Rustshot** and
+  **Always**.)
 - When Windows does not open Rustshot yet, turning the option on shows
   **One more step to use Win+Shift+S** with the steps and an **Open
   Default apps** button (*Settings › Apps › Default apps*, where *Choose
-  defaults by link type* is). Back in the window, once Rustshot is the
-  chosen app, a toast says *Win+Shift+S now opens Rustshot*. While the
-  option is on but another app is chosen, the daemon shows the same message
-  when it starts; **Don't show again** turns that off
+  defaults by link type* is; if that page cannot be opened, the message
+  says so). Back in the window, once Rustshot is the chosen app, a toast
+  says *Win+Shift+S now opens Rustshot*. While the option is on but another
+  app is chosen, the daemon shows the same message when it starts. Tick
+  **Don't show again** and the message, however it closes (Remind me later,
+  Esc, the close button, or Rustshot chosen), turns that off
   (`screenclip_hint = false`).
 - Under the option, Settings shows which app Win+Shift+S opens: *Opens
   Rustshot*, *Opens Snipping Tool* (or another app), *Not set*, or *Set to

@@ -212,6 +212,10 @@ pub trait RegRead {
         let _ = s;
         None
     }
+    /// The program a command names is there.
+    fn file_exists(&self, path: &str) -> bool {
+        std::path::Path::new(path).is_file()
+    }
 }
 
 /// Which app Windows opens for the scheme (Win+Shift+S).
@@ -244,16 +248,39 @@ fn is_appx(progid: &str) -> bool {
 }
 
 /// `progid` opens something: it has a `shell\open\command` (in the user's
-/// classes or the merged ones), or it is a packaged app's ProgID that is
-/// still registered (an installed AppX package keeps its `AppX…` key
+/// classes or the merged ones) whose program, when the command names one
+/// by its full path, is still there; or it is a packaged app's ProgID that
+/// is still registered (an installed AppX package keeps its `AppX…` key
 /// under `HKCR`; uninstalling the package removes it).
 pub fn resolves(r: &impl RegRead, progid: &str) -> bool {
     if progid.is_empty() || progid.contains(['\\', '/']) {
         return false;
     }
-    r.exists(Root::User, &format!(r"Software\Classes\{progid}\shell\open\command"))
-        || r.exists(Root::Classes, &format!(r"{progid}\shell\open\command"))
-        || (is_appx(progid) && r.exists(Root::Classes, progid))
+    if is_appx(progid) && r.exists(Root::Classes, progid) {
+        return true;
+    }
+    let user = format!(r"Software\Classes\{progid}\shell\open\command");
+    let merged = format!(r"{progid}\shell\open\command");
+    let cmd = if r.exists(Root::User, &user) {
+        r.get(Root::User, &user, None)
+    } else if r.exists(Root::Classes, &merged) {
+        r.get(Root::Classes, &merged, None)
+    } else {
+        return false;
+    };
+    // A command naming a program that is gone (an uninstalled app's stale
+    // key) opens nothing either. Only a plain absolute path is checked: no
+    // command (DelegateExecute), `%vars%` or bare names are trusted.
+    match cmd.as_deref().and_then(command_exe) {
+        Some(exe) if is_absolute_windows_path(exe) && !exe.contains('%') => r.file_exists(exe),
+        _ => true,
+    }
+}
+
+/// `C:\…` or `\\server\…`.
+fn is_absolute_windows_path(p: &str) -> bool {
+    let b = p.as_bytes();
+    (b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/')) || p.starts_with(r"\\")
 }
 
 /// A readable name for the app behind `progid`: a packaged app's
@@ -351,13 +378,23 @@ pub fn state_line(h: &Handler, show_tray: bool) -> (String, Tone) {
 /// page, where "Choose defaults by link type" is (the guide's steps).
 pub const DEFAULT_APPS_URI: &str = "ms-settings:defaultapps";
 
-/// Open Windows' Default apps.
-pub fn open_default_apps() {
+/// Open Windows' Default apps; the error when Windows did not.
+pub fn open_default_apps() -> Result<(), String> {
     #[cfg(windows)]
-    reg::shell_open(DEFAULT_APPS_URI);
+    {
+        reg::shell_open(DEFAULT_APPS_URI)
+    }
+    #[cfg(not(windows))]
+    Err("only on Windows".into())
 }
 
-/// The registry, HKCU only.
+/// The guide's line when Default apps did not open.
+pub fn open_failed_text(e: &str) -> String {
+    format!("Couldn't open Default apps ({}). Open Settings > Apps > Default apps yourself.", e.trim().trim_end_matches('.'))
+}
+
+/// The registry: writes only our own HKCU keys; reads HKCU and (for the
+/// handler check, read-only) HKCR.
 #[cfg(windows)]
 pub mod reg {
     use super::*;
@@ -434,15 +471,23 @@ pub mod reg {
     }
 
     /// Open a `ms-settings:` page.
-    pub fn shell_open(uri: &str) {
+    /// Open a `ms-settings:` page (COM initialized on this thread, as
+    /// `ShellExecute` wants for URI handlers); the error when it did not.
+    pub fn shell_open(uri: &str) -> Result<(), String> {
+        use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoUninitialize};
         use windows::Win32::UI::Shell::ShellExecuteW;
         use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
         if !uri.starts_with("ms-settings:") {
-            return;
+            return Err(format!("not a Settings page: {uri}"));
         }
-        unsafe {
-            ShellExecuteW(None, &HSTRING::from("open"), &HSTRING::from(uri), PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL);
+        let com = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) };
+        let h = unsafe { ShellExecuteW(None, &HSTRING::from("open"), &HSTRING::from(uri), PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL) };
+        // Above 32 is success; the rest are error codes.
+        let res = if h.0 as isize > 32 { Ok(()) } else { Err(windows::core::Error::from_thread().message()) };
+        if com.is_ok() {
+            unsafe { CoUninitialize() };
         }
+        res
     }
 
     /// Write a string value (creating the key).
@@ -782,6 +827,8 @@ mod tests {
         keys: std::collections::HashSet<(Root, String)>,
         values: std::collections::HashMap<(Root, String, String), String>,
         indirect: std::collections::HashMap<String, String>,
+        /// Programs that are gone (every other one is there).
+        missing: std::collections::HashSet<String>,
     }
 
     impl FakeReg {
@@ -821,6 +868,36 @@ mod tests {
         fn indirect(&self, s: &str) -> Option<String> {
             self.indirect.get(s).cloned()
         }
+        fn file_exists(&self, path: &str) -> bool {
+            !self.missing.contains(&path.to_ascii_lowercase())
+        }
+    }
+
+    /// An app uninstalled but its classic ProgID left behind (the command
+    /// names a program that is gone): broken, like a gone AppX. Commands
+    /// with variables, bare names or no command are trusted.
+    #[test]
+    fn stale_classic_progid_is_broken() {
+        let n = Names::real();
+        let mut r = FakeReg::default();
+        r.put(Root::Classes, r"Old.Clip\shell\open\command", None, r#""C:\Program Files\Old\old.exe" "%1""#);
+        r.choice(None, Some("Old.Clip"));
+        assert!(matches!(handler_in(&r, &n), Handler::Other { .. }));
+        r.missing.insert(r"c:\program files\old\old.exe".into());
+        assert_eq!(handler_in(&r, &n), Handler::Broken { progid: "Old.Clip".into() });
+        r.put(Root::Classes, r"Var.Clip\shell\open\command", None, r#""%ProgramFiles%\Var\var.exe" "%1""#);
+        r.put(Root::Classes, r"Bare.Clip\shell\open\command", None, "var.exe %1");
+        r.put(Root::Classes, r"Delegate.Clip\shell\open\command", Some("DelegateExecute"), "{GUID}");
+        r.missing.insert(r"%programfiles%\var\var.exe".into());
+        assert!(resolves(&r, "Var.Clip") && resolves(&r, "Bare.Clip") && resolves(&r, "Delegate.Clip"));
+        // Ours with its program moved away: broken (the daemon re-points it).
+        let mut ours = FakeReg::default();
+        ours.put(Root::User, &n.command_key(), None, &open_command(r"D:\Downloads\rustshot.exe"));
+        ours.choice(Some("Rustshot.ScreenClip"), None);
+        assert_eq!(handler_in(&ours, &n), Handler::Ours);
+        ours.missing.insert(r"d:\downloads\rustshot.exe".into());
+        assert_eq!(handler_in(&ours, &n), Handler::Broken { progid: "Rustshot.ScreenClip".into() });
+        assert!(is_absolute_windows_path(r"\\srv\share\a.exe") && !is_absolute_windows_path("a.exe"));
     }
 
     const SNIP: &str = "AppXfeq5vwnakrw6cy02kzhq8ekhhsremh62";
@@ -1032,9 +1109,12 @@ mod tests {
             assert_eq!(handler(n), Handler::None);
             set(&format!(r"{root}\UserChoice"), Some("ProgId"), "AppXrustshotTestDefinitelyMissing0").unwrap();
             assert_eq!(handler(n), Handler::Broken { progid: "AppXrustshotTestDefinitelyMissing0".into() });
-            register(n, Path::new(r"C:\x\rustshot.exe")).unwrap();
+            register(n, &std::env::current_exe().unwrap()).unwrap();
             set(&format!(r"{root}\UserChoiceLatest\ProgId"), Some("ProgId"), &n.progid).unwrap();
             assert_eq!(handler(n), Handler::Ours);
+            // Its program gone: broken.
+            register(n, Path::new(r"C:\definitely\not\here\rustshot.exe")).unwrap();
+            assert_eq!(handler(n), Handler::Broken { progid: n.progid.clone() });
         }
 
         /// A moved exe is re-pointed; another copy that still exists is not.

@@ -720,6 +720,8 @@ pub struct Settings {
     guide_away: bool,
     /// The guide waits for the open question to close.
     guide_queued: bool,
+    /// Default apps did not open: the guide says so (in red).
+    pub guide_error: Option<String>,
     /// A short message at the bottom of the window, and when it came.
     pub toast: Option<(String, std::time::Instant)>,
     pub form: Form,
@@ -772,6 +774,7 @@ impl Settings {
             handler: Handler::None,
             guide_away: false,
             guide_queued: false,
+            guide_error: None,
             toast: None,
             section: GENERAL,
             scroll: [0.0; SECTIONS.len()],
@@ -816,7 +819,10 @@ impl Settings {
         }
         let broken = matches!(self.handler, Handler::Broken { .. });
         match &self.modal {
-            None => self.modal = Some(Modal::Guide { broken, dont_show: false }),
+            None => {
+                self.modal = Some(Modal::Guide { broken, dont_show: false });
+                self.guide_error = None;
+            }
             Some(Modal::Guide { .. }) => {}
             Some(_) => self.guide_queued = true,
         }
@@ -855,12 +861,26 @@ impl Settings {
         self.open_guide();
     }
 
-    /// Close the guide; a ticked "Don't show again" writes
-    /// `screenclip_hint = false` (that line only).
+    /// Default apps did not open (`text`: [`crate::screenclip_win::open_failed_text`]):
+    /// the guide shows it in red, and nothing waits for the user to come back.
+    pub fn default_apps_failed(&mut self, text: String) {
+        self.guide_away = false;
+        if matches!(self.modal, Some(Modal::Guide { .. })) {
+            self.guide_error = Some(text);
+        } else {
+            self.notify(text);
+        }
+    }
+
+    /// Close the guide however it closes (Remind me later, Esc, the
+    /// window's close button, or Rustshot chosen); a ticked "Don't show
+    /// again" writes `screenclip_hint = false` (that line only). A write
+    /// that fails leaves the error showing.
     fn close_guide(&mut self) -> Vec<Act> {
         let Some(Modal::Guide { dont_show, .. }) = self.modal else { return vec![] };
         self.modal = None;
         self.guide_away = false;
+        self.guide_error = None;
         if dont_show {
             let edit = [("screenclip_hint".to_string(), Some("false".to_string()))];
             match config::edit_top_keys_at(&self.path, &edit) {
@@ -875,11 +895,14 @@ impl Settings {
         vec![]
     }
 
-    /// The window has the focus again (back from Default apps): read
-    /// which app Win+Shift+S opens; once it is Rustshot the guide closes
-    /// and a toast says so. Returns whether anything changed.
+    /// The window has the focus again (back from Default apps): while the
+    /// guide is up or its Open Default apps was clicked, read which app
+    /// Win+Shift+S opens; once it is Rustshot the guide closes and a toast
+    /// says so. Other focus changes read nothing (the read may load a
+    /// package's resources). Returns whether anything changed.
     pub fn refocused(&mut self) -> bool {
-        if self.screenclip != Some(true) {
+        let guide = matches!(self.modal, Some(Modal::Guide { .. }));
+        if self.screenclip != Some(true) || !(guide || self.guide_away) {
             return false;
         }
         let was = std::mem::replace(&mut self.handler, (self.read_handler)());
@@ -1067,7 +1090,10 @@ impl Settings {
             (Click::Enter, Some(Modal::Guide { .. })) => Click::OpenDefaultApps,
             (Click::Cancel, Some(Modal::Guide { .. })) => {
                 let mut acts = self.close_guide();
-                acts.push(Act::Close);
+                // "Don't show again" could not be saved: the error stays.
+                if !matches!(self.modal, Some(Modal::Error(_))) {
+                    acts.push(Act::Close);
+                }
                 return acts;
             }
             (Click::Escape, Some(_)) => Click::Back,
@@ -1300,6 +1326,8 @@ enum Msg {
     Section(usize),
     /// Show the Win+Shift+S guide ([`show_guide`]).
     Guide,
+    /// The guide's Open Default apps did not open it (the text to show).
+    DefaultAppsFailed(String),
 }
 
 /// The open window's inbox, if any.
@@ -1443,6 +1471,7 @@ fn run(rx: Receiver<Msg>) {
                 START_GUIDE.store(true, std::sync::atomic::Ordering::SeqCst);
                 late = true;
             }
+            Msg::DefaultAppsFailed(t) => notes.push(t),
         }
     }
     *open = None;
@@ -1530,7 +1559,14 @@ impl Window {
                 std::thread::spawn(move || crate::actions::open_link(u));
             }
             Act::OpenDefaultApps => {
-                std::thread::spawn(crate::screenclip_win::open_default_apps);
+                std::thread::spawn(|| {
+                    if let Err(e) = crate::screenclip_win::open_default_apps() {
+                        eprintln!("rustshot: opening Default apps: {e}");
+                        if let Some(tx) = lock(&OPEN).as_ref() {
+                            let _ = tx.send(Msg::DefaultAppsFailed(crate::screenclip_win::open_failed_text(&e)));
+                        }
+                    }
+                });
             }
         }
     }
@@ -1646,6 +1682,10 @@ impl Driver for Window {
                             self.s.section = CAPTURE;
                             self.s.sync_screenclip(crate::screenclip_win::state());
                             self.s.open_guide();
+                            changed = true;
+                        }
+                        Msg::DefaultAppsFailed(t) => {
+                            self.s.default_apps_failed(t);
                             changed = true;
                         }
                     }
