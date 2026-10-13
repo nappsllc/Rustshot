@@ -33,6 +33,7 @@ fn main() {
     println!("cargo:rerun-if-changed=packaging/icons/rustshot.ico");
     println!("cargo:rerun-if-env-changed=RC");
     bake_font();
+    pack_i18n();
     // Check the *target*, not the host: cross-target checks run build.rs on the host.
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows")
         || env::var("CARGO_CFG_TARGET_ENV").as_deref() != Ok("msvc")
@@ -297,4 +298,199 @@ fn compress_model() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     fs::write(out_dir.join("selfie.bin.z"), &z).expect("write selfie.bin.z");
     fs::write(out_dir.join("selfie_len.rs"), format!("{}", raw.len())).expect("write selfie_len.rs");
+}
+
+/// The plural categories (CLDR), in the order a plural entry stores them.
+const PLURAL_FORMS: [&str; 6] = ["zero", "one", "two", "few", "many", "other"];
+
+/// One catalog file: its `@` metadata and `key = value` entries (plural
+/// forms as `key[one]`: (key, form, value, line)), in file order.
+struct Catalog {
+    code: String,
+    meta: std::collections::BTreeMap<String, String>,
+    entries: Vec<(String, Option<usize>, String, usize)>,
+}
+
+/// `\n`, `\t`, `\\` and `\s` (a space, for an edge the trim would eat).
+fn unescape(v: &str, at: &str) -> String {
+    let mut out = String::new();
+    let mut it = v.chars();
+    while let Some(c) = it.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match it.next() {
+            Some('n') => out.push('\n'),
+            Some('t') => out.push('\t'),
+            Some('s') => out.push(' '),
+            Some('\\') => out.push('\\'),
+            other => panic!("{at}: unknown escape \\{}", other.map(String::from).unwrap_or_default()),
+        }
+    }
+    out
+}
+
+fn read_catalog(path: &Path) -> Catalog {
+    let code = path.file_stem().unwrap().to_string_lossy().into_owned();
+    let text = fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let mut cat = Catalog { code, meta: Default::default(), entries: Vec::new() };
+    let mut seen = std::collections::HashSet::new();
+    for (n, line) in text.lines().enumerate() {
+        let at = format!("{}:{}", path.display(), n + 1);
+        let line = line.trim_start_matches('\u{feff}').trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let (k, v) = line.split_once('=').unwrap_or_else(|| panic!("{at}: expected `key = value`"));
+        let (k, v) = (k.trim(), unescape(v.trim(), &at));
+        if let Some(m) = k.strip_prefix('@') {
+            cat.meta.insert(m.to_string(), v);
+            continue;
+        }
+        let (base, form) = match k.split_once('[') {
+            Some((b, f)) => {
+                let f = f.strip_suffix(']').unwrap_or_else(|| panic!("{at}: unclosed ["));
+                let i = PLURAL_FORMS.iter().position(|&p| p == f).unwrap_or_else(|| panic!("{at}: unknown plural form {f}"));
+                (b, Some(i))
+            }
+            None => (k, None),
+        };
+        assert!(
+            !base.is_empty() && base.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-".contains(&b)),
+            "{at}: bad key {base:?} (a-z 0-9 . _ -)"
+        );
+        assert!(seen.insert(k.to_string()), "{at}: duplicate key {k}");
+        cat.entries.push((base.to_string(), form, v, n + 1));
+    }
+    cat
+}
+
+/// The `{name}` placeholders of `s`, sorted.
+fn placeholders(s: &str) -> Vec<String> {
+    let mut v = Vec::new();
+    let mut rest = s;
+    while let Some(i) = rest.find('{') {
+        rest = &rest[i + 1..];
+        if let Some(j) = rest.find('}') {
+            let name = &rest[..j];
+            if !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+                v.push(name.to_string());
+                rest = &rest[j + 1..];
+            }
+        }
+    }
+    v.sort();
+    v.dedup();
+    v
+}
+
+/// Pack every `i18n/<lang>.txt` into `$OUT_DIR/i18n_table.rs` (the sorted
+/// English keys, their placeholders, each language's metadata) and
+/// `$OUT_DIR/i18n.bin` (per language, the DEFLATE-compressed values in key
+/// order, NUL-terminated; a plural entry's six CLDR forms joined by 0x1F;
+/// an empty value falls back to English at run time).
+fn pack_i18n() {
+    use std::collections::BTreeMap;
+    use std::fmt::Write as _;
+    println!("cargo:rerun-if-changed=i18n");
+    let mut files: Vec<PathBuf> = fs::read_dir("i18n")
+        .expect("read i18n/")
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "txt"))
+        .collect();
+    files.sort();
+    for f in &files {
+        println!("cargo:rerun-if-changed={}", f.display());
+    }
+    let mut cats: Vec<Catalog> = files.iter().map(|p| read_catalog(p)).collect();
+    let en_i = cats.iter().position(|c| c.code == "en").expect("i18n/en.txt");
+    let en = cats.remove(en_i);
+    cats.insert(0, en);
+    // Each English key's forms (a plain entry in slot 5, "other").
+    let mut keys: BTreeMap<String, [Option<String>; 6]> = BTreeMap::new();
+    let mut plural: BTreeMap<String, bool> = BTreeMap::new();
+    for (k, form, v, line) in &cats[0].entries {
+        if let Some(&p) = plural.get(k) {
+            assert_eq!(p, form.is_some(), "i18n/en.txt:{line}: {k} is both plain and plural");
+        }
+        plural.insert(k.clone(), form.is_some());
+        assert!(!v.is_empty(), "i18n/en.txt:{line}: empty value for {k}");
+        keys.entry(k.clone()).or_default()[form.unwrap_or(5)] = Some(v.clone());
+    }
+    for (k, f) in &keys {
+        if plural[k] {
+            assert!(f[1].is_some() && f[5].is_some(), "i18n/en.txt: plural {k} needs [one] and [other]");
+        }
+    }
+    let names: Vec<&String> = keys.keys().collect();
+    assert!(names.len() < 65536, "too many i18n keys");
+    let ph: Vec<Vec<String>> = keys
+        .values()
+        .map(|f| {
+            let mut all: Vec<String> = f.iter().flatten().flat_map(|v| placeholders(v)).collect();
+            all.sort();
+            all.dedup();
+            all
+        })
+        .collect();
+
+    let mut blob: Vec<u8> = Vec::new();
+    let mut langs = String::new();
+    for cat in &cats {
+        let mut vals: BTreeMap<&str, [Option<&str>; 6]> = BTreeMap::new();
+        for (k, form, v, line) in &cat.entries {
+            let Some(&is_plural) = plural.get(k) else {
+                println!("cargo:warning=i18n/{}.txt:{line}: {k} is not an English key", cat.code);
+                continue;
+            };
+            if is_plural != form.is_some() {
+                println!("cargo:warning=i18n/{}.txt:{line}: {k} is plural in one file only", cat.code);
+                continue;
+            }
+            vals.entry(k).or_default()[form.unwrap_or(5)] = Some(v);
+        }
+        let mut raw: Vec<u8> = Vec::new();
+        for k in keys.keys() {
+            if let Some(f) = vals.get(k.as_str()) {
+                if plural[k] {
+                    let forms: Vec<&str> = f.iter().map(|v| v.unwrap_or("")).collect();
+                    raw.extend(forms.join("\u{1f}").bytes());
+                } else {
+                    raw.extend(f[5].unwrap_or("").bytes());
+                }
+            }
+            raw.push(0);
+        }
+        let z = deflate::deflate(&raw, deflate::Effort::BEST);
+        let meta = |m: &str, d: &str| cat.meta.get(m).cloned().unwrap_or_else(|| d.to_string());
+        let (name, rtl, rule) = (meta("name", &cat.code), meta("dir", "ltr") == "rtl", meta("plural", "one_other"));
+        writeln!(
+            langs,
+            "    LangDef {{ code: {:?}, name: {name:?}, rtl: {rtl}, plural: {rule:?}, at: {}, z_len: {}, raw_len: {} }},",
+            cat.code,
+            blob.len(),
+            z.len(),
+            raw.len()
+        )
+        .unwrap();
+        blob.extend(z);
+    }
+    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+    fs::write(out_dir.join("i18n.bin"), &blob).expect("write i18n.bin");
+    let mut w = String::new();
+    writeln!(w, "// @generated by build.rs from i18n/*.txt; do not edit.").unwrap();
+    writeln!(w, "pub const N: usize = {};", names.len()).unwrap();
+    writeln!(w, "/// The English keys, sorted (byte order).").unwrap();
+    writeln!(w, "pub const KEYS: [&str; N] = {names:?};").unwrap();
+    writeln!(w, "/// Each key's `{{placeholders}}` (compile-time checks only).").unwrap();
+    let ph: Vec<String> = ph.iter().map(|p| format!("&{p:?}")).collect();
+    writeln!(w, "pub const PH: [&[&str]; N] = [{}];", ph.join(", ")).unwrap();
+    let pl: Vec<bool> = keys.keys().map(|k| plural[k]).collect();
+    writeln!(w, "/// Whether each key is a plural entry.").unwrap();
+    writeln!(w, "pub const PLURAL: [bool; N] = {pl:?};").unwrap();
+    writeln!(w, "pub static LANGS: [LangDef; {}] = [\n{langs}];", cats.len()).unwrap();
+    writeln!(w, r#"pub static BLOB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/i18n.bin"));"#).unwrap();
+    fs::write(out_dir.join("i18n_table.rs"), w).expect("write i18n_table.rs");
 }

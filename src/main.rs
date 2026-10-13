@@ -1,5 +1,8 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+// UI translations: tr!/trn!/key! (declared first: the macros are textual).
+#[macro_use]
+mod i18n;
 mod actions;
 mod anim;
 mod autostart;

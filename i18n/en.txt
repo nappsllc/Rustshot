@@ -1,0 +1,12 @@
+# Rustshot UI strings: English, the source language. Keys are sorted by
+# area; see src/i18n/mod.rs for the format ({name} placeholders, plural
+# forms as key[one] / key[other] with the CLDR categories).
+@name = English
+@dir = ltr
+@plural = one_other
+
+settings.general.language = Language
+settings.general.language.system = System default
+settings.general.language.help = The language of menus, windows and messages
+test.files[one] = {n} file
+test.files[other] = {n} files
