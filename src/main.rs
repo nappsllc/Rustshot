@@ -155,7 +155,7 @@ enum Parsed {
 }
 
 const HELP: &str = "\
-Rustshot: screenshot and annotation tool (Flameshot-style, written in Rust)
+Rustshot: tiny yet powerful, beautiful, open-source and cross-platform tool for screenshots, editing and video capture
 
 Usage: rustshot [COMMAND] [OPTIONS]
 
