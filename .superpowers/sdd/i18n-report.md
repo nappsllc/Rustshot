@@ -153,7 +153,7 @@ local overrides `<data dir>/lang/<tag>.txt` (`i18n::data_dirs()`); my
   `cargo clippy --all-targets -- -D warnings` clean; clippy also clean for
   `--target x86_64-unknown-linux-gnu` and `aarch64-apple-darwin`.
 - Linux docker (x11, worktree): all steps pass (unit 1353 passed, live x11,
-  rec, sni, openh264). Wayland: see below.
+  rec, sni, openh264). Wayland (sway + portal, worktree): all steps pass.
 - (One existing window test, `run_window_caption_buttons`, flaked once in a
   full run and passed alone.)
 
