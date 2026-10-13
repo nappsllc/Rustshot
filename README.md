@@ -465,6 +465,20 @@ recording starts video mode, and a delay waits that long.
   next <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> asks which app to use;
   choose **Rustshot** and **Always**. (Or *Settings › Apps › Default apps ›
   Choose defaults by link type › MS-SCREENCLIP*.)
+- When Windows does not open Rustshot yet, turning the option on shows
+  **One more step to use Win+Shift+S** with the steps and an **Open
+  Default apps** button (on Windows 11 with the April 2023 update or later
+  it opens Rustshot's own page there). Back in the window, once Rustshot is
+  the chosen app, a toast says *Win+Shift+S now opens Rustshot*. While the
+  option is on but another app is chosen, the daemon shows the same message
+  when it starts; **Don't show again** turns that off
+  (`screenclip_hint = false`).
+- Under the option, Settings shows which app Win+Shift+S opens: *Opens
+  Rustshot*, *Opens Snipping Tool* (or another app), *Not set*, or *Set to
+  a missing app — click to fix*. The last one is the uninstalled-Snipping-Tool
+  case: Windows still remembers the removed app, so it shows "This file does
+  not have an app associated with it" instead of asking; pick Rustshot for
+  MS-SCREENCLIP under Default apps as the message says.
 - To undo it, turn the option off (or run `rustshot register-screenclip
   off`): Rustshot's keys go and, when Rustshot was the chosen app, the
   choice too, so the Snipping Tool opens again. Uninstalling does the same.
@@ -739,6 +753,7 @@ magnifier = true                  # zoomed pixels and a crosshair while picking 
 magnifier_square = false          # square instead of round
 accept_on_select = "off"          # "copy" or "save": a drawn region is exported at once
 overlay_hints = true              # the key card when the overlay opens
+screenclip_hint = true            # Windows: remind how to pick Rustshot for Win+Shift+S
 check_updates = true              # daemon checks GitHub once a day
 skip_version = ""                 # a version the daily check ignores ("Skip this version")
 renderer = "gdi"                  # Windows overlay: "gdi" (low memory) or "software"; ignored elsewhere
