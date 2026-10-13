@@ -642,6 +642,10 @@ impl Edit {
     /// The snip state as this frame paints it (capture px).
     pub(super) fn snip_scene(&mut self, area: FRect, s: f32, dim_a: u8, mouse: Pt) -> Option<SnipUi> {
         self.refresh_cov();
+        // The selection moved under Text mode: its words are of another area.
+        if self.snip.text.as_ref().is_some_and(|tm| tm.area != self.ocr_area()) {
+            self.leave_text_mode();
+        }
         let mut u = SnipUi { area: None, words: Vec::new(), hl: Vec::new(), bar: None, lasso: Vec::new(), outline: Vec::new(), cov: None, dim_a, crop: None };
         let mut any = false;
         if let Some(tm) = &self.snip.text {

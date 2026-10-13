@@ -160,11 +160,13 @@ pub fn crop_rect(r: FRect, size: (u32, u32)) -> Option<FRect> {
     crop_px(r, size).map(|(x, y, w, h)| FRect { x: x as f32, y: y as f32, w: w as f32, h: h as f32 })
 }
 
-/// The part `crop` of `img` (the whole picture when it covers nothing).
+/// The part `crop` of `img`; a crop that covers none of it gives one
+/// transparent pixel (fail closed: never the whole picture).
 pub fn crop(img: &PixBuf, r: FRect) -> PixBuf {
     match crop_px(r, img.dimensions()) {
-        Some((x, y, w, h)) if (x, y, w, h) != (0, 0, img.width(), img.height()) => img.crop(x, y, w, h),
-        _ => img.clone(),
+        Some((0, 0, w, h)) if (w, h) == img.dimensions() => img.clone(),
+        Some((x, y, w, h)) => img.crop(x, y, w, h),
+        None => PixBuf::from_pixel(1, 1, [255, 255, 255, 0]),
     }
 }
 
@@ -234,6 +236,8 @@ mod tests {
         let img = PixBuf::from_pixel(100, 50, [0, 0, 0, 255]);
         assert_eq!(crop(&img, r).dimensions(), (30, 35));
         assert_eq!(crop(&img, FRect { x: 0.0, y: 0.0, w: 100.0, h: 50.0 }).dimensions(), (100, 50));
+        let off = crop(&img, FRect { x: 500.0, y: 0.0, w: 5.0, h: 5.0 });
+        assert_eq!((off.dimensions(), off.as_raw()[3]), ((1, 1), 0), "outside the picture: nothing shown");
         let o = outside(FRect { x: 10.0, y: 5.0, w: 30.0, h: 20.0 }, (100, 50));
         assert_eq!(o.len(), 4);
         let sum: f32 = o.iter().map(|b| b.w * b.h).sum();

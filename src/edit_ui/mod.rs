@@ -420,6 +420,13 @@ fn run(id: &str, rx: std::sync::mpsc::Receiver<Msg>, unsaved: Arc<AtomicBool>) {
         }
     };
     let th = crate::theme::resolve(&cfg);
+    if let Some(c) = doc.crop
+        && crate::objects::mask::crop_rect(c, img.dimensions()).is_none()
+    {
+        crate::tray::notify("Could not open the capture: its crop lies outside the picture");
+        done(id);
+        return;
+    }
     let mut canvas = Canvas::new(img, doc.objects, cfg.clone(), th);
     // Its crop and a freeform capture's lasso.
     canvas.set_doc(doc.crop, e.meta.mask.clone());

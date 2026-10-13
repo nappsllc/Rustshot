@@ -457,6 +457,11 @@ pub fn picture(store: &Store, e: &Entry) -> anyhow::Result<PixBuf> {
         anyhow::bail!("its lasso cannot be read, so it is not shown");
     }
     let orig = store.original(e)?;
+    if let Some(c) = doc.crop
+        && crate::objects::mask::crop_rect(c, orig.dimensions()).is_none()
+    {
+        anyhow::bail!("its crop lies outside the picture, so it is not shown");
+    }
     // Its crop and lasso too (what they leave out is never shown).
     Ok(crate::history::render(&orig, &doc.objects, doc.crop, e.meta.mask.as_deref()))
 }
