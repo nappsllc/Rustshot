@@ -156,6 +156,51 @@ impl Key {
     }
 }
 
+/// A key reads as its string: `&key` passes for a `&str`, `key.len()`,
+/// `format!("{key}")` and comparisons with strings work.
+impl std::ops::Deref for Key {
+    type Target = str;
+    fn deref(&self) -> &str {
+        self.get()
+    }
+}
+
+impl std::fmt::Display for Key {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.get())
+    }
+}
+
+impl PartialEq<str> for Key {
+    fn eq(&self, o: &str) -> bool {
+        self.get() == o
+    }
+}
+
+impl PartialEq<&str> for Key {
+    fn eq(&self, o: &&str) -> bool {
+        self.get() == *o
+    }
+}
+
+impl PartialEq<String> for Key {
+    fn eq(&self, o: &String) -> bool {
+        self.get() == o
+    }
+}
+
+impl PartialEq<Key> for &str {
+    fn eq(&self, o: &Key) -> bool {
+        *self == o.get()
+    }
+}
+
+impl PartialEq<Key> for String {
+    fn eq(&self, o: &Key) -> bool {
+        self == o.get()
+    }
+}
+
 /// The key named `k` at run time (keys built from ids); None when there
 /// is none.
 pub fn lookup(k: &str) -> Option<Key> {
@@ -217,7 +262,7 @@ macro_rules! tr {
     };
     ($k:literal, $($name:ident $(= $v:expr)?),+ $(,)?) => {{
         const K: $crate::i18n::Key = $crate::i18n::Key::of($k);
-        const _: () = { $( assert!(K.has_ph(stringify!($name)), concat!("i18n: no {", stringify!($name), "} in ", $k)); )+ };
+        const _: () = { $( assert!(K.has_ph(stringify!($name)), concat!("i18n: no {{", stringify!($name), "}} in ", $k)); )+ };
         $crate::i18n::fmt(K.get(), &[$((stringify!($name), &$crate::__tr_arg!($name $(= $v)?) as &dyn ::std::fmt::Display)),+])
     }};
 }
@@ -228,7 +273,7 @@ macro_rules! tr {
 macro_rules! trn {
     ($k:literal, $n:expr $(, $name:ident $(= $v:expr)?)* $(,)?) => {{
         const K: $crate::i18n::Key = $crate::i18n::Key::of_plural($k);
-        const _: () = { $( assert!(K.has_ph(stringify!($name)), concat!("i18n: no {", stringify!($name), "} in ", $k)); )* };
+        const _: () = { $( assert!(K.has_ph(stringify!($name)), concat!("i18n: no {{", stringify!($name), "}} in ", $k)); )* };
         let n = $n;
         $crate::i18n::fmt(K.plural(n as i64), &[("n", &n as &dyn ::std::fmt::Display) $(, (stringify!($name), &$crate::__tr_arg!($name $(= $v)?) as &dyn ::std::fmt::Display))*])
     }};

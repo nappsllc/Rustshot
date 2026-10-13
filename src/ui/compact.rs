@@ -145,7 +145,7 @@ pub const RAIL_LABEL_H: f32 = 24.0;
 pub struct RailStyle<'a> {
     pub item: f32,
     pub pitch: f32,
-    pub groups: &'a [(usize, &'a str)],
+    pub groups: &'a [(usize, crate::i18n::Key)],
 }
 
 /// The rail's item tops and its group labels' tops (with their index in

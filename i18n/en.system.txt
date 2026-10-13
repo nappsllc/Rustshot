@@ -1,0 +1,10 @@
+hotkey.fail.alt = {chord} is in use by another app — {name} is on {alt} instead.
+hotkey.fail.pick = Pick another key: click Change shortcuts…, click the {name} key and press a new one.
+hotkey.fail.pick_free = Pick another key: click Change shortcuts…, click the {name} key and press a new one ({free} is free).
+hotkey.fail.unknown = Couldn't confirm {chord} was registered.
+hotkey.fail.in_use_pick = {chord} is used by another app. {pick}
+hotkey.fail.invalid_pick = Couldn't register {chord} — it's not a hotkey Rustshot can register. {pick}
+hotkey.fail.no_display = Couldn't register {chord} — no X display is available.
+hotkey.fail.invalid_kept = Couldn't register {chord} — it's not a hotkey Rustshot can register; kept {kept}.
+hotkey.fail.no_display_kept = Couldn't register {chord} — no X display is available; kept {kept}.
+hotkey.fail.in_use_kept = Couldn't register {chord} — it's in use by another app; kept {kept}.

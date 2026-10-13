@@ -2186,7 +2186,7 @@ fn while_recording_rows_notes() {
     s.form.keys.set(Action::RecPause, vec![Chord::parse("Ctrl+Alt+Shift+M").unwrap()]);
     assert_eq!(s.form.rec_note(Action::RecPause).as_deref(), Some("Already used by Mute microphone. Choose another."));
     s.form.keys.set(Action::RecPause, vec![Chord::parse("P").unwrap()]);
-    assert_eq!(s.form.rec_note(Action::RecPause).as_deref(), Some(BARE_NOTE));
+    assert_eq!(s.form.rec_note(Action::RecPause).as_deref(), Some(BARE_NOTE.get()));
     // The same chord as an overlay key is fine (the overlay is closed while recording).
     s.form.keys.set(Action::RecPause, vec![Chord::parse("Ctrl+S").unwrap()]);
     assert_eq!(s.form.rec_note(Action::RecPause), None);
@@ -2231,8 +2231,8 @@ fn about_links() {
     s.section = ABOUT;
     let mut focus = FocusState::default();
     assert_eq!(click(&mut s, &mut focus, "check_updates_now", 1.0), Some(Click::CheckUpdates));
-    for (label, url) in crate::actions::LINKS.iter().take(5) {
-        assert_eq!(click(&mut s, &mut focus, &format!("link_{label}"), 1.0), Some(Click::Link(url)), "{label}");
+    for (i, (label, url)) in crate::actions::LINKS.iter().take(5).enumerate() {
+        assert_eq!(click(&mut s, &mut focus, &format!("link_{i}"), 1.0), Some(Click::Link(url)), "{}", label.get());
     }
     assert_eq!(click(&mut s, &mut focus, "link_powernapps", 1.0), Some(Click::Link("https://powernapps.net")));
 }
