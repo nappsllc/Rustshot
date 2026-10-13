@@ -480,14 +480,14 @@ fn thumbnails_are_bounded_and_follow_edits() {
 fn with_record(st: &Store) -> String {
     let e = st.list().into_iter().find(|e| e.meta.uploaded.is_some()).expect("an uploaded capture");
     st.update(&e.id, |m| {
-        m.upload = Some(crate::uploads::Info { deletehash: crate::uploads::Secret::new("dhKq2"), time: 1, kind: crate::uploads::UpKind::Image, thumb: None })
+        m.upload = Some(crate::uploads::Info { deletehash: crate::uploads::Secret::new("dhKq2"), time: 1, kind: crate::uploads::UpKind::Image, thumb: None, s3: None })
     })
     .unwrap();
     e.id
 }
 
 /// "Uploaded" keeps the captures with a link; their cards' ⋯ menu adds
-/// Copy link, and Delete from Imgur… once the deletehash is kept.
+/// Copy link, and Delete upload… once the deletehash is kept.
 #[test]
 fn uploaded_filter_and_card_menu() {
     let (_r, st) = fixture("uploaded");
@@ -509,11 +509,11 @@ fn uploaded_filter_and_card_menu() {
     h.reload();
     let up = h.entry(&up.id).unwrap().clone();
     assert_eq!(draw::card_acts(&h, &up), [M::SaveAs, M::OpenWith, M::ShowInFolder, M::CopyPath, M::CopyLink, M::DeleteUpload, M::Delete]);
-    assert_eq!(M::DeleteUpload.label(), "Delete from Imgur\u{2026}");
+    assert_eq!(M::DeleteUpload.label(), "Delete upload\u{2026}");
     assert_eq!(M::OpenWith.label(), "Open with\u{2026}");
 }
 
-/// Delete from Imgur… asks first; its button deletes (a fake Imgur):
+/// Delete upload… asks first; its button deletes (a fake Imgur):
 /// the link and record go and the toast says so; a failure says why and
 /// keeps them.
 #[test]
@@ -524,15 +524,16 @@ fn deleting_an_upload_asks_then_deletes() {
     h.ask_unupload = Some(id.clone());
     assert!(h.asking());
     let (title, para, check, ok) = h.dialog_texts();
-    assert_eq!((title.as_str(), check, ok), ("Delete from Imgur?", None, "Delete from Imgur"));
+    assert_eq!((title.as_str(), check, ok), ("Delete upload?", None, "Delete upload"));
     assert!(para.starts_with("rs.sh/a8Kq2 stops working"), "{para}");
     assert_eq!(h.dialog_ok(), [Act::DeleteUpload(id.clone())]);
     assert!(!h.asking());
     h.ask_unupload = Some(id.clone());
     assert!(h.escape() && h.ask_unupload.is_none(), "Esc answers no");
 
+    let no_s3 = |_: &crate::s3::Object| -> Result<(), String> { panic!("an Imgur upload") };
     let refused = |_: &str, _: &str, _: &[(&str, &str)]| Ok((403, r#"{"data":{"error":"Permission denied"},"success":false}"#.to_string()));
-    let d = delete_upload(&st, &id, "cid", &refused);
+    let d = delete_upload(&st, &id, "cid", &refused, &no_s3);
     assert_eq!((d.text.as_str(), d.kind), ("Couldn't delete from Imgur: Permission denied", crate::editor::style::ToastKind::Error));
     assert!(st.get(&id).unwrap().meta.uploaded.is_some(), "kept after a failure");
 
@@ -541,12 +542,12 @@ fn deleting_an_upload_asks_then_deletes() {
         *asked.borrow_mut() = format!("{h}{p}");
         Ok((200, r#"{"data":true,"success":true,"status":200}"#.to_string()))
     };
-    let d = delete_upload(&st, &id, "cid", &ok_http);
+    let d = delete_upload(&st, &id, "cid", &ok_http, &no_s3);
     assert_eq!((d.text.as_str(), d.changed), ("Deleted from Imgur", true));
     assert_eq!(*asked.borrow(), "api.imgur.com/3/image/dhKq2");
     let m = st.get(&id).unwrap().meta;
     assert_eq!((m.uploaded, m.upload), (None, None));
-    assert!(delete_upload(&st, &id, "cid", &ok_http).text.contains("no upload"), "nothing left to delete");
+    assert!(delete_upload(&st, &id, "cid", &ok_http, &no_s3).text.contains("no upload"), "nothing left to delete");
 }
 
 /// The header still fits at the smallest window with the fourth filter.

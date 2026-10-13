@@ -1104,6 +1104,10 @@ impl App {
                 if daemon {
                     let bytes = std::fs::metadata(&path).map_or(0, |m| m.len());
                     let mut note = crate::notice::recording_saved(&path, length, bytes, &warnings, crate::notice::upload_configured(&self.cfg));
+                    // Upload recordings automatically: the link is ready for Copy link.
+                    if self.cfg.upload_recordings && note.actions.contains(&crate::notice::NoteAct::CopyLink) {
+                        crate::rec_upload::start(&path, entry.clone());
+                    }
                     // Copy link files its record with the entry.
                     note.entry = entry;
                     let at = self.rec_area.map_or((0, 0), |a| (a.0 + a.2 as i32 / 2, a.1 + a.3 as i32 / 2));

@@ -103,6 +103,15 @@ edit_save = ""                    # the Edit window's Save: "" asks, "overwrite"
 # Upload
 upload_client_id = "313baf0c7b4d3ff"
 copy_url_after_upload = true
+upload_destination = "imgur"      # "imgur" or "s3" (an S3-compatible bucket, see the guide's Uploads)
+s3_endpoint = ""                  # e.g. "https://<account>.r2.cloudflarestorage.com"
+s3_region = "auto"                # "auto" for R2, the bucket's region for AWS
+s3_bucket = ""
+s3_access_key_id = ""             # the secret access key is in the OS credential store, never here
+s3_public_url = ""                # links start with it ("" = the object's own URL)
+s3_key_prefix = "%Y/%m/%d/"       # file-name tokens; "" = the bucket's root
+s3_path_style = true              # false = virtual-hosted (<bucket>.<endpoint>)
+upload_recordings = false         # upload a recording when it is saved (Copy link is then instant)
 
 # Updates
 check_updates = true              # the daemon checks GitHub once a day
