@@ -37,6 +37,11 @@ screenshots, editing and video capture.** Windows, Linux and macOS.
   outline it, then click to take exactly that window, menu or tooltip.
   <kbd>Tab</kbd> steps into its panels and fields.
 - Resize handles, arrow-key nudging and a live `W × H` readout.
+- *Freeform*: draw a lasso instead of a rectangle (<kbd>Shift</kbd>+<kbd>F</kbd>, or the
+  lasso by the mode switch). Outside it the PNG is transparent (white in a
+  JPG or BMP).
+- Crop (<kbd>C</kbd>): a frame inside the selection, or inside the picture in the
+  Edit window, where the crop can be undone or widened again later.
 - A pixel magnifier shows the position and color under the pointer.
   <kbd>H</kbd> copies the color as `#rrggbb`.
 - *Accept on select*: copy or save the moment you release the mouse.
@@ -73,6 +78,14 @@ screenshots, editing and video capture.** Windows, Linux and macOS.
 **OCR**
 - Copy the text from any area. Rustshot uses the OCR built into Windows
   and macOS, or `tesseract` on Linux. Nothing is uploaded.
+- Text mode: the toolbar's Copy text shows the words it found. Drag across
+  them to select (double-click a word, triple-click a line, <kbd>Ctrl</kbd>+<kbd>A</kbd>
+  all), then <kbd>Ctrl</kbd>+<kbd>C</kbd> or **Copy**; **Copy all** copies everything.
+  The Copy text hotkey still copies all at once (Settings › Capture › Copy
+  text picks the button's way too).
+- Quick Redact (<kbd>Shift</kbd>+<kbd>R</kbd>): e-mail addresses, phone and card numbers,
+  IBANs, IP addresses, URLs with tokens and passwords get a blur, all in one
+  undo step. Long-press Copy text to choose which kinds.
 
 **Pin**
 - Pin a capture on top of every window. Zoom it, fade it and compare
@@ -181,6 +194,8 @@ off in Rustshot, and Windows uses the Snipping Tool again. More detail:
 | Copy / Save / Save As / Upload | <kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>Ctrl</kbd>+<kbd>S</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> / <kbd>Ctrl</kbd>+<kbd>U</kbd> |
 | Save to Desktop / Open with… / Pin | <kbd>Ctrl</kbd>+<kbd>D</kbd> / <kbd>Ctrl</kbd>+<kbd>O</kbd> / <kbd>Ctrl</kbd>+<kbd>P</kbd> |
 | Copy text (OCR) / Copy color under pointer | <kbd>O</kbd> (or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd>) / <kbd>H</kbd> |
+| Crop / Quick Redact / Freeform selection | <kbd>C</kbd> / <kbd>Shift</kbd>+<kbd>R</kbd> / <kbd>Shift</kbd>+<kbd>F</kbd> |
+| Text mode: copy the words / select all / leave | <kbd>Ctrl</kbd>+<kbd>C</kbd> (or <kbd>Enter</kbd>) / <kbd>Ctrl</kbd>+<kbd>A</kbd> / <kbd>Esc</kbd> |
 | Undo / Redo | <kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> (or <kbd>Ctrl</kbd>+<kbd>Y</kbd>) |
 | Delete / Duplicate selected objects | <kbd>Del</kbd> / <kbd>Ctrl</kbd>+<kbd>D</kbd> |
 | Bring to front / Send to back | <kbd>Ctrl</kbd>+<kbd>]</kbd> / <kbd>Ctrl</kbd>+<kbd>[</kbd> |

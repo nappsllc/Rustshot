@@ -178,9 +178,9 @@ The action ids:
 
 | Group | Actions |
 |---|---|
-| Tools | `tool_select`, `tool_pencil`, `tool_line`, `tool_arrow`, `tool_rectangle`, `tool_circle`, `tool_marker`, `tool_text`, `tool_callout`, `tool_counter`, `tool_pixelate`, `tool_invert`, `tool_spotlight`, `tool_magnify`, `tool_blur`, `size_down`, `size_up` |
-| Output | `copy`, `copy_text`, `copy_color`, `save`, `save_as`, `save_desktop`, `open_with`, `upload`, `pin` |
-| Editing | `undo`, `redo`, `select_all`, `toggle_palette`, `accept`, `cancel`, `record` |
+| Tools | `tool_select`, `tool_pencil`, `tool_line`, `tool_arrow`, `tool_rectangle`, `tool_circle`, `tool_marker`, `tool_text`, `tool_callout`, `tool_counter`, `tool_pixelate`, `tool_invert`, `tool_spotlight`, `tool_magnify`, `tool_blur`, `tool_crop`, `size_down`, `size_up` |
+| Output | `copy`, `copy_text`, `redact`, `copy_color`, `save`, `save_as`, `save_desktop`, `open_with`, `upload`, `pin` |
+| Editing | `undo`, `redo`, `select_all`, `select_freeform`, `toggle_palette`, `accept`, `cancel`, `record` |
 | UI size | `ui_bigger`, `ui_smaller`, `ui_reset` |
 | Selected objects | `delete_object`, `duplicate`, `bring_front`, `send_back` |
 | While typing | `text_bold`, `text_italic`, `text_underline` |
