@@ -60,6 +60,9 @@ use crate::uifb::C4;
 use anyhow::{anyhow, bail, Result};
 use std::fmt::Write;
 
+#[path = "json_effects.rs"]
+mod effects;
+
 /// The newest format version this build reads.
 pub const VERSION: u32 = 2;
 /// The version it writes (what v0.2.0 reads).
@@ -402,6 +405,7 @@ pub fn to_json_full(objs: &[Obj], crop: Option<FRect>, edits: &crate::imgedit::E
         rect(&mut out, c);
     }
     transforms(&mut out, edits);
+    effects::write(&mut out, &edits.effects);
     out.push_str(",\"objects\":[");
     let stand_ins = crop.map_or(Vec::new(), |c| doc_stand_ins(objs, c, size));
     for (i, o) in objs.iter().chain(&stand_ins).enumerate() {
@@ -854,7 +858,8 @@ pub fn from_json_doc(s: &str) -> Result<Doc> {
         }
     };
     let objects = objects_of(&top)?;
-    let edits = transforms_of(top.iter().find(|(n, _)| n == "transforms").map(|(_, v)| v))?;
+    let mut edits = transforms_of(top.iter().find(|(n, _)| n == "transforms").map(|(_, v)| v))?;
+    edits.effects = effects::read(top.iter().find(|(n, _)| n == "effects").map(|(_, v)| v))?;
     Ok(Doc { objects, crop, edits })
 }
 
