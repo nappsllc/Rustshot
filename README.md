@@ -112,8 +112,8 @@ Download from the **[latest release](https://github.com/nappsllc/rustshot/releas
 > macOS, Gatekeeper blocks the first launch: right-click the app and choose
 > *Open*.
 
-Store and package-manager listings (Microsoft Store, winget, Homebrew,
-Flathub, Snap Store, AUR) are being set up. See
+Store and package-manager listings (Microsoft Store, winget, Mac App Store,
+Homebrew, Flathub, Snap Store, AUR) are being set up. See
 [docs/STORES.md](docs/STORES.md).
 
 ## Quick start
