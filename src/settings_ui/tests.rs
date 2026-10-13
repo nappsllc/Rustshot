@@ -1795,7 +1795,12 @@ fn every_key_is_in_its_section() {
         } else {
             KEYS_ACTIONS
         };
-        assert_eq!(home(&format!("key_{}", a.id())), vec![want], "{a:?}");
+        // (Linux has no share sheet: no Share key.)
+        let want = if cfg!(target_os = "linux") && a == Action::Share { vec![] } else { vec![want] };
+        assert_eq!(home(&format!("key_{}", a.id())), want, "{a:?}");
+        if let Some(w) = want.first() {
+            assert_eq!(section_of_action(a), *w, "{a:?}: the deep link's section");
+        }
     }
     assert_eq!(section_of_slot(2), KEYS_RECORDING, "Record video sits with the recording keys");
 }
