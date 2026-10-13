@@ -172,6 +172,24 @@ pub unsafe fn read_fp16(m: &D3D11_MAPPED_SUBRESOURCE, w: u32, h: u32) -> Vec<u16
     out
 }
 
+/// Load DXGI and list the outputs once on a background thread, so the
+/// first capture does not pay for it (~40 ms; ~2 ms after).
+pub fn warm_up() {
+    let _ = std::thread::Builder::new().name("hdr-warm".into()).spawn(|| {
+        if let Ok(f) = unsafe { CreateDXGIFactory1::<IDXGIFactory1>() } {
+            let mut i = 0;
+            while let Ok(a) = unsafe { f.EnumAdapters1(i) } {
+                i += 1;
+                let mut j = 0;
+                while let Ok(o) = unsafe { a.EnumOutputs(j) } {
+                    j += 1;
+                    let _ = output_hdr(&o);
+                }
+            }
+        }
+    });
+}
+
 /// The parts of `area` (virtual-screen px) that lie on HDR outputs, read
 /// in FP16 and tone-mapped (RGBA), with where each goes. Empty when
 /// tone-mapping is off ([`super::enabled`]) or no HDR output shows the
@@ -285,6 +303,13 @@ mod tests {
     /// a live HDR test would need (prints; asserts only sane values).
     #[test]
     fn live_outputs_report_their_hdr_state() {
+        // What every capture pays without an HDR display: the output list.
+        let t0 = Instant::now();
+        let none = grab((0, 0, 64, 64));
+        eprintln!("grab without HDR: {:?} ({} parts)", t0.elapsed(), none.len());
+        let t1 = Instant::now();
+        let _ = grab((0, 0, 64, 64));
+        eprintln!("again: {:?}", t1.elapsed());
         let Ok(factory) = (unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }) else { return };
         let mut ai = 0;
         while let Ok(adapter) = unsafe { factory.EnumAdapters1(ai) } {

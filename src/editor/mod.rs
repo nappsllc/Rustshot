@@ -254,6 +254,11 @@ pub fn run(
     if cfg.snap_windows && !cfg!(test) {
         crate::snap::warm_up();
     }
+    // DXGI's first load (~40 ms) off the first capture's path.
+    #[cfg(windows)]
+    if !cfg!(test) {
+        crate::hdr::win::warm_up();
+    }
     let hot = match kind {
         RunKind::Daemon => Some(Hotkeys::new(&cfg)),
         RunKind::OneShot => None,
