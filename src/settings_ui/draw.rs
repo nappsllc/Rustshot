@@ -336,6 +336,11 @@ fn question(ui: &mut Ui, m: &Modal) -> Option<Click> {
             ("info", REWRITE.into(), &[("q_save", "Save", Click::Save), ("q_cancel", "Cancel", Click::Back)])
         }
         Modal::Error(e) => ("alert", e.clone(), &[("q_ok", "OK", Click::Back)]),
+        Modal::Hotkeys { text, .. } => (
+            "alert",
+            text.clone(),
+            &[("q_ok", "OK", Click::Back), ("q_change", "Change shortcuts\u{2026}", Click::ChangeShortcuts)],
+        ),
         Modal::Broken(e) => (
             "alert",
             broken_text(e),
@@ -684,9 +689,15 @@ pub const REC_ROWS: [(&str, Action); 3] = [
 fn keys(ui: &mut Ui, s: &mut Settings, tok: &Tok) {
     sec_at(ui, tok, "Global \u{b7} work anywhere", 8.0);
     let msgs: Vec<Option<String>> = GLOBALS.iter().map(|(_, slot)| s.global_message(*slot)).collect();
+    let errs: Vec<bool> = GLOBALS.iter().map(|(_, slot)| s.global_err(*slot)).collect();
+    // "Change shortcuts…" in the hotkey dialog: that row's box records.
+    if ui.enabled
+        && let Some(id) = s.record_field.take()
+    {
+        ui.focus.record(&id);
+    }
     ui.allow_meta = true;
-    for ((label, slot), msg) in GLOBALS.iter().zip(&msgs) {
-        let err = msg.as_deref().is_some_and(|m| m.starts_with("Already"));
+    for (((label, slot), msg), err) in GLOBALS.iter().zip(&msgs).zip(errs) {
         let chord = s.form.global_mut(*slot);
         let mut slots = [Slot { id: format!("global{slot}"), chord, err }];
         ui.key_row(label, &[], &mut slots, true, 34.0, tok);

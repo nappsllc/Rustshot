@@ -590,14 +590,14 @@ fn unregistered_hotkey_can_be_retried() {
     assert_eq!((s.hotkey_slot_note(0), s.hotkey_slot_note(1)), (None, None));
     assert_eq!(s.on(Click::Apply), vec![]);
     s.hotkey_failures = vec![
-        Failure { slot: 0, wanted: "Ctrl+Alt+F9".into(), cause: Cause::InUse, kept: Some("Ctrl+Alt+Shift+Q".into()) },
-        Failure { slot: 1, wanted: "Ctrl+Alt+F10".into(), cause: Cause::Unknown, kept: None },
-        Failure { slot: 5, wanted: "Ctrl+Shift+P".into(), cause: Cause::InUse, kept: None },
+        Failure { slot: 0, wanted: "Ctrl+Alt+F9".into(), cause: Cause::InUse, kept: Some("Ctrl+Alt+Shift+Q".into()), ..Failure::default() },
+        Failure { slot: 1, wanted: "Ctrl+Alt+F10".into(), cause: Cause::Unknown, ..Failure::default() },
+        Failure { slot: 5, wanted: "Ctrl+Shift+P".into(), cause: Cause::InUse, ..Failure::default() },
     ];
     assert!(s.retry_hotkeys() && !s.dirty());
-    assert_eq!(s.hotkey_slot_note(0).as_deref(), Some("Not registered \u{2014} using Ctrl+Alt+Shift+Q"));
+    assert_eq!(s.hotkey_slot_note(0).as_deref(), Some("In use by another app \u{2014} using Ctrl+Alt+Shift+Q"));
     assert_eq!(s.hotkey_slot_note(1).as_deref(), Some("Not registered"));
-    assert_eq!(s.global_message(5).as_deref(), Some("Already used by another app. Choose another."));
+    assert_eq!(s.global_message(5).as_deref(), Some("In use by another app. Choose another."));
     assert_eq!(s.on(Click::Apply), vec![Act::Reload]);
     assert_eq!(s.on(Click::Ok), vec![Act::Reload, Act::Close]);
     assert_eq!(s.on(Click::Enter), vec![Act::Reload, Act::Close]);
@@ -607,10 +607,101 @@ fn unregistered_hotkey_can_be_retried() {
     assert!(matches!(&s.on(Click::Apply)[..], [Act::Saved(_)]));
     // Apply is enabled for the retry: a click on it lands.
     let mut s = sample();
-    s.hotkey_failures = vec![Failure { slot: 0, wanted: "Ctrl+Alt+F9".into(), cause: Cause::InUse, kept: None }];
+    s.hotkey_failures = vec![Failure { slot: 0, wanted: "Ctrl+Alt+F9".into(), cause: Cause::InUse, ..Failure::default() }];
     let mut focus = FocusState::default();
     assert_eq!(click(&mut s, &mut focus, "apply", 1.0), Some(Click::Apply));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The user's case: Record still unregistered, full screen fallen back.
+const HOTKEY_TEXT: &str = "Shift+Win+F is in use by another app \u{2014} Capture full screen is on Shift+Win+Y instead.\nShift+Win+K is used by another app. Pick another key: click Change shortcuts\u{2026}, click the Record video key and press a new one (Shift+Win+J is free).";
+
+/// Another app holds a global key: its row shows red with "In use by
+/// another app" (and what is used meanwhile, or a free key); a new key
+/// recorded in its place clears that until it is saved.
+#[test]
+fn rows_show_keys_in_use_by_another_app() {
+    use crate::hotkey::{Cause, Failure};
+    let mut s = sample();
+    assert!(!s.global_err(3) && s.global_message(3).is_none());
+    s.hotkey_failures = vec![
+        Failure { slot: 3, wanted: "Shift+Meta+F".into(), cause: Cause::InUse, alt: Some("Shift+Meta+Y".into()), ..Failure::default() },
+        Failure { slot: 2, wanted: "Shift+Meta+G".into(), cause: Cause::InUse, free: Some("Shift+Meta+J".into()), ..Failure::default() },
+        Failure { slot: 4, wanted: "Shift+Meta+E".into(), cause: Cause::InUse, ..Failure::default() },
+        Failure { slot: 7, wanted: "Shift+Meta+H".into(), cause: Cause::Unknown, ..Failure::default() },
+    ];
+    let l = crate::hotkey::chord_label;
+    assert_eq!(s.global_message(3).unwrap(), format!("In use by another app \u{2014} using {} for now", l("Shift+Meta+Y")));
+    assert_eq!(s.global_message(2).unwrap(), format!("In use by another app. {} is free.", l("Shift+Meta+J")));
+    assert_eq!(s.global_message(4).as_deref(), Some("In use by another app. Choose another."));
+    assert_eq!(s.global_message(7).as_deref(), Some("Not registered"));
+    assert!(s.global_err(3) && s.global_err(2) && s.global_err(4));
+    assert!(!s.global_err(7) && !s.global_err(0), "not in use: no red");
+    // A new key recorded in the row: its own state, not the old failure.
+    s.form.full = Chord::parse("Ctrl+Alt+F");
+    assert!(!s.global_err(3) && s.global_message(3).is_none());
+    // The red keys and the note are drawn.
+    let mut s2 = sample();
+    s2.section = KEYS;
+    s2.hotkey_failures = s.hotkey_failures.clone();
+    let (img, _) = render(&mut s2, &DARK, 1.0, &Input::default(), &mut FocusState::default());
+    preview::save("settings-keys-in-use-dark.png", &img);
+}
+
+/// The hotkey dialog: OK closes it; "Change shortcuts…" goes to Key
+/// bindings with the first row needing a new key recording; a second
+/// note joins the open dialog; an error turns into one.
+#[test]
+fn hotkey_dialog_changes_shortcuts() {
+    let mut s = sample();
+    s.notify_hotkeys(HOTKEY_TEXT.into(), Some("global2".into()));
+    assert_eq!(s.modal, Some(Modal::Hotkeys { text: HOTKEY_TEXT.into(), field: Some("global2".into()) }));
+    assert_eq!(s.on(Click::Enter), vec![], "Enter is OK");
+    assert_eq!(s.modal, None);
+    assert_eq!(s.section, GENERAL);
+    // Both buttons are drawn and land.
+    s.notify_hotkeys("one".into(), None);
+    s.notify_hotkeys("two".into(), Some("global2".into()));
+    assert_eq!(s.modal, Some(Modal::Hotkeys { text: "one\ntwo".into(), field: Some("global2".into()) }));
+    let mut focus = FocusState::default();
+    assert_eq!(click(&mut s, &mut focus, "q_change", 1.0), Some(Click::ChangeShortcuts));
+    assert_eq!(s.on(Click::ChangeShortcuts), vec![]);
+    assert_eq!((s.modal.clone(), s.section, s.scroll[KEYS]), (None, KEYS, 0.0));
+    let mut focus = FocusState::default();
+    render(&mut s, &DARK, 1.0, &Input::default(), &mut focus);
+    assert!(focus.is_recording("global2"), "the Record video key records");
+    assert_eq!(s.record_field, None);
+    // An error dialog open: the note joins it, with the button.
+    let mut s = sample();
+    s.notify("Could not save".into());
+    s.notify_hotkeys("x".into(), Some("global3".into()));
+    assert_eq!(s.modal, Some(Modal::Hotkeys { text: "Could not save\nx".into(), field: Some("global3".into()) }));
+    let mut focus = FocusState::default();
+    assert_eq!(click(&mut s, &mut focus, "q_ok", 1.0), Some(Click::Back));
+    // Behind another question: shown (with the button) once it closes.
+    let mut s = sample();
+    s.modal = Some(Modal::Rewrite { close: false });
+    s.notify_hotkeys("later".into(), Some("global0".into()));
+    s.on(Click::Back);
+    assert_eq!(s.modal, Some(Modal::Hotkeys { text: "later".into(), field: Some("global0".into()) }));
+}
+
+/// The daemon's routing: a key the user must change opens the dialog at
+/// its row; only fallbacks are a balloon.
+#[test]
+fn hotkey_notes_route_to_dialog_or_balloon() {
+    use crate::editor::{HotkeyNote, hotkey_note};
+    use crate::hotkey::{Cause, Failure};
+    assert_eq!(hotkey_note(&[]), None);
+    let alt = Failure { slot: 3, wanted: "Shift+Meta+F".into(), cause: Cause::InUse, alt: Some("Shift+Meta+Y".into()), ..Failure::default() };
+    let stuck = Failure { slot: 2, wanted: "Shift+Meta+K".into(), cause: Cause::InUse, free: Some("Shift+Meta+J".into()), ..Failure::default() };
+    assert_eq!(hotkey_note(std::slice::from_ref(&alt)), Some(HotkeyNote::Balloon(alt.message())));
+    let both = [alt.clone(), stuck.clone()];
+    let Some(HotkeyNote::Dialog { text, field }) = hotkey_note(&both) else { panic!() };
+    assert_eq!(field.as_deref(), Some("global2"));
+    assert_eq!(text, format!("{}\n{}", alt.message(), stuck.message()));
+    #[cfg(windows)]
+    assert_eq!(text, HOTKEY_TEXT);
 }
 
 #[test]
@@ -752,7 +843,7 @@ fn hidden_tray_without_a_hotkey_warns() {
     s.form.capture = None;
     assert!(s.tray_warning());
     s.form.capture = Chord::parse("Ctrl+Shift+S");
-    s.hotkey_failures = vec![crate::hotkey::Failure { slot: 0, wanted: "Ctrl+Shift+S".into(), cause: crate::hotkey::Cause::InUse, kept: None }];
+    s.hotkey_failures = vec![crate::hotkey::Failure { slot: 0, wanted: "Ctrl+Shift+S".into(), cause: crate::hotkey::Cause::InUse, ..Default::default() }];
     assert!(s.tray_warning());
 }
 
@@ -836,7 +927,8 @@ fn preview_settings_pngs() {
             let mut s = sample();
             s.section = KEYS;
             s.form.repeat = Chord::parse("Ctrl+Shift+P");
-            s.hotkey_failures = vec![crate::hotkey::Failure { slot: 5, wanted: "Ctrl+Shift+P".into(), cause: crate::hotkey::Cause::InUse, kept: None }];
+            s.loaded.repeat_hotkey = "Ctrl+Shift+P".into();
+            s.hotkey_failures = vec![crate::hotkey::Failure { slot: 5, wanted: "Ctrl+Shift+P".into(), cause: crate::hotkey::Cause::InUse, ..Default::default() }];
             let mut focus = FocusState::default();
             render(&mut s, th, k, &Input::default(), &mut focus);
             focus.record("global3");
@@ -884,7 +976,7 @@ fn preview_settings_pngs() {
             for (name, m) in [
                 ("rewrite", Modal::Rewrite { close: true }),
                 ("error", Modal::Error(r"Could not save C:\Users\denis\AppData\Roaming\rustshot\config.toml: Access is denied. (os error 5)".into())),
-                ("hotkey-failed", Modal::Error("Couldn't register Ctrl+Shift+S \u{2014} it's in use by another app; kept Shift+Win+X.".into())),
+                ("hotkey-failed", Modal::Hotkeys { text: HOTKEY_TEXT.into(), field: Some("global3".into()) }),
             ] {
                 let mut s = sample();
                 s.modal = Some(m);

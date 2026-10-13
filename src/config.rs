@@ -873,6 +873,67 @@ pub fn hotkey_warnings(cfg: &Config) -> Vec<String> {
         .collect()
 }
 
+/// Global hotkeys whose default moved: (config key, former defaults).
+/// 0.2.0 moved Record off Win+Shift+R and Copy text off Win+Shift+T
+/// (Windows holds both); 0.1.3 moved Capture window off Win+Shift+W.
+pub const FORMER_DEFAULTS: [(&str, &[&str]); 3] = [
+    ("record_hotkey", &["Shift+Meta+R"]),
+    ("capture_text_hotkey", &["Shift+Meta+T"]),
+    ("capture_window_hotkey", &["Shift+Meta+W"]),
+];
+
+/// The global hotkey field of `key` (one of [`FORMER_DEFAULTS`]').
+fn former_field<'a>(cfg: &'a mut Config, key: &str) -> Option<&'a mut String> {
+    match key {
+        "record_hotkey" => Some(&mut cfg.record_hotkey),
+        "capture_text_hotkey" => Some(&mut cfg.capture_text_hotkey),
+        "capture_window_hotkey" => Some(&mut cfg.capture_window_hotkey),
+        _ => None,
+    }
+}
+
+/// Global hotkeys still on a former default ([`FORMER_DEFAULTS`]; the
+/// chord compared, not the text, so "Meta+Shift+R" is "Shift+Meta+R"):
+/// the old file kept the default of its day, so they get today's.
+/// A key that was never a default is left alone. Returns (key, old, new).
+pub fn migrate_old_defaults(cfg: &mut Config) -> Vec<(&'static str, String, String)> {
+    let def = Config::default();
+    let mut out = Vec::new();
+    for (key, olds) in FORMER_DEFAULTS {
+        let new = former_field(&mut def.clone(), key).map(|s| s.clone()).unwrap_or_default();
+        let Some(v) = former_field(cfg, key) else { continue };
+        let Some(c) = crate::keymap::Chord::parse(v) else { continue };
+        if olds.iter().any(|o| crate::keymap::Chord::parse(o) == Some(c)) {
+            out.push((key, std::mem::replace(v, new.clone()), new));
+        }
+    }
+    out
+}
+
+/// [`migrate_old_defaults`] for the daemon's `cfg`, read from `path`: the
+/// moved keys are written back to the file (only their lines, atomically)
+/// and logged. A file that cannot be written keeps them for next time;
+/// this run uses the new keys anyway.
+pub fn migrate_at(path: &std::path::Path, cfg: &mut Config) {
+    let moved = migrate_old_defaults(cfg);
+    if moved.is_empty() {
+        return;
+    }
+    let edits: Vec<(String, Option<String>)> = moved.iter().map(|(k, _, new)| (k.to_string(), Some(toml_str(new)))).collect();
+    let res = edit_top_keys_at(path, &edits);
+    for (k, old, new) in &moved {
+        eprintln!(
+            "rustshot: {k} {} was an old default; it is {} now{}",
+            crate::hotkey::chord_label(old),
+            crate::hotkey::chord_label(new),
+            if res.is_ok() { " (config.toml updated)" } else { "" }
+        );
+    }
+    if let Err(e) = res {
+        eprintln!("rustshot: could not update {}: {e}", path.display());
+    }
+}
+
 /// `[shortcuts]` problems: unknown actions, bad chords, and chords bound
 /// to several actions (the first in table order wins).
 pub fn shortcut_warnings(cfg: &Config) -> Vec<String> {
@@ -1569,6 +1630,50 @@ oops
         assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink(), "the link stays");
         assert_eq!(std::fs::read_to_string(&real).unwrap(), "new");
         assert_eq!(only(&dir), ["config.toml", "real.toml"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn old_default_hotkeys_migrate_by_chord() {
+        // The user's file: Record on the pre-0.2.0 default, written in
+        // another order; full screen on today's default; window on a key
+        // they chose; Copy text on the old T.
+        let text = "# mine\nrecord_hotkey = \"Meta+Shift+R\"\ncapture_full_hotkey = \"Shift+Meta+F\"\ncapture_window_hotkey = \"Ctrl+Alt+W\"\ncapture_text_hotkey = \"shift+win+t\"\nbogus = 1\n";
+        let mut cfg = parse_config(text).unwrap();
+        let moved = migrate_old_defaults(&mut cfg);
+        assert_eq!(
+            moved,
+            [
+                ("record_hotkey", "Meta+Shift+R".to_string(), "Shift+Meta+G".to_string()),
+                ("capture_text_hotkey", "shift+win+t".to_string(), "Shift+Meta+Z".to_string()),
+            ]
+        );
+        assert_eq!((cfg.record_hotkey.as_str(), cfg.capture_text_hotkey.as_str()), ("Shift+Meta+G", "Shift+Meta+Z"));
+        assert_eq!((cfg.capture_full_hotkey.as_str(), cfg.capture_window_hotkey.as_str()), ("Shift+Meta+F", "Ctrl+Alt+W"), "not former defaults");
+        // Once: nothing moves the second time.
+        assert!(migrate_old_defaults(&mut cfg).is_empty());
+        // Win+Shift+W was Capture window's default.
+        let mut w = parse_config("capture_window_hotkey = \"Shift+Meta+W\"\n").unwrap();
+        assert_eq!(migrate_old_defaults(&mut w).len(), 1);
+        assert_eq!(w.capture_window_hotkey, "Shift+Meta+E");
+        // Unbound, invalid or another former default's key: left alone.
+        let mut c = Config { record_hotkey: String::new(), capture_text_hotkey: "Nope+".into(), capture_window_hotkey: "Shift+Meta+R".into(), ..Config::default() };
+        assert!(migrate_old_defaults(&mut c).is_empty());
+        // The file: only the moved lines change.
+        let dir = scratch("migrate");
+        let p = dir.join("config.toml");
+        std::fs::write(&p, text).unwrap();
+        let mut cfg = read_at(&p).unwrap().unwrap();
+        migrate_at(&p, &mut cfg);
+        assert_eq!(
+            std::fs::read_to_string(&p).unwrap(),
+            "# mine\nrecord_hotkey = \"Shift+Meta+G\"\ncapture_full_hotkey = \"Shift+Meta+F\"\ncapture_window_hotkey = \"Ctrl+Alt+W\"\ncapture_text_hotkey = \"Shift+Meta+Z\"\nbogus = 1\n"
+        );
+        assert_eq!(read_at(&p).unwrap().unwrap(), cfg);
+        // A file with nothing to move is not touched.
+        let before = std::fs::metadata(&p).unwrap().modified().unwrap();
+        migrate_at(&p, &mut cfg);
+        assert_eq!(std::fs::metadata(&p).unwrap().modified().unwrap(), before);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -808,7 +808,9 @@ fn run() -> Result<()> {
             uploads::warm();
             screenclip_win::repoint_on_start();
             rec_ui::warm_mp4();
-            let cfg = config::load();
+            let mut cfg = config::load();
+            // An older file's former default hotkeys get today's, once.
+            config::migrate_at(&config::config_path(), &mut cfg);
             let exit_code = Arc::new(AtomicI32::new(0));
             let slot: UploadSlot = Arc::new(Mutex::new(None));
             let mut code = editor::run(cfg.clone(), RunKind::Daemon, None, exit_code, slot.clone(), guard);

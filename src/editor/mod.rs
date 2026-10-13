@@ -227,16 +227,44 @@ impl Motion {
     }
 }
 
-/// Hotkeys that did not register: on stderr, and in the Settings window
-/// when it is open, else a tray balloon.
-fn tell_hotkey_failures(failed: &[crate::hotkey::Failure]) {
+/// How the daemon tells hotkey failures: in the Settings window's dialog
+/// (with "Change shortcuts…", to the first row needing a new key), or a
+/// tray balloon (only fallbacks and kept chords: every action still has
+/// a key; a click opens Key bindings).
+#[derive(Debug, PartialEq)]
+pub enum HotkeyNote {
+    Dialog { text: String, field: Option<String> },
+    Balloon(String),
+}
+
+/// The note for `failed` (none when empty).
+pub fn hotkey_note(failed: &[crate::hotkey::Failure]) -> Option<HotkeyNote> {
     if failed.is_empty() {
-        return;
+        return None;
     }
     let text = failed.iter().map(|f| f.message()).collect::<Vec<_>>().join("\n");
-    eprintln!("rustshot: {text}");
-    if !crate::settings_ui::notify(&text) {
-        crate::tray::notify(&text);
+    Some(match failed.iter().find(|f| f.needs_action()) {
+        Some(f) => HotkeyNote::Dialog { text, field: Some(f.field_id()) },
+        None => HotkeyNote::Balloon(text),
+    })
+}
+
+/// Hotkeys that did not register: on stderr, and in the Settings window
+/// when it is open. Otherwise a key the user has to change opens it (at
+/// Key bindings, the dialog over it); a fallback is a tray balloon.
+fn tell_hotkey_failures(failed: &[crate::hotkey::Failure]) {
+    let Some(note) = hotkey_note(failed) else { return };
+    match note {
+        HotkeyNote::Dialog { text, field } => {
+            eprintln!("rustshot: {text}");
+            crate::settings_ui::show_hotkeys(&text, field);
+        }
+        HotkeyNote::Balloon(text) => {
+            eprintln!("rustshot: {text}");
+            if !crate::settings_ui::notify_hotkeys(&text, None) {
+                crate::tray::notify_keys(&text);
+            }
+        }
     }
 }
 
@@ -477,6 +505,10 @@ impl App {
             if !self.on_hot(ev) {
                 return;
             }
+        }
+        // The startup registration's failures (and fallbacks).
+        if let Some(h) = self.hot.as_mut() {
+            tell_hotkey_failures(&h.take_news());
         }
         self.poll_upload();
         self.poll_ocr();

@@ -97,6 +97,9 @@ pub const GLOBALS: [(&str, usize); 8] = [
     ("Quit Rustshot", 1),
 ];
 
+/// A global row's note while another app holds its key.
+pub const IN_USE: &str = "In use by another app";
+
 /// The file-name editor's token buttons: (label, inserted text), shown in
 /// columns (top to bottom, then the next column).
 pub const TOKENS: [(&str, &str); 15] = [
@@ -624,6 +627,10 @@ enum Modal {
     /// A save failed, or a message for the user (a hotkey the daemon
     /// could not register).
     Error(String),
+    /// Hotkeys the daemon could not register as saved (or that fell
+    /// back): OK, and "Change shortcuts…", which goes to Key bindings
+    /// with `field`'s key box recording (the first row needing a new key).
+    Hotkeys { text: String, field: Option<String> },
     /// `config.toml` does not parse (the error): Open config file, Reset
     /// to defaults…, Close; nothing else until it is fixed.
     Broken(String),
@@ -641,6 +648,8 @@ pub enum Click {
     Save,
     /// The rewrite question's Cancel, or the error's OK.
     Back,
+    /// The hotkey dialog's "Change shortcuts…".
+    ChangeShortcuts,
     Browse,
     OpenConfig,
     Restore,
@@ -722,6 +731,12 @@ pub struct Settings {
     stale: bool,
     /// Messages waiting for the open question to close.
     pending: Vec<String>,
+    /// Some of them are hotkey notes: the dialog they make has "Change
+    /// shortcuts…" (to this key box, when one needs a new key).
+    pending_keys: Option<Option<String>>,
+    /// The key box to start recording in at the next frame of Key
+    /// bindings ("Change shortcuts…").
+    pub record_field: Option<String>,
     /// The drive (top-level folder) last probed and its note: probed
     /// again only when the root changes, never while typing in it.
     folder_probe: Option<(PathBuf, Option<String>)>,
@@ -755,6 +770,8 @@ impl Settings {
             tray_row: cfg!(windows),
             stale: false,
             pending: Vec::new(),
+            pending_keys: None,
+            record_field: None,
             folder_probe: None,
             hotkey_failures: Vec::new(),
             tools_reset: false,
@@ -831,6 +848,7 @@ impl Settings {
 
     /// Show `msg` (e.g. a hotkey the daemon could not register) once no
     /// other question is open.
+    #[cfg_attr(not(test), allow(dead_code))] // the daemon's notes are hotkey notes now
     pub fn notify(&mut self, msg: String) {
         match &mut self.modal {
             None => self.modal = Some(Modal::Error(msg)),
@@ -838,14 +856,58 @@ impl Settings {
                 e.push('\n');
                 e.push_str(&msg);
             }
+            Some(Modal::Hotkeys { text, .. }) => {
+                text.push('\n');
+                text.push_str(&msg);
+            }
             Some(_) => self.pending.push(msg),
+        }
+    }
+
+    /// Show the hotkey note `msg` ([`Modal::Hotkeys`]; `field`: the key
+    /// box of the first row that needs a new key) once no other question
+    /// is open. Joins an error or hotkey dialog already showing.
+    pub fn notify_hotkeys(&mut self, msg: String, field: Option<String>) {
+        match &mut self.modal {
+            None => self.modal = Some(Modal::Hotkeys { text: msg, field }),
+            Some(Modal::Error(e)) => {
+                let text = format!("{e}\n{msg}");
+                self.modal = Some(Modal::Hotkeys { text, field });
+            }
+            Some(Modal::Hotkeys { text, field: f }) => {
+                text.push('\n');
+                text.push_str(&msg);
+                if f.is_none() {
+                    *f = field;
+                }
+            }
+            Some(_) => {
+                self.pending.push(msg);
+                let f = self.pending_keys.take().flatten();
+                self.pending_keys = Some(f.or(field));
+            }
         }
     }
 
     fn show_pending(&mut self) {
         if self.modal.is_none() && !self.pending.is_empty() {
-            self.modal = Some(Modal::Error(std::mem::take(&mut self.pending).join("\n")));
+            let text = std::mem::take(&mut self.pending).join("\n");
+            self.modal = Some(match self.pending_keys.take() {
+                Some(field) => Modal::Hotkeys { text, field },
+                None => Modal::Error(text),
+            });
         }
+    }
+
+    /// The dialog's "Change shortcuts…": Key bindings, at the top (the
+    /// global rows), the row's key box recording.
+    fn change_shortcuts(&mut self) {
+        if let Some(Modal::Hotkeys { field, .. }) = self.modal.take() {
+            self.section = KEYS;
+            self.scroll[KEYS] = 0.0;
+            self.record_field = field;
+        }
+        self.show_pending();
     }
 
     /// The file on disk now, if it parses: `Ok(None)` when there is none.
@@ -881,16 +943,39 @@ impl Settings {
         !self.hotkey_failures.is_empty()
     }
 
-    /// The note under hotkey `slot`'s row while it is not registered:
-    /// "Not registered — using Ctrl+Alt+Shift+Q" (the chord kept in its
-    /// place), or "Not registered".
-    pub fn hotkey_slot_note(&self, slot: usize) -> Option<String> {
+    /// The daemon's failure for hotkey `slot`, while the form still has
+    /// the saved chord (a new key recorded in its place hides it).
+    fn slot_failure(&self, slot: usize) -> Option<&hotkey::Failure> {
         let f = self.hotkey_failures.iter().find(|f| f.slot == slot)?;
-        Some(match &f.kept {
-            Some(k) => format!("Not registered \u{2014} using {}", hotkey::chord_label(k)),
-            None if f.cause == hotkey::Cause::InUse => "Already used by another app. Choose another.".into(),
-            None => "Not registered".into(),
+        let saved = hotkey::wanted(&self.loaded).get(slot).and_then(|s| Chord::parse(s));
+        (slot >= hotkey::SLOTS || self.form.global(slot) == saved).then_some(f)
+    }
+
+    /// The note under hotkey `slot`'s row while it is not registered as
+    /// saved: another app holds it ("In use by another app — using
+    /// Win+Shift+Y for now" after a fallback, "… — using Ctrl+Alt+Shift+Q"
+    /// with the chord kept, "In use by another app. Win+Shift+Y is free."),
+    /// else "Not registered — using …" or "Not registered".
+    pub fn hotkey_slot_note(&self, slot: usize) -> Option<String> {
+        let f = self.slot_failure(slot)?;
+        let label = hotkey::chord_label;
+        Some(match (&f.alt, &f.kept, f.cause) {
+            (Some(a), _, _) => format!("{IN_USE} \u{2014} using {} for now", label(a)),
+            (None, Some(k), hotkey::Cause::InUse) => format!("{IN_USE} \u{2014} using {}", label(k)),
+            (None, Some(k), _) => format!("Not registered \u{2014} using {}", label(k)),
+            (None, None, hotkey::Cause::InUse) => match &f.free {
+                Some(free) => format!("{IN_USE}. {} is free.", label(free)),
+                None => format!("{IN_USE}. Choose another."),
+            },
+            (None, None, _) => "Not registered".into(),
         })
+    }
+
+    /// Hotkey `slot`'s keys show red: another global has the chord, or
+    /// another app holds it.
+    pub fn global_err(&self, slot: usize) -> bool {
+        self.form.global_note(slot).is_some_and(|n| n.starts_with("Already"))
+            || self.slot_failure(slot).is_some_and(|f| f.cause == hotkey::Cause::InUse)
     }
 
     /// The message under global hotkey `slot`: a clash with another
@@ -928,7 +1013,7 @@ impl Settings {
             (Click::Escape, Some(_)) => Click::Back,
             (Click::Escape, None) => Click::Cancel,
             (Click::Enter, Some(Modal::Rewrite { .. })) => Click::Save,
-            (Click::Enter, Some(Modal::Error(_))) => Click::Back,
+            (Click::Enter, Some(Modal::Error(_) | Modal::Hotkeys { .. })) => Click::Back,
             // Nothing happens to a broken file by a stray Enter.
             (Click::Enter, Some(Modal::Broken(_) | Modal::Reset(_))) => return vec![],
             (Click::Enter, None) => Click::Ok,
@@ -968,6 +1053,10 @@ impl Settings {
                 vec![]
             }
             Click::Replace => self.reset(),
+            Click::ChangeShortcuts => {
+                self.change_shortcuts();
+                vec![]
+            }
             Click::Close => vec![Act::Close],
             Click::Browse => vec![Act::Browse],
             Click::OpenConfig => vec![Act::OpenConfig],
@@ -1124,8 +1213,9 @@ impl Settings {
 enum Msg {
     /// Come to the front (another request to open it).
     Raise,
-    /// Show this to the user ([`notify`]).
-    Note(String),
+    /// A hotkey note ([`notify_hotkeys`]): the text and the key box to
+    /// record in.
+    Hotkeys(String, Option<String>),
     /// Go to this section ([`show_at`]).
     Section(usize),
 }
@@ -1177,11 +1267,29 @@ pub fn show_at(section: usize) {
     show();
 }
 
-/// Show `text` in the open Settings window (over the form, with OK);
-/// false when no window is open (the caller tells the user some other way).
-pub fn notify(text: &str) -> bool {
-    lock(&OPEN).as_ref().is_some_and(|tx| tx.send(Msg::Note(text.to_string())).is_ok())
+/// The hotkey dialog ([`Modal::Hotkeys`]) in the open Settings window;
+/// false when none is open.
+pub fn notify_hotkeys(text: &str, field: Option<String>) -> bool {
+    lock(&OPEN).as_ref().is_some_and(|tx| tx.send(Msg::Hotkeys(text.to_string(), field.clone())).is_ok())
 }
+
+/// A hotkey note with keys to change: the hotkey dialog in the Settings
+/// window, opened at Key bindings when it is not open. (macOS and tests:
+/// a tray note.)
+pub fn show_hotkeys(text: &str, field: Option<String>) {
+    if notify_hotkeys(text, field.clone()) {
+        return;
+    }
+    if cfg!(test) || cfg!(target_os = "macos") {
+        crate::tray::notify(text);
+        return;
+    }
+    *lock(&START_NOTE) = Some((text.to_string(), field));
+    show_at(KEYS);
+}
+
+/// The hotkey note a window opened by [`show_hotkeys`] starts with.
+static START_NOTE: Mutex<Option<(String, Option<String>)>> = Mutex::new(None);
 
 /// Open the window on its own thread, or bring the open one to the front.
 pub fn show() {
@@ -1224,6 +1332,9 @@ fn run(rx: Receiver<Msg>) {
         .with_screenclip(crate::screenclip_win::state(), crate::screenclip_win::awaiting_choice());
     s.hotkey_failures = hotkey::outstanding();
     s.section = START_SECTION.swap(GENERAL, std::sync::atomic::Ordering::SeqCst).min(SECTIONS.len() - 1);
+    if let Some((text, field)) = lock(&START_NOTE).take() {
+        s.notify_hotkeys(text, field);
+    }
     let th = crate::theme::resolve(&s.loaded);
     // Opened without a daemon (`rustshot settings`): the file's UI size.
     // In the daemon an overlay may have set it and still have the write
@@ -1242,7 +1353,7 @@ fn run(rx: Receiver<Msg>) {
     for m in w.rx.try_iter() {
         match m {
             Msg::Raise => late = true,
-            Msg::Note(t) => notes.push(t),
+            Msg::Hotkeys(t, _) => notes.push(t),
             Msg::Section(_) => late = true,
         }
     }
@@ -1436,8 +1547,9 @@ impl Driver for Window {
                             self.s.section = n.min(SECTIONS.len() - 1);
                             changed = true;
                         }
-                        Msg::Note(t) => {
-                            self.s.notify(t);
+                        Msg::Hotkeys(t, field) => {
+                            self.s.notify_hotkeys(t, field);
+                            raise = true;
                             changed = true;
                         }
                     }

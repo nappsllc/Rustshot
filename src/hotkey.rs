@@ -138,7 +138,7 @@ impl<W> RecKeys<W> {
         let (w, ok) = start(want);
         self.held = Some((w, want.clone()));
         (0..REC_SLOTS)
-            .filter_map(|i| ok[i].err().map(|cause| Failure { slot: REC_SLOT_BASE + i, wanted: want[i].clone(), cause, kept: None }))
+            .filter_map(|i| ok[i].err().map(|cause| Failure { slot: REC_SLOT_BASE + i, wanted: want[i].clone(), cause, ..Failure::default() }))
             .collect()
     }
 
@@ -178,13 +178,16 @@ pub struct Hotkeys {
     /// Failures already told to the user (once per run each).
     #[cfg(not(target_os = "macos"))]
     told: Vec<Failure>,
+    /// The startup registration's failures, not taken yet ([`Hotkeys::take_news`]).
+    #[cfg(not(target_os = "macos"))]
+    news: Vec<Failure>,
     /// The while-recording chords, registered only while a recording runs.
     #[cfg(not(target_os = "macos"))]
     rec: RecKeys<imp::Worker>,
 }
 
 /// Why a hotkey did not register.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[cfg_attr(target_os = "macos", allow(dead_code))] // macOS: hotkeys apply after a restart
 pub enum Cause {
     /// Not a chord Rustshot can register (or a key this keyboard lacks).
@@ -195,6 +198,7 @@ pub enum Cause {
     /// Another app holds it.
     InUse,
     /// The registration thread did not answer in time.
+    #[default]
     Unknown,
 }
 
@@ -256,8 +260,56 @@ pub fn wanted(cfg: &Config) -> [String; SLOTS] {
     .map(|s| s.trim().to_string())
 }
 
+/// What each slot is called (as Settings › Key bindings lists it).
+pub const SLOT_NAMES: [&str; SLOTS] = [
+    "Capture region",
+    "Quit Rustshot",
+    "Record video",
+    "Capture full screen",
+    "Capture window",
+    "Repeat last capture",
+    "Copy text from area",
+    "Open History",
+];
+
+/// What each while-recording chord is called (Settings › Key bindings).
+pub const REC_NAMES: [&str; REC_SLOTS] = ["Pause / resume recording", "Mute microphone", "Hide / show recording controls"];
+
+/// The name of slot `slot` (a config slot or a while-recording one).
+pub fn slot_name(slot: usize) -> &'static str {
+    match slot {
+        s if s < SLOTS => SLOT_NAMES[s],
+        s => REC_NAMES.get(s - REC_SLOT_BASE).copied().unwrap_or("hotkey"),
+    }
+}
+
+/// The current default chord of each slot ("" = none).
+pub fn defaults() -> [String; SLOTS] {
+    wanted(&Config::default())
+}
+
+/// The keys a slot still on its default falls back to, in order, when
+/// another app holds the default (from the Win+Shift keys free on a clean
+/// Windows: E Z Q G J Y, minus our own defaults where they would clash;
+/// a key another slot wants or holds is skipped).
+pub fn alternates(slot: usize) -> &'static [&'static str] {
+    match slot {
+        0 => &["Shift+Meta+Q", "Shift+Meta+J", "Shift+Meta+Y"],
+        2 => &["Shift+Meta+J", "Shift+Meta+Y", "Shift+Meta+Q"],
+        3 => &["Shift+Meta+Y", "Shift+Meta+J"],
+        4 => &["Shift+Meta+J", "Shift+Meta+Y", "Shift+Meta+Q"],
+        6 => &["Shift+Meta+Q", "Shift+Meta+Y", "Shift+Meta+J"],
+        7 => &["Shift+Meta+J", "Shift+Meta+Y", "Shift+Meta+Q"],
+        _ => &[],
+    }
+}
+
+/// The keys probed for a "… is free" suggestion when a hotkey stays
+/// unregistered (the first that registers now and no slot wants).
+pub const FREE_POOL: [&str; 6] = ["Shift+Meta+Y", "Shift+Meta+J", "Shift+Meta+Q", "Shift+Meta+E", "Shift+Meta+Z", "Shift+Meta+G"];
+
 /// A hotkey `reload` could not register.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct Failure {
     /// The slot: 0 = capture, 1 = quit, 2 = record, 3 =
     /// full screen, 4 = window, 5 = repeat, 6 = copy text, 7 = History.
@@ -266,14 +318,40 @@ pub struct Failure {
     pub cause: Cause,
     /// The previous chord, registered again in its place.
     pub kept: Option<String>,
+    /// The slot is on its default and another app holds it: this
+    /// alternate ([`alternates`]) is registered instead (the config is not
+    /// changed, so the default comes back once it is free).
+    pub alt: Option<String>,
+    /// Nothing is registered for the slot: a key that registers now
+    /// (probed), suggested in the message.
+    pub free: Option<String>,
 }
 
 impl Failure {
-    /// "Couldn't register Ctrl+Alt+F9 — it's in use by another app; kept Shift+Win+X."
+    /// "Win+Shift+F is in use by another app — Capture full screen is on
+    /// Win+Shift+Y instead.", "Win+Shift+F is used by another app. Pick
+    /// another key: …", "Couldn't register Ctrl+Alt+F9 — it's in use by
+    /// another app; kept Shift+Win+X."
     pub fn message(&self) -> String {
         let chord = chord_label(&self.wanted);
+        let name = slot_name(self.slot);
+        if let Some(a) = &self.alt {
+            return format!("{chord} is in use by another app \u{2014} {name} is on {} instead.", chord_label(a));
+        }
+        let pick = || {
+            let mut s = format!("Pick another key: click Change shortcuts\u{2026}, click the {name} key and press a new one");
+            if let Some(f) = &self.free {
+                s.push_str(&format!(" ({} is free)", chord_label(f)));
+            }
+            s.push('.');
+            s
+        };
         let why = match self.cause {
             Cause::Unknown => return format!("Couldn't confirm {chord} was registered."),
+            Cause::InUse if self.kept.is_none() => return format!("{chord} is used by another app. {}", pick()),
+            Cause::Invalid if self.kept.is_none() => {
+                return format!("Couldn't register {chord} \u{2014} it's not a hotkey Rustshot can register. {}", pick());
+            }
             Cause::Invalid => "it's not a hotkey Rustshot can register",
             Cause::NoDisplay => "no X display is available",
             Cause::InUse => "it's in use by another app",
@@ -284,6 +362,20 @@ impl Failure {
         }
         s.push('.');
         s
+    }
+
+    /// Nothing is registered for the slot and the user has to pick
+    /// another key (another app holds it, or it is not a valid hotkey).
+    pub fn needs_action(&self) -> bool {
+        matches!(self.cause, Cause::InUse | Cause::Invalid) && self.kept.is_none() && self.alt.is_none()
+    }
+
+    /// The id of this slot's key field in Settings › Key bindings.
+    pub fn field_id(&self) -> String {
+        match self.slot {
+            s if s < SLOTS => format!("global{s}"),
+            s => REC_ACTIONS.get(s - REC_SLOT_BASE).map_or_else(String::new, |a| format!("key_{}", a.id())),
+        }
     }
 
     /// The same slot, chord and cause (what was kept does not matter).
@@ -325,25 +417,41 @@ pub fn plan_reload(
         return (old.clone(), Vec::new());
     }
     let first = register(want);
+    settle(old, want, first, register)
+}
+
+/// The rest of [`plan_reload`] once `want` was registered with result
+/// `first` (also the daemon's startup registration, with no `old`):
+/// slots on their default that another app holds fall back
+/// ([`fall_back`]), other known failures get their `old` chord back, and
+/// a slot left with nothing because another app holds its key gets a
+/// free key probed for the message ([`probe_free`]).
+#[cfg_attr(target_os = "macos", allow(dead_code))] // macOS: hotkeys apply after a restart
+pub fn settle(
+    old: &[String; SLOTS],
+    want: &[String; SLOTS],
+    first: Registered,
+    mut register: impl FnMut(&[String; SLOTS]) -> Registered,
+) -> ([String; SLOTS], Vec<Failure>) {
     let known = |r: &Result<(), Cause>| matches!(r, Err(c) if *c != Cause::Unknown);
-    let (mut tried, mut last) = (want.clone(), first);
-    if first.iter().any(known) {
+    let (mut tried, mut last, alt) = fall_back(want, first, &mut register);
+    if last.iter().any(known) {
         let retry: [String; SLOTS] = std::array::from_fn(|i| {
-            if !known(&first[i]) {
-                want[i].clone()
-            } else if (0..SLOTS).any(|j| first[j].is_ok() && j != i && !want[j].is_empty() && same_chord(&want[j], &old[i])) {
+            if !known(&last[i]) {
+                tried[i].clone()
+            } else if (0..SLOTS).any(|j| last[j].is_ok() && j != i && !tried[j].is_empty() && same_chord(&tried[j], &old[i])) {
                 String::new() // the other slot holds that chord now
             } else {
                 old[i].clone()
             }
         });
-        if retry != *want {
+        if retry != tried {
             last = register(&retry);
             tried = retry;
         }
     }
     let now = held(&tried, last);
-    let failures = (0..SLOTS)
+    let mut failures: Vec<Failure> = (0..SLOTS)
         .filter_map(|i| {
             // A known cause from the first try, else what the last one says.
             let cause = match (first[i], last[i]) {
@@ -351,15 +459,119 @@ pub fn plan_reload(
                 (_, Err(c)) => c,
                 _ => return None,
             };
+            let other = (!now[i].is_empty() && now[i] != want[i]).then(|| now[i].clone());
+            let fell = other.is_some() && alt[i].as_deref() == other.as_deref();
             Some(Failure {
                 slot: i,
                 wanted: want[i].clone(),
                 cause,
-                kept: (!now[i].is_empty() && now[i] != want[i]).then(|| now[i].clone()),
+                kept: if fell { None } else { other.clone() },
+                alt: if fell { other } else { None },
+                free: None,
             })
         })
         .collect();
+    let need: Vec<usize> = failures.iter().filter(|f| f.cause == Cause::InUse && now[f.slot].is_empty()).map(|f| f.slot).collect();
+    let free = probe_free(want, &now, &need, &mut register);
+    for f in &mut failures {
+        f.free = free[f.slot].clone();
+    }
     (now, failures)
+}
+
+/// Each slot still on its default ([`defaults`]) that another app holds
+/// tries its [`alternates`] in turn (skipping a key another slot wants or
+/// tries), every round one registration of all slots, until each such
+/// slot registered or ran out. Returns what was tried last, its result,
+/// and per slot the alternate it registered on.
+#[cfg_attr(target_os = "macos", allow(dead_code))] // macOS: hotkeys apply after a restart
+fn fall_back(
+    want: &[String; SLOTS],
+    first: Registered,
+    register: &mut impl FnMut(&[String; SLOTS]) -> Registered,
+) -> ([String; SLOTS], Registered, [Option<String>; SLOTS]) {
+    let def = defaults();
+    let (mut tried, mut ok) = (want.clone(), first);
+    let mut next = [0usize; SLOTS];
+    loop {
+        let mut moved = false;
+        for i in 0..SLOTS {
+            if ok[i] != Err(Cause::InUse) || def[i].is_empty() || !same_chord(&want[i], &def[i]) {
+                continue;
+            }
+            let alts = alternates(i);
+            let mut pick = None;
+            while let Some(c) = alts.get(next[i]) {
+                next[i] += 1;
+                if !(0..SLOTS).any(|j| j != i && (same_chord(&want[j], c) || same_chord(&tried[j], c))) {
+                    pick = Some(*c);
+                    break;
+                }
+            }
+            match pick {
+                Some(c) => {
+                    tried[i] = c.to_string();
+                    moved = true;
+                }
+                None => tried[i] = want[i].clone(), // ran out: the default, not registered
+            }
+        }
+        if !moved {
+            break;
+        }
+        ok = register(&tried);
+    }
+    let alt = std::array::from_fn(|i| (ok[i].is_ok() && tried[i] != want[i]).then(|| tried[i].clone()));
+    (tried, ok, alt)
+}
+
+/// For each slot in `need` (nothing registered: another app holds its
+/// key): a key of [`FREE_POOL`] that registers now and that no slot wants
+/// or holds. Probed by registering `now` with the candidates in those
+/// slots (a round per candidate), then `now` again.
+#[cfg_attr(target_os = "macos", allow(dead_code))] // macOS: hotkeys apply after a restart
+fn probe_free(
+    want: &[String; SLOTS],
+    now: &[String; SLOTS],
+    need: &[usize],
+    register: &mut impl FnMut(&[String; SLOTS]) -> Registered,
+) -> [Option<String>; SLOTS] {
+    let mut free: [Option<String>; SLOTS] = Default::default();
+    let mut next = [0usize; SLOTS];
+    let mut pending: Vec<usize> = need.to_vec();
+    let mut probed = false;
+    while !pending.is_empty() {
+        let mut probe = now.clone();
+        let mut trying = Vec::new();
+        for &i in &pending {
+            while let Some(c) = FREE_POOL.get(next[i]) {
+                next[i] += 1;
+                let busy = (0..SLOTS).any(|j| same_chord(&want[j], c) || same_chord(&now[j], c))
+                    || free.iter().flatten().any(|f| same_chord(f, c))
+                    || trying.iter().any(|&t: &usize| same_chord(&probe[t], c));
+                if !busy {
+                    probe[i] = c.to_string();
+                    trying.push(i);
+                    break;
+                }
+            }
+        }
+        if trying.is_empty() {
+            break;
+        }
+        let ok = register(&probe);
+        probed = true;
+        for &i in &trying {
+            if ok[i].is_ok() {
+                free[i] = Some(probe[i].clone());
+            }
+        }
+        pending.retain(|&i| free[i].is_none() && next[i] < FREE_POOL.len());
+    }
+    if probed {
+        let _ = register(now); // back to what is held
+    }
+    free
 }
 
 /// The specs of `tried` that registered.
@@ -409,6 +621,8 @@ impl Hotkeys {
             #[cfg(not(target_os = "macos"))]
             told: Vec::new(),
             #[cfg(not(target_os = "macos"))]
+            news: Vec::new(),
+            #[cfg(not(target_os = "macos"))]
             rec: RecKeys::default(),
         }
     }
@@ -457,11 +671,30 @@ impl Hotkeys {
             Err(mpsc::TryRecvError::Disconnected) => unanswered(&self.specs),
         };
         self.started = None;
-        let failed: Vec<Failure> = (0..SLOTS)
-            .filter_map(|i| ok[i].err().map(|cause| Failure { slot: i, wanted: self.specs[i].clone(), cause, kept: None }))
-            .collect();
-        self.specs = held(&self.specs, ok);
+        // A default another app holds falls back; the rest is told.
+        let want = self.specs.clone();
+        let none: [String; SLOTS] = Default::default();
+        let (now, failed) = if ok.contains(&Err(Cause::InUse)) {
+            settle(&none, &want, ok, |s| self.restart(s))
+        } else {
+            let failed = (0..SLOTS)
+                .filter_map(|i| ok[i].err().map(|cause| Failure { slot: i, wanted: want[i].clone(), cause, ..Failure::default() }))
+                .collect();
+            (held(&want, ok), failed)
+        };
+        self.specs = now;
         publish(&failed);
+        let new = untold(&mut self.told, &failed);
+        self.news.extend(new);
+    }
+
+    /// The startup registration's failures not told yet (once each); the
+    /// daemon tells them like a reload's.
+    pub fn take_news(&mut self) -> Vec<Failure> {
+        #[cfg(not(target_os = "macos"))]
+        return std::mem::take(&mut self.news);
+        #[cfg(target_os = "macos")]
+        Vec::new()
     }
 
     /// Register `cfg`'s hotkeys instead of the current ones (no-op when
@@ -699,7 +932,7 @@ mod tests {
     }
 
     fn fail(slot: usize, wanted: &str, cause: Cause, kept: Option<&str>) -> Failure {
-        Failure { slot, wanted: wanted.into(), cause, kept: kept.map(Into::into) }
+        Failure { slot, wanted: wanted.into(), cause, kept: kept.map(Into::into), ..Failure::default() }
     }
 
     #[test]
@@ -749,7 +982,11 @@ mod tests {
         let (now, f) = plan_reload(&old, &want, registrar(&["Ctrl+Alt+F9"], &mut calls));
         assert_eq!(now, s2("", "Ctrl+Alt+Shift+Q"));
         assert_eq!(f[0].kept, None);
-        assert_eq!(f[0].message(), "Couldn't register Ctrl+Alt+F9 — it's in use by another app.");
+        assert_eq!(f[0].free.as_deref(), Some("Shift+Meta+Y"), "a free key is probed");
+        assert_eq!(
+            f[0].message(),
+            format!("Ctrl+Alt+F9 is used by another app. Pick another key: click Change shortcuts\u{2026}, click the Capture region key and press a new one ({} is free).", chord_label("Shift+Meta+Y"))
+        );
         let mut calls = Vec::new();
         let old = s2("Shift+Meta+X", "Ctrl+Alt+Shift+Q");
         let (now, f) = plan_reload(&old, &want, registrar(&["Ctrl+Alt+F9", "Meta+Shift+X"], &mut calls));
@@ -761,7 +998,9 @@ mod tests {
         let want = s2("Ctrl+Alt+F9", "Shift+Meta+X");
         let (now, f) = plan_reload(&old, &want, registrar(&["Ctrl+Alt+F9"], &mut calls));
         assert_eq!(now, s2("", "Shift+Meta+X"));
-        assert_eq!(calls, [want.clone(), s2("", "Shift+Meta+X")]);
+        assert_eq!(calls[..2], [want.clone(), s2("", "Shift+Meta+X")]);
+        // Then the probe for a free key, and what is held again.
+        assert_eq!(calls.last(), Some(&now));
         assert_eq!((f.len(), f[0].kept.clone()), (1, None));
     }
 
@@ -807,7 +1046,10 @@ mod tests {
         let (_, f) = plan_reload(&s2("", ""), &s2("Hyper+X", ""), |s| {
             r2(if s[0].is_empty() { Ok(()) } else { Err(Cause::Invalid) }, Ok(()))
         });
-        assert_eq!(f[0].message(), "Couldn't register Hyper+X — it's not a hotkey Rustshot can register.");
+        assert_eq!(
+            f[0].message(),
+            "Couldn't register Hyper+X \u{2014} it's not a hotkey Rustshot can register. Pick another key: click Change shortcuts\u{2026}, click the Capture region key and press a new one."
+        );
     }
 
     /// A failure is told once per run: an unrelated save that hits the
@@ -865,8 +1107,8 @@ mod tests {
         assert!(matches!(slot_event(7), HotEvent::History));
         let mut calls = Vec::new();
         let (now, f) = plan_reload(&s2("", ""), &w, registrar(&["Shift+Meta+E"], &mut calls));
-        assert_eq!(now[4], "");
-        assert_eq!((f.len(), f[0].slot, f[0].cause), (1, 4, Cause::InUse));
+        assert_eq!(now[4], "Shift+Meta+J", "the default fell back");
+        assert_eq!((f.len(), f[0].slot, f[0].cause, f[0].alt.as_deref()), (1, 4, Cause::InUse, Some("Shift+Meta+J")));
     }
 
     /// The while-recording chords come from the keymap (`[shortcuts]`),
@@ -924,8 +1166,12 @@ mod tests {
         rk.end(stop);
         // One chord is taken by another app: a failure for its slot, the others work.
         let f = rk.begin(&want, |w| start(w, &["Ctrl+Alt+Shift+M"]), stop);
-        assert_eq!(f, [Failure { slot: REC_SLOT_BASE + 1, wanted: "Ctrl+Alt+Shift+M".into(), cause: Cause::InUse, kept: None }]);
-        assert_eq!(f[0].message(), format!("Couldn't register {} — it's in use by another app.", chord_label("Ctrl+Alt+Shift+M")));
+        assert_eq!(f, [Failure { slot: REC_SLOT_BASE + 1, wanted: "Ctrl+Alt+Shift+M".into(), cause: Cause::InUse, ..Failure::default() }]);
+        assert_eq!(
+            f[0].message(),
+            "Ctrl+Alt+Shift+M is used by another app. Pick another key: click Change shortcuts\u{2026}, click the Mute microphone key and press a new one."
+        );
+        assert_eq!(f[0].field_id(), "key_rec_mute");
         assert_eq!(*live.borrow(), ["Ctrl+Alt+Shift+P", "Ctrl+Alt+Shift+H"]);
         // New chords while recording: the old ones go, the new ones come.
         let mut want2 = want.clone();
@@ -941,6 +1187,114 @@ mod tests {
         assert!(rk.begin(&none, |w| start(w, &[]), stop).is_empty());
         assert!(!rk.active());
         assert_eq!(starts.get(), before);
+    }
+
+    /// The full-screen default held by another app moves to its first
+    /// free alternate (Y, then J), says so, and the slot reports the
+    /// fallback (not a kept chord); with every alternate taken it stays
+    /// unregistered and a probed free key is suggested.
+    #[test]
+    fn default_falls_back_to_a_free_alternate() {
+        let want = defaults();
+        let mut calls = Vec::new();
+        let (now, f) = plan_reload(&Default::default(), &want, registrar(&["Shift+Meta+F"], &mut calls));
+        assert_eq!(now[3], "Shift+Meta+Y");
+        assert_eq!(f.len(), 1);
+        assert_eq!((f[0].slot, f[0].alt.as_deref(), f[0].kept.as_deref()), (3, Some("Shift+Meta+Y"), None));
+        assert!(!f[0].needs_action());
+        assert_eq!(
+            f[0].message(),
+            format!("{} is in use by another app \u{2014} Capture full screen is on {} instead.", chord_label("Shift+Meta+F"), chord_label("Shift+Meta+Y"))
+        );
+        #[cfg(windows)]
+        assert_eq!(f[0].message(), "Shift+Win+F is in use by another app \u{2014} Capture full screen is on Shift+Win+Y instead.");
+        // Y taken too: J.
+        let mut calls = Vec::new();
+        let (now, f) = plan_reload(&Default::default(), &want, registrar(&["Shift+Meta+F", "Meta+Shift+Y"], &mut calls));
+        assert_eq!((now[3].as_str(), f[0].alt.as_deref()), ("Shift+Meta+J", Some("Shift+Meta+J")));
+        // All taken: nothing registered, a key that registers now is suggested
+        // (Y and J are taken, E Z G are our own defaults: Q).
+        let mut calls = Vec::new();
+        let (now, f) = plan_reload(&Default::default(), &want, registrar(&["Shift+Meta+F", "Shift+Meta+Y", "Shift+Meta+J"], &mut calls));
+        assert_eq!(now[3], "");
+        assert_eq!((f[0].alt.clone(), f[0].kept.clone(), f[0].free.as_deref()), (None, None, Some("Shift+Meta+Q")));
+        assert!(f[0].needs_action());
+        assert_eq!(f[0].field_id(), "global3");
+        #[cfg(windows)]
+        assert_eq!(
+            f[0].message(),
+            "Shift+Win+F is used by another app. Pick another key: click Change shortcuts\u{2026}, click the Capture full screen key and press a new one (Shift+Win+Q is free)."
+        );
+        // The probe left only what is held registered.
+        assert_eq!(calls.last(), Some(&now));
+    }
+
+    /// An alternate another slot wants (or tries) is skipped; a key the
+    /// user chose (not the default) never falls back.
+    #[test]
+    fn fallback_skips_our_own_keys_and_user_choices() {
+        let mut want = defaults();
+        want[0] = "Shift+Meta+Y".into(); // the user put Capture region on Y
+        let mut calls = Vec::new();
+        let (now, f) = plan_reload(&Default::default(), &want, registrar(&["Shift+Meta+F"], &mut calls));
+        assert_eq!((now[0].as_str(), now[3].as_str()), ("Shift+Meta+Y", "Shift+Meta+J"));
+        assert_eq!(f[0].alt.as_deref(), Some("Shift+Meta+J"));
+        // Two defaults held: each gets its own alternate, never the same.
+        let want = defaults();
+        let mut calls = Vec::new();
+        let (now, f) = plan_reload(&Default::default(), &want, registrar(&["Shift+Meta+F", "Shift+Meta+G"], &mut calls));
+        assert_eq!((now[2].as_str(), now[3].as_str()), ("Shift+Meta+J", "Shift+Meta+Y"));
+        assert_eq!(f.len(), 2);
+        // A key the user chose: no fallback, a free key suggested.
+        let mut want = defaults();
+        want[3] = "Ctrl+Alt+F".into();
+        let mut calls = Vec::new();
+        let (now, f) = plan_reload(&Default::default(), &want, registrar(&["Ctrl+Alt+F"], &mut calls));
+        assert_eq!(now[3], "");
+        assert_eq!((f[0].alt.clone(), f[0].free.as_deref()), (None, Some("Shift+Meta+Y")));
+        // Saved spelled differently, still the default: falls back.
+        let mut want = defaults();
+        want[3] = "Meta+Shift+F".into();
+        let mut calls = Vec::new();
+        let (now, _) = plan_reload(&Default::default(), &want, registrar(&["Shift+Meta+F"], &mut calls));
+        assert_eq!(now[3], "Shift+Meta+Y");
+        // The other app let go: the next reload gets the default back.
+        let mut calls = Vec::new();
+        let (again, f) = plan_reload(&now, &defaults(), registrar(&[], &mut calls));
+        assert_eq!((again, f), (defaults(), vec![]));
+    }
+
+    /// The daemon's startup registration settles the same way (no old
+    /// chords to keep).
+    #[test]
+    fn startup_settles_with_fallbacks() {
+        let want = defaults();
+        let first: Registered = std::array::from_fn(|i| if i == 3 { Err(Cause::InUse) } else { Ok(()) });
+        let mut calls = Vec::new();
+        let (now, f) = settle(&Default::default(), &want, first, registrar(&["Shift+Meta+F"], &mut calls));
+        assert_eq!(now[3], "Shift+Meta+Y");
+        assert_eq!(f[0].alt.as_deref(), Some("Shift+Meta+Y"));
+        assert_eq!(calls.len(), 1, "one registration with the alternate");
+    }
+
+    /// The slot names follow Settings › Key bindings.
+    #[test]
+    fn slot_names_are_the_settings_rows() {
+        for (label, slot) in crate::settings_ui::GLOBALS {
+            assert_eq!(slot_name(slot), label);
+        }
+        for (i, (label, a)) in crate::settings_ui::draw::REC_ROWS.iter().enumerate() {
+            assert_eq!((slot_name(REC_SLOT_BASE + i), REC_ACTIONS[i]), (*label, *a));
+        }
+        // Every alternate is a Win+Shift chord no default has.
+        let def = defaults();
+        for i in 0..SLOTS {
+            for a in alternates(i) {
+                let c = crate::keymap::Chord::parse(a).unwrap();
+                assert!(c.meta && c.shift && !c.ctrl && !c.alt, "{a}");
+                assert!(!def.iter().any(|d| same_chord(d, a)), "{a} is a default");
+            }
+        }
     }
 
     #[test]

@@ -169,7 +169,27 @@ re-registered. A hotkey that cannot be registered (another app uses it,
 or it is not a valid hotkey) is reported once, in the window or as a tray
 notification (Windows; on Linux and macOS on stderr), and the previous one
 is kept; while it stays unregistered
-the window says so under its row, and **Apply** tries again. Saving
+the window says so under its row (red keys, *In use by another app*), and
+**Apply** tries again. The message says what to do ("… is used by another
+app. Pick another key: click Change shortcuts…, click the Capture full
+screen key and press a new one (Win+Shift+Y is free)" — the suggested key
+is one that registers right now); its **Change shortcuts…** button opens
+Key bindings with that row already waiting for the new key. When the
+daemon starts (or reloads) and a key needs changing, the Settings window
+opens with this message.
+
+A global hotkey still on its **default** that another app holds falls
+back to a free alternate instead (Capture full screen: Win+Shift+F, then
+Win+Shift+Y, then Win+Shift+J; the others similarly from Q, J and Y,
+never a key another action uses), and a tray notification says so:
+"Win+Shift+F is in use by another app — Capture full screen is on
+Win+Shift+Y instead." The config keeps the default, so it comes back once
+the other app lets go. A `config.toml` written by an older version that
+still has a **former** default (Record on Win+Shift+R, Copy text on
+Win+Shift+T, Capture window on Win+Shift+W; compared as chords, so
+`Meta+Shift+R` counts) is moved to today's default at daemon start and
+that line of the file is rewritten (logged on stderr); a key you chose
+yourself is never changed. Saving
 rewrites `config.toml`: if the file has comments or keys Rustshot does not
 know, the first save asks before removing them. A `config.toml` with an
 error is never overwritten silently: the window shows the error and offers

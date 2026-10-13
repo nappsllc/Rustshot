@@ -596,6 +596,16 @@ pub fn notify(text: &str) {
     eprintln!("rustshot: {text}");
 }
 
+/// [`notify`] about the hotkeys: a click on the balloon opens Settings ›
+/// Key bindings (Windows).
+pub fn notify_keys(text: &str) {
+    notify(text);
+    #[cfg(all(windows, not(test)))]
+    if is_visible() {
+        crate::tray_win::click_opens_keys();
+    }
+}
+
 #[cfg(test)]
 thread_local! {
     static NOTES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
