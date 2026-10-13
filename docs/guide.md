@@ -401,11 +401,34 @@ screens on Wayland records the whole shared screen.
 | Quit Rustshot | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>Q</kbd> | `quit_hotkey` |
 
 <kbd>Win</kbd> is <kbd>⌘</kbd> on macOS and <kbd>Super</kbd> on Linux
-(`Meta` in `config.toml`). A hotkey that cannot be registered (another app
-uses it) is reported once and the previous one is kept; Settings says so
-under its row. While the overlay is open, a global hotkey without
+(`Meta` in `config.toml`). While the overlay is open, a global hotkey without
 <kbd>Win</kbd> acts as the overlay's own key; only Quit always quits.
 Repeat last capture remembers the region for as long as the daemon runs.
+
+### When another app has the key
+
+- **A default falls back.** A hotkey still on its default that another app
+  holds moves to a spare key: Capture full screen Win+Shift+F, then
+  Win+Shift+Y, then Win+Shift+J; the others from Q, J and Y, never a key
+  another Rustshot hotkey uses. A tray notification (or, without the icon,
+  a note near the pointer) says e.g. *Shift+Win+F is in use by another
+  app — Capture full screen is on Shift+Win+Y instead.* `config.toml`
+  keeps the default, so it comes back once the other app lets go.
+- **A key that stays unregistered** (one you chose, or no spare free)
+  opens Settings with a message that says what to do and names a key that
+  registers right now: *Shift+Win+F is used by another app. Pick another
+  key: click Change shortcuts…, click the Capture full screen key and
+  press a new one (Shift+Win+Q is free).* **Change shortcuts…** opens Key
+  bindings with that row already waiting for the new key; the row shows
+  red keys and *In use by another app*. A *While recording* key that
+  another app holds is only a note (nothing opens over the recording).
+- **Old defaults move.** A `config.toml` written by an older version that
+  still has a former default (Record on Win+Shift+R, Copy text on
+  Win+Shift+T, Capture window on Win+Shift+W; compared as keys, so
+  `Meta+Shift+R` counts) gets today's default once, and that line of the
+  file is rewritten (logged on stderr). If another of your hotkeys already
+  has today's default, a spare key no hotkey uses is taken instead. A key
+  you chose yourself is never changed.
 
 ## Win+Shift+S and Print Screen (Windows)
 
@@ -422,12 +445,64 @@ screen, a recording starts video mode, and a delay waits that long.
   (`HKCU\Software\Classes\Rustshot.ScreenClip`,
   `HKCU\Software\Rustshot\Capabilities` and a `Rustshot` value under
   `HKCU\Software\RegisteredApplications`).
-- Windows lets no app make itself the default: the next
-  <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> asks which app to use; choose
-  **Rustshot** and **Always**.
+- Windows lets no app make itself the default; you pick it under
+  *Settings › Apps › Default apps › Choose defaults by link type ›
+  MS-SCREENCLIP*. (If Windows instead asks which app to use at the next
+  <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd>, choose **Rustshot** and
+  **Always**.)
+- When Windows does not open Rustshot yet, turning the option on shows
+  **One more step to use Win+Shift+S** with the steps and an **Open
+  Default apps** button (*Settings › Apps › Default apps*, where *Choose
+  defaults by link type* is; if that page cannot be opened, the message
+  says so). Back in the window, once Rustshot is the chosen app, a toast
+  says *Win+Shift+S now opens Rustshot*. While the option is on but another
+  app is chosen, the daemon shows the same message when it starts. Tick
+  **Don't show again** and the message, however it closes (Remind me later,
+  Esc, the close button, or Rustshot chosen), turns that off
+  (`screenclip_hint = false`).
+- Under the option, Settings shows which app Win+Shift+S opens: *Opens
+  Rustshot*, *Opens Snipping Tool* (or another app), *Not set*, or *Set to
+  a missing app — click to fix*. The last one is the uninstalled Snipping
+  Tool: Windows still remembers the removed app, so it shows "This file does
+  not have an app associated with it" instead of asking. With the tray icon
+  off and Rustshot not the chosen app, the line reads *Set up Win+Shift+S —
+  otherwise Rustshot can't be opened by a shortcut*, even while the option
+  is off; clicking it turns the option on and opens the message.
 - To undo it, turn the option off (or run `rustshot register-screenclip
   off`); uninstalling does the same.
 - Not offered in the Microsoft Store (MSIX) build.
+
+## The tray icon off (Windows)
+
+With *Show icon in tray* off, nothing of Rustshot runs in the background
+(0 MB): Win+Shift+S and Print Screen start it for the capture when it is
+set up above.
+
+- Turning it off asks first (*Rustshot won't run in the background. …*;
+  **Turn off** / **Cancel**, and **Set up…** while Rustshot is not yet the
+  Win+Shift+S app: it turns the option on and opens the message above).
+  The running daemon quits as soon as nothing it opened is left.
+- `rustshot daemon` (Launch at login) then exits at once (a line on
+  stderr); `rustshot daemon --force` runs it anyway, also over an
+  on-demand capture, and stays forced across in-app updates and in the
+  login item.
+- Launching Rustshot, or **Rustshot Settings** in the Start menu, opens
+  Settings. **About › Check for updates** there installs the update by
+  itself; a capture started by Win+Shift+S checks once a day too.
+- A capture started by Win+Shift+S has no other global hotkeys (the
+  *While recording* keys and the recording pill work). Its process stays
+  while its pins, Edit, History or Settings windows, the thumbnail, a
+  recording, an upload or a save are up (background work at most two
+  minutes more), then exits.
+- Turning the icon on again starts the daemon.
+- A `config.toml` from before this (where the icon off meant a hidden
+  daemon) gets one message at the next start: *Rustshot no longer runs in
+  the background while the tray icon is off. …* with **Set up
+  Win+Shift+S**, **Show tray icon again** and **OK**
+  (`tray_off_mode_seen = true` afterwards).
+- The Microsoft Store build cannot take Win+Shift+S, so there (and on
+  Linux and macOS) the icon off keeps Rustshot running without it, its
+  hotkeys working.
 
 ## Settings
 

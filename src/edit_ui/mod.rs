@@ -425,7 +425,7 @@ fn run(id: &str, rx: std::sync::mpsc::Receiver<Msg>, unsaved: Arc<AtomicBool>) {
     ed.held = Some(held);
     let mut w = window::Window::new(ed, rx);
     w.unsaved = unsaved;
-    let spec = crate::wind::WindowSpec { title, w: W, h: H, resizable: true, min: MIN };
+    let spec = crate::wind::WindowSpec { title, w: W, h: H, resizable: true, min: MIN, controls: crate::wind::Controls::MinMaxClose };
     if let Err(err) = crate::wind::run_window(spec, &mut w) {
         eprintln!("rustshot: edit window: {err:#}");
     }

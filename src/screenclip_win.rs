@@ -189,7 +189,212 @@ impl Names {
 
 pub const REGISTERED_APPS: &str = r"Software\RegisteredApplications";
 
-/// The registry, HKCU only.
+// --- Who opens Win+Shift+S --------------------------------------------------
+
+/// A registry hive the handler check reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Root {
+    /// `HKEY_CURRENT_USER`.
+    User,
+    /// `HKEY_CLASSES_ROOT` (the user's and the machine's classes merged).
+    Classes,
+}
+
+/// The registry reads the handler check makes (tests fake them).
+pub trait RegRead {
+    /// String value `name` (`None`: the default value) of `key`.
+    fn get(&self, root: Root, key: &str, name: Option<&str>) -> Option<String>;
+    /// `key` exists.
+    fn exists(&self, root: Root, key: &str) -> bool;
+    /// An indirect string (`@{Package?ms-resource://…}`, `@file.dll,-12`)
+    /// as text, when it resolves.
+    fn indirect(&self, s: &str) -> Option<String> {
+        let _ = s;
+        None
+    }
+    /// The program a command names is there.
+    fn file_exists(&self, path: &str) -> bool {
+        std::path::Path::new(path).is_file()
+    }
+}
+
+/// Which app Windows opens for the scheme (Win+Shift+S).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Handler {
+    /// Rustshot.
+    Ours,
+    /// Another app that is installed (the Snipping Tool, usually).
+    Other { progid: String, name: String },
+    /// The user's choice names a ProgID that no longer opens anything (an
+    /// uninstalled Snipping Tool): Windows shows "This file does not have
+    /// an app associated with it" and never asks.
+    Broken { progid: String },
+    /// No choice: Windows asks (when there is a candidate) or uses its
+    /// default.
+    None,
+}
+
+/// The ProgID the user chose for the scheme: `UserChoiceLatest`'s (newer
+/// Windows 11) when there is one, else `UserChoice`'s.
+pub fn user_choice_in(r: &impl RegRead, n: &Names) -> Option<String> {
+    let root = n.user_choice_root();
+    let pick = |key: String| r.get(Root::User, &key, Some("ProgId")).map(|p| p.trim().to_string()).filter(|p| !p.is_empty());
+    pick(format!(r"{root}\UserChoiceLatest\ProgId")).or_else(|| pick(format!(r"{root}\UserChoice")))
+}
+
+/// A packaged (Store) app's ProgID: `AppX` and a hash.
+fn is_appx(progid: &str) -> bool {
+    progid.get(..4).is_some_and(|p| p.eq_ignore_ascii_case("appx"))
+}
+
+/// `progid` opens something: it has a `shell\open\command` (in the user's
+/// classes or the merged ones) whose program, when the command names one
+/// by its full path, is still there; or it is a packaged app's ProgID that
+/// is still registered (an installed AppX package keeps its `AppX…` key
+/// under `HKCR`; uninstalling the package removes it).
+pub fn resolves(r: &impl RegRead, progid: &str) -> bool {
+    if progid.is_empty() || progid.contains(['\\', '/']) {
+        return false;
+    }
+    if is_appx(progid) && r.exists(Root::Classes, progid) {
+        return true;
+    }
+    let user = format!(r"Software\Classes\{progid}\shell\open\command");
+    let merged = format!(r"{progid}\shell\open\command");
+    let cmd = if r.exists(Root::User, &user) {
+        r.get(Root::User, &user, None)
+    } else if r.exists(Root::Classes, &merged) {
+        r.get(Root::Classes, &merged, None)
+    } else {
+        return false;
+    };
+    // A command naming a program that is gone (an uninstalled app's stale
+    // key) opens nothing either. Only a plain absolute path is checked: no
+    // command (DelegateExecute), `%vars%` or bare names are trusted.
+    match cmd.as_deref().and_then(command_exe) {
+        Some(exe) if is_absolute_windows_path(exe) && !exe.contains('%') => r.file_exists(exe),
+        _ => true,
+    }
+}
+
+/// `C:\…` or `\\server\…`.
+fn is_absolute_windows_path(p: &str) -> bool {
+    let b = p.as_bytes();
+    (b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/')) || p.starts_with(r"\\")
+}
+
+/// A readable name for the app behind `progid`: a packaged app's
+/// `Application\ApplicationName` (resolved when indirect), else the
+/// ProgID's description, else its command's program name, else the
+/// ProgID itself.
+pub fn app_name(r: &impl RegRead, progid: &str) -> String {
+    let text = |s: Option<String>| -> Option<String> {
+        let s = s?.trim().to_string();
+        let s = if s.starts_with('@') { r.indirect(&s)? } else { s };
+        let s = s.trim().to_string();
+        (!s.is_empty() && !s.starts_with('@')).then_some(s)
+    };
+    let classes = |key: &str, name: Option<&str>| {
+        r.get(Root::User, &format!(r"Software\Classes\{key}"), name).or_else(|| r.get(Root::Classes, key, name))
+    };
+    if let Some(s) = text(classes(&format!(r"{progid}\Application"), Some("ApplicationName"))) {
+        return s;
+    }
+    if let Some(s) = text(classes(progid, None)).filter(|s| !s.to_ascii_lowercase().starts_with("url:")) {
+        return s;
+    }
+    let cmd = classes(&format!(r"{progid}\shell\open\command"), None);
+    // A Windows path, split by hand (tests run everywhere).
+    let stem = cmd.as_deref().and_then(command_exe).map(|e| {
+        let file = e.rsplit(['\\', '/']).next().unwrap_or(e);
+        file.rsplit_once('.').map_or(file, |(s, _)| s).to_string()
+    });
+    if let Some(stem) = stem.filter(|s| !s.is_empty()) {
+        return stem;
+    }
+    progid.to_string()
+}
+
+/// Which app the scheme opens, from the registry `r`.
+pub fn handler_in(r: &impl RegRead, n: &Names) -> Handler {
+    let Some(progid) = user_choice_in(r, n) else { return Handler::None };
+    if !resolves(r, &progid) {
+        return Handler::Broken { progid };
+    }
+    if progid.eq_ignore_ascii_case(&n.progid) {
+        return Handler::Ours;
+    }
+    let name = app_name(r, &progid);
+    Handler::Other { progid, name }
+}
+
+/// The message that says how to pick Rustshot (Windows lets no app do it).
+pub const GUIDE_TITLE: &str = "One more step to use Win+Shift+S";
+pub const GUIDE_STEPS: &str = "Windows lets only you choose which app opens Win+Shift+S.\n\
+1. Click Open Default apps below.\n\
+2. Scroll to the bottom and click \"Choose defaults by link type\".\n\
+3. Find MS-SCREENCLIP and pick Rustshot.";
+/// Said first when the choice names an app that is gone.
+pub const GUIDE_BROKEN: &str =
+    "Win+Shift+S is currently set to an app that is no longer installed, so Windows shows an error instead of asking.";
+pub const GUIDE_OPEN: &str = "Open Default apps";
+pub const GUIDE_LATER: &str = "Remind me later";
+pub const GUIDE_DONT_SHOW: &str = "Don't show again";
+/// The toast once Windows uses Rustshot.
+pub const NOW_OURS: &str = "Win+Shift+S now opens Rustshot";
+
+/// The guide's body for a choice that is `broken` or not.
+pub fn guide_text(broken: bool) -> String {
+    if broken { format!("{GUIDE_BROKEN}\n{GUIDE_STEPS}") } else { GUIDE_STEPS.to_string() }
+}
+
+/// How a handler line reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tone {
+    Good,
+    Plain,
+    Bad,
+}
+
+/// The Settings row's line when the tray icon is off and Windows does not
+/// open Rustshot: no shortcut reaches Rustshot then.
+pub const NO_SHORTCUT: &str = "Set up Win+Shift+S \u{2014} otherwise Rustshot can't be opened by a shortcut";
+
+/// The Settings row's line for `h`; `show_tray`: the tray icon is on
+/// (off, anything but Rustshot is [`NO_SHORTCUT`], a link to the guide).
+pub fn state_line(h: &Handler, show_tray: bool) -> (String, Tone) {
+    if !show_tray && *h != Handler::Ours {
+        return (NO_SHORTCUT.into(), Tone::Bad);
+    }
+    match h {
+        Handler::Ours => ("Opens Rustshot".into(), Tone::Good),
+        Handler::Other { name, .. } => (format!("Opens {name}"), Tone::Plain),
+        Handler::Broken { .. } => ("Set to a missing app \u{2014} click to fix".into(), Tone::Bad),
+        Handler::None => ("Not set".into(), Tone::Plain),
+    }
+}
+
+/// The Settings page the guide's button opens: the plain Default apps
+/// page, where "Choose defaults by link type" is (the guide's steps).
+pub const DEFAULT_APPS_URI: &str = "ms-settings:defaultapps";
+
+/// Open Windows' Default apps; the error when Windows did not.
+pub fn open_default_apps() -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        reg::shell_open(DEFAULT_APPS_URI)
+    }
+    #[cfg(not(windows))]
+    Err("only on Windows".into())
+}
+
+/// The guide's line when Default apps did not open.
+pub fn open_failed_text(e: &str) -> String {
+    format!("Couldn't open Default apps ({}). Open Settings > Apps > Default apps yourself.", e.trim().trim_end_matches('.'))
+}
+
+/// The registry: writes only our own HKCU keys; reads HKCU and (for the
+/// handler check, read-only) HKCR.
 #[cfg(windows)]
 pub mod reg {
     use super::*;
@@ -204,32 +409,85 @@ pub mod reg {
 
     /// `name` (`None`: the default value) of `key`, if it is a string.
     pub fn get(key: &str, name: Option<&str>) -> Option<String> {
+        get_in(HKEY_CURRENT_USER, key, name, RRF_RT_REG_SZ)
+    }
+
+    fn get_in(root: HKEY, key: &str, name: Option<&str>, flags: REG_ROUTINE_FLAGS) -> Option<String> {
         let key = HSTRING::from(key);
         let name = name.map(HSTRING::from);
         let pname = name.as_ref().map_or(PCWSTR::null(), |n| PCWSTR(n.as_ptr()));
         unsafe {
             let mut len = 0u32;
-            let r = RegGetValueW(HKEY_CURRENT_USER, &key, pname, RRF_RT_REG_SZ, None, None, Some(&mut len));
+            let r = RegGetValueW(root, &key, pname, flags, None, None, Some(&mut len));
             if r != ERROR_SUCCESS {
                 return None;
             }
             let mut buf = vec![0u16; (len as usize).div_ceil(2) + 1];
             let mut len = (buf.len() * 2) as u32;
-            let r = RegGetValueW(
-                HKEY_CURRENT_USER,
-                &key,
-                pname,
-                RRF_RT_REG_SZ,
-                None,
-                Some(buf.as_mut_ptr().cast()),
-                Some(&mut len),
-            );
+            let r = RegGetValueW(root, &key, pname, flags, None, Some(buf.as_mut_ptr().cast()), Some(&mut len));
             if r != ERROR_SUCCESS {
                 return None;
             }
             let n = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
             Some(String::from_utf16_lossy(&buf[..n]))
         }
+    }
+
+    fn exists_in(root: HKEY, key: &str) -> bool {
+        let mut h = HKEY::default();
+        let r = unsafe { RegOpenKeyExW(root, &HSTRING::from(key), None, KEY_READ, &mut h) };
+        if r == ERROR_SUCCESS {
+            unsafe {
+                let _ = RegCloseKey(h);
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// The live registry, read only.
+    pub struct Live;
+
+    impl RegRead for Live {
+        fn get(&self, root: Root, key: &str, name: Option<&str>) -> Option<String> {
+            let h = match root {
+                Root::User => HKEY_CURRENT_USER,
+                Root::Classes => HKEY_CLASSES_ROOT,
+            };
+            get_in(h, key, name, RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ | RRF_NOEXPAND)
+        }
+
+        fn exists(&self, root: Root, key: &str) -> bool {
+            exists_in(if root == Root::User { HKEY_CURRENT_USER } else { HKEY_CLASSES_ROOT }, key)
+        }
+
+        fn indirect(&self, s: &str) -> Option<String> {
+            let mut buf = vec![0u16; 512];
+            unsafe { windows::Win32::UI::Shell::SHLoadIndirectString(&HSTRING::from(s), &mut buf, None) }.ok()?;
+            let n = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+            Some(String::from_utf16_lossy(&buf[..n]))
+        }
+    }
+
+    /// Open a `ms-settings:` page.
+    /// Open a `ms-settings:` page (COM initialized on this thread, as
+    /// `ShellExecute` wants for URI handlers); the error when it did not.
+    pub fn shell_open(uri: &str) -> Result<(), String> {
+        use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoUninitialize};
+        use windows::Win32::UI::Shell::ShellExecuteW;
+        use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+        if !uri.starts_with("ms-settings:") {
+            return Err(format!("not a Settings page: {uri}"));
+        }
+        let com = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) };
+        let h = unsafe { ShellExecuteW(None, &HSTRING::from("open"), &HSTRING::from(uri), PCWSTR::null(), PCWSTR::null(), SW_SHOWNORMAL) };
+        // Above 32 is success; the rest are error codes.
+        let res = if h.0 as isize > 32 { Ok(()) } else { Err(windows::core::Error::from_thread().message()) };
+        if com.is_ok() {
+            unsafe { CoUninitialize() };
+        }
+        res
     }
 
     /// Write a string value (creating the key).
@@ -267,16 +525,7 @@ pub mod reg {
 
     #[cfg(test)]
     pub fn key_exists(key: &str) -> bool {
-        let mut h = HKEY::default();
-        let r = unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, &HSTRING::from(key), None, KEY_READ, &mut h) };
-        if r == ERROR_SUCCESS {
-            unsafe {
-                let _ = RegCloseKey(h);
-            }
-            true
-        } else {
-            false
-        }
+        exists_in(HKEY_CURRENT_USER, key)
     }
 
     /// Our registration is complete: the command, the capability and its
@@ -292,17 +541,15 @@ pub mod reg {
         get(&n.command_key(), None).and_then(|c| command_exe(&c).map(str::to_owned))
     }
 
-    /// The ProgID the user chose for the scheme: `UserChoiceLatest`'s
-    /// (newer Windows 11) when there is one, else `UserChoice`'s.
-    pub fn user_choice(n: &Names) -> Option<String> {
-        let root = n.user_choice_root();
-        get(&format!(r"{root}\UserChoiceLatest\ProgId"), Some("ProgId"))
-            .or_else(|| get(&format!(r"{root}\UserChoice"), Some("ProgId")))
+    /// Which app the scheme opens now.
+    pub fn handler(n: &Names) -> Handler {
+        handler_in(&Live, n)
     }
 
-    /// Windows opens the scheme with us.
+    /// The user chose our ProgID ([`user_choice_in`]).
+    #[cfg(test)]
     pub fn is_default(n: &Names) -> bool {
-        user_choice(n).is_some_and(|p| p.eq_ignore_ascii_case(&n.progid))
+        user_choice_in(&Live, n).is_some_and(|p| p.eq_ignore_ascii_case(&n.progid))
     }
 
     /// Offer `exe` as the scheme's handler.
@@ -397,16 +644,59 @@ pub fn state() -> Option<bool> {
     None
 }
 
-/// Registered, but Windows still opens the Snipping Tool (the user has
-/// not picked Rustshot yet).
-pub fn awaiting_choice() -> bool {
+/// Which app Win+Shift+S opens now (read only; `None` where the toggle is
+/// not offered).
+pub fn handler() -> Handler {
     #[cfg(windows)]
-    {
-        let n = Names::real();
-        available() && reg::is_registered(&n) && !reg::is_default(&n)
+    if available() {
+        return reg::handler(&Names::real());
     }
-    #[cfg(not(windows))]
-    false
+    Handler::None
+}
+
+/// Public entry for other flows (the tray-off confirmation): which app
+/// Win+Shift+S opens now. Same as [`handler`].
+pub fn handler_state() -> Handler {
+    handler()
+}
+
+/// Public entry for other flows (the tray-off confirmation): set up
+/// Win+Shift+S. The registration is turned on first when it is off (as
+/// the Settings toggle does), then "One more step to use Win+Shift+S"
+/// shows — the Settings window opens at Capture with the guide over it
+/// (or the open window shows it; nothing over it when Windows already
+/// opens Rustshot). Where it is not offered (MSIX, off Windows) nothing
+/// happens. `owner` is accepted for callers that have a window; the guide
+/// lives in the Settings window, so it is not used.
+pub fn show_setup_guide(owner: Option<crate::wind::Hwnd>) {
+    let _ = owner;
+    match state() {
+        None => return,
+        Some(false) => {
+            if let Err(e) = set(true) {
+                let text = format!("Could not change Win+Shift+S: {e}");
+                eprintln!("rustshot: {text}");
+                if !crate::settings_ui::notify(&text) {
+                    crate::tray::notify(&text);
+                }
+                return;
+            }
+        }
+        Some(true) => {}
+    }
+    crate::settings_ui::show_guide();
+}
+
+/// At daemon start: registered, but Windows does not open Rustshot, and
+/// the user did not say "Don't show again" — the Settings window opens
+/// on the guide. Named (test) instances never do it.
+pub fn remind_on_start(hint: bool) {
+    if !hint || cfg!(test) || crate::instance::instance_name().is_some() || state() != Some(true) {
+        return;
+    }
+    if handler_state() != Handler::Ours {
+        show_setup_guide(None);
+    }
 }
 
 /// Turn the real registration on or off for this executable.
@@ -530,6 +820,186 @@ mod tests {
         assert_eq!(n.user_choice_root(), r"Software\Microsoft\Windows\Shell\Associations\UrlAssociations\ms-screenclip");
     }
 
+    /// A registry in memory: keys (and their parents) and string values,
+    /// names case-insensitive as in the real one.
+    #[derive(Default)]
+    struct FakeReg {
+        keys: std::collections::HashSet<(Root, String)>,
+        values: std::collections::HashMap<(Root, String, String), String>,
+        indirect: std::collections::HashMap<String, String>,
+        /// Programs that are gone (every other one is there).
+        missing: std::collections::HashSet<String>,
+    }
+
+    impl FakeReg {
+        fn put(&mut self, root: Root, key: &str, name: Option<&str>, v: &str) -> &mut Self {
+            let k = key.to_ascii_lowercase();
+            let mut p = k.as_str();
+            loop {
+                self.keys.insert((root, p.to_string()));
+                match p.rfind('\\') {
+                    Some(i) => p = &p[..i],
+                    None => break,
+                }
+            }
+            self.values.insert((root, k, name.unwrap_or("").to_ascii_lowercase()), v.to_string());
+            self
+        }
+
+        fn choice(&mut self, latest: Option<&str>, legacy: Option<&str>) -> &mut Self {
+            let root = Names::real().user_choice_root();
+            if let Some(p) = latest {
+                self.put(Root::User, &format!(r"{root}\UserChoiceLatest\ProgId"), Some("ProgId"), p);
+            }
+            if let Some(p) = legacy {
+                self.put(Root::User, &format!(r"{root}\UserChoice"), Some("ProgId"), p);
+            }
+            self
+        }
+    }
+
+    impl RegRead for FakeReg {
+        fn get(&self, root: Root, key: &str, name: Option<&str>) -> Option<String> {
+            self.values.get(&(root, key.to_ascii_lowercase(), name.unwrap_or("").to_ascii_lowercase())).cloned()
+        }
+        fn exists(&self, root: Root, key: &str) -> bool {
+            self.keys.contains(&(root, key.to_ascii_lowercase()))
+        }
+        fn indirect(&self, s: &str) -> Option<String> {
+            self.indirect.get(s).cloned()
+        }
+        fn file_exists(&self, path: &str) -> bool {
+            !self.missing.contains(&path.to_ascii_lowercase())
+        }
+    }
+
+    /// An app uninstalled but its classic ProgID left behind (the command
+    /// names a program that is gone): broken, like a gone AppX. Commands
+    /// with variables, bare names or no command are trusted.
+    #[test]
+    fn stale_classic_progid_is_broken() {
+        let n = Names::real();
+        let mut r = FakeReg::default();
+        r.put(Root::Classes, r"Old.Clip\shell\open\command", None, r#""C:\Program Files\Old\old.exe" "%1""#);
+        r.choice(None, Some("Old.Clip"));
+        assert!(matches!(handler_in(&r, &n), Handler::Other { .. }));
+        r.missing.insert(r"c:\program files\old\old.exe".into());
+        assert_eq!(handler_in(&r, &n), Handler::Broken { progid: "Old.Clip".into() });
+        r.put(Root::Classes, r"Var.Clip\shell\open\command", None, r#""%ProgramFiles%\Var\var.exe" "%1""#);
+        r.put(Root::Classes, r"Bare.Clip\shell\open\command", None, "var.exe %1");
+        r.put(Root::Classes, r"Delegate.Clip\shell\open\command", Some("DelegateExecute"), "{GUID}");
+        r.missing.insert(r"%programfiles%\var\var.exe".into());
+        assert!(resolves(&r, "Var.Clip") && resolves(&r, "Bare.Clip") && resolves(&r, "Delegate.Clip"));
+        // Ours with its program moved away: broken (the daemon re-points it).
+        let mut ours = FakeReg::default();
+        ours.put(Root::User, &n.command_key(), None, &open_command(r"D:\Downloads\rustshot.exe"));
+        ours.choice(Some("Rustshot.ScreenClip"), None);
+        assert_eq!(handler_in(&ours, &n), Handler::Ours);
+        ours.missing.insert(r"d:\downloads\rustshot.exe".into());
+        assert_eq!(handler_in(&ours, &n), Handler::Broken { progid: "Rustshot.ScreenClip".into() });
+        assert!(is_absolute_windows_path(r"\\srv\share\a.exe") && !is_absolute_windows_path("a.exe"));
+    }
+
+    const SNIP: &str = "AppXfeq5vwnakrw6cy02kzhq8ekhhsremh62";
+
+    /// An installed Snipping Tool (its AppX key, an indirect name).
+    fn snipping_tool(r: &mut FakeReg) {
+        let name = "@{Microsoft.ScreenSketch_11.2409.25.0_x64__8wekyb3d8bbwe?ms-resource://Microsoft.ScreenSketch/Resources/AppName}";
+        r.put(Root::Classes, &format!(r"{SNIP}\Application"), Some("ApplicationName"), name);
+        r.put(Root::Classes, &format!(r"{SNIP}\Shell\open"), Some("ActivatableClassId"), "App.AppXc99k5qnnsvxj5szemm7fp3g7y08we5vm.mca");
+        r.indirect.insert(name.into(), "Snipping Tool".into());
+    }
+
+    #[test]
+    fn handler_states() {
+        let n = Names::real();
+        // No choice.
+        let mut r = FakeReg::default();
+        assert_eq!(handler_in(&r, &n), Handler::None);
+        // The Snipping Tool, installed.
+        snipping_tool(&mut r);
+        r.choice(None, Some(SNIP));
+        assert_eq!(handler_in(&r, &n), Handler::Other { progid: SNIP.into(), name: "Snipping Tool".into() });
+        // The user's case: the Snipping Tool uninstalled, its choice left.
+        let mut gone = FakeReg::default();
+        gone.choice(None, Some(SNIP));
+        assert_eq!(handler_in(&gone, &n), Handler::Broken { progid: SNIP.into() });
+        // Ours (UserChoiceLatest wins over the old UserChoice).
+        let mut ours = FakeReg::default();
+        ours.put(Root::User, &n.command_key(), None, &open_command(r"C:\x\rustshot.exe"));
+        ours.choice(Some("Rustshot.ScreenClip"), Some(SNIP));
+        assert_eq!(handler_in(&ours, &n), Handler::Ours);
+        assert_eq!(user_choice_in(&ours, &n).as_deref(), Some("Rustshot.ScreenClip"));
+        // Our ProgID chosen but our keys gone: broken too.
+        let mut stale = FakeReg::default();
+        stale.choice(Some("rustshot.screenclip"), None);
+        assert_eq!(handler_in(&stale, &n), Handler::Broken { progid: "rustshot.screenclip".into() });
+        // An empty choice is no choice.
+        let mut empty = FakeReg::default();
+        empty.choice(Some("  "), None);
+        assert_eq!(handler_in(&empty, &n), Handler::None);
+    }
+
+    #[test]
+    fn progids_resolve() {
+        let mut r = FakeReg::default();
+        // A classic handler in the machine's classes (HKCR), one in the user's.
+        r.put(Root::Classes, r"ShareX.ScreenClip\shell\open\command", None, r#""C:\Program Files\ShareX\ShareX.exe" "%1""#);
+        r.put(Root::User, r"Software\Classes\Greenshot.Clip\shell\open\command", None, r#"C:\gs\Greenshot.exe %1"#);
+        assert!(resolves(&r, "ShareX.ScreenClip"));
+        assert!(resolves(&r, "sharex.screenclip"), "case-insensitive");
+        assert!(resolves(&r, "Greenshot.Clip"));
+        // A ProgID key without a command is not a handler (unless AppX).
+        r.put(Root::Classes, "Half.Registered", None, "Half");
+        assert!(!resolves(&r, "Half.Registered"));
+        r.put(Root::Classes, "AppXabc", None, "");
+        assert!(resolves(&r, "AppXabc"));
+        assert!(!resolves(&r, "AppXmissing"));
+        assert!(!resolves(&r, ""));
+        assert!(!resolves(&r, r"..\ShareX.ScreenClip"));
+        // Names: the description, else the program, else the ProgID.
+        assert_eq!(app_name(&r, "ShareX.ScreenClip"), "ShareX");
+        r.put(Root::Classes, "ShareX.ScreenClip", None, "ShareX screen capture");
+        assert_eq!(app_name(&r, "ShareX.ScreenClip"), "ShareX screen capture");
+        r.put(Root::Classes, "ShareX.ScreenClip", None, "URL:ms-screenclip");
+        assert_eq!(app_name(&r, "ShareX.ScreenClip"), "ShareX", "a URL: description is no name");
+        assert_eq!(app_name(&r, "Greenshot.Clip"), "Greenshot");
+        // An indirect name that does not resolve falls through.
+        r.put(Root::Classes, r"AppXabc\Application", Some("ApplicationName"), "@{Gone?ms-resource://x}");
+        assert_eq!(app_name(&r, "AppXabc"), "AppXabc");
+    }
+
+    #[test]
+    fn guide_and_state_texts() {
+        let plain = guide_text(false);
+        assert_eq!(
+            plain,
+            "Windows lets only you choose which app opens Win+Shift+S.\n1. Click Open Default apps below.\n2. Scroll to the bottom and click \"Choose defaults by link type\".\n3. Find MS-SCREENCLIP and pick Rustshot."
+        );
+        let broken = guide_text(true);
+        assert!(broken.starts_with("Win+Shift+S is currently set to an app that is no longer installed, so Windows shows an error instead of asking.\n"));
+        assert!(broken.ends_with(&plain));
+        let other = Handler::Other { progid: SNIP.into(), name: "Snipping Tool".into() };
+        let broken = Handler::Broken { progid: SNIP.into() };
+        assert_eq!(state_line(&Handler::Ours, true), ("Opens Rustshot".into(), Tone::Good));
+        assert_eq!(state_line(&other, true), ("Opens Snipping Tool".into(), Tone::Plain));
+        assert_eq!(state_line(&broken, true), ("Set to a missing app \u{2014} click to fix".into(), Tone::Bad));
+        assert_eq!(state_line(&Handler::None, true), ("Not set".into(), Tone::Plain));
+        // The tray icon off: anything but Rustshot leaves no way in.
+        let no_way = ("Set up Win+Shift+S \u{2014} otherwise Rustshot can't be opened by a shortcut".to_string(), Tone::Bad);
+        for h in [&other, &broken, &Handler::None] {
+            assert_eq!(state_line(h, false), no_way);
+        }
+        assert_eq!(state_line(&Handler::Ours, false), ("Opens Rustshot".into(), Tone::Good));
+    }
+
+    /// The plain Default apps page, where the guide's steps apply.
+    #[test]
+    fn default_apps_page() {
+        assert_eq!(DEFAULT_APPS_URI, "ms-settings:defaultapps");
+        assert!(GUIDE_STEPS.contains("Choose defaults by link type"));
+    }
+
     /// Register, re-point and unregister a throwaway scheme under HKCU
     /// (never `ms-screenclip`), cleaning up whatever happens.
     #[cfg(windows)]
@@ -626,6 +1096,25 @@ mod tests {
             unregister(n).unwrap();
             assert!(!key_exists(&format!(r"{root}\UserChoiceLatest")));
             assert_eq!(get(&format!(r"{root}\UserChoice"), Some("ProgId")).as_deref(), Some("AppXsomethingelse"));
+        }
+
+        /// The live reads: our registration chosen is Ours, a missing
+        /// AppX ProgID is Broken, no choice is None.
+        #[test]
+        fn live_handler_states() {
+            use super::super::Handler;
+            let t = Throwaway::new("e");
+            let n = &t.0;
+            let root = n.user_choice_root();
+            assert_eq!(handler(n), Handler::None);
+            set(&format!(r"{root}\UserChoice"), Some("ProgId"), "AppXrustshotTestDefinitelyMissing0").unwrap();
+            assert_eq!(handler(n), Handler::Broken { progid: "AppXrustshotTestDefinitelyMissing0".into() });
+            register(n, &std::env::current_exe().unwrap()).unwrap();
+            set(&format!(r"{root}\UserChoiceLatest\ProgId"), Some("ProgId"), &n.progid).unwrap();
+            assert_eq!(handler(n), Handler::Ours);
+            // Its program gone: broken.
+            register(n, Path::new(r"C:\definitely\not\here\rustshot.exe")).unwrap();
+            assert_eq!(handler(n), Handler::Broken { progid: n.progid.clone() });
         }
 
         /// A moved exe is re-pointed; another copy that still exists is not.

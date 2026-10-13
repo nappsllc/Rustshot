@@ -36,6 +36,7 @@ use crate::hotkey::{self, HotEvent};
 use crate::keymap::{Action, Chord, Keymap};
 use crate::objects::FRect;
 use crate::pixbuf::PixBuf;
+use crate::screenclip_win::Handler;
 use crate::theme::Theme;
 use crate::ui::{FocusState, Input, TextState, Ui};
 use crate::uisize::{self, UiSize};
@@ -99,6 +100,27 @@ pub const GLOBALS: [(&str, usize); 8] = [
     ("Open History", 7),
     ("Quit Rustshot", 1),
 ];
+
+/// The question when "Show icon in tray" is turned off: the way back in.
+/// (Windows: off means no background process at all.)
+#[cfg(windows)]
+pub const HIDE_TRAY: &str = "Rustshot won't run in the background. Win+Shift+S and Print Screen still open it if Rustshot is set as your screenshot app (Settings > Capture); other global shortcuts stop working. To open Settings, start Rustshot from the Start menu.";
+#[cfg(not(windows))]
+pub const HIDE_TRAY: &str = "The tray icon will be hidden. To open Settings later, start Rustshot again from your applications menu (or run `rustshot settings`). Your shortcuts keep working.";
+/// [`HIDE_TRAY`]'s extra line while Win+Shift+S does not open Rustshot.
+pub const HIDE_TRAY_SETUP: &str = "Rustshot isn't set as your screenshot app yet \u{2014} Set up\u{2026}";
+/// The "Show icon in tray" row's help (Windows).
+pub const TRAY_HELP: &str = "Off: no background process; only Win+Shift+S / Print Screen (when set up)";
+/// Where the icon off keeps the daemon (the Store build, which cannot
+/// take Win+Shift+S): the question and the row's help.
+pub const HIDE_TRAY_KEEP: &str = "The tray icon will be hidden. Rustshot keeps running in the background and your shortcuts keep working. To open Settings, start Rustshot again from the Start menu.";
+pub const TRAY_HELP_KEEP: &str = "Off: no icon; Rustshot keeps running and its shortcuts work";
+/// The one-time notice for a file from before the icon off meant "no
+/// background process" (the first start of this version).
+pub const TRAY_OFF_NOTICE: &str = "Rustshot no longer runs in the background while the tray icon is off. Win+Shift+S and Print Screen can still open it.";
+
+/// A global row's note while another app holds its key.
+pub const IN_USE: &str = "In use by another app";
 
 /// The file-name editor's token buttons: (label, inserted text), shown in
 /// columns (top to bottom, then the next column).
@@ -633,11 +655,23 @@ enum Modal {
     /// A save failed, or a message for the user (a hotkey the daemon
     /// could not register).
     Error(String),
+    /// Hotkeys the daemon could not register as saved (or that fell
+    /// back): OK, and "Change shortcuts…", which goes to Key bindings
+    /// with `field`'s key box recording (the first row needing a new key).
+    Hotkeys { text: String, field: Option<String> },
+    /// [`HIDE_TRAY`]: "Show icon in tray" was just turned off.
+    HideTray,
+    /// [`TRAY_OFF_NOTICE`]: Set up Win+Shift+S / Show tray icon again / OK.
+    TrayOffNotice,
     /// `config.toml` does not parse (the error): Open config file, Reset
     /// to defaults…, Close; nothing else until it is fixed.
     Broken(String),
     /// [`RESET`] over [`Modal::Broken`] (its error, to go back to).
     Reset(String),
+    /// How to make Windows open Rustshot for Win+Shift+S
+    /// ([`crate::screenclip_win::GUIDE_TITLE`]); `broken`: the choice
+    /// names an app that is gone; `dont_show`: "Don't show again" ticked.
+    Guide { broken: bool, dont_show: bool },
 }
 
 /// What the user did this frame.
@@ -650,6 +684,17 @@ pub enum Click {
     Save,
     /// The rewrite question's Cancel, or the error's OK.
     Back,
+    /// The hotkey dialog's "Change shortcuts…".
+    ChangeShortcuts,
+    /// The tray-icon-off question's "Turn off" / "Cancel".
+    HideTray,
+    KeepTray,
+    /// Its "Set up…": the Win+Shift+S setup ([`Settings::screenclip_setup`]).
+    ScreenclipSetup,
+    /// The tray-off notice's "Show tray icon again" (saved, the daemon
+    /// starts) and "OK" (the window closes).
+    ShowTrayAgain,
+    NoticeOk,
     Browse,
     OpenConfig,
     Restore,
@@ -671,6 +716,14 @@ pub enum Click {
     CheckUpdates,
     /// About: one of [`crate::actions::LINKS`].
     Link(&'static str),
+    /// The Win+Shift+S guide's "Open Default apps".
+    OpenDefaultApps,
+    /// The guide's "Remind me later".
+    RemindLater,
+    /// The guide's "Don't show again" checkbox.
+    DontShow,
+    /// Capture: "Set to a missing app — click to fix" (opens the guide).
+    FixScreenclip,
     /// Esc not taken by a control.
     Escape,
     /// Enter not taken by a control.
@@ -695,6 +748,11 @@ pub enum Act {
     ClearHistory,
     /// Open this About link in the browser.
     Link(&'static str),
+    /// "Show icon in tray" was turned on again: start the daemon unless
+    /// one runs (Windows: with it off none did).
+    StartDaemon,
+    /// Open Windows' Default apps (the guide's button).
+    OpenDefaultApps,
 }
 
 /// The window's state: the form, what it was loaded from, the section and
@@ -706,9 +764,18 @@ pub struct Settings {
     autostart: Option<bool>,
     /// The Win+Shift+S handler as registered now (`None`: hidden).
     screenclip: Option<bool>,
-    /// Registered, but Windows still opens the Snipping Tool: a note says
-    /// to pick Rustshot when Windows asks.
-    pub screenclip_wait: bool,
+    /// Which app Win+Shift+S opens, as last read (the row's line under
+    /// the toggle; read again when the window gets the focus back).
+    pub handler: Handler,
+    /// The guide's Open Default apps was clicked: when the window gets
+    /// the focus back and Windows now opens Rustshot, a toast says so.
+    guide_away: bool,
+    /// The guide waits for the open question to close.
+    guide_queued: bool,
+    /// Default apps did not open: the guide says so (in red).
+    pub guide_error: Option<String>,
+    /// A short message at the bottom of the window, and when it came.
+    pub toast: Option<(String, std::time::Instant)>,
     pub form: Form,
     /// The rail's section ([`SECTIONS`] index).
     pub section: usize,
@@ -731,6 +798,18 @@ pub struct Settings {
     stale: bool,
     /// Messages waiting for the open question to close.
     pending: Vec<String>,
+    /// Some of them are hotkey notes: the dialog they make has "Change
+    /// shortcuts…" (to this key box, when one needs a new key).
+    pending_keys: Option<Option<String>>,
+    /// The key box to start recording in at the next frame of Key
+    /// bindings ("Change shortcuts…").
+    pub record_field: Option<String>,
+    /// A control to focus (with the ring, scrolled into view) at the next
+    /// frame of its section.
+    pub focus_field: Option<String>,
+    /// The icon off means no background process here
+    /// ([`crate::tray::hidden_means_no_daemon`]; not the Store build).
+    pub no_background: bool,
     /// The drive (top-level folder) last probed and its note: probed
     /// again only when the root changes, never while typing in it.
     folder_probe: Option<(PathBuf, Option<String>)>,
@@ -743,7 +822,11 @@ pub struct Settings {
     rec_lists: recording::Lists,
     set_autostart: fn(bool) -> Result<(), String>,
     set_screenclip: fn(bool) -> Result<(), String>,
+    read_handler: fn() -> Handler,
 }
+
+/// How long the toast shows.
+pub const TOAST_MS: u64 = 2500;
 
 impl Settings {
     pub fn new(cfg: Config, autostart: Option<bool>, path: PathBuf) -> Settings {
@@ -752,7 +835,11 @@ impl Settings {
             loaded: cfg,
             autostart,
             screenclip: None,
-            screenclip_wait: false,
+            handler: Handler::None,
+            guide_away: false,
+            guide_queued: false,
+            guide_error: None,
+            toast: None,
             section: GENERAL,
             scroll: [0.0; SECTIONS.len()],
             content_h: [0.0; SECTIONS.len()],
@@ -764,22 +851,152 @@ impl Settings {
             tray_row: cfg!(windows),
             stale: false,
             pending: Vec::new(),
+            pending_keys: None,
+            record_field: None,
+            focus_field: None,
+            no_background: crate::tray::hidden_means_no_daemon(),
             folder_probe: None,
             hotkey_failures: Vec::new(),
             tools_reset: false,
             rec_lists: recording::Lists::default(),
             set_autostart: crate::autostart::set,
             set_screenclip: crate::screenclip_win::set,
+            read_handler: crate::screenclip_win::handler,
         }
     }
 
     /// Show the Win+Shift+S toggle at `state` (as the registry has it;
-    /// `None` hides it); `waiting`: Windows has not been told to use us.
-    pub fn with_screenclip(mut self, state: Option<bool>, waiting: bool) -> Settings {
+    /// `None` hides it); `handler`: which app Win+Shift+S opens now.
+    pub fn with_screenclip(mut self, state: Option<bool>, handler: Handler) -> Settings {
         self.screenclip = state;
         self.form.screenclip = state;
-        self.screenclip_wait = waiting;
+        self.handler = handler;
         self
+    }
+
+    /// Show the Win+Shift+S guide (now, or once the open question
+    /// closes); nothing when Windows already opens Rustshot or the toggle
+    /// is not on.
+    pub fn open_guide(&mut self) {
+        if self.screenclip != Some(true) {
+            return;
+        }
+        self.handler = (self.read_handler)();
+        if self.handler == Handler::Ours {
+            return;
+        }
+        let broken = matches!(self.handler, Handler::Broken { .. });
+        match &self.modal {
+            None => {
+                self.modal = Some(Modal::Guide { broken, dont_show: false });
+                self.guide_error = None;
+            }
+            Some(Modal::Guide { .. }) => {}
+            Some(_) => self.guide_queued = true,
+        }
+    }
+
+    /// The guide's text: its title and body.
+    pub fn guide_texts(&self, broken: bool) -> (&'static str, String) {
+        (crate::screenclip_win::GUIDE_TITLE, crate::screenclip_win::guide_text(broken))
+    }
+
+    /// The registration as it is now (another flow may have turned it on:
+    /// [`crate::screenclip_win::show_setup_guide`]); the form's toggle
+    /// follows unless the user changed it.
+    pub fn sync_screenclip(&mut self, state: Option<bool>) {
+        if self.form.screenclip == self.screenclip {
+            self.form.screenclip = state;
+        }
+        self.screenclip = state;
+    }
+
+    /// The red line's click: turn the registration on (as Apply would)
+    /// when it is off, then the guide.
+    fn fix_screenclip(&mut self) {
+        if self.screenclip == Some(false) {
+            match (self.set_screenclip)(true) {
+                Ok(()) => {
+                    self.screenclip = Some(true);
+                    self.form.screenclip = Some(true);
+                }
+                Err(e) => {
+                    self.modal = Some(Modal::Error(format!("Could not change Win+Shift+S: {e}")));
+                    return;
+                }
+            }
+        }
+        self.open_guide();
+    }
+
+    /// Default apps did not open (`text`: [`crate::screenclip_win::open_failed_text`]):
+    /// the guide shows it in red, and nothing waits for the user to come back.
+    pub fn default_apps_failed(&mut self, text: String) {
+        self.guide_away = false;
+        if matches!(self.modal, Some(Modal::Guide { .. })) {
+            self.guide_error = Some(text);
+        } else {
+            self.notify(text);
+        }
+    }
+
+    /// Close the guide however it closes (Remind me later, Esc, the
+    /// window's close button, or Rustshot chosen); a ticked "Don't show
+    /// again" writes `screenclip_hint = false` (that line only). A write
+    /// that fails leaves the error showing.
+    fn close_guide(&mut self) -> Vec<Act> {
+        let Some(Modal::Guide { dont_show, .. }) = self.modal else { return vec![] };
+        self.modal = None;
+        self.guide_away = false;
+        self.guide_error = None;
+        if dont_show {
+            let edit = [("screenclip_hint".to_string(), Some("false".to_string()))];
+            match config::edit_top_keys_at(&self.path, &edit) {
+                Ok(()) => self.loaded.screenclip_hint = false,
+                Err(e) => {
+                    self.modal = Some(Modal::Error(format!("Could not save {}: {e}", self.path.display())));
+                    return vec![];
+                }
+            }
+        }
+        self.show_pending();
+        vec![]
+    }
+
+    /// The window has the focus again (back from Default apps): while the
+    /// guide is up or its Open Default apps was clicked, read which app
+    /// Win+Shift+S opens; once it is Rustshot the guide closes and a toast
+    /// says so. Other focus changes read nothing (the read may load a
+    /// package's resources). Returns whether anything changed.
+    pub fn refocused(&mut self) -> bool {
+        let guide = matches!(self.modal, Some(Modal::Guide { .. }));
+        if self.screenclip != Some(true) || !(guide || self.guide_away) {
+            return false;
+        }
+        let was = std::mem::replace(&mut self.handler, (self.read_handler)());
+        if self.handler == Handler::Ours && was != Handler::Ours {
+            if matches!(self.modal, Some(Modal::Guide { .. })) {
+                self.close_guide();
+            }
+            self.guide_away = false;
+            self.guide_queued = false;
+            self.toast = Some((crate::screenclip_win::NOW_OURS.into(), std::time::Instant::now()));
+            return true;
+        }
+        let broken_now = matches!(self.handler, Handler::Broken { .. });
+        if let Some(Modal::Guide { broken, .. }) = &mut self.modal {
+            *broken = broken_now;
+        }
+        self.handler != was
+    }
+
+    /// The toast is showing (the window animates until it goes).
+    pub fn toast_live(&mut self) -> bool {
+        let live = self.toast.as_ref().is_some_and(|(_, at)| at.elapsed() < std::time::Duration::from_millis(TOAST_MS));
+        if !live {
+            self.toast = None;
+        }
+        live
     }
 
     /// The form for `cfg`, keeping the toggles that are not in the file.
@@ -847,14 +1064,126 @@ impl Settings {
                 e.push('\n');
                 e.push_str(&msg);
             }
+            Some(Modal::Hotkeys { text, .. }) => {
+                text.push('\n');
+                text.push_str(&msg);
+            }
             Some(_) => self.pending.push(msg),
+        }
+    }
+
+    /// Show the hotkey note `msg` ([`Modal::Hotkeys`]; `field`: the key
+    /// box of the first row that needs a new key) once no other question
+    /// is open. Joins an error or hotkey dialog already showing.
+    pub fn notify_hotkeys(&mut self, msg: String, field: Option<String>) {
+        match &mut self.modal {
+            None => self.modal = Some(Modal::Hotkeys { text: msg, field }),
+            Some(Modal::Error(e)) => {
+                let text = format!("{e}\n{msg}");
+                self.modal = Some(Modal::Hotkeys { text, field });
+            }
+            Some(Modal::Hotkeys { text, field: f }) => {
+                text.push('\n');
+                text.push_str(&msg);
+                if f.is_none() {
+                    *f = field;
+                }
+            }
+            Some(_) => {
+                self.pending.push(msg);
+                let f = self.pending_keys.take().flatten();
+                self.pending_keys = Some(f.or(field));
+            }
         }
     }
 
     fn show_pending(&mut self) {
         if self.modal.is_none() && !self.pending.is_empty() {
-            self.modal = Some(Modal::Error(std::mem::take(&mut self.pending).join("\n")));
+            let text = std::mem::take(&mut self.pending).join("\n");
+            self.modal = Some(match self.pending_keys.take() {
+                Some(field) => Modal::Hotkeys { text, field },
+                None => Modal::Error(text),
+            });
         }
+        if self.modal.is_none() && std::mem::take(&mut self.guide_queued) {
+            self.open_guide();
+        }
+    }
+
+    /// "Show icon in tray" was just turned off: ask first, saying how to
+    /// get back in ([`HIDE_TRAY`]).
+    pub fn ask_hide_tray(&mut self) {
+        if self.modal.is_none() {
+            self.modal = Some(Modal::HideTray);
+        }
+    }
+
+    /// Win+Shift+S / Print Screen open Rustshot: registered and chosen.
+    /// (`None` where it cannot be: nothing to set up.)
+    pub fn screenclip_ready(&self) -> Option<bool> {
+        self.screenclip.map(|on| on && self.handler == Handler::Ours)
+    }
+
+    /// The tray-icon-off question: [`HIDE_TRAY`], and while Win+Shift+S
+    /// does not open Rustshot, [`HIDE_TRAY_SETUP`].
+    pub fn hide_tray_text(&self) -> String {
+        if !self.no_background {
+            return HIDE_TRAY_KEEP.to_string();
+        }
+        match self.screenclip_ready() {
+            Some(false) => format!("{HIDE_TRAY}\n{HIDE_TRAY_SETUP}"),
+            _ => HIDE_TRAY.to_string(),
+        }
+    }
+
+    /// "Set up…": the icon stays for now; Capture opens at "Use
+    /// Win+Shift+S and Print Screen", which is turned on if it is off, and
+    /// the Win+Shift+S guide shows over it (what
+    /// [`crate::screenclip_win::show_setup_guide`] does from outside).
+    pub fn screenclip_setup(&mut self) {
+        if matches!(self.modal, Some(Modal::HideTray | Modal::TrayOffNotice)) {
+            self.modal = None;
+        }
+        self.form.show_tray = true;
+        self.section = CAPTURE;
+        self.focus_field = Some("screenclip".into());
+        if self.screenclip == Some(false) {
+            match (self.set_screenclip)(true) {
+                Ok(()) => {
+                    self.screenclip = Some(true);
+                    self.form.screenclip = Some(true);
+                }
+                Err(e) => {
+                    self.modal = Some(Modal::Error(format!("Could not change Win+Shift+S: {e}")));
+                    return;
+                }
+            }
+        }
+        self.open_guide();
+        self.show_pending();
+    }
+
+    /// The "Show icon in tray" row's help.
+    pub fn tray_help(&self) -> &'static str {
+        if self.no_background { TRAY_HELP } else { TRAY_HELP_KEEP }
+    }
+
+    /// The one-time tray-off notice ([`run_tray_off_notice`]).
+    pub fn show_tray_off_notice(&mut self) {
+        self.modal = Some(Modal::TrayOffNotice);
+    }
+
+    /// The dialog's "Change shortcuts…": Key bindings, at the top (the
+    /// global rows) or the bottom (the while-recording ones), the row's
+    /// key box recording.
+    fn change_shortcuts(&mut self) {
+        if let Some(Modal::Hotkeys { field, .. }) = self.modal.take() {
+            self.section = KEYS;
+            let rec = field.as_deref().is_some_and(|f| f.starts_with("key_rec_"));
+            self.scroll[KEYS] = if rec { 1e6 } else { 0.0 };
+            self.record_field = field;
+        }
+        self.show_pending();
     }
 
     /// The file on disk now, if it parses: `Ok(None)` when there is none.
@@ -890,16 +1219,39 @@ impl Settings {
         !self.hotkey_failures.is_empty()
     }
 
-    /// The note under hotkey `slot`'s row while it is not registered:
-    /// "Not registered — using Ctrl+Alt+Shift+Q" (the chord kept in its
-    /// place), or "Not registered".
-    pub fn hotkey_slot_note(&self, slot: usize) -> Option<String> {
+    /// The daemon's failure for hotkey `slot`, while the form still has
+    /// the saved chord (a new key recorded in its place hides it).
+    fn slot_failure(&self, slot: usize) -> Option<&hotkey::Failure> {
         let f = self.hotkey_failures.iter().find(|f| f.slot == slot)?;
-        Some(match &f.kept {
-            Some(k) => format!("Not registered \u{2014} using {}", hotkey::chord_label(k)),
-            None if f.cause == hotkey::Cause::InUse => "Already used by another app. Choose another.".into(),
-            None => "Not registered".into(),
+        let saved = hotkey::wanted(&self.loaded).get(slot).and_then(|s| Chord::parse(s));
+        (slot >= hotkey::SLOTS || self.form.global(slot) == saved).then_some(f)
+    }
+
+    /// The note under hotkey `slot`'s row while it is not registered as
+    /// saved: another app holds it ("In use by another app — using
+    /// Win+Shift+Y for now" after a fallback, "… — using Ctrl+Alt+Shift+Q"
+    /// with the chord kept, "In use by another app. Win+Shift+Y is free."),
+    /// else "Not registered — using …" or "Not registered".
+    pub fn hotkey_slot_note(&self, slot: usize) -> Option<String> {
+        let f = self.slot_failure(slot)?;
+        let label = hotkey::chord_label;
+        Some(match (&f.alt, &f.kept, f.cause) {
+            (Some(a), _, _) => format!("{IN_USE} \u{2014} using {} for now", label(a)),
+            (None, Some(k), hotkey::Cause::InUse) => format!("{IN_USE} \u{2014} using {}", label(k)),
+            (None, Some(k), _) => format!("Not registered \u{2014} using {}", label(k)),
+            (None, None, hotkey::Cause::InUse) => match &f.free {
+                Some(free) => format!("{IN_USE}. {} is free.", label(free)),
+                None => format!("{IN_USE}. Choose another."),
+            },
+            (None, None, _) => "Not registered".into(),
         })
+    }
+
+    /// Hotkey `slot`'s keys show red: another global has the chord, or
+    /// another app holds it.
+    pub fn global_err(&self, slot: usize) -> bool {
+        self.form.global_note(slot).is_some_and(|n| n.starts_with("Already"))
+            || self.slot_failure(slot).is_some_and(|f| f.cause == hotkey::Cause::InUse)
     }
 
     /// The message under global hotkey `slot`: a clash with another
@@ -934,10 +1286,22 @@ impl Settings {
     pub fn on(&mut self, c: Click) -> Vec<Act> {
         let c = match (c, &self.modal) {
             (Click::Escape, Some(Modal::Broken(_))) => Click::Close,
+            (Click::Escape, Some(Modal::Guide { .. })) => Click::RemindLater,
+            (Click::Enter, Some(Modal::Guide { .. })) => Click::OpenDefaultApps,
+            (Click::Cancel, Some(Modal::Guide { .. })) => {
+                let mut acts = self.close_guide();
+                // "Don't show again" could not be saved: the error stays.
+                if !matches!(self.modal, Some(Modal::Error(_))) {
+                    acts.push(Act::Close);
+                }
+                return acts;
+            }
             (Click::Escape, Some(_)) => Click::Back,
             (Click::Escape, None) => Click::Cancel,
             (Click::Enter, Some(Modal::Rewrite { .. })) => Click::Save,
-            (Click::Enter, Some(Modal::Error(_))) => Click::Back,
+            (Click::Enter, Some(Modal::HideTray)) => Click::HideTray,
+            (Click::Enter, Some(Modal::TrayOffNotice)) => Click::NoticeOk,
+            (Click::Enter, Some(Modal::Error(_) | Modal::Hotkeys { .. })) => Click::Back,
             // Nothing happens to a broken file by a stray Enter.
             (Click::Enter, Some(Modal::Broken(_) | Modal::Reset(_))) => return vec![],
             (Click::Enter, None) => Click::Ok,
@@ -965,6 +1329,11 @@ impl Settings {
             Click::Back => {
                 self.modal = match self.modal.take() {
                     Some(Modal::Reset(e)) => Some(Modal::Broken(e)),
+                    // Esc on the hide-the-icon question: it stays.
+                    Some(Modal::HideTray) => {
+                        self.form.show_tray = true;
+                        None
+                    }
                     _ => None,
                 };
                 self.show_pending();
@@ -977,6 +1346,33 @@ impl Settings {
                 vec![]
             }
             Click::Replace => self.reset(),
+            Click::ScreenclipSetup => {
+                self.screenclip_setup();
+                vec![]
+            }
+            Click::ShowTrayAgain => {
+                self.modal = None;
+                self.form.show_tray = true;
+                self.save(true)
+            }
+            Click::NoticeOk => {
+                self.modal = None;
+                vec![Act::Close]
+            }
+            Click::HideTray | Click::KeepTray => {
+                if matches!(self.modal, Some(Modal::HideTray)) {
+                    self.modal = None;
+                    if c == Click::KeepTray {
+                        self.form.show_tray = true;
+                    }
+                }
+                self.show_pending();
+                vec![]
+            }
+            Click::ChangeShortcuts => {
+                self.change_shortcuts();
+                vec![]
+            }
             Click::Close => vec![Act::Close],
             Click::Browse => vec![Act::Browse],
             Click::OpenConfig => vec![Act::OpenConfig],
@@ -996,6 +1392,22 @@ impl Settings {
             }
             Click::ResetTools => self.reset_tools(),
             Click::ClearHistory => vec![Act::ClearHistory],
+            Click::OpenDefaultApps => {
+                // The guide stays: its steps are still needed over there.
+                self.guide_away = true;
+                vec![Act::OpenDefaultApps]
+            }
+            Click::RemindLater => self.close_guide(),
+            Click::DontShow => {
+                if let Some(Modal::Guide { dont_show, .. }) = &mut self.modal {
+                    *dont_show = !*dont_show;
+                }
+                vec![]
+            }
+            Click::FixScreenclip => {
+                self.fix_screenclip();
+                vec![]
+            }
             Click::Escape | Click::Enter => vec![],
         }
     }
@@ -1019,7 +1431,11 @@ impl Settings {
         let path = self.path.clone();
         let saved = config::with_config_lock(&path, || {
             let onto = self.disk().ok()?.unwrap_or_else(|| self.loaded.clone());
-            let cfg = self.form.apply(&self.loaded, &onto);
+            let mut cfg = self.form.apply(&self.loaded, &onto);
+            // Turned off here: the user saw what it means now.
+            if !cfg.show_tray && self.no_background {
+                cfg.tray_off_mode_seen = true;
+            }
             Some((config::save_at(&path, &cfg), cfg))
         });
         let Some((res, cfg)) = saved else { return vec![] };
@@ -1028,10 +1444,14 @@ impl Settings {
             return vec![];
         }
         self.confirmed = true; // the file is ours now
+        let tray_on = cfg.show_tray && !self.loaded.show_tray;
         self.loaded = cfg.clone();
         // The form shows what was saved (merged with the file, trimmed).
         self.form = self.form_for(&cfg);
         let mut acts = vec![Act::Saved(Box::new(cfg))];
+        if tray_on && self.no_background {
+            acts.push(Act::StartDaemon);
+        }
         if let (Some(on), true) = (self.form.autostart, self.form.autostart != self.autostart) {
             match (self.set_autostart)(on) {
                 Ok(()) => self.autostart = Some(on),
@@ -1045,7 +1465,16 @@ impl Settings {
             match (self.set_screenclip)(on) {
                 Ok(()) => {
                     self.screenclip = Some(on);
-                    self.screenclip_wait = on;
+                    self.handler = (self.read_handler)();
+                    // Turned on: Windows still has to be told, by the
+                    // user. The guide shows (and OK leaves the window
+                    // open for it).
+                    if on {
+                        self.open_guide();
+                        if matches!(self.modal, Some(Modal::Guide { .. })) {
+                            return acts;
+                        }
+                    }
                 }
                 Err(e) => {
                     self.modal = Some(Modal::Error(format!("Could not change Win+Shift+S: {e}")));
@@ -1135,8 +1564,15 @@ enum Msg {
     Raise,
     /// Show this to the user ([`notify`]).
     Note(String),
+    /// A hotkey note ([`notify_hotkeys`]): the text and the key box to
+    /// record in.
+    Hotkeys(String, Option<String>),
     /// Go to this section ([`show_at`]).
     Section(usize),
+    /// Show the Win+Shift+S guide ([`show_guide`]).
+    Guide,
+    /// The guide's Open Default apps did not open it (the text to show).
+    DefaultAppsFailed(String),
 }
 
 /// The open window's inbox, if any.
@@ -1145,6 +1581,13 @@ static OPEN: Mutex<Option<Sender<Msg>>> = Mutex::new(None);
 static START_SECTION: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(GENERAL);
 /// The daemon's event sender: told to reload after a save.
 static DAEMON: Mutex<Option<Sender<HotEvent>>> = Mutex::new(None);
+
+/// Whether the window is open in this process (an on-demand run waits
+/// for it before it quits).
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub fn is_open() -> bool {
+    lock(&OPEN).is_some()
+}
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -1159,6 +1602,19 @@ pub fn set_daemon(tx: Sender<HotEvent>) {
 fn reload_daemon() {
     if let Some(d) = lock(&DAEMON).as_ref() {
         let _ = d.send(HotEvent::ReloadConfig);
+    }
+}
+
+/// Start `rustshot daemon` beside this window's process unless one runs.
+fn start_daemon() {
+    #[cfg(windows)]
+    if !crate::instance::daemon_running() {
+        let r = std::env::current_exe()
+            .map_err(|e| e.to_string())
+            .and_then(|exe| crate::proc_win::spawn_detached(&exe, &[std::ffi::OsStr::new("daemon")], &[]));
+        if let Err(e) = r {
+            eprintln!("rustshot: could not start the daemon: {e}");
+        }
     }
 }
 
@@ -1186,11 +1642,55 @@ pub fn show_at(section: usize) {
     show();
 }
 
+/// A window opened by [`show_guide`] starts on the guide.
+static START_GUIDE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Open the window at Capture with the Win+Shift+S guide over it (the
+/// daemon's reminder), or show it in the open one.
+pub fn show_guide() {
+    #[cfg(not(target_os = "macos"))]
+    {
+        let open = lock(&OPEN);
+        if let Some(tx) = open.as_ref()
+            && tx.send(Msg::Guide).is_ok()
+        {
+            let _ = tx.send(Msg::Raise);
+            return;
+        }
+        START_GUIDE.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    show_at(CAPTURE);
+}
+
 /// Show `text` in the open Settings window (over the form, with OK);
 /// false when no window is open (the caller tells the user some other way).
 pub fn notify(text: &str) -> bool {
     lock(&OPEN).as_ref().is_some_and(|tx| tx.send(Msg::Note(text.to_string())).is_ok())
 }
+
+/// The hotkey dialog ([`Modal::Hotkeys`]) in the open Settings window;
+/// false when none is open.
+pub fn notify_hotkeys(text: &str, field: Option<String>) -> bool {
+    lock(&OPEN).as_ref().is_some_and(|tx| tx.send(Msg::Hotkeys(text.to_string(), field.clone())).is_ok())
+}
+
+/// A hotkey note with keys to change: the hotkey dialog in the Settings
+/// window, opened at Key bindings when it is not open. (macOS and tests:
+/// a tray note.)
+pub fn show_hotkeys(text: &str, field: Option<String>) {
+    if notify_hotkeys(text, field.clone()) {
+        return;
+    }
+    if cfg!(test) || cfg!(target_os = "macos") {
+        crate::tray::notify(text);
+        return;
+    }
+    *lock(&START_NOTE) = Some((text.to_string(), field));
+    show_at(KEYS);
+}
+
+/// The hotkey note a window opened by [`show_hotkeys`] starts with.
+static START_NOTE: Mutex<Option<(String, Option<String>)>> = Mutex::new(None);
 
 /// Open the window on its own thread, or bring the open one to the front.
 pub fn show() {
@@ -1200,6 +1700,16 @@ pub fn show() {
     if let Some(rx) = claim() {
         std::thread::spawn(move || run(rx));
     }
+}
+
+/// A window opened by [`run_tray_off_notice`] starts with the notice.
+static START_TRAY_NOTICE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The first start of this version with an older file's `show_tray =
+/// false`: the window here with [`TRAY_OFF_NOTICE`] over it.
+pub fn run_tray_off_notice() {
+    START_TRAY_NOTICE.store(true, std::sync::atomic::Ordering::SeqCst);
+    run_here();
 }
 
 /// `rustshot settings` with no daemon running: the window on this thread
@@ -1230,9 +1740,16 @@ fn claim() -> Option<Receiver<Msg>> {
 fn run(rx: Receiver<Msg>) {
     let autostart = crate::update::managed_install().is_none().then(crate::autostart::is_enabled);
     let mut s = Settings::open(config::config_path(), autostart)
-        .with_screenclip(crate::screenclip_win::state(), crate::screenclip_win::awaiting_choice());
+        .with_screenclip(crate::screenclip_win::state(), crate::screenclip_win::handler());
     s.hotkey_failures = hotkey::outstanding();
     s.section = START_SECTION.swap(GENERAL, std::sync::atomic::Ordering::SeqCst).min(SECTIONS.len() - 1);
+    if START_TRAY_NOTICE.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        s.show_tray_off_notice();
+    } else if let Some((text, field)) = lock(&START_NOTE).take() {
+        s.notify_hotkeys(text, field);
+    } else if START_GUIDE.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        s.open_guide();
+    }
     let th = crate::theme::resolve(&s.loaded);
     // Opened without a daemon (`rustshot settings`): the file's UI size.
     // In the daemon an overlay may have set it and still have the write
@@ -1241,7 +1758,7 @@ fn run(rx: Receiver<Msg>) {
         uisize::init(s.loaded.ui_scale);
     }
     let mut w = Window::new(s, th, rx);
-    let spec = WindowSpec { title: "Rustshot Settings".into(), w: W, h: H, resizable: false, min: (W, H) };
+    let spec = WindowSpec { title: "Rustshot Settings".into(), w: W, h: H, resizable: false, min: (W, H), controls: wind::Controls::MinClose };
     if let Err(e) = wind::run_window(spec, &mut w) {
         eprintln!("rustshot: settings window: {e:#}");
     }
@@ -1251,8 +1768,13 @@ fn run(rx: Receiver<Msg>) {
     for m in w.rx.try_iter() {
         match m {
             Msg::Raise => late = true,
-            Msg::Note(t) => notes.push(t),
+            Msg::Note(t) | Msg::Hotkeys(t, _) => notes.push(t),
             Msg::Section(_) => late = true,
+            Msg::Guide => {
+                START_GUIDE.store(true, std::sync::atomic::Ordering::SeqCst);
+                late = true;
+            }
+            Msg::DefaultAppsFailed(t) => notes.push(t),
         }
     }
     *open = None;
@@ -1319,6 +1841,9 @@ impl Window {
                 reload_daemon();
             }
             Act::Reload => reload_daemon(),
+            // In the daemon (or an on-demand run) the reload did it.
+            Act::StartDaemon if lock(&DAEMON).is_none() => start_daemon(),
+            Act::StartDaemon => {}
             Act::Browse if !self.picking => {
                 self.picking = true;
                 let start = PathBuf::from(self.s.form.folder.text.trim());
@@ -1338,6 +1863,16 @@ impl Window {
             Act::ClearHistory => crate::history_ui::show_clear(),
             Act::Link(u) => {
                 std::thread::spawn(move || crate::actions::open_link(u));
+            }
+            Act::OpenDefaultApps => {
+                std::thread::spawn(|| {
+                    if let Err(e) = crate::screenclip_win::open_default_apps() {
+                        eprintln!("rustshot: opening Default apps: {e}");
+                        if let Some(tx) = lock(&OPEN).as_ref() {
+                            let _ = tx.send(Msg::DefaultAppsFailed(crate::screenclip_win::open_failed_text(&e)));
+                        }
+                    }
+                });
             }
         }
     }
@@ -1449,6 +1984,21 @@ impl Driver for Window {
                             self.s.notify(t);
                             changed = true;
                         }
+                        Msg::Hotkeys(t, field) => {
+                            self.s.notify_hotkeys(t, field);
+                            raise = true;
+                            changed = true;
+                        }
+                        Msg::Guide => {
+                            self.s.section = CAPTURE;
+                            self.s.sync_screenclip(crate::screenclip_win::state());
+                            self.s.open_guide();
+                            changed = true;
+                        }
+                        Msg::DefaultAppsFailed(t) => {
+                            self.s.default_apps_failed(t);
+                            changed = true;
+                        }
                     }
                 }
                 if raise {
@@ -1473,6 +2023,11 @@ impl Driver for Window {
                 }
                 // The Recording section's devices were listed.
                 changed |= self.s.rec_lists.poll();
+                // The toast fades: frames while it shows, one after.
+                let toast = self.s.toast.is_some();
+                let live = self.s.toast_live();
+                changed |= toast;
+                wind::set_fast_timer(self.hwnd, live);
                 while let Ok(p) = self.picked.1.try_recv() {
                     self.picking = false;
                     if let Some(p) = p {
@@ -1492,6 +2047,14 @@ impl Driver for Window {
                 if !self.closing {
                     wind::invalidate(self.hwnd); // hover changes
                 }
+            }
+            // Back (from Default apps, say): Win+Shift+S's app read again.
+            Ev::Focus(true) => {
+                self.input.feed(&ev);
+                if self.s.refocused() && self.s.toast.is_some() {
+                    wind::set_fast_timer(self.hwnd, true);
+                }
+                self.render();
             }
             _ => {
                 self.input.feed(&ev);
@@ -1515,6 +2078,12 @@ impl Driver for Window {
 
     fn cursor(&self) -> Cursor {
         Cursor::Arrow
+    }
+
+    /// The title bar follows the theme the window shows (a Theme click
+    /// recolours it before Apply, as it does the rest of the window).
+    fn frame_colors(&self) -> Option<wind::FrameColors> {
+        Some(crate::ui::paint::WTok::of(&self.th).frame())
     }
 }
 

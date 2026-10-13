@@ -430,7 +430,7 @@ impl Window {
     fn spawn(&mut self, f: impl FnOnce() -> super::Done + Send + 'static) {
         let tx = self.done.0.clone();
         self.busy += 1;
-        std::thread::spawn(move || {
+        crate::busy::spawn(move || {
             let _ = tx.send(f());
         });
     }
@@ -675,5 +675,9 @@ impl Driver for Window {
 
     fn cursor(&self) -> Cursor {
         if self.h.cursor_text { Cursor::IBeam } else { Cursor::Arrow }
+    }
+
+    fn frame_colors(&self) -> Option<wind::FrameColors> {
+        Some(crate::ui::paint::WTok::of(&crate::theme::resolve(&self.h.cfg)).frame())
     }
 }

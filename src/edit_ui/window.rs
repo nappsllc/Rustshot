@@ -213,7 +213,7 @@ impl Window {
         }
         if r == Request::CopyText {
             let tx = self.done.0.clone();
-            std::thread::spawn(move || {
+            crate::busy::spawn(move || {
                 let res = crate::ocr::recognize(&img);
                 let note = crate::ocr::finish(&res);
                 let _ = tx.send(Done { text: note.text, kind: note.kind, uploaded: None, saved: None });
@@ -225,7 +225,7 @@ impl Window {
             #[allow(clippy::unnecessary_cast)] // a pointer, a u64 or a usize
             let owner = Some(self.hwnd.0 as usize);
             let (tx, cfg) = (self.done.0.clone(), self.e.cfg.clone());
-            std::thread::spawn(move || {
+            crate::busy::spawn(move || {
                 let res = crate::open_with::file_for(&img, None, &cfg).map_err(|e| format!("Open with failed: {e:#}"));
                 let text = match res.and_then(|p| crate::open_with::open_now(&p, owner)) {
                     Ok(()) => String::new(),
@@ -238,7 +238,7 @@ impl Window {
         let (store, id, cfg) = (self.e.store.clone(), self.e.entry.id.clone(), self.e.cfg.clone());
         let saves = matches!(r, Request::SaveAs | Request::SaveDesktop);
         let tx = self.done.0.clone();
-        std::thread::spawn(move || {
+        crate::busy::spawn(move || {
             let res = crate::export::run_export(&img, (0, 0), std::slice::from_ref(&task), &cfg);
             let _ = tx.send(export_done(res, saves, &store, &id, objs, crop, &cfg));
         });
@@ -548,5 +548,9 @@ impl Driver for Window {
             return Cursor::Arrow;
         }
         self.e.canvas.cursor(self.mouse)
+    }
+
+    fn frame_colors(&self) -> Option<wind::FrameColors> {
+        Some(WTok::of(self.e.canvas.theme()).frame())
     }
 }
