@@ -638,6 +638,10 @@ fn editor_main(cfg: Config, kind: RunKind, pending: Pending) -> i32 {
 /// [`editor_main`]; `None`: no capture yet (the launcher's countdown
 /// starts it).
 fn editor_run(cfg: Config, kind: RunKind, pending: Option<Pending>) -> i32 {
+    // Open with / Share files of earlier days (also without a daemon).
+    if kind == RunKind::OneShot {
+        open_with::cleanup();
+    }
     let exit_code = Arc::new(AtomicI32::new(0));
     let slot: UploadSlot = Arc::new(Mutex::new(None));
     let mut code = editor::run(cfg.clone(), kind, pending, exit_code, slot.clone(), None, editor::Background::Normal);
@@ -931,7 +935,13 @@ fn run() -> Result<()> {
                 screenclip_win::remind_on_start(hint);
             });
             let bg = if force { editor::Background::Forced } else { editor::Background::Normal };
-            exit(run_background(cfg, None, guard, bg));
+            // Unlocked before `exit` may wait for a share sheet: a relaunch
+            // meanwhile starts a new daemon instead of signaling this one.
+            let code = {
+                let _held = _solo;
+                run_background(cfg, None, guard, bg)
+            };
+            exit(code);
         }
         Cmd::Gui(ref args) | Cmd::Full(ref args) | Cmd::Screen { ref args, .. } => {
             let plan = plan_capture(&cmd)?.expect("a capture command");

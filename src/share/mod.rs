@@ -130,12 +130,14 @@ impl Drop for Sheet {
 /// What a share hands over: the picture's file (PNG, also set as the
 /// bitmap) or another file (a recording).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(windows), allow(dead_code))] // Windows (tests everywhere)
 pub enum Kind {
     Picture,
     File,
 }
 
 /// Which kind `file` is: a PNG, JPEG or BMP is also offered as a bitmap.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn kind_of(file: &Path) -> Kind {
     let ext = file.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
     if matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "bmp") { Kind::Picture } else { Kind::File }

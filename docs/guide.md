@@ -160,10 +160,13 @@ in a card's ⋯ menu) opens the system's share sheet with the capture: on Window
 the Share window (titled "Rustshot capture"; a picture goes as a file and
 as an image, a recording as its MP4 or GIF file), on macOS the share menu
 at the pointer. The file is the same as Open with's: the saved file, else a
-PNG in the private `rustshot-open` folder. The overlay closes at once;
-Rustshot keeps running (also for a one-off capture without the tray) until
-the share is done, at most 10 minutes. Linux has no standard share sheet,
-so Share is not offered there.
+PNG in the private `rustshot-open` folder. One sheet at a time: while one
+is open, Share says "A share sheet is already open". The overlay closes at
+once; Rustshot keeps running (also for a one-off capture without the tray)
+until the share is done: the sheet closed or the target took it, at most
+10 minutes (60 s after a target was chosen, or when Windows cannot tell
+when the share ends). Linux has no standard share sheet, so Share is not
+offered there.
 
 ## Pins and the thumbnail
 

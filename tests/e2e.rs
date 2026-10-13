@@ -288,17 +288,17 @@ fn window_classes(pid: u32) -> Vec<String> {
     acc.out
 }
 
-/// Share in a one-shot capture (its key rebound to F9: posted keys carry
-/// no Ctrl/Shift): the overlay closes, the share sheet comes up with the
-/// capture, and the process stays until the share thread lets go (here
-/// after `RUSTSHOT_SHARE_MAX_SECS`, or 5 s when a sheet was already up),
-/// then exits 0. Nothing is shared; the sheet stays on screen until it is
-/// dismissed by hand (Esc).
+/// Manual: Share in a one-shot capture (its key rebound to F9: posted keys
+/// carry no Ctrl/Shift; only the test's own overlay gets a message). The
+/// overlay closes, the share sheet comes up with the capture, and the
+/// process stays. Press Esc on the sheet: the share ends (`done: true`)
+/// and the process exits 0, long before the 120 s limit. Nothing is
+/// shared. No input is sent to the sheet or the desktop.
 ///
-///     cargo test --test e2e share_keeps -- --ignored --nocapture
+///     cargo test --test e2e manual_share -- --ignored --nocapture
 #[test]
-#[ignore = "live display access; shows the share sheet"]
-fn share_keeps_a_one_shot_capture_alive_for_the_sheet() {
+#[ignore = "manual: opens a system sheet; press Esc"]
+fn manual_share_keeps_a_one_shot_capture_alive_until_esc() {
     let root = config_root("share", &renderer());
     let cfg = root.join("rustshot").join("config.toml");
     let mut text = std::fs::read_to_string(&cfg).unwrap();
@@ -308,7 +308,7 @@ fn share_keeps_a_one_shot_capture_alive_for_the_sheet() {
         .env("RUSTSHOT_INSTANCE", format!("e2e-share-{}", std::process::id()))
         .env("LOCALAPPDATA", &*root)
         .env("RUSTSHOT_SHARE_TRACE", "1")
-        .env("RUSTSHOT_SHARE_MAX_SECS", "8")
+        .env("RUSTSHOT_SHARE_MAX_SECS", "120")
         .args(["gui", "--region", "400x300+40+40"])
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
@@ -323,16 +323,18 @@ fn share_keeps_a_one_shot_capture_alive_for_the_sheet() {
     let classes = window_classes(child.id());
     assert_eq!(classes, ["RustshotShareOwner"], "the overlay closed, the owner stays");
     assert!(child.try_wait().unwrap().is_none(), "still running while the sheet is up");
-    let code = wait_exit(&mut child, 30000);
+    eprintln!("Press Esc on the share sheet now.");
+    let code = wait_exit(&mut child, 130_000);
     let mut err = String::new();
     use std::io::Read;
     child.stderr.take().unwrap().read_to_string(&mut err).unwrap();
     eprintln!("{err}");
     assert_eq!(code, Some(0), "{err}");
     assert!(err.contains("share: sheet shown for") && err.contains(".png"), "{err}");
-    assert!(err.contains("share: ended"), "{err}");
+    assert!(err.contains("share: package filled"), "{err}");
+    assert!(err.contains("share: ended (asked: true, done: true"), "Esc ended it: {err}");
     assert!(!err.contains("target chosen: true"), "nothing shared: {err}");
-    assert!(t0.elapsed() >= Duration::from_secs(4), "waited for the sheet");
+    assert!(t0.elapsed() < Duration::from_secs(115), "not the time limit");
 }
 
 /// Run locally, this briefly shows the tray icon of its own named daemon
