@@ -667,7 +667,10 @@ fn phones(s: &str) -> Vec<Range<usize>> {
         // like a number (555.123.4567).
         let dots_only = text.contains('.') && !text.contains([' ', '-', '(']);
         let dotted_ok = !dots_only || (groups.len() >= 3 && groups.iter().all(|g| (2..=4).contains(&g.len())));
-        let ok = (7..=15).contains(&digits) && (plus || seps > 0) && !tail_word && !date_like(text) && dotted_ok && (plus || groups.len() >= 2);
+        // A date with its time ("2024-10-12 14:30"), an ISBN: not phones.
+        let dated = text.split(' ').next().is_some_and(date_like);
+        let isbn = s[..start].trim_end().to_ascii_lowercase().trim_end_matches([':', '-']).ends_with("isbn") || s[..start].to_ascii_lowercase().trim_end().ends_with("isbn-13:");
+        let ok = (7..=15).contains(&digits) && (plus || seps > 0) && !tail_word && !date_like(text) && !dated && !isbn && dotted_ok && (plus || groups.len() >= 2);
         if ok {
             out.push(start..end);
         }
@@ -730,6 +733,9 @@ mod tests {
             "ID 12345678",
             "order 12-34x",
             "1.234.567,89",
+            "2024-10-12 14:30",
+            "ISBN 978-3-16-148410-0",
+            "ISBN: 978-3-16-148410-0",
         ] {
             none(s);
         }
