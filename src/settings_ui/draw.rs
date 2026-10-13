@@ -863,7 +863,7 @@ pub const KEY_ROWS: [(&str, &[Action]); 17] = [
     ("Copy text \u{b7} Copy color", &[Action::CopyText, Action::CopyColor]),
     ("Crop \u{b7} Quick Redact \u{b7} Freeform selection", &[Action::ToolCrop, Action::Redact, Action::SelectFreeform]),
     ("Accept \u{b7} Cancel", &[Action::Accept, Action::Cancel]),
-    ("Save As \u{b7} Save to Desktop \u{b7} Open with", &[Action::SaveAs, Action::SaveDesktop, Action::OpenWith]),
+    SAVE_ROW,
     ("Undo \u{b7} Redo", &[Action::Undo, Action::Redo]),
     ("Select all \u{b7} Palette", &[Action::SelectAll, Action::TogglePalette]),
     ("Record", &[Action::Record]),
@@ -872,6 +872,14 @@ pub const KEY_ROWS: [(&str, &[Action]); 17] = [
     ("UI size + \u{b7} - \u{b7} Auto", &[Action::UiBigger, Action::UiSmaller, Action::UiReset]),
     ("Edit window zoom + \u{b7} - \u{b7} Fit \u{b7} 1:1", &[Action::ZoomIn, Action::ZoomOut, Action::ZoomFit, Action::ZoomActual]),
 ];
+
+/// Save As, Save to Desktop, Open with and, with a share sheet (not on
+/// Linux), Share.
+#[cfg(not(target_os = "linux"))]
+const SAVE_ROW: (&str, &[Action]) =
+    ("Save As \u{b7} Save to Desktop \u{b7} Open with \u{b7} Share", &[Action::SaveAs, Action::SaveDesktop, Action::OpenWith, Action::Share]);
+#[cfg(target_os = "linux")]
+const SAVE_ROW: (&str, &[Action]) = ("Save As \u{b7} Save to Desktop \u{b7} Open with", &[Action::SaveAs, Action::SaveDesktop, Action::OpenWith]);
 
 /// The while-recording rows of Key bindings: (label, action).
 pub const REC_ROWS: [(&str, Action); 3] = [

@@ -642,7 +642,7 @@ impl Edit {
             recents: &recents,
         });
         let busy = !self.tasks.is_empty();
-        let save_keys = [Act::SaveAs, Act::SaveDesktop, Act::OpenWith].map(|a| chrome::act_tip(a, &self.keys).1.join("+"));
+        let save_keys: Vec<String> = toolbar::save_menu().iter().map(|&(a, _)| chrome::act_tip(a, &self.keys).1.join("+")).collect();
         let slot_keys = toolbar::SLOT_MENU.map(|(a, _)| chrome::act_tip(a, &self.keys).1.join("+"));
         let copy_menu = self.copy_menu_view();
         if self.pick.is_none() {
@@ -673,7 +673,7 @@ impl Edit {
                 colors: tools::has_color(cur),
                 fills: tools::has_fill(cur),
                 pick: pv.as_ref(),
-                save_menu: self.save_menu.then_some(&save_keys),
+                save_menu: self.save_menu.then_some(save_keys.as_slice()),
                 slot_menu: self.slot_menu.then_some(&slot_keys),
                 copy_menu: copy_menu.as_ref(),
                 freeform: (!busy && self.host.is_none()).then_some(self.snip.freeform),

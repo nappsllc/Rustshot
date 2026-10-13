@@ -333,6 +333,81 @@ fn freeform_lasso_saves_a_transparent_outside() {
     assert_eq!(a(200, 100), 255, "inside");
     assert_eq!((a(5, 395), a(395, 395)), (0, 0), "outside: transparent");
 }
+/// The window classes of process `pid`'s visible top-level windows.
+fn window_classes(pid: u32) -> Vec<String> {
+    use windows::Win32::UI::WindowsAndMessaging::GetClassNameW;
+    struct Acc {
+        pid: u32,
+        out: Vec<String>,
+    }
+    unsafe extern "system" fn cb(hwnd: HWND, l: LPARAM) -> BOOL {
+        unsafe {
+            let acc = &mut *(l.0 as *mut Acc);
+            let mut p = 0u32;
+            let _ = GetWindowThreadProcessId(hwnd, Some(&mut p));
+            if p == acc.pid && IsWindowVisible(hwnd).as_bool() {
+                let mut buf = [0u16; 128];
+                let n = GetClassNameW(hwnd, &mut buf) as usize;
+                acc.out.push(String::from_utf16_lossy(&buf[..n]));
+            }
+            BOOL(1)
+        }
+    }
+    let mut acc = Acc { pid, out: Vec::new() };
+    unsafe {
+        let _ = EnumWindows(Some(cb), LPARAM(&mut acc as *mut Acc as isize));
+    }
+    acc.out
+}
+
+/// Manual: Share in a one-shot capture (its key rebound to F9: posted keys
+/// carry no Ctrl/Shift; only the test's own overlay gets a message). The
+/// overlay closes, the share sheet comes up with the capture, and the
+/// process stays. Press Esc on the sheet: the share ends (`done: true`)
+/// and the process exits 0, long before the 120 s limit. Nothing is
+/// shared. No input is sent to the sheet or the desktop.
+///
+///     cargo test --test e2e manual_share -- --ignored --nocapture
+#[test]
+#[ignore = "manual: opens a system sheet; press Esc"]
+fn manual_share_keeps_a_one_shot_capture_alive_until_esc() {
+    let root = config_root("share", &renderer());
+    let cfg = root.join("rustshot").join("config.toml");
+    let mut text = std::fs::read_to_string(&cfg).unwrap();
+    text.push_str("\n[shortcuts]\nshare = \"F9\"\n");
+    std::fs::write(&cfg, text).unwrap();
+    let mut child = rustshot(&root)
+        .env("RUSTSHOT_INSTANCE", format!("e2e-share-{}", std::process::id()))
+        .env("LOCALAPPDATA", &*root)
+        .env("RUSTSHOT_SHARE_TRACE", "1")
+        .env("RUSTSHOT_SHARE_MAX_SECS", "120")
+        .args(["gui", "--region", "400x300+40+40"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn rustshot");
+    let hwnd = wait_window(&child, 8000).expect("editor window");
+    key(hwnd, 0x78); // VK_F9
+    let t0 = Instant::now();
+    // The overlay goes at once; the process waits for the sheet.
+    std::thread::sleep(Duration::from_millis(2500));
+    // Left: only the invisible owner window of the sheet.
+    let classes = window_classes(child.id());
+    assert_eq!(classes, ["RustshotShareOwner"], "the overlay closed, the owner stays");
+    assert!(child.try_wait().unwrap().is_none(), "still running while the sheet is up");
+    eprintln!("Press Esc on the share sheet now.");
+    let code = wait_exit(&mut child, 130_000);
+    let mut err = String::new();
+    use std::io::Read;
+    child.stderr.take().unwrap().read_to_string(&mut err).unwrap();
+    eprintln!("{err}");
+    assert_eq!(code, Some(0), "{err}");
+    assert!(err.contains("share: sheet shown for") && err.contains(".png"), "{err}");
+    assert!(err.contains("share: package filled"), "{err}");
+    assert!(err.contains("share: ended (asked: true, done: true"), "Esc ended it: {err}");
+    assert!(!err.contains("target chosen: true"), "nothing shared: {err}");
+    assert!(t0.elapsed() < Duration::from_secs(115), "not the time limit");
+}
 
 /// Run locally, this briefly shows the tray icon of its own named daemon
 /// instance (it never runs beside, or touches, the default one).
@@ -713,10 +788,12 @@ const NO_OTHER_HOTKEYS: &str =
 /// bold · italic · underline (3), Copy · Save · Upload (3), Copy text ·
 /// Copy color (2), then Accept.
 const ACCEPT_TABS: usize = 8 + 11 + 4 + 4 + 2 + 3 + 3 + 2 + 1;
-/// From Accept's cap to the footer's OK: the 18 overlay caps after it (Trim to content: 1; the Edit window's zoom: 4),
-/// the 3 While recording rows, the header's Reset to defaults, then Open
-/// config file, Apply, Cancel, OK.
-const ACCEPT_TO_OK: usize = 18 + 3 + 1 + 4;
+/// From Accept's cap to the footer's OK: the 19 overlay caps after it
+/// (Cancel; Save As · Save to Desktop · Open with · Share: 4; Trim to
+/// content: 1; … the Edit window's zoom: 4), the 3 While recording rows,
+/// the header's Reset to defaults, then Open config file, Apply, Cancel,
+/// OK.
+const ACCEPT_TO_OK: usize = 19 + 3 + 1 + 4;
 /// Tab presses from the rail to General's Save to field: Theme, the
 /// four accent swatches, Launch at login, Show icon in tray, Copy after
 /// capture, Play shutter sound, Show thumbnail after capture, Show hints

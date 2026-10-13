@@ -1175,6 +1175,8 @@ fn hotkey_notes_route_to_dialog_or_balloon() {
 /// The tray-icon-off question: one more line (and "Set up…") while
 /// Win+Shift+S does not open Rustshot; "Set up…" keeps the icon and goes
 /// to the Win+Shift+S row. Saving the icon on again starts the daemon.
+/// Windows only: elsewhere tray off keeps a hidden daemon.
+#[cfg(windows)]
 #[test]
 fn tray_off_question_variants() {
     // Registered and chosen: the plain text, Turn off / Cancel.
@@ -1943,9 +1945,12 @@ fn key_rows_cover_every_action() {
     assert!(all.iter().all(|a| !a.while_recording()));
     assert!(REC_ROWS.iter().all(|(_, a)| a.while_recording()));
     all.extend(REC_ROWS.iter().map(|(_, a)| *a));
-    assert_eq!(all.len(), Action::ALL.len());
+    // Share only where there is a share sheet (not on Linux).
+    let want: Vec<Action> = Action::ALL.into_iter().filter(|a| *a != Action::Share || crate::share::supported()).collect();
+    assert_eq!(all.len(), want.len());
+    assert_eq!(all.contains(&Action::Share), crate::share::supported());
     all.dedup();
-    for a in Action::ALL {
+    for a in want {
         assert!(all.contains(&a), "{a:?}");
     }
 }

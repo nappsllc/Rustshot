@@ -178,7 +178,7 @@ impl Window {
                         self.e.perform(d);
                     }
                 }
-                Request::SaveAs | Request::SaveDesktop | Request::OpenWith | Request::Copy | Request::Upload | Request::CopyText | Request::Pin => self.export(r),
+                Request::SaveAs | Request::SaveDesktop | Request::OpenWith | Request::Share | Request::Copy | Request::Upload | Request::CopyText | Request::Pin => self.export(r),
             }
         }
     }
@@ -223,14 +223,17 @@ impl Window {
             });
             return;
         }
-        if r == Request::OpenWith {
-            // The chooser is owned by this window, its failure a toast.
+        if r == Request::OpenWith || r == Request::Share {
+            // The chooser (the share sheet) is over this window, its
+            // failure a toast.
             #[allow(clippy::unnecessary_cast)] // a pointer, a u64 or a usize
             let owner = Some(self.hwnd.0 as usize);
             let (tx, cfg) = (self.done.0.clone(), self.e.cfg.clone());
             crate::busy::spawn(move || {
-                let res = crate::open_with::file_for(&img, None, &cfg).map_err(|e| format!("Open with failed: {e:#}"));
-                let text = match res.and_then(|p| crate::open_with::open_now(&p, owner)) {
+                let what = if r == Request::Share { "Share" } else { "Open with" };
+                let res = crate::open_with::file_for(&img, None, &cfg).map_err(|e| format!("{what} failed: {e:#}"));
+                let hand = |p: std::path::PathBuf| if r == Request::Share { crate::share::share_now(&p, owner) } else { crate::open_with::open_now(&p, owner) };
+                let text = match res.and_then(hand) {
                     Ok(()) => String::new(),
                     Err(e) => e,
                 };

@@ -29,6 +29,9 @@ pub enum Task {
     /// [`crate::open_with`]): the file this export saved, else a
     /// temporary one.
     OpenWith,
+    /// Hand the picture to the system's share sheet ([`crate::share`]):
+    /// the file this export saved, else a temporary one.
+    Share,
 }
 
 /// Day of year (1-366) for a civil date.
@@ -735,6 +738,23 @@ pub fn run_export(
                     Err(e) => {
                         messages.push(format!("error: open with: {e:#}"));
                         done.push(Done::Failed("Open with", format!("{e:#}")));
+                        error = true;
+                    }
+                }
+            }
+            Task::Share => {
+                let saved = done.iter().rev().find_map(|d| match d {
+                    Done::Saved(p) | Done::SavedDesktop(p) => Some(p.clone()),
+                    _ => None,
+                });
+                match crate::share::file_for(img, saved.as_deref(), cfg) {
+                    Ok(p) => {
+                        messages.push(format!("share: {}", p.display()));
+                        crate::share::share(&p);
+                    }
+                    Err(e) => {
+                        messages.push(format!("error: share: {e:#}"));
+                        done.push(Done::Failed("Share", format!("{e:#}")));
                         error = true;
                     }
                 }
