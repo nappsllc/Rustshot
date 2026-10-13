@@ -118,6 +118,38 @@ impl Window {
         draw::layout(&self.e, w, h, self.e.canvas.bar_width())
     }
 
+    /// Right to left: the toolbar and the canvas (the picture) keep
+    /// reading left to right, their region flipped back as a whole in the
+    /// mirrored frame: its span (physical px) while that is so.
+    fn ltr_span(&self) -> Option<(f32, f32)> {
+        if !crate::i18n::is_rtl() {
+            return None;
+        }
+        let (k, lay) = (self.k(), self.lay());
+        let x0 = lay.bar.x.min(lay.canvas.x) * k;
+        let x1 = lay.bar.x1().max(lay.canvas.x1()) * k;
+        Some((x0.round(), x1.round()))
+    }
+
+    /// A pointer event (already mirrored for the frame: `rtl_ev`) on the
+    /// toolbar or the canvas, mirrored back within their region; others
+    /// as they are (a question or a menu over it: the frame's).
+    fn ltr_ev(&self, ev: Ev) -> Ev {
+        let Some((x0, x1)) = self.ltr_span() else { return ev };
+        if self.e.flow.dialog.is_some() || self.e.img_menu || self.e.img_dialog.is_some() {
+            return ev;
+        }
+        let m = |x: i32| if (x as f32) >= x0 && (x as f32) < x1 { (x0 + x1) as i32 - 1 - x } else { x };
+        match ev {
+            Ev::Move { x, y } => Ev::Move { x: m(x), y },
+            Ev::Down { x, y } => Ev::Down { x: m(x), y },
+            Ev::Up { x, y } => Ev::Up { x: m(x), y },
+            Ev::Wheel { delta, x, y } => Ev::Wheel { delta, x: m(x), y },
+            Ev::Middle { down, x, y } => Ev::Middle { down, x: m(x), y },
+            e => e,
+        }
+    }
+
     /// Tell the canvas where it is.
     fn place(&mut self) {
         let k = self.k();
@@ -154,6 +186,7 @@ impl Window {
             let _dp = crate::perf::span(crate::perf::K::Damage);
             self.e.canvas.paint(&mut fb, tok.cv, edge, now);
         }
+        let span = self.ltr_span();
         let inp = Input::default();
         let mut focus = FocusState::default();
         let mut clip = crate::ui::SystemClipboard;
@@ -169,7 +202,16 @@ impl Window {
         draw::paint_status(&mut ui, &self.e, &lay, &tok, self.hover);
         draw::paint_zoom(&mut ui, &self.e, &lay, &tok, self.hover);
         drop(_lp);
+        // The toolbar and the canvas read left to right in a mirrored
+        // frame: drawn unmirrored, their region flipped back as a whole.
+        let mirror = ui.fb.mirror;
+        ui.fb.mirror = false;
         self.e.canvas.paint_bar(&mut ui.fb, now);
+        ui.fb.mirror = mirror;
+        if let Some((x0, x1)) = span {
+            let (y0, y1) = ((lay.bar.y.min(lay.canvas.y) * k).round() as i32, (lay.bar.y1().max(lay.canvas.y1()) * k).round() as i32);
+            ui.fb.flip_rect(x0 as i32, y0, x1 as i32, y1);
+        }
         draw::paint_toast(&mut ui, &self.e, &lay, now);
         draw::paint_img_menu(&mut ui, &self.e, &lay, &tok, self.hover);
         draw::paint_dialog(&mut ui, &self.e, &lay, &tok, self.hover);
@@ -621,6 +663,9 @@ impl Driver for Window {
     }
 
     fn on_event(&mut self, ev: Ev) -> bool {
+        // Right to left: the pointer mirrored, as the frame is (and back
+        // on the toolbar and the canvas, which read left to right).
+        let ev = self.ltr_ev(crate::ui::rtl_ev(ev, self.canvas.width()));
         let timer = matches!(ev, Ev::Timer);
         let mv = matches!(ev, Ev::Move { .. });
         let due = self.event(ev);

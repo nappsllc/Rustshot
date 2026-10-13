@@ -1600,6 +1600,24 @@ fn crowded() -> Settings {
     s
 }
 
+//// General › Language: a language not downloaded yet shows its
+/// download's state under the row, and Retry after a failure.
+#[test]
+fn language_row_shows_the_download() {
+    use crate::i18n::fetch::{set_status, Status};
+    let i = language_choices().iter().position(|c| c.0 == "zz-ui").unwrap();
+    for (st, retry) in [(Status::Failed("offline".into()), true), (Status::Downloading, false)] {
+        set_status("zz-ui", st.clone());
+        let mut s = sample();
+        s.section = GENERAL;
+        s.form.language = i;
+        let mut focus = FocusState::default();
+        let (img, _) = render(&mut s, &DARK, 1.0, &Input::default(), &mut focus);
+        assert_eq!(focus.rect_of("language_retry").is_some(), retry, "{st:?}");
+        preview::save(&format!("settings-language-{}.png", if retry { "failed" } else { "downloading" }), &img);
+    }
+}
+
 /// Every section in the pseudo-languages (RUSTSHOT_PREVIEW_DIR).
 #[test]
 fn preview_settings_pseudo_pngs() {

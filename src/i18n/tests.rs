@@ -12,7 +12,7 @@ fn keys_are_sorted_and_found() {
 
 #[test]
 fn english_is_first_and_complete() {
-    assert_eq!(table::LANGS[0].code, "en");
+    assert_eq!(registry()[0].code, "en");
     assert_eq!(languages()[0].code, "en");
     for (i, v) in table_of(0).iter().enumerate() {
         assert!(!v.is_empty(), "English lacks {}", table::KEYS[i]);
@@ -40,60 +40,133 @@ fn pseudo_languages_derive_from_english() {
 #[test]
 fn system_tags_match_languages() {
     let tags = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-    assert_eq!(best_match(&tags(&["en-US"])), 0);
-    assert_eq!(best_match(&tags(&["C", "POSIX"])), 0);
-    assert_eq!(best_match(&tags(&["xx-YY"])), 0, "unknown: English");
-    for (i, d) in table::LANGS.iter().enumerate() {
-        assert_eq!(best_match(&tags(&[d.code])), i, "{}", d.code);
-        assert_eq!(best_match(&tags(&[&format!("{}.UTF-8", d.code.replace('-', "_"))])), i, "{}", d.code);
+    let codes = ["en", "de", "pt-BR", "pt-PT", "zh-Hans", "zh-Hant", "nb", "sr-Latn", "ar"];
+    let m = |t: &[&str]| codes[best_in(&tags(t), &codes)];
+    assert_eq!(m(&["en-US"]), "en");
+    assert_eq!(m(&["C", "POSIX"]), "en");
+    assert_eq!(m(&["xx-YY"]), "en", "unknown: English");
+    assert_eq!(m(&["de_AT.UTF-8"]), "de");
+    assert_eq!(m(&["xx", "de-CH"]), "de", "the first one known");
+    assert_eq!(m(&["pt-PT"]), "pt-PT");
+    assert_eq!(m(&["pt"]), "pt-BR");
+    assert_eq!(m(&["zh-TW"]), "zh-Hant");
+    assert_eq!(m(&["zh-CN"]), "zh-Hans");
+    assert_eq!(m(&["no_NO"]), "nb");
+    assert_eq!(m(&["sr-Cyrl-RS"]), "sr-Latn");
+    assert_eq!(m(&["ar-EG"]), "ar");
+    for c in codes {
+        assert_eq!(m(&[c]), c);
+    }
+    // The real list: every embedded language is found by its own tag.
+    for (i, k) in registry().iter().enumerate().filter(|(_, k)| !k.code.starts_with("qps")) {
+        assert_eq!(best_match(&tags(&[k.code])), i, "{}", k.code);
     }
 }
 
+/// Every translation in lang/ reads without a problem: known keys, the
+/// English placeholders, a name of its own (build.rs lists it).
 #[test]
 fn catalogs_agree_with_english() {
-    // Every language's keys exist in English, with the same placeholders
-    // (each plural form a subset of English's), and real names.
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("i18n");
-    let en: std::collections::HashMap<&str, usize> = table::KEYS.iter().enumerate().map(|(i, k)| (*k, i)).collect();
-    for d in &table::LANGS {
-        assert!(!d.name.is_empty() && d.name != d.code, "{}: @name", d.code);
-        let mut text = String::new();
-        for e in std::fs::read_dir(&dir).unwrap().flatten() {
-            let name = e.file_name().to_string_lossy().into_owned();
-            if name.ends_with(".txt") && name.split('.').next() == Some(d.code) {
-                text += &std::fs::read_to_string(e.path()).unwrap();
-                text.push('\n');
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("lang");
+    for (tag, files) in files::discover(&[dir]) {
+        let p = files::load(&tag, &files);
+        assert!(p.problems.is_empty(), "{tag}: {:#?}", p.problems);
+        assert!(p.name != tag, "{tag}: @name");
+        assert!(table::AVAILABLE.iter().any(|a| a.0 == tag), "{tag} is listed");
+    }
+}
+
+/// A language file is read defensively: bad lines are skipped, a value
+/// with the wrong placeholders falls back to English, later files win.
+#[test]
+fn language_files_are_read_defensively() {
+    let dir = std::env::temp_dir().join(format!("rustshot-lang-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let base = dir.join("base.txt");
+    let over = dir.join("over.txt");
+    std::fs::write(
+        &base,
+        "\u{feff}# test\n@name = Testisch\n@dir = rtl\n@plural = polish\nsettings.general.language = Sprache\nno equals sign\nno.such.key = x\n\
+         settings.error.save = Speichern {path} fehlgeschlagen: {e}\nsettings.error.autostart = Fehler {bogus}\nsettings.broken = Fehler ohne e\n\
+         history.count[one] = {n} Aufnahme\nhistory.count[few] = {n} Aufnahmen\nhistory.count[many] = {n} Aufnahmen!\nhistory.count[other] = {n} Aufnahme(n)\n\
+         history.count = kein Plural\nsettings.general.theme[one] = plural?\nhistory.count[bogus] = x\nsettings.general.accent = \\s spaced \\\\ \\q\n",
+    )
+    .unwrap();
+    std::fs::write(&over, "settings.general.language = Sprache!\n").unwrap();
+    let p = files::load("xx", &[base, over]);
+    let v = |k: &str| p.values[lookup(k).map(|k| k.0 as usize).or_else(|| find(k)).unwrap()];
+    assert_eq!((p.name.as_str(), p.rtl, p.plural.as_str()), ("Testisch", true, "polish"));
+    assert_eq!(v("settings.general.language"), "Sprache!", "the later file wins");
+    assert_eq!(v("settings.error.save"), "Speichern {path} fehlgeschlagen: {e}");
+    assert_eq!(v("settings.error.autostart"), "", "an unknown placeholder: English");
+    assert_eq!(v("settings.broken"), "", "a left-out placeholder: English");
+    assert_eq!(v("history.count"), "\u{1f}{n} Aufnahme\u{1f}\u{1f}{n} Aufnahmen\u{1f}{n} Aufnahmen!\u{1f}{n} Aufnahme(n)");
+    assert_eq!(v("settings.general.theme"), "", "not plural in English");
+    assert_eq!(v("settings.general.accent"), "  spaced \\ \\q", "escapes; an unknown one kept");
+    assert_eq!(p.problems.len(), 7, "{:#?}", p.problems);
+    let _ = std::fs::remove_dir_all(&dir);
+    // Nothing at all: no panic, all English.
+    let none = files::load("yy", &[dir.join("gone.txt")]);
+    assert!(none.values.iter().all(|v| v.is_empty()) && none.problems.len() == 1);
+}
+
+#[test]
+fn language_files_are_found_by_tag() {
+    let root = std::env::temp_dir().join(format!("rustshot-langdirs-{}", std::process::id()));
+    let (hi, lo) = (root.join("hi"), root.join("lo"));
+    std::fs::create_dir_all(&hi).unwrap();
+    std::fs::create_dir_all(&lo).unwrap();
+    for (d, n) in [(&hi, "de.txt"), (&lo, "de.txt"), (&lo, "pt-BR.txt"), (&lo, "en.txt"), (&lo, "bad tag.txt"), (&lo, "notes.md")] {
+        std::fs::write(d.join(n), "").unwrap();
+    }
+    let found = files::discover(&[hi.clone(), lo.clone(), root.join("missing")]);
+    let tags: Vec<&str> = found.iter().map(|(t, _)| t.as_str()).collect();
+    assert_eq!(tags, ["de", "pt-BR"], "English is the template; bad names skipped");
+    assert_eq!(found[0].1, [lo.join("de.txt"), hi.join("de.txt")], "lowest priority first");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Picking a language that is not here downloads it (a fake fetcher):
+/// Downloading, then loaded and shown; a failure is kept for Retry.
+#[test]
+fn a_picked_language_is_downloaded() {
+    use std::sync::Arc;
+    struct Fake {
+        dir: std::path::PathBuf,
+        fail: std::sync::atomic::AtomicBool,
+        asked: std::sync::Mutex<Vec<String>>,
+    }
+    impl fetch::Fetch for Fake {
+        fn ensure(&self, asset: &str, rel: &str, done: Box<dyn FnOnce(Result<std::path::PathBuf, String>) + Send>) {
+            self.asked.lock().unwrap().push(asset.to_string());
+            if self.fail.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                return done(Err("offline".into()));
             }
+            let p = self.dir.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, "@name = Zet\nsettings.general.language = Taal\n").unwrap();
+            done(Ok(p));
         }
-        for line in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#') && !l.starts_with('@')) {
-            let (k, v) = line.split_once('=').unwrap();
-            let base = k.trim().split('[').next().unwrap();
-            let i = *en.get(base).unwrap_or_else(|| panic!("{}: {base} is not an English key", d.code));
-            let ph = |s: &str| {
-                let mut v: Vec<String> = Vec::new();
-                let mut r = s;
-                while let Some(a) = r.find('{') {
-                    r = &r[a + 1..];
-                    if let Some(b) = r.find('}') {
-                        v.push(r[..b].to_string());
-                        r = &r[b + 1..];
-                    }
-                }
-                v
-            };
-            for p in ph(v) {
-                assert!(table::PH[i].contains(&p.as_str()), "{}: {base} has {{{p}}}, English does not", d.code);
-            }
-            if !table::PLURAL[i] && d.code != "en" {
-                let mut want: Vec<&str> = table::PH[i].to_vec();
-                let mut got = ph(v);
-                want.sort();
-                got.sort();
-                got.dedup();
-                assert_eq!(got, want, "{}: {base} placeholders", d.code);
-            }
+        fn cached(&self, rel: &str) -> Option<std::path::PathBuf> {
+            Some(self.dir.join(rel)).filter(|p| p.is_file())
         }
     }
+    let dir = std::env::temp_dir().join(format!("rustshot-fetch-{}", std::process::id()));
+    let fake = Arc::new(Fake { dir: dir.clone(), fail: true.into(), asked: Default::default() });
+    fetch::set_fetcher(fake.clone());
+    assert_eq!(fetch::status("zz-test"), fetch::Status::Missing);
+    fetch::request("zz-test");
+    assert_eq!(fetch::status("zz-test"), fetch::Status::Failed("offline".into()));
+    let g = generation();
+    fetch::request("zz-test");
+    assert_eq!(fetch::status("zz-test"), fetch::Status::Here);
+    assert!(generation() > g, "the windows lay themselves out again");
+    assert_eq!(*fake.asked.lock().unwrap(), ["lang-zz-test.txt", "lang-zz-test.txt"]);
+    assert_eq!(with_lang("zz-test", || tr!("settings.general.language")), "Taal");
+    assert_eq!(with_lang("zz-test", || tr!("settings.general.theme")), "Theme", "missing keys: English");
+    fetch::request("zz-test");
+    assert_eq!(fake.asked.lock().unwrap().len(), 2, "here: not asked again");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The code with the test modules cut off (`#[cfg(test)] mod ...` to the
@@ -291,10 +364,10 @@ fn no_untranslated_ui_literals() {
 
 #[test]
 fn plurals_pick_forms() {
-    let one = trn!("test.files", 1);
-    let many = trn!("test.files", 5);
-    assert_eq!(one, "1 file");
-    assert_eq!(many, "5 files");
-    let p = with_lang("qps", || trn!("test.files", 1));
+    let one = trn!("history.count", 1);
+    let many = trn!("history.count", 5);
+    assert_eq!(one, "1 capture");
+    assert_eq!(many, "5 captures");
+    let p = with_lang("qps", || trn!("history.count", 1));
     assert!(p.contains('1') && p.starts_with('['), "{p}");
 }

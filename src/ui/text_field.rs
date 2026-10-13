@@ -304,7 +304,7 @@ impl Ui<'_> {
         let k = self.k;
         // Dark mode needs a denser tint than accent_ring to read as selected.
         let sel_bg = if th.dark { th.accent.fade(0.45) } else { th.accent_ring };
-        super::clipped(&mut self.fb, inner, |fb| {
+        super::clipped_ltr(&mut self.fb, inner, |fb| {
             let ox = inner.x - scroll;
             let cy = inner.y + inner.h / 2.0;
             let lh = (16.0 * k).round();

@@ -1332,6 +1332,10 @@ impl App {
         }
         // macOS: the pins' input is handled on these ticks.
         crate::pin::tick();
+        // The system's language arrived (a first run): say so, with the way back.
+        if let Some(name) = crate::i18n::take_auto_switch() {
+            crate::notice::show(crate::notice::language_note(name), capture::cursor_pos(), theme::resolve(&self.cfg));
+        }
         // macOS: the notice fades on these ticks (fast while it is up).
         if let Some(fast) = crate::notice::tick()
             && self.rec.is_none()

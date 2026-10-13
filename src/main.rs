@@ -11,6 +11,8 @@ mod cam;
 mod capture;
 mod chan;
 mod config;
+// Data folders (translations, models): where they are looked for.
+mod datadir;
 mod desktop;
 mod deflate;
 // D-Bus client (portals; the StatusNotifierItem tray later). Pure parts tested everywhere.

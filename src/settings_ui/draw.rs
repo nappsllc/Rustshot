@@ -524,10 +524,31 @@ fn general(ui: &mut Ui, s: &mut Settings, tok: &Tok) {
     srow(ui, tok, tr!("settings.general.theme"), None, |ui| {
         ui.seg("theme", &labels(&THEMES), &mut f.theme, tok);
     });
-    srow(ui, tok, tr!("settings.general.language"), None, |ui| {
-        let names: Vec<&str> = language_choices().into_iter().map(|l| l.1).collect();
-        ui.width(FIELD_W).dropdown("language", &names, &mut f.language);
+    // The picked language (System default: the system's), downloaded when
+    // it is not here yet: its state under the row, Retry after a failure.
+    let choices = language_choices();
+    let code = choices.get(f.language).map_or("", |c| c.0);
+    let code = if code.is_empty() { crate::i18n::system_language() } else { code };
+    let (help, err, retry) = match crate::i18n::fetch::status(code) {
+        crate::i18n::fetch::Status::Downloading => (Some(tr!("settings.general.language.downloading").to_string()), false, false),
+        crate::i18n::fetch::Status::Failed(e) => (Some(tr!("settings.general.language.failed", e)), true, true),
+        _ if f.language == 0 => (Some(tr!("settings.general.language.system_is", name = crate::i18n::name_of(code))), false, false),
+        _ => (None, false, false),
+    };
+    let mut picked = false;
+    let mut again = false;
+    srow_ex(ui, tok, tr!("settings.general.language"), help.as_deref(), err, ROW_H, |ui| {
+        let names: Vec<&str> = choices.iter().map(|l| l.1).collect();
+        picked = ui.width(FIELD_W).dropdown("language", &names, &mut f.language);
+        if retry {
+            again = ui.cbutton("language_retry", tr!("settings.general.language.retry"), None, false, tok);
+        }
     });
+    if picked || again {
+        let code = choices.get(f.language).map_or("", |c| c.0);
+        let code = if code.is_empty() { crate::i18n::system_language() } else { code };
+        crate::i18n::fetch::request(code);
+    }
     srow(ui, tok, tr!("settings.general.accent"), Some(tr!("settings.general.accent.help")), |ui| {
         ui.lay.gap = 10.0;
         let accents = crate::theme::ACCENTS;

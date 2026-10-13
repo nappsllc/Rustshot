@@ -452,6 +452,8 @@ mod imp {
         }
 
         fn on_event(&mut self, ev: Ev) -> bool {
+            // Right to left: the pointer mirrored, as the frame is.
+            let ev = crate::ui::rtl_ev(ev, self.canvas.width());
             match ev {
                 Ev::Resize(w, h) => {
                     self.canvas = PixBuf::new(w.max(1), h.max(1));

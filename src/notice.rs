@@ -63,6 +63,8 @@ pub enum NoteAct {
     /// The tray's "Delete upload?": delete it, or not.
     DeleteUpload,
     KeepUpload,
+    /// "Rustshot is now in …": back to English (`language = "en"`).
+    UseEnglish,
 }
 
 impl NoteAct {
@@ -79,6 +81,7 @@ impl NoteAct {
             NoteAct::Card => "",
             NoteAct::CancelDelay | NoteAct::KeepUpload => tr!("notice.act.cancel"),
             NoteAct::DeleteUpload => tr!("notice.act.delete_upload"),
+            NoteAct::UseEnglish => tr!("notice.act.use_english"),
         }
     }
 
@@ -382,6 +385,25 @@ pub fn render_note(note: &Note, th: &Theme, s: f32, k: f32, hover: Option<NoteAc
     (w, h, px)
 }
 
+/// The first run's note when the system's language has just been
+/// downloaded and shown: "Rustshot is now in Deutsch" with Use English.
+pub fn language_note(name: &str) -> Note {
+    let mut n = Note::plain(tr!("notice.language", name), ToastKind::Info);
+    n.actions = vec![NoteAct::UseEnglish, NoteAct::Dismiss];
+    n.ttl = ACTION_TTL;
+    n
+}
+
+/// Use English from now on: `language = "en"` in config.toml (that line
+/// only), at once in this process.
+fn use_english() {
+    let path = crate::config::config_path();
+    if let Err(e) = crate::config::edit_top_keys_at(&path, &[("language".to_string(), Some("\"en\"".to_string()))]) {
+        eprintln!("rustshot: could not save the language: {e}");
+    }
+    crate::i18n::set_language("en");
+}
+
 /// Whether uploading is set up (an Imgur client id; for S3 an endpoint,
 /// bucket and access key id): Copy link is offered.
 pub fn upload_configured(cfg: &crate::config::Config) -> bool {
@@ -396,7 +418,7 @@ pub fn upload_configured(cfg: &crate::config::Config) -> bool {
 pub fn run_action(a: NoteAct, file: &std::path::Path, entry: Option<String>, done: impl FnOnce(Note) + Send + 'static) -> Option<Note> {
     match a {
         // A thumbnail's buttons act on its picture (`run_note_action`).
-        NoteAct::ThumbCopy | NoteAct::ThumbSave | NoteAct::Pin | NoteAct::Edit | NoteAct::Dismiss | NoteAct::Card | NoteAct::CancelDelay | NoteAct::DeleteUpload | NoteAct::KeepUpload => None,
+        NoteAct::ThumbCopy | NoteAct::ThumbSave | NoteAct::Pin | NoteAct::Edit | NoteAct::Dismiss | NoteAct::Card | NoteAct::CancelDelay | NoteAct::DeleteUpload | NoteAct::KeepUpload | NoteAct::UseEnglish => None,
         NoteAct::Open => {
             crate::actions::open_path(file);
             None
@@ -869,6 +891,10 @@ pub fn run_note_action(note: &Note, a: NoteAct, th: Theme, done: impl FnOnce(Not
             Next::Hide
         }
         NoteAct::DeleteUpload | NoteAct::KeepUpload => crate::uploads::answer(a == NoteAct::DeleteUpload, done).map_or(Next::Hide, Next::Show),
+        NoteAct::UseEnglish => {
+            use_english();
+            Next::Hide
+        }
         NoteAct::Edit => {
             if let Some(id) = note.entry.as_ref().or(note.thumb.as_ref().and_then(|t| t.entry.as_ref())) {
                 crate::edit_ui::open(id);

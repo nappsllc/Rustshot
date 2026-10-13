@@ -386,21 +386,54 @@ fn placeholders(s: &str) -> Vec<String> {
     v
 }
 
-/// Pack every `i18n/<lang>.txt` into `$OUT_DIR/i18n_table.rs` (the sorted
-/// English keys, their placeholders, each language's metadata) and
-/// `$OUT_DIR/i18n.bin` (per language, the DEFLATE-compressed values in key
-/// order, NUL-terminated; a plural entry's six CLDR forms joined by 0x1F;
-/// an empty value falls back to English at run time).
+/// The languages of `lang/<tag>.txt` other than English: (tag, its own
+/// name, right to left), read leniently from each file's `@name` / `@dir`
+/// (a translation file never breaks the build; the app checks it when it
+/// loads it).
+fn available_languages(all: &[PathBuf]) -> Vec<(String, String, bool)> {
+    let mut v = Vec::new();
+    for p in all {
+        let Some(tag) = p.file_stem().and_then(|s| s.to_str()) else { continue };
+        let ok = !tag.is_empty() && tag.len() <= 16 && tag.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-');
+        if !ok || tag.split('.').next() == Some("en") {
+            continue;
+        }
+        let text = String::from_utf8_lossy(&fs::read(p).unwrap_or_default()).into_owned();
+        let meta = |m: &str| {
+            text.lines().find_map(|l| {
+                let (k, v) = l.trim_start_matches('\u{feff}').split_once('=')?;
+                (k.trim() == m).then(|| v.trim().to_string())
+            })
+        };
+        let name = meta("@name").filter(|n| !n.is_empty()).unwrap_or_else(|| tag.to_string());
+        let rtl = meta("@dir").is_some_and(|d| d.eq_ignore_ascii_case("rtl"));
+        v.push((tag.to_string(), name, rtl));
+    }
+    v.sort_by(|a, b| a.0.to_ascii_lowercase().cmp(&b.0.to_ascii_lowercase()));
+    v
+}
+
+/// Pack the English catalog (`lang/en.txt`, and `en.<part>.txt` beside it)
+/// into `$OUT_DIR/i18n_table.rs` (the sorted keys, their placeholders,
+/// which are plural; the other languages' tags and names) and
+/// `$OUT_DIR/i18n.bin` (the values in key order, NUL-terminated, a plural
+/// entry's six CLDR forms joined by 0x1F, DEFLATE-compressed). Other
+/// languages are not embedded: their files are release assets the app
+/// downloads when one is picked (`src/i18n/files.rs`).
 fn pack_i18n() {
     use std::collections::BTreeMap;
     use std::fmt::Write as _;
-    println!("cargo:rerun-if-changed=i18n");
-    let mut files: Vec<PathBuf> = fs::read_dir("i18n")
-        .expect("read i18n/")
+    println!("cargo:rerun-if-changed=lang");
+    let mut all: Vec<PathBuf> = fs::read_dir("lang")
+        .expect("read lang/")
         .flatten()
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|x| x == "txt"))
         .collect();
+    all.sort();
+    let others = available_languages(&all);
+    let mut files: Vec<PathBuf> =
+        all.iter().filter(|p| p.file_stem().and_then(|s| s.to_str()).and_then(|s| s.split('.').next()) == Some("en")).cloned().collect();
     files.sort();
     for f in &files {
         println!("cargo:rerun-if-changed={}", f.display());
@@ -412,7 +445,7 @@ fn pack_i18n() {
             Some(o) => {
                 for e in c.entries {
                     let dup = o.entries.iter().any(|x| x.0 == e.0 && x.1 == e.1);
-                    assert!(!dup, "i18n/{}*.txt: duplicate key {}", c.code, e.0);
+                    assert!(!dup, "lang/{}*.txt: duplicate key {}", c.code, e.0);
                     o.entries.push(e);
                 }
                 o.meta.extend(c.meta);
@@ -420,23 +453,25 @@ fn pack_i18n() {
             None => cats.push(c),
         }
     }
-    let en_i = cats.iter().position(|c| c.code == "en").expect("i18n/en.txt");
+    // Only English is embedded (the source and the fallback); every other
+    // language is a file the app loads at run time (`src/i18n/files.rs`).
+    let en_i = cats.iter().position(|c| c.code == "en").expect("lang/en.txt");
     let en = cats.remove(en_i);
-    cats.insert(0, en);
+    cats = vec![en];
     // Each English key's forms (a plain entry in slot 5, "other").
     let mut keys: BTreeMap<String, [Option<String>; 6]> = BTreeMap::new();
     let mut plural: BTreeMap<String, bool> = BTreeMap::new();
     for (k, form, v, line) in &cats[0].entries {
         if let Some(&p) = plural.get(k) {
-            assert_eq!(p, form.is_some(), "i18n/en.txt:{line}: {k} is both plain and plural");
+            assert_eq!(p, form.is_some(), "lang/en.txt:{line}: {k} is both plain and plural");
         }
         plural.insert(k.clone(), form.is_some());
-        assert!(!v.is_empty(), "i18n/en.txt:{line}: empty value for {k}");
+        assert!(!v.is_empty(), "lang/en.txt:{line}: empty value for {k}");
         keys.entry(k.clone()).or_default()[form.unwrap_or(5)] = Some(v.clone());
     }
     for (k, f) in &keys {
         if plural[k] {
-            assert!(f[1].is_some() && f[5].is_some(), "i18n/en.txt: plural {k} needs [one] and [other]");
+            assert!(f[1].is_some() && f[5].is_some(), "lang/en.txt: plural {k} needs [one] and [other]");
         }
     }
     let names: Vec<&String> = keys.keys().collect();
@@ -479,23 +514,15 @@ fn pack_i18n() {
             raw.push(0);
         }
         let z = deflate::deflate(&raw, deflate::Effort::BEST);
-        let meta = |m: &str, d: &str| cat.meta.get(m).cloned().unwrap_or_else(|| d.to_string());
-        let (name, rtl, rule) = (meta("name", &cat.code), meta("dir", "ltr") == "rtl", meta("plural", "one_other"));
-        writeln!(
-            langs,
-            "    LangDef {{ code: {:?}, name: {name:?}, rtl: {rtl}, plural: {rule:?}, at: {}, z_len: {}, raw_len: {} }},",
-            cat.code,
-            blob.len(),
-            z.len(),
-            raw.len()
-        )
-        .unwrap();
+        writeln!(langs, "pub const EN_RAW_LEN: usize = {};", raw.len()).unwrap();
         blob.extend(z);
     }
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
     fs::write(out_dir.join("i18n.bin"), &blob).expect("write i18n.bin");
     let mut w = String::new();
-    writeln!(w, "// @generated by build.rs from i18n/*.txt; do not edit.").unwrap();
+    writeln!(w, "// @generated by build.rs from lang/*.txt; do not edit.").unwrap();
+    writeln!(w, "/// The other languages of lang/: (tag, name in itself, right to left).").unwrap();
+    writeln!(w, "pub static AVAILABLE: [(&str, &str, bool); {}] = {others:?};", others.len()).unwrap();
     writeln!(w, "pub const N: usize = {};", names.len()).unwrap();
     writeln!(w, "/// The English keys, sorted (byte order).").unwrap();
     writeln!(w, "pub const KEYS: [&str; N] = {names:?};").unwrap();
@@ -505,7 +532,8 @@ fn pack_i18n() {
     let pl: Vec<bool> = keys.keys().map(|k| plural[k]).collect();
     writeln!(w, "/// Whether each key is a plural entry.").unwrap();
     writeln!(w, "pub const PLURAL: [bool; N] = {pl:?};").unwrap();
-    writeln!(w, "pub static LANGS: [LangDef; {}] = [\n{langs}];", cats.len()).unwrap();
-    writeln!(w, r#"pub static BLOB: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/i18n.bin"));"#).unwrap();
+    w.push_str(&langs);
+    writeln!(w, "/// English, DEFLATE-compressed: each key's value in key order, NUL-terminated (plural forms joined by 0x1F).").unwrap();
+    writeln!(w, r#"pub static EN_Z: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/i18n.bin"));"#).unwrap();
     fs::write(out_dir.join("i18n_table.rs"), w).expect("write i18n_table.rs");
 }

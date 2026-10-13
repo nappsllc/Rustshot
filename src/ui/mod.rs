@@ -422,6 +422,11 @@ impl<'a> Ui<'a> {
         k: f32,
         area: FRect,
     ) -> Ui<'a> {
+        let mut fb = fb;
+        // A right-to-left language mirrors the window: drawn left to
+        // right, flipped in `finish` (the windows mirror their pointer
+        // events: [`rtl_ev`]).
+        fb.mirror = crate::i18n::is_rtl();
         let mut ui = Ui {
             fb,
             theme,
@@ -496,6 +501,9 @@ impl<'a> Ui<'a> {
         }
         if let Some(p) = self.popup.take() {
             controls::draw_popup(&mut self, &p.items, p.r, p.sel, p.hover);
+        }
+        if self.fb.mirror {
+            self.fb.flip();
         }
         let mut out = Out { redraw: self.redraw, ..Out::default() };
         for i in 0..self.input.keys.len() {
@@ -585,6 +593,25 @@ impl<'a> Ui<'a> {
     }
 }
 
+/// A window event with its pointer x mirrored in a right-to-left language
+/// (`width`: the window's physical width), so the window's layout and hit
+/// tests stay left to right while [`Ui::finish`] flips what is drawn.
+pub fn rtl_ev(ev: Ev, width: u32) -> Ev {
+    if !crate::i18n::is_rtl() || width == 0 {
+        return ev;
+    }
+    let m = |x: i32| width as i32 - 1 - x;
+    match ev {
+        Ev::Move { x, y } => Ev::Move { x: m(x), y },
+        Ev::Down { x, y } => Ev::Down { x: m(x), y },
+        Ev::Up { x, y } => Ev::Up { x: m(x), y },
+        Ev::Wheel { delta, x, y } => Ev::Wheel { delta, x: m(x), y },
+        Ev::Middle { down, x, y } => Ev::Middle { down, x: m(x), y },
+        Ev::Right { down, x, y } => Ev::Right { down, x: m(x), y },
+        e => e,
+    }
+}
+
 pub fn contains(r: FRect, p: Pt) -> bool {
     p.x >= r.x && p.y >= r.y && p.x < r.x1() && p.y < r.y1()
 }
@@ -592,6 +619,16 @@ pub fn contains(r: FRect, p: Pt) -> bool {
 /// Run `draw` with output clipped to `r` (physical px): the region is
 /// copied out, drawn into as its own buffer, and copied back.
 pub fn clipped(fb: &mut Fb, r: FRect, draw: impl FnOnce(&mut Fb)) {
+    clipped_as(fb, r, false, draw)
+}
+
+/// [`clipped`], and in a mirrored frame the region reads left to right
+/// as a whole (a text field: its text, selection and caret together).
+pub fn clipped_ltr(fb: &mut Fb, r: FRect, draw: impl FnOnce(&mut Fb)) {
+    clipped_as(fb, r, true, draw)
+}
+
+fn clipped_as(fb: &mut Fb, r: FRect, ltr: bool, draw: impl FnOnce(&mut Fb)) {
     let (bx0, by0) = (fb.ox, fb.oy);
     let (bx1, by1) = (fb.ox + fb.stride as i32, fb.oy + fb.height());
     let x0 = (r.x.floor() as i32).max(bx0);
@@ -607,7 +644,14 @@ pub fn clipped(fb: &mut Fb, r: FRect, draw: impl FnOnce(&mut Fb)) {
     for y in 0..h {
         tmp[y * w * 4..(y + 1) * w * 4].copy_from_slice(&fb.d[row(y)..row(y) + w * 4]);
     }
-    draw(&mut Fb::with_origin(&mut tmp, w, x0, y0, fb.order));
+    let mut sub = Fb::with_origin(&mut tmp, w, x0, y0, fb.order);
+    sub.mirror = fb.mirror && !ltr;
+    draw(&mut sub);
+    // Kept left to right: pre-flipped as a whole (the frame's flip puts
+    // it back, a text field's caret where its text is).
+    if fb.mirror && ltr {
+        sub.flip();
+    }
     for y in 0..h {
         let at = row(y);
         fb.d[at..at + w * 4].copy_from_slice(&tmp[y * w * 4..(y + 1) * w * 4]);

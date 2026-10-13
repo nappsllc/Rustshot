@@ -477,6 +477,17 @@ fn row_w(gs: &[Group]) -> f32 {
     gs.iter().map(group_w).sum::<f32>() + gs.len().saturating_sub(1) as f32 * (2.0 * GROUP_GAP + 1.0)
 }
 
+/// A right-to-left language runs the toolbar right to left: the items
+/// laid out so far mirrored within `0..w` (logical px), so the first
+/// group (the tools) starts at the right.
+fn mirror_row(items: &mut [Item], w: f32) {
+    if crate::i18n::is_rtl() {
+        for it in items {
+            it.r.x = w - it.r.x - it.r.w;
+        }
+    }
+}
+
 /// Lay `gs` out left to right from (x0, y) with separators between groups.
 fn place_row(gs: &[Group], x0: f32, y: f32, items: &mut Vec<Item>) {
     let mut x = x0;
@@ -523,6 +534,7 @@ pub fn layout(inp: &Input) -> Toolbar {
         place_row(&gs[2..], PAD + inner - w2, rule_y + 1.0 + ROW_GAP, &mut items);
         (inner + 2.0 * PAD, 2.0 * BTN + 2.0 * ROW_GAP + 1.0 + 2.0 * PAD)
     };
+    mirror_row(&mut items, w);
 
     let (bw, bh) = (w * s, h * s);
     let sel = inp.sel;
@@ -615,7 +627,11 @@ pub fn layout_docked(inp: &Input, bar: FRect) -> Toolbar {
     let gs = docked_groups(inp);
     let mut items = Vec::new();
     place_row(&gs, 0.0, 0.0, &mut items);
-    let (x, y) = (bar.x + DOCK_PAD * s, bar.y + ((bar.h - BTN * s) / 2.0).round());
+    let row = row_w(&gs);
+    mirror_row(&mut items, row);
+    // Right to left: from the strip's right end.
+    let x0 = if crate::i18n::is_rtl() { bar.x1() - (DOCK_PAD + row) * s } else { bar.x + DOCK_PAD * s };
+    let (x, y) = (x0, bar.y + ((bar.h - BTN * s) / 2.0).round());
     for it in &mut items {
         it.r = FRect { x: (x + it.r.x * s).round(), y: y + it.r.y * s, w: (it.r.w * s).round(), h: (it.r.h * s).round() };
     }
