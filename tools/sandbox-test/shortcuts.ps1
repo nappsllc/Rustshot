@@ -50,10 +50,33 @@ function ShortcutChecks($exe) {
     Check 'shortcuts: Rustshot Settings.lnk icon is the exe' ($s.IconLocation -ieq "$exe,0") $s.IconLocation
     $u = ExactName $dir 'uninstall.lnk'
     Check 'shortcuts: Uninstall.lnk' ($u -ceq 'Uninstall.lnk') "found '$u'"
+    # (A fresh install ticks "Desktop shortcut"; the upgrade checks below
+    # test that an existing one decides.)
     $d = ExactName "$env:USERPROFILE\Desktop" 'rustshot.lnk'
-    Check 'shortcuts: the old desktop shortcut is kept as "Rustshot.lnk"' ($d -ceq 'Rustshot.lnk') "found '$d'"
+    Check 'shortcuts: the desktop shortcut is "Rustshot.lnk"' ($d -ceq 'Rustshot.lnk') "found '$d'"
     $dl = ReadLnk "$env:USERPROFILE\Desktop\Rustshot.lnk"
     Check 'shortcuts: desktop icon is the exe' ($dl.IconLocation -ieq "$exe,0") $dl.IconLocation
+}
+
+# A silent update over an install keeps a desktop shortcut only where one
+# existed: none before -> none after; an old lowercase one -> "Rustshot.lnk".
+# Also a lowercase Start folder holding a file of the user's own is kept
+# (with the file) but renamed "Rustshot". Runs $setup /S twice.
+function UpgradeShortcutChecks($setup, $exe) {
+    Get-ChildItem "$env:USERPROFILE\Desktop" -Filter '*.lnk' | Where-Object { $_.Name -ieq 'rustshot.lnk' } | Remove-Item -Force
+    $p = Start-Process $setup -ArgumentList '/S' -Wait -PassThru
+    Check 'shortcuts (update): no desktop shortcut before, none after' ($p.ExitCode -eq 0 -and -not (ExactName "$env:USERPROFILE\Desktop" 'rustshot.lnk')) "exit=$($p.ExitCode) found '$(ExactName "$env:USERPROFILE\Desktop" 'rustshot.lnk')'"
+    NewLnk "$env:USERPROFILE\Desktop\rustshot.lnk" $exe
+    $dir = ExactName $StartDir 'rustshot'
+    if ($dir) { Rename-Item "$StartDir\$dir" 'rustshot-tmp'; Rename-Item "$StartDir\rustshot-tmp" 'rustshot' }
+    else { New-Item -ItemType Directory "$StartDir\rustshot" | Out-Null }
+    Set-Content "$StartDir\rustshot\my notes.txt" 'mine'
+    $p = Start-Process $setup -ArgumentList '/S' -Wait -PassThru
+    $d = ExactName "$env:USERPROFILE\Desktop" 'rustshot.lnk'
+    Check 'shortcuts (update): an old lowercase desktop shortcut comes back as "Rustshot.lnk"' ($p.ExitCode -eq 0 -and $d -ceq 'Rustshot.lnk') "exit=$($p.ExitCode) found '$d'"
+    $f = ExactName $StartDir 'rustshot'
+    Check 'shortcuts (update): a Start folder with a user file is renamed "Rustshot", the file kept' ($f -ceq 'Rustshot' -and (Test-Path "$StartDir\Rustshot\my notes.txt") -and (Test-Path "$StartDir\Rustshot\Rustshot.lnk")) "found '$f'"
+    Remove-Item "$StartDir\Rustshot\my notes.txt" -Force -ErrorAction SilentlyContinue
 }
 
 # After the uninstall: no shortcut of any version is left.

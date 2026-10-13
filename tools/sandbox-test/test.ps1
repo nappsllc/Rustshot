@@ -252,6 +252,7 @@ if ($old) {
     $np = Get-CimInstance Win32_Process -Filter "Name='rustshot.exe'" | Select-Object -First 1
     Check 'upgrade: new daemon relaunched (tray window)' ($up -and $np -and $np.ProcessId -ne $o.Id) "$($np.CommandLine)"
     Check 'upgrade: Run value and Start menu shortcut kept' ([bool](Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue).rustshot -and (Test-Path $lnk))
+    UpgradeShortcutChecks $setup.FullName $exe
     # "/S /RELAUNCH" is what the in-app update runs: the 0.1.x entry is rewritten.
     UninstKeyChecks 'upgrade (in-app update path):' $inst $newVersion
     Start-Sleep 2

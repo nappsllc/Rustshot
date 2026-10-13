@@ -3,6 +3,7 @@
 mod actions;
 mod anim;
 mod autostart;
+mod busy;
 mod cam;
 mod capture;
 mod config;
@@ -577,17 +578,26 @@ enum DaemonStart {
     Run,
     /// A plain launch with the tray icon off (Windows): open Settings.
     Settings,
+    /// The icon is off in a file from before this meant "no background
+    /// process", and nobody said they know: the one-time notice (Settings,
+    /// with Set up Win+Shift+S / Show tray icon again / OK). Also on the
+    /// update's relaunch.
+    Notice,
     /// `rustshot daemon` with the tray icon off (Windows; the login item):
     /// nothing runs in the background, so it exits at once.
     Exit,
 }
 
-/// Windows with "Show icon in tray" off means no background process
+/// With `no_bg` ([`tray::hidden_means_no_daemon`]: Windows, not the
+/// Store build) "Show icon in tray" off means no background process
 /// (unless `--force`); elsewhere the daemon is the only way to capture
-/// from a hotkey, so it always runs.
-fn daemon_start(cfg: &Config, force: bool, plain: bool) -> DaemonStart {
-    if !cfg!(windows) || cfg.show_tray || force {
+/// from a hotkey, so it always runs. `running`: a daemon of this instance
+/// is up (a launch then goes to it as before).
+fn daemon_start(cfg: &Config, force: bool, plain: bool, no_bg: bool, running: impl Fn() -> bool) -> DaemonStart {
+    if !no_bg || cfg.show_tray || force || running() {
         DaemonStart::Run
+    } else if !cfg.tray_off_mode_seen {
+        DaemonStart::Notice
     } else if plain {
         DaemonStart::Settings
     } else {
@@ -830,8 +840,34 @@ fn run() -> Result<()> {
             // Windows, tray icon off: no background process. Win+Shift+S /
             // Print Screen start Rustshot on demand; a plain launch opens
             // Settings (the way back in).
-            match daemon_start(&config::load(), force, plain) {
+            // What an earlier update left, on any start (also one that
+            // exits right away: the tray icon is off), unless a daemon or an
+            // update dialog may be downloading into the folder right now.
+            if !instance::daemon_running() && !instance::update_dialog_open() {
+                update_install::cleanup_previous();
+            }
+            // `--force` while an on-demand run (or a daemon) holds the
+            // instance: it becomes the forced daemon.
+            if force && instance::daemon_running() && instance::signal_become_daemon() {
+                return Ok(());
+            }
+            // An older file's former default hotkeys get today's, once
+            // (here too when no daemon runs: Settings then shows them).
+            if !instance::daemon_running() {
+                config::migrate_at(&config::config_path(), &mut config::load());
+            }
+            match daemon_start(&config::load(), force, plain, tray::hidden_means_no_daemon(), instance::daemon_running) {
                 DaemonStart::Run => {}
+                DaemonStart::Notice => {
+                    // An older file with the icon off (it meant a hidden
+                    // daemon then): say once what it means now.
+                    let edit = [("tray_off_mode_seen".to_string(), Some("true".to_string()))];
+                    if let Err(e) = config::edit_top_keys_at(&config::config_path(), &edit) {
+                        eprintln!("rustshot: could not save tray_off_mode_seen: {e}");
+                    }
+                    settings_ui::run_tray_off_notice();
+                    return Ok(());
+                }
                 DaemonStart::Settings => {
                     if !instance::signal_settings() {
                         settings_ui::run_here();
@@ -875,6 +911,13 @@ fn run() -> Result<()> {
             let mut cfg = config::load();
             // An older file's former default hotkeys get today's, once.
             config::migrate_at(&config::config_path(), &mut cfg);
+            // Offered for Win+Shift+S but not chosen: the guide, once the
+            // daemon is up (its Settings window reaches the daemon).
+            let hint = cfg.screenclip_hint;
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_secs(3));
+                screenclip_win::remind_on_start(hint);
+            });
             let bg = if force { editor::Background::Forced } else { editor::Background::Normal };
             exit(run_background(cfg, None, guard, bg));
         }
@@ -922,7 +965,14 @@ fn screenclip(uri: &str) -> Result<()> {
         Some(instance::Instance::Primary(g)) => Some(g),
         _ => None,
     };
-    exit(run_background(config::load(), Some(pending), guard, editor::Background::OnDemand))
+    if guard.is_some() && !instance::update_dialog_open() {
+        update_install::cleanup_previous();
+    }
+    let mut cfg = config::load();
+    if guard.is_some() {
+        config::migrate_at(&config::config_path(), &mut cfg);
+    }
+    exit(run_background(cfg, Some(pending), guard, editor::Background::OnDemand))
 }
 
 #[cfg(not(windows))]
@@ -950,17 +1000,25 @@ mod cli_tests {
     #[test]
     fn daemon_start_follows_the_tray_switch() {
         let on = Config::default();
-        let off = Config { show_tray: false, ..Config::default() };
-        assert_eq!(daemon_start(&on, false, false), DaemonStart::Run);
-        assert_eq!(daemon_start(&on, false, true), DaemonStart::Run);
-        assert_eq!(daemon_start(&off, true, false), DaemonStart::Run, "--force");
-        if cfg!(windows) {
-            assert_eq!(daemon_start(&off, false, false), DaemonStart::Exit);
-            assert_eq!(daemon_start(&off, false, true), DaemonStart::Settings);
-        } else {
-            assert_eq!(daemon_start(&off, false, false), DaemonStart::Run);
-            assert_eq!(daemon_start(&off, false, true), DaemonStart::Run);
+        let off = Config { show_tray: false, tray_off_mode_seen: true, ..Config::default() };
+        let none = || false;
+        assert_eq!(daemon_start(&on, false, false, true, none), DaemonStart::Run);
+        assert_eq!(daemon_start(&on, false, true, true, none), DaemonStart::Run);
+        assert_eq!(daemon_start(&off, true, false, true, none), DaemonStart::Run, "--force");
+        assert_eq!(daemon_start(&off, false, false, true, none), DaemonStart::Exit);
+        assert_eq!(daemon_start(&off, false, true, true, none), DaemonStart::Settings);
+        // A daemon runs (forced, or the Store build): a launch goes to it.
+        assert_eq!(daemon_start(&off, false, true, true, || true), DaemonStart::Run);
+        // The Store build, Linux, macOS: a hidden daemon as before.
+        assert_eq!(daemon_start(&off, false, false, false, none), DaemonStart::Run);
+        assert_eq!(daemon_start(&off, false, true, false, none), DaemonStart::Run);
+        // An older file with the icon off: the one-time notice, on any start
+        // (the login item, a plain launch, the update's relaunch).
+        let old = Config { show_tray: false, ..Config::default() };
+        for plain in [false, true] {
+            assert_eq!(daemon_start(&old, false, plain, true, none), DaemonStart::Notice);
         }
+        assert_eq!(daemon_start(&old, true, false, true, none), DaemonStart::Run, "--force still runs");
         assert!(matches!(p(&[]).unwrap(), Parsed::Cmd(None)), "a plain launch has no command");
     }
 

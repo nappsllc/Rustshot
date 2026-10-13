@@ -243,6 +243,7 @@ fn settings_at(path: &Path) -> Settings {
     let mut s = Settings::open(path.to_path_buf(), None);
     s.set_autostart = |_| Err("not in tests".into());
     s.set_screenclip = |_| Err("not in tests".into());
+    s.read_handler = || Handler::None;
     s
 }
 
@@ -256,22 +257,25 @@ fn screenclip_toggle_applies_on_save() {
     let dir = scratch("screenclip");
     let p = dir.join("config.toml");
     config::save_at(&p, &Config::default()).unwrap();
-    let mut s = settings_at(&p).with_screenclip(Some(false), false);
+    let mut s = settings_at(&p).with_screenclip(Some(false), Handler::None);
     s.set_screenclip = |on| {
         LAST.store(on as u8, Ordering::SeqCst);
         Ok(())
     };
+    s.read_handler = || Handler::Ours;
     assert!(!s.dirty());
     s.form.screenclip = Some(true);
     assert!(s.dirty());
     assert!(matches!(&s.on(Click::Apply)[..], [Act::Saved(_)]));
     assert_eq!(LAST.load(Ordering::SeqCst), 1);
     assert_eq!(s.form.screenclip, Some(true), "kept across the rebuild");
-    assert!(s.screenclip_wait && !s.dirty());
+    assert_eq!(s.handler, Handler::Ours, "read again after the change");
+    assert!(s.modal.is_none(), "already the default: no guide");
+    assert!(!s.dirty());
     s.form.screenclip = Some(false);
     s.on(Click::Apply);
     assert_eq!(LAST.load(Ordering::SeqCst), 0);
-    assert!(!s.screenclip_wait && !s.dirty());
+    assert!(!s.dirty());
     // A failure: the error shows, the toggle stays as asked (still dirty).
     s.set_screenclip = |_| Err("Access is denied.".into());
     s.form.screenclip = Some(true);
@@ -283,6 +287,255 @@ fn screenclip_toggle_applies_on_save() {
     assert_eq!(s.form.screenclip, None);
     assert!(!s.dirty());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The fake handler the guide tests read: 0 none, 1 the Snipping Tool,
+/// 2 a missing app, 3 Rustshot. One test at a time sets it.
+static FAKE_HANDLER: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+static GUIDE_LOCK: Mutex<()> = Mutex::new(());
+
+fn fake_handler() -> Handler {
+    match FAKE_HANDLER.load(std::sync::atomic::Ordering::SeqCst) {
+        1 => Handler::Other { progid: "AppXsnip".into(), name: "Snipping Tool".into() },
+        2 => Handler::Broken { progid: "AppXgone".into() },
+        3 => Handler::Ours,
+        _ => Handler::None,
+    }
+}
+
+fn set_fake(v: u8) {
+    FAKE_HANDLER.store(v, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn guide_settings(p: &Path) -> Settings {
+    let mut s = settings_at(p).with_screenclip(Some(false), Handler::None);
+    s.set_screenclip = |_| Ok(());
+    s.read_handler = fake_handler;
+    s
+}
+
+/// Turning the toggle on while Windows opens something else shows the
+/// guide (and OK leaves the window open for it); Open Default apps keeps
+/// it; back in the window with Rustshot chosen, it closes with a toast
+/// and a ticked "Don't show again" is written.
+#[test]
+fn screenclip_guide_flow() {
+    let _g = GUIDE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = scratch("guide");
+    let p = dir.join("config.toml");
+    config::save_at(&p, &Config::default()).unwrap();
+    let mut s = guide_settings(&p);
+    set_fake(2);
+    s.form.screenclip = Some(true);
+    assert!(matches!(&s.on(Click::Ok)[..], [Act::Saved(_)]), "no Close under the guide");
+    assert_eq!(s.modal, Some(Modal::Guide { broken: true, dont_show: false }));
+    let (title, text) = s.guide_texts(true);
+    assert_eq!(title, "One more step to use Win+Shift+S");
+    assert!(text.starts_with(crate::screenclip_win::GUIDE_BROKEN) && text.contains("Choose defaults by link type"));
+    // Enter is Open Default apps; the guide stays.
+    assert_eq!(s.on(Click::Enter), vec![Act::OpenDefaultApps]);
+    assert!(s.guide_away && matches!(s.modal, Some(Modal::Guide { .. })));
+    // Back, nothing changed.
+    assert!(!s.refocused());
+    assert!(s.toast.is_none());
+    // Back, the Snipping Tool chosen: no longer broken, still the guide.
+    set_fake(1);
+    assert!(s.refocused());
+    assert_eq!(s.modal, Some(Modal::Guide { broken: false, dont_show: false }));
+    assert_eq!(s.on(Click::DontShow), vec![]);
+    assert_eq!(s.modal, Some(Modal::Guide { broken: false, dont_show: true }));
+    // Back with Rustshot chosen: closed, the toast, the hint off on disk.
+    set_fake(3);
+    assert!(s.refocused());
+    assert!(s.modal.is_none() && !s.guide_away);
+    assert_eq!(s.toast.as_ref().map(|t| t.0.as_str()), Some("Win+Shift+S now opens Rustshot"));
+    assert!(s.toast_live());
+    assert!(!config::read_at(&p).unwrap().unwrap().screenclip_hint);
+    assert!(!s.dirty(), "the hint is not a form change");
+    // Rustshot already chosen: the guide does not show.
+    s.open_guide();
+    assert!(s.modal.is_none());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Remind me later (and Esc, and the close button) closes the guide and
+/// writes nothing; the guide waits behind another message; off, it
+/// never shows.
+#[test]
+fn screenclip_guide_later() {
+    let _g = GUIDE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = scratch("guide-later");
+    let p = dir.join("config.toml");
+    config::save_at(&p, &Config::default()).unwrap();
+    let before = std::fs::read_to_string(&p).unwrap();
+    set_fake(1);
+    let mut s = guide_settings(&p);
+    s.open_guide();
+    assert!(s.modal.is_none(), "not registered: no guide");
+    s.form.screenclip = Some(true);
+    s.on(Click::Apply);
+    assert_eq!(s.modal, Some(Modal::Guide { broken: false, dont_show: false }));
+    assert!(s.guide_texts(false).1.starts_with("Windows lets only you choose"));
+    assert_eq!(s.on(Click::RemindLater), vec![]);
+    assert!(s.modal.is_none());
+    s.open_guide();
+    s.on(Click::DontShow);
+    s.on(Click::DontShow); // unticked again
+    assert_eq!(s.on(Click::Escape), vec![]);
+    assert!(s.modal.is_none());
+    s.open_guide();
+    assert_eq!(s.on(Click::Cancel), vec![Act::Close]);
+    assert!(config::read_at(&p).unwrap().unwrap().screenclip_hint);
+    assert_eq!(std::fs::read_to_string(&p).unwrap(), before, "nothing written");
+    // Behind an error: shown once it is dismissed.
+    s.notify("Couldn't register Ctrl+Alt+F9 \u{2014} it's in use by another app.".into());
+    s.open_guide();
+    assert!(matches!(s.modal, Some(Modal::Error(_))));
+    s.on(Click::Back);
+    assert_eq!(s.modal, Some(Modal::Guide { broken: false, dont_show: false }));
+    // The red line's click opens it too.
+    s.modal = None;
+    set_fake(2);
+    assert_eq!(s.on(Click::FixScreenclip), vec![]);
+    assert_eq!(s.modal, Some(Modal::Guide { broken: true, dont_show: false }));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Review fixes: a "Don't show again" that cannot be saved keeps the
+/// window open with the error; focus changes read nothing unless the
+/// guide is up (or Default apps was opened); Default apps failing to open
+/// shows in the guide.
+#[test]
+fn screenclip_guide_edges() {
+    let _g = GUIDE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = scratch("guide-edges");
+    let p = dir.join("config.toml");
+    config::save_at(&p, &Config::default()).unwrap();
+    set_fake(1);
+    let mut s = guide_settings(&p);
+    s.form.screenclip = Some(true);
+    s.on(Click::Apply);
+    assert!(matches!(s.modal, Some(Modal::Guide { .. })));
+    s.on(Click::DontShow);
+    // The file broke meanwhile: the hint is not written, the window stays.
+    std::fs::write(&p, "jpeg_quality = high\n").unwrap();
+    let acts = s.on(Click::Cancel);
+    assert!(!acts.contains(&Act::Close), "{acts:?}");
+    assert!(matches!(&s.modal, Some(Modal::Error(e)) if e.contains("Could not save")));
+    // No guide, not away: a focus change reads nothing.
+    s.modal = None;
+    set_fake(3);
+    assert!(!s.refocused());
+    assert_ne!(s.handler, Handler::Ours, "not read");
+    // Default apps opened, the guide closed meanwhile: still read on return.
+    set_fake(1);
+    s.open_guide();
+    s.on(Click::OpenDefaultApps);
+    s.modal = None;
+    set_fake(3);
+    assert!(s.refocused());
+    assert_eq!(s.handler, Handler::Ours);
+    assert!(s.toast.is_some());
+    // Default apps did not open: the guide says so, nothing waits.
+    set_fake(1);
+    s.toast = None;
+    s.open_guide();
+    s.on(Click::OpenDefaultApps);
+    let text = crate::screenclip_win::open_failed_text("Access is denied.");
+    assert_eq!(text, "Couldn't open Default apps (Access is denied). Open Settings > Apps > Default apps yourself.");
+    s.default_apps_failed(text.clone());
+    assert_eq!(s.guide_error.as_deref(), Some(text.as_str()));
+    assert!(!s.guide_away);
+    s.on(Click::RemindLater);
+    assert!(s.guide_error.is_none());
+    // With no guide up it is a message.
+    s.default_apps_failed(text);
+    assert!(matches!(&s.modal, Some(Modal::Error(e)) if e.starts_with("Couldn't open Default apps")));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Capture's Win+Shift+S row: the red "click to fix" line is a link that
+/// opens the guide; the other states are plain text; nothing while the
+/// toggle is off or not applied yet.
+#[test]
+fn screenclip_row_line() {
+    let _g = GUIDE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    set_fake(2);
+    let mut s = sample().with_screenclip(Some(true), Handler::Broken { progid: "AppXgone".into() });
+    s.read_handler = fake_handler;
+    s.section = CAPTURE;
+    let mut focus = FocusState::default();
+    reveal(&mut s, &mut focus, "screenclip");
+    assert_eq!(click(&mut s, &mut focus, "screenclip_fix", 1.0), Some(Click::FixScreenclip));
+    s.on(Click::FixScreenclip);
+    assert_eq!(s.modal, Some(Modal::Guide { broken: true, dont_show: false }));
+    for h in [Handler::Ours, Handler::None, Handler::Other { progid: "AppXsnip".into(), name: "Snipping Tool".into() }] {
+        let mut s = sample().with_screenclip(Some(true), h);
+        s.section = CAPTURE;
+        let mut focus = FocusState::default();
+        reveal(&mut s, &mut focus, "screenclip");
+        assert!(focus.rect_of("screenclip_fix").is_none());
+    }
+    // The tray icon off and another app chosen: the red line, a link.
+    set_fake(1);
+    let mut s = sample().with_screenclip(Some(true), fake_handler());
+    s.read_handler = fake_handler;
+    s.form.show_tray = false;
+    s.section = CAPTURE;
+    let mut focus = FocusState::default();
+    reveal(&mut s, &mut focus, "screenclip");
+    assert_eq!(click(&mut s, &mut focus, "screenclip_fix", 1.0), Some(Click::FixScreenclip));
+    s.on(Click::FixScreenclip);
+    assert_eq!(s.modal, Some(Modal::Guide { broken: false, dont_show: false }));
+    // Saved off, turned on in the form: no line until applied.
+    let mut s = sample().with_screenclip(Some(false), Handler::Broken { progid: "AppXgone".into() });
+    s.form.screenclip = Some(true);
+    s.section = CAPTURE;
+    let mut focus = FocusState::default();
+    reveal(&mut s, &mut focus, "screenclip");
+    assert!(focus.rect_of("screenclip_fix").is_none());
+    // The tray icon off and the toggle off: the red line all the same;
+    // its click registers (as Apply would) and shows the guide.
+    {
+        use std::sync::atomic::{AtomicU8, Ordering};
+        static SET: AtomicU8 = AtomicU8::new(9);
+        set_fake(0);
+        let mut s = sample().with_screenclip(Some(false), Handler::None);
+        s.read_handler = fake_handler;
+        s.set_screenclip = |on| {
+            SET.store(on as u8, Ordering::SeqCst);
+            Ok(())
+        };
+        s.form.show_tray = false;
+        s.section = CAPTURE;
+        let mut focus = FocusState::default();
+        reveal(&mut s, &mut focus, "screenclip");
+        assert_eq!(click(&mut s, &mut focus, "screenclip_fix", 1.0), Some(Click::FixScreenclip));
+        s.on(Click::FixScreenclip);
+        assert_eq!(SET.load(Ordering::SeqCst), 1);
+        assert_eq!((s.screenclip, s.form.screenclip), (Some(true), Some(true)));
+        assert_eq!(s.modal, Some(Modal::Guide { broken: false, dont_show: false }));
+        // A failure says so and leaves it off.
+        let mut s = sample().with_screenclip(Some(false), Handler::None);
+        s.set_screenclip = |_| Err("Access is denied.".into());
+        s.on(Click::FixScreenclip);
+        assert_eq!(s.screenclip, Some(false));
+        assert!(matches!(&s.modal, Some(Modal::Error(e)) if e.contains("Win+Shift+S")));
+        // Registered elsewhere (show_setup_guide): the window follows.
+        let mut s = sample().with_screenclip(Some(false), Handler::None);
+        s.sync_screenclip(Some(true));
+        assert_eq!((s.screenclip, s.form.screenclip), (Some(true), Some(true)));
+        assert!(!s.dirty());
+    }
+    // The guide's controls click through.
+    for k in [1.0f32, 1.5] {
+        let mut s = sample();
+        s.modal = Some(Modal::Guide { broken: true, dont_show: false });
+        let mut focus = FocusState::default();
+        assert_eq!(click(&mut s, &mut focus, "q_dont_show", k), Some(Click::DontShow));
+        assert_eq!(click(&mut s, &mut focus, "q_open_default_apps", k), Some(Click::OpenDefaultApps));
+        assert_eq!(click(&mut s, &mut focus, "q_later", k), Some(Click::RemindLater));
+    }
 }
 
 /// After a save the form is rebuilt from what was written: nothing stale
@@ -696,6 +949,11 @@ fn hotkey_notes_route_to_dialog_or_balloon() {
     let alt = Failure { slot: 3, wanted: "Shift+Meta+F".into(), cause: Cause::InUse, alt: Some("Shift+Meta+Y".into()), ..Failure::default() };
     let stuck = Failure { slot: 2, wanted: "Shift+Meta+K".into(), cause: Cause::InUse, free: Some("Shift+Meta+J".into()), ..Failure::default() };
     assert_eq!(hotkey_note(std::slice::from_ref(&alt)), Some(HotkeyNote::Balloon(alt.message())));
+    // A while-recording chord never opens the dialog (it would cover the
+    // recording): a note only.
+    let rec = Failure { slot: crate::hotkey::REC_SLOT_BASE + 1, wanted: "Ctrl+Alt+Shift+M".into(), cause: Cause::InUse, ..Failure::default() };
+    assert!(rec.needs_action());
+    assert_eq!(hotkey_note(std::slice::from_ref(&rec)), Some(HotkeyNote::Balloon(rec.message())));
     let both = [alt.clone(), stuck.clone()];
     let Some(HotkeyNote::Dialog { text, field }) = hotkey_note(&both) else { panic!() };
     assert_eq!(field.as_deref(), Some("global2"));
@@ -719,8 +977,10 @@ fn tray_off_question_variants() {
     assert!(focus.rect_of("q_hide").is_some() && focus.rect_of("q_setup").is_none());
     // Registered but Windows still opens the Snipping Tool, or not
     // registered: the setup line and its button.
-    for (state, wait) in [(Some(true), true), (Some(false), false)] {
-        let mut s = sample().with_screenclip(state, wait);
+    for state in [Some(true), Some(false)] {
+        let mut s = sample().with_screenclip(state, Handler::None);
+        s.read_handler = || Handler::None;
+        s.set_screenclip = |_| Ok(()); // never the real registry
         assert_eq!(s.screenclip_ready(), Some(false));
         assert_eq!(s.hide_tray_text(), format!("{HIDE_TRAY}\n{HIDE_TRAY_SETUP}"));
         assert_eq!(HIDE_TRAY_SETUP, "Rustshot isn't set as your screenshot app yet \u{2014} Set up\u{2026}");
@@ -729,13 +989,16 @@ fn tray_off_question_variants() {
         let mut focus = FocusState::default();
         assert_eq!(click(&mut s, &mut focus, "q_setup", 1.0), Some(Click::ScreenclipSetup));
         s.on(Click::ScreenclipSetup);
-        assert!(s.form.show_tray && s.modal.is_none(), "the icon stays for now");
+        assert!(s.form.show_tray, "the icon stays for now");
         assert_eq!(s.section, CAPTURE);
+        assert!(matches!(s.modal, Some(Modal::Guide { .. })), "the Win+Shift+S guide: {:?}", s.modal);
+        s.modal = None; // the guide closed: the row is there
         render(&mut s, &DARK, 1.0, &Input::default(), &mut focus);
         assert!(focus.is_focused("screenclip") && s.focus_field.is_none(), "the Win+Shift+S row");
+        assert_eq!(s.screenclip, Some(true), "turned on for the guide");
     }
     // Not available here (no handler to set up): nothing extra.
-    let s = sample().with_screenclip(None, false);
+    let s = sample().with_screenclip(None, Handler::Ours);
     assert_eq!((s.screenclip_ready(), s.hide_tray_text()), (None, HIDE_TRAY.to_string()));
     // The row's help.
     assert_eq!(TRAY_HELP, "Off: no background process; only Win+Shift+S / Print Screen (when set up)");
@@ -751,6 +1014,59 @@ fn tray_off_question_variants() {
     s.form.ask = !s.form.ask;
     assert!(!s.on(Click::Apply).contains(&Act::StartDaemon), "only when it was turned on");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The one-time notice for an older file with the tray icon off: Set up
+/// Win+Shift+S, Show tray icon again (saved; the daemon starts), OK
+/// (closes). Turning it off here marks the file, so it never shows.
+/// The Store build keeps a hidden daemon: its question and help say so.
+#[test]
+fn tray_off_notice_and_store_build() {
+    assert_eq!(TRAY_OFF_NOTICE, "Rustshot no longer runs in the background while the tray icon is off. Win+Shift+S and Print Screen can still open it.");
+    let dir = scratch("traynotice");
+    let p = dir.join("config.toml");
+    config::save_at(&p, &Config { show_tray: false, ..Config::default() }).unwrap();
+    let mut s = settings_at(&p);
+    s.no_background = true;
+    s.confirmed = true;
+    s.show_tray_off_notice();
+    let mut focus = FocusState::default();
+    render(&mut s, &DARK, 1.0, &Input::default(), &mut focus);
+    for id in ["q_setup", "q_tray_on", "q_ok"] {
+        assert!(focus.rect_of(id).is_some(), "{id}");
+    }
+    assert_eq!(s.on(Click::Enter), vec![Act::Close], "Enter is OK");
+    s.show_tray_off_notice();
+    let acts = s.on(Click::ShowTrayAgain);
+    assert!(matches!(&acts[..], [Act::Saved(c), Act::StartDaemon, Act::Close] if c.show_tray), "{acts:?}");
+    assert!(config::read_at(&p).unwrap().unwrap().show_tray);
+    // Turned off here: marked (the notice is for older files only).
+    s.form.show_tray = false;
+    s.on(Click::Apply);
+    let saved = config::read_at(&p).unwrap().unwrap();
+    assert!(!saved.show_tray && saved.tray_off_mode_seen);
+    // The Store build: the icon off keeps the daemon; nothing to start.
+    let mut s = sample();
+    s.no_background = false;
+    assert_eq!(s.hide_tray_text(), HIDE_TRAY_KEEP);
+    assert_eq!(s.tray_help(), TRAY_HELP_KEEP);
+    s.no_background = true;
+    assert_eq!(s.tray_help(), TRAY_HELP);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// "Change shortcuts…" for a while-recording chord: Key bindings scrolled
+/// to the bottom, where those rows are.
+#[test]
+fn change_shortcuts_reaches_the_recording_rows() {
+    let mut s = sample();
+    s.notify_hotkeys("x".into(), Some("key_rec_mute".into()));
+    s.on(Click::ChangeShortcuts);
+    assert_eq!((s.section, s.record_field.as_deref()), (KEYS, Some("key_rec_mute")));
+    let mut focus = FocusState::default();
+    render(&mut s, &DARK, 1.0, &Input::default(), &mut focus);
+    assert!(focus.is_recording("key_rec_mute"));
+    assert!(s.scroll[KEYS] > 0.0, "scrolled down to the recording rows");
 }
 
 #[test]
@@ -943,7 +1259,8 @@ fn preview_cfg() -> Config {
 }
 
 fn sample() -> Settings {
-    let mut s = Settings::new(preview_cfg(), Some(true), PathBuf::from("config.toml")).with_screenclip(Some(true), false);
+    let mut s = Settings::new(preview_cfg(), Some(true), PathBuf::from("config.toml")).with_screenclip(Some(true), Handler::Ours);
+    s.read_handler = || Handler::Ours;
     s.renderer = true;
     s.tray_row = true;
     s.rec_lists.linux = false;
@@ -1003,14 +1320,55 @@ fn preview_settings_pngs() {
             s.folder_probe = Some((PathBuf::from(r"C:\"), Some("Drive Q: is not on this computer.".into())));
             let (img, _) = render(&mut s, th, k, &Input::default(), &mut FocusState::default());
             preview::save(&png("general-states", tname, k), &img);
-            // Win+Shift+S just turned on: Windows has not been told yet.
-            let mut s = sample();
-            s.form.screenclip = Some(true);
-            s.screenclip_wait = true;
+            // Win+Shift+S's line under its toggle, per state.
+            for (name, h) in [
+                ("capture-screenclip", Handler::Ours),
+                ("capture-screenclip-other", Handler::Other { progid: "AppXsnip".into(), name: "Snipping Tool".into() }),
+                ("capture-screenclip-broken", Handler::Broken { progid: "AppXgone".into() }),
+                ("capture-screenclip-unset", Handler::None),
+            ] {
+                let mut s = sample().with_screenclip(Some(true), h);
+                s.section = CAPTURE;
+                s.scroll[CAPTURE] = 1e6;
+                let (img, _) = render(&mut s, th, k, &Input::default(), &mut FocusState::default());
+                preview::save(&png(name, tname, k), &img);
+            }
+            let mut s = sample().with_screenclip(Some(true), Handler::None);
+            s.form.show_tray = false;
             s.section = CAPTURE;
             s.scroll[CAPTURE] = 1e6;
             let (img, _) = render(&mut s, th, k, &Input::default(), &mut FocusState::default());
-            preview::save(&png("capture-screenclip", tname, k), &img);
+            preview::save(&png("capture-screenclip-no-tray", tname, k), &img);
+            // The tray icon off with the toggle off too.
+            let mut s = sample().with_screenclip(Some(false), Handler::None);
+            s.form.show_tray = false;
+            s.section = CAPTURE;
+            s.scroll[CAPTURE] = 1e6;
+            let (img, _) = render(&mut s, th, k, &Input::default(), &mut FocusState::default());
+            preview::save(&png("capture-screenclip-no-tray-off", tname, k), &img);
+            // The guide, and the toast once Rustshot is chosen.
+            for (name, broken, dont_show) in [("screenclip-guide", false, false), ("screenclip-guide-broken", true, true)] {
+                let mut s = sample();
+                s.section = CAPTURE;
+                s.scroll[CAPTURE] = 1e6;
+                s.modal = Some(Modal::Guide { broken, dont_show });
+                let (img, _) = render(&mut s, th, k, &Input::default(), &mut FocusState::default());
+                preview::save(&png(name, tname, k), &img);
+            }
+            let mut s = sample();
+            s.section = CAPTURE;
+            s.scroll[CAPTURE] = 1e6;
+            s.modal = Some(Modal::Guide { broken: false, dont_show: false });
+            s.guide_error = Some(crate::screenclip_win::open_failed_text("The system cannot find the file specified."));
+            let (img, _) = render(&mut s, th, k, &Input::default(), &mut FocusState::default());
+            preview::save(&png("screenclip-guide-error", tname, k), &img);
+            let mut s = sample();
+            s.section = CAPTURE;
+            s.scroll[CAPTURE] = 1e6;
+            let shown = std::time::Instant::now().checked_sub(std::time::Duration::from_millis(600)).unwrap();
+            s.toast = Some((crate::screenclip_win::NOW_OURS.into(), shown));
+            let (img, _) = render(&mut s, th, k, &Input::default(), &mut FocusState::default());
+            preview::save(&png("capture-screenclip-toast", tname, k), &img);
             // Teal accent (previewed before Apply), JPEG chosen.
             let mut s = sample();
             s.form.accent = 1;

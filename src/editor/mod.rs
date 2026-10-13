@@ -237,13 +237,14 @@ pub enum HotkeyNote {
     Balloon(String),
 }
 
-/// The note for `failed` (none when empty).
+/// The note for `failed` (none when empty). A while-recording chord never
+/// opens the dialog (it would land over the recording): a small note.
 pub fn hotkey_note(failed: &[crate::hotkey::Failure]) -> Option<HotkeyNote> {
     if failed.is_empty() {
         return None;
     }
     let text = failed.iter().map(|f| f.message()).collect::<Vec<_>>().join("\n");
-    Some(match failed.iter().find(|f| f.needs_action()) {
+    Some(match failed.iter().find(|f| f.slot < crate::hotkey::SLOTS && f.needs_action()) {
         Some(f) => HotkeyNote::Dialog { text, field: Some(f.field_id()) },
         None => HotkeyNote::Balloon(text),
     })
@@ -266,7 +267,7 @@ thread_local! {
 /// Hotkeys that did not register: on stderr, and in the Settings window
 /// when it is open. Otherwise a key the user has to change opens it (at
 /// Key bindings, the dialog over it); a fallback is a tray balloon.
-fn tell_hotkey_failures(failed: &[crate::hotkey::Failure]) {
+fn tell_hotkey_failures(failed: &[crate::hotkey::Failure], th: Theme) {
     let Some(note) = hotkey_note(failed) else { return };
     match note {
         HotkeyNote::Dialog { text, field } => {
@@ -276,11 +277,48 @@ fn tell_hotkey_failures(failed: &[crate::hotkey::Failure]) {
         HotkeyNote::Balloon(text) => {
             eprintln!("rustshot: {text}");
             if !crate::settings_ui::notify_hotkeys(&text, None) {
-                crate::tray::notify_keys(&text);
+                say(&text, ToastKind::Info, th, true);
             }
         }
     }
 }
+
+/// Tell the user `text` outside any window: a tray balloon while the icon
+/// shows (`keys`: its click opens Key bindings), else a notice near the
+/// pointer (no icon to show a balloon on; an on-demand run lives while
+/// the notice is up).
+fn say(text: &str, kind: ToastKind, th: Theme, keys: bool) {
+    if crate::tray::is_visible() || cfg!(test) {
+        if keys {
+            crate::tray::notify_keys(text);
+        } else {
+            crate::tray::notify(text);
+        }
+        return;
+    }
+    #[cfg(not(test))]
+    if !crate::notice::show(crate::notice::Note::plain(text.to_string(), kind), capture::cursor_pos(), th) {
+        eprintln!("rustshot: {text}");
+    }
+    #[cfg(test)]
+    let _ = (kind, th);
+}
+
+/// What keeps a leaving run up ([`App::linger`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Linger {
+    /// Nothing: it quits.
+    Gone,
+    /// A capture, window, pin, notice, …
+    Open,
+    /// Only background work.
+    Finishing,
+    /// Background work for longer than [`LINGER_CAP`]: it quits anyway.
+    GaveUp,
+}
+
+/// The longest a leaving run waits for background work alone.
+const LINGER_CAP: Duration = Duration::from_secs(120);
 
 /// How a daemon run stays in the background.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -334,6 +372,10 @@ pub fn run(
     if cfg.snap_windows && !cfg!(test) {
         crate::snap::warm_up();
     }
+    // A forced daemon is relaunched forced by an update.
+    if kind == RunKind::Daemon && bg == Background::Forced {
+        crate::update_install::set_forced(true);
+    }
     let hot = match kind {
         RunKind::Daemon if bg == Background::OnDemand => Some(Hotkeys::new(&without_globals(&cfg))),
         RunKind::Daemon => Some(Hotkeys::new(&cfg)),
@@ -354,7 +396,8 @@ pub fn run(
         crate::launcher::set_daemon(h.sender());
     }
     let updates = match kind {
-        RunKind::Daemon if bg == Background::OnDemand => None,
+        // Nothing else checks with the tray icon off: one check, if due.
+        RunKind::Daemon if bg == Background::OnDemand => crate::update::spawn_once(cfg.check_updates),
         RunKind::Daemon => crate::update::spawn_checker(cfg.check_updates),
         RunKind::OneShot => None,
     };
@@ -365,6 +408,8 @@ pub fn run(
         kind,
         bg,
         stopping: false,
+        finishing_since: None,
+        finishing_said: false,
         hot,
         pending,
         st: State::Hidden,
@@ -476,6 +521,10 @@ struct App {
     /// The tray icon was turned off (Windows): the daemon quits once
     /// nothing it opened is left ([`App::lingering`]).
     stopping: bool,
+    /// Leaving, and only background work is left: since when.
+    finishing_since: Option<Instant>,
+    /// "Finishing in the background" was said.
+    finishing_said: bool,
     hot: Option<Hotkeys>,
     pending: Option<Pending>,
     st: State,
@@ -570,7 +619,8 @@ impl App {
         }
         // The startup registration's failures (and fallbacks).
         if let Some(h) = self.hot.as_mut() {
-            tell_hotkey_failures(&h.take_news());
+            let news = h.take_news();
+            tell_hotkey_failures(&news, theme::resolve(&self.cfg));
         }
         self.poll_upload();
         self.poll_ocr();
@@ -656,9 +706,37 @@ impl App {
         }
         // On demand, or the tray icon was turned off: gone once the
         // capture and what it opened are.
-        if self.leaving() && !self.lingering() {
-            self.request_exit(0);
+        if self.leaving() {
+            match self.linger(Instant::now()) {
+                Linger::Gone => self.request_exit(0),
+                Linger::Finishing if !self.finishing_said => {
+                    // Only work in the background is left (an upload from an
+                    // Edit window): it finishes first.
+                    self.finishing_said = true;
+                    say("Rustshot is finishing in the background\u{2026}", ToastKind::Info, theme::resolve(&self.cfg), false);
+                }
+                Linger::GaveUp => {
+                    eprintln!("rustshot: gave up waiting for background work after {} s", LINGER_CAP.as_secs());
+                    self.request_exit(0);
+                }
+                _ => {}
+            }
         }
+    }
+
+    /// What keeps a [`App::leaving`] run: something open, or only
+    /// background work ([`crate::busy`], a one-off update check), waited
+    /// for up to [`LINGER_CAP`].
+    fn linger(&mut self, now: Instant) -> Linger {
+        if self.lingering() {
+            self.finishing_since = None;
+            return Linger::Open;
+        }
+        if crate::busy::count() == 0 && !crate::update::checking() {
+            return Linger::Gone;
+        }
+        let since = *self.finishing_since.get_or_insert(now);
+        if now.duration_since(since) >= LINGER_CAP { Linger::GaveUp } else { Linger::Finishing }
     }
 
     /// This daemon run ends once nothing is left ([`App::lingering`]): an
@@ -683,6 +761,25 @@ impl App {
             || crate::update_ui::is_open()
     }
 
+    /// `rustshot daemon --force` reached this run: an on-demand one
+    /// becomes the daemon (its global hotkeys, the update check), forced
+    /// (it stays with the tray icon off); a stopping one stays.
+    fn become_daemon(&mut self) {
+        if self.kind != RunKind::Daemon {
+            return;
+        }
+        if self.bg == Background::OnDemand
+            && let Some(h) = self.hot.as_mut()
+        {
+            let failed = h.reload(&self.cfg);
+            tell_hotkey_failures(&failed, theme::resolve(&self.cfg));
+            self.updates = crate::update::spawn_checker(self.cfg.check_updates);
+        }
+        self.bg = Background::Forced;
+        self.stopping = false;
+        crate::update_install::set_forced(true);
+    }
+
     /// Handle one daemon event; false once we are quitting.
     fn on_hot(&mut self, ev: HotEvent) -> bool {
         match ev {
@@ -696,6 +793,7 @@ impl App {
                 return false;
             }
             HotEvent::Relaunch => return self.relaunch(crate::tray::is_visible()),
+            HotEvent::BecomeDaemon => self.become_daemon(),
             HotEvent::Restart => self.restart_pending = true,
             HotEvent::RestartWhenIdle(reply) => {
                 self.updating = true;
@@ -1084,7 +1182,7 @@ impl App {
     fn rec_hotkeys(&mut self, on: bool) {
         if let Some(h) = self.hot.as_mut() {
             let failed = h.set_recording(&self.cfg, on);
-            tell_hotkey_failures(&failed);
+            tell_hotkey_failures(&failed, theme::resolve(&self.cfg));
         }
     }
 
@@ -1100,7 +1198,7 @@ impl App {
                     self.updates = crate::update::spawn_checker(cfg.check_updates);
                 }
                 // Off (Windows): no background process.
-                (Background::Normal, false) if cfg!(windows) => {
+                (Background::Normal, false) if crate::tray::hidden_means_no_daemon() => {
                     if !self.stopping {
                         eprintln!("rustshot: Show icon in tray is off: quitting once nothing is open");
                     }
@@ -1116,7 +1214,7 @@ impl App {
             if self.rec.is_some() {
                 failed.extend(h.set_recording(&cfg, true));
             }
-            tell_hotkey_failures(&failed);
+            tell_hotkey_failures(&failed, theme::resolve(&self.cfg));
         }
         if cfg.check_updates != self.cfg.check_updates && self.kind == RunKind::Daemon && self.bg != Background::OnDemand {
             // A new checker generation: the old one stops before its next
@@ -3974,6 +4072,37 @@ mod tests {
         assert_eq!(c.shortcuts, Config::default().shortcuts, "the while-recording chords stay");
     }
 
+    /// Leaving with only background work left (an Edit window's upload):
+    /// it waits, says so once, and gives up after the cap. `--force`
+    /// makes an on-demand run the forced daemon.
+    #[test]
+    fn leaving_waits_for_background_work() {
+        let mut app = preview_app(theme::DARK, None);
+        app.kind = RunKind::Daemon;
+        app.cfg.check_updates = false;
+        app.st = State::Hidden;
+        app.bg = Background::OnDemand;
+        let (go, wait) = std::sync::mpsc::channel::<()>();
+        crate::busy::spawn(move || {
+            let _ = wait.recv();
+        });
+        let t0 = Instant::now();
+        assert_eq!(app.linger(t0), Linger::Finishing);
+        assert_eq!(app.linger(t0 + Duration::from_secs(60)), Linger::Finishing);
+        assert_eq!(app.linger(t0 + LINGER_CAP), Linger::GaveUp);
+        // Something opens meanwhile: the wait starts over.
+        app.pending = Some(Pending::editor());
+        assert_eq!(app.linger(t0 + LINGER_CAP), Linger::Open);
+        assert!(app.finishing_since.is_none());
+        app.pending = None;
+        go.send(()).unwrap();
+        // --force reached it: the forced daemon from now on.
+        app.become_daemon();
+        assert_eq!(app.bg, Background::Forced);
+        assert!(!app.leaving());
+        crate::update_install::set_forced(false);
+    }
+
     /// A capture asked while the worker waits is refused too (it would
     /// keep the daemon busy); a reply nobody reads lifts the gate.
     #[test]
@@ -4022,6 +4151,8 @@ mod tests {
             kind: RunKind::OneShot,
             bg: Background::Normal,
             stopping: false,
+            finishing_since: None,
+            finishing_said: false,
             hot: None,
             pending: None,
             st: State::Edit(Box::new(edit)),

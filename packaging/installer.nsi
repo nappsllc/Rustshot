@@ -29,9 +29,6 @@ InstallDir "$LOCALAPPDATA\${PRODUCT_NAME}"
 InstallDirRegKey HKCU "Software\${PRODUCT_NAME}" "InstallDir"
 RequestExecutionLevel user
 
-; Whether a desktop shortcut existed before this install (.onInit).
-Var HadDesktop
-
 ; Every Start menu / desktop shortcut any version made, the old lowercase
 ; names included (Delete and RMDir ignore case; both spellings are listed
 ; so the intent is plain). RMDir only removes an empty folder.
@@ -47,6 +44,15 @@ Var HadDesktop
   Delete "$DESKTOP\${PRODUCT_DISPLAY}.lnk"
 !macroend
 
+; A lowercase "rustshot" folder still there holds files of the user's own
+; (RMDir left it): renamed to "Rustshot" (a case-only rename keeps every
+; file), so the shortcuts land in a folder Start shows capitalized.
+!macro CapitalizeStartFolder
+  ${If} ${FileExists} "$SMPROGRAMS\${PRODUCT_NAME}\*.*"
+    Rename "$SMPROGRAMS\${PRODUCT_NAME}" "$SMPROGRAMS\${PRODUCT_DISPLAY}"
+  ${EndIf}
+!macroend
+
 Page directory
 Page components
 Page instfiles
@@ -58,12 +64,12 @@ Section "${PRODUCT_DISPLAY} (required)" SecMain
   SectionIn RO
   SetOutPath "$INSTDIR"
   ${If} ${Silent}
-    ; Silent update: if the old daemon is still running after the wait in
-    ; .onInit, move its exe aside (allowed while it runs) so File succeeds.
-    ; The new daemon deletes rustshot.exe.old when it starts.
+    ; Silent update: move the old exe aside (allowed while it runs: the old
+    ; daemon after the wait in .onInit, or a Settings window that started
+    ; this update with the tray icon off) so File succeeds. The next start
+    ; deletes rustshot.exe.old.
     Delete "$INSTDIR\${PRODUCT_EXE}.old"
-    FindWindow $0 "rustshot_tray"
-    ${If} $0 <> 0
+    ${If} ${FileExists} "$INSTDIR\${PRODUCT_EXE}"
       Rename "$INSTDIR\${PRODUCT_EXE}" "$INSTDIR\${PRODUCT_EXE}.old"
     ${EndIf}
   ${EndIf}
@@ -77,15 +83,12 @@ Section "${PRODUCT_DISPLAY} (required)" SecMain
   ; would keep the old names (Start shows "rustshot"). Remove the old
   ; shortcuts and folder first, then make them fresh, the icon explicit.
   !insertmacro RemoveShortcuts
+  !insertmacro CapitalizeStartFolder
   CreateDirectory "$SMPROGRAMS\${PRODUCT_DISPLAY}"
   CreateShortcut "$SMPROGRAMS\${PRODUCT_DISPLAY}\${PRODUCT_DISPLAY}.lnk" "$INSTDIR\${PRODUCT_EXE}" "" "$INSTDIR\${PRODUCT_EXE}" 0
   ; The way to Settings with the tray icon off (no background process).
   CreateShortcut "$SMPROGRAMS\${PRODUCT_DISPLAY}\${PRODUCT_DISPLAY} Settings.lnk" "$INSTDIR\${PRODUCT_EXE}" "settings" "$INSTDIR\${PRODUCT_EXE}" 0
   CreateShortcut "$SMPROGRAMS\${PRODUCT_DISPLAY}\Uninstall.lnk" "$INSTDIR\uninstall.exe" "" "$INSTDIR\uninstall.exe" 0
-  ; A desktop shortcut that was there (any case) comes back, renamed.
-  ${If} $HadDesktop == 1
-    CreateShortcut "$DESKTOP\${PRODUCT_DISPLAY}.lnk" "$INSTDIR\${PRODUCT_EXE}" "" "$INSTDIR\${PRODUCT_EXE}" 0
-  ${EndIf}
   ; Settings > Apps > Installed apps. The key name stays "rustshot", so an
   ; install or update over any older version (the in-app update runs this
   ; section too) rewrites every value here.
@@ -106,22 +109,27 @@ Section "${PRODUCT_DISPLAY} (required)" SecMain
   WriteRegDWORD HKCU "${UNINST_KEY}" "EstimatedSize" $0
 SectionEnd
 
+; Ticked (by default; a silent update keeps it only where a desktop
+; shortcut, any case, existed: .onInit): made fresh with the new name.
+; Unticked: RemoveShortcuts took the old one away.
 Section "Desktop shortcut" SecDesktop
-  Delete "$DESKTOP\${PRODUCT_NAME}.lnk" ; an old lowercase one (the same file)
   CreateShortcut "$DESKTOP\${PRODUCT_DISPLAY}.lnk" "$INSTDIR\${PRODUCT_EXE}" "" "$INSTDIR\${PRODUCT_EXE}" 0
 SectionEnd
 
+; An existing value is kept as it is (it may say "daemon --force", which
+; runs with the tray icon off too); only a missing one is written.
 Section "Start daemon with Windows" SecStartup
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCT_NAME}" \
-      '"$INSTDIR\${PRODUCT_EXE}" daemon'
+  ClearErrors
+  ReadRegStr $0 HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCT_NAME}"
+  ${If} ${Errors}
+  ${OrIf} $0 == ""
+    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${PRODUCT_NAME}" \
+        '"$INSTDIR\${PRODUCT_EXE}" daemon'
+  ${EndIf}
 SectionEnd
 
 ; Silent installs only; interactive installs are unchanged.
 Function .onInit
-  StrCpy $HadDesktop 0
-  ${If} ${FileExists} "$DESKTOP\${PRODUCT_DISPLAY}.lnk"
-    StrCpy $HadDesktop 1
-  ${EndIf}
   ${If} ${Silent}
     ; An update keeps the user's choices: over an existing install the
     ; optional sections run again only if their shortcut / Run value exists.
@@ -159,7 +167,15 @@ Function .onInstSuccess
     ClearErrors
     ${GetOptions} $0 "/RELAUNCH" $1
     ${IfNot} ${Errors}
-      Exec '"$INSTDIR\${PRODUCT_EXE}" daemon --after-update'
+      ; "/FORCE": the daemon that updated ran with --force (the tray icon
+      ; off but kept running); the new one does too.
+      ClearErrors
+      ${GetOptions} $0 "/FORCE" $1
+      ${If} ${Errors}
+        Exec '"$INSTDIR\${PRODUCT_EXE}" daemon --after-update'
+      ${Else}
+        Exec '"$INSTDIR\${PRODUCT_EXE}" daemon --after-update --force'
+      ${EndIf}
     ${EndIf}
   ${EndIf}
 FunctionEnd

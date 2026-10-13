@@ -183,6 +183,13 @@ pub struct Config {
     pub accept_on_select: String,
     /// The hint card when the overlay opens (Settings › General).
     pub overlay_hints: bool,
+    /// Windows: the daemon reminds how to pick Rustshot for Win+Shift+S
+    /// while it is offered but not chosen (false: "Don't show again").
+    pub screenclip_hint: bool,
+    /// Windows: the user knows that with the tray icon off nothing runs in
+    /// the background (they turned it off in this version, or saw the
+    /// one-time notice an older file with `show_tray = false` gets).
+    pub tray_off_mode_seen: bool,
 }
 
 /// The drawing tools whose size and color are remembered
@@ -302,6 +309,8 @@ impl Default for Config {
             magnifier_square: false,
             accept_on_select: "off".into(),
             overlay_hints: true,
+            screenclip_hint: true,
+            tray_off_mode_seen: false,
             history: true,
             history_days: 30,
             history_max_mb: 2048,
@@ -895,19 +904,45 @@ fn former_field<'a>(cfg: &'a mut Config, key: &str) -> Option<&'a mut String> {
 /// Global hotkeys still on a former default ([`FORMER_DEFAULTS`]; the
 /// chord compared, not the text, so "Meta+Shift+R" is "Shift+Meta+R"):
 /// the old file kept the default of its day, so they get today's.
-/// A key that was never a default is left alone. Returns (key, old, new).
+/// A key that was never a default is left alone. Never a clash: when
+/// another global already has today's default, the first of the slot's
+/// alternates (then the spare keys) no global has is used instead, or
+/// none (unset) when every one is taken. Returns (key, old, new).
 pub fn migrate_old_defaults(cfg: &mut Config) -> Vec<(&'static str, String, String)> {
     let def = Config::default();
     let mut out = Vec::new();
     for (key, olds) in FORMER_DEFAULTS {
         let new = former_field(&mut def.clone(), key).map(|s| s.clone()).unwrap_or_default();
+        let slot = former_slot(key);
         let Some(v) = former_field(cfg, key) else { continue };
         let Some(c) = crate::keymap::Chord::parse(v) else { continue };
-        if olds.iter().any(|o| crate::keymap::Chord::parse(o) == Some(c)) {
-            out.push((key, std::mem::replace(v, new.clone()), new));
+        if !olds.iter().any(|o| crate::keymap::Chord::parse(o) == Some(c)) {
+            continue;
         }
+        let wanted = crate::hotkey::wanted(cfg);
+        let taken = |s: &str| {
+            let k = crate::keymap::Chord::parse(s);
+            (0..crate::hotkey::SLOTS).any(|j| j != slot && k.is_some() && crate::keymap::Chord::parse(&wanted[j]) == k)
+        };
+        let pick = std::iter::once(new.as_str())
+            .chain(crate::hotkey::alternates(slot).iter().copied())
+            .chain(crate::hotkey::FREE_POOL)
+            .find(|s| !taken(s))
+            .unwrap_or_default()
+            .to_string();
+        let Some(v) = former_field(cfg, key) else { continue };
+        out.push((key, std::mem::replace(v, pick.clone()), pick));
     }
     out
+}
+
+/// The hotkey slot of a [`FORMER_DEFAULTS`] key.
+fn former_slot(key: &str) -> usize {
+    match key {
+        "record_hotkey" => 2,
+        "capture_window_hotkey" => 4,
+        _ => 6, // capture_text_hotkey
+    }
 }
 
 /// [`migrate_old_defaults`] for the daemon's `cfg`, read from `path`: the
@@ -921,11 +956,19 @@ pub fn migrate_at(path: &std::path::Path, cfg: &mut Config) {
     }
     let edits: Vec<(String, Option<String>)> = moved.iter().map(|(k, _, new)| (k.to_string(), Some(toml_str(new)))).collect();
     let res = edit_top_keys_at(path, &edits);
+    let def = crate::hotkey::defaults();
     for (k, old, new) in &moved {
+        let why = if new.is_empty() {
+            " (today's and every spare key are used by other Rustshot hotkeys: unset; pick one in Settings \u{203a} Key bindings)".to_string()
+        } else if !def.iter().any(|d| crate::hotkey::chord_label(d) == crate::hotkey::chord_label(new)) {
+            " (today's default is another Rustshot hotkey's)".to_string()
+        } else {
+            String::new()
+        };
+        let now = if new.is_empty() { "none".to_string() } else { crate::hotkey::chord_label(new) };
         eprintln!(
-            "rustshot: {k} {} was an old default; it is {} now{}",
+            "rustshot: {k} {} was an old default; it is {now} now{why}{}",
             crate::hotkey::chord_label(old),
-            crate::hotkey::chord_label(new),
             if res.is_ok() { " (config.toml updated)" } else { "" }
         );
     }
@@ -1019,6 +1062,8 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
                 cfg.accept_on_select = one_of(val, &["off", "copy", "save"]).map_err(|e| bad("value", &e))?
             }
             "overlay_hints" => cfg.overlay_hints = as_bool(val).map_err(|e| bad("boolean", &e))?,
+            "screenclip_hint" => cfg.screenclip_hint = as_bool(val).map_err(|e| bad("boolean", &e))?,
+            "tray_off_mode_seen" => cfg.tray_off_mode_seen = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "history" => cfg.history = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "history_days" => {
                 cfg.history_days =
@@ -1290,6 +1335,8 @@ pub fn to_toml(c: &Config) -> String {
         q(&c.accept_on_select),
         c.overlay_hints
     ));
+    out.push_str(&format!("screenclip_hint = {}\n", c.screenclip_hint));
+    out.push_str(&format!("tray_off_mode_seen = {}\n", c.tray_off_mode_seen));
     out.push_str(&format!(
         "launcher_source = {}\nlauncher_delay = {}\nlauncher_after = {}\n",
         q(&c.launcher_source),
@@ -1656,6 +1703,28 @@ oops
         let mut w = parse_config("capture_window_hotkey = \"Shift+Meta+W\"\n").unwrap();
         assert_eq!(migrate_old_defaults(&mut w).len(), 1);
         assert_eq!(w.capture_window_hotkey, "Shift+Meta+E");
+        // Today's default is another global's (the user's full screen on
+        // G): the slot's first free alternate instead, never a clash.
+        let mut c = Config { record_hotkey: "Shift+Meta+R".into(), capture_full_hotkey: "Shift+Meta+G".into(), ..Config::default() };
+        assert_eq!(migrate_old_defaults(&mut c), [("record_hotkey", "Shift+Meta+R".to_string(), "Shift+Meta+J".to_string())]);
+        let w = crate::hotkey::wanted(&c);
+        for i in 0..w.len() {
+            for j in 0..i {
+                assert!(w[i].is_empty() || w[i] != w[j], "{w:?}");
+            }
+        }
+        // Every candidate taken: unset.
+        let mut c = Config {
+            capture_hotkey: "Shift+Meta+Z".into(),
+            capture_window_hotkey: "Shift+Meta+Q".into(),
+            capture_full_hotkey: "Shift+Meta+Y".into(),
+            history_hotkey: "Shift+Meta+J".into(),
+            record_hotkey: "Shift+Meta+E".into(),
+            repeat_hotkey: "Shift+Meta+G".into(),
+            capture_text_hotkey: "Shift+Meta+T".into(),
+            ..Config::default()
+        };
+        assert_eq!(migrate_old_defaults(&mut c), [("capture_text_hotkey", "Shift+Meta+T".to_string(), String::new())]);
         // Unbound, invalid or another former default's key: left alone.
         let mut c = Config { record_hotkey: String::new(), capture_text_hotkey: "Nope+".into(), capture_window_hotkey: "Shift+Meta+R".into(), ..Config::default() };
         assert!(migrate_old_defaults(&mut c).is_empty());
@@ -1871,6 +1940,29 @@ bogus = 1
         assert!(!rewrite_loses(&text));
         assert!(!rewrite_loses("accept_on_select = \"copy\"\nmagnifier_square = true\n"), "hand-written keys survive");
         assert!(parse_config("accept_on_select = \"maybe\"").is_err());
+    }
+
+    /// The Win+Shift+S guide's "Don't show again": on by default, kept.
+    #[test]
+    fn tray_off_mode_seen_roundtrip() {
+        assert!(!Config::default().tray_off_mode_seen);
+        let c = Config { tray_off_mode_seen: true, ..Config::default() };
+        let text = to_toml(&c);
+        assert!(text.contains("tray_off_mode_seen = true\n"), "{text}");
+        assert_eq!(parse_config(&text).unwrap(), c);
+        assert!(parse_config("tray_off_mode_seen = 1").is_err());
+    }
+
+    #[test]
+    fn screenclip_hint_roundtrip() {
+        assert!(Config::default().screenclip_hint);
+        let c = Config { screenclip_hint: false, ..Config::default() };
+        let text = to_toml(&c);
+        assert!(text.contains("screenclip_hint = false\n"), "{text}");
+        assert_eq!(parse_config(&text).unwrap(), c);
+        assert!(!rewrite_loses(&text));
+        assert!(!parse_config("screenclip_hint = false").unwrap().screenclip_hint);
+        assert!(parse_config("screenclip_hint = 2").is_err());
     }
 
     #[test]

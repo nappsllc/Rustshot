@@ -945,8 +945,6 @@ mod x11;
 #[path = "notice_macos.rs"]
 mod macos;
 
-/// Show `note` near global point `at` (the capture's centre), replacing
-/// the one up; false when there is no notice window here.
 /// A notice (or the thumbnail) is up on this thread (Windows; elsewhere
 /// it is not tracked yet: false).
 pub fn showing() -> bool {
@@ -956,6 +954,8 @@ pub fn showing() -> bool {
     false
 }
 
+/// Show `note` near global point `at` (the capture's centre), replacing
+/// the one up; false when there is no notice window here.
 pub fn show(note: Note, at: (i32, i32), th: Theme) -> bool {
     #[cfg(test)]
     {

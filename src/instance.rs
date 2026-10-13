@@ -60,6 +60,35 @@ pub fn daemon_running() -> bool {
     unsafe { windows::Win32::UI::WindowsAndMessaging::FindWindowW(tray_class(), windows::core::PCWSTR::null()) }.is_ok()
 }
 
+/// Elsewhere the tray icon off never means "no daemon": not asked.
+#[cfg(not(windows))]
+pub fn daemon_running() -> bool {
+    false
+}
+
+/// An update dialog is open in some Rustshot process (it may be
+/// downloading into the update folder): Windows.
+#[cfg(windows)]
+pub fn update_dialog_open() -> bool {
+    use windows::core::w;
+    unsafe { windows::Win32::UI::WindowsAndMessaging::FindWindowW(w!("rustshot_window"), w!("Rustshot update")) }.is_ok()
+}
+
+#[cfg(not(windows))]
+pub fn update_dialog_open() -> bool {
+    false
+}
+
+/// `rustshot daemon --force` while an on-demand run holds the instance:
+/// ask it to become the daemon (all its hotkeys, staying); false when
+/// none is reachable. Windows (elsewhere none runs on demand).
+pub fn signal_become_daemon() -> bool {
+    #[cfg(windows)]
+    return imp::signal_capture(imp::BECOME);
+    #[cfg(not(windows))]
+    false
+}
+
 /// Ask a running daemon to open its Settings window; false only when no
 /// daemon is reachable (then the caller opens the window itself). True
 /// means the request was delivered, not that a window opened: a daemon
@@ -117,6 +146,8 @@ mod imp {
     /// `WM_CAPTURE`'s wparam from a second launch ([`HotEvent::Relaunch`]);
     /// a daemon older than it takes it as a region capture.
     pub const RELAUNCH: usize = 100;
+    /// `WM_CAPTURE`'s wparam from `daemon --force` ([`super::signal_become_daemon`]).
+    pub const BECOME: usize = 101;
 
     pub fn signal_settings() -> bool {
         unsafe {
@@ -216,6 +247,7 @@ mod imp {
                     let ev = match w.0 {
                         2..=4 => crate::hotkey::slot_event(w.0),
                         RELAUNCH => HotEvent::Relaunch,
+                        BECOME => HotEvent::BecomeDaemon,
                         _ => HotEvent::Capture,
                     };
                     let _ = tx.send(ev);

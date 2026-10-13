@@ -9,6 +9,10 @@ pub enum HotEvent {
     /// Start menu, the exe, `rustshot`): a capture, or Settings when the
     /// tray icon is hidden (or no capture can start now).
     Relaunch,
+    /// `rustshot daemon --force` found this run: an on-demand run becomes
+    /// the daemon (all its hotkeys, it stays); a stopping one stays.
+    #[cfg_attr(not(windows), allow(dead_code))] // sent on Windows only
+    BecomeDaemon,
     Quit,
     /// An update is about to install: reply on the sender as soon as no
     /// capture, editor or upload is running, and start no new capture from
