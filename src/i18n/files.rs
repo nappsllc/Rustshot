@@ -26,13 +26,16 @@ pub struct Parsed {
 const FORMS: [&str; 6] = ["zero", "one", "two", "few", "many", "other"];
 
 /// A tag that can name a language file (`de`, `pt-BR`, `zh-Hant`).
+#[cfg(test)]
 pub fn valid_tag(t: &str) -> bool {
     !t.is_empty() && t.len() <= 16 && t.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') && !t.starts_with('-')
 }
 
 /// The language files in `dirs` (highest priority first): tag → its
 /// files, lowest priority first (later ones override earlier entries).
-/// English files are the template, not a language.
+/// English files are the template, not a language. (Tests: lang/'s
+/// files; the app looks a picked language's file up by its tag.)
+#[cfg(test)]
 pub fn discover(dirs: &[PathBuf]) -> Vec<(String, Vec<PathBuf>)> {
     let mut out: Vec<(String, Vec<PathBuf>)> = Vec::new();
     for d in dirs.iter().rev() {
@@ -159,7 +162,7 @@ pub fn parse_into(text: &str, file: &str, forms: &mut [[Option<String>; 6]], p: 
             },
             None => (k, None),
         };
-        let Ok(i) = table::KEYS.binary_search(&base) else {
+        let Ok(i) = super::names().binary_search(&base) else {
             p.problems.push(format!("{}: {base} is not a key of this version", at()));
             continue;
         };
@@ -170,7 +173,7 @@ pub fn parse_into(text: &str, file: &str, forms: &mut [[Option<String>; 6]], p: 
         if v.is_empty() {
             continue; // English stands
         }
-        let en = table::PH[i];
+        let en = super::placeholders_of(i);
         let ph = placeholders(&v);
         if let Some(bad) = ph.iter().find(|x| !en.contains(x)) {
             p.problems.push(format!("{}: {base} has {{{bad}}}, which English has not: English is used", at()));

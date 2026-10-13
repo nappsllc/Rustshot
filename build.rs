@@ -513,6 +513,12 @@ fn pack_i18n() {
             }
             raw.push(0);
         }
+        // Then the key names (the run time reads files and dynamic keys
+        // by name; compressed here they cost a few KB, not an array).
+        for k in keys.keys() {
+            raw.extend(k.bytes());
+            raw.push(0);
+        }
         let z = deflate::deflate(&raw, deflate::Effort::BEST);
         writeln!(langs, "pub const EN_RAW_LEN: usize = {};", raw.len()).unwrap();
         blob.extend(z);

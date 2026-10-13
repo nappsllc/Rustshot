@@ -17,7 +17,6 @@
 use crate::fonts::UiFont;
 use crate::objects::Pt;
 use crate::text::{UiFace, UI_EM_RATIO};
-use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 /// Whether `s` needs the OS text stack (a character the baked font lacks).
@@ -36,20 +35,34 @@ struct Run {
     used: u64,
 }
 
-type K = (String, u32, bool);
+/// One cached string at one size and direction: its width, and its
+/// raster once drawn. (A list searched by a hash: one small cache, no map.)
+struct Entry {
+    hash: u64,
+    px: u32,
+    rtl: bool,
+    s: String,
+    w: f32,
+    run: Option<Run>,
+}
 
 #[derive(Default)]
 struct Cache {
-    widths: HashMap<K, f32>,
-    runs: HashMap<K, Run>,
+    entries: Vec<Entry>,
     bytes: usize,
     tick: u64,
 }
 
-/// Kept rasters: at most this many, and this many bytes.
-const MAX_RUNS: usize = 1024;
+impl Cache {
+    fn find(&mut self, s: &str, px: f32, rtl: bool) -> Option<&mut Entry> {
+        let h = crate::ui::id_of(s);
+        self.entries.iter_mut().find(|e| e.hash == h && e.px == px.to_bits() && e.rtl == rtl && e.s == s)
+    }
+}
+
+/// Kept entries: at most this many, rasters at most this many bytes.
+const MAX_ENTRIES: usize = 1024;
 const MAX_BYTES: usize = 8 << 20;
-const MAX_WIDTHS: usize = 8192;
 
 fn cache() -> std::sync::MutexGuard<'static, Cache> {
     static C: OnceLock<Mutex<Cache>> = OnceLock::new();
@@ -69,16 +82,18 @@ fn face(rtl: bool) -> &'static UiFace {
 /// Advance width of `s` at the baked font's `px`.
 pub fn width(font: &UiFont, s: &str, px: f32) -> f32 {
     let rtl = crate::i18n::is_rtl();
-    let key = (s.to_string(), px.to_bits(), rtl);
-    if let Some(&w) = cache().widths.get(&key) {
-        return w;
+    if let Some(e) = cache().find(s, px, rtl) {
+        return e.w;
     }
     let w = face(rtl).width(s, os_px(font, px));
     let mut c = cache();
-    if c.widths.len() >= MAX_WIDTHS {
-        c.widths.clear();
+    if c.entries.len() >= MAX_ENTRIES {
+        // Drop the older half (entries are added at the end, used ones
+        // keep their raster's tick).
+        c.entries.drain(..MAX_ENTRIES / 2);
+        c.bytes = c.entries.iter().filter_map(|e| e.run.as_ref()).map(|r| r.a.len()).sum();
     }
-    c.widths.insert(key, w);
+    c.entries.push(Entry { hash: crate::ui::id_of(s), px: px.to_bits(), rtl, s: s.to_string(), w, run: None });
     w
 }
 
@@ -86,14 +101,13 @@ pub fn width(font: &UiFont, s: &str, px: f32) -> f32 {
 /// `f(x, y, coverage)` per pixel. Returns the advance width.
 pub fn draw(font: &UiFont, s: &str, px: f32, x: f32, y: f32, f: &mut dyn FnMut(i32, i32, f32)) -> f32 {
     let rtl = crate::i18n::is_rtl();
-    let key = (s.to_string(), px.to_bits(), rtl);
     let w = width(font, s, px);
     let (ox, oy) = (x.round() as i32, y.round() as i32);
     {
         let mut c = cache();
         c.tick += 1;
         let tick = c.tick;
-        if let Some(r) = c.runs.get_mut(&key) {
+        if let Some(r) = c.find(s, px, rtl).and_then(|e| e.run.as_mut()) {
             r.used = tick;
             blit(r, ox, oy, f);
             return w;
@@ -102,15 +116,22 @@ pub fn draw(font: &UiFont, s: &str, px: f32, x: f32, y: f32, f: &mut dyn FnMut(i
     let r = raster(font, s, px, rtl, w);
     blit(&r, ox, oy, f);
     let mut c = cache();
-    c.bytes += r.a.len();
-    c.runs.insert(key, r);
-    if c.runs.len() > MAX_RUNS || c.bytes > MAX_BYTES {
-        // Drop the older half.
-        let mut ticks: Vec<u64> = c.runs.values().map(|r| r.used).collect();
+    let n = r.a.len();
+    if let Some(e) = c.find(s, px, rtl) {
+        e.run = Some(r);
+        c.bytes += n;
+    }
+    if c.bytes > MAX_BYTES {
+        // Drop the older half of the rasters (the widths stay).
+        let mut ticks: Vec<u64> = c.entries.iter().filter_map(|e| e.run.as_ref()).map(|r| r.used).collect();
         ticks.sort_unstable();
         let cut = ticks[ticks.len() / 2];
-        c.runs.retain(|_, r| r.used > cut);
-        c.bytes = c.runs.values().map(|r| r.a.len()).sum();
+        for e in c.entries.iter_mut() {
+            if e.run.as_ref().is_some_and(|r| r.used <= cut) {
+                e.run = None;
+            }
+        }
+        c.bytes = c.entries.iter().filter_map(|e| e.run.as_ref()).map(|r| r.a.len()).sum();
     }
     w
 }
@@ -206,7 +227,7 @@ mod tests {
             assert!(n > 20 && w > 10.0, "{s}: {n} px, width {w}");
             // Within a few px of the baked text's vertical extent.
             assert!(b.1 >= base.1 - 6 && b.3 <= base.3 + 7, "{s}: rows {}..{} vs {}..{}", b.1, b.3, base.1, base.3);
-            assert!(cache().runs.contains_key(&(s.to_string(), 20f32.to_bits(), false)), "{s}: cached");
+            assert!(cache().find(s, 20.0, false).is_some_and(|e| e.run.is_some()), "{s}: cached");
             let again = lit(s, 20.0);
             assert_eq!(again.0, n, "{s}: same pixels from the cache");
         }

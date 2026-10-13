@@ -105,10 +105,12 @@ impl Key {
     /// The key's name (`settings.general.language`).
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn name(self) -> &'static str {
-        table::KEYS[self.0 as usize]
+        names()[self.0 as usize]
     }
 
     /// The string in the current language (English when it has none).
+    /// (Never inlined: a thousand call sites stay a call each.)
+    #[inline(never)]
     pub fn get(self) -> &'static str {
         let lang = current_index();
         let v = table_of(lang)[self.0 as usize];
@@ -117,6 +119,7 @@ impl Key {
 
     /// The plural form for `n` in the current language (its `other`, then
     /// English, when it lacks that form).
+    #[inline(never)]
     pub fn plural(self, n: i64) -> &'static str {
         let lang = current_index();
         let pick = |lang: usize| -> &'static str {
@@ -214,7 +217,7 @@ impl Label for &'static str {
 /// The key named `k` at run time (keys built from ids); None when there
 /// is none.
 pub fn lookup(k: &str) -> Option<Key> {
-    table::KEYS.binary_search(&k).ok().filter(|&i| !table::PLURAL[i]).map(|i| Key(i as u16))
+    names().binary_search(&k).ok().filter(|&i| !table::PLURAL[i]).map(|i| Key(i as u16))
 }
 
 /// The string of the key named `k` at run time; the key itself when there
@@ -231,6 +234,7 @@ pub fn t(k: &str) -> &'static str {
 }
 
 /// `s` with each `{name}` replaced by its argument (unknown ones kept).
+#[inline(never)]
 pub fn fmt(s: &str, args: &[(&str, &dyn std::fmt::Display)]) -> String {
     use std::fmt::Write as _;
     let mut out = String::with_capacity(s.len() + 16);
@@ -345,10 +349,43 @@ fn english() -> &'static files::Parsed {
             _ => vec![0; table::N],
         };
         let s: &'static str = Box::leak(String::from_utf8(raw).unwrap_or_default().into_boxed_str());
-        let mut values: Vec<&'static str> = s.split('\0').take(table::N).collect();
+        let mut parts = s.split('\0');
+        let mut values: Vec<&'static str> = parts.by_ref().take(table::N).collect();
         values.resize(table::N, "");
+        let mut names: Vec<&'static str> = parts.take(table::N).collect();
+        names.resize(table::N, "");
+        let _ = NAMES.set(names);
         files::Parsed { name: "English".into(), rtl: false, plural: "one_other".into(), values, problems: Vec::new() }
     })
+}
+
+static NAMES: OnceLock<Vec<&'static str>> = OnceLock::new();
+
+/// The key names, sorted (from English's table: `table::KEYS` is for the
+/// compile-time checks only).
+pub(crate) fn names() -> &'static [&'static str] {
+    english();
+    NAMES.get().map_or(&[], |v| v)
+}
+
+/// The `{placeholders}` of key `i`'s English string (all its forms).
+pub(crate) fn placeholders_of(i: usize) -> Vec<&'static str> {
+    let v = english().values[i];
+    let mut out = Vec::new();
+    let mut rest = v;
+    while let Some(a) = rest.find('{') {
+        rest = &rest[a + 1..];
+        if let Some(b) = rest.find('}') {
+            let name = &rest[..b];
+            if !name.is_empty() && name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_') {
+                out.push(name);
+                rest = &rest[b + 1..];
+            }
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
 }
 
 /// Language `i` if its strings are here (English always; a test
@@ -387,11 +424,9 @@ fn try_load(i: usize) -> bool {
     }
     let k = known(i);
     let mut paths: Vec<std::path::PathBuf> = fetch::cached(k.code).into_iter().collect();
-    for (tag, p) in files::discover(&files::lang_dirs()) {
-        if tag.eq_ignore_ascii_case(k.code) {
-            paths.extend(p);
-        }
-    }
+    // (Highest priority first: they go on top, so last.)
+    let local: Vec<_> = files::lang_dirs().into_iter().map(|d| d.join(format!("{}.txt", k.code))).filter(|p| p.is_file()).collect();
+    paths.extend(local.into_iter().rev());
     if paths.is_empty() {
         return false;
     }

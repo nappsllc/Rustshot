@@ -8,7 +8,6 @@
 //! Names: language `<tag>` is the release asset `lang-<tag>.txt`, cached
 //! as `lang/<tag>.txt` (relative to the cache folder).
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -77,9 +76,24 @@ pub enum Status {
     Failed(String),
 }
 
-fn states() -> std::sync::MutexGuard<'static, HashMap<String, Status>> {
-    static S: OnceLock<Mutex<HashMap<String, Status>>> = OnceLock::new();
-    S.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner())
+/// Each asked-for language's status (a handful: a list).
+struct States(Vec<(String, Status)>);
+
+impl States {
+    fn get(&self, k: &str) -> Option<&Status> {
+        self.0.iter().find(|(t, _)| t == k).map(|(_, s)| s)
+    }
+    fn insert(&mut self, k: String, s: Status) {
+        match self.0.iter_mut().find(|(t, _)| *t == k) {
+            Some(e) => e.1 = s,
+            None => self.0.push((k, s)),
+        }
+    }
+}
+
+fn states() -> std::sync::MutexGuard<'static, States> {
+    static S: Mutex<States> = Mutex::new(States(Vec::new()));
+    S.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// Set language `tag`'s status (tests: the states Settings shows).
