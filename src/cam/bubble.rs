@@ -25,7 +25,7 @@ use crate::rec_ui::Dib;
 use crate::theme::Theme;
 use anyhow::{bail, Context, Result};
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -65,6 +65,8 @@ struct Shared {
     stop: AtomicBool,
     /// The bubble's side in physical px (what pictures are fitted to).
     side: AtomicU32,
+    /// The background effect ([`super::bg::Bg`]).
+    bg: AtomicU8,
     /// The window; 0 once it is being destroyed. Posting holds the lock,
     /// so nothing reaches a destroyed (or reused) handle.
     hwnd: Mutex<isize>,
@@ -339,6 +341,7 @@ fn camera_thread(open: Opener, sh: Arc<Shared>, done: mpsc::Sender<()>) {
         let mut src = open()?;
         let mut last: Option<Instant> = None;
         let (mut raw, mut tmp) = (CamFrame::default(), Vec::new());
+        let mut fx = super::bg::Effect::default();
         while !sh.stop.load(Ordering::SeqCst) {
             if !src.read(&mut raw)? {
                 continue;
@@ -352,6 +355,7 @@ fn camera_thread(open: Opener, sh: Arc<Shared>, done: mpsc::Sender<()>) {
             // filled again.
             let mut sq = lock(&sh.spare).take().or_else(|| lock(&sh.frame).take()).unwrap_or_default();
             super::fit_square_into(&raw, sh.side.load(Ordering::SeqCst), &mut tmp, &mut sq);
+            fx.apply(super::bg::Bg::from_u8(sh.bg.load(Ordering::SeqCst)), &raw, &mut sq);
             if let Some(old) = lock(&sh.frame).replace(sq) {
                 *lock(&sh.spare) = Some(old);
             }
@@ -417,6 +421,7 @@ impl Bubble {
             error: Mutex::new(None),
             stop: AtomicBool::new(false),
             side: AtomicU32::new(tpl.d),
+            bg: AtomicU8::new(look.bg.to_u8()),
             hwnd: Mutex::new(hwnd.0 as isize),
         });
         let mut st = State {
@@ -592,6 +597,12 @@ impl Bubble {
                 return false;
             }
             let resized = st.look.size != look.size;
+            st.shared.bg.store(look.bg.to_u8(), Ordering::SeqCst);
+            if (Look { bg: st.look.bg, ..look }) == st.look && st.th == *th {
+                // Only the background: the camera thread's next picture.
+                st.look = look;
+                return false;
+            }
             st.look = look;
             st.th = *th;
             st.tpl = super::template(look, st.scale, th);

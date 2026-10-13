@@ -307,6 +307,17 @@ cargo test                     # unit tests
 cargo test -- --ignored        # live display / clipboard / network tests
 ```
 
+The camera's background blur uses MediaPipe's Selfie Segmentation model
+(Apache-2.0), converted to `assets/selfie.bin` (source and hash in
+`assets/selfie.bin.txt`); it is embedded whenever that file is there.
+`RUSTSHOT_NO_SELFIE=1` builds without it (macOS 12+ still blurs with
+Vision). To convert the model again:
+
+```bash
+cargo run --manifest-path tools/convert-selfie/Cargo.toml -- \
+    selfie_segmentation_landscape.tflite assets/selfie.bin
+```
+
 Packaging scripts for NSIS, MSIX, `.app`/dmg, deb, AppImage, Flatpak,
 Snap, AUR and Homebrew live in [`packaging/`](packaging). CI builds all of
 them on every push. Pushing a `vX.Y.Z` tag that matches `Cargo.toml`

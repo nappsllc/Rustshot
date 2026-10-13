@@ -27,7 +27,7 @@ use crate::rec_ui::x11::{self as xw, Disp, Kind, Win};
 use crate::theme::Theme;
 use anyhow::{bail, Context, Result};
 use core::ffi::{c_int, c_short};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -97,6 +97,8 @@ struct Shared {
     error: Mutex<Option<String>>,
     stop: AtomicBool,
     side: AtomicU32,
+    /// The background effect ([`super::bg::Bg`]).
+    bg: AtomicU8,
     picture: AtomicBool,
     /// The window thread could not make the window.
     failed: Mutex<Option<String>>,
@@ -115,6 +117,7 @@ fn camera_thread(open: Opener, sh: Arc<Shared>, done: mpsc::Sender<()>) {
         let mut src = open(&sh.stop)?;
         let mut last: Option<Instant> = None;
         let (mut raw, mut tmp) = (CamFrame::default(), Vec::new());
+        let mut fx = super::bg::Effect::default();
         while !sh.stop.load(Ordering::SeqCst) {
             if !src.read(&mut raw)? {
                 continue;
@@ -126,6 +129,7 @@ fn camera_thread(open: Opener, sh: Arc<Shared>, done: mpsc::Sender<()>) {
             last = Some(now);
             let mut sq = lock(&sh.spare).take().unwrap_or_default();
             super::fit_square_into(&raw, sh.side.load(Ordering::SeqCst), &mut tmp, &mut sq);
+            fx.apply(super::bg::Bg::from_u8(sh.bg.load(Ordering::SeqCst)), &raw, &mut sq);
             if let Some(old) = lock(&sh.fresh).replace(sq) {
                 *lock(&sh.spare) = Some(old);
             }
@@ -339,6 +343,7 @@ impl Bubble {
             error: Mutex::new(None),
             stop: AtomicBool::new(false),
             side: AtomicU32::new(side),
+            bg: AtomicU8::new(look.bg.to_u8()),
             picture: AtomicBool::new(false),
             failed: Mutex::new(None),
         });
@@ -474,8 +479,14 @@ impl Bubble {
 
     /// Change the shape, size or mirroring (and the theme's accent).
     pub fn set_look(&mut self, look: Look, th: &Theme) {
+        self.shared.bg.store(look.bg.to_u8(), Ordering::SeqCst);
         let mut g = lock(&self.shared.geo);
         if g.look == look && g.th == *th {
+            return;
+        }
+        if (Look { bg: g.look.bg, ..look }) == g.look && g.th == *th {
+            // Only the background: the camera thread's next picture.
+            g.look = look;
             return;
         }
         let resized = g.look.size != look.size;

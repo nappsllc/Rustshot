@@ -175,6 +175,9 @@ pub struct Config {
     /// Recording: a GIF stops by itself after this many seconds (15, 30
     /// or 60; video mode's panel and Settings › Recording "Max length").
     pub rec_gif_max: u32,
+    /// Recording: the camera bubble's background, "off", "light" or
+    /// "strong" (blurred behind the person).
+    pub rec_camera_bg: String,
     /// The capture launcher's last choices: "region", "screen" or
     /// "window"; the delay in seconds (0-60); "edit", "copy", "save" or
     /// "pin" after the capture.
@@ -413,6 +416,7 @@ impl Default for Config {
             rec_camera_ring_color: String::new(),
             rec_camera_ring_width: RING_WIDTH_DEFAULT,
             rec_gif_max: 30,
+            rec_camera_bg: "off".into(),
             launcher_source: "region".into(),
             launcher_delay: 0,
             launcher_after: "edit".into(),
@@ -715,6 +719,7 @@ pub fn copy_key(from: &Config, to: &mut Config, key: &str) {
         "recent_colors" => to.recent_colors = from.recent_colors.clone(),
         "rec_camera_ring_color" => to.rec_camera_ring_color = from.rec_camera_ring_color.clone(),
         "rec_camera_ring_width" => to.rec_camera_ring_width = from.rec_camera_ring_width,
+        "rec_camera_bg" => to.rec_camera_bg = from.rec_camera_bg.clone(),
         "ui_scale" => to.ui_scale = from.ui_scale,
         "snap_tab_hint" => to.snap_tab_hint = from.snap_tab_hint,
         "redact_kinds" => to.redact_kinds = from.redact_kinds.clone(),
@@ -1256,6 +1261,7 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
             }
             // Recorder redesign.
             "rec_gif_max" => cfg.rec_gif_max = fps_of(val, &[15, 30, 60]).map_err(|e| bad("number (15, 30 or 60)", &e))?,
+            "rec_camera_bg" => cfg.rec_camera_bg = one_of(val, &["off", "light", "strong"]).map_err(|e| bad("value", &e))?,
             "recent_colors" => cfg.recent_colors = as_array(val).map_err(|e| bad("array", &e))?,
             "launcher_source" => {
                 cfg.launcher_source = one_of(val, &["region", "screen", "window"]).map_err(|e| bad("value", &e))?
@@ -1417,6 +1423,7 @@ pub fn to_toml(c: &Config) -> String {
     );
     out.push_str(&format!("rec_gif_max = {}
 ", c.rec_gif_max));
+    out.push_str(&format!("rec_camera_bg = {}\n", q(&c.rec_camera_bg)));
     out.push_str(&format!("show_thumbnail = {}\n", c.show_thumbnail));
     out.push_str(&format!(
         "magnifier = {}\nmagnifier_square = {}\naccept_on_select = {}\noverlay_hints = {}\n",
@@ -2282,6 +2289,26 @@ record_hotkey = \"Ctrl+Shift+R\"
         for ok in ["rec_fps = 60", "rec_gif_fps = 10", "rec_camera_shape = \"circle\"", "rec_linux_encoder = \"auto\""] {
             assert!(parse_config(ok).is_ok(), "{ok}");
         }
+    }
+
+    /// The camera bubble's background: off by default, light or strong,
+    /// written and read back; anything else refused.
+    #[test]
+    fn camera_background_key() {
+        assert_eq!(Config::default().rec_camera_bg, "off");
+        assert!(to_toml(&Config::default()).contains("rec_camera_bg = \"off\"\n"));
+        for v in ["off", "light", "strong"] {
+            let c = parse_config(&format!("rec_camera_bg = \"{v}\"")).unwrap();
+            assert_eq!(c.rec_camera_bg, v);
+            assert_eq!(parse_config(&to_toml(&c)).unwrap(), c);
+        }
+        assert_eq!(parse_config("rec_camera_bg = \"Strong\"").unwrap().rec_camera_bg, "strong");
+        for bad in ["rec_camera_bg = \"blur\"", "rec_camera_bg = 1"] {
+            assert!(parse_config(bad).expect_err(bad).contains("'rec_camera_bg'"), "{bad}");
+        }
+        let mut to = Config::default();
+        copy_key(&Config { rec_camera_bg: "light".into(), ..Config::default() }, &mut to, "rec_camera_bg");
+        assert_eq!(to.rec_camera_bg, "light");
     }
 
     #[test]

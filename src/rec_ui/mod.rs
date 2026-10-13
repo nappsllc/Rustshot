@@ -264,6 +264,8 @@ pub struct RecOpts {
     pub cam_ring: Option<crate::uifb::C4>,
     /// The ring's width in logical px (0 = no ring).
     pub cam_ring_w: u32,
+    /// The background behind the person (`rec_camera_bg`).
+    pub cam_bg: crate::cam::bg::Bg,
 }
 
 impl RecOpts {
@@ -284,6 +286,7 @@ impl RecOpts {
             cam_mirror: cfg.rec_camera_mirror,
             cam_ring: crate::config::parse_color(&cfg.rec_camera_ring_color).map(|(r, g, b, _)| crate::uifb::C4::rgb(r, g, b)),
             cam_ring_w: cfg.rec_camera_ring_width.min(crate::config::RING_WIDTH_MAX),
+            cam_bg: crate::cam::bg::Bg::from_config(&cfg.rec_camera_bg),
         }
     }
 
@@ -295,6 +298,7 @@ impl RecOpts {
             mirror: self.cam_mirror,
             ring: self.cam_ring,
             ring_w: self.cam_ring_w.min(crate::config::RING_WIDTH_MAX) as u8,
+            bg: self.cam_bg,
         }
     }
 

@@ -140,6 +140,7 @@ rec_camera_size = "m"             # "s", "m", "l" or "xl" (120, 160, 200, 240 px
 rec_camera_mirror = true
 rec_camera_ring_color = ""        # "" = the accent, or "#rrggbb"
 rec_camera_ring_width = 2         # 0 (no ring) to 16
+rec_camera_bg = "off"             # the bubble's background: "off", "light" or "strong" (blurred)
 rec_linux_encoder = "auto"        # Linux MP4: "auto", "ffmpeg" or "openh264"
 ```
 

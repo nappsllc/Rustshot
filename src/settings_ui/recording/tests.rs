@@ -33,6 +33,7 @@ fn custom() -> Config {
         rec_linux_encoder: "openh264".into(),
         rec_camera_ring_color: "#3b82f6".into(),
         rec_camera_ring_width: 7,
+        rec_camera_bg: "strong".into(),
         ..Config::default()
     }
 }
@@ -77,6 +78,7 @@ fn form_writes_each_recording_key() {
         ("rec_camera_shape", Box::new(|f| f.shape = 1)),
         ("rec_camera_size", Box::new(|f| f.size = 3)),
         ("rec_camera_mirror", Box::new(|f| f.mirror = false)),
+        ("rec_camera_bg", Box::new(|f| f.bg = 2)),
         ("rec_countdown", Box::new(|f| f.countdown = false)),
         ("record_hotkey", Box::new(|f| f.hotkey = Chord::parse("Ctrl+Alt+R"))),
         ("rec_linux_encoder", Box::new(|f| f.encoder = 2)),
@@ -288,4 +290,73 @@ fn a_gif_keeps_the_camera_rows_enabled() {
     assert!(left(false, "mp4") == left(true, "mp4"));
     // And GIF still greys the sound rows (the left side differs from MP4).
     assert!(left(true, "gif") != left(true, "mp4"), "GIF greys System sound and Microphone");
+}
+
+/// Click the control `id` at `fx` of its width (scrolled to the end).
+fn click_at(s: &mut Settings, id: &str, fx: f32) {
+    use crate::wind::Ev;
+    s.scroll[RECORDING] = 1e6;
+    let mut focus = FocusState::default();
+    for _ in 0..2 {
+        preview::render(W, H, 1.0, &DARK, &Input::default(), &mut focus, |ui| {
+            paint(ui, s);
+        });
+    }
+    let r = focus.rect_of(id).unwrap_or_else(|| panic!("{id} drawn"));
+    let (x, y) = ((r.x + r.w * fx) as i32, (r.y + r.h / 2.0) as i32);
+    let mut input = Input::default();
+    for e in [Ev::Move { x, y }, Ev::Down { x, y }, Ev::Up { x, y }] {
+        input.feed(&e);
+    }
+    preview::render(W, H, 1.0, &DARK, &input, &mut focus, |ui| {
+        paint(ui, s);
+    });
+}
+
+/// The camera's Background row: Off / Blur light / Blur strong, saved
+/// as `rec_camera_bg`; without a segmentation model in the build it says
+/// so and does nothing.
+#[test]
+fn background_row() {
+    assert_eq!(labels(&BACKGROUNDS), ["Off", "Blur light", "Blur strong"]);
+    assert_eq!(BACKGROUNDS.map(|b| b.1), crate::cam::bg::Bg::ALL.map(|b| b.key()));
+    assert_eq!(BACKGROUNDS[RecForm::new(&Config::default()).bg].1, "off");
+    assert_eq!(RecForm::new(&Config { rec_camera_bg: "light".into(), ..Config::default() }).bg, 1);
+    // Available: a click on the last segment picks Blur strong.
+    crate::cam::bg::set_available(Some(true));
+    let mut s = sample(Config { rec_camera: true, ..Config::default() });
+    click_at(&mut s, "rec_camera_bg", 0.85);
+    assert_eq!(s.form.rec.bg, 2);
+    let d = Config::default();
+    let c = s.form.apply(&d, &d);
+    assert_eq!(c.rec_camera_bg, "strong");
+    let on = {
+        let (img, _) = render(&mut s, &DARK, 1.0);
+        img
+    };
+    // Unavailable: the click changes nothing, and the row reads otherwise.
+    crate::cam::bg::set_available(Some(false));
+    let mut s = sample(Config { rec_camera: true, ..Config::default() });
+    click_at(&mut s, "rec_camera_bg", 0.85);
+    assert_eq!(s.form.rec.bg, 0, "disabled");
+    s.form.rec.bg = 2;
+    let (off, _) = render(&mut s, &DARK, 1.0);
+    assert!(on.as_raw() != off.as_raw(), "\"{}\" shows", crate::cam::bg::UNAVAILABLE);
+    crate::cam::bg::set_available(None);
+}
+
+/// Preview PNGs of the camera rows with the Background row, available
+/// and not, dark and light.
+#[test]
+fn preview_background_row_pngs() {
+    for (tname, th) in [("dark", &DARK), ("light", &LIGHT)] {
+        for (name, avail) in [("blur", true), ("noblur", false)] {
+            crate::cam::bg::set_available(Some(avail));
+            let mut s = sample(Config { rec_camera: true, rec_camera_bg: "light".into(), ..Config::default() });
+            s.scroll[RECORDING] = 1e6;
+            let (img, _) = render(&mut s, th, 1.0);
+            preview::save(&format!("settings-recording-camera-{name}-{tname}.png"), &img);
+        }
+    }
+    crate::cam::bg::set_available(None);
 }

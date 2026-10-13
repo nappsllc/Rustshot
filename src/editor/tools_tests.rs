@@ -801,6 +801,46 @@ fn popover_tips_stay_off_the_bar() {
     assert!(!e.scene.as_ref().unwrap().tip.clone().expect("tooltip").below);
 }
 
+/// The panel's Background row: a choice goes to the bubble's look at
+/// once and is remembered (`rec_camera_bg`) for the next capture; the
+/// config's value starts it. A build that cannot blur ignores it.
+#[cfg(any(windows, target_os = "linux"))]
+#[test]
+fn background_choice_reaches_the_bubble_and_is_remembered() {
+    use crate::cam::bg::Bg;
+    crate::cam::bg::set_available(Some(true));
+    let mut a = app_big();
+    let rec = item(&mut a, |k| *k == toolbar::Kind::Btn(Act::Record));
+    click(&mut a, mid(rec));
+    let cam = item(&mut a, |k| matches!(k, toolbar::Kind::Switch { act: Act::RecCamera, .. }));
+    click(&mut a, mid(cam));
+    let look = |a: &mut App| {
+        a.pump();
+        ed(a).rec.cam.shown.as_ref().map(|s| s.1).expect("the bubble is shown")
+    };
+    assert_eq!(look(&mut a).bg, Bg::Off);
+    let strong = item(&mut a, |k| matches!(k, toolbar::Kind::Seg { act: Act::RecBg(Bg::Strong), .. }));
+    click(&mut a, mid(strong));
+    assert_eq!(look(&mut a).bg, Bg::Strong);
+    assert_eq!(ed(&mut a).pending.get("rec_camera_bg"), Some(&Some("\"strong\"".to_string())));
+    key(&mut a, key_esc());
+    key(&mut a, key_esc());
+    assert_eq!(a.cfg.rec_camera_bg, "strong");
+    assert_eq!(a.rec_opts.as_ref().map(|o| o.cam_bg), Some(Bg::Strong));
+    assert_eq!(RecOpts::from_config(&Config { rec_camera_bg: "light".into(), ..Config::default() }).cam_look().bg, Bg::Light);
+    // Unavailable: the row has no choices, and the action does nothing.
+    crate::cam::bg::set_available(Some(false));
+    let mut a = app_big();
+    let rec = item(&mut a, |k| *k == toolbar::Kind::Btn(Act::Record));
+    click(&mut a, mid(rec));
+    let cam = item(&mut a, |k| matches!(k, toolbar::Kind::Switch { act: Act::RecCamera, .. }));
+    click(&mut a, mid(cam));
+    item(&mut a, |k| matches!(k, toolbar::Kind::Row { act: Act::RecBg(_), value: Some(crate::cam::bg::UNAVAILABLE), .. }));
+    let tb = ed(&mut a).toolbar.clone().unwrap();
+    assert!(!tb.items.iter().any(|i| matches!(i.kind, toolbar::Kind::Seg { act: Act::RecBg(_), .. })));
+    crate::cam::bg::set_available(None);
+}
+
 /// Ring settings from the config reach the bubble's look.
 #[test]
 fn ring_settings_from_the_config() {

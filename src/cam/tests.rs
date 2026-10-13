@@ -8,7 +8,7 @@ pub(crate) static REMEMBERED_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(
 #[cfg(windows)]
 pub(crate) static LIVE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-const LOOK: Look = Look { shape: Shape::Circle, size: CamSize::M, mirror: false, ring: None, ring_w: 3 };
+const LOOK: Look = Look { shape: Shape::Circle, size: CamSize::M, mirror: false, ring: None, ring_w: 3, bg: bg::Bg::Off };
 
 #[test]
 fn config_values_round_trip() {

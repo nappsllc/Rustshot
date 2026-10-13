@@ -392,6 +392,11 @@ under the selection, offers:
   fit) or **GIF** (10, 15 or 24 fps, no sound; it stops by itself at its
   max length, 15, 30 or 60 s).
 - The countdown (0 or 3 s) and the camera's shape and ring.
+- The camera's **Background** (under the Camera row): Off, Blur light or
+  Blur strong. The person is found in each picture on your computer (the
+  embedded MediaPipe Selfie Segmentation model, or Vision on macOS 12 and
+  later) and what is behind them is blurred; nothing leaves the machine.
+  A build without the model says *Blur unavailable in this build*.
 
 The camera bubble is a real window on the screen, so it is in the
 recording: drag it anywhere (it snaps into the nearest corner when let go
@@ -641,7 +646,8 @@ on the left picks the section:
   then *Image*: *Trim margins automatically*, *Add a border* (width and
   color) and *HDR screenshots* (Windows), and the History limits.
 - **Recording:** video mode's defaults (format, frame rate, quality, GIF
-  length, countdown, sound, microphone, camera bubble); on Linux also the
+  length, countdown, sound, microphone, camera bubble and its
+  background); on Linux also the
   MP4 encoder.
 - **Key bindings:** the global hotkeys, every editor shortcut and the
   *While recording* chords.
