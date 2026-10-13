@@ -99,12 +99,12 @@ pub enum Btn {
 impl Btn {
     fn label(self) -> &'static str {
         match self {
-            Btn::Update => "Update",
-            Btn::Skip => "Skip this version",
-            Btn::Cancel => "Cancel",
-            Btn::Ok => "OK",
-            Btn::Retry => "Retry",
-            Btn::Close => "Close",
+            Btn::Update => tr!("update.btn.update"),
+            Btn::Skip => tr!("update.btn.skip"),
+            Btn::Cancel => tr!("common.cancel"),
+            Btn::Ok => tr!("common.ok"),
+            Btn::Retry => tr!("update.btn.retry"),
+            Btn::Close => tr!("common.close"),
         }
     }
 
@@ -350,7 +350,7 @@ impl View {
 }
 
 fn mb(b: u64) -> String {
-    format!("{:.1} MB", b as f64 / 1_000_000.0)
+    tr!("size.mb", n = format!("{:.1}", b as f64 / 1_000_000.0))
 }
 
 /// Heading icon: the app glyph, or a Lucide status icon in a theme color.
@@ -370,7 +370,7 @@ struct Content<'a> {
 }
 
 fn content<'a>(m: &'a Machine, th: &Theme) -> Content<'a> {
-    let available = |r: &Release| format!("Rustshot {} is available (you have {CURRENT})", r.version);
+    let available = |r: &Release| tr!("update.available", version = r.version, current = CURRENT);
     let msg = |mark, title: String, text: &str| Content {
         mark,
         title,
@@ -388,43 +388,43 @@ fn content<'a>(m: &'a Machine, th: &Theme) -> Content<'a> {
     match &m.screen {
         Screen::Checking => Content {
             mark: Mark::App,
-            title: "Checking for updates…".into(),
+            title: tr!("update.checking").into(),
             notes: None,
-            text: Some(format!("You have {CURRENT}.")),
+            text: Some(tr!("update.you_have", current = CURRENT)),
             progress: None,
         },
         Screen::Available(r) => Content { mark: Mark::App, title: available(r), notes: Some(r), text: None, progress: None },
         Screen::Downloading { rel, got, total } => {
             let s = match total {
-                Some(t) => format!("Downloading… {} of {}", mb(*got), mb(*t)),
-                None if *got > 0 => format!("Downloading… {}", mb(*got)),
-                None => "Downloading…".into(),
+                Some(t) => tr!("codec.progress", got = mb(*got), total = mb(*t)),
+                None if *got > 0 => tr!("update.downloading_n", got = mb(*got)),
+                None => tr!("codec.downloading").into(),
             };
             busy(rel, s, total.map_or(0.0, |t| *got as f32 / t.max(1) as f32))
         }
-        Screen::Verifying(rel) => busy(rel, "Verifying the download…".into(), 1.0),
-        Screen::Cancelling(rel) => busy(rel, "Cancelling…".into(), 0.0),
-        Screen::Installing { rel, waiting: true } => busy(rel, "Waiting for the capture to close…".into(), 1.0),
-        Screen::Installing { rel, waiting: false } => busy(rel, "Installing… Rustshot will restart.".into(), 1.0),
+        Screen::Verifying(rel) => busy(rel, tr!("update.verifying").into(), 1.0),
+        Screen::Cancelling(rel) => busy(rel, tr!("update.cancelling").into(), 0.0),
+        Screen::Installing { rel, waiting: true } => busy(rel, tr!("update.waiting").into(), 1.0),
+        Screen::Installing { rel, waiting: false } => busy(rel, tr!("update.installing").into(), 1.0),
         Screen::UpToDate => msg(
             Mark::Icon("okc", th.success),
-            "Rustshot is up to date".into(),
-            &format!("You have the latest version, {CURRENT}."),
+            tr!("update.up_to_date").into(),
+            &tr!("update.latest", current = CURRENT),
         ),
         Screen::Managed(store) => msg(
             Mark::Icon("info", th.accent_fg),
-            format!("Rustshot {CURRENT}"),
-            &format!("Updates for this install come from {store}."),
+            tr!("update.managed_title", current = CURRENT),
+            &tr!("update.managed", store),
         ),
-        Screen::CheckFailed(e) => msg(Mark::Icon("alert", th.error), "Could not check for updates".into(), e),
+        Screen::CheckFailed(e) => msg(Mark::Icon("alert", th.error), tr!("update.check_failed").into(), e),
         Screen::InstallFailed { rel, msg: e } => Content {
             mark: Mark::Icon("alert", th.error),
-            title: format!("Rustshot {} could not be installed", rel.version),
+            title: tr!("update.install_failed_title", version = rel.version),
             notes: Some(rel),
             text: Some(e.clone()),
             progress: None,
         },
-        Screen::SaveFailed(e) => msg(Mark::Icon("alert", th.error), "Could not save the setting".into(), e),
+        Screen::SaveFailed(e) => msg(Mark::Icon("alert", th.error), tr!("update.save_failed").into(), e),
     }
 }
 
@@ -505,7 +505,7 @@ fn paint(ui: &mut Ui, m: &Machine, v: &mut View) -> Option<Btn> {
         let mut scroll = v.scroll;
         let notes = &v.notes;
         let src: Vec<(&str, bool)> = if notes.is_empty() {
-            vec![("No release notes.", true)]
+            vec![(tr!("update.no_notes"), true)]
         } else {
             // Headings in the primary text color, the rest secondary.
             notes.iter().map(|(l, heading)| (l.as_str(), !heading)).collect()
@@ -654,7 +654,7 @@ fn run_dialog(req: Request, tx: Sender<In>, rx: Receiver<In>) {
     for a in acts {
         d.perform(a);
     }
-    let spec = WindowSpec { title: "Rustshot update".into(), w: W, h: H, resizable: false, min: (W, H), controls: wind::Controls::MinClose };
+    let spec = WindowSpec { title: tr!("update.window_title").into(), w: W, h: H, resizable: false, min: (W, H), controls: wind::Controls::MinClose };
     if let Err(e) = wind::run_window(spec, &mut d) {
         eprintln!("rustshot: update dialog: {e:#}");
     }
@@ -855,7 +855,7 @@ fn download(rel: Release, tx: Sender<In>, phase: Arc<AtomicU8>) {
     let dir = match update_install::ensure_update_dir() {
         Ok(d) => d,
         Err(e) => {
-            let _ = tx.send(In::Fetched(Err(format!("Download failed: {e}"))));
+            let _ = tx.send(In::Fetched(Err(tr!("update.download_failed", e))));
             return;
         }
     };
@@ -888,7 +888,7 @@ fn install(fetched: Result<(PathBuf, [u8; 32]), String>, phase: &AtomicU8, tx: &
             let _ = tx.send(In::Fetched(Err(e)));
         }
         Err(e) => {
-            let _ = tx.send(In::Fetched(Err(format!("Download failed: {e}"))));
+            let _ = tx.send(In::Fetched(Err(tr!("update.download_failed", e))));
         }
         Ok((file, _)) if !commit() => {
             let _ = std::fs::remove_file(&file);
@@ -904,7 +904,7 @@ fn install(fetched: Result<(PathBuf, [u8; 32]), String>, phase: &AtomicU8, tx: &
             let standalone = daemon.is_none() && inst.standalone;
             if !standalone && !wait_idle(daemon, tx) {
                 let _ = std::fs::remove_file(&file);
-                let msg = "Install failed: Rustshot is not running in the background any more";
+                let msg = tr!("update.install_no_daemon");
                 let _ = tx.send(In::Installed(Err(msg.into())));
                 return;
             }
@@ -918,7 +918,7 @@ fn install(fetched: Result<(PathBuf, [u8; 32]), String>, phase: &AtomicU8, tx: &
                 let ev = if r == Ok(Applied::RestartingNow) { HotEvent::Restart } else { HotEvent::RestartAborted };
                 let _ = d.send(ev);
             }
-            let _ = tx.send(In::Installed(r.map_err(|e| format!("Install failed: {e}"))));
+            let _ = tx.send(In::Installed(r.map_err(|e| tr!("update.install_failed", e))));
         }
     }
 }

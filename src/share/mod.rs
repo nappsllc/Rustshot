@@ -29,10 +29,10 @@ mod macos;
 
 /// The title the share sheet shows for the package (Windows).
 #[cfg_attr(not(windows), allow(dead_code))]
-pub const TITLE: &str = "Rustshot capture";
+pub const TITLE: crate::i18n::Key = key!("share.title");
 
 /// What a second share says while a sheet is up.
-pub const BUSY: &str = "A share sheet is already open";
+pub const BUSY: crate::i18n::Key = key!("share.busy");
 
 /// How long a share may keep its caller (and the process) waiting.
 pub const MAX_WAIT: Duration = Duration::from_secs(10 * 60);
@@ -168,10 +168,10 @@ thread_local! {
 /// its time limit): on a worker. `Err`: what to tell the user.
 pub fn share_now(file: &Path, owner: Option<usize>) -> Result<(), String> {
     if !supported() {
-        return Err("Share is not available here".into());
+        return Err(tr!("share.unavailable").into());
     }
     if !file.is_file() {
-        return Err("Share failed: the file is gone".into());
+        return Err(tr!("share.file_gone").into());
     }
     let Some(sheet) = Sheet::claim() else { return Err(BUSY.into()) };
     let _running = Running::start();
@@ -199,8 +199,8 @@ fn imp(file: PathBuf, owner: Option<usize>, sheet: Sheet) -> Result<(), String> 
     std::thread::Builder::new()
         .name("rustshot-share-sheet".into())
         .spawn(move || win::share(&file, owner, kind, max, win::Release::new(tx, sheet)))
-        .map_err(|e| format!("Share failed: {e}"))?;
-    rx.recv().unwrap_or_else(|_| Err("Share failed".into()))
+        .map_err(|e| tr!("share.failed", e))?;
+    rx.recv().unwrap_or_else(|_| Err(tr!("share.failed_plain").into()))
 }
 
 #[cfg(all(target_os = "macos", not(test)))]
@@ -212,7 +212,7 @@ fn imp(file: PathBuf, _owner: Option<usize>, sheet: Sheet) -> Result<(), String>
 
 #[cfg(all(not(any(windows, target_os = "macos")), not(test)))]
 fn imp(_file: PathBuf, _owner: Option<usize>, _sheet: Sheet) -> Result<(), String> {
-    Err("Share is not available here".into())
+    Err(tr!("share.unavailable").into())
 }
 
 /// [`share_now`] on its own thread (the overlay's thread must not wait;

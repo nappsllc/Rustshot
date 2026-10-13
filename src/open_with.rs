@@ -146,7 +146,7 @@ pub fn open_now(file: &Path, owner: Option<usize>) -> Result<(), String> {
         Ok(())
     }
     #[cfg(not(test))]
-    imp::open(file, owner).map_err(|e| format!("Open with failed: {e}"))
+    imp::open(file, owner).map_err(|e| tr!("history.what_failed", what = tr!("history.open_with"), e))
 }
 
 /// [`open_now`] on its own thread (the overlay's thread must not wait),

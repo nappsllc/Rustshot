@@ -193,7 +193,7 @@ pub fn parse_endpoint(s: &str) -> Result<String, String> {
     let rest = if lower.starts_with("https://") { &s[8..] } else { s };
     let rest = rest.trim_end_matches('/');
     if rest.is_empty() {
-        return Err("no endpoint is set".into());
+        return Err(tr!("s3.no_endpoint").into());
     }
     if rest.contains(['/', '?', '#', '@']) {
         return Err("the endpoint is a host name only (no path)".into());
@@ -243,7 +243,7 @@ impl Target {
     pub fn check(&self) -> Result<(), String> {
         parse_endpoint(&self.endpoint)?;
         if self.bucket.is_empty() {
-            return Err("no bucket is set".into());
+            return Err(tr!("s3.no_bucket").into());
         }
         if !valid_bucket(&self.bucket) {
             return Err(format!("\"{}\" is not a bucket name", self.bucket));
@@ -462,10 +462,10 @@ impl<'a> Client<'a> {
     /// The signed request for `key`.
     pub fn request<'b>(&self, method: &'static str, key: &str, query: &[(String, String)], mut headers: Vec<(String, String)>, body: Body<'b>) -> Result<HttpReq<'b>, String> {
         if self.creds.access_key.trim().is_empty() {
-            return Err("no access key ID is set".into());
+            return Err(tr!("s3.no_key_id").into());
         }
         if self.creds.secret.is_empty() {
-            return Err("no secret access key is stored".into());
+            return Err(tr!("s3.no_secret").into());
         }
         let (host, path) = self.target.host_path(key)?;
         let hash = match body {
@@ -644,8 +644,8 @@ impl<'a> Client<'a> {
     /// then DELETE it.
     pub fn test_connection(&self, tail: &str) -> Result<(), String> {
         let key = format!("rustshot-test-{tail}.txt");
-        self.put_object(&key, "text/plain", Body::Bytes(b"Rustshot connection test\n")).map_err(|e| format!("upload failed: {e}"))?;
-        self.delete_object(&key).map_err(|e| format!("uploaded, but the delete failed: {e}"))
+        self.put_object(&key, "text/plain", Body::Bytes(b"Rustshot connection test\n")).map_err(|e| tr!("s3.test_upload_failed", e))?;
+        self.delete_object(&key).map_err(|e| tr!("s3.test_delete_failed", e))
     }
 }
 
@@ -763,8 +763,8 @@ pub fn stored_secret(target: &Target, access_key: &str) -> Result<String, String
     let name = crate::keystore::s3_name(&target.host(), &target.bucket, access_key);
     match crate::keystore::os().get(&name) {
         Ok(Some(s)) if !s.is_empty() => Ok(s),
-        Ok(_) => Err(format!("no secret access key is stored for \"{}\" with key ID {} (Settings \u{203a} Upload)", target.bucket, access_key.trim())),
-        Err(e) => Err(format!("could not read the secret access key: {e}")),
+        Ok(_) => Err(tr!("s3.no_secret_for", bucket = target.bucket, key_id = access_key.trim())),
+        Err(e) => Err(tr!("s3.read_secret_failed", e)),
     }
 }
 

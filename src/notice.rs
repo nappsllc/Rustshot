@@ -68,17 +68,17 @@ pub enum NoteAct {
 impl NoteAct {
     pub fn label(self) -> &'static str {
         match self {
-            NoteAct::CopyLink => "Copy link",
-            NoteAct::Copy | NoteAct::ThumbCopy => "Copy",
-            NoteAct::Open => "Open",
-            NoteAct::ShowInFolder => "Show in folder",
-            NoteAct::ThumbSave => "Save",
-            NoteAct::Pin => "Pin to screen",
-            NoteAct::Edit => "Edit",
-            NoteAct::Dismiss => "Close",
+            NoteAct::CopyLink => tr!("notice.act.copy_link"),
+            NoteAct::Copy | NoteAct::ThumbCopy => tr!("notice.act.copy"),
+            NoteAct::Open => tr!("notice.act.open"),
+            NoteAct::ShowInFolder => tr!("notice.act.show_in_folder"),
+            NoteAct::ThumbSave => tr!("notice.act.save"),
+            NoteAct::Pin => tr!("notice.act.pin_to_screen"),
+            NoteAct::Edit => tr!("notice.act.edit"),
+            NoteAct::Dismiss => tr!("notice.act.close"),
             NoteAct::Card => "",
-            NoteAct::CancelDelay | NoteAct::KeepUpload => "Cancel",
-            NoteAct::DeleteUpload => "Delete upload",
+            NoteAct::CancelDelay | NoteAct::KeepUpload => tr!("notice.act.cancel"),
+            NoteAct::DeleteUpload => tr!("notice.act.delete_upload"),
         }
     }
 
@@ -164,11 +164,11 @@ fn clock(d: Duration) -> String {
 pub fn file_size(bytes: u64) -> String {
     let mb = bytes as f64 / 1_000_000.0;
     if mb < 1.0 {
-        format!("{} KB", (bytes as f64 / 1000.0).round().max(1.0) as u64)
+        tr!("size.kb", n = (bytes as f64 / 1000.0).round().max(1.0) as u64)
     } else if mb < 10.0 {
-        format!("{mb:.1} MB")
+        tr!("size.mb", n = format!("{mb:.1}"))
     } else {
-        format!("{mb:.0} MB")
+        tr!("size.mb", n = format!("{mb:.0}"))
     }
 }
 
@@ -177,7 +177,7 @@ pub fn file_size(bytes: u64) -> String {
 /// Copy (a GIF: the file itself), Open and Show in folder; it stays
 /// [`ACTION_TTL`].
 pub fn recording_saved(path: &std::path::Path, length: Duration, bytes: u64, warnings: &[String], upload: bool) -> Note {
-    let mut text = format!("Saved {} \u{b7} {} \u{b7} {}", file_name(path), clock(length), file_size(bytes));
+    let mut text = tr!("notice.rec_saved", name = file_name(path), length = clock(length), size = file_size(bytes));
     for w in warnings {
         text.push_str(" \u{2014} ");
         text.push_str(&reason(w));
@@ -218,20 +218,20 @@ pub fn compose(done: &[Done], uploading: bool) -> Option<Note> {
     let mut failed = false;
     for d in done {
         parts.push(match d {
-            Done::Copied if single => "Copied to clipboard".to_string(),
-            Done::Copied => "Copied".to_string(),
-            Done::Saved(p) if single => format!("Saved \u{b7} {}", file_name(p)),
-            Done::Saved(p) => format!("Saved {}", file_name(p)),
-            Done::SavedDesktop(p) if single => format!("Saved to Desktop \u{b7} {}", file_name(p)),
-            Done::SavedDesktop(p) => format!("Saved {} to Desktop", file_name(p)),
+            Done::Copied if single => tr!("history.copied").to_string(),
+            Done::Copied => tr!("notice.copied").to_string(),
+            Done::Saved(p) if single => tr!("notice.saved_one", name = file_name(p)),
+            Done::Saved(p) => tr!("notice.saved", name = file_name(p)),
+            Done::SavedDesktop(p) if single => tr!("notice.saved_desktop_one", name = file_name(p)),
+            Done::SavedDesktop(p) => tr!("notice.saved_desktop", name = file_name(p)),
             Done::Failed(what, e) => {
                 failed = true;
-                format!("{what} failed: {}", reason(e))
+                tr!("history.what_failed", what, e = reason(e))
             }
         });
     }
     if uploading {
-        parts.push("Uploading\u{2026}".to_string());
+        parts.push(tr!("history.uploading").to_string());
     }
     if parts.is_empty() {
         return None;
@@ -253,10 +253,10 @@ pub fn upload_note(res: &Result<String, String>, copied: bool) -> Note {
     match res {
         Ok(url) => {
             let short = url.trim_start_matches("https://").trim_start_matches("http://");
-            let head = if copied { "Link copied" } else { "Uploaded" };
-            Note::new(format!("{head} \u{b7} {short}"), ToastKind::Success)
+            let head = if copied { tr!("history.link_copied") } else { tr!("editor.uploaded") };
+            Note::new(tr!("notice.upload_done", head, link = short), ToastKind::Success)
         }
-        Err(e) => Note::new(format!("Upload failed: {}", reason(e)), ToastKind::Error),
+        Err(e) => Note::new(tr!("editor.upload_failed", e = reason(e)), ToastKind::Error),
     }
 }
 
@@ -406,8 +406,8 @@ pub fn run_action(a: NoteAct, file: &std::path::Path, entry: Option<String>, don
             None
         }
         NoteAct::Copy => Some(match copy_file(file) {
-            Ok(()) => Note::plain("Copied to clipboard", ToastKind::Success),
-            Err(e) => Note::plain(format!("Copy failed: {}", reason(&format!("{e:#}"))), ToastKind::Error),
+            Ok(()) => Note::plain(tr!("history.copied"), ToastKind::Success),
+            Err(e) => Note::plain(tr!("ocr.copy_failed", e = reason(&format!("{e:#}"))), ToastKind::Error),
         }),
         // The upload may be under way already (Upload recordings
         // automatically): see `rec_upload`.
@@ -879,7 +879,7 @@ pub fn run_note_action(note: &Note, a: NoteAct, th: Theme, done: impl FnOnce(Not
             if let Some(t) = &note.thumb
                 && !crate::pin::open(t.img.clone(), t.at, th)
             {
-                crate::tray::notify("Pin to screen is not available here");
+                crate::tray::notify(tr!("editor.pin_unavailable"));
             }
             Next::Hide
         }

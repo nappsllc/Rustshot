@@ -779,7 +779,7 @@ fn fill(args: *mut c_void, c: &Content, ev: &Arc<Events>) -> R<()> {
     let r = fill_package(&request, c, ev);
     if let Err(e) = &r {
         // IDataRequest::FailWithDisplayText (9).
-        let text = HSTRING::from(format!("Rustshot could not share this capture: {e}"));
+        let text = HSTRING::from(tr!("share.could_not", e));
         let _ = request.call_ptr(9, hs(&text), "FailWithDisplayText");
     }
     r
@@ -806,7 +806,7 @@ fn fill_package(request: &Com, c: &Content, ev: &Arc<Events>) -> R<()> {
     }
     ev.tracked.store(canceled.is_ok(), Ordering::SeqCst);
     let props = pkg.get_obj(7, "Properties")?; // IDataPackage::Properties
-    let title = HSTRING::from(TITLE);
+    let title = HSTRING::from(TITLE.get());
     props.call_ptr(7, hs(&title), "SetTitle")?;
     props.call_ptr(9, hs(&c.description), "SetDescription")?;
     if let Some(b) = &c.bitmap {
@@ -852,7 +852,7 @@ impl Release {
 
 impl Drop for Release {
     fn drop(&mut self) {
-        self.send(Err("Share failed".into()));
+        self.send(Err(tr!("share.failed_plain").into()));
     }
 }
 
@@ -860,7 +860,7 @@ impl Drop for Release {
 static COLD: AtomicBool = AtomicBool::new(true);
 
 /// What the sheet says when it never asked for the package.
-pub const NOT_OPENED: &str = "The share sheet did not open";
+pub const NOT_OPENED: crate::i18n::Key = key!("share.not_opened");
 
 /// Share `file` through a sheet over `asker` (a raw window handle), on
 /// this (new) thread. The caller is let go through `release` when the
@@ -874,7 +874,7 @@ pub fn share(file: &Path, asker: Option<usize>, kind: Kind, max: Duration, mut r
 }
 
 fn run(file: &Path, asker: Option<usize>, kind: Kind, max: Duration, release: &mut Release) -> R<()> {
-    let failed = |e: String| format!("Share failed: {e}");
+    let failed = |e: String| tr!("share.failed", e);
     let _apt = Apartment::enter();
     // The owner first, while this process may still bring a window up.
     let owner = owner::Owner::new(asker).map_err(failed)?;
@@ -913,7 +913,7 @@ fn run(file: &Path, asker: Option<usize>, kind: Kind, max: Duration, release: &m
                 Ok(()) => trace("package filled"),
                 Err(e) => {
                     trace(&format!("package failed: {e}"));
-                    *lock(&ev.failed) = Some(format!("Share failed: {e}"));
+                    *lock(&ev.failed) = Some(tr!("share.failed", e));
                 }
             }
             S_OK
