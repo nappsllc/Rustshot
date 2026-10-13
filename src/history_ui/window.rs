@@ -430,7 +430,7 @@ impl Window {
     fn spawn(&mut self, f: impl FnOnce() -> super::Done + Send + 'static) {
         let tx = self.done.0.clone();
         self.busy += 1;
-        std::thread::spawn(move || {
+        crate::busy::spawn(move || {
             let _ = tx.send(f());
         });
     }
@@ -502,10 +502,11 @@ impl Window {
                 self.spawn(move || super::open_with(&store, &id, &cfg, owner))
             }
             Act::DeleteUpload(id) => {
-                self.h.note("Deleting from Imgur\u{2026}", crate::editor::style::ToastKind::Info);
+                self.h.note("Deleting upload\u{2026}", crate::editor::style::ToastKind::Info);
                 self.spawn(move || {
                     let del = |h: &str, p: &str, hd: &[(&str, &str)]| delete_http(h, p, hd);
-                    super::delete_upload(&store, &id, &cfg.upload_client_id, &del)
+                    let s3 = crate::uploads::s3_delete_with(&cfg);
+                    super::delete_upload(&store, &id, &cfg.upload_client_id, &del, &s3)
                 })
             }
             Act::Delete(ids) => {
@@ -675,5 +676,9 @@ impl Driver for Window {
 
     fn cursor(&self) -> Cursor {
         if self.h.cursor_text { Cursor::IBeam } else { Cursor::Arrow }
+    }
+
+    fn frame_colors(&self) -> Option<wind::FrameColors> {
+        Some(crate::ui::paint::WTok::of(&crate::theme::resolve(&self.h.cfg)).frame())
     }
 }

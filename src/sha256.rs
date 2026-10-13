@@ -1,5 +1,7 @@
 //! SHA-256 (FIPS 180-4), for verifying downloaded updates against
-//! `SHA256SUMS`. Small and dependency-free; tested against NIST vectors.
+//! `SHA256SUMS`, and HMAC-SHA256 (RFC 2104) for signing S3 requests
+//! (AWS Signature Version 4, `s3::sigv4`). Small and dependency-free;
+//! tested against the NIST and RFC 4231 vectors.
 
 const K: [u32; 64] = [
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -108,15 +110,32 @@ fn compress(h: &mut [u32; 8], block: &[u8; 64]) {
 }
 
 /// One-shot digest.
-#[cfg(test)]
 pub fn digest(data: &[u8]) -> [u8; 32] {
     let mut s = Sha256::new();
     s.update(data);
     s.finish()
 }
 
+/// HMAC-SHA256 of `msg` under `key` (RFC 2104: a key longer than the
+/// 64-byte block is hashed first).
+pub fn hmac(key: &[u8], msg: &[u8]) -> [u8; 32] {
+    let mut k = [0u8; 64];
+    if key.len() > 64 {
+        k[..32].copy_from_slice(&digest(key));
+    } else {
+        k[..key.len()].copy_from_slice(key);
+    }
+    let mut inner = Sha256::new();
+    inner.update(&k.map(|b| b ^ 0x36));
+    inner.update(msg);
+    let ih = inner.finish();
+    let mut outer = Sha256::new();
+    outer.update(&k.map(|b| b ^ 0x5c));
+    outer.update(&ih);
+    outer.finish()
+}
+
 /// Lowercase hex.
-#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))] // tests; the OpenH264 pins (Linux)
 pub fn hex(bytes: &[u8]) -> String {
     const D: &[u8; 16] = b"0123456789abcdef";
     let mut s = String::with_capacity(bytes.len() * 2);
@@ -195,6 +214,24 @@ mod tests {
             }
             assert_eq!(s.finish(), digest(&data[..n]), "len {n}");
         }
+    }
+
+    /// RFC 4231 test cases 1, 2, 6 (a key longer than the block) and 7.
+    #[test]
+    fn hmac_rfc4231_vectors() {
+        assert_eq!(hex(&hmac(&[0x0b; 20], b"Hi There")), "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7");
+        assert_eq!(hex(&hmac(b"Jefe", b"what do ya want for nothing?")), "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843");
+        assert_eq!(
+            hex(&hmac(&[0xaa; 131], b"Test Using Larger Than Block-Size Key - Hash Key First")),
+            "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54"
+        );
+        assert_eq!(
+            hex(&hmac(
+                &[0xaa; 131],
+                b"This is a test using a larger than block-size key and a larger than block-size data. The key needs to be hashed before being used by the HMAC algorithm."
+            )),
+            "9b09ffa71b942fcb27635fbcd5b0e944bfdc63644f0713938a7f51535c3a35e2"
+        );
     }
 
     #[test]

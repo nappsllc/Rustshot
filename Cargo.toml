@@ -4,7 +4,7 @@ version = "0.3.0"
 edition = "2024"
 # Derivative of Flameshot (GPL-3.0): behavior and UI modeled on it.
 license = "GPL-3.0-only"
-description = "Screenshot and annotation tool (Flameshot-style, written in Rust)"
+description = "Tiny yet powerful, beautiful, open-source and cross-platform tool for screenshots, editing and video capture"
 
 [features]
 # Embed the camera background blur's person-segmentation model
@@ -41,6 +41,10 @@ windows = { version = "0.62", features = [
     "Win32_UI_HiDpi",
     "Win32_System_Threading",
     "Win32_Security",
+    # The S3 secret access key in Credential Manager (CredWriteW / CredReadW).
+    "Win32_Security_Credentials",
+    # S3 object keys: 128 random bits from BCryptGenRandom.
+    "Win32_Security_Cryptography",
     "Win32_Networking_WinHttp",
     "Win32_System_SystemInformation",
     "Win32_UI_Controls_Dialogs",

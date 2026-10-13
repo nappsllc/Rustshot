@@ -190,8 +190,8 @@ impl FocusState {
 
     /// Focus key_capture `id` and start recording, as a click on it does
     /// (call after the frame's controls are drawn: a press this frame
-    /// would otherwise stop the recording again).
-    #[cfg(test)]
+    /// would otherwise stop the recording again). Settings' "Change
+    /// shortcuts…" starts recording in the row that needs a new key.
     pub fn record(&mut self, id: &str) {
         self.set(Some(id_of(id)), false);
         self.recording = Some(id_of(id));
@@ -366,6 +366,9 @@ pub struct Ui<'a> {
     pub radius: f32,
     /// An icon drawn at the left inside the next text field (taken by it).
     pub field_icon: Option<&'static str>,
+    /// The next text field is a secret (taken by it): dots for its
+    /// characters, no copy or cut.
+    pub masked: bool,
     /// Height of single-line controls (logical px): the toolbar's 32, or
     /// 28 in the compact style.
     pub ctl_h: f32,
@@ -421,6 +424,7 @@ impl<'a> Ui<'a> {
             radius: 8.0,
             ctl_h: layout::H,
             field_icon: None,
+            masked: false,
             field_fill: None,
             frameless: false,
             input_clip: None,

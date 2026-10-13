@@ -208,6 +208,57 @@ fn text_field_selection_replace_and_words() {
     assert_eq!(st.text, "save path ");
 }
 
+fn masked_field(h: &mut Harness, st: &mut TextState) -> bool {
+    h.frame(|ui| {
+        ui.masked = true;
+        ui.place(r(20.0, 20.0, 300.0, 32.0)).text_field("f", st)
+    })
+    .0
+}
+
+/// A masked field (a secret): dots instead of its text, pasting works,
+/// copy and cut never reach the clipboard (cut still deletes); the flag
+/// is taken by one field.
+#[test]
+fn masked_field_hides_and_never_copies() {
+    let mut h = Harness::new();
+    let mut st = TextState::new("");
+    h.focus.focus("f");
+    masked_field(&mut h, &mut st);
+    h.typed("wJalr/K7");
+    assert!(masked_field(&mut h, &mut st));
+    assert_eq!(st.text, "wJalr/K7");
+    h.clip.0 = Some("old".into());
+    h.key(0x41, CTRL).key(0x43, CTRL); // Ctrl+A, Ctrl+C
+    masked_field(&mut h, &mut st);
+    assert_eq!(h.clip.0.as_deref(), Some("old"), "not copied");
+    h.key(0x58, CTRL); // Ctrl+X
+    assert!(masked_field(&mut h, &mut st));
+    assert_eq!((st.text.as_str(), h.clip.0.as_deref()), ("", Some("old")), "cut deletes only");
+    h.clip.0 = Some("pasted-secret".into());
+    h.key(0x56, CTRL);
+    assert!(masked_field(&mut h, &mut st));
+    assert_eq!(st.text, "pasted-secret");
+    // Dots: the same picture for any text of the same length.
+    let mut a = TextState::new("aaaaaaaaaaaaa");
+    let mut b = TextState::new("WWWWWWWWWWWWW");
+    let mut h2 = Harness::new();
+    masked_field(&mut h2, &mut a);
+    let pa = h2.img.clone();
+    let mut h3 = Harness::new();
+    masked_field(&mut h3, &mut b);
+    assert!(pa.as_raw() == h3.img.as_raw(), "the text never shows");
+    let mut h4 = Harness::new();
+    field(&mut h4, &mut b);
+    assert!(pa.as_raw() != h4.img.as_raw(), "unmasked, it does");
+    // Taken by the field: the next one shows its text.
+    let ((), _) = h.frame(|ui| {
+        ui.masked = true;
+        ui.place(r(20.0, 20.0, 300.0, 32.0)).text_field("f", &mut st);
+        assert!(!ui.masked);
+    });
+}
+
 #[test]
 fn text_field_clipboard() {
     let mut h = Harness::new();

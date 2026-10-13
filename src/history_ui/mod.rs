@@ -76,7 +76,7 @@ pub enum Act {
     CopyLink(String),
     /// Open the capture with an app the user picks.
     OpenWith(String),
-    /// Delete the upload from Imgur (after "Delete from Imgur?").
+    /// Delete the upload (after "Delete upload?").
     DeleteUpload(String),
     Delete(Vec<String>),
     SaveToFolder(Vec<String>),
@@ -136,7 +136,7 @@ pub struct History {
     pub thumb_clock: u64,
     /// "Delete N captures?" (more than one selected) asks first.
     pub ask_delete: Option<Vec<String>>,
-    /// "Delete from Imgur?" (the entry whose upload goes).
+    /// "Delete upload?" (the entry whose upload goes).
     pub ask_unupload: Option<String>,
     /// The pointer between frames (press, marquee, double-click).
     pub ptr: window::Pointer,
@@ -370,10 +370,10 @@ impl History {
         self.clear.is_some() || self.ask_delete.is_some() || self.ask_unupload.is_some()
     }
 
-    /// Whether entry `id`'s upload can be deleted from Imgur (its
-    /// deletehash was kept).
+    /// Whether entry `id`'s upload can be deleted (an S3 object, or an
+    /// Imgur upload whose deletehash was kept).
     pub fn can_unupload(&self, id: &str) -> bool {
-        self.entry(id).is_some_and(|e| e.meta.uploaded.is_some() && e.meta.upload.as_ref().is_some_and(|u| !u.deletehash.is_empty()))
+        self.entry(id).is_some_and(|e| e.meta.uploaded.is_some() && e.meta.upload.as_ref().is_some_and(crate::uploads::Info::deletable))
     }
 
     /// Delete `ids`: one at once, several after "Delete N captures?".
@@ -391,10 +391,10 @@ impl History {
         if let Some(id) = &self.ask_unupload {
             let link = self.entry(id).and_then(|e| e.meta.uploaded.clone()).unwrap_or_default();
             return (
-                "Delete from Imgur?".into(),
+                "Delete upload?".into(),
                 format!("{} stops working for everyone. The capture stays in History. This can't be undone.", crate::uploads::short_link(&link)),
                 None,
-                "Delete from Imgur",
+                "Delete upload",
             );
         }
         if let Some(ids) = &self.ask_delete {
@@ -586,13 +586,13 @@ pub fn open_with(store: &Store, id: &str, cfg: &Config, owner: Option<usize>) ->
     }
 }
 
-/// Delete entry `id`'s upload from Imgur over `http` (a fake in tests),
-/// then forget its link and record.
-pub fn delete_upload(store: &Store, id: &str, client_id: &str, http: crate::uploads::DeleteFn) -> Done {
+/// Delete entry `id`'s upload where it went (Imgur over `http`, S3
+/// through `s3`; fakes in tests), then forget its link and record.
+pub fn delete_upload(store: &Store, id: &str, client_id: &str, http: crate::uploads::DeleteFn, s3: crate::uploads::S3DeleteFn) -> Done {
     let Some(e) = store.get(id) else { return fail("That capture is gone") };
     let (Some(link), Some(info)) = (e.meta.uploaded.clone(), e.meta.upload.clone()) else { return fail("This capture has no upload to delete") };
     let rec = crate::uploads::Record { link, info, entry: Some(id.to_string()) };
-    let (text, kind) = crate::uploads::delete_record(store, &rec, client_id, http);
+    let (text, kind) = crate::uploads::delete_record(store, &rec, client_id, http, s3);
     Done { text, kind, changed: true }
 }
 
@@ -686,6 +686,13 @@ pub fn show_clear() {
     show();
 }
 
+/// Whether the window is open in this process (an on-demand run waits
+/// for it before it quits).
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+pub fn is_open() -> bool {
+    lock(&OPEN).is_some()
+}
+
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -722,7 +729,7 @@ fn run(rx: Receiver<Msg>) {
         h.clear = Some(false);
     }
     let mut w = window::Window::new(h, rx);
-    let spec = crate::wind::WindowSpec { title: "Rustshot History".into(), w: W, h: H, resizable: true, min: MIN };
+    let spec = crate::wind::WindowSpec { title: "Rustshot History".into(), w: W, h: H, resizable: true, min: MIN, controls: crate::wind::Controls::MinMaxClose };
     if let Err(e) = crate::wind::run_window(spec, &mut w) {
         eprintln!("rustshot: history window: {e:#}");
     }

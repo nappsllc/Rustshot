@@ -2,10 +2,11 @@
 Type=Application
 Name=Rustshot
 GenericName=Screenshot Tool
-Comment=Screenshot capture with annotation, upload and global hotkeys
+Comment=Screenshots, editing and video capture
 Exec=rustshot daemon
 Icon=io.github.nappsllc.rustshot
 Terminal=false
 Categories=Utility;Graphics;
 Keywords=screenshot;capture;annotate;share;
 StartupNotify=false
+StartupWMClass=rustshot
