@@ -238,6 +238,8 @@ fn text_tool_types_and_accepts() {
 #[ignore = "live display access; may replace the clipboard's text"]
 fn copy_text_key_recognizes_the_area() {
     let root = config_root("ocr", &renderer());
+    // All at once (the default lets you select words: `text_mode_*`).
+    append_config(&root, "copy_text_mode = \"all\"\n");
     let mut child = rustshot(&root)
         .env("RUSTSHOT_INSTANCE", format!("e2e-ocr-{}", std::process::id()))
         .env("LOCALAPPDATA", &*root)
@@ -259,6 +261,77 @@ fn copy_text_key_recognizes_the_area() {
         Some(1) => assert!(line.contains("language"), "only a missing language may fail: {out:?}"),
         c => panic!("unexpected exit {c:?}: {out:?}"),
     }
+}
+
+fn append_config(root: &Path, text: &str) {
+    use std::io::Write;
+    let mut f = std::fs::OpenOptions::new().append(true).open(root.join("rustshot").join("config.toml")).expect("config");
+    f.write_all(text.as_bytes()).expect("config");
+}
+
+/// A one-shot overlay with its own instance, config and history (nothing
+/// of the user's is read or written).
+fn isolated(tag: &str, extra: &str, args: &[&str]) -> (Child, HWND, TempRoot) {
+    let root = config_root(tag, &renderer());
+    append_config(&root, extra);
+    let child = rustshot(&root)
+        .env("RUSTSHOT_INSTANCE", format!("e2e-{tag}-{}", std::process::id()))
+        .env("LOCALAPPDATA", &*root)
+        .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn rustshot");
+    let hwnd = wait_window(&child, 8000).expect("editor window");
+    (child, hwnd, root)
+}
+
+/// Copy text (O) with "Let me select": the overlay stays up in Text mode
+/// (whatever OCR finds on screen), Esc leaves it, a second Esc cancels.
+#[test]
+#[ignore = "live display access"]
+fn text_mode_keeps_the_overlay_until_escape() {
+    let (mut child, hwnd, _root) = isolated("textmode", "", &["gui", "--region", "800x600+20+20"]);
+    key(hwnd, 'O' as u32);
+    assert_eq!(wait_exit(&mut child, 3000), None, "Text mode: the overlay stays");
+    key(hwnd, 0x1B);
+    key(hwnd, 0x1B);
+    assert_eq!(wait_exit(&mut child, 5000), Some(2), "Esc leaves Text mode, then cancels");
+}
+
+/// Freeform (`selection_mode = "freeform"`): a lasso drawn with the mouse,
+/// Enter saves its box with the outside transparent.
+#[test]
+#[ignore = "live display access"]
+fn freeform_lasso_saves_a_transparent_outside() {
+    let out = std::env::temp_dir().join(format!("{ROOT_PREFIX}{}-lasso.png", std::process::id()));
+    let _ = std::fs::remove_file(&out);
+    let path = out.to_string_lossy().into_owned();
+    let (mut child, hwnd, _root) = isolated("lasso", "selection_mode = \"freeform\"\nsnap_windows = false\n", &["gui", "--path", &path]);
+    let pts = [(300, 200), (700, 200), (500, 600), (300, 200)];
+    mouse_move(hwnd, pts[0].0, pts[0].1);
+    mouse_down(hwnd, pts[0].0, pts[0].1);
+    for w in pts.windows(2) {
+        for i in 1..=20 {
+            let (x, y) = (w[0].0 + (w[1].0 - w[0].0) * i / 20, w[0].1 + (w[1].1 - w[0].1) * i / 20);
+            mouse_move(hwnd, x, y);
+        }
+    }
+    mouse_up(hwnd, pts[0].0, pts[0].1);
+    key(hwnd, 0x0D);
+    assert_eq!(wait_exit(&mut child, 8000), Some(0), "saved");
+    let bytes = std::fs::read(&out).expect("the PNG");
+    let _ = std::fs::remove_file(&out);
+    let mut dec = png::Decoder::new(std::io::Cursor::new(bytes));
+    dec.set_transformations(png::Transformations::EXPAND);
+    let mut r = dec.read_info().expect("png");
+    let mut buf = vec![0; r.output_buffer_size()];
+    let info = r.next_frame(&mut buf).expect("frame");
+    assert_eq!((info.width, info.height), (400, 400), "the lasso's box");
+    assert_eq!(info.color_type, png::ColorType::Rgba);
+    let a = |x: usize, y: usize| buf[(y * 400 + x) * 4 + 3];
+    assert_eq!(a(200, 100), 255, "inside");
+    assert_eq!((a(5, 395), a(395, 395)), (0, 0), "outside: transparent");
 }
 
 /// Run locally, this briefly shows the tray icon of its own named daemon
