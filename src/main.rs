@@ -57,6 +57,7 @@ mod sni;
 mod sound;
 mod text;
 mod theme;
+mod trim;
 mod tray;
 #[cfg(target_os = "linux")]
 mod tray_linux;
