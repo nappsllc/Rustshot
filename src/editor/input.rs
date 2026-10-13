@@ -779,6 +779,13 @@ impl Edit {
                 self.rec.dev_open = None;
             }
             Act::RecShape(sh) => self.rec.opts.cam_shape = sh,
+            // Remembered (`rec_camera_bg`); the bubble follows (`sync_bubble`).
+            Act::RecBg(b) if crate::cam::bg::available() => {
+                self.rec.opts.cam_bg = b;
+                self.pending.set("rec_camera_bg".into(), Some(config::toml_str(b.key())), Instant::now());
+                self.cfg.rec_camera_bg = b.key().into();
+            }
+            Act::RecBg(_) => {}
             Act::RecDevMenu(dev) => {
                 self.rec.ring_pal = false;
                 match dev {

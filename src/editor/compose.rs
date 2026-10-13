@@ -611,6 +611,8 @@ impl Edit {
             cams: rp.has_cams(),
             cams_looking: rp.cams_looking(),
             shape: rp.opts.cam_shape,
+            bg: rp.opts.cam_bg,
+            blur: crate::cam::bg::available(),
             source: rp.source,
             countdown: rp.opts.countdown,
             gif_max: rp.opts.gif_max,

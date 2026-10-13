@@ -4198,6 +4198,14 @@ mod tests {
             e.rec.load_cams();
             e.rec.ring_pal = true;
             save(&mut app, &format!("{tn}-video-ring-palette.png"));
+            // The camera's Background row: Blur light; a build without a model.
+            for (name, avail) in [("blur", true), ("noblur", false)] {
+                crate::cam::bg::set_available(Some(avail));
+                let mut app = video(th, vsel);
+                edit_of(&mut app).rec.opts.cam_bg = crate::cam::bg::Bg::Light;
+                save(&mut app, &format!("{tn}-video-camera-{name}.png"));
+            }
+            crate::cam::bg::set_available(None);
             // No room below: above the selection; none above either: inside.
             save(&mut video(th, FRect { x: 240.0, y: 520.0, w: 960.0, h: 340.0 }), &format!("{tn}-video-above.png"));
             save(&mut video(th, FRect { x: 0.0, y: 0.0, w: 1440.0, h: 900.0 }), &format!("{tn}-video-inside.png"));

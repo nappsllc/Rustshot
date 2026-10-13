@@ -152,6 +152,7 @@ pub fn act_icon(a: Act) -> &'static str {
         | Act::RecDevMenu(_)
         | Act::RecDev(..)
         | Act::RecShape(_)
+        | Act::RecBg(_)
         | Act::Mode(_)
         | Act::RecSource(_)
         | Act::RecCountdown(_)
@@ -1181,6 +1182,7 @@ pub fn act_tip(a: Act, km: &Keymap) -> (&'static str, Vec<String>) {
         Act::RecMic | Act::RecDevMenu(Dev::Mic) | Act::RecDev(Dev::Mic, _) => "Microphone",
         Act::RecCamera | Act::RecDevMenu(Dev::Cam) | Act::RecDev(Dev::Cam, _) => "Camera",
         Act::RecShape(_) => "Camera shape",
+        Act::RecBg(_) => "Camera background",
         Act::RecStart => "Start recording",
         Act::Wheel | Act::RingWheel => "More colors",
         Act::RingSize(d) if d < 0 => "Thinner ring",

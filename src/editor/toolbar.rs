@@ -135,6 +135,8 @@ pub enum Act {
     /// Pick device `i` of the list (0 = the default device).
     RecDev(Dev, usize),
     RecShape(Shape),
+    /// The camera's background: off or blurred.
+    RecBg(crate::cam::bg::Bg),
     /// The countdown 0 / 3 s.
     RecCountdown(bool),
     /// A GIF's max length (seconds).
@@ -315,6 +317,9 @@ pub struct RecView<'a> {
     /// The cameras are still being listed (the row says so, disabled).
     pub cams_looking: bool,
     pub shape: Shape,
+    /// The camera's background, and whether this build can blur it.
+    pub bg: crate::cam::bg::Bg,
+    pub blur: bool,
     /// The chosen microphone's name ("Default microphone" for the default).
     pub mic_label: &'a str,
     /// The chosen camera's name ("Default camera" for the first).
