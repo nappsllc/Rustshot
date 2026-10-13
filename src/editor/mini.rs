@@ -300,6 +300,21 @@ fn dashed_line(f: &mut Fb, a: Pt, b: Pt, s: f32, c: C4) {
     }
 }
 
+/// A square handle at `p` and scale `s`: its halo, accent and white face
+/// rects. Whole pixels first (the line, the border, the face), and every
+/// layer offset from one integer origin, so the border is equally wide on
+/// all four sides at any scale and position (rounding each layer's edges
+/// on its own left it 1 px on one side and 2 on the other).
+pub(crate) fn square_handle(p: Pt, s: f32, hot: bool) -> [FRect; 3] {
+    let lw = s.round().max(1.0);
+    let bd = (SQ_BORDER * s).round().max(1.0);
+    let face = ((if hot { SQ + 1.0 } else { SQ }) * s).round().max(1.0);
+    let outer = face + 2.0 * bd;
+    let o = FRect { x: (p.x - outer / 2.0).round(), y: (p.y - outer / 2.0).round(), w: outer, h: outer };
+    let g = |r: FRect, d: f32| FRect { x: r.x - d, y: r.y - d, w: r.w + 2.0 * d, h: r.h + 2.0 * d };
+    [g(o, lw), o, g(o, -bd)]
+}
+
 /// The selection chrome of the objects.
 pub fn osel(f: &mut Fb, ui: &Ui, u: &ObjSelUi) {
     let th = ui.th;
@@ -316,15 +331,10 @@ pub fn osel(f: &mut Fb, ui: &Ui, u: &ObjSelUi) {
     let halo = C4::new(0, 0, 0, 115);
     for (i, p) in u.square.iter().enumerate() {
         let hot = u.hot == Some((false, i));
-        let face = ui.px(if hot { SQ + 1.0 } else { SQ });
-        let bd = ui.px(SQ_BORDER);
-        let (x, y) = (p.x.round(), p.y.round());
-        let outer = face + 2.0 * bd;
-        let o = FRect { x: x - outer / 2.0, y: y - outer / 2.0, w: outer, h: outer };
-        let g = |r: FRect, d: f32| FRect { x: r.x - d, y: r.y - d, w: r.w + 2.0 * d, h: r.h + 2.0 * d };
-        chrome::fill(f, chrome::round(g(o, lw)), ui.px(3.0), halo);
-        chrome::fill(f, chrome::round(o), ui.px(2.5), th.accent);
-        chrome::fill(f, chrome::round(g(o, -bd)), ui.px(1.5), C4::rgb(255, 255, 255));
+        let [h, o, w] = square_handle(*p, s, hot);
+        chrome::fill(f, h, ui.px(3.0), halo);
+        chrome::fill(f, o, ui.px(2.5), th.accent);
+        chrome::fill(f, w, ui.px(1.5), C4::rgb(255, 255, 255));
     }
     for (i, p) in u.round.iter().enumerate() {
         let hot = u.hot == Some((true, i));
@@ -440,5 +450,35 @@ mod tests {
         }
         let p = m.pop.expect("the font list");
         assert!(p.x >= area.x && p.x1() <= area.x1());
+    }
+}
+
+#[cfg(test)]
+mod handle_tests {
+    use super::*;
+
+    /// Every layer's edge is a whole pixel and each ring is equally wide on
+    /// all four sides, at every scale and sub-pixel position.
+    #[test]
+    fn square_handles_are_even_all_round() {
+        for s in [1.0f32, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0] {
+            for k in 0..8 {
+                let p = Pt::new(100.0 + k as f32 / 8.0, 57.0 + k as f32 / 5.0);
+                for hot in [false, true] {
+                    let [h, o, w] = square_handle(p, s, hot);
+                    for r in [h, o, w] {
+                        for v in [r.x, r.y, r.w, r.h] {
+                            assert_eq!(v, v.round(), "whole pixels at s={s} p={p:?}: {r:?}");
+                        }
+                        assert_eq!(r.w, r.h, "square at s={s}");
+                    }
+                    let ring = |a: FRect, b: FRect| [b.x - a.x, b.y - a.y, a.x1() - b.x1(), a.y1() - b.y1()];
+                    for (outer, inner) in [(h, o), (o, w)] {
+                        let d = ring(outer, inner);
+                        assert!(d.iter().all(|x| *x == d[0] && *x >= 1.0), "even ring at s={s} p={p:?} hot={hot}: {d:?}");
+                    }
+                }
+            }
+        }
     }
 }
