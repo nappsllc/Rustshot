@@ -58,7 +58,7 @@ struct Com(*mut c_void);
 
 impl Com {
     fn new(p: *mut c_void) -> Option<Com> {
-        (!p.is_null()).then_some(Com(p))
+        (!p.is_null()).then(|| Com(p))
     }
 
     /// Method `slot` of the vtable, as `F`.
@@ -327,4 +327,16 @@ pub fn recognize_lines(img: &PixBuf) -> Result<Vec<Line>, OcrError> {
         out.push(line);
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod null_tests {
+    /// A null interface (TryCreateFromUserProfileLanguages without an OCR
+    /// language, as on a fresh Windows Sandbox) is `None`, and nothing is
+    /// released: the old eager `then_some(Com(p))` dropped a `Com(null)`
+    /// and crashed Text mode and Quick Redact.
+    #[test]
+    fn a_null_interface_is_none_and_never_released() {
+        assert!(super::Com::new(core::ptr::null_mut()).is_none());
+    }
 }

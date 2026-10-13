@@ -354,7 +354,7 @@ mod mac {
     impl Id {
         /// Take an object we own (alloc/init, new, copy, Create).
         pub fn owned(p: *mut c_void) -> Option<Id> {
-            (!p.is_null()).then_some(Id(p))
+            (!p.is_null()).then(|| Id(p))
         }
 
         /// Retain an object we do not own (an autoreleased result).

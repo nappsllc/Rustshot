@@ -88,7 +88,7 @@ fn check(hr: HRESULT, what: &str) -> R<()> {
 
 impl Com {
     fn new(p: *mut c_void) -> Option<Com> {
-        (!p.is_null()).then_some(Com(p))
+        (!p.is_null()).then(|| Com(p))
     }
 
     /// Another reference to `p` (AddRef).
@@ -992,6 +992,13 @@ fn run(file: &Path, asker: Option<usize>, kind: Kind, max: Duration, release: &m
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A null interface is `None`, and nothing is released (an eager
+    /// `then_some(Com(p))` dropped a `Com(null)`, which crashes).
+    #[test]
+    fn a_null_interface_is_none_and_never_released() {
+        assert!(Com::new(core::ptr::null_mut()).is_none());
+    }
 
     /// SHA-1 (FIPS 180-4), for the interface ids below.
     fn sha1(data: &[u8]) -> [u8; 20] {
