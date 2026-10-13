@@ -79,6 +79,7 @@ magnifier = true                  # zoomed pixels and a crosshair while picking 
 magnifier_square = false          # square instead of round
 accept_on_select = "off"          # "copy" or "save": a drawn region is exported at once
 overlay_hints = true              # the key card when the overlay opens
+screenclip_hint = true            # Windows: remind how to pick Rustshot for Win+Shift+S
 show_thumbnail = true             # the thumbnail card after a copied or saved capture
 shutter_sound = false             # a short click when a capture is taken
 show_tray = true                  # false = no tray icon (hotkeys still work)
