@@ -833,6 +833,7 @@ fn run() -> Result<()> {
             match plan {
                 Plan::Editor(pending) => exit(editor_main(cfg, RunKind::OneShot, pending)),
                 Plan::Direct { screen, region } => {
+                    hdr::configure(&cfg);
                     let shot = match screen {
                         Some(n) => capture::grab_monitor(n as usize),
                         None => capture::grab_edit(None, cfg.capture_active_monitor),

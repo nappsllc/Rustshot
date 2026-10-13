@@ -1742,6 +1742,8 @@ fn grab(cfg: &Config, th: &Theme, screen: Option<u32>) -> anyhow::Result<(Shot, 
 
 #[cfg_attr(test, allow(dead_code))]
 fn grab_screen(cfg: &Config, th: &Theme, screen: Option<u32>) -> anyhow::Result<(Shot, Option<gdi::GdiScreen>)> {
+    // Settings › Capture "HDR screenshots" (recordings follow it too).
+    crate::hdr::configure(cfg);
     #[cfg(windows)]
     if cfg.use_gdi() {
         let shot = capture::plan_edit(screen, cfg.capture_active_monitor)?;

@@ -143,6 +143,7 @@ impl ToneMap {
     }
 
     /// sRGB 8-bit of scRGB `c` (exact OETF; tests and single pixels).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn srgb8(&self, c: [f32; 3]) -> [u8; 3] {
         self.linear(c).map(|x| (srgb_oetf(x) * 255.0).round() as u8)
     }
@@ -168,6 +169,10 @@ pub fn peak_of(src: &[u16]) -> f32 {
         .filter(|y| y.is_finite())
         .fold(0.0, f32::max)
 }
+
+#[cfg(windows)]
+#[path = "hdr_win.rs"]
+pub mod win;
 
 #[cfg(test)]
 mod tests {

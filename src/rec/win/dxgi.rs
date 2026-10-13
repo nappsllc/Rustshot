@@ -20,6 +20,11 @@
 //! Physical pixels throughout: output desktop coordinates are physical in
 //! a per-monitor-DPI-aware process. Rotated outputs are not supported
 //! here (the caller falls back to GDI).
+//!
+//! An output in HDR (with Settings › Capture "HDR screenshots" on Tone-map,
+//! [`crate::hdr`]) is duplicated in FP16 (scRGB) and tone-mapped to sRGB
+//! on the CPU as each new image is copied into the canvas, up to the
+//! display's peak; such a recording converts to NV12 on the CPU too.
 
 use crate::capture::IRect;
 use super::gpu::Gpu;
@@ -68,6 +73,9 @@ struct Output {
     /// The part of the area on this output, virtual-screen coordinates.
     isect: IRect,
     staging: Option<ID3D11Texture2D>,
+    /// The output is in HDR and duplicated in FP16: its tone mapping
+    /// (`staging` is FP16 then).
+    hdr: Option<crate::hdr::ToneMap>,
     retry_at: Instant,
     /// A failure other than lost access was reported (once per output).
     logged: bool,
@@ -193,10 +201,21 @@ impl Output {
             (self.device, self.ctx) = create_device(&self.adapter)?;
             self.staging = None;
         }
-        let dup = unsafe { output.cast::<IDXGIOutput1>()?.DuplicateOutput(&self.device) }.context("duplicate the output")?;
+        // HDR: FP16 (scRGB), tone-mapped as it is copied; else BGRA.
+        let hdr = crate::hdr::enabled().then(|| crate::hdr::win::output_hdr(&output)).flatten();
+        let fp16 = hdr.and_then(|h| crate::hdr::win::duplicate_fp16(&output, &self.device).map(|d| (h.tone_map(), d)));
+        let tm = fp16.as_ref().map(|f| f.0);
+        let dup = match fp16 {
+            Some((_, d)) => d,
+            None => unsafe { output.cast::<IDXGIOutput1>()?.DuplicateOutput(&self.device) }.context("duplicate the output")?,
+        };
         if !upright(unsafe { dup.GetDesc() }.Rotation) {
             bail!("rotated output");
         }
+        if tm.is_some() != self.hdr.is_some() {
+            self.staging = None;
+        }
+        self.hdr = tm;
         let isect = intersect(area, &desc.DesktopCoordinates).unwrap_or((area.0, area.1, 0, 0));
         if isect != self.isect || desc.DesktopCoordinates != self.desk {
             self.staging = None;
@@ -204,7 +223,10 @@ impl Output {
         self.desk = desc.DesktopCoordinates;
         self.isect = isect;
         if self.staging.is_none() && isect.2 > 0 && isect.3 > 0 {
-            self.staging = Some(staging(&self.device, isect.2, isect.3)?);
+            self.staging = Some(match self.hdr {
+                Some(_) => crate::hdr::win::fp16_staging(&self.device, isect.2, isect.3).context("create an FP16 staging texture")?,
+                None => staging(&self.device, isect.2, isect.3)?,
+            });
         }
         self.dup = Some(dup);
         Ok(())
@@ -252,6 +274,7 @@ impl DxgiSource {
                     desk: RECT::default(),
                     isect: (0, 0, 0, 0),
                     staging: None,
+                    hdr: None,
                     retry_at: Instant::now(),
                     logged: false,
                     seen: false,
@@ -321,6 +344,9 @@ impl DxgiSource {
         let o = &self.outs[0];
         if self.outs.iter().any(|p| p.device.as_raw() != o.device.as_raw()) {
             bail!("the area spans outputs of more than one adapter");
+        }
+        if self.outs.iter().any(|p| p.hdr.is_some()) {
+            bail!("an HDR display is tone-mapped on the CPU");
         }
         let gpu = Gpu::new(&o.device, &o.ctx, self.area, out)?;
         gpu.upload(self.area, &self.canvas);
@@ -413,8 +439,9 @@ impl DxgiSource {
         let t0 = Instant::now();
         let mut copied = false;
         // The GPU canvas takes the image straight from the duplication; an
-        // output whose device was re-created (device removed) cannot.
-        let gpu = self.gpu.as_ref().filter(|g| g.device.as_raw() == o.device.as_raw());
+        // output whose device was re-created (device removed) cannot, nor
+        // one that came back in HDR (FP16).
+        let gpu = self.gpu.as_ref().filter(|g| g.device.as_raw() == o.device.as_raw() && o.hdr.is_none());
         let gpu_lost = self.gpu.is_some() && gpu.is_none();
         #[cfg(test)]
         if info.LastPresentTime != 0 {
@@ -482,16 +509,27 @@ impl DxgiSource {
                 let row = iw as usize * 4;
                 let x = (ix - area.0) as usize * 4;
                 for r in 0..ih as usize {
-                    let src = unsafe { std::slice::from_raw_parts((m.pData as *const u8).add(r * m.RowPitch as usize), row) };
                     let at = (iy - area.1) as usize * stride + r * stride + x;
-                    self.canvas[at..at + row].copy_from_slice(src);
+                    let line = unsafe { (m.pData as *const u8).add(r * m.RowPitch as usize) };
+                    match &o.hdr {
+                        // FP16 scRGB: 4 halves a pixel, tone-mapped to BGRA.
+                        Some(tm) => {
+                            let src = unsafe { std::slice::from_raw_parts(line as *const u16, iw as usize * 4) };
+                            tm.row(src, &mut self.canvas[at..at + row], true);
+                        }
+                        None => {
+                            let src = unsafe { std::slice::from_raw_parts(line, row) };
+                            self.canvas[at..at + row].copy_from_slice(src);
+                        }
+                    }
                 }
                 unsafe { o.ctx.Unmap(stg, 0) };
                 o.seen = true;
             }
         }
         if gpu_lost {
-            self.stop_gpu("the display device was re-created");
+            let why = if self.outs[i].hdr.is_some() { "the display is in HDR now" } else { "the display device was re-created" };
+            self.stop_gpu(why);
         }
         self.work += t0.elapsed();
     }

@@ -127,6 +127,11 @@ fn span_geom(mons: &[MonInfo]) -> Shot {
 /// Fill a geometry-only shot with the screen pixels.
 fn grab_into(mut shot: Shot) -> Result<Shot> {
     shot.image = gdi_capture(shot.origin.0, shot.origin.1, shot.size.0, shot.size.1)?;
+    // HDR monitors (Windows): their part read in FP16 and tone-mapped.
+    #[cfg(windows)]
+    for (r, px) in crate::hdr::win::grab((shot.origin.0, shot.origin.1, shot.size.0, shot.size.1)) {
+        crate::hdr::win::paste(&mut shot.image, (r.0 - shot.origin.0, r.1 - shot.origin.1), &px);
+    }
     Ok(shot)
 }
 
