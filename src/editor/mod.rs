@@ -501,6 +501,10 @@ struct FinishJob {
     cfg: Config,
     /// What the history keeps of it (history on).
     hist: Option<Box<HistShot>>,
+    /// Pin to screen with Save at below 100 %: the pin's own picture at
+    /// the screen's pixels (with the border) and its top-left; `None`:
+    /// the pin shows `img`.
+    pin: Option<(PixBuf, (i32, i32))>,
 }
 
 /// A capture for the history: the plain selection, its objects in its
@@ -1601,8 +1605,13 @@ impl App {
         // Copy text (OCR) reads the capture alone.
         let framed = tasks.iter().any(|t| !matches!(t, Task::Text | Task::Geometry));
         // Settings › Saving "Save at" too (the history keeps the capture
-        // at the screen's pixels).
+        // at the screen's pixels, and a pin shows it at screen size).
         let b = if framed { export::output_border(&edit.cfg, edit.shot.scale) as i32 } else { 0 };
+        let scaled = framed && export::save_factor(&edit.cfg, edit.shot.scale) < 0.999;
+        let pin = (scaled && tasks.contains(&Task::Pin)).then(|| {
+            let pb = export::border(&edit.cfg, edit.shot.scale).map_or(0, |(b, _)| b as i32);
+            (export::with_border(img.clone(), &edit.cfg, edit.shot.scale), (g.0 - pb, g.1 - pb))
+        });
         let img = if framed { export::for_output(img, &edit.cfg, edit.shot.scale, false) } else { img };
         self.st = State::Finish(Box::new(FinishJob {
             img,
@@ -1610,6 +1619,7 @@ impl App {
             tasks,
             cfg: edit.cfg.clone(),
             hist,
+            pin,
         }));
     }
 
@@ -1649,8 +1659,13 @@ impl App {
         self.upload_entry = entry.clone().filter(|_| res.upload.is_some());
         self.last_entry = entry.clone();
         let img = Arc::new(job.img);
-        // Pin to screen: the image where it was captured.
-        if job.tasks.contains(&Task::Pin) && !crate::pin::open(img.clone(), job.sel_global, th) {
+        // Pin to screen: the image where it was captured (at the screen's
+        // pixels whatever Save at says).
+        let (pin_img, pin_at) = match job.pin {
+            Some((p, at)) => (Arc::new(p), at),
+            None => (img.clone(), job.sel_global),
+        };
+        if job.tasks.contains(&Task::Pin) && !crate::pin::open(pin_img, pin_at, th) {
             eprintln!("rustshot: pin to screen is not available here");
             if self.kind == RunKind::Daemon {
                 crate::tray::notify("Pin to screen is not available here");

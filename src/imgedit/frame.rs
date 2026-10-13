@@ -1,6 +1,6 @@
 //! Canvas: padding round the picture over a background (a solid color,
-//! or "presentation": a soft diagonal gradient of the picture's dominant
-//! colors), the picture's corners rounded and a drop shadow under it.
+//! or "presentation": a soft diagonal gradient of neutral tones taken from
+//! the picture's edges), the picture's corners rounded and a drop shadow.
 
 use crate::pixbuf::PixBuf;
 use crate::uifb::C4;
@@ -18,7 +18,8 @@ pub const SHADOW_DY: f32 = 8.0;
 pub enum Bg {
     /// One color (its alpha kept: a transparent background).
     Solid(C4),
-    /// A soft gradient of the picture's two dominant colors.
+    /// A soft gradient of the dominant colors of the picture's edges, made
+    /// neutral (light grays for a mostly-white picture: [`present_colors`]).
     Presentation,
 }
 
@@ -106,23 +107,41 @@ fn over(dst: &mut [u8; 4], src: [u8; 4], cov: u32) {
     dst[3] = ((oa + 127) / 255) as u8;
 }
 
-/// The two dominant colors of `img` (the most common one, and the most
-/// common one clearly different from it; a lighter or darker shade of
-/// the first when there is none).
-pub fn dominant(img: &PixBuf) -> (C4, C4) {
+/// The presentation gradient for a mostly-white picture: light grays.
+pub const PRESENT_LIGHT: (C4, C4) = (C4 { r: 238, g: 240, b: 244, a: 255 }, C4 { r: 214, g: 219, b: 228, a: 255 });
+
+/// What the picture's edges look like: the two dominant colors there (the
+/// most common one, and the most common one clearly different from it; a
+/// lighter or darker shade of the first when there is none) and the share
+/// of the edge that is near white. The edges are what meets the canvas,
+/// so the gradient matches them, not an accent in the middle.
+pub fn dominant(img: &PixBuf) -> (C4, C4, f32) {
     let (w, h) = img.dimensions();
     let px = img.as_raw().as_chunks::<4>().0;
     if px.is_empty() {
-        return (C4::rgb(230, 232, 240), C4::rgb(200, 206, 222));
+        return (PRESENT_LIGHT.0, PRESENT_LIGHT.1, 1.0);
     }
-    // About 16 000 samples on a grid.
-    let step = ((w as usize * h as usize / 16_000) as f64).sqrt().max(1.0) as usize;
+    let (wu, hu) = (w as usize, h as usize);
+    // A band an eighth of each side deep (at least 1 px), about 8 000
+    // samples on a grid.
+    let (bx, by) = ((wu / 8).max(1), (hu / 8).max(1));
+    let band = wu * hu - wu.saturating_sub(2 * bx) * hu.saturating_sub(2 * by);
+    let step = ((band / 8_000) as f64).sqrt().max(1.0) as usize;
     let mut bins = vec![(0u32, [0u32; 3]); 4096];
-    for y in (0..h as usize).step_by(step) {
-        for x in (0..w as usize).step_by(step) {
-            let p = px[y * w as usize + x];
+    let (mut n, mut white) = (0u32, 0u32);
+    for y in (0..hu).step_by(step) {
+        let inner_row = y >= by && y + by < hu;
+        for x in (0..wu).step_by(step) {
+            if inner_row && x >= bx && x + bx < wu {
+                continue;
+            }
+            let p = px[y * wu + x];
             if p[3] < 128 {
                 continue;
+            }
+            n += 1;
+            if p[0] >= 235 && p[1] >= 235 && p[2] >= 235 {
+                white += 1;
             }
             let k = ((p[0] as usize >> 4) << 8) | ((p[1] as usize >> 4) << 4) | (p[2] as usize >> 4);
             let b = &mut bins[k];
@@ -135,7 +154,7 @@ pub fn dominant(img: &PixBuf) -> (C4, C4) {
     let avg = |b: &(u32, [u32; 3])| C4::rgb((b.1[0] / b.0) as u8, (b.1[1] / b.0) as u8, (b.1[2] / b.0) as u8);
     let mut order: Vec<usize> = (0..4096).filter(|&k| bins[k].0 > 0).collect();
     if order.is_empty() {
-        return (C4::rgb(230, 232, 240), C4::rgb(200, 206, 222));
+        return (PRESENT_LIGHT.0, PRESENT_LIGHT.1, 1.0);
     }
     order.sort_by_key(|&k| std::cmp::Reverse(bins[k].0));
     let a = avg(&bins[order[0]]);
@@ -143,20 +162,33 @@ pub fn dominant(img: &PixBuf) -> (C4, C4) {
         let d = |u: u8, v: u8| (u as f32 - v as f32).powi(2);
         (d(p.r, q.r) + d(p.g, q.g) + d(p.b, q.b)).sqrt()
     };
-    let b = order.iter().skip(1).map(|&k| avg(&bins[k])).find(|c| dist(*c, a) > 64.0).unwrap_or_else(|| {
-        let lum = 0.299 * a.r as f32 + 0.587 * a.g as f32 + 0.114 * a.b as f32;
-        let t = if lum > 128.0 { 0.0 } else { 255.0 };
-        let m = |v: u8| (v as f32 + (t - v as f32) * 0.35).round() as u8;
+    let b = order.iter().skip(1).map(|&k| avg(&bins[k])).find(|c| dist(*c, a) > 48.0).unwrap_or_else(|| {
+        let t = if lum(a) > 128.0 { 0.0 } else { 255.0 };
+        let m = |v: u8| (v as f32 + (t - v as f32) * 0.3).round() as u8;
         C4::rgb(m(a.r), m(a.g), m(a.b))
     });
-    (a, b)
+    (a, b, white as f32 / n.max(1) as f32)
 }
 
-/// The presentation gradient's two ends: the dominant colors softened
-/// (a third of the way to white).
-pub fn soft((a, b): (C4, C4)) -> (C4, C4) {
+fn lum(c: C4) -> f32 {
+    0.299 * c.r as f32 + 0.587 * c.g as f32 + 0.114 * c.b as f32
+}
+
+/// The presentation gradient's two ends for `img`: light grays when its
+/// edges are mostly white, else its edges' dominant colors made neutral
+/// (two thirds of the way to their own gray) and soft (a quarter of the
+/// way to white).
+pub fn present_colors(img: &PixBuf) -> (C4, C4) {
+    let (a, b, white) = dominant(img);
+    if white > 0.5 {
+        return PRESENT_LIGHT;
+    }
     let m = |c: C4| {
-        let f = |v: u8| (v as f32 + (255.0 - v as f32) * 0.33).round() as u8;
+        let g = lum(c);
+        let f = |v: u8| {
+            let d = v as f32 + (g - v as f32) * 0.65;
+            (d + (255.0 - d) * 0.25).round().clamp(0.0, 255.0) as u8
+        };
         C4::rgb(f(c.r), f(c.g), f(c.b))
     };
     (m(a), m(b))
@@ -220,7 +252,7 @@ pub fn apply_at(img: &PixBuf, p: &Pad, k: f32) -> PixBuf {
     // The background: a color per x + y (the gradient runs diagonally).
     let (c0, c1) = match p.bg {
         Bg::Solid(c) => (c, c),
-        Bg::Presentation => soft(dominant(img)),
+        Bg::Presentation => present_colors(img),
     };
     let span = (ow as f32 + oh as f32).max(1.0);
     let lut: Vec<[u8; 4]> = if matches!(p.bg, Bg::Presentation) {
@@ -334,28 +366,40 @@ mod tests {
     }
 
     #[test]
-    fn presentation_uses_the_dominant_colors() {
-        // Mostly blue with an orange band.
+    fn presentation_takes_neutral_tones_from_the_edges() {
+        let chroma = |c: C4| c.r.max(c.g).max(c.b) - c.r.min(c.g).min(c.b);
+        // A dark blue window with a bright red accent in the middle: the
+        // edges are blue, the accent does not count.
         let mut img = PixBuf::from_pixel(200, 100, [30, 60, 200, 255]);
-        for y in 70..100 {
-            for x in 0..200 {
+        for y in 30..70 {
+            for x in 50..150 {
                 let i = (y * 200 + x) * 4;
-                img.as_raw_mut()[i..i + 4].copy_from_slice(&[240, 140, 20, 255]);
+                img.as_raw_mut()[i..i + 4].copy_from_slice(&[240, 30, 20, 255]);
             }
         }
-        let (a, b) = dominant(&img);
-        assert!(a.b > 150 && a.r < 60, "blue first: {a:?}");
-        assert!(b.r > 200 && b.b < 60, "orange second: {b:?}");
+        let (a, _, white) = dominant(&img);
+        assert!(a.b > 150 && a.r < 60, "the edges' blue: {a:?}");
+        assert_eq!(white, 0.0);
+        let (c0, c1) = present_colors(&img);
+        assert!(chroma(c0) < 70 && chroma(c1) < 70, "neutral: {c0:?} {c1:?}");
+        assert!(c0.b >= c0.r, "a cool gray from the blue: {c0:?}");
         let out = apply(&img, &Pad::presentation());
-        let tl = out.get_pixel(0, 0);
-        let br = out.get_pixel(out.width() - 1, out.height() - 1);
-        assert!(tl[2] > tl[0], "top-left leans blue: {tl:?}");
-        assert!(br[0] > br[2], "bottom-right leans orange: {br:?}");
-        assert!(tl[0] > 30 && tl[1] > 60, "softened toward white: {tl:?}");
+        let (tl, br) = (out.get_pixel(0, 0), out.get_pixel(out.width() - 1, out.height() - 1));
+        assert!(tl[0].abs_diff(tl[1]) < 70 && br[0].abs_diff(br[2]) < 70, "no red anywhere: {tl:?} {br:?}");
+        // A mostly-white screenshot (a red callout inside): light grays.
+        let mut page = PixBuf::from_pixel(300, 200, [252, 252, 253, 255]);
+        for y in 60..120 {
+            for x in 100..220 {
+                let i = (y * 300 + x) * 4;
+                page.as_raw_mut()[i..i + 4].copy_from_slice(&[240, 68, 56, 255]);
+            }
+        }
+        assert!(dominant(&page).2 > 0.9);
+        assert_eq!(present_colors(&page), PRESENT_LIGHT);
         // One color only: a shade of it.
-        let (a, b) = dominant(&PixBuf::from_pixel(10, 10, [20, 20, 20, 255]));
+        let (a, b, _) = dominant(&PixBuf::from_pixel(10, 10, [20, 20, 20, 255]));
         assert_eq!(a, C4::rgb(20, 20, 20));
-        assert!(b.r > 80, "{b:?}");
+        assert!(b.r > 70, "{b:?}");
     }
 
     #[test]

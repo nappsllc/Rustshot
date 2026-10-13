@@ -245,6 +245,9 @@ impl Window {
         // the canvas.
         let img = if r == Request::CopyText {
             self.e.canvas.export_picture()
+        } else if r == Request::Pin {
+            // A pin shows it at the screen's pixels (no Save at).
+            crate::export::with_border(self.e.canvas.export(), &self.e.cfg, self.e.entry.meta.scale)
         } else {
             let resized = self.e.canvas.edits().resize.is_some();
             crate::export::for_output(self.e.canvas.export(), &self.e.cfg, self.e.entry.meta.scale, resized)

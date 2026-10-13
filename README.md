@@ -80,7 +80,7 @@ screenshots, editing and video capture.** Windows, Linux and macOS.
 - An optional border (any color, 1 to 8 px) around everything you copy,
   save, upload or pin.
 - *Save at*: screen pixels, 1× (a high-DPI capture at its logical size) or
-  a percent, for everything you copy, save, upload or pin. History keeps
+  a percent, for everything you copy, save or upload. Pins and History keep
   the full capture.
 - Upload to Imgur, or to your own S3-compatible bucket (Amazon S3,
   Cloudflare R2, MinIO, …), with the link copied for you. Images and MP4

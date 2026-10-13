@@ -169,7 +169,7 @@ pub fn scaled(img: PixBuf, f: f32) -> PixBuf {
     crate::imgedit::resample::resize(&img, nw, nh, crate::imgedit::Filter::Area)
 }
 
-/// `img` (a capture at `scale`) as Copy, Save, Upload and Pin hand it
+/// `img` (a capture at `scale`) as Copy, Save and Upload hand it
 /// out: at the Save at size ([`save_factor`]; `keep_size`: it was resized
 /// on purpose already, the Edit window's Resize) with the border round it
 /// ([`with_border`], its width at the new size). The history keeps the

@@ -248,6 +248,14 @@ pub fn file_for(img: &crate::pixbuf::PixBuf, saved: Option<&Path>, cfg: &crate::
 mod tests {
     use super::*;
 
+    /// The tests that claim the sheet or share run one at a time: the
+    /// flag is per thread, but a harness on one thread (`--test-threads=1`)
+    /// runs them all on it.
+    fn serial() -> std::sync::MutexGuard<'static, ()> {
+        static M: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        M.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// Windows and macOS share; Linux has no standard sheet.
     #[test]
     fn availability_per_os() {
@@ -294,6 +302,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let img = crate::pixbuf::PixBuf::from_pixel(4, 4, [9, 9, 9, 255]);
         let cfg = crate::config::Config::default();
+        let _serial = serial();
         SHARED.with(|s| s.borrow_mut().clear());
         let tasks = [crate::export::Task::Save { path: Some(dir.join("both.png")), ask: false }, crate::export::Task::Share];
         let res = crate::export::run_export(&img, (0, 0), &tasks, &cfg);
@@ -315,13 +324,17 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("b.png");
         std::fs::write(&f, b"x").unwrap();
+        let _serial = serial();
         SHARED.with(|s| s.borrow_mut().clear());
         let up = Sheet::claim().expect("free");
         assert!(Sheet::claim().is_none());
         if supported() {
             assert_eq!(share_now(&f, None), Err(BUSY.to_string()));
             assert!(SHARED.with(|s| s.borrow().is_empty()), "nothing shown");
-            drop(up);
+        }
+        // (Released on every OS: Linux has no sheet, but the flag is the same.)
+        drop(up);
+        if supported() {
             assert_eq!(share_now(&f, None), Ok(()));
         }
         assert!(Sheet::claim().is_some(), "free after the share");
@@ -352,6 +365,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let f = dir.join("s.png");
         std::fs::write(&f, b"x").unwrap();
+        let _serial = serial();
         SHARED.with(|s| s.borrow_mut().clear());
         if supported() {
             assert_eq!(share_now(&f, None), Ok(()));

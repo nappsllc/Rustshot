@@ -169,10 +169,10 @@ as a band around the selection. The History keeps the capture without it.
 (the default: the capture as the screen has it), *1×* (a capture from a
 high-DPI display at its logical size: a 200 % screen's capture at half its
 pixels, area-averaged so text stays smooth) or *Custom* (10-100 %,
-`save_scale_percent`). It applies to what you copy, save, upload and pin,
-from the overlay, the direct captures, History and the Edit window; the
-border keeps its logical width at the new size. The History keeps the
-capture at full size, and a picture you resized in the Edit window keeps
+`save_scale_percent`). It applies to what you copy, save and upload (Open
+with and Share too), from the overlay, the direct captures, History and
+the Edit window; the border keeps its logical width at the new size. A pin
+always shows the capture at screen size, the History keeps it at full size, and a picture you resized in the Edit window keeps
 the size you chose.
 
 The folder, subfolder pattern, file-name pattern, format and JPEG quality
@@ -340,7 +340,8 @@ of the status bar for the **Image** menu, or use the keys.
   ("1180 × 760 → 590 × 380").
 - **Canvas…** adds padding (all sides or each), on a solid color (white,
   gray, black, transparent or any `#rrggbb`) or *Presentation*: a soft
-  diagonal gradient of the picture's two dominant colors, with 12 px
+  diagonal gradient of neutral tones taken from the colors at the
+  picture's edges (light grays for a mostly-white screenshot), with 12 px
   rounded corners and a drop shadow (24 px blur, 25 %). The corner radius
   and the shadow can be changed for either, and the dialog shows a
   preview.

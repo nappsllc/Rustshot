@@ -230,7 +230,7 @@ pub struct Config {
     /// Settings › Saving "Save at": "screen" (the screen's pixels, as
     /// captured), "logical" (1×: a high-DPI capture scaled down by its
     /// scale, area-averaged) or "custom" (`save_scale_percent`, 10-100 %).
-    /// Copy, Save, Upload and Pin get it; History keeps the original.
+    /// Copy, Save and Upload get it; a pin and History keep the original size.
     pub save_scale: String,
     pub save_scale_percent: u32,
     /// Windows: the daemon reminds how to pick Rustshot for Win+Shift+S

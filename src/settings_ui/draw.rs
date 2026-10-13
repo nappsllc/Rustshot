@@ -607,7 +607,7 @@ fn general(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) 
     if ui.focus.is_focused("filename") {
         s.pattern = Pattern::File;
     }
-    srow_ex(ui, tok, "Save at", Some("History keeps the original"), false, 44.0, |ui| {
+    srow_ex(ui, tok, "Save at", Some("Not pins; History keeps the original"), false, 44.0, |ui| {
         let on = ui.enabled;
         ui.enabled = on && f.save_at == 2;
         let w = ui.text_w(12.0, "%").ceil();

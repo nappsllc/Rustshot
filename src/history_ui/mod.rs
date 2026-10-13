@@ -528,8 +528,9 @@ pub fn run_export(store: &Store, id: &str, task: crate::export::Task, cfg: &Conf
         };
     }
     let img = match picture(store, &e) {
-        // Save at (unless the Edit window resized it on purpose), the border.
-        Ok(i) => crate::export::for_output(i, cfg, e.meta.scale, store.doc(&e).is_ok_and(|d| d.edits.resize.is_some())),
+        // Save at (unless the Edit window resized it on purpose, or it is
+        // a pin: that shows the screen's pixels), the border.
+        Ok(i) => crate::export::for_output(i, cfg, e.meta.scale, task == Task::Pin || store.doc(&e).is_ok_and(|d| d.edits.resize.is_some())),
         Err(err) => return fail(format!("Could not read the capture: {err:#}")),
     };
     if task == Task::Pin {
