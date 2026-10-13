@@ -879,7 +879,7 @@ fn settings_window_saves_and_the_daemon_reloads() {
         std::thread::sleep(Duration::from_millis(500));
         // The rail → Saving (Capture, Overlay, Saving), then its Save to
         // field: End, clear, type.
-        tab_to(w, &focus, "rail", 5);
+        tab_to(w, &focus, "rail", 80);
         keys(w, &TO_SAVING);
         tab_to(w, &focus, "folder", 60);
         keys(w, &[0x23]);
@@ -912,7 +912,7 @@ fn settings_window_saves_and_the_daemon_reloads() {
         let w = wait_pid_window(pid, 5000).expect("settings window again");
         std::thread::sleep(Duration::from_millis(500));
         // The rail → Shortcuts › Overlay actions; Accept's cap: record J; then OK.
-        tab_to(w, &focus, "rail", 5);
+        tab_to(w, &focus, "rail", 80);
         keys(w, &TO_ACTIONS);
         tab_to(w, &focus, "key_accept", 200);
         keys(w, &[RET, 'J' as u32]);
