@@ -285,7 +285,7 @@ fn effect_blurs_once_a_mask_came() {
     assert_eq!(fx.running(), Some(true));
     let mut p = sq.clone();
     fx.apply(Bg::Strong, &raw, &mut p);
-    assert!(p == sq || calls.load(Ordering::SeqCst) == 1);
+    assert!(p == sq || calls.load(Ordering::SeqCst) >= 1, "a mask shows only after a segmentation (the next one may already be running)");
     fx.settle();
     let mut p = sq.clone();
     fx.apply(Bg::Strong, &raw, &mut p);
