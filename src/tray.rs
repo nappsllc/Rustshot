@@ -995,7 +995,7 @@ mod tests {
                         }
                     }
                 }
-                let png = crate::pngfile::encode(w, w, crate::pngfile::Color::Rgb, &img);
+                let png = crate::pngfile::encode(w, w, crate::pngfile::Color::Rgb, &img).unwrap();
                 std::fs::write(dir.join(format!("glyph_{size}_{name}.png")), png).unwrap();
             }
         }

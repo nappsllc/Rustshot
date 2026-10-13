@@ -74,10 +74,9 @@ impl PixBuf {
         out
     }
 
-    /// The buffer as a PNG file (`Result` for the callers' sake: it does
-    /// not fail).
+    /// The buffer as a PNG file (an empty buffer is an error).
     pub fn to_png(&self) -> Result<Vec<u8>> {
-        Ok(crate::pngfile::encode(self.w, self.h, crate::pngfile::Color::Rgba, &self.d))
+        Ok(crate::pngfile::encode(self.w, self.h, crate::pngfile::Color::Rgba, &self.d)?)
     }
 
     /// Decode a PNG (any color type and depth) into RGBA.

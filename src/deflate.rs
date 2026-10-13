@@ -186,11 +186,17 @@ impl Huff {
 /// the data and the input bytes the stream took.
 pub fn inflate(src: &[u8], limit: usize) -> Result<(Vec<u8>, usize), Error> {
     let mut out = Vec::new();
-    let used = inflate_into(src, limit, &mut out)?;
+    let used = inflate_into(src, limit, &mut out, false)?;
     Ok((out, used))
 }
 
-fn inflate_into(src: &[u8], limit: usize, out: &mut Vec<u8>) -> Result<usize, Error> {
+/// What `inflate_into` in `stop` mode returns once the output reached the
+/// limit (the rest of the stream unread).
+const STOPPED: Error = "deflate: stopped at the limit";
+
+/// Inflate into `out`, at most `limit` bytes: past it an error, or with
+/// `stop` the output cut at `limit` and [`STOPPED`].
+fn inflate_into(src: &[u8], limit: usize, out: &mut Vec<u8>, stop: bool) -> Result<usize, Error> {
     // Room for what the input could give (DEFLATE expands at most 1032:1),
     // up to the limit, taken fallibly: no regrowing on the way, and a huge
     // stream is an error instead of an abort.
@@ -208,9 +214,13 @@ fn inflate_into(src: &[u8], limit: usize, out: &mut Vec<u8>) -> Result<usize, Er
                 if len != !nlen & 0xffff {
                     return Err("deflate: bad stored block");
                 }
-                let len = len as usize;
-                if out.len() + len > limit {
+                let mut len = len as usize;
+                let over = out.len() + len > limit;
+                if over && !stop {
                     return Err("deflate: too much data");
+                }
+                if over {
+                    len = limit - out.len();
                 }
                 // Whole bytes still in the bit buffer, then straight from the input.
                 let mut k = 0;
@@ -227,16 +237,19 @@ fn inflate_into(src: &[u8], limit: usize, out: &mut Vec<u8>) -> Result<usize, Er
                 }
                 out.extend_from_slice(&src[b.pos..b.pos + rest]);
                 b.pos += rest;
+                if over {
+                    return Err(STOPPED);
+                }
             }
             1 => {
                 let l = fixed_lengths();
                 let lit = Huff::new(&l)?;
                 let dist = Huff::new(&[5u8; 30])?;
-                codes(&mut b, &lit, &dist, out, limit)?;
+                codes(&mut b, &lit, &dist, out, limit, stop)?;
             }
             2 => {
                 let (lit, dist) = dynamic(&mut b)?;
-                codes(&mut b, &lit, &dist, out, limit)?;
+                codes(&mut b, &lit, &dist, out, limit, stop)?;
             }
             _ => return Err("deflate: bad block type"),
         }
@@ -295,7 +308,8 @@ fn dynamic(b: &mut Bits) -> Result<(Huff, Huff), Error> {
     Ok((Huff::new(&lens[..nlen])?, Huff::new(&lens[nlen..nlen + ndist])?))
 }
 
-fn codes(b: &mut Bits, lit: &Huff, dist: &Huff, out: &mut Vec<u8>, limit: usize) -> Result<(), Error> {
+fn codes(b: &mut Bits, lit: &Huff, dist: &Huff, out: &mut Vec<u8>, limit: usize, stop: bool) -> Result<(), Error> {
+    let full = if stop { STOPPED } else { "deflate: too much data" };
     loop {
         if b.over > 16 {
             return Err("deflate: truncated");
@@ -303,7 +317,7 @@ fn codes(b: &mut Bits, lit: &Huff, dist: &Huff, out: &mut Vec<u8>, limit: usize)
         let s = lit.decode(b)? as usize;
         if s < 256 {
             if out.len() >= limit {
-                return Err("deflate: too much data");
+                return Err(full);
             }
             out.push(s as u8);
             continue;
@@ -315,7 +329,7 @@ fn codes(b: &mut Bits, lit: &Huff, dist: &Huff, out: &mut Vec<u8>, limit: usize)
         if s >= 29 {
             return Err("deflate: bad length code");
         }
-        let len = LEN_BASE[s] as usize + b.bits(LEN_EXTRA[s] as u32) as usize;
+        let mut len = LEN_BASE[s] as usize + b.bits(LEN_EXTRA[s] as u32) as usize;
         let d = dist.decode(b)? as usize;
         if d >= 30 {
             return Err("deflate: bad distance code");
@@ -324,8 +338,12 @@ fn codes(b: &mut Bits, lit: &Huff, dist: &Huff, out: &mut Vec<u8>, limit: usize)
         if d > out.len() {
             return Err("deflate: distance too far back");
         }
-        if out.len() + len > limit {
-            return Err("deflate: too much data");
+        let over = out.len() + len > limit;
+        if over && !stop {
+            return Err(full);
+        }
+        if over {
+            len = limit - out.len(); // the part that fits, then stop
         }
         let start = out.len() - d;
         if d >= len {
@@ -338,6 +356,9 @@ fn codes(b: &mut Bits, lit: &Huff, dist: &Huff, out: &mut Vec<u8>, limit: usize)
                 let v = out[start + k];
                 out.push(v);
             }
+        }
+        if over {
+            return Err(STOPPED);
         }
     }
 }
@@ -396,10 +417,41 @@ pub fn zlib_decompress(src: &[u8], limit: usize) -> Result<Vec<u8>, Error> {
         return Err("zlib: preset dictionary");
     }
     let mut out = Vec::new();
-    let used = inflate_into(&src[2..], limit, &mut out)?;
+    let used = inflate_into(&src[2..], limit, &mut out, false)?;
     let t = 2 + used;
     let want = src.get(t..t + 4).ok_or("zlib: truncated")?;
     if u32::from_be_bytes(want.try_into().unwrap()) != adler32(1, &out) {
+        return Err("zlib: bad checksum");
+    }
+    Ok(out)
+}
+
+/// A PNG's image data: a zlib stream giving `want` bytes, read the way the
+/// png crate reads it. Once `want` bytes are out the rest is ignored (extra
+/// data, a missing or wrong Adler-32, damage past the image); a stream that
+/// ends early comes back short, or as "bad checksum" when its Adler-32 is
+/// there and wrong.
+pub fn zlib_image(src: &[u8], want: usize) -> Result<Vec<u8>, Error> {
+    if src.len() < 2 {
+        return Err("zlib: truncated");
+    }
+    let (cmf, flg) = (src[0], src[1]);
+    if cmf & 15 != 8 || cmf >> 4 > 7 || !((cmf as u16) << 8 | flg as u16).is_multiple_of(31) {
+        return Err("zlib: bad header");
+    }
+    if flg & 0x20 != 0 {
+        return Err("zlib: preset dictionary");
+    }
+    let mut out = Vec::new();
+    let r = inflate_into(&src[2..], want, &mut out, true);
+    if out.len() == want {
+        return Ok(out);
+    }
+    let used = r?;
+    let t = 2 + used;
+    if let Some(a) = src.get(t..t + 4)
+        && u32::from_be_bytes(a.try_into().unwrap()) != adler32(1, &out)
+    {
         return Err("zlib: bad checksum");
     }
     Ok(out)

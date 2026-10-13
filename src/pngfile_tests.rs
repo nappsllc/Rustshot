@@ -76,7 +76,7 @@ fn big_pictures_encode_in_bands() {
     for v in d.iter_mut().step_by(97) {
         *v = rng(&mut s) as u8;
     }
-    let f = encode(w, h, Color::Rgba, &d);
+    let f = encode(w, h, Color::Rgba, &d).unwrap();
     let r = reference(&f).expect("the png crate decodes it");
     assert!(r.rgba == d);
     assert!(decode(&f).unwrap().rgba == d);
@@ -90,7 +90,7 @@ fn encodes_what_the_png_crate_decodes() {
             for color in [Color::Rgba, Color::Rgb] {
                 let ch = if color == Color::Rgba { 4 } else { 3 };
                 let d = random_image(&mut s, w, h, ch, smooth);
-                let f = encode(w, h, color, &d);
+                let f = encode(w, h, color, &d).unwrap();
                 let want: Vec<u8> = if ch == 4 { d.clone() } else { d.as_chunks::<3>().0.iter().flat_map(|p| [p[0], p[1], p[2], 255]).collect() };
                 let r = reference(&f).expect("the png crate decodes it");
                 assert_eq!((r.w, r.h), (w, h));
@@ -259,7 +259,7 @@ fn hostile_input_fails_cleanly() {
     let mut s = 3u64;
     let mut files = Vec::new();
     let d = random_image(&mut s, 23, 11, 4, true);
-    files.push(encode(23, 11, Color::Rgba, &d));
+    files.push(encode(23, 11, Color::Rgba, &d).unwrap());
     let pal: Vec<u8> = (0..48).collect();
     files.push(png_crate_encode(13, 7, png::ColorType::Indexed, png::BitDepth::Four, &[0x5a; 49], Some(pal), Some(vec![9; 3])));
     let samples: Vec<u8> = (0..4 * 9 * 9).map(|_| rng(&mut s) as u8).collect();
@@ -330,8 +330,10 @@ fn sizes_are_capped_and_headers_checked() {
     assert_eq!(decode(&file_with_header(14_142, 14_142, 8, 6, &bomb)), Err(PngError("not enough image data")));
     assert_eq!(decode(&file_with_header(1 << 17, 1, 8, 6, &bomb)), Err(PngError("bad size")));
     assert_eq!(decode(&file_with_header(0, 5, 8, 6, &bomb)), Err(PngError("bad size")));
-    // More data than the picture needs: an error, not more memory.
-    assert!(decode(&file_with_header(16, 16, 8, 6, &bomb)).is_err());
+    // More data than the picture needs: the rest is ignored (as the png
+    // crate does), and no more memory is taken for it.
+    let im = decode(&file_with_header(16, 16, 8, 6, &bomb)).unwrap();
+    assert!(im.rgba.len() == 16 * 16 * 4 && im.rgba.iter().all(|&v| v == 0));
     // Bad depth / color combinations.
     for (d, c) in [(16, 3), (4, 2), (2, 6), (7, 0), (8, 5), (1, 4)] {
         assert_eq!(decode(&file_with_header(4, 4, d, c, &bomb)), Err(PngError("unsupported IHDR")), "depth {d} color {c}");
@@ -349,16 +351,53 @@ fn sizes_are_capped_and_headers_checked() {
     chunk(&mut f, b"PLTE", &[1, 2, 3]);
     chunk(&mut f, b"IDAT", &raw);
     chunk(&mut f, b"IEND", &[]);
-    assert_eq!(decode(&f), Err(PngError("palette index out of range")));
+    // An index past the palette: opaque black, as the png crate.
+    assert_eq!(decode(&f).unwrap().rgba, [0, 0, 0, 255]);
+    assert_eq!(decode(&f).unwrap(), reference(&f).unwrap());
     // A bad filter type.
     let raw = deflate::zlib_compress(&[9, 1, 2, 3, 4], deflate::Effort::DEFAULT);
     assert_eq!(decode(&file_with_header(1, 1, 8, 6, &raw)), Err(PngError("bad filter type")));
 }
 
 #[test]
+fn encoding_an_empty_or_mismatched_picture_is_an_error() {
+    assert_eq!(encode(0, 5, Color::Rgba, &[]), Err(PngError("bad size")));
+    assert_eq!(encode(5, 0, Color::Rgb, &[]), Err(PngError("bad size")));
+    assert!(encode(2, 2, Color::Rgba, &[0; 15]).is_err());
+    assert!(crate::pixbuf::PixBuf::new(4, 0).to_png().is_err());
+}
+
+#[test]
+fn image_data_is_read_like_the_png_crate() {
+    let rows = [0u8, 1, 2, 3, 4, 0, 5, 6, 7, 8]; // 1x2 RGBA, filter None
+    let z = deflate::zlib_compress(&rows, deflate::Effort::DEFAULT);
+    let want = [1u8, 2, 3, 4, 5, 6, 7, 8];
+    let ok = |idat: &[u8]| decode(&file_with_header(1, 2, 8, 6, idat)).map(|im| im.rgba);
+    assert_eq!(ok(&z).unwrap(), want);
+    // A wrong or missing Adler-32 does not matter once every row is there.
+    let mut bad = z.clone();
+    let k = bad.len() - 1;
+    bad[k] ^= 0x55;
+    assert_eq!(ok(&bad).unwrap(), want);
+    assert_eq!(ok(&z[..z.len() - 4]).unwrap(), want);
+    // Data past the image (more rows' worth, then junk): ignored.
+    let more = deflate::zlib_compress(&[&rows[..], &[0, 9, 9, 9, 9][..]].concat(), deflate::Effort::DEFAULT);
+    assert_eq!(ok(&more).unwrap(), want);
+    assert_eq!(ok(&[&z[..], b"junk"].concat()).unwrap(), want);
+    assert_eq!(reference(&file_with_header(1, 2, 8, 6, &more)).unwrap().rgba, want, "the png crate reads it the same");
+    // An image that comes out short fails; with its Adler-32 wrong, says so.
+    let short = deflate::zlib_compress(&rows[..7], deflate::Effort::DEFAULT);
+    assert_eq!(ok(&short), Err(PngError("not enough image data")));
+    let mut short_bad = short.clone();
+    let k = short_bad.len() - 1;
+    short_bad[k] ^= 1;
+    assert_eq!(ok(&short_bad), Err(PngError("zlib: bad checksum")));
+}
+
+#[test]
 fn ancillary_and_split_chunks() {
     let d = [1u8, 2, 3, 4, 5, 6, 7, 8];
-    let f = encode(2, 1, Color::Rgba, &d);
+    let f = encode(2, 1, Color::Rgba, &d).unwrap();
     // A text chunk before IEND, IEND missing: still the picture.
     let iend = f.len() - 12;
     let mut g = f[..iend].to_vec();
@@ -405,7 +444,7 @@ fn png_codec_bench() {
     let (mut tot_c, mut tot_o) = (0usize, 0usize);
     for (name, im) in &pics {
         let (c, tc) = time(&|| crate_png(im).len());
-        let (o, to) = time(&|| encode(im.w, im.h, Color::Rgba, &im.rgba).len());
+        let (o, to) = time(&|| encode(im.w, im.h, Color::Rgba, &im.rgba).unwrap().len());
         eprintln!("BENCH {name} {}x{}: png crate {c} B {tc:.1} ms, ours {o} B {to:.1} ms ({:+.1} %)", im.w, im.h, (o as f64 / c as f64 - 1.0) * 100.0);
         tot_c += c;
         tot_o += o;
@@ -437,9 +476,9 @@ fn png_codec_bench() {
     }
     let big = Image { w, h, rgba: big };
     let (c, tc) = time(&|| crate_png(&big).len());
-    let (o, to) = time(&|| encode(w, h, Color::Rgba, &big.rgba).len());
+    let (o, to) = time(&|| encode(w, h, Color::Rgba, &big.rgba).unwrap().len());
     eprintln!("BENCH 4K encode: png crate {c} B {tc:.1} ms, ours {o} B {to:.1} ms ({:+.1} % size, x{:.2} time)", (o as f64 / c as f64 - 1.0) * 100.0, to / tc);
-    let f = encode(w, h, Color::Rgba, &big.rgba);
+    let f = encode(w, h, Color::Rgba, &big.rgba).unwrap();
     let (_, dc) = time(&|| reference(&f).unwrap().rgba.len());
     let (_, dt) = time(&|| decode(&f).unwrap().rgba.len());
     eprintln!("BENCH 4K decode: png crate {dc:.1} ms, ours {dt:.1} ms (x{:.2})", dt / dc);

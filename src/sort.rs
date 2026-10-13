@@ -47,7 +47,7 @@ fn by_less<T>(v: &mut [T], mut less: impl FnMut(&T, &T) -> bool) {
     // element now at j; each swap puts one element where it belongs.
     let mut to = vec![0usize; n];
     for (k, &j) in order.iter().enumerate() {
-        to[j as usize] = k;
+        to[j] = k;
     }
     for i in 0..n {
         while to[i] != i {
@@ -60,18 +60,18 @@ fn by_less<T>(v: &mut [T], mut less: impl FnMut(&T, &T) -> bool) {
 
 /// The indices `0..n` in sorted order (stable): runs of [`SHORT`] by
 /// insertion, then merged bottom-up.
-fn sorted_indices(n: usize, less: &mut dyn FnMut(usize, usize) -> bool) -> Vec<u32> {
-    let mut a: Vec<u32> = (0..n as u32).collect();
+fn sorted_indices(n: usize, less: &mut dyn FnMut(usize, usize) -> bool) -> Vec<usize> {
+    let mut a: Vec<usize> = (0..n).collect();
     for run in a.chunks_mut(SHORT) {
         for i in 1..run.len() {
             let mut j = i;
-            while j > 0 && less(run[j] as usize, run[j - 1] as usize) {
+            while j > 0 && less(run[j], run[j - 1]) {
                 run.swap(j, j - 1);
                 j -= 1;
             }
         }
     }
-    let mut b = vec![0u32; n];
+    let mut b = vec![0usize; n];
     let mut w = SHORT;
     while w < n {
         let mut s = 0;
@@ -80,7 +80,7 @@ fn sorted_indices(n: usize, less: &mut dyn FnMut(usize, usize) -> bool) -> Vec<u
             let (mut i, mut j, mut k) = (s, m, s);
             while i < m && j < e {
                 // Equal: the left one first (stable).
-                if less(a[j] as usize, a[i] as usize) {
+                if less(a[j], a[i]) {
                     b[k] = a[j];
                     j += 1;
                 } else {

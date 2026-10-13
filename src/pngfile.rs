@@ -3,14 +3,16 @@
 //! [`decode`] reads every PNG a screenshot tool meets: gray, RGB, palette,
 //! gray + alpha and RGBA, 1 to 16 bits a sample, interlaced (Adam7) or
 //! not, `tRNS` transparency, and gives RGBA8 (16-bit samples keep their
-//! high byte, low-bit gray is scaled to 0..=255). Chunk CRCs and the zlib
-//! Adler-32 are checked; sizes are capped ([`MAX_PIXELS`], the editor's
-//! own cap) before anything is allocated, and allocations are fallible: bad
-//! or huge input is an error, never a panic or an abort.
+//! high byte, low-bit gray is scaled to 0..=255). Chunk CRCs are checked.
+//! As lenient as the png crate it replaced: palette indices past the
+//! palette are opaque black, image data past the last row is ignored, and
+//! so is the zlib Adler-32 once every row is there (it fails only an
+//! incomplete image). Sizes are capped ([`MAX_PIXELS`], the editor's own
+//! cap) before anything is allocated, and allocations are fallible: bad or
+//! huge input is an error, never a panic or an abort.
 //!
-//! [`encode`] writes RGBA8 or RGB8: each row with the filter whose output
-//! has the smallest sum of absolute values (the usual heuristic), then one
-//! zlib stream.
+//! [`encode`] writes RGBA8 or RGB8: each row with the filter (None, Sub or
+//! Up) that leaves the fewest non-zero bytes, then one zlib stream.
 
 use crate::deflate;
 
@@ -237,7 +239,7 @@ pub fn decode(b: &[u8]) -> Result<Image, PngError> {
     }
     let ps = passes(&h);
     let raw_len: usize = ps.iter().filter(|p| p.4 > 0).map(|p| p.5 as usize * (1 + h.row_bytes(p.4))).sum();
-    let mut raw = deflate::zlib_decompress(&idat, raw_len).map_err(PngError)?;
+    let mut raw = deflate::zlib_image(&idat, raw_len).map_err(PngError)?;
     if raw.len() != raw_len {
         return err("not enough image data");
     }
@@ -385,7 +387,8 @@ fn to_rgba(h: &Header, row: &[u8], palette: &[[u8; 4]], key: Option<[u16; 3]>, o
         }
         3 => {
             for (i, o) in px.iter_mut().enumerate() {
-                *o = *palette.get(sample(i) as usize).ok_or(PngError("palette index out of range"))?;
+                // Past the palette: opaque black, as the png crate and libpng.
+                *o = palette.get(sample(i) as usize).copied().unwrap_or([0, 0, 0, 255]);
             }
         }
         4 => {
@@ -571,11 +574,17 @@ fn compress_rows(data: &[u8], rb: usize, ch: usize, r: (usize, usize), last: boo
 }
 
 /// A PNG of `w` x `h` pixels of 8-bit RGB or RGBA `data` (rows top to
-/// bottom, no padding). `data` must be exactly that long.
-pub fn encode(w: u32, h: u32, color: Color, data: &[u8]) -> Vec<u8> {
+/// bottom, no padding). An empty or oversized picture, or `data` of the
+/// wrong length, is an error.
+pub fn encode(w: u32, h: u32, color: Color, data: &[u8]) -> Result<Vec<u8>, PngError> {
     let ch = if color == Color::Rgba { 4 } else { 3 };
+    if w == 0 || h == 0 || w > MAX_SIDE || h > MAX_SIDE {
+        return err("bad size");
+    }
     let rb = w as usize * ch;
-    assert_eq!(data.len(), rb * h as usize, "png: data size");
+    if data.len() != rb * h as usize {
+        return err("data size does not match the picture");
+    }
     // Big pictures in bands compressed on threads of their own, each a
     // part of one DEFLATE stream (a band's matches do not reach into the
     // band above: a few hundred bytes).
@@ -588,12 +597,21 @@ pub fn encode(w: u32, h: u32, color: Color, data: &[u8]) -> Vec<u8> {
         vec![compress_rows(data, rb, ch, rows[0], true)]
     } else {
         std::thread::scope(|s| {
+            // A band whose thread does not start is done here.
             let hs: Vec<_> = rows
                 .iter()
                 .enumerate()
-                .map(|(i, &r)| s.spawn(move || compress_rows(data, rb, ch, r, i == last)))
+                .map(|(i, &r)| {
+                    let job = move || compress_rows(data, rb, ch, r, i == last);
+                    std::thread::Builder::new().spawn_scoped(s, job).map_err(|_| job)
+                })
                 .collect();
-            hs.into_iter().map(|h| h.join().expect("png band")).collect()
+            hs.into_iter()
+                .map(|h| match h {
+                    Ok(h) => h.join().expect("png band"),
+                    Err(job) => job(),
+                })
+                .collect()
         })
     };
     let mut z = vec![0x78, 0x9c];
@@ -615,7 +633,7 @@ pub fn encode(w: u32, h: u32, color: Color, data: &[u8]) -> Vec<u8> {
         chunk(&mut out, b"IDAT", part);
     }
     chunk(&mut out, b"IEND", &[]);
-    out
+    Ok(out)
 }
 
 #[cfg(test)]
