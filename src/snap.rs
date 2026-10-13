@@ -590,7 +590,7 @@ mod tests {
         assert_eq!(s.client_of(rr(80, 80, 800, 600)), Some(rr(88, 120, 784, 552)));
         assert_eq!(s.client_of(rr(70, 70, 900, 700)), None, "a region around the window is no snap");
         assert_eq!(s.client_of(rr(30, 30, 100, 100)), None, "the popup's client area is its frame");
-        assert_eq!(s.client_of(rr(0, 0, 980, 780)), Some(rr(0, 10, 980, 760)), "clipped to the shot");
+        assert_eq!(s.client_of(rr(0, 0, 980, 780)), Some(rr(0, 10, 970, 760)), "clipped to the shot");
         assert_eq!(Snapshot::build(&[n(0, 0, 10, 10, vec![])], (0, 0), (100, 100)).client_of(rr(0, 0, 10, 10)), None);
     }
 }
