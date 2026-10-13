@@ -735,7 +735,7 @@ fn run(rx: Receiver<Msg>) {
         h.clear = Some(false);
     }
     let mut w = window::Window::new(h, rx);
-    let spec = crate::wind::WindowSpec { title: "Rustshot History".into(), w: W, h: H, resizable: true, min: MIN };
+    let spec = crate::wind::WindowSpec { title: "Rustshot History".into(), w: W, h: H, resizable: true, min: MIN, controls: crate::wind::Controls::MinMaxClose };
     if let Err(e) = crate::wind::run_window(spec, &mut w) {
         eprintln!("rustshot: history window: {e:#}");
     }
