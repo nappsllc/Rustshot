@@ -170,6 +170,30 @@ fn locked_keyrings_are_unlocked_through_the_prompt() {
     assert_eq!(get(&mut f, "n").unwrap().as_deref(), Some("y"));
 }
 
+/// The session bus's own Secret Service, when there is one: a throwaway
+/// item kept, read and deleted; without one, the refusal says why.
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "uses the session bus's Secret Service (a throwaway item, deleted again)"]
+fn live_secret_service_round_trip() {
+    use crate::keystore::Store;
+    let s = Session;
+    let name = format!("rustshot:s3:rustshot-live-test-{}", std::process::id());
+    match s.set(&name, "Rustshot live test", "live-secret") {
+        Ok(()) => {
+            assert_eq!(s.get(&name).unwrap().as_deref(), Some("live-secret"));
+            assert_eq!(s.has(&name), Ok(true));
+            s.delete(&name).unwrap();
+            assert_eq!(s.get(&name), Ok(None));
+            eprintln!("Secret Service: kept, read and deleted an item");
+        }
+        Err(e) => {
+            assert!(e.contains("Secret Service") || e.contains("keyring"), "{e}");
+            eprintln!("SKIP: {e}");
+        }
+    }
+}
+
 #[test]
 fn a_dismissed_prompt_or_no_service_fails_and_says_why() {
     let mut f = Fake::new();
