@@ -318,7 +318,12 @@ jobs:
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
         run: |
           if [ -z "$APPLE_CERT_P12" ]; then
-            echo "APPLE_CERT_P12 not configured — skipping code signing"
+            # No Developer ID: ad-hoc sign the whole bundle so it has a
+            # sealed signature (an unsealed bundle gets no "Open Anyway").
+            echo "APPLE_CERT_P12 not configured — ad-hoc signing only"
+            codesign --force --deep --sign - \
+              --entitlements packaging/macos/devid.entitlements dist/Rustshot.app
+            codesign --verify --deep --strict --verbose=2 dist/Rustshot.app
             exit 0
           fi
           set -euo pipefail

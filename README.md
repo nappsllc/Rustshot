@@ -147,8 +147,15 @@ Download from the **[latest release](https://github.com/nappsllc/rustshot/releas
 
 > **Unsigned builds.** Releases are not code-signed yet. On Windows,
 > SmartScreen may warn on first run: choose *More info* › *Run anyway*. On
-> macOS, Gatekeeper blocks the first launch: right-click the app and choose
-> *Open*.
+> macOS, Gatekeeper blocks the first launch ("Rustshot Not Opened"). Move
+> `Rustshot.app` to Applications, try to open it once, then open **System
+> Settings › Privacy & Security**, scroll down and click **Open Anyway**.
+> If that button doesn't appear, run this once in Terminal and open the app
+> again:
+>
+> ```bash
+> xattr -dr com.apple.quarantine /Applications/Rustshot.app
+> ```
 
 Store and package-manager listings (Microsoft Store, winget, Mac App Store,
 Homebrew, Flathub, Snap Store, AUR) are being set up. See
