@@ -466,6 +466,8 @@ mod tests {
     #[test]
     #[ignore = "live: puts a pin on the screen and captures it"]
     fn live_pin_on_screen() {
+        // Real windows: never alongside the other window tests.
+        let _guard = crate::wind::test_window_lock();
         close_all();
         let mut img = PixBuf::new(160, 100);
         for (i, p) in img.as_raw_mut().as_chunks_mut::<4>().0.iter_mut().enumerate() {
@@ -509,6 +511,8 @@ mod tests {
     /// one-shot run follow.
     #[test]
     fn pins_closed_from_outside_leave_the_list() {
+        // Real windows: never alongside the other window tests.
+        let _guard = crate::wind::test_window_lock();
         let img = Arc::new(crate::pin::tests::sample_shot(40, 30));
         assert!(open(img.clone(), (40, 600), crate::theme::DARK));
         assert!(open(img, (120, 600), crate::theme::DARK));
@@ -527,6 +531,8 @@ mod tests {
     /// capture can still be pinned at 100 %.
     #[test]
     fn the_zoom_is_capped() {
+        // Real windows: never alongside the other window tests.
+        let _guard = crate::wind::test_window_lock();
         let img = Arc::new(PixBuf::new(1600, 1000));
         assert!(open(img, (0, 0), crate::theme::DARK));
         let hwnd = PINS.with(|p| p.borrow().last().unwrap().hwnd);
@@ -543,6 +549,8 @@ mod tests {
 
     #[test]
     fn a_pin_window_zooms_fades_moves_and_closes() {
+        // Real windows: never alongside the other window tests.
+        let _guard = crate::wind::test_window_lock();
         close_all();
         let img = Arc::new(crate::pin::tests::sample_shot(120, 80));
         assert!(open(img.clone(), (200, 150), crate::theme::DARK));
