@@ -1600,7 +1600,7 @@ fn crowded() -> Settings {
     s
 }
 
-//// General › Language: a language not downloaded yet shows its
+/// General › Language: a language not downloaded yet shows its
 /// download's state under the row, and Retry after a failure.
 #[test]
 fn language_row_shows_the_download() {
@@ -1618,7 +1618,7 @@ fn language_row_shows_the_download() {
     }
 }
 
-//// A right-to-left language mirrors the window: the rail on the right
+/// A right-to-left language mirrors the window: the rail on the right
 /// (its selected item where the English one is, mirrored), while a long
 /// left-to-right language does not move it; a click lands on the control
 /// drawn under it.

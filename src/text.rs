@@ -409,6 +409,7 @@ impl UiFace {
 
 /// A strong right-to-left character (Hebrew, Arabic, Syriac, Thaana,
 /// N'Ko and their presentation forms).
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
 pub fn is_rtl_char(c: char) -> bool {
     matches!(c as u32, 0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF | 0x10800..=0x10FFF | 0x1E800..=0x1EFFF)
 }
@@ -420,6 +421,7 @@ pub fn is_rtl_char(c: char) -> bool {
 /// punctuation) between runs of one direction take it, others the
 /// paragraph's (right to left when `rtl`, else the first strong
 /// character's); a right-to-left paragraph lays its runs out from the right.
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
 pub fn visual_order(s: &str, rtl: bool) -> Vec<char> {
     let chars: Vec<char> = s.chars().collect();
     // Some(true): strong right to left; Some(false): left to right (letters, digits).

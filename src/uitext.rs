@@ -31,7 +31,6 @@ struct Run {
     x0: i32,
     y0: i32,
     w: usize,
-    h: usize,
     a: Vec<u8>,
     /// Last use (eviction order).
     used: u64,
@@ -45,8 +44,6 @@ struct Cache {
     runs: HashMap<K, Run>,
     bytes: usize,
     tick: u64,
-    #[cfg(test)]
-    misses: usize,
 }
 
 /// Kept rasters: at most this many, and this many bytes.
@@ -105,10 +102,6 @@ pub fn draw(font: &UiFont, s: &str, px: f32, x: f32, y: f32, f: &mut dyn FnMut(i
     let r = raster(font, s, px, rtl, w);
     blit(&r, ox, oy, f);
     let mut c = cache();
-    #[cfg(test)]
-    {
-        c.misses += 1;
-    }
     c.bytes += r.a.len();
     c.runs.insert(key, r);
     if c.runs.len() > MAX_RUNS || c.bytes > MAX_BYTES {
@@ -152,20 +145,14 @@ fn raster(font: &UiFont, s: &str, px: f32, rtl: bool, w: f32) -> Run {
     let rows: Vec<usize> = (0..ch).filter(|&r| a[r * cw..(r + 1) * cw].iter().any(|&v| v > 0)).collect();
     let cols: Vec<usize> = (0..cw).filter(|&c| (0..ch).any(|r| a[r * cw + c] > 0)).collect();
     let (Some(&r0), Some(&r1), Some(&c0), Some(&c1)) = (rows.first(), rows.last(), cols.first(), cols.last()) else {
-        return Run { x0: 0, y0: 0, w: 1, h: 0, a: Vec::new(), used: 0 };
+        return Run { x0: 0, y0: 0, w: 1, a: Vec::new(), used: 0 };
     };
     let (tw, th) = (c1 - c0 + 1, r1 - r0 + 1);
     let mut t = Vec::with_capacity(tw * th);
     for r in r0..=r1 {
         t.extend_from_slice(&a[r * cw + c0..r * cw + c1 + 1]);
     }
-    Run { x0: x0 + c0 as i32, y0: y0 + r0 as i32, w: tw, h: th, a: t, used: 0 }
-}
-
-/// Rasters made so far (tests: the cache is hit on a redraw).
-#[cfg(test)]
-pub fn misses() -> usize {
-    cache().misses
+    Run { x0: x0 + c0 as i32, y0: y0 + r0 as i32, w: tw, a: t, used: 0 }
 }
 
 #[cfg(test)]

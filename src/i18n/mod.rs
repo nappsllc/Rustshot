@@ -35,10 +35,6 @@ mod table {
     include!(concat!(env!("OUT_DIR"), "/i18n_table.rs"));
 }
 
-/// The number of keys.
-#[cfg_attr(not(test), allow(dead_code))]
-pub const N_KEYS: usize = table::N;
-
 /// A translatable string: an index into the key table, checked when the
 /// constant is evaluated ([`Key::of`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -581,10 +577,11 @@ pub fn take_auto_switch() -> Option<&'static str> {
 /// system's.
 fn resolve(setting: &str) -> usize {
     let s = setting.trim();
-    if !s.is_empty() && !s.eq_ignore_ascii_case("system") {
-        if let Some(i) = index_of(s) {
-            return i;
-        }
+    if !s.is_empty()
+        && !s.eq_ignore_ascii_case("system")
+        && let Some(i) = index_of(s)
+    {
+        return i;
     }
     // Tests never follow the machine's language.
     if cfg!(test) {

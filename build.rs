@@ -409,7 +409,7 @@ fn available_languages(all: &[PathBuf]) -> Vec<(String, String, bool)> {
         let rtl = meta("@dir").is_some_and(|d| d.eq_ignore_ascii_case("rtl"));
         v.push((tag.to_string(), name, rtl));
     }
-    v.sort_by(|a, b| a.0.to_ascii_lowercase().cmp(&b.0.to_ascii_lowercase()));
+    v.sort_by_key(|a| a.0.to_ascii_lowercase());
     v
 }
 
