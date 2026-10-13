@@ -561,7 +561,7 @@ impl Edit {
                 let path = target(choice, self.entry.meta.saved.as_deref(), &self.cfg);
                 // Text being typed is part of what is saved.
                 self.canvas.commit_drafts();
-                let img = self.canvas.export();
+                let img = crate::export::with_border(self.canvas.export(), &self.cfg, self.entry.meta.scale);
                 let objs = self.canvas.objects().to_vec();
                 let crop = self.canvas.crop();
                 match write(&self.store, &self.entry.id, &img, &objs, crop, &path, &self.cfg) {

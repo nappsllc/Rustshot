@@ -765,6 +765,14 @@ impl Edit {
         }
     }
 
+    /// The selection was trimmed (or that undone) from `old`: its lasso
+    /// stays as it is, in the capture's pixels (the export cuts it).
+    pub(super) fn rebind_mask(&mut self, old: Option<FRect>) {
+        if self.snip.mask.is_some() && self.snip.mask_sel == old {
+            self.snip.mask_sel = self.sel;
+        }
+    }
+
     /// The selection went from `a` to `b` (an arrow key): the lasso too.
     pub(super) fn fit_mask(&mut self, a: FRect, b: FRect) {
         if self.snip.mask_sel == Some(a)

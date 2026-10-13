@@ -109,6 +109,8 @@ pub fn act_icon(a: Act) -> &'static str {
         Act::TextSelect => "ocr",
         Act::CopyAll | Act::TextCopy => "copy",
         Act::RedactKind(_) => "",
+        // A menu row (the size label's): no icon.
+        Act::Trim => "",
         Act::ObjFront => "front",
         Act::ObjBack => "back",
         Act::ObjDup => "dup",
@@ -974,6 +976,38 @@ pub fn outline(f: &mut Fb, ui: &Ui, sr: FRect, k: f32) {
     }
 }
 
+/// Where the export border's preview goes: a band `b` px wide just
+/// outside the selection's outline (the border itself is added on export,
+/// right at the image's edge), 1 px clear of the outline.
+fn border_band(ui: &Ui, sr: FRect, b: f32) -> FRect {
+    let sr = round(sr);
+    let g = (2.0 * ui.line()).ceil() + 1.0;
+    FRect { x: sr.x - g - b, y: sr.y - g - b, w: sr.w + 2.0 * (g + b), h: sr.h + 2.0 * (g + b) }
+}
+
+/// Settings › Capture "Add a border": its preview, a band of the border's
+/// color and width around the selection's outline.
+pub fn border_preview(f: &mut Fb, ui: &Ui, sr: FRect, b: f32, c: C4) {
+    let o = border_band(ui, sr, b);
+    let (x, y, w, h, b) = (o.x as i32, o.y as i32, o.w as i32, o.h as i32, b.round().max(1.0) as i32);
+    f.fill_rect(x, y, w, b, c);
+    f.fill_rect(x, y + h - b, w, b, c);
+    f.fill_rect(x, y + b, b, h - 2 * b, c);
+    f.fill_rect(x + w - b, y + b, b, h - 2 * b, c);
+}
+
+/// What [`border_preview`] covers: its four strips.
+pub fn border_preview_bounds(ui: &Ui, sr: FRect, b: f32) -> Vec<FRect> {
+    let o = border_band(ui, sr, b);
+    let b = b.round().max(1.0) + AA;
+    vec![
+        FRect { x: o.x - AA, y: o.y - AA, w: o.w + 2.0 * AA, h: b + AA },
+        FRect { x: o.x - AA, y: o.y1() - b, w: o.w + 2.0 * AA, h: b + AA },
+        FRect { x: o.x - AA, y: o.y - AA, w: b + AA, h: o.h + 2.0 * AA },
+        FRect { x: o.x1() - b, y: o.y - AA, w: b + AA, h: o.h + 2.0 * AA },
+    ]
+}
+
 /// The [`outline`] plus 8 handles: white 6 ⌀ dot, 2 px accent ring (3
 /// when hot), 1 px halo.
 pub fn selection(f: &mut Fb, ui: &Ui, sr: FRect, hot: Option<usize>, k: f32) {
@@ -997,7 +1031,7 @@ fn label_texts(sr: FRect) -> (String, String) {
 /// Where `size_label` puts its panel.
 /// `at`: what to keep off (the toolbar above), and the mode switch it
 /// follows (10 px right of it, centred on it) when there is one.
-fn size_label_rect(ui: &Ui, sr: FRect, show_pos: bool, area: FRect, at: (Option<FRect>, Option<FRect>)) -> FRect {
+pub(super) fn size_label_rect(ui: &Ui, sr: FRect, show_pos: bool, area: FRect, at: (Option<FRect>, Option<FRect>)) -> FRect {
     let (size, pos) = label_texts(sr);
     let pad = ui.px(8.0);
     let mut w = 2.0 * pad + tw(ui, 12.0, &size);
@@ -1208,6 +1242,7 @@ pub fn act_tip(a: Act, km: &Keymap) -> (&'static str, Vec<String>) {
         Act::OpenWith => "Open with\u{2026}",
         Act::Upload => "Upload",
         Act::Pin => "Pin to screen",
+        Act::Trim => "Trim to content",
         Act::Exit => "Close",
         Act::Accept => "Accept",
         Act::Record => "Record video",

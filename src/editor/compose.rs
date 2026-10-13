@@ -157,6 +157,9 @@ impl Backdrop for PixBufBackdrop<'_> {
 pub struct SelUi {
     pub sr: FRect,
     pub hot: Option<usize>,
+    /// Settings › Capture "Add a border": its preview around the
+    /// selection (width in image px, color); not part of the capture.
+    pub border: Option<(f32, C4)>,
 }
 
 /// Window snapping: the window (or part) under the pointer, outlined with
@@ -683,7 +686,7 @@ impl Edit {
         } else {
             self.mo.bar.snap(0.0);
         }
-        if self.palette_open || self.pick.is_some() || self.save_menu || self.slot_menu || self.snip.copy_menu {
+        if self.palette_open || self.pick.is_some() || self.save_menu || self.slot_menu || self.snip.copy_menu || self.size_menu {
             self.mo.pop.set(1.0, 100, now);
         } else {
             self.mo.pop.snap(0.0);
@@ -697,8 +700,12 @@ impl Edit {
             _ => Arc::new(self.objects.clone()),
         };
 
+        let border = crate::export::border(&self.cfg, self.shot.scale).map(|(b, c)| (b as f32, C4::rgb(c[0], c[1], c[2])));
         // The crop frame has its own handles (not two sets at once).
-        let sel_ui = self.sel.filter(|_| self.snip.crop_mode.is_none()).map(|sr| SelUi { sr, hot: self.hot_handle });
+        let sel_ui = self
+            .sel
+            .filter(|_| self.snip.crop_mode.is_none())
+            .map(|sr| SelUi { sr, hot: self.hot_handle, border: border.filter(|_| self.host.is_none() && !self.rec.open) });
         let snap_r = self.snap_rect();
         let snap = snap_r.map(|r| SnapUi { r, hint: self.cfg.snap_tab_hint && self.hover_win.has_parts(), area });
         let label = self.sel.map(|sr| {
@@ -713,6 +720,23 @@ impl Edit {
             let avoid = if lead.is_some() { close } else { avoid };
             LabelUi { sr, show_pos: !interacting, area, avoid, lead }
         });
+        // The label's menu (Trim to content) hangs off it, part of the
+        // toolbar's popover.
+        self.label_at = label.as_ref().map(|l| {
+            let ui = Ui { th: &self.th, s, font: self.ui_font };
+            chrome::size_label_rect(&ui, l.sr, l.show_pos, l.area, (l.avoid, l.lead))
+        });
+        // A menu that cannot open (video mode, another popover) is not
+        // left open to swallow the next press.
+        if self.size_menu {
+            let key = chrome::act_tip(Act::Trim, &self.keys).1.join("+");
+            self.size_menu = self.host.is_none()
+                && !self.rec.open
+                && match (self.toolbar.as_mut(), self.label_at) {
+                    (Some(tb), Some(at)) => toolbar::add_size_menu(tb, at, key, area, s),
+                    _ => false,
+                };
+        }
         let tfont = self.text_font();
         let text = self.text.as_ref().map(|td| TextUi {
             boxr: text_box_rect(ww, td, self.mem.size(Tool::Text), tfont.as_ref(), s),
@@ -912,7 +936,13 @@ impl Edit {
             El::Sel => sc
                 .sel_ui
                 .as_ref()
-                .map_or(Vec::new(), |u| chrome::selection_bounds(&ui, u.sr).into_iter().map(px_bounds).collect()),
+                .map_or(Vec::new(), |u| {
+                    let mut v = chrome::selection_bounds(&ui, u.sr);
+                    if let Some((b, _)) = u.border {
+                        v.extend(chrome::border_preview_bounds(&ui, u.sr, b));
+                    }
+                    v.into_iter().map(px_bounds).collect()
+                }),
             El::Snap => sc.snap.as_ref().map_or(Vec::new(), |u| {
                 let mut v: Vec<PxRect> = chrome::outline_bounds(&ui, u.r).into_iter().map(px_bounds).collect();
                 v.push(px_bounds(chrome::snap_label_bounds(&ui, u.r, u.hint, u.area)));
@@ -1030,6 +1060,9 @@ impl Edit {
             && hits(El::Sel)
         {
             let _p = crate::perf::span(crate::perf::K::Sel);
+            if let Some((b, c)) = u.border {
+                chrome::border_preview(&mut f, &ui, u.sr, b, c);
+            }
             chrome::selection(&mut f, &ui, u.sr, u.hot, 1.0);
         }
         if let Some(u) = &sc.osel

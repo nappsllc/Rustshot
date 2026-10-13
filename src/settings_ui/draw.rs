@@ -760,6 +760,7 @@ fn capture(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) 
             *click = Some(Click::ResetTools);
         }
     });
+    image_rows(ui, f, tok);
     ui.sec("History", tok);
     srow(ui, tok, "Keep a history of captures", Some("Edit them again later; saved and uploaded files are not affected"), |ui| {
         ui.switch("history", &mut f.history, tok);
@@ -782,6 +783,35 @@ fn capture(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) 
     });
 }
 
+/// Capture › Image: trim margins, the export border, HDR screenshots
+/// (Windows).
+fn image_rows(ui: &mut Ui, f: &mut crate::settings_ui::Form, tok: &Tok) {
+    ui.sec("Image", tok);
+    let by_hand = f.keys.chords(Action::Trim).first().map_or_else(|| "the size label's menu".to_string(), |c| c.label());
+    let help = format!("Cut uniform margins off each new region or window ({by_hand} by hand)");
+    srow(ui, tok, "Trim margins automatically", Some(&help), |ui| {
+        ui.switch("trim_margins", &mut f.trim, tok);
+    });
+    srow(ui, tok, "Add a border", Some("On every export"), |ui| {
+        ui.switch("border", &mut f.border, tok);
+        let on = ui.enabled;
+        ui.enabled = on && f.border;
+        ui.width(120.0).slider("border_width", &mut f.border_w, 1, config::BORDER_MAX as u8);
+        ui.space(4.0);
+        ui.width(92.0).text_field("border_color", &mut f.border_hex);
+        let c = config::parse_color(f.border_hex.text.trim()).map(|(r, g, b, _)| C4::rgb(r, g, b));
+        if ui.swatch("border_swatch", c, false, tok) {
+            ui.focus.focus("border_color");
+        }
+        ui.enabled = on;
+    });
+    if cfg!(windows) {
+        srow(ui, tok, "HDR screenshots", Some("HDR displays; recordings too"), |ui| {
+            ui.seg("hdr_screenshots", &labels(&HDR_MODES), &mut f.hdr, tok);
+        });
+    }
+}
+
 /// `s` cut at the start with an ellipsis to fit `w` (logical px) at 11 px.
 fn fit_start(ui: &Ui, s: &str, w: f32) -> String {
     if ui.text_w(11.0, s) <= w {
@@ -802,7 +832,7 @@ fn wayland() -> bool {
 }
 
 /// The overlay rows of Key bindings: (label, actions).
-pub const KEY_ROWS: [(&str, &[Action]); 16] = [
+pub const KEY_ROWS: [(&str, &[Action]); 17] = [
     (
         "Tools",
         &[
@@ -838,6 +868,7 @@ pub const KEY_ROWS: [(&str, &[Action]); 16] = [
     ("Select all \u{b7} Palette", &[Action::SelectAll, Action::TogglePalette]),
     ("Record", &[Action::Record]),
     ("Pin to screen", &[Action::Pin]),
+    ("Trim to content", &[Action::Trim]),
     ("UI size + \u{b7} - \u{b7} Auto", &[Action::UiBigger, Action::UiSmaller, Action::UiReset]),
     ("Edit window zoom + \u{b7} - \u{b7} Fit \u{b7} 1:1", &[Action::ZoomIn, Action::ZoomOut, Action::ZoomFit, Action::ZoomActual]),
 ];

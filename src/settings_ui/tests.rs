@@ -748,6 +748,59 @@ fn overlay_helper_settings_are_saved() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Capture › Image: Trim margins, Add a border (on/off, width, color),
+/// HDR screenshots write their keys; a border turned off keeps its color,
+/// a color that does not parse is not written.
+#[test]
+fn image_rows_write_their_keys() {
+    let cfg = Config::default();
+    let f = Form::new(&cfg, None);
+    assert!(!f.trim && !f.border && f.border_w == BORDER_DEFAULT && f.hdr == 0 && f.border_hex.text == "#000000");
+    let mut f = Form::new(&cfg, None);
+    f.trim = true;
+    f.border = true;
+    f.border_w = 5;
+    f.border_hex.set("#3366ff");
+    f.hdr = 1;
+    let c = f.apply(&cfg, &cfg);
+    assert!(c.trim_margins && c.border_width == 5 && c.border_color == "#3366ff" && c.hdr_screenshots == "keep");
+    let back = Form::new(&c, None);
+    assert!(back.trim && back.border && back.border_w == 5 && back.hdr == 1);
+    assert_eq!(config::to_toml(&back.apply(&c, &c)), config::to_toml(&c), "round trip");
+    let mut off = Form::new(&c, None);
+    off.border = false;
+    off.border_hex.set("blue");
+    let c2 = off.apply(&c, &c);
+    assert_eq!((c2.border_width, c2.border_color.as_str()), (0, "#3366ff"));
+    // In the window: the switches and the segment click.
+    let mut s = sample();
+    s.section = CAPTURE;
+    let mut focus = FocusState::default();
+    reveal(&mut s, &mut focus, "trim_margins");
+    click(&mut s, &mut focus, "trim_margins", 1.0);
+    assert!(s.form.trim);
+    reveal(&mut s, &mut focus, "border");
+    click(&mut s, &mut focus, "border", 1.0);
+    assert!(s.form.border);
+    assert!(focus.rect_of("border_width").is_some() && focus.rect_of("border_color").is_some());
+    if cfg!(windows) {
+        reveal(&mut s, &mut focus, "hdr_screenshots");
+        let r = focus.rect_of("hdr_screenshots").unwrap();
+        let (x, y) = ((r.x1() - 12.0) as i32, (r.y + r.h / 2.0) as i32);
+        let mut input = Input::default();
+        for e in [Ev::Move { x, y }, Ev::Down { x, y }, Ev::Up { x, y }] {
+            input.feed(&e);
+        }
+        render(&mut s, &DARK, 1.0, &input, &mut focus);
+        assert_eq!(s.form.hdr, 1, "Keep as captured");
+    } else {
+        render(&mut s, &DARK, 1.0, &Input::default(), &mut focus);
+        assert!(focus.rect_of("hdr_screenshots").is_none(), "Windows only");
+    }
+    let c = s.form.apply(&s.loaded, &s.loaded);
+    assert!(c.trim_margins && c.border_width == u32::from(BORDER_DEFAULT));
+}
+
 /// Poll the Upload section's workers until the secret is saved (or 10 s);
 /// the window's acts from it.
 fn settle_save(s: &mut Settings) -> Vec<Act> {
@@ -1536,6 +1589,19 @@ fn preview_settings_pngs() {
             let th2 = s.preview_theme();
             let (img, _) = render(&mut s, &th2, k, &Input::default(), &mut FocusState::default());
             preview::save(&png("capture-teal-jpeg", tname, k), &img);
+            // Capture › Image: trim on, a border of 4 px.
+            let mut s = sample();
+            s.section = CAPTURE;
+            s.form.trim = true;
+            s.form.border = true;
+            s.form.border_w = 4;
+            s.form.border_hex.set("#f04438");
+            let mut focus = FocusState::default();
+            render(&mut s, th, k, &Input::default(), &mut focus);
+            let r = focus.rect_of("trim_margins").expect("trim row");
+            s.scroll[CAPTURE] = (s.scroll[CAPTURE] + r.y - viewport().y - 60.0).max(0.0);
+            let (img, _) = render(&mut s, th, k, &Input::default(), &mut focus);
+            preview::save(&png("capture-image", tname, k), &img);
             // Upload › S3-compatible, filled in, a secret stored and the
             // test failed; then one being typed.
             let mut s = sample();

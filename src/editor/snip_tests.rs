@@ -364,6 +364,12 @@ fn freeform_draws_a_lasso_whose_outside_is_transparent() {
     let e = edit_of(&mut a);
     assert_eq!(e.sel, Some(r(320.0, 210.0, 400.0, 400.0)));
     assert_eq!(e.live_mask().unwrap()[0], Pt::new(320.0, 210.0));
+    // Trim (and its undo) keeps the lasso.
+    let e = edit_of(&mut a);
+    let was = e.sel;
+    e.sel = Some(r(330.0, 220.0, 300.0, 300.0));
+    e.rebind_mask(was);
+    assert!(e.live_mask().is_some(), "still cut by the lasso");
     // A new rectangle (freeform off) drops the lasso.
     key(&mut a, 'F' as u32, SHIFT);
     drag(&mut a, Pt::new(50.0, 50.0), Pt::new(90.0, 90.0));

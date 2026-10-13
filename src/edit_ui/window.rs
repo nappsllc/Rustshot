@@ -187,7 +187,10 @@ impl Window {
     /// encoding and uploads take a while).
     fn export(&mut self, r: Request) {
         use crate::export::Task;
+        // Settings › Capture "Add a border" (the capture's scale); not on
+        // what Copy text reads.
         let img = self.e.canvas.export();
+        let img = if r == Request::CopyText { img } else { crate::export::with_border(img, &self.e.cfg, self.e.entry.meta.scale) };
         let objs = self.e.canvas.objects().to_vec();
         let crop = self.e.canvas.crop();
         if r == Request::Pin {

@@ -713,10 +713,10 @@ const NO_OTHER_HOTKEYS: &str =
 /// bold · italic · underline (3), Copy · Save · Upload (3), Copy text ·
 /// Copy color (2), then Accept.
 const ACCEPT_TABS: usize = 8 + 11 + 4 + 4 + 2 + 3 + 3 + 2 + 1;
-/// From Accept's cap to the footer's OK: the 17 overlay caps after it (the Edit window's zoom: 4),
+/// From Accept's cap to the footer's OK: the 18 overlay caps after it (Trim to content: 1; the Edit window's zoom: 4),
 /// the 3 While recording rows, the header's Reset to defaults, then Open
 /// config file, Apply, Cancel, OK.
-const ACCEPT_TO_OK: usize = 17 + 3 + 1 + 4;
+const ACCEPT_TO_OK: usize = 18 + 3 + 1 + 4;
 /// Tab presses from the rail to General's Save to field: Theme, the
 /// four accent swatches, Launch at login, Show icon in tray, Copy after
 /// capture, Play shutter sound, Show thumbnail after capture, Show hints

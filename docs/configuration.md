@@ -79,6 +79,10 @@ magnifier = true                  # zoomed pixels and a crosshair while picking 
 magnifier_square = false          # square instead of round
 accept_on_select = "off"          # "copy" or "save": a drawn region is exported at once
 overlay_hints = true              # the key card when the overlay opens
+trim_margins = false              # trim each new region or window to its content (Shift+A by hand)
+border_width = 0                  # a border around every export, 1-8 logical px (0 = none)
+border_color = "#000000"          # its color
+hdr_screenshots = "tonemap"       # Windows HDR displays (screenshots and recordings): "tonemap" to SDR or "keep" as captured
 screenclip_hint = true            # Windows: remind how to pick Rustshot for Win+Shift+S
 show_thumbnail = true             # the thumbnail card after a copied or saved capture
 shutter_sound = false             # a short click when a capture is taken
@@ -192,7 +196,8 @@ The action ids:
 |---|---|
 | Tools | `tool_select`, `tool_pencil`, `tool_line`, `tool_arrow`, `tool_rectangle`, `tool_circle`, `tool_marker`, `tool_text`, `tool_callout`, `tool_counter`, `tool_pixelate`, `tool_invert`, `tool_spotlight`, `tool_magnify`, `tool_blur`, `tool_crop`, `size_down`, `size_up` |
 | Output | `copy`, `copy_text`, `redact`, `copy_color`, `save`, `save_as`, `save_desktop`, `open_with`, `upload`, `pin` |
-| Editing | `undo`, `redo`, `select_all`, `select_freeform`, `toggle_palette`, `accept`, `cancel`, `record` |
+| Selection | `trim` (Trim to content, <kbd>Shift</kbd>+<kbd>A</kbd>), `select_freeform` |
+| Editing | `undo`, `redo`, `select_all`, `toggle_palette`, `accept`, `cancel`, `record` |
 | UI size | `ui_bigger`, `ui_smaller`, `ui_reset` |
 | Selected objects | `delete_object`, `duplicate`, `bring_front`, `send_back` |
 | While typing | `text_bold`, `text_italic`, `text_underline` |

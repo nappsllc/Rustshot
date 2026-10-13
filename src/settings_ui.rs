@@ -82,6 +82,10 @@ pub const COPY_TEXT: [(&str, &str); 2] = [("Copy all at once", "all"), ("Let me 
 /// Capture › Redact style (`redact_style`): an opaque fill, or a mosaic
 /// under a blur.
 pub const REDACT_STYLES: [(&str, &str); 2] = [("Solid", "solid"), ("Blur", "blur")];
+/// Capture › HDR screenshots (`hdr_screenshots`; Windows).
+pub const HDR_MODES: [(&str, &str); 2] = [("Tone-map to SDR", "tonemap"), ("Keep as captured", "keep")];
+/// Capture › Add a border: the width a new border starts at (logical px).
+pub const BORDER_DEFAULT: u8 = 2;
 const DEFAULT_FILENAME: &str = "%F_%H-%M";
 /// Capture › History: how long and how much it keeps (value, label).
 pub const HISTORY_DAYS: [(u32, &str); 4] = [(7, "7 days"), (30, "30 days"), (90, "90 days"), (365, "1 year")];
@@ -281,6 +285,14 @@ pub struct Form {
     pub copy_text: usize,
     /// Capture › Overlay: Quick Redact's style ([`REDACT_STYLES`] index).
     pub redact_style: usize,
+    /// Capture › Image: trim margins of new selections (`trim_margins`),
+    /// the export border (on, its width 1-8 and color: `border_width`,
+    /// `border_color`), HDR screenshots ([`HDR_MODES`] index).
+    pub trim: bool,
+    pub border: bool,
+    pub border_w: u8,
+    pub border_hex: TextState,
+    pub hdr: usize,
 }
 
 impl Form {
@@ -326,6 +338,11 @@ impl Form {
             hints: cfg.overlay_hints,
             copy_text: COPY_TEXT.iter().position(|a| cfg.copy_text_mode.trim() == a.1).unwrap_or(1),
             redact_style: REDACT_STYLES.iter().position(|a| cfg.redact_style.trim() == a.1).unwrap_or(0),
+            trim: cfg.trim_margins,
+            border: cfg.border_width > 0,
+            border_w: if cfg.border_width > 0 { cfg.border_width.min(config::BORDER_MAX) as u8 } else { BORDER_DEFAULT },
+            border_hex: TextState::new(cfg.border_color.trim()),
+            hdr: HDR_MODES.iter().position(|m| cfg.hdr_screenshots.trim() == m.1).unwrap_or(0),
         }
     }
 
@@ -468,6 +485,20 @@ impl Form {
         }
         if self.redact_style != was.redact_style && let Some(a) = REDACT_STYLES.get(self.redact_style) {
             c.redact_style = a.1.into();
+        }
+        if self.trim != was.trim {
+            c.trim_margins = self.trim;
+        }
+        if self.border != was.border || (self.border && self.border_w != was.border_w) {
+            c.border_width = if self.border { u32::from(self.border_w.clamp(1, config::BORDER_MAX as u8)) } else { 0 };
+        }
+        // A color that does not parse is not written.
+        let hex = self.border_hex.text.trim();
+        if hex != was.border_hex.text.trim() && config::parse_color(hex).is_some() {
+            c.border_color = hex.to_string();
+        }
+        if self.hdr != was.hdr && let Some(m) = HDR_MODES.get(self.hdr) {
+            c.hdr_screenshots = m.1.into();
         }
         let changed: Vec<Action> = Action::ALL.into_iter().filter(|a| self.keys.chords(*a) != was.keys.chords(*a)).collect();
         if !changed.is_empty() {

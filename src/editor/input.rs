@@ -467,6 +467,16 @@ impl Edit {
                 }
                 self.leave_text_mode();
             }
+            // The size label: its menu (Trim to content) opens, and a
+            // press anywhere else while it is open closes it.
+            if std::mem::take(&mut self.size_menu) {
+                return;
+            }
+            if self.on_label(p) {
+                self.size_menu = true;
+                self.palette_open = false;
+                return;
+            }
             // The mini-toolbar over the selected objects.
             if let Some(act) = self.obj.mini.as_ref().filter(|m| m.contains(p)).map(|m| m.act_at(p)) {
                 if let Some(act) = act {
@@ -702,6 +712,7 @@ impl Edit {
         if snip::exports(act) && self.queue_for_redact(snip::Queued::Act(act)) {
             return;
         }
+        self.size_menu = false;
         // A pick from the Blur / Invert menu picks (never toggles off).
         let from_menu = std::mem::take(&mut self.slot_menu);
         // The Copy text menu closes on a pick (a kind's checkbox keeps it).
@@ -749,6 +760,10 @@ impl Edit {
             Act::SaveMenu => {
                 self.save_menu = !self.save_menu;
                 self.palette_open = false;
+            }
+            Act::Trim if self.host.is_some() || self.rec.open => {}
+            Act::Trim => {
+                self.trim_selection(true);
             }
             Act::Undo | Act::Redo => {
                 self.finish_callout_edit();
