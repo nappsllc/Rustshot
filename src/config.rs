@@ -197,6 +197,10 @@ pub struct Config {
     /// Windows: the daemon reminds how to pick Rustshot for Win+Shift+S
     /// while it is offered but not chosen (false: "Don't show again").
     pub screenclip_hint: bool,
+    /// Windows: the user knows that with the tray icon off nothing runs in
+    /// the background (they turned it off in this version, or saw the
+    /// one-time notice an older file with `show_tray = false` gets).
+    pub tray_off_mode_seen: bool,
 }
 
 /// The widest export border (logical px).
@@ -324,6 +328,7 @@ impl Default for Config {
             border_color: "#000000".into(),
             border_width: 0,
             screenclip_hint: true,
+            tray_off_mode_seen: false,
             history: true,
             history_days: 30,
             history_max_mb: 2048,
@@ -895,6 +900,101 @@ pub fn hotkey_warnings(cfg: &Config) -> Vec<String> {
         .collect()
 }
 
+/// Global hotkeys whose default moved: (config key, former defaults).
+/// 0.2.0 moved Record off Win+Shift+R and Copy text off Win+Shift+T
+/// (Windows holds both); 0.1.3 moved Capture window off Win+Shift+W.
+pub const FORMER_DEFAULTS: [(&str, &[&str]); 3] = [
+    ("record_hotkey", &["Shift+Meta+R"]),
+    ("capture_text_hotkey", &["Shift+Meta+T"]),
+    ("capture_window_hotkey", &["Shift+Meta+W"]),
+];
+
+/// The global hotkey field of `key` (one of [`FORMER_DEFAULTS`]').
+fn former_field<'a>(cfg: &'a mut Config, key: &str) -> Option<&'a mut String> {
+    match key {
+        "record_hotkey" => Some(&mut cfg.record_hotkey),
+        "capture_text_hotkey" => Some(&mut cfg.capture_text_hotkey),
+        "capture_window_hotkey" => Some(&mut cfg.capture_window_hotkey),
+        _ => None,
+    }
+}
+
+/// Global hotkeys still on a former default ([`FORMER_DEFAULTS`]; the
+/// chord compared, not the text, so "Meta+Shift+R" is "Shift+Meta+R"):
+/// the old file kept the default of its day, so they get today's.
+/// A key that was never a default is left alone. Never a clash: when
+/// another global already has today's default, the first of the slot's
+/// alternates (then the spare keys) no global has is used instead, or
+/// none (unset) when every one is taken. Returns (key, old, new).
+pub fn migrate_old_defaults(cfg: &mut Config) -> Vec<(&'static str, String, String)> {
+    let def = Config::default();
+    let mut out = Vec::new();
+    for (key, olds) in FORMER_DEFAULTS {
+        let new = former_field(&mut def.clone(), key).map(|s| s.clone()).unwrap_or_default();
+        let slot = former_slot(key);
+        let Some(v) = former_field(cfg, key) else { continue };
+        let Some(c) = crate::keymap::Chord::parse(v) else { continue };
+        if !olds.iter().any(|o| crate::keymap::Chord::parse(o) == Some(c)) {
+            continue;
+        }
+        let wanted = crate::hotkey::wanted(cfg);
+        let taken = |s: &str| {
+            let k = crate::keymap::Chord::parse(s);
+            (0..crate::hotkey::SLOTS).any(|j| j != slot && k.is_some() && crate::keymap::Chord::parse(&wanted[j]) == k)
+        };
+        let pick = std::iter::once(new.as_str())
+            .chain(crate::hotkey::alternates(slot).iter().copied())
+            .chain(crate::hotkey::FREE_POOL)
+            .find(|s| !taken(s))
+            .unwrap_or_default()
+            .to_string();
+        let Some(v) = former_field(cfg, key) else { continue };
+        out.push((key, std::mem::replace(v, pick.clone()), pick));
+    }
+    out
+}
+
+/// The hotkey slot of a [`FORMER_DEFAULTS`] key.
+fn former_slot(key: &str) -> usize {
+    match key {
+        "record_hotkey" => 2,
+        "capture_window_hotkey" => 4,
+        _ => 6, // capture_text_hotkey
+    }
+}
+
+/// [`migrate_old_defaults`] for the daemon's `cfg`, read from `path`: the
+/// moved keys are written back to the file (only their lines, atomically)
+/// and logged. A file that cannot be written keeps them for next time;
+/// this run uses the new keys anyway.
+pub fn migrate_at(path: &std::path::Path, cfg: &mut Config) {
+    let moved = migrate_old_defaults(cfg);
+    if moved.is_empty() {
+        return;
+    }
+    let edits: Vec<(String, Option<String>)> = moved.iter().map(|(k, _, new)| (k.to_string(), Some(toml_str(new)))).collect();
+    let res = edit_top_keys_at(path, &edits);
+    let def = crate::hotkey::defaults();
+    for (k, old, new) in &moved {
+        let why = if new.is_empty() {
+            " (today's and every spare key are used by other Rustshot hotkeys: unset; pick one in Settings \u{203a} Key bindings)".to_string()
+        } else if !def.iter().any(|d| crate::hotkey::chord_label(d) == crate::hotkey::chord_label(new)) {
+            " (today's default is another Rustshot hotkey's)".to_string()
+        } else {
+            String::new()
+        };
+        let now = if new.is_empty() { "none".to_string() } else { crate::hotkey::chord_label(new) };
+        eprintln!(
+            "rustshot: {k} {} was an old default; it is {now} now{why}{}",
+            crate::hotkey::chord_label(old),
+            if res.is_ok() { " (config.toml updated)" } else { "" }
+        );
+    }
+    if let Err(e) = res {
+        eprintln!("rustshot: could not update {}: {e}", path.display());
+    }
+}
+
 /// `[shortcuts]` problems: unknown actions, bad chords, and chords bound
 /// to several actions (the first in table order wins).
 pub fn shortcut_warnings(cfg: &Config) -> Vec<String> {
@@ -992,6 +1092,7 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
                     as_u64(val).ok().filter(|w| *w <= BORDER_MAX as u64).ok_or_else(|| bad("number (0-8)", val))? as u32
             }
             "screenclip_hint" => cfg.screenclip_hint = as_bool(val).map_err(|e| bad("boolean", &e))?,
+            "tray_off_mode_seen" => cfg.tray_off_mode_seen = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "history" => cfg.history = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "history_days" => {
                 cfg.history_days =
@@ -1264,6 +1365,7 @@ pub fn to_toml(c: &Config) -> String {
         c.overlay_hints
     ));
     out.push_str(&format!("screenclip_hint = {}\n", c.screenclip_hint));
+    out.push_str(&format!("tray_off_mode_seen = {}\n", c.tray_off_mode_seen));
     out.push_str(&format!(
         "trim_margins = {}\nhdr_screenshots = {}\nborder_color = {}\nborder_width = {}\n",
         c.trim_margins,
@@ -1615,6 +1717,72 @@ oops
     }
 
     #[test]
+    fn old_default_hotkeys_migrate_by_chord() {
+        // The user's file: Record on the pre-0.2.0 default, written in
+        // another order; full screen on today's default; window on a key
+        // they chose; Copy text on the old T.
+        let text = "# mine\nrecord_hotkey = \"Meta+Shift+R\"\ncapture_full_hotkey = \"Shift+Meta+F\"\ncapture_window_hotkey = \"Ctrl+Alt+W\"\ncapture_text_hotkey = \"shift+win+t\"\nbogus = 1\n";
+        let mut cfg = parse_config(text).unwrap();
+        let moved = migrate_old_defaults(&mut cfg);
+        assert_eq!(
+            moved,
+            [
+                ("record_hotkey", "Meta+Shift+R".to_string(), "Shift+Meta+G".to_string()),
+                ("capture_text_hotkey", "shift+win+t".to_string(), "Shift+Meta+Z".to_string()),
+            ]
+        );
+        assert_eq!((cfg.record_hotkey.as_str(), cfg.capture_text_hotkey.as_str()), ("Shift+Meta+G", "Shift+Meta+Z"));
+        assert_eq!((cfg.capture_full_hotkey.as_str(), cfg.capture_window_hotkey.as_str()), ("Shift+Meta+F", "Ctrl+Alt+W"), "not former defaults");
+        // Once: nothing moves the second time.
+        assert!(migrate_old_defaults(&mut cfg).is_empty());
+        // Win+Shift+W was Capture window's default.
+        let mut w = parse_config("capture_window_hotkey = \"Shift+Meta+W\"\n").unwrap();
+        assert_eq!(migrate_old_defaults(&mut w).len(), 1);
+        assert_eq!(w.capture_window_hotkey, "Shift+Meta+E");
+        // Today's default is another global's (the user's full screen on
+        // G): the slot's first free alternate instead, never a clash.
+        let mut c = Config { record_hotkey: "Shift+Meta+R".into(), capture_full_hotkey: "Shift+Meta+G".into(), ..Config::default() };
+        assert_eq!(migrate_old_defaults(&mut c), [("record_hotkey", "Shift+Meta+R".to_string(), "Shift+Meta+J".to_string())]);
+        let w = crate::hotkey::wanted(&c);
+        for i in 0..w.len() {
+            for j in 0..i {
+                assert!(w[i].is_empty() || w[i] != w[j], "{w:?}");
+            }
+        }
+        // Every candidate taken: unset.
+        let mut c = Config {
+            capture_hotkey: "Shift+Meta+Z".into(),
+            capture_window_hotkey: "Shift+Meta+Q".into(),
+            capture_full_hotkey: "Shift+Meta+Y".into(),
+            history_hotkey: "Shift+Meta+J".into(),
+            record_hotkey: "Shift+Meta+E".into(),
+            repeat_hotkey: "Shift+Meta+G".into(),
+            capture_text_hotkey: "Shift+Meta+T".into(),
+            ..Config::default()
+        };
+        assert_eq!(migrate_old_defaults(&mut c), [("capture_text_hotkey", "Shift+Meta+T".to_string(), String::new())]);
+        // Unbound, invalid or another former default's key: left alone.
+        let mut c = Config { record_hotkey: String::new(), capture_text_hotkey: "Nope+".into(), capture_window_hotkey: "Shift+Meta+R".into(), ..Config::default() };
+        assert!(migrate_old_defaults(&mut c).is_empty());
+        // The file: only the moved lines change.
+        let dir = scratch("migrate");
+        let p = dir.join("config.toml");
+        std::fs::write(&p, text).unwrap();
+        let mut cfg = read_at(&p).unwrap().unwrap();
+        migrate_at(&p, &mut cfg);
+        assert_eq!(
+            std::fs::read_to_string(&p).unwrap(),
+            "# mine\nrecord_hotkey = \"Shift+Meta+G\"\ncapture_full_hotkey = \"Shift+Meta+F\"\ncapture_window_hotkey = \"Ctrl+Alt+W\"\ncapture_text_hotkey = \"Shift+Meta+Z\"\nbogus = 1\n"
+        );
+        assert_eq!(read_at(&p).unwrap().unwrap(), cfg);
+        // A file with nothing to move is not touched.
+        let before = std::fs::metadata(&p).unwrap().modified().unwrap();
+        migrate_at(&p, &mut cfg);
+        assert_eq!(std::fs::metadata(&p).unwrap().modified().unwrap(), before);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn save_skip_version_edits_the_file_in_place() {
         let dir = scratch("skip");
         let p = dir.join("config.toml");
@@ -1829,6 +1997,16 @@ bogus = 1
     }
 
     /// The Win+Shift+S guide's "Don't show again": on by default, kept.
+    #[test]
+    fn tray_off_mode_seen_roundtrip() {
+        assert!(!Config::default().tray_off_mode_seen);
+        let c = Config { tray_off_mode_seen: true, ..Config::default() };
+        let text = to_toml(&c);
+        assert!(text.contains("tray_off_mode_seen = true\n"), "{text}");
+        assert_eq!(parse_config(&text).unwrap(), c);
+        assert!(parse_config("tray_off_mode_seen = 1").is_err());
+    }
+
     #[test]
     fn screenclip_hint_roundtrip() {
         assert!(Config::default().screenclip_hint);

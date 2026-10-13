@@ -33,6 +33,31 @@ const TARBALL_COPY: &str = "update.tar.gz";
 /// Hidden `daemon` flag for a daemon started by an update (the NSIS
 /// installer and `relaunch` pass it): it never signals the old daemon.
 pub const AFTER_UPDATE_FLAG: &str = "--after-update";
+/// `rustshot daemon --force`: runs with the tray icon off too.
+pub const FORCE_FLAG: &str = "--force";
+
+/// This process is a forced daemon (`--force`, or an on-demand run told
+/// to become one): an update relaunches it forced too.
+static FORCED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Mark this process as a forced daemon (see [`FORCED`]).
+pub fn set_forced(on: bool) {
+    FORCED.store(on, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// The relaunched daemon's arguments: `daemon --after-update`, plus
+/// `--force` for a forced one.
+pub fn relaunch_args(forced: bool) -> Vec<&'static str> {
+    let mut a = vec!["daemon", AFTER_UPDATE_FLAG];
+    if forced {
+        a.push(FORCE_FLAG);
+    }
+    a
+}
+
+fn forced() -> bool {
+    FORCED.load(std::sync::atomic::Ordering::SeqCst)
+}
 /// After the wait for the old daemon, keep trying to become the primary
 /// for this long (`RETRY_TRIES` x `RETRY_MS`) before exiting quietly.
 const RETRY_MS: u64 = 250;
@@ -251,19 +276,15 @@ fn relaunch(exe: &Path, wait_pid: u32) -> Result<(), String> {
     {
         use std::ffi::OsStr;
         let pid = wait_pid.to_string();
-        crate::proc_win::spawn_detached(
-            exe,
-            &[OsStr::new("daemon"), OsStr::new(AFTER_UPDATE_FLAG)],
-            &[(OsStr::new(WAIT_PID_VAR), OsStr::new(&pid))],
-        )
+        let args: Vec<&OsStr> = relaunch_args(forced()).into_iter().map(OsStr::new).collect();
+        crate::proc_win::spawn_detached(exe, &args, &[(OsStr::new(WAIT_PID_VAR), OsStr::new(&pid))])
     }
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
         use std::process::{Command, Stdio};
         Command::new(exe)
-            .arg("daemon")
-            .arg(AFTER_UPDATE_FLAG)
+            .args(relaunch_args(forced()))
             .env(WAIT_PID_VAR, wait_pid.to_string())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -298,7 +319,12 @@ fn run_installer(file: &Path, sha256: [u8; 32]) -> Result<Applied, String> {
         .open(file)
         .map_err(|e| format!("open {}: {e}", file.display()))?;
     update::verify_file(file, sha256)?;
-    crate::proc_win::spawn_detached(file, &[OsStr::new("/S"), OsStr::new("/RELAUNCH")], &[])?;
+    // `/FORCE`: the relaunched daemon runs with `--force` too.
+    let mut args = vec![OsStr::new("/S"), OsStr::new("/RELAUNCH")];
+    if forced() {
+        args.push(OsStr::new("/FORCE"));
+    }
+    crate::proc_win::spawn_detached(file, &args, &[])?;
     Ok(Applied::RestartingNow)
 }
 
@@ -487,6 +513,13 @@ fn wait_pid(pid: u32, ms: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A forced daemon comes back forced after an update.
+    #[test]
+    fn relaunch_keeps_force() {
+        assert_eq!(relaunch_args(false), ["daemon", AFTER_UPDATE_FLAG]);
+        assert_eq!(relaunch_args(true), ["daemon", AFTER_UPDATE_FLAG, FORCE_FLAG]);
+    }
 
     /// A fresh temp dir, removed on drop.
     struct Tmp(PathBuf);

@@ -839,6 +839,55 @@ fn unix_now() -> u64 {
         .map_or(0, |d| d.as_secs())
 }
 
+/// A [`spawn_once`] check is running in this process.
+static CHECKING: AtomicU64 = AtomicU64::new(0);
+
+/// A one-off check is still running (an on-demand run waits for it).
+pub fn checking() -> bool {
+    CHECKING.load(Ordering::SeqCst) > 0
+}
+
+/// One check now, if the last one is a day old (the stamp), for a run
+/// that is not the daemon (Win+Shift+S with the tray icon off: nothing
+/// else checks). Same rules as the daemon's: the stamp on success,
+/// `skip_version` honoured. `None` when disabled or store-managed.
+pub fn spawn_once(enabled: bool) -> Option<std::sync::mpsc::Receiver<Release>> {
+    if !enabled || update_channel().is_some() || cfg!(test) {
+        return None;
+    }
+    let stamp = crate::config::config_dir().join(STAMP_FILE);
+    let (tx, rx) = std::sync::mpsc::channel();
+    CHECKING.fetch_add(1, Ordering::SeqCst);
+    std::thread::spawn(move || {
+        struct Done;
+        impl Drop for Done {
+            fn drop(&mut self) {
+                CHECKING.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
+        let _done = Done;
+        let release = once(&stamp, unix_now(), check_now, &crate::config::load().skip_version);
+        if let Some(r) = release {
+            let _ = tx.send(r);
+        }
+    });
+    Some(rx)
+}
+
+/// [`spawn_once`]'s check: `check` when due, the stamp written on success,
+/// a release `skip` does not name.
+fn once(stamp: &Path, now: u64, check: impl FnOnce() -> Result<Option<Release>, String>, skip: &str) -> Option<Release> {
+    let last = std::fs::read_to_string(stamp).ok().and_then(|t| parse_stamp(&t));
+    let (new_stamp, release) = tick(last, now, check);
+    if let Some(t) = new_stamp {
+        if let Some(dir) = stamp.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(stamp, t.to_string());
+    }
+    release.filter(|r| !is_skipped(r, skip))
+}
+
 /// Start the daemon's background checker. `None` when disabled or when the
 /// install is managed by a store. The thread is detached and never blocks exit.
 /// A release equal to the config's `skip_version` (re-read each time) is not
@@ -974,6 +1023,27 @@ pub fn open_url(url: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An on-demand run's one check: only when a day has passed, the stamp
+    /// written on success, a skipped version not reported.
+    #[test]
+    fn once_checks_when_due() {
+        let dir = std::env::temp_dir().join(format!("rustshot-once-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let stamp = dir.join(STAMP_FILE);
+        let rel = || Ok(Some(Release { version: "9.9.9".into(), ..Default::default() }));
+        let now = 1_000_000;
+        assert_eq!(once(&stamp, now, rel, "").map(|r| r.version), Some("9.9.9".into()), "never checked: due");
+        assert_eq!(std::fs::read_to_string(&stamp).unwrap(), now.to_string());
+        let called = std::cell::Cell::new(false);
+        let r = once(&stamp, now + 3600, || { called.set(true); rel() }, "");
+        assert!(r.is_none() && !called.get(), "checked an hour ago: not due");
+        assert!(once(&stamp, now + DAY_SECS + 1, rel, "v9.9.9").is_none(), "skipped");
+        assert!(once(&stamp, now + 3 * DAY_SECS, || Err("offline".into()), "").is_none());
+        assert_eq!(std::fs::read_to_string(&stamp).unwrap(), (now + DAY_SECS + 1).to_string(), "a failure keeps the stamp");
+        assert!(spawn_once(true).is_none() && !checking(), "never in tests");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn spawn_checker_disabled_is_none() {

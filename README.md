@@ -106,7 +106,7 @@ Download from the **[latest release](https://github.com/nappsllc/rustshot/releas
 
 | Platform | File | Size | Notes |
 |---|---|---|---|
-| Windows 10/11 | `rustshot-<v>-setup.exe` | 1.0 MB | Per-user installer, no admin. Optional desktop shortcut and start with Windows. |
+| Windows 10/11 | `rustshot-<v>-setup.exe` | 1.0 MB | Per-user installer, no admin. Start menu *Rustshot* and *Rustshot Settings*; optional desktop shortcut and start with Windows. Installing over an older version replaces its shortcuts (0.1.0 named them in lowercase). |
 | Windows (portable) | `rustshot-<v>-windows-x86_64.exe` | 2.1 MB | The whole app. Run it from anywhere. |
 | Windows (Store package) | `rustshot-<v>-x64.msix` | 1.1 MB | The unsigned Microsoft Store upload package. You can't install it directly; use the installer or the portable exe. |
 | Debian / Ubuntu | `rustshot-<v>-amd64.deb` | 1.2 MB | `sudo apt install ./rustshot-<v>-amd64.deb` |
@@ -139,8 +139,12 @@ Homebrew, Flathub, Snap Store, AUR) are being set up. See
    <kbd>Ctrl</kbd>+<kbd>U</kbd> to upload. <kbd>Esc</kbd> cancels.
 
 If you launch Rustshot while it is already running, the running copy
-starts a capture. The tray menu has **Capture…**, **History…** and
-**Settings…**.
+starts a capture, or opens Settings when its tray icon is hidden (or a
+recording runs). With the tray icon off on Windows nothing runs in the
+background: launching Rustshot (or **Rustshot Settings** in the Start
+menu) opens Settings. On Linux, macOS and in the Microsoft Store build
+the icon off keeps Rustshot running without it. The tray menu has
+**Capture…**, **History…** and **Settings…**.
 
 ## Replace the Snipping Tool (Windows)
 

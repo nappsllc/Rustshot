@@ -86,7 +86,8 @@ hdr_screenshots = "tonemap"       # Windows HDR displays: "tonemap" to SDR or "k
 screenclip_hint = true            # Windows: remind how to pick Rustshot for Win+Shift+S
 show_thumbnail = true             # the thumbnail card after a copied or saved capture
 shutter_sound = false             # a short click when a capture is taken
-show_tray = true                  # false = no tray icon (hotkeys still work)
+show_tray = true                  # false = no tray icon; Windows (not the Store build): no background process
+tray_off_mode_seen = false        # Windows: the "no longer runs in the background" message was shown
 
 # Capture launcher (remembered choices)
 launcher_source = "region"        # "region", "screen" or "window"

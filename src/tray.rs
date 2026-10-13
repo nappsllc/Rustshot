@@ -596,6 +596,24 @@ pub fn notify(text: &str) {
     eprintln!("rustshot: {text}");
 }
 
+/// With the tray icon off nothing runs in the background: Windows, not
+/// the Store (MSIX) build, where Win+Shift+S / Print Screen can start
+/// Rustshot on demand. The Store build (and Linux, macOS) keep the daemon
+/// running without an icon, its hotkeys working.
+pub fn hidden_means_no_daemon() -> bool {
+    cfg!(windows) && crate::screenclip_win::available()
+}
+
+/// [`notify`] about the hotkeys: a click on the balloon opens Settings ›
+/// Key bindings (Windows).
+pub fn notify_keys(text: &str) {
+    notify(text);
+    #[cfg(all(windows, not(test)))]
+    if is_visible() {
+        crate::tray_win::click_opens_keys();
+    }
+}
+
 #[cfg(test)]
 thread_local! {
     static NOTES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
