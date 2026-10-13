@@ -174,7 +174,7 @@ unit_tests() {
 # network, folder pickers and cameras): informational.
 extra_tests() {
     local ran='^(live_monitor_capture|live_desktop_capture|live_window_lifecycle|interactive_window_renders_rect|.*window_smoke|live_rec_linux_.*|live_oh264_.*|live_sni_.*)'
-    local skip='(wayland|bench|perf_|render_|preview|write_glyph|interactive_pick_folder|live_download|live_imgur|live_portable_update|holder_child|probe_recording_file|leak|live_cam_)'
+    local skip='(wayland|bench|perf_|render_|preview|write_glyph|manual_|live_download|live_imgur|live_portable_update|holder_child|probe_recording_file|leak|live_cam_)'
     local extra
     extra="$(sed 's/.*:://' "$LOGS/ignored-tests.txt" | grep -v -E "$ran" | grep -v -E "$skip" | sort -u | tr '\n' ' ')"
     sed 's/^/       ignored test compiled on Linux: /' "$LOGS/ignored-tests.txt" >> "$SUMMARY"

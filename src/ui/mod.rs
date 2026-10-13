@@ -183,6 +183,11 @@ impl FocusState {
         self.focused == Some(id_of(id))
     }
 
+    /// The focused control's id ([`id_of`] its name), if any.
+    pub fn focused_id(&self) -> Option<u64> {
+        self.focused
+    }
+
     /// Focus control `id` (with the focus ring, as if tabbed to).
     pub fn focus(&mut self, id: &str) {
         self.set(Some(id_of(id)), true);
@@ -201,6 +206,12 @@ impl FocusState {
     #[cfg(test)]
     pub fn rect_of(&self, id: &str) -> Option<FRect> {
         self.rects.get(&id_of(id)).copied()
+    }
+
+    /// Tests: where every focusable control was last drawn (physical px).
+    #[cfg(test)]
+    pub fn all_rects(&self) -> Vec<FRect> {
+        self.rects.values().copied().collect()
     }
 
     /// Whether `id` is recording a shortcut.
@@ -496,11 +507,6 @@ impl<'a> Ui<'a> {
             }
         }
         out
-    }
-
-    /// Ask for another frame (something changed after drawing).
-    pub fn request_redraw(&mut self) {
-        self.redraw = true;
     }
 
     /// Logical → physical px.

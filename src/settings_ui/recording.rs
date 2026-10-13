@@ -1,8 +1,11 @@
-//! Settings → **Recording**: the defaults video mode's panel starts from
-//! (format, frame rate, MP4 quality, a GIF's max length, system sound and
-//! microphone with its device, the camera bubble's device, shape, size,
-//! mirror and ring), the 3-2-1 countdown and, on Linux, the MP4 encoder with a line saying what
-//! is installed (the record hotkey is in Key bindings).
+//! Settings → **Recording** and **Camera**: the defaults video mode's
+//! panel starts from (Recording: format, frame rate, MP4 quality, a GIF's
+//! max length, the 3-2-1 countdown, on Linux the MP4 encoder with a line
+//! saying what is installed, then system sound and the microphone with its
+//! device; Camera: the bubble's device, shape, size, mirror, background
+//! (blurred or not; "Blur unavailable in this build" without a
+//! segmentation model) and ring). The record hotkey is in Shortcuts ›
+//! Recording.
 //!
 //! [`RecForm`] is the part of the settings form this tab edits (every
 //! `rec_*` key and `record_hotkey`); [`Lists`] holds the microphones and
@@ -28,6 +31,8 @@ const SHAPES: [(&str, &str); 3] = [("Circle", "circle"), ("Rounded", "rounded"),
 /// The bubble's side (logical px), as video mode's panel and the wheel
 /// size it: S / M / L / XL.
 const SIZES: [(&str, &str); 4] = [("120", "s"), ("160", "m"), ("200", "l"), ("240", "xl")];
+/// The camera's background (`rec_camera_bg`).
+pub const BACKGROUNDS: [(&str, &str); 3] = [("Off", "off"), ("Blur light", "light"), ("Blur strong", "strong")];
 pub const ENCODERS: [(&str, &str); 3] = [("Auto", "auto"), ("ffmpeg", "ffmpeg"), ("OpenH264", "openh264")];
 /// The ring colors on offer after "Accent" (the default drawing palette).
 const RINGS: [(&str, &str); 10] = [
@@ -76,6 +81,8 @@ pub struct RecForm {
     pub shape: usize,
     pub size: usize,
     pub mirror: bool,
+    /// [`BACKGROUNDS`] index.
+    pub bg: usize,
     /// `#rrggbb`, or "" for the theme's accent.
     pub ring: String,
     /// Logical px, 0 = no ring.
@@ -102,6 +109,7 @@ impl RecForm {
             shape: index_str(&SHAPES, &cfg.rec_camera_shape),
             size: index_str(&SIZES, &cfg.rec_camera_size),
             mirror: cfg.rec_camera_mirror,
+            bg: index_str(&BACKGROUNDS, &cfg.rec_camera_bg),
             ring: cfg.rec_camera_ring_color.trim().to_ascii_lowercase(),
             ring_w: cfg.rec_camera_ring_width.min(config::RING_WIDTH_MAX) as u8,
             countdown: cfg.rec_countdown,
@@ -151,6 +159,9 @@ impl RecForm {
         }
         if self.mirror != was.mirror {
             c.rec_camera_mirror = self.mirror;
+        }
+        if self.bg != was.bg {
+            c.rec_camera_bg = BACKGROUNDS[self.bg].1.into();
         }
         if self.ring != was.ring {
             c.rec_camera_ring_color = self.ring.clone();
@@ -330,7 +341,7 @@ fn labels<T: Copy, const N: usize>(list: &[(&'static str, T); N]) -> [&'static s
 /// Device dropdowns' width (logical px).
 const DEVICE_W: f32 = 210.0;
 
-/// The Recording section (the board's rows).
+/// The Recording section (the board's rows): the video, then the sound.
 pub fn section(ui: &mut Ui, s: &mut super::Settings, tok: &Tok) {
     s.rec_lists.start();
     let lists = &s.rec_lists;
@@ -339,11 +350,8 @@ pub fn section(ui: &mut Ui, s: &mut super::Settings, tok: &Tok) {
     let status = found.map(|f| encoder_status(s.form.rec.encoder, f.ffmpeg.as_deref(), f.openh264));
     let f = &mut s.form.rec;
     let mics = device_items(DEFAULT_MIC, found.map(|f| f.mics.as_slice()), &f.mic_dev);
-    let cams = device_items(DEFAULT_CAM, found.map(|f| f.cams.as_slice()), &f.cam_dev);
-    let no_cams = found.is_some_and(|f| f.cams.is_empty());
     let on = ui.enabled;
     let gif = f.gif();
-    ui.sec("Video", tok);
     srow(ui, tok, "Format", None, |ui| {
         ui.seg("rec_format", &labels(&FORMATS), &mut f.format, tok);
     });
@@ -384,7 +392,16 @@ pub fn section(ui: &mut Ui, s: &mut super::Settings, tok: &Tok) {
         device_dropdown(ui, "rec_mic_device", DEVICE_W, mics, &mut f.mic_dev);
     });
     ui.enabled = on;
+}
 
+/// The Camera section: the bubble a recording shows.
+pub fn camera(ui: &mut Ui, s: &mut super::Settings, tok: &Tok) {
+    s.rec_lists.start();
+    let found = s.rec_lists.found.as_ref();
+    let f = &mut s.form.rec;
+    let cams = device_items(DEFAULT_CAM, found.map(|f| f.cams.as_slice()), &f.cam_dev);
+    let no_cams = found.is_some_and(|f| f.cams.is_empty());
+    let on = ui.enabled;
     ui.sec("Camera bubble", tok);
     ui.enabled = on && !no_cams;
     srow(ui, tok, "Camera", no_cams.then_some("No camera found"), |ui| {
@@ -404,6 +421,13 @@ pub fn section(ui: &mut Ui, s: &mut super::Settings, tok: &Tok) {
     srow(ui, tok, "Mirror", Some("Like a mirror, as most video calls show you"), |ui| {
         ui.switch("rec_camera_mirror", &mut f.mirror, tok);
     });
+    let blur = crate::cam::bg::available();
+    ui.enabled = on && !no_cams && blur;
+    let note = if blur { "Blurs what is behind you" } else { crate::cam::bg::UNAVAILABLE };
+    srow(ui, tok, "Background", Some(note), |ui| {
+        ui.seg("rec_camera_bg", &labels(&BACKGROUNDS), &mut f.bg, tok);
+    });
+    ui.enabled = on && !no_cams;
     srow(ui, tok, "Ring", Some("Color and width of the outline"), |ui| {
         ui.width(120.0).slider("rec_camera_ring_width", &mut f.ring_w, 0, config::RING_WIDTH_MAX as u8);
         let (items, sel) = f.ring_items();

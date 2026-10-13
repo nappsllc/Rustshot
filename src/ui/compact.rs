@@ -135,6 +135,41 @@ pub const CSS: f32 = 1.21;
 pub const REC_TEXT: &str = "Press shortcut\u{2026}";
 pub const REC_HINT: &str = "Esc to cancel";
 
+/// A group label's height in the rail (logical px).
+pub const RAIL_LABEL_H: f32 = 24.0;
+
+/// How [`Ui::rail`] lays out its items: an item's height, the distance
+/// from one item's top to the next, and the group labels (each shown
+/// before item `.0`).
+#[derive(Clone, Copy, Debug)]
+pub struct RailStyle<'a> {
+    pub item: f32,
+    pub pitch: f32,
+    pub groups: &'a [(usize, &'a str)],
+}
+
+/// The rail's item tops and its group labels' tops (with their index in
+/// `style.groups`), logical px: from the top of `area`, items from
+/// `bottom_from` on at its bottom.
+pub fn rail_layout(n: usize, bottom_from: usize, area: FRect, style: &RailStyle) -> (Vec<f32>, Vec<(f32, usize)>) {
+    let mut labels = Vec::new();
+    let mut tops = Vec::with_capacity(n);
+    let mut y = area.y;
+    for i in 0..n {
+        if i < bottom_from {
+            if let Some(g) = style.groups.iter().position(|(at, _)| *at == i) {
+                labels.push((y, g));
+                y += RAIL_LABEL_H;
+            }
+            tops.push(y);
+            y += style.pitch;
+        } else {
+            tops.push(area.y1() - (n - i) as f32 * style.pitch + (style.pitch - style.item));
+        }
+    }
+    (tops, labels)
+}
+
 impl Ui<'_> {
     /// Text at `size` (logical px) left-aligned at `x`, centred on `cy`
     /// (physical px); `bold` thickens Inter Medium towards SemiBold.
@@ -432,23 +467,18 @@ impl Ui<'_> {
     }
 
     /// The section rail: one focusable list (Up/Down/Home/End), items
-    /// 32 px tall 2 apart from `top`; items from `bottom_from` on sit at
-    /// the bottom of `area` (About). Returns whether `sel` changed.
-    pub fn rail(&mut self, id: &str, items: &[(&str, &str)], bottom_from: usize, area: FRect, sel: &mut usize, tok: &Tok) -> bool {
+    /// `style.item` px tall, `style.pitch` apart from the top of `area`; a
+    /// group label (`style.groups`: shown before item i) takes
+    /// [`RAIL_LABEL_H`]; items from `bottom_from` on sit at the bottom of
+    /// `area` (About). Returns whether `sel` changed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn rail(&mut self, id: &str, items: &[(&str, &str)], bottom_from: usize, area: FRect, sel: &mut usize, style: &RailStyle, tok: &Tok) -> bool {
         let id = id_of(id);
         let k = self.k;
         let px = |v: f32| (v * k).round();
         let n = items.len();
-        let rects: Vec<FRect> = (0..n)
-            .map(|i| {
-                let y = if i < bottom_from {
-                    area.y + i as f32 * 34.0
-                } else {
-                    area.y1() - (n - i) as f32 * 34.0 + 2.0
-                };
-                FRect { x: px(area.x), y: px(y), w: px(area.w), h: px(32.0) }
-            })
-            .collect();
+        let (tops, labels) = rail_layout(n, bottom_from, area, style);
+        let rects: Vec<FRect> = tops.iter().map(|y| FRect { x: px(area.x), y: px(*y), w: px(area.w), h: px(style.item) }).collect();
         let whole = FRect { x: px(area.x), y: px(area.y), w: px(area.w), h: px(area.h) };
         self.last_alloc = rects.get(*sel).copied().unwrap_or(whole);
         let focused = self.focusable(id);
@@ -476,6 +506,20 @@ impl Ui<'_> {
             }
         }
         let f = fade(self);
+        for (y, gi) in labels {
+            // Like the board's `.sec` (uppercase, tracked), a size smaller.
+            let up = style.groups[gi].1.to_uppercase();
+            let size = 10.0;
+            let track = self.px(size * 0.07);
+            let cy = px(y + RAIL_LABEL_H - 9.0);
+            let mut x = px(area.x + 10.0);
+            let c = tok.tx3.fade(f);
+            for ch in up.chars() {
+                let t = ch.to_string();
+                self.text_at(size, &t, x, cy, c, true);
+                x += self.px(self.text_w(size, &t)) + track;
+            }
+        }
         for (i, ((icon, label), r)) in items.iter().zip(&rects).enumerate() {
             let on = i == *sel;
             let hov = self.hovered(*r);

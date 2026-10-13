@@ -1,6 +1,7 @@
-//! Settings → **Upload**: the destination (Imgur or an S3-compatible
-//! bucket: Amazon S3, Cloudflare R2, MinIO, …), the bucket's settings, a
-//! Test connection, and what happens after an upload.
+//! Settings → **Upload** (the destination: Imgur or an S3-compatible
+//! bucket, and what happens after an upload) and **S3 storage** (the
+//! bucket's settings: Amazon S3, Cloudflare R2, MinIO, …, and a Test
+//! connection).
 //!
 //! [`UpForm`] is the part of the settings form this tab edits (the
 //! `upload_*`, `s3_*` keys and `copy_url_after_upload`). The secret access
@@ -360,10 +361,21 @@ pub fn probe_help(p: Option<&Probe>) -> (String, bool) {
     }
 }
 
-pub fn section(ui: &mut Ui, s: &mut super::Settings, tok: &Tok, click: &mut Option<Click>) {
-    let stored = s.upload.stored(s.form.up.slot());
-    let saving = s.upload.saving();
-    let (probe, probe_err) = probe_help(s.upload.probe.as_ref());
+/// The Upload row that stands for the S3 settings: which bucket, at
+/// which host (or that it is not set up yet).
+pub fn s3_summary(f: &UpForm) -> String {
+    let bucket = f.bucket.text.trim();
+    let host = f.endpoint.text.trim().trim_start_matches("https://").trim_start_matches("http://").trim_end_matches('/');
+    match (bucket.is_empty(), host.is_empty()) {
+        (true, _) | (_, true) => "Not set up yet".into(),
+        (false, false) => format!("{bucket} at {host}"),
+    }
+}
+
+/// Settings › Upload: where uploads go and what follows them; an S3
+/// bucket's own settings are in [`s3_section`].
+pub fn section(ui: &mut Ui, s: &mut super::Settings, tok: &Tok) {
+    let mut open_s3 = false;
     let f = &mut s.form.up;
     ui.sec("Destination", tok);
     srow(ui, tok, "Upload to", None, |ui| {
@@ -371,47 +383,13 @@ pub fn section(ui: &mut Ui, s: &mut super::Settings, tok: &Tok, click: &mut Opti
         ui.seg("upload_dest", &labels, &mut f.dest, tok);
     });
     if f.dest != S3 {
-        ui.sec("Imgur", tok);
-        srow(ui, tok, "Client ID", Some("Rustshot's own unless you register one"), |ui| {
+        srow(ui, tok, "Imgur client ID", Some("Rustshot's own unless you register one"), |ui| {
             ui.width(FIELD_W).text_field("upload_client_id", &mut f.client_id);
         });
     } else {
-        ui.sec("S3-compatible storage", tok);
-        srow(ui, tok, "Endpoint", Some("The provider's S3 API address"), |ui| {
-            ui.width(FIELD_W).text_field("s3_endpoint", &mut f.endpoint);
-        });
-        srow(ui, tok, "Region", Some("\"auto\" for Cloudflare R2"), |ui| {
-            ui.width(FIELD_W).text_field("s3_region", &mut f.region);
-        });
-        srow(ui, tok, "Bucket", None, |ui| {
-            ui.width(FIELD_W).text_field("s3_bucket", &mut f.bucket);
-        });
-        srow(ui, tok, "Access key ID", None, |ui| {
-            ui.width(FIELD_W).text_field("s3_access_key", &mut f.access_key);
-        });
-        let help = secret_help(!f.secret.text.trim().is_empty(), stored, saving);
-        srow_ex(ui, tok, "Secret access key", Some(&help), false, 44.0, |ui| {
-            ui.masked = true;
-            ui.width(FIELD_W).text_field("s3_secret", &mut f.secret);
-        });
-        let (help, warn) = public_help(&f.public_url.text);
-        srow_ex(ui, tok, "Public URL base", Some(help), warn, if warn { 58.0 } else { ROW_H }, |ui| {
-            ui.width(FIELD_W).text_field("s3_public_url", &mut f.public_url);
-        });
-        srow(ui, tok, "Key prefix", Some("%Y %m %d as in file names"), |ui| {
-            ui.width(FIELD_W).text_field("s3_key_prefix", &mut f.prefix);
-        });
-        srow(ui, tok, "Path-style URLs", Some("On for R2 and most S3-compatible servers"), |ui| {
-            ui.switch("s3_path_style", &mut f.path_style, tok);
-        });
-        let busy = matches!(s.upload.probe, Some(Probe::Running));
-        srow_ex(ui, tok, "Test connection", Some(&probe), probe_err, if probe_err { 44.0 } else { ROW_H }, |ui| {
-            let on = ui.enabled;
-            ui.enabled = on && !busy;
-            if ui.cbutton("s3_test", "Test connection", None, false, tok) {
-                *click = Some(Click::TestUpload);
-            }
-            ui.enabled = on;
+        let summary = s3_summary(f);
+        srow(ui, tok, "S3 storage", Some(&summary), |ui| {
+            open_s3 = ui.cbutton("s3_open", "Set up\u{2026}", None, false, tok);
         });
     }
     ui.sec("After upload", tok);
@@ -420,5 +398,55 @@ pub fn section(ui: &mut Ui, s: &mut super::Settings, tok: &Tok, click: &mut Opti
     });
     srow(ui, tok, "Upload recordings automatically", Some("When saved; Copy link then copies at once"), |ui| {
         ui.switch("upload_recordings", &mut f.auto_rec, tok);
+    });
+    if open_s3 {
+        s.section = super::S3_STORAGE;
+    }
+}
+
+/// Settings › S3 storage: the bucket (Amazon S3, Cloudflare R2, MinIO, …)
+/// and a Test connection; used when Upload › Upload to is S3-compatible.
+pub fn s3_section(ui: &mut Ui, s: &mut super::Settings, tok: &Tok, click: &mut Option<Click>) {
+    let stored = s.upload.stored(s.form.up.slot());
+    let saving = s.upload.saving();
+    let (probe, probe_err) = probe_help(s.upload.probe.as_ref());
+    let busy = matches!(s.upload.probe, Some(Probe::Running));
+    let f = &mut s.form.up;
+    if f.dest != S3 {
+        super::draw::note_line(ui, tok, "Used when Upload \u{203a} Upload to is S3-compatible", false, Some(2.0));
+    }
+    srow(ui, tok, "Endpoint", Some("The provider's S3 API address"), |ui| {
+        ui.width(FIELD_W).text_field("s3_endpoint", &mut f.endpoint);
+    });
+    // Bucket and region share a row (the region is short: "auto", "us-east-1").
+    srow(ui, tok, "Bucket and region", Some("Region \"auto\" for Cloudflare R2"), |ui| {
+        ui.width(96.0).text_field("s3_region", &mut f.region);
+        ui.width(FIELD_W - 96.0 - 12.0).text_field("s3_bucket", &mut f.bucket);
+    });
+    srow(ui, tok, "Access key ID", None, |ui| {
+        ui.width(FIELD_W).text_field("s3_access_key", &mut f.access_key);
+    });
+    let help = secret_help(!f.secret.text.trim().is_empty(), stored, saving);
+    srow_ex(ui, tok, "Secret access key", Some(&help), false, 44.0, |ui| {
+        ui.masked = true;
+        ui.width(FIELD_W).text_field("s3_secret", &mut f.secret);
+    });
+    let (help, warn) = public_help(&f.public_url.text);
+    srow_ex(ui, tok, "Public URL base", Some(help), warn, if warn { 58.0 } else { ROW_H }, |ui| {
+        ui.width(FIELD_W).text_field("s3_public_url", &mut f.public_url);
+    });
+    srow(ui, tok, "Key prefix", Some("%Y %m %d as in file names"), |ui| {
+        ui.width(FIELD_W).text_field("s3_key_prefix", &mut f.prefix);
+    });
+    srow(ui, tok, "Path-style URLs", Some("On for R2 and most S3-compatible servers"), |ui| {
+        ui.switch("s3_path_style", &mut f.path_style, tok);
+    });
+    srow_ex(ui, tok, "Test connection", Some(&probe), probe_err, if probe_err { 44.0 } else { ROW_H }, |ui| {
+        let on = ui.enabled;
+        ui.enabled = on && !busy;
+        if ui.cbutton("s3_test", "Test connection", None, false, tok) {
+            *click = Some(Click::TestUpload);
+        }
+        ui.enabled = on;
     });
 }

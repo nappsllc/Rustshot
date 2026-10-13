@@ -56,7 +56,7 @@ fn rect(h: HWND) -> RECT {
     r
 }
 
-const M: Look = Look { shape: Shape::Circle, size: CamSize::M, mirror: true, ring: None, ring_w: 3 };
+const M: Look = Look { shape: Shape::Circle, size: CamSize::M, mirror: true, ring: None, ring_w: 3, bg: bg::Bg::Off };
 
 #[test]
 fn bubble_shows_pictures_follows_the_area_and_releases_the_camera() {

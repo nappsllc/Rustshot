@@ -393,7 +393,7 @@ pub fn handle(hwnd: HWND, m: u32, _w: WPARAM, l: LPARAM) -> Option<LRESULT> {
                 if let Some(dir) = SAVED.lock().unwrap().take() {
                     crate::actions::open_path(&dir);
                 } else if KEYS_CLICK.swap(false, std::sync::atomic::Ordering::SeqCst) {
-                    crate::settings_ui::show_at(crate::settings_ui::KEYS);
+                    crate::settings_ui::show_at(crate::settings_ui::KEYS_GLOBAL);
                 }
             }
             WM_RBUTTONUP | WM_CONTEXTMENU => show_menu(hwnd),

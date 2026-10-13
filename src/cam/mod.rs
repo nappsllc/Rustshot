@@ -15,9 +15,11 @@
 //! portal and PipeWire (`rec::linux::pipewire`) on Wayland and in Flatpak,
 //! and an X11 ARGB window (`x11.rs`). macOS: an `AVCaptureSession` and a
 //! transparent panel (`macos.rs`). The camera is opened only while the
-//! bubble is shown and released when it closes. Background effects are
-//! the OS's (Windows Studio Effects, macOS Center Stage and Portrait apply
-//! to the feed by themselves); Rustshot adds none.
+//! bubble is shown and released when it closes. The OS's own effects
+//! (Windows Studio Effects, macOS Center Stage and Portrait) apply to the
+//! feed by themselves; Rustshot can blur the background behind the person
+//! itself ([`bg`]: `rec_camera_bg`, segmented by the embedded model
+//! ([`seg`]) or, on macOS 12+, by Vision).
 //!
 //! Position memory is in-memory (process lifetime, not in the config):
 //! the corner the bubble was last dropped at and its offset from that
@@ -35,6 +37,11 @@ mod x11;
 
 #[cfg(target_os = "macos")]
 mod macos;
+
+pub mod bg;
+#[cfg(target_os = "macos")]
+mod seg_macos;
+pub mod seg;
 
 #[cfg(windows)]
 pub use bubble::Bubble;
@@ -281,6 +288,8 @@ pub struct Look {
     pub ring: Option<C4>,
     /// The ring's width in logical px; 0 = no ring.
     pub ring_w: u8,
+    /// The background behind the person: off, or blurred (light / strong).
+    pub bg: bg::Bg,
 }
 
 impl Look {
@@ -288,7 +297,7 @@ impl Look {
     #[cfg(test)]
     #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub fn new(shape: Shape, size: CamSize) -> Look {
-        Look { shape, size, mirror: true, ring: None, ring_w: crate::config::RING_WIDTH_DEFAULT as u8 }
+        Look { shape, size, mirror: true, ring: None, ring_w: crate::config::RING_WIDTH_DEFAULT as u8, bg: bg::Bg::Off }
     }
 }
 

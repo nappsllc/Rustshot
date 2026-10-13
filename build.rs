@@ -8,6 +8,21 @@ use std::{env, fs};
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+    // The camera blur's segmentation model is embedded when it is there
+    // (`assets/selfie.bin`, converted by tools/convert-selfie); the
+    // `selfie_model` feature insists on it, `RUSTSHOT_NO_SELFIE=1` leaves
+    // it out.
+    println!("cargo:rustc-check-cfg=cfg(selfie_embedded)");
+    println!("cargo:rerun-if-changed=assets/selfie.bin");
+    println!("cargo:rerun-if-env-changed=RUSTSHOT_NO_SELFIE");
+    let have = std::path::Path::new("assets/selfie.bin").is_file();
+    let off = std::env::var_os("RUSTSHOT_NO_SELFIE").is_some_and(|v| v == "1");
+    if std::env::var_os("CARGO_FEATURE_SELFIE_MODEL").is_some() && !have {
+        panic!("the selfie_model feature needs assets/selfie.bin (see tools/convert-selfie)");
+    }
+    if have && !off {
+        println!("cargo:rustc-cfg=selfie_embedded");
+    }
     println!("cargo:rerun-if-changed=packaging/icons/rustshot.ico");
     println!("cargo:rerun-if-env-changed=RC");
     bake_font();

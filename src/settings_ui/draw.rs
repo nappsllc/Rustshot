@@ -1,11 +1,12 @@
 //! Painting the Settings window as on the Settings board: the 188 px
-//! rail, a 48 px header, the scrolling section body (rows of the board's
-//! `.r`: a 12.5/500 label with an 11/400 helper line, controls on the
-//! right) and the footer bar with Open config file and OK / Cancel /
+//! rail (14 sections, a Shortcuts group), a 48 px header, the section body
+//! that fits without scrolling (rows of the board's `.r`: a 12.5/500
+//! label with an 11/400 helper line, controls on the right) and the
+//! footer bar with Open config file and OK / Cancel /
 //! Apply; questions over the dimmed window.
 
 use super::*;
-use crate::ui::compact::{Slot, Tok, CSS};
+use crate::ui::compact::{RailStyle, Slot, Tok, CSS};
 use crate::ui::controls::wrap;
 use crate::uifb::C4;
 
@@ -33,6 +34,15 @@ pub const FIELD_W: f32 = 228.0;
 /// The section body's viewport (between the header and the footer).
 pub fn viewport() -> FRect {
     FRect { x: RAIL_W, y: HDR_H, w: W as f32 - RAIL_W, h: H as f32 - HDR_H - FOOT_H }
+}
+
+/// The rail: 15 sections and the Shortcuts label need items a little
+/// shorter than the board's 32 px (26, 28 apart).
+pub const RAIL: RailStyle<'static> = RailStyle { item: 26.0, pitch: 28.0, groups: &RAIL_GROUPS };
+
+/// Where the rail's items go (under the mark and the name).
+pub fn rail_area() -> FRect {
+    FRect { x: 10.0, y: 52.0, w: RAIL_W - 20.0, h: H as f32 - 14.0 - 52.0 }
 }
 
 /// Logical → physical px (rounded).
@@ -196,6 +206,7 @@ pub fn screenclip_line(ui: &mut Ui, tok: &Tok, text: &str, tone: crate::screencl
     clicked
 }
 
+
 /// A section heading indented `x` (Key bindings: 8).
 fn sec_at(ui: &mut Ui, tok: &Tok, s: &str, x: f32) {
     if x <= 0.0 {
@@ -228,12 +239,7 @@ pub fn paint(ui: &mut Ui, s: &mut Settings) -> Option<Click> {
     mark(ui, 18.0, 18.0, 20.0);
     let (tx, ty) = (ui.px(46.0), ui.px(28.0));
     ui.text_at(13.0, NAME, tx, ty, tok.tx, true);
-    let before = s.section;
-    let rail = FRect { x: 10.0, y: 52.0, w: RAIL_W - 20.0, h: h - 14.0 - 52.0 };
-    ui.rail("rail", &SECTIONS, ABOUT, rail, &mut s.section, &tok);
-    if s.section != before {
-        s.scroll[s.section] = 0.0;
-    }
+    ui.rail("rail", &SECTIONS, ABOUT, rail_area(), &mut s.section, &RAIL, &tok);
 
     // A form that never saw the file (it did not parse) is not shown.
     if !s.stale {
@@ -275,58 +281,48 @@ pub fn toast_at(ui: &mut Ui, msg: &str, k: f32) {
     crate::editor::style::toast(&mut ui.fb, &cu, msg, crate::editor::style::ToastKind::Success, area, k);
 }
 
-/// The scrolled section body.
+/// The section body: every section fits between the header and the
+/// footer (`every_section_fits`), so nothing scrolls; its height is kept
+/// for that test.
 fn body(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) {
     let vp = viewport();
     let sec = s.section;
-    let max = (s.content_h[sec] - vp.h).max(0.0);
-    let pvp = phys(ui, vp);
-    if ui.enabled && ui.input.wheel != 0 && crate::ui::contains(pvp, ui.input.mouse) {
-        s.scroll[sec] -= ui.input.wheel as f32 / 120.0 * 48.0;
-    }
-    // (Not measured yet: the first frame keeps the offset asked for.)
-    if s.content_h[sec] > 0.0 {
-        s.scroll[sec] = s.scroll[sec].clamp(0.0, max);
-    }
-    let x0 = if sec == KEYS { KEYS_PAD_X } else { PAD_X };
-    let top = HDR_H + BODY_TOP - s.scroll[sec];
+    let x0 = if is_keys(sec) { KEYS_PAD_X } else { PAD_X };
+    let top = HDR_H + BODY_TOP;
     let area = FRect { x: RAIL_W + x0, y: top, w: vp.w - 2.0 * x0, h: 4000.0 };
-    ui.input_clip = Some(pvp);
-    ui.focus_rect = None;
+    // (Anything past the body would be under the footer: not clickable.)
+    ui.input_clip = Some(phys(ui, vp));
+    // "Change shortcuts…" in the hotkey dialog: that row's box records
+    // (`change_shortcuts` opened the section that lists it).
+    if is_keys(sec)
+        && ui.enabled
+        && let Some(id) = s.record_field.take()
+    {
+        ui.focus.record(&id);
+    }
     let end = ui.area(area, |ui| {
         ui.lay.gap = 2.0;
         match sec {
-            GENERAL => general(ui, s, tok, click),
+            GENERAL => general(ui, s, tok),
             CAPTURE => capture(ui, s, tok, click),
+            OVERLAY => overlay(ui, s, tok, click),
+            SAVING => saving(ui, s, tok, click),
+            FILE_NAMES => file_names(ui, s, tok, click),
+            HISTORY => history(ui, s, tok, click),
             RECORDING => recording::section(ui, s, tok),
-            KEYS => keys(ui, s, tok),
-            UPLOAD => super::upload::section(ui, s, tok, click),
-            _ => about(ui, s, tok, click),
+            CAMERA => recording::camera(ui, s, tok),
+            UPLOAD => super::upload::section(ui, s, tok),
+            S3_STORAGE => super::upload::s3_section(ui, s, tok, click),
+            KEYS_GLOBAL => keys_global(ui, s, tok),
+            KEYS_RECORDING => keys_recording(ui, s, tok),
+            KEYS_TOOLS => overlay_keys(ui, s, tok, &TOOL_ROWS),
+            KEYS_ACTIONS => overlay_keys(ui, s, tok, &ACTION_ROWS),
+            _ => about(ui, tok, click),
         }
         ui.cursor_y()
     });
     ui.input_clip = None;
-    s.content_h[sec] = end - 2.0 - top + BODY_BOTTOM;
-    // A control tabbed to out of view: scrolled in.
-    if let Some(fr) = ui.focus_rect
-        && fr.x >= ui.px(RAIL_W)
-    {
-        let (y0, y1) = (fr.y / ui.k, fr.y1() / ui.k);
-        let (lo, hi) = (vp.y + 4.0, vp.y1() - 4.0);
-        let d = if y0 < lo { y0 - lo } else if y1 > hi { y1 - hi } else { 0.0 };
-        if d != 0.0 {
-            s.scroll[sec] = (s.scroll[sec] + d).clamp(0.0, (s.content_h[sec] - vp.h).max(0.0));
-            ui.request_redraw();
-        }
-    }
-    // The scroll thumb.
-    let max = (s.content_h[sec] - vp.h).max(0.0);
-    if max > 0.0 {
-        let th_h = (vp.h * vp.h / s.content_h[sec]).max(24.0);
-        let y = vp.y + 2.0 + (vp.h - 4.0 - th_h) * (s.scroll[sec] / max);
-        let r = phys(ui, FRect { x: W as f32 - 7.0, y, w: 4.0, h: th_h });
-        ui.fb.fill_rounded(r.x as i32, r.y as i32, r.w as i32, r.h as i32, r.w / 2.0, tok.tx3.fade(0.5));
-    }
+    s.content_h[sec] = end - 2.0 - top + BODY_TOP + BODY_BOTTOM;
 }
 
 fn header(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) {
@@ -334,8 +330,8 @@ fn header(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) {
     fill_rect(ui, FRect { x: RAIL_W, y: 0.0, w, h: HDR_H }, tok.win);
     line(ui, RAIL_W, HDR_H - 1.0, w, 1.0, tok.sep);
     let (x, cy) = (ui.px(RAIL_W + PAD_X), ui.px(HDR_H / 2.0));
-    ui.text_at(14.0, SECTIONS[s.section].1, x, cy, tok.tx, true);
-    if s.section == KEYS {
+    ui.text_at(14.0, TITLES[s.section], x, cy, tok.tx, true);
+    if is_keys(s.section) {
         let bw = ui.cbutton_width("Reset to defaults", true);
         let r = FRect { x: W as f32 - PAD_X - bw, y: (HDR_H - CTL) / 2.0, w: bw, h: CTL };
         if ui.place(r).cbutton("reset_all", "Reset to defaults", Some("set-rotate"), false, tok) {
@@ -509,21 +505,15 @@ fn question(ui: &mut Ui, s: &Settings, m: &Modal) -> Option<Click> {
     dialog(ui, &Dialog { icon, icon_color, title: None, text: &text, buttons: btns, check: None, min_w: 420.0, max_text_h: 160.0, error: None })
 }
 
+
 // --- Sections ---------------------------------------------------------------
 
 fn labels<T, const N: usize>(list: &[(&'static str, T); N]) -> [&'static str; N] {
     std::array::from_fn(|i| list[i].0)
 }
 
-/// The file name the preview path ends in.
-fn example_name(s: &Settings) -> String {
-    let p = s.form.preview(&s.loaded, export::local_ymdhms());
-    p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
-}
-
-fn general(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) {
-    let folder_note = s.folder_note();
-    let example = example_name(s);
+/// General: how the app looks and runs.
+fn general(ui: &mut Ui, s: &mut Settings, tok: &Tok) {
     let tray_row = s.tray_row;
     let warn = s.tray_warning();
     let tray_help = s.tray_help();
@@ -573,50 +563,9 @@ fn general(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) 
             hid = ui.switch("show_tray", &mut f.show_tray, tok) && !f.show_tray;
         });
     }
-    srow(ui, tok, "Copy to clipboard after capture", Some("Also when saving or uploading"), |ui| {
-        ui.switch("copy_after_capture", &mut f.copy_after, tok);
-    });
-    srow(ui, tok, "Play shutter sound", None, |ui| {
-        ui.switch("shutter_sound", &mut f.shutter, tok);
-    });
-    srow(ui, tok, "Show thumbnail after capture", None, |ui| {
-        ui.switch("show_thumbnail", &mut f.thumbnail, tok);
-    });
-    srow(ui, tok, "Show hints in the overlay", Some("The keys, for a few seconds when it opens"), |ui| {
-        ui.switch("overlay_hints", &mut f.hints, tok);
-    });
-    ui.sec("Saving", tok);
-    srow(ui, tok, "Save to", None, |ui| {
-        if ui.cbutton("browse", "Change\u{2026}", None, false, tok) {
-            *click = Some(Click::Browse);
-        }
-        ui.field_icon = Some("set-folder");
-        ui.width(FIELD_W).text_field("folder", &mut f.folder);
-    });
-    if let Some(n) = &folder_note {
-        note_line(ui, tok, n, false, None);
-    }
-    srow_ex(ui, tok, "File name", Some(&example), false, 44.0, |ui| {
-        let mut fmt = if f.format < 2 { f.format } else { usize::MAX };
-        if ui.seg("format", &["PNG", "JPG"], &mut fmt, tok) && fmt < 2 {
-            f.format = fmt;
-        }
-        let w = ui.row_free() - 112.0;
-        ui.width(w.min(FIELD_W)).text_field("filename", &mut f.filename);
-    });
-    if ui.focus.is_focused("filename") {
-        s.pattern = Pattern::File;
-    }
-    srow_ex(ui, tok, "Save at", Some("Not pins; History keeps the original"), false, 44.0, |ui| {
-        let on = ui.enabled;
-        ui.enabled = on && f.save_at == 2;
-        let w = ui.text_w(12.0, "%").ceil();
-        let r = ui.alloc(Some(w), CTL);
-        let c = if ui.enabled { tok.tx2 } else { tok.tx3 };
-        ui.text_at(12.0, "%", r.x, r.y + r.h / 2.0, c, false);
-        ui.width(110.0).slider("save_pct", &mut f.save_pct, 10, 100);
-        ui.enabled = on;
-        ui.seg("save_at", &labels(&SAVE_AT), &mut f.save_at, tok);
+    ui.sec("Updates", tok);
+    srow(ui, tok, "Check for updates automatically", Some("Once a day, from GitHub"), |ui| {
+        ui.switch("check_updates", &mut f.check_updates, tok);
     });
     // Turned off: say how to get back before it goes.
     if hid {
@@ -624,17 +573,15 @@ fn general(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) 
     }
 }
 
+/// Capture: how a capture starts and selects, and what follows it.
 fn capture(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) {
-    // "Set up…" (tray icon off): the Win+Shift+S row, focused and in view.
+    // "Set up…" (tray icon off): the Win+Shift+S row, focused.
     if ui.enabled
         && let Some(id) = s.focus_field.take()
     {
         ui.focus.focus(&id);
     }
-    let base = s.loaded.clone();
     let wayland = wayland();
-    let show_renderer = s.renderer;
-    let done = s.tools_reset;
     // Which app Win+Shift+S opens, once the toggle is saved on. With the
     // tray icon off, red unless it is Rustshot (no other way in), even
     // while the toggle is off: its click turns it on.
@@ -646,19 +593,102 @@ fn capture(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) 
         (registered && s.form.screenclip == Some(true)).then(|| crate::screenclip_win::state_line(&s.handler, true))
     };
     let f = &mut s.form;
-    let mut target = s.pattern;
-    let mut token = None;
-    ui.sec("Files", tok);
-    srow(ui, tok, "Daily subfolders", Some("A folder per day inside Save to"), |ui| {
-        ui.switch("subfolder", &mut f.subfolder, tok);
-        let on = ui.enabled;
-        ui.enabled = on && f.subfolder;
-        ui.width(160.0).text_field("subfolder_pattern", &mut f.subfolder_pattern);
-        ui.enabled = on;
+    ui.sec("Selecting", tok);
+    if let Some(on) = f.screenclip.as_mut() {
+        srow_ex(ui, tok, "Use Win+Shift+S and Print Screen", Some(SCREENCLIP_HELP), false, ROW_H, |ui| {
+            ui.switch("screenclip", on, tok);
+        });
+        if let Some((text, tone)) = &clip_line
+            && screenclip_line(ui, tok, text, *tone)
+        {
+            *click = Some(Click::FixScreenclip);
+        }
+    }
+    let help = if wayland { "Not on Wayland" } else { "Outline the window under the pointer; a click selects it" };
+    srow(ui, tok, "Snap to windows", Some(help), |ui| {
+        ui.switch("snap_windows", &mut f.snap, tok);
     });
+    // (Two helper lines: the segmented control leaves little room.)
+    srow_ex(ui, tok, "Accept on select", Some("Copy or save as soon as a region is drawn; hold Alt to adjust"), false, 44.0, |ui| {
+        ui.seg("accept_on_select", &labels(&ACCEPTS), &mut f.accept, tok);
+    });
+    ui.sec("After capture", tok);
+    srow(ui, tok, "Copy to clipboard after capture", Some("Also when saving or uploading"), |ui| {
+        ui.switch("copy_after_capture", &mut f.copy_after, tok);
+    });
+    srow(ui, tok, "Play shutter sound", None, |ui| {
+        ui.switch("shutter_sound", &mut f.shutter, tok);
+    });
+    srow(ui, tok, "Show thumbnail after capture", None, |ui| {
+        ui.switch("show_thumbnail", &mut f.thumbnail, tok);
+    });
+    let by_hand = f.keys.chords(Action::Trim).first().map_or_else(|| "the size label's menu".to_string(), |c| c.label());
+    let help = format!("Cut uniform margins off each new region or window ({by_hand} by hand)");
+    srow(ui, tok, "Trim margins automatically", Some(&help), |ui| {
+        ui.switch("trim_margins", &mut f.trim, tok);
+    });
+}
+
+/// Overlay: what shows while selecting, and how the toolbar draws.
+fn overlay(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) {
+    let show_renderer = s.renderer;
+    let done = s.tools_reset;
+    let f = &mut s.form;
+    ui.sec("While selecting", tok);
+    srow(ui, tok, "Show magnifier", Some("Zoomed pixels and a crosshair while selecting; H copies the color"), |ui| {
+        ui.switch("magnifier", &mut f.magnifier, tok);
+    });
+    let on = ui.enabled;
+    ui.enabled = on && f.magnifier;
+    srow(ui, tok, "Square magnifier", Some("Round when off"), |ui| {
+        ui.switch("magnifier_square", &mut f.magnifier_square, tok);
+    });
+    ui.enabled = on;
+    srow(ui, tok, "Show hints in the overlay", Some("The keys, for a few seconds when it opens"), |ui| {
+        ui.switch("overlay_hints", &mut f.hints, tok);
+    });
+    ui.sec("Toolbar", tok);
+    srow_ex(ui, tok, "Copy text", Some("The toolbar's Copy text button; the Copy text hotkey always copies all"), false, 44.0, |ui| {
+        ui.seg("copy_text_mode", &labels(&COPY_TEXT), &mut f.copy_text, tok);
+    });
+    srow_ex(ui, tok, "Redact style", Some("What Quick Redact puts over sensitive text; Solid can never be read back"), false, 44.0, |ui| {
+        ui.seg("redact_style", &labels(&REDACT_STYLES), &mut f.redact_style, tok);
+    });
+    srow(ui, tok, "UI size", Some("Toolbar and labels; Auto follows each monitor"), |ui| {
+        ui.width(120.0).dropdown("ui_size", &uisize::LABELS, &mut f.ui_size);
+    });
+    let help = if done { "Done: the next capture starts from the defaults" } else { "Each tool remembers its last size and color" };
+    srow(ui, tok, "Tool sizes & colors", Some(help), |ui| {
+        if ui.cbutton("reset_tools", "Reset", Some("set-rotate"), false, tok) {
+            *click = Some(Click::ResetTools);
+        }
+    });
+    if show_renderer {
+        srow(ui, tok, "Renderer", Some("GDI repaints only what changed"), |ui| {
+            ui.seg("renderer", &labels(&RENDERERS), &mut f.renderer, tok);
+        });
+    }
+}
+
+/// Saving: where captures go and in which format.
+fn saving(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) {
+    let folder_note = s.folder_note();
+    let f = &mut s.form;
+    ui.sec("Folder", tok);
+    srow(ui, tok, "Save to", None, |ui| {
+        if ui.cbutton("browse", "Change\u{2026}", None, false, tok) {
+            *click = Some(Click::Browse);
+        }
+        ui.field_icon = Some("set-folder");
+        ui.width(FIELD_W).text_field("folder", &mut f.folder);
+    });
+    if let Some(n) = &folder_note {
+        note_line(ui, tok, n, false, None);
+    }
     srow(ui, tok, "Ask where to save", Some("Ctrl+Shift+S in the overlay always asks"), |ui| {
         ui.switch("ask", &mut f.ask, tok);
     });
+    ui.sec("Format", tok);
     srow(ui, tok, "Format", None, |ui| {
         ui.seg("format_all", &labels(&FORMATS), &mut f.format, tok);
     });
@@ -668,7 +698,58 @@ fn capture(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) 
         ui.width(200.0).slider("quality", &mut f.quality, 1, 100);
     });
     ui.enabled = on;
+    srow(ui, tok, "Save at", Some("Not pins; History keeps the original"), |ui| {
+        let on = ui.enabled;
+        ui.enabled = on && f.save_at == 2;
+        let w = ui.text_w(12.0, "%").ceil();
+        let r = ui.alloc(Some(w), CTL);
+        let c = if ui.enabled { tok.tx2 } else { tok.tx3 };
+        ui.text_at(12.0, "%", r.x, r.y + r.h / 2.0, c, false);
+        ui.width(110.0).slider("save_pct", &mut f.save_pct, 10, 100);
+        ui.enabled = on;
+        ui.seg("save_at", &labels(&SAVE_AT), &mut f.save_at, tok);
+    });
+    image_rows(ui, f, tok);
+}
 
+/// Saving › Format, after the format: the export border and HDR
+/// screenshots (Windows).
+fn image_rows(ui: &mut Ui, f: &mut crate::settings_ui::Form, tok: &Tok) {
+    srow(ui, tok, "Add a border", Some("On every export"), |ui| {
+        ui.switch("border", &mut f.border, tok);
+        let on = ui.enabled;
+        ui.enabled = on && f.border;
+        ui.width(120.0).slider("border_width", &mut f.border_w, 1, config::BORDER_MAX as u8);
+        ui.space(4.0);
+        ui.width(92.0).text_field("border_color", &mut f.border_hex);
+        let c = config::parse_color(f.border_hex.text.trim()).map(|(r, g, b, _)| C4::rgb(r, g, b));
+        if ui.swatch("border_swatch", c, false, tok) {
+            ui.focus.focus("border_color");
+        }
+        ui.enabled = on;
+    });
+    if cfg!(windows) {
+        srow(ui, tok, "HDR screenshots", Some("HDR displays; recordings too"), |ui| {
+            ui.seg("hdr_screenshots", &labels(&HDR_MODES), &mut f.hdr, tok);
+        });
+    }
+}
+
+/// File names: the daily subfolder and the file-name pattern, with the
+/// token buttons that insert into either.
+fn file_names(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) {
+    let base = s.loaded.clone();
+    let f = &mut s.form;
+    let mut target = s.pattern;
+    let mut token = None;
+    ui.sec("Folders", tok);
+    srow(ui, tok, "Daily subfolders", Some("A folder per day inside Save to"), |ui| {
+        ui.switch("subfolder", &mut f.subfolder, tok);
+        let on = ui.enabled;
+        ui.enabled = on && f.subfolder;
+        ui.width(160.0).text_field("subfolder_pattern", &mut f.subfolder_pattern);
+        ui.enabled = on;
+    });
     ui.sec("File name", tok);
     srow(ui, tok, "Pattern", None, |ui| {
         if ui.cbutton("clear", "Clear", None, false, tok) {
@@ -722,57 +803,12 @@ fn capture(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) 
         ui.focus.focus(if target == Pattern::Sub { "subfolder_pattern" } else { "filename_pattern" });
     }
     s.pattern = target;
+}
 
+/// History: what the History window keeps.
+fn history(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) {
     let f = &mut s.form;
-    ui.sec("Overlay", tok);
-    srow(ui, tok, "UI size", Some("Toolbar and labels; Auto follows each monitor"), |ui| {
-        ui.width(120.0).dropdown("ui_size", &uisize::LABELS, &mut f.ui_size);
-    });
-    let help = if wayland { "Not on Wayland" } else { "Outline the window under the pointer; a click selects it" };
-    srow(ui, tok, "Snap to windows", Some(help), |ui| {
-        ui.switch("snap_windows", &mut f.snap, tok);
-    });
-    srow(ui, tok, "Show magnifier", Some("Zoomed pixels and a crosshair while selecting; H copies the color"), |ui| {
-        ui.switch("magnifier", &mut f.magnifier, tok);
-    });
-    let on = ui.enabled;
-    ui.enabled = on && f.magnifier;
-    srow(ui, tok, "Square magnifier", Some("Round when off"), |ui| {
-        ui.switch("magnifier_square", &mut f.magnifier_square, tok);
-    });
-    ui.enabled = on;
-    srow(ui, tok, "Accept on select", Some("Copy or save as soon as a region is drawn; hold Alt to adjust"), |ui| {
-        ui.seg("accept_on_select", &labels(&ACCEPTS), &mut f.accept, tok);
-    });
-    srow(ui, tok, "Copy text", Some("The toolbar's Copy text button; the Copy text hotkey always copies all"), |ui| {
-        ui.seg("copy_text_mode", &labels(&COPY_TEXT), &mut f.copy_text, tok);
-    });
-    srow(ui, tok, "Redact style", Some("What Quick Redact puts over sensitive text; Solid can never be read back"), |ui| {
-        ui.seg("redact_style", &labels(&REDACT_STYLES), &mut f.redact_style, tok);
-    });
-    if let Some(on) = f.screenclip.as_mut() {
-        srow_ex(ui, tok, "Use Win+Shift+S and Print Screen", Some(SCREENCLIP_HELP), false, ROW_H, |ui| {
-            ui.switch("screenclip", on, tok);
-        });
-        if let Some((text, tone)) = &clip_line
-            && screenclip_line(ui, tok, text, *tone)
-        {
-            *click = Some(Click::FixScreenclip);
-        }
-    }
-    if show_renderer {
-        srow(ui, tok, "Renderer", Some("GDI repaints only what changed"), |ui| {
-            ui.seg("renderer", &labels(&RENDERERS), &mut f.renderer, tok);
-        });
-    }
-    let help = if done { "Done: the next capture starts from the defaults" } else { "Each tool remembers its last size and color" };
-    srow(ui, tok, "Tool sizes & colors", Some(help), |ui| {
-        if ui.cbutton("reset_tools", "Reset", Some("set-rotate"), false, tok) {
-            *click = Some(Click::ResetTools);
-        }
-    });
-    image_rows(ui, f, tok);
-    ui.sec("History", tok);
+    ui.sec("Captures", tok);
     srow(ui, tok, "Keep a history of captures", Some("Edit them again later; saved and uploaded files are not affected"), |ui| {
         ui.switch("history", &mut f.history, tok);
     });
@@ -794,35 +830,6 @@ fn capture(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) 
     });
 }
 
-/// Capture › Image: trim margins, the export border, HDR screenshots
-/// (Windows).
-fn image_rows(ui: &mut Ui, f: &mut crate::settings_ui::Form, tok: &Tok) {
-    ui.sec("Image", tok);
-    let by_hand = f.keys.chords(Action::Trim).first().map_or_else(|| "the size label's menu".to_string(), |c| c.label());
-    let help = format!("Cut uniform margins off each new region or window ({by_hand} by hand)");
-    srow(ui, tok, "Trim margins automatically", Some(&help), |ui| {
-        ui.switch("trim_margins", &mut f.trim, tok);
-    });
-    srow(ui, tok, "Add a border", Some("On every export"), |ui| {
-        ui.switch("border", &mut f.border, tok);
-        let on = ui.enabled;
-        ui.enabled = on && f.border;
-        ui.width(120.0).slider("border_width", &mut f.border_w, 1, config::BORDER_MAX as u8);
-        ui.space(4.0);
-        ui.width(92.0).text_field("border_color", &mut f.border_hex);
-        let c = config::parse_color(f.border_hex.text.trim()).map(|(r, g, b, _)| C4::rgb(r, g, b));
-        if ui.swatch("border_swatch", c, false, tok) {
-            ui.focus.focus("border_color");
-        }
-        ui.enabled = on;
-    });
-    if cfg!(windows) {
-        srow(ui, tok, "HDR screenshots", Some("HDR displays; recordings too"), |ui| {
-            ui.seg("hdr_screenshots", &labels(&HDR_MODES), &mut f.hdr, tok);
-        });
-    }
-}
-
 /// `s` cut at the start with an ellipsis to fit `w` (logical px) at 11 px.
 fn fit_start(ui: &Ui, s: &str, w: f32) -> String {
     if ui.text_w(11.0, s) <= w {
@@ -842,8 +849,8 @@ fn wayland() -> bool {
     false
 }
 
-/// The overlay rows of Key bindings: (label, actions).
-pub const KEY_ROWS: [(&str, &[Action]); 19] = [
+/// Shortcuts › Overlay tools: (label, actions).
+pub const TOOL_ROWS: [(&str, &[Action]); 7] = [
     (
         "Tools",
         &[
@@ -868,85 +875,69 @@ pub const KEY_ROWS: [(&str, &[Action]); 19] = [
         "Selected objects: delete \u{b7} duplicate \u{b7} front \u{b7} back",
         &[Action::DeleteObject, Action::Duplicate, Action::BringFront, Action::SendBack],
     ),
-    ("Stroke size - / +", &[Action::SizeDown, Action::SizeUp]),
+    ("Crop \u{b7} Trim \u{b7} Quick Redact \u{b7} Freeform", &[Action::ToolCrop, Action::Trim, Action::Redact, Action::SelectFreeform]),
+    ("Stroke size - / + \u{b7} Palette", &[Action::SizeDown, Action::SizeUp, Action::TogglePalette]),
     ("Typing: bold \u{b7} italic \u{b7} underline", &[Action::TextBold, Action::TextItalic, Action::TextUnderline]),
-    ("Copy \u{b7} Save \u{b7} Upload", &[Action::Copy, Action::Save, Action::Upload]),
-    ("Copy text \u{b7} Copy color", &[Action::CopyText, Action::CopyColor]),
-    ("Crop \u{b7} Quick Redact \u{b7} Freeform selection", &[Action::ToolCrop, Action::Redact, Action::SelectFreeform]),
-    ("Accept \u{b7} Cancel", &[Action::Accept, Action::Cancel]),
-    SAVE_ROW,
-    ("Undo \u{b7} Redo", &[Action::Undo, Action::Redo]),
-    ("Select all \u{b7} Palette", &[Action::SelectAll, Action::TogglePalette]),
-    ("Record", &[Action::Record]),
-    ("Pin to screen", &[Action::Pin]),
-    ("Trim to content", &[Action::Trim]),
-    ("UI size + \u{b7} - \u{b7} Auto", &[Action::UiBigger, Action::UiSmaller, Action::UiReset]),
-    ("Edit window zoom + \u{b7} - \u{b7} Fit \u{b7} 1:1", &[Action::ZoomIn, Action::ZoomOut, Action::ZoomFit, Action::ZoomActual]),
-    (
-        "Edit window: rotate left \u{b7} right \u{b7} flip horizontal \u{b7} vertical",
-        &[Action::RotateLeft, Action::RotateRight, Action::FlipHorizontal, Action::FlipVertical],
-    ),
-    ("Edit window: resize \u{b7} canvas \u{b7} reset image edits", &[Action::ImageResize, Action::ImageCanvas, Action::ImageReset]),
+    ("Undo \u{b7} Redo \u{b7} Select all", &[Action::Undo, Action::Redo, Action::SelectAll]),
 ];
 
-/// Save As, Save to Desktop, Open with and, with a share sheet (not on
-/// Linux), Share.
-#[cfg(not(target_os = "linux"))]
-const SAVE_ROW: (&str, &[Action]) =
-    ("Save As \u{b7} Save to Desktop \u{b7} Open with \u{b7} Share", &[Action::SaveAs, Action::SaveDesktop, Action::OpenWith, Action::Share]);
-#[cfg(target_os = "linux")]
-const SAVE_ROW: (&str, &[Action]) = ("Save As \u{b7} Save to Desktop \u{b7} Open with", &[Action::SaveAs, Action::SaveDesktop, Action::OpenWith]);
+/// Shortcuts › Overlay actions: (label, actions). The Edit window's own
+/// keys (zoom, image edits) end the list.
+pub const ACTION_ROWS: [(&str, &[Action]); 7] = [
+    ("Copy \u{b7} Save \u{b7} Upload \u{b7} Copy text \u{b7} color", &[Action::Copy, Action::Save, Action::Upload, Action::CopyText, Action::CopyColor]),
+    ("Save As \u{b7} Desktop \u{b7} Open with", &[Action::SaveAs, Action::SaveDesktop, Action::OpenWith]),
+    SEND_ROW,
+    ("UI size + \u{b7} - \u{b7} Auto", &[Action::UiBigger, Action::UiSmaller, Action::UiReset]),
+    ("Edit window zoom + \u{b7} - \u{b7} Fit \u{b7} 1:1", &[Action::ZoomIn, Action::ZoomOut, Action::ZoomFit, Action::ZoomActual]),
+    ("Rotate left \u{b7} right \u{b7} Flip H \u{b7} V", &[Action::RotateLeft, Action::RotateRight, Action::FlipHorizontal, Action::FlipVertical]),
+    ("Resize \u{b7} Canvas \u{b7} Reset image", &[Action::ImageResize, Action::ImageCanvas, Action::ImageReset]),
+];
 
-/// The while-recording rows of Key bindings: (label, action).
+/// Share (with a share sheet: not on Linux), Pin to screen, Record, and
+/// Accept · Cancel.
+#[cfg(not(target_os = "linux"))]
+const SEND_ROW: (&str, &[Action]) =
+    ("Share \u{b7} Pin \u{b7} Record \u{b7} Accept \u{b7} Cancel", &[Action::Share, Action::Pin, Action::Record, Action::Accept, Action::Cancel]);
+#[cfg(target_os = "linux")]
+const SEND_ROW: (&str, &[Action]) = ("Pin \u{b7} Record \u{b7} Accept \u{b7} Cancel", &[Action::Pin, Action::Record, Action::Accept, Action::Cancel]);
+
+/// The while-recording rows of Shortcuts › Recording: (label, action).
 pub const REC_ROWS: [(&str, Action); 3] = [
     ("Pause / resume recording", Action::RecPause),
     ("Mute microphone", Action::RecMute),
     ("Hide / show recording controls", Action::RecHidePill),
 ];
 
-fn keys(ui: &mut Ui, s: &mut Settings, tok: &Tok) {
-    sec_at(ui, tok, "Global \u{b7} work anywhere", 8.0);
-    let msgs: Vec<Option<String>> = GLOBALS.iter().map(|(_, slot)| s.global_message(*slot)).collect();
-    let errs: Vec<bool> = GLOBALS.iter().map(|(_, slot)| s.global_err(*slot)).collect();
-    // "Change shortcuts…" in the hotkey dialog: that row's box records.
-    if ui.enabled
-        && let Some(id) = s.record_field.take()
-    {
-        ui.focus.record(&id);
-    }
+/// The global hotkey rows of `slots` ([`GLOBALS`] order), with their notes.
+fn global_rows(ui: &mut Ui, s: &mut Settings, tok: &Tok, slots: &[usize]) {
     ui.allow_meta = true;
-    for (((label, slot), msg), err) in GLOBALS.iter().zip(&msgs).zip(errs) {
+    for (label, slot) in GLOBALS.iter().filter(|(_, slot)| slots.contains(slot)) {
+        let msg = s.global_message(*slot);
+        let err = s.global_err(*slot);
         let chord = s.form.global_mut(*slot);
         let mut slots = [Slot { id: format!("global{slot}"), chord, err }];
         ui.key_row(label, &[], &mut slots, true, 34.0, tok);
         if let Some(m) = msg {
-            note_line(ui, tok, m, true, Some(8.0));
+            note_line(ui, tok, &m, true, Some(8.0));
         }
     }
     ui.allow_meta = false;
-    sec_at(ui, tok, "In the overlay \u{b7} single keys", 8.0);
-    let bad = s.form.conflicting();
-    for (label, acts) in KEY_ROWS {
-        let mut chords: Vec<Option<Chord>> = acts.iter().map(|a| s.form.keys.chords(*a).first().copied()).collect();
-        let names: Vec<&str> = acts.iter().map(|a| a.label()).collect();
-        let changed = {
-            let mut slots: Vec<Slot> = chords
-                .iter_mut()
-                .zip(acts.iter())
-                .map(|(c, a)| Slot { id: format!("key_{}", a.id()), chord: c, err: bad.contains(a) })
-                .collect();
-            ui.key_row(label, &names, &mut slots, false, 30.0, tok)
-        };
-        if let Some(i) = changed {
-            s.form.keys.set(acts[i], chords[i].into_iter().collect());
-        }
-        if let Some(n) = acts.iter().find_map(|a| s.form.conflict_note(*a).map(|n| (a, n))).map(|(a, n)| format!("{}: {n}", a.label())) {
-            note_line(ui, tok, &n, true, Some(8.0));
-        }
-    }
+}
+
+/// Shortcuts › Global: the hotkeys that work anywhere (the record
+/// hotkey is in Shortcuts › Recording).
+fn keys_global(ui: &mut Ui, s: &mut Settings, tok: &Tok) {
+    let slots: Vec<usize> = GLOBALS.iter().map(|(_, slot)| *slot).filter(|slot| section_of_slot(*slot) == KEYS_GLOBAL).collect();
+    global_rows(ui, s, tok, &slots);
+}
+
+/// Shortcuts › Recording: the record hotkey, then the keys that work
+/// anywhere while a recording runs (the pill never takes the keyboard;
+/// stopping is the record hotkey).
+fn keys_recording(ui: &mut Ui, s: &mut Settings, tok: &Tok) {
+    sec_at(ui, tok, "Start \u{b7} stop", 8.0);
+    global_rows(ui, s, tok, &[2]);
     ui.allow_meta = true;
-    // Global too, but only while a recording runs (the pill never takes
-    // the keyboard); stopping is the record hotkey.
     sec_at(ui, tok, "While recording \u{b7} work anywhere", 8.0);
     for (label, a) in REC_ROWS {
         let note = s.form.rec_note(a);
@@ -966,11 +957,35 @@ fn keys(ui: &mut Ui, s: &mut Settings, tok: &Tok) {
     ui.allow_meta = false;
 }
 
+/// Shortcuts › Overlay tools / Overlay actions: single keys while the
+/// overlay is open, a conflict noted under its row.
+fn overlay_keys(ui: &mut Ui, s: &mut Settings, tok: &Tok, rows: &[(&str, &[Action])]) {
+    let bad = s.form.conflicting();
+    for (label, acts) in rows {
+        let mut chords: Vec<Option<Chord>> = acts.iter().map(|a| s.form.keys.chords(*a).first().copied()).collect();
+        let names: Vec<&str> = acts.iter().map(|a| a.label()).collect();
+        let changed = {
+            let mut slots: Vec<Slot> = chords
+                .iter_mut()
+                .zip(acts.iter())
+                .map(|(c, a)| Slot { id: format!("key_{}", a.id()), chord: c, err: bad.contains(a) })
+                .collect();
+            ui.key_row(label, &names, &mut slots, false, 30.0, tok)
+        };
+        if let Some(i) = changed {
+            s.form.keys.set(acts[i], chords[i].into_iter().collect());
+        }
+        if let Some(n) = acts.iter().find_map(|a| s.form.conflict_note(*a).map(|n| (a, n))).map(|(a, n)| format!("{}: {n}", a.label())) {
+            note_line(ui, tok, &n, true, Some(8.0));
+        }
+    }
+}
+
 /// The More from PowerNapps tiles: none until there are real apps (the
 /// row is hidden while the list is empty).
 pub const MORE_APPS: [(&str, &str, &str); 0] = [];
 
-fn about(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) {
+fn about(ui: &mut Ui, tok: &Tok, click: &mut Option<Click>) {
     let b = ui.bounds();
     let y = ui.cursor_y();
     // Hero: the 72 px mark, the name, the version line, the description.
@@ -1031,9 +1046,6 @@ fn about(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) {
     let ly = ui.cursor_y() - gap + 12.0;
     line(ui, b.x, ly, b.w, 1.0, tok.sep);
     ui.space(12.0 - gap + 6.0);
-    srow(ui, tok, "Check for updates automatically", Some("Once a day, from GitHub"), |ui| {
-        ui.switch("check_updates", &mut s.form.check_updates, tok);
-    });
 
     // More from PowerNapps, with its link on the right.
     let y = ui.cursor_y();

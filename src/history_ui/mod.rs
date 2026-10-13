@@ -661,7 +661,7 @@ pub fn save_to_folder(store: &Store, ids: &[String], dir: &std::path::Path) -> D
 
 enum Msg {
     Raise,
-    /// Ask "Clear history?" (Settings › Capture › Clear history…).
+    /// Ask "Clear history?" (Settings › History › Clear history…).
     Clear,
 }
 

@@ -208,7 +208,8 @@ fn the_size_label_menu_trims() {
     let pop = tb.pop.expect("the menu");
     assert!(pop.y >= label.y1() && (pop.x - label.x).abs() < 1.0, "under the label: {pop:?} {label:?}");
     let row = tb.items.iter().find(|i| matches!(i.kind, toolbar::Kind::MenuItem { act: Act::Trim, .. })).expect("Trim row").r;
-    assert_eq!(tb.texts.last().map(String::as_str), Some("Shift+A"), "its key");
+    // (Shift is "⇧" on macOS.)
+    assert_eq!(tb.texts.last().cloned(), Some(format!("{}+A", chrome::SHIFT)), "its key");
     // Esc closes it (the capture stays).
     key_m(&mut a, key::ESCAPE, NONE);
     assert!(!ed(&mut a).size_menu && !ed(&mut a).done);
