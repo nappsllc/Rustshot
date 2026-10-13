@@ -187,7 +187,20 @@ impl M {
         };
         let mut t = Tab::default().f(0, F::U32(idx as u32)).f(1, F::I32s(ins.to_vec())).f(2, F::I32s(vec![out]));
         if let Some(o) = opts {
-            t = t.f(3, F::U8(1)).f(4, F::Table(o));
+            // The BuiltinOptions union's tag for the operator's table.
+            let tag = match code {
+                3 => 1,
+                4 => 2,
+                1 => 5,
+                2 => 10,
+                0 => 11,
+                23 => 15,
+                18 => 21,
+                40 => 27,
+                67 => 49,
+                _ => 0,
+            };
+            t = t.f(3, F::U8(tag)).f(4, F::Table(o));
         }
         if let Some(c) = custom_opts {
             t = t.f(5, F::Bytes(c));
