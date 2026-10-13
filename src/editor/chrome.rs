@@ -103,6 +103,8 @@ pub fn act_icon(a: Act) -> &'static str {
             Tool::Blur => "blur",
         },
         Act::SaveMenu => "chevron",
+        // A menu row (the size label's): no icon.
+        Act::Trim => "",
         Act::ObjFront => "front",
         Act::ObjBack => "back",
         Act::ObjDup => "dup",
@@ -961,7 +963,7 @@ fn label_texts(sr: FRect) -> (String, String) {
 /// Where `size_label` puts its panel.
 /// `at`: what to keep off (the toolbar above), and the mode switch it
 /// follows (10 px right of it, centred on it) when there is one.
-fn size_label_rect(ui: &Ui, sr: FRect, show_pos: bool, area: FRect, at: (Option<FRect>, Option<FRect>)) -> FRect {
+pub(super) fn size_label_rect(ui: &Ui, sr: FRect, show_pos: bool, area: FRect, at: (Option<FRect>, Option<FRect>)) -> FRect {
     let (size, pos) = label_texts(sr);
     let pad = ui.px(8.0);
     let mut w = 2.0 * pad + tw(ui, 12.0, &size);
@@ -1165,6 +1167,7 @@ pub fn act_tip(a: Act, km: &Keymap) -> (&'static str, Vec<String>) {
         Act::OpenWith => "Open with\u{2026}",
         Act::Upload => "Upload",
         Act::Pin => "Pin to screen",
+        Act::Trim => "Trim to content",
         Act::Exit => "Close",
         Act::Accept => "Accept",
         Act::Record => "Record video",

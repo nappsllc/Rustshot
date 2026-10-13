@@ -635,7 +635,7 @@ fn wayland() -> bool {
 }
 
 /// The overlay rows of Key bindings: (label, actions).
-pub const KEY_ROWS: [(&str, &[Action]); 15] = [
+pub const KEY_ROWS: [(&str, &[Action]); 16] = [
     (
         "Tools",
         &[
@@ -670,6 +670,7 @@ pub const KEY_ROWS: [(&str, &[Action]); 15] = [
     ("Select all \u{b7} Palette", &[Action::SelectAll, Action::TogglePalette]),
     ("Record", &[Action::Record]),
     ("Pin to screen", &[Action::Pin]),
+    ("Trim to content", &[Action::Trim]),
     ("UI size + \u{b7} - \u{b7} Auto", &[Action::UiBigger, Action::UiSmaller, Action::UiReset]),
     ("Edit window zoom + \u{b7} - \u{b7} Fit \u{b7} 1:1", &[Action::ZoomIn, Action::ZoomOut, Action::ZoomFit, Action::ZoomActual]),
 ];

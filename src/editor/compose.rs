@@ -674,7 +674,7 @@ impl Edit {
         } else {
             self.mo.bar.snap(0.0);
         }
-        if self.palette_open || self.pick.is_some() || self.save_menu || self.slot_menu {
+        if self.palette_open || self.pick.is_some() || self.save_menu || self.slot_menu || self.size_menu {
             self.mo.pop.set(1.0, 100, now);
         } else {
             self.mo.pop.snap(0.0);
@@ -703,6 +703,18 @@ impl Edit {
             let avoid = if lead.is_some() { close } else { avoid };
             LabelUi { sr, show_pos: !interacting, area, avoid, lead }
         });
+        // The label's menu (Trim to content) hangs off it, part of the
+        // toolbar's popover.
+        self.label_at = label.as_ref().map(|l| {
+            let ui = Ui { th: &self.th, s, font: self.ui_font };
+            chrome::size_label_rect(&ui, l.sr, l.show_pos, l.area, (l.avoid, l.lead))
+        });
+        if !self.size_menu || self.host.is_some() {
+            self.size_menu = false;
+        } else if let (Some(tb), Some(at)) = (self.toolbar.as_mut(), self.label_at) {
+            let key = chrome::act_tip(Act::Trim, &self.keys).1.join("+");
+            toolbar::add_size_menu(tb, at, key, area, s);
+        }
         let tfont = self.text_font();
         let text = self.text.as_ref().map(|td| TextUi {
             boxr: text_box_rect(ww, td, self.mem.size(Tool::Text), tfont.as_ref(), s),
