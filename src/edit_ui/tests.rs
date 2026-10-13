@@ -485,6 +485,42 @@ fn image_edits_turn_undo_save_and_reopen() {
     assert_eq!(w.e.canvas.objects().len(), 5);
 }
 
+/// A crop and a lasso turn with the picture: the export is the turned
+/// export, the crop is saved in the original's pixels, undo restores the
+/// crop's own frame.
+#[test]
+fn a_crop_and_a_lasso_turn_with_the_picture() {
+    use crate::imgedit::Orient;
+    let img = page(400, 300);
+    let crop = FRect { x: 40.0, y: 30.0, w: 200.0, h: 120.0 };
+    let mut c = Canvas::new(img.clone(), objects()[..1].to_vec(), Config::default(), DARK);
+    c.set_doc(Some(crop), None);
+    let flat = c.export();
+    c.rotate(true);
+    c.flip(false);
+    let o = Orient::ID.rotated(true).flipped_v();
+    assert_eq!(c.export(), o.image(&flat), "turned after the crop");
+    assert_eq!(c.doc().crop, Some(crop), "saved in the original's pixels");
+    assert_eq!(c.crop(), Some(o.rect(crop, (400, 300))));
+    assert_eq!(c.source_size(), (120, 200));
+    // A lasso (a triangle) leaves the same corners out, turned.
+    let tri = vec![Pt::new(0.0, 0.0), Pt::new(400.0, 0.0), Pt::new(0.0, 300.0)];
+    let mut l = Canvas::new(img, Vec::new(), Config::default(), DARK);
+    l.set_doc(None, Some(tri));
+    let flat = l.export();
+    assert_eq!(flat.get_pixel(399, 299)[3], 0, "outside the lasso");
+    l.rotate(false);
+    let turned = l.export();
+    assert_eq!(differing(&turned, &Orient::ID.rotated(false).image(&flat)), 0, "the lasso's edge within a step of its alpha");
+    l.flip(true);
+    assert_eq!(differing(&l.export(), &Orient::ID.rotated(false).flipped_h().image(&flat)), 0);
+    // Undo twice: the picture as captured, its lasso where it was.
+    for _ in 0..2 {
+        l.key('Z' as u32, false, false, CTRL);
+    }
+    assert_eq!(l.export(), flat);
+}
+
 /// The Image menu from the status bar's chip; Resize… typed into (the
 /// height follows), Enter applies, one undo step; Canvas… with the
 /// presentation look; Esc cancels; Save at does not shrink a resized
