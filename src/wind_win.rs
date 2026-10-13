@@ -1694,6 +1694,41 @@ mod tests {
         }
     }
 
+    /// [`caption_probe`] once the frame has settled: the window shown with
+    /// its final rect, DWM flushed, and two reads in a row agreeing (the
+    /// first reads after ShowWindow can still see the frame before its
+    /// caption metrics and button rects are laid out). `pump` drains this
+    /// thread's messages between reads (a window owned by this thread).
+    unsafe fn settled_probe(hwnd: HWND, pump: bool) -> (Vec<(u32, RECT)>, Hits) {
+        unsafe {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let rect = || {
+                let mut r = RECT::default();
+                let _ = GetWindowRect(hwnd, &mut r);
+                (r.left, r.top, r.right, r.bottom)
+            };
+            let mut last = None;
+            loop {
+                if pump {
+                    let mut msg = MSG::default();
+                    while PeekMessageW(&mut msg, Some(hwnd), 0, 0, PM_REMOVE).as_bool() {
+                        let _ = TranslateMessage(&msg);
+                        DispatchMessageW(&msg);
+                    }
+                }
+                let _ = windows::Win32::Graphics::Dwm::DwmFlush();
+                let now = (rect(), caption_probe(hwnd));
+                let laid_out = now.1.0.iter().all(|(state, r)| state & STATE_SYSTEM_INVISIBLE != 0 || r.right > r.left);
+                if IsWindowVisible(hwnd).as_bool() && laid_out && last.as_ref() == Some(&now) {
+                    return now.1;
+                }
+                assert!(std::time::Instant::now() < deadline, "the caption never settled: {now:?}");
+                last = Some(now);
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        }
+    }
+
     unsafe extern "system" fn reference_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
         unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
     }
@@ -1728,7 +1763,8 @@ mod tests {
             )
             .expect("reference window");
             let _ = ShowWindow(win, SW_SHOWNOACTIVATE);
-            let (_, hits) = caption_probe(win);
+            let _ = UpdateWindow(win);
+            let (_, hits) = settled_probe(win, true);
             let _ = DestroyWindow(win);
             hits
         }
@@ -1778,7 +1814,7 @@ mod tests {
                     std::thread::sleep(std::time::Duration::from_millis(5));
                 }
                 let mut s = CaptionSeen::default();
-                (s.buttons, s.hits) = caption_probe(hwnd);
+                (s.buttons, s.hits) = settled_probe(hwnd, false);
                 // The same frame on a plain DefWindowProc window: the
                 // reference for what Windows itself answers.
                 let mut wr = RECT::default();
@@ -1952,6 +1988,18 @@ mod tests {
         }
     }
 
+    /// The title bar pixel right of the title text and left of the
+    /// buttons, if the bar is laid out inside the print.
+    fn caption_sample(img: &PixBuf, bar: RECT) -> Option<[u8; 4]> {
+        let (x, y) = (bar.left + (bar.right - bar.left) * 3 / 5, (bar.top + bar.bottom) / 2);
+        let inside = bar.right > bar.left && bar.bottom > bar.top && x >= 0 && y >= 0;
+        (inside && (x as u32) < img.width() && (y as u32) < img.height()).then(|| img.get_pixel(x as u32, y as u32))
+    }
+
+    fn near(p: [u8; 4], want: [u8; 3]) -> bool {
+        p.iter().zip(want).all(|(&a, b)| a.abs_diff(b) <= 3)
+    }
+
     /// Fills its client area with the "design surface" and reports the
     /// title bar colours for `dark` (flipped from the helper thread).
     struct Themed {
@@ -1975,21 +2023,17 @@ mod tests {
             self.helper = Some(std::thread::spawn(move || unsafe {
                 let hwnd = HWND(raw as *mut core::ffi::c_void);
                 SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-                while !IsWindowVisible(hwnd).as_bool() {
-                    std::thread::sleep(std::time::Duration::from_millis(5));
-                }
-                let mut shots = Vec::new();
-                for d in [true, false, true] {
-                    dark.store(d, std::sync::atomic::Ordering::SeqCst);
-                    // A theme switch repaints; the frame follows on that paint.
-                    let _ = InvalidateRect(Some(hwnd), None, false);
-                    std::thread::sleep(std::time::Duration::from_millis(400));
+                // Shown, laid out and composed before the first print.
+                settled_probe(hwnd, false);
+                // DWMWA_CAPTION_COLOR arrived with Windows 11 (build 22000).
+                let tinted = os_build() >= 22000;
+                let shot = || {
                     let mut wr = RECT::default();
                     let _ = GetWindowRect(hwnd, &mut wr);
                     let mut tbi = TITLEBARINFOEX { cbSize: std::mem::size_of::<TITLEBARINFOEX>() as u32, ..Default::default() };
                     SendMessageW(hwnd, WM_GETTITLEBARINFOEX, Some(WPARAM(0)), Some(LPARAM(&raw mut tbi as isize)));
-                    // The title bar in window coordinates (the print's).
-                    // Cropped to the visible frame (no invisible resize borders).
+                    // Cropped to the visible frame (no invisible resize borders);
+                    // the title bar in the crop's coordinates.
                     use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS};
                     let mut vis = wr;
                     let _ = DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, (&raw mut vis).cast(), 16);
@@ -2003,8 +2047,31 @@ mod tests {
                         row.copy_from_slice(&full.as_raw()[at..at + iw]);
                     }
                     let t = tbi.rcTitleBar;
-                    let bar = RECT { left: t.left - vis.left, top: t.top - vis.top, right: t.right - vis.left, bottom: t.bottom - vis.top };
-                    shots.push((d, img, bar));
+                    (img, RECT { left: t.left - vis.left, top: t.top - vis.top, right: t.right - vis.left, bottom: t.bottom - vis.top })
+                };
+                let mut shots = Vec::new();
+                for d in [true, false, true] {
+                    dark.store(d, std::sync::atomic::Ordering::SeqCst);
+                    // A theme switch repaints; the frame follows on that paint.
+                    let _ = InvalidateRect(Some(hwnd), None, false);
+                    // DWM applies the colour asynchronously: print until the
+                    // title bar shows it (or, where DWM keeps its own colour,
+                    // until two prints agree), within a deadline.
+                    let want = Themed::colors(d).caption;
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                    let mut last: Option<[u8; 4]> = None;
+                    let got = loop {
+                        let _ = windows::Win32::Graphics::Dwm::DwmFlush();
+                        let (img, bar) = shot();
+                        let p = caption_sample(&img, bar);
+                        let done = if tinted { p.is_some_and(|p| near(p, want)) } else { p.is_some() && p == last };
+                        if done || std::time::Instant::now() >= deadline {
+                            break (img, bar);
+                        }
+                        last = p;
+                        std::thread::sleep(std::time::Duration::from_millis(30));
+                    };
+                    shots.push((d, got.0, got.1));
                 }
                 let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
                 shots
@@ -2055,20 +2122,16 @@ mod tests {
         })
         .join()
         .expect("window thread");
-        // DWMWA_CAPTION_COLOR arrived with Windows 11 (build 22000).
         let build = os_build();
         for (i, (dark, img, bar)) in shots.iter().enumerate() {
             let name = format!("caption-{}{}.png", if *dark { "dark" } else { "light" }, if i == 2 { "-again" } else { "" });
             crate::ui::preview::save(&name, img);
             assert!(bar.bottom > bar.top && bar.right > bar.left, "title bar rect {bar:?}");
-            // Right of the title text, left of the buttons.
-            let (x, y) = ((bar.left + (bar.right - bar.left) * 3 / 5) as u32, ((bar.top + bar.bottom) / 2) as u32);
-            let p = img.get_pixel(x, y);
+            let p = caption_sample(img, *bar).expect("title bar inside the print");
             let want = Themed::colors(*dark).caption;
-            println!("{name}: title bar at ({x}, {y}) = {p:?}, want {want:?}, build {build}");
+            println!("{name}: title bar {p:?}, want {want:?}, build {build}");
             if build >= 22000 {
-                let near = p.iter().zip(want).all(|(&a, b)| a.abs_diff(b) <= 3);
-                assert!(near, "{name}: title bar {p:?}, want the design surface {want:?}");
+                assert!(near(p, want), "{name}: title bar {p:?}, want the design surface {want:?}");
             }
         }
     }

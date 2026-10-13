@@ -96,6 +96,27 @@ pub struct Config {
     pub upload_client_id: String,
     /// Copy the resulting URL to the clipboard after upload.
     pub copy_url_after_upload: bool,
+    /// Where uploads go: "imgur" or "s3" (an S3-compatible bucket, see
+    /// `crate::s3`).
+    pub upload_destination: String,
+    /// S3: the endpoint (`https://<account>.r2.cloudflarestorage.com`,
+    /// `https://s3.<region>.amazonaws.com`), the signing region ("auto"
+    /// for R2), the bucket and the access key id. The secret access key
+    /// is never here: it is in the OS credential store (`crate::keystore`).
+    pub s3_endpoint: String,
+    pub s3_region: String,
+    pub s3_bucket: String,
+    pub s3_access_key_id: String,
+    /// S3: the public URL base links start with ("" = the object's URL).
+    pub s3_public_url: String,
+    /// S3: the key prefix, with strftime tokens (`%Y/%m/%d/`).
+    pub s3_key_prefix: String,
+    /// S3: path-style URLs (`<endpoint>/<bucket>/<key>`); off,
+    /// virtual-hosted (`<bucket>.<endpoint>/<key>`).
+    pub s3_path_style: bool,
+    /// Upload a recording as soon as it is saved (the toast's Copy link
+    /// then copies at once).
+    pub upload_recordings: bool,
     /// If true, GUI captures only the monitor under the cursor even when
     /// all monitors share the same scale factor.
     pub capture_active_monitor: bool,
@@ -341,6 +362,15 @@ impl Default for Config {
             .collect(),
             upload_client_id: "313baf0c7b4d3ff".into(),
             copy_url_after_upload: true,
+            upload_destination: "imgur".into(),
+            s3_endpoint: String::new(),
+            s3_region: crate::s3::DEFAULT_REGION.into(),
+            s3_bucket: String::new(),
+            s3_access_key_id: String::new(),
+            s3_public_url: String::new(),
+            s3_key_prefix: crate::s3::DEFAULT_PREFIX.into(),
+            s3_path_style: true,
+            upload_recordings: false,
             capture_active_monitor: false,
             snap_windows: true,
             snap_tab_hint: true,
@@ -1138,6 +1168,15 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
                     .map_err(|_| bad("number", "out of range"))?
             }
             "user_colors" => cfg.user_colors = as_array(val).map_err(|e| bad("array", &e))?,
+            "upload_destination" => cfg.upload_destination = one_of(val, &["imgur", "s3"]).map_err(|e| bad("value", &e))?,
+            "s3_endpoint" => cfg.s3_endpoint = as_string(val).map_err(|e| bad("string", &e))?,
+            "s3_region" => cfg.s3_region = as_string(val).map_err(|e| bad("string", &e))?,
+            "s3_bucket" => cfg.s3_bucket = as_string(val).map_err(|e| bad("string", &e))?,
+            "s3_access_key_id" => cfg.s3_access_key_id = as_string(val).map_err(|e| bad("string", &e))?,
+            "s3_public_url" => cfg.s3_public_url = as_string(val).map_err(|e| bad("string", &e))?,
+            "s3_key_prefix" => cfg.s3_key_prefix = as_string(val).map_err(|e| bad("string", &e))?,
+            "s3_path_style" => cfg.s3_path_style = as_bool(val).map_err(|e| bad("boolean", &e))?,
+            "upload_recordings" => cfg.upload_recordings = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "copy_url_after_upload" => {
                 cfg.copy_url_after_upload =
                     as_bool(val).map_err(|e| bad("boolean", &e))?
@@ -1364,6 +1403,18 @@ pub fn to_toml(c: &Config) -> String {
         q(&c.launcher_source),
         c.launcher_delay,
         q(&c.launcher_after)
+    ));
+    out.push_str(&format!(
+        "upload_destination = {}\ns3_endpoint = {}\ns3_region = {}\ns3_bucket = {}\ns3_access_key_id = {}\ns3_public_url = {}\ns3_key_prefix = {}\ns3_path_style = {}\nupload_recordings = {}\n",
+        q(&c.upload_destination),
+        q(&c.s3_endpoint),
+        q(&c.s3_region),
+        q(&c.s3_bucket),
+        q(&c.s3_access_key_id),
+        q(&c.s3_public_url),
+        q(&c.s3_key_prefix),
+        c.s3_path_style,
+        c.upload_recordings
     ));
     out.push_str(&format!(
         "history = {}\nhistory_days = {}\nhistory_max_mb = {}\nhistory_hotkey = {}\nedit_save = {}\n",

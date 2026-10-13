@@ -227,14 +227,16 @@ on empty space selects several (Copy, Save to folder…, Delete). Hovering a
 card offers Edit, Copy, Save, Upload, Pin and more; a double-click (or
 <kbd>Enter</kbd>, <kbd>E</kbd>) edits; <kbd>Del</kbd> removes from History
 only. A card's ⋯ menu has Save As…, Open with…, Show in folder and Copy
-file path, and for an uploaded capture **Copy link** and **Delete from
-Imgur…**.
+file path, and for an uploaded capture **Copy link** and **Delete
+upload…**.
 
-Every Imgur upload's link, its *deletehash* (the key that deletes it), the
-time and a small thumbnail are kept with the capture's History entry, or in
-`uploads.json` beside the history folder when History is off (the last 50).
-The tray's **Recent uploads** lists the last five: a click copies the link,
-and **Delete … from Imgur…** asks, then deletes it.
+Every upload's link, where it went (Imgur and its *deletehash*, the key
+that deletes it; or the S3 bucket, the object's key and the access key id
+used), the time and a small thumbnail are kept with the capture's History
+entry, or in `uploads.json` beside the history folder when History is off
+(the last 50). The tray's **Recent uploads** lists the last five: a click
+copies the link, and **Delete upload …** asks, then deletes it (from
+Imgur, or with a signed `DELETE` from the bucket).
 
 The **Edit window** reopens a capture with its annotations as objects: the
 overlay's toolbar docked at the top, every tool and object edit at any
@@ -363,7 +365,10 @@ and **Discard**; neither is in the video on Windows and macOS. Stop with the
 pill, the record hotkey again, or the tray's **Stop recording**. The file
 goes where a screenshot would, as `.mp4` or `.gif`; it is written as
 `<name>.part` and renamed when complete, and a notice offers **Copy link**
-(an MP4: uploads it to Imgur, up to 200 MB, and copies the link) or
+(an MP4: uploads it to the configured destination, Imgur up to 200 MB
+or an S3 bucket of any size, and copies the link; with *Upload recordings
+automatically* the upload starts when the recording is saved, so the
+link is ready when you click) or
 **Copy** (a GIF), **Open** and **Show in folder**.
 
 The pill never takes the keyboard (it would steal it from the app being
@@ -407,6 +412,63 @@ Per platform:
 Limitations: one recording at a time; no editing or trimming; MJPG-only
 cameras are not supported; a selection spanning two
 screens on Wayland records the whole shared screen.
+
+## Uploads
+
+<kbd>Ctrl</kbd>+<kbd>U</kbd> (or **Upload** in History, Edit and the
+CLI's `--upload`) sends the capture to the destination chosen in
+Settings › Upload; the link replaces the image on the clipboard (*Copy
+link after upload*).
+
+- **Imgur** (the default): anonymous, with Rustshot's client id (or your
+  own).
+- **S3-compatible**: any bucket that speaks the S3 API: Amazon S3,
+  Cloudflare R2, MinIO, Backblaze B2, Wasabi and the like. Set:
+  - **Endpoint**: `https://<account>.r2.cloudflarestorage.com` (R2),
+    `https://s3.<region>.amazonaws.com` (AWS), your server's address
+    (`https://` only; a `:port` is fine).
+  - **Region**: `auto` for R2 (the default), the bucket's region for AWS.
+  - **Bucket** and **Access key ID**.
+  - **Secret access key**: typed into a masked field (trimmed) and kept in
+    the OS credential store, never in `config.toml` or a log, under
+    `rustshot:s3:<bucket>@<endpoint host>/<access key id>` (so the same
+    bucket name at two providers, or a rotated key, keeps its own) —
+    Windows Credential Manager (a generic credential), the Secret
+    Service on Linux (GNOME Keyring, KWallet, KeePassXC; without one
+    Rustshot refuses to save the secret and says so), the login Keychain
+    on macOS.
+  - **Public URL base**: what links start with — a CDN in front of the
+    bucket, or its `https://pub-….r2.dev` address. Empty: the object's
+    own URL on the endpoint, which opens for others only when the bucket
+    is public (Settings warns).
+  - **Key prefix**: where in the bucket, with the file-name tokens
+    (`%Y/%m/%d/` by default). The object is named after the capture's
+    file name plus 128 random bits from the OS generator
+    (`2026/10/12/rustshot_2026-10-12_09-14-<26 characters>.png`), so
+    nothing is overwritten and links cannot be guessed.
+  - **Path-style URLs** (on by default; R2 and most self-hosted servers
+    want it): `https://<endpoint>/<bucket>/<key>`; off, virtual-hosted
+    `https://<bucket>.<endpoint>/<key>` (AWS; a bucket name with a dot
+    always goes path-style, since it would not match the endpoint's TLS
+    certificate).
+  - **Test connection** uploads a tiny `rustshot-test-<random>.txt` and
+    deletes it again, and says what the bucket answered.
+
+  Requests are signed with AWS Signature Version 4 (written in Rustshot,
+  no SDK); pictures are hashed and signed, recordings stream with
+  `UNSIGNED-PAYLOAD` over HTTPS, and files over 64 MB go up as a multipart
+  upload in 16 MB parts. Every request is tried up to four times
+  (network errors, 5xx, `SlowDown`; waiting 0.5, 1, 2 s plus a random
+  extra, signed afresh each time). A multipart upload that still fails
+  is kept: the next **Copy link** on that recording lists the parts
+  already in the bucket and sends only the rest (it starts over if the
+  upload is gone); one the bucket refuses (`AccessDenied` and the like)
+  is aborted. Parts of an upload never finished (the app quit, the
+  recording deleted) stay billed until the bucket removes them — add a
+  lifecycle rule *abort incomplete multipart uploads after 1 day* (R2:
+  Settings › Object lifecycle rules; AWS: Management › Lifecycle). The
+  objects need no special ACL: make the bucket (or the CDN in front of
+  it) public for the links to open for others.
 
 ## Global hotkeys
 
@@ -545,7 +607,10 @@ on the left picks the section:
   MP4 encoder.
 - **Key bindings:** the global hotkeys, every editor shortcut and the
   *While recording* chords.
-- **Upload:** the Imgur client id and *Copy link after upload*.
+- **Upload:** the destination (*Imgur* or *S3-compatible*), the Imgur
+  client id or the bucket's settings with **Test connection** (see
+  [Uploads](#uploads)), *Copy link after upload* and *Upload recordings
+  automatically*.
 - **About:** the version, *Check for updates*, the daily update check and
   links.
 

@@ -180,18 +180,35 @@ fn copy(st: &TextState, clip: &mut dyn Clipboard) {
     }
 }
 
-/// Byte offset in `s` nearest to `x` px from the text origin.
-fn hit(s: &str, px: f32, x: f32) -> usize {
-    let font = &crate::fonts::UI;
+/// Byte offset in `s` nearest to `x` px from the text origin (`width`
+/// measures a prefix).
+fn hit(s: &str, x: f32, width: impl Fn(&str) -> f32) -> usize {
     let mut best = (0, x.abs());
     for (i, c) in s.char_indices() {
         let end = i + c.len_utf8();
-        let d = (text_width(font, px, &s[..end]) - x).abs();
+        let d = (width(&s[..end]) - x).abs();
         if d < best.1 {
             best = (end, d);
         }
     }
     best.0
+}
+
+/// The advance of one dot of a masked field at `px`.
+pub fn mask_dot(px: f32) -> f32 {
+    (px * 0.62).round().max(4.0)
+}
+
+/// A key a masked field must not act on as usual: copy (Ctrl+C,
+/// Ctrl+Insert) is ignored, cut (Ctrl+X, Shift+Del) only deletes.
+fn masked_key(vk: u32, m: Mods) -> Option<bool> {
+    let ctrl = m.ctrl && !m.alt;
+    match vk {
+        0x43 | key::INSERT if ctrl => Some(false),
+        0x58 if ctrl => Some(true),
+        key::DELETE if m.shift && !m.ctrl && !m.alt => Some(true),
+        _ => None,
+    }
 }
 
 impl Ui<'_> {
@@ -204,9 +221,13 @@ impl Ui<'_> {
         let px = self.px(self.text_px);
         let pad = self.px(10.0);
         let icon = self.field_icon.take();
+        let masked = std::mem::take(&mut self.masked);
         let pad_l = if icon.is_some() { self.px(32.0) } else { pad };
         let inner = FRect { x: r.x + pad_l, y: r.y, w: (r.w - pad_l - pad).max(1.0), h: r.h };
         let font = &crate::fonts::UI;
+        let dot = mask_dot(px);
+        // A masked field measures dots, one per character.
+        let wof = |s: &str| if masked { s.chars().count() as f32 * dot } else { text_width(font, px, s) };
         let mut changed = false;
 
         // Mouse: press places the caret (Shift extends), drag selects.
@@ -215,10 +236,10 @@ impl Ui<'_> {
             let shift = self.input.mods.shift;
             self.focus.set(Some(id), false);
             self.focus.active = Some(id);
-            let i = hit(&st.text, px, self.input.pressed.unwrap().x - ox);
+            let i = hit(&st.text, self.input.pressed.unwrap().x - ox, wof);
             st.move_to(i, shift);
         } else if self.focus.active == Some(id) && self.input.held {
-            let i = hit(&st.text, px, self.input.mouse.x - ox);
+            let i = hit(&st.text, self.input.mouse.x - ox, wof);
             st.move_to(i, true);
         }
 
@@ -233,6 +254,17 @@ impl Ui<'_> {
                         st.insert(c.encode_utf8(&mut [0; 4]));
                         changed = true;
                     }
+                    KeyIn::Key { vk, mods } if masked && masked_key(vk, mods).is_some() => {
+                        // A secret never reaches the clipboard.
+                        if masked_key(vk, mods) == Some(true) && !st.selection().is_empty() {
+                            st.insert("");
+                            changed = true;
+                        } else if vk == key::DELETE {
+                            // Shift+Del with nothing selected: Del, as elsewhere.
+                            changed |= st.key(key::DELETE, Mods { ctrl: false, shift: false, alt: false }, &mut *self.clip).0;
+                        }
+                        self.consume(i);
+                    }
                     KeyIn::Key { vk, mods } => {
                         let (ch, used) = st.key(vk, mods, &mut *self.clip);
                         changed |= ch;
@@ -245,7 +277,7 @@ impl Ui<'_> {
         }
 
         // Keep the caret in view while editing; show the start otherwise.
-        let cx = text_width(font, px, &st.text[..st.caret]);
+        let cx = wof(&st.text[..st.caret]);
         if self.focus.focused != Some(id) {
             st.scroll = 0.0;
         } else if cx - st.scroll > inner.w {
@@ -253,7 +285,7 @@ impl Ui<'_> {
         } else if cx < st.scroll {
             st.scroll = cx;
         }
-        let full = text_width(font, px, &st.text);
+        let full = wof(&st.text);
         st.scroll = st.scroll.min((full - inner.w + 1.0).max(0.0)).max(0.0);
 
         let focused = self.focus.focused == Some(id) && self.enabled;
@@ -277,10 +309,10 @@ impl Ui<'_> {
             let cy = inner.y + inner.h / 2.0;
             let lh = (16.0 * k).round();
             let lw = k.round().max(1.0);
-            let cx = (ox + text_width(font, px, &text[..caret])).round().min(inner.x1() - lw);
+            let cx = (ox + wof(&text[..caret])).round().min(inner.x1() - lw);
             if focused && !sel.is_empty() {
-                let mut x0 = (ox + text_width(font, px, &text[..sel.start])).round();
-                let mut x1 = (ox + text_width(font, px, &text[..sel.end])).round();
+                let mut x0 = (ox + wof(&text[..sel.start])).round();
+                let mut x1 = (ox + wof(&text[..sel.end])).round();
                 // Keep a 1 px gap between the caret and the selection.
                 if caret == sel.end {
                     x1 = x1.min(cx - lw);
@@ -292,8 +324,15 @@ impl Ui<'_> {
                     fb.fill_rect(x0 as i32, y as i32, (x1 - x0) as i32, lh as i32, sel_bg);
                 }
             }
-            let ty = cy - crate::uifb::text_height(font, px) / 2.0;
-            fb.draw_text(font, px, text, ox, ty, th.text.fade(fade));
+            if masked {
+                let rad = (dot * 0.27).max(1.5);
+                for i in 0..text.chars().count() {
+                    fb.fill_circle(ox + dot * (i as f32 + 0.5), cy, rad, th.text.fade(fade));
+                }
+            } else {
+                let ty = cy - crate::uifb::text_height(font, px) / 2.0;
+                fb.draw_text(font, px, text, ox, ty, th.text.fade(fade));
+            }
             if focused {
                 let y = (cy - lh / 2.0).round();
                 fb.fill_rect(cx as i32, y as i32, lw as i32, lh as i32, th.text);

@@ -1,6 +1,8 @@
-//! Imgur upload records: each upload's link, its deletehash (the secret
-//! that deletes it again), when, whether it was an image or a video, and
-//! a 72 × 48 thumbnail. With History on and the upload belonging to an
+//! Upload records: each upload's link, where it went (Imgur and its
+//! deletehash, the secret that deletes it again; or an S3 bucket and the
+//! object's key, [`Info::s3`]), when, whether it was an image or a video,
+//! and a 72 × 48 thumbnail. "Delete upload…" ([`delete_record`]) deletes
+//! from Imgur or sends the bucket a signed `DELETE` (`crate::s3`). With History on and the upload belonging to an
 //! entry they live in its `meta.json` ([`crate::history::Meta::upload`]);
 //! otherwise in a small `uploads.json` next to the history folder
 //! (`%LOCALAPPDATA%\rustshot\uploads.json`, `$XDG_DATA_HOME/rustshot/…`),
@@ -13,7 +15,8 @@
 //! [`Secret`], whose `Debug` hides it.
 //!
 //! The upload code (`export::do_upload`, `imgur::upload_video`) hands the
-//! reply to [`note_reply`] (the deletehash, kept in memory by link) and the
+//! reply to [`note_reply`] (the deletehash, kept in memory by link; an S3
+//! upload its object to [`note_s3`]) and the
 //! upload thread its thumbnail to [`note_thumb`]; whoever learns that the
 //! upload finished calls [`finished`] (or [`finished_in`] with a
 //! [`Store`]), which files the record where it belongs.
@@ -88,6 +91,25 @@ pub struct Info {
     pub kind: UpKind,
     /// A 72 × 48 PNG.
     pub thumb: Option<Vec<u8>>,
+    /// Uploaded to an S3-compatible bucket (destination "s3"): where the
+    /// object is (its endpoint, region, bucket and key). None: Imgur.
+    pub s3: Option<crate::s3::Object>,
+}
+
+impl Info {
+    /// The destination's id as the records keep it.
+    pub fn dest(&self) -> &'static str {
+        if self.s3.is_some() { "s3" } else { "imgur" }
+    }
+
+    /// "Delete upload…" can delete it: an S3 object, or an Imgur upload
+    /// whose deletehash was kept.
+    pub fn deletable(&self) -> bool {
+        match &self.s3 {
+            Some(o) => !o.key.is_empty() && !o.target.bucket.is_empty(),
+            None => valid_deletehash(self.deletehash.reveal()),
+        }
+    }
 }
 
 /// One upload: its link and the rest.
@@ -169,6 +191,7 @@ struct Note {
     deletehash: Secret,
     kind: UpKind,
     thumb: Option<Vec<u8>>,
+    s3: Option<crate::s3::Object>,
 }
 
 static NOTES: Mutex<Vec<Note>> = Mutex::new(Vec::new());
@@ -183,7 +206,7 @@ fn note_mut(link: &str, f: impl FnOnce(&mut Note)) {
         f(&mut n[i]);
         return;
     }
-    let mut x = Note { link: link.to_string(), deletehash: Secret::default(), kind: UpKind::Image, thumb: None };
+    let mut x = Note { link: link.to_string(), deletehash: Secret::default(), kind: UpKind::Image, thumb: None, s3: None };
     f(&mut x);
     n.push(x);
     // Records nobody filed (a one-shot run that exited) do not pile up.
@@ -226,6 +249,15 @@ pub fn note_reply(body: &str, kind: UpKind) {
     }
 }
 
+/// An upload to an S3-compatible bucket finished at `link`: where the
+/// object is, for its record (and "Delete upload…").
+pub fn note_s3(link: &str, obj: crate::s3::Object, kind: UpKind) {
+    note_mut(link, |n| {
+        n.s3 = Some(obj);
+        n.kind = kind;
+    });
+}
+
 /// The upload of `link` had this picture (a PNG): its thumbnail.
 pub fn note_thumb(link: &str, thumb: Option<Vec<u8>>) {
     note_mut(link, |n| n.thumb = thumb);
@@ -254,11 +286,11 @@ fn unix_now() -> u64 {
 /// [`note_thumb`] said; `thumb` when they had none).
 fn info_for(link: &str, thumb: impl FnOnce() -> Option<Vec<u8>>) -> Info {
     let n = take(link);
-    let (deletehash, kind, t) = match n {
-        Some(n) => (n.deletehash, n.kind, n.thumb),
-        None => (Secret::default(), if link.ends_with(".mp4") { UpKind::Video } else { UpKind::Image }, None),
+    let (deletehash, kind, t, s3) = match n {
+        Some(n) => (n.deletehash, n.kind, n.thumb, n.s3),
+        None => (Secret::default(), if link.ends_with(".mp4") { UpKind::Video } else { UpKind::Image }, None, None),
     };
-    Info { deletehash, time: unix_now(), kind, thumb: t.or_else(thumb) }
+    Info { deletehash, time: unix_now(), kind, thumb: t.or_else(thumb), s3 }
 }
 
 /// The 72 × 48 PNG of an entry's `thumb.png` in `dir`.
@@ -315,6 +347,37 @@ fn set(m: &mut Meta, link: String, info: Info) {
 
 // --- uploads.json ----------------------------------------------------------------
 
+/// An S3 object as the records keep it: `s3_endpoint`, `s3_region`,
+/// `s3_bucket`, `s3_key`, `s3_path_style` ("1" or "0"), `s3_access_key`
+/// (the id; its secret stays in the OS credential store).
+pub fn s3_fields(o: &crate::s3::Object) -> [(&'static str, String); 6] {
+    [
+        ("s3_endpoint", o.target.endpoint.clone()),
+        ("s3_region", o.target.region.clone()),
+        ("s3_bucket", o.target.bucket.clone()),
+        ("s3_key", o.key.clone()),
+        ("s3_path_style", if o.target.path_style { "1" } else { "0" }.into()),
+        ("s3_access_key", o.access_key.clone()),
+    ]
+}
+
+/// [`s3_fields`] read back (`get` a field's text); None without a key
+/// or bucket.
+pub fn s3_from_fields(get: impl Fn(&str) -> Option<String>) -> Option<crate::s3::Object> {
+    let key = get("s3_key").filter(|k| !k.is_empty())?;
+    let bucket = get("s3_bucket").filter(|b| !b.is_empty())?;
+    Some(crate::s3::Object {
+        target: crate::s3::Target {
+            endpoint: get("s3_endpoint").unwrap_or_default(),
+            region: get("s3_region").unwrap_or_default(),
+            bucket,
+            path_style: get("s3_path_style").as_deref() != Some("0"),
+        },
+        key,
+        access_key: get("s3_access_key").unwrap_or_default(),
+    })
+}
+
 /// `uploads.json` (and where it is).
 #[derive(Clone, Debug)]
 pub struct Book {
@@ -333,6 +396,15 @@ pub fn book_to_json(recs: &[Record]) -> String {
         o.push_str(",\"deletehash\":");
         json::string(&mut o, r.info.deletehash.reveal());
         o.push_str(&format!(",\"time\":{},\"kind\":\"{}\"", r.info.time, r.info.kind.id()));
+        if let Some(obj) = &r.info.s3 {
+            o.push_str(&format!(",\"dest\":\"{}\"", r.info.dest()));
+            for (k, v) in s3_fields(obj) {
+                o.push(',');
+                json::string(&mut o, k);
+                o.push(':');
+                json::string(&mut o, &v);
+            }
+        }
         if let Some(t) = &r.info.thumb {
             o.push_str(",\"thumb\":");
             json::string(&mut o, &b64_encode(t));
@@ -364,6 +436,7 @@ pub fn book_from_json(s: &str) -> Vec<Record> {
                 time,
                 kind: UpKind::from_id(&s("kind").unwrap_or_default()),
                 thumb: s("thumb").and_then(|t| b64_decode(&t)),
+                s3: (s("dest").as_deref() == Some("s3")).then(|| s3_from_fields(|k| s(k))).flatten(),
             };
             Some(Record { link, info, entry: None })
         })
@@ -595,28 +668,43 @@ pub fn forget_book() {
     warm();
 }
 
-/// Delete `rec` from Imgur and forget it; the toast's text and kind.
-pub fn delete_record(store: &Store, rec: &Record, client_id: &str, http: DeleteFn) -> (String, crate::editor::style::ToastKind) {
+/// Deletes an S3 object (a signed `DELETE`; a fake in tests).
+pub type S3DeleteFn<'a> = &'a dyn Fn(&crate::s3::Object) -> Result<(), String>;
+
+/// Delete `rec` where it was uploaded (Imgur over `http`, an S3 bucket
+/// through `s3`) and forget it; the toast's text and kind.
+pub fn delete_record(store: &Store, rec: &Record, client_id: &str, http: DeleteFn, s3: S3DeleteFn) -> (String, crate::editor::style::ToastKind) {
     use crate::editor::style::ToastKind;
-    match delete_remote(&rec.info.deletehash, client_id, http) {
-        Ok(d) => match forget(store, rec.entry.as_deref(), &rec.link) {
-            Ok(()) => (d.text().into(), ToastKind::Success),
-            Err(e) => (format!("{}, but the link is still listed: {e:#}", d.text()), ToastKind::Error),
+    let done = match &rec.info.s3 {
+        Some(obj) => s3(obj).map(|()| "Deleted from S3").map_err(|e| format!("Couldn't delete the upload: {e}")),
+        None => delete_remote(&rec.info.deletehash, client_id, http).map(Deleted::text).map_err(|e| format!("Couldn't delete from Imgur: {e}")),
+    };
+    match done {
+        Ok(text) => match forget(store, rec.entry.as_deref(), &rec.link) {
+            Ok(()) => (text.into(), ToastKind::Success),
+            Err(e) => (format!("{text}, but the link is still listed: {e:#}"), ToastKind::Error),
         },
-        Err(e) => (format!("Couldn't delete from Imgur: {e}"), ToastKind::Error),
+        Err(e) => (e, ToastKind::Error),
     }
 }
 
-// --- the tray's Delete from Imgur… -------------------------------------------------
+/// [`delete_record`]'s S3 delete over the platform's HTTPS with the
+/// configured access key (tests: never the network).
+pub fn s3_delete_with(cfg: &crate::config::Config) -> impl Fn(&crate::s3::Object) -> Result<(), String> + use<> {
+    let key = cfg.s3_access_key_id.clone();
+    move |obj: &crate::s3::Object| crate::s3::delete_platform(obj, &key)
+}
+
+// --- the tray's Delete upload… ------------------------------------------------------
 
 /// The upload the tray asked to delete, until its question is answered.
 static ASKED: Mutex<Option<Record>> = Mutex::new(None);
 
-/// The question for the tray's "Delete from Imgur…": a note with Delete
+/// The question for the tray's "Delete upload…": a note with Delete
 /// and Cancel (None: that upload is no longer listed).
 pub fn ask_delete(tag: u32) -> Option<crate::notice::Note> {
     let rec = by_tag(tag)?;
-    let mut n = crate::notice::Note::plain(format!("Delete {} from Imgur?", short_link(&rec.link)), crate::editor::style::ToastKind::Info);
+    let mut n = crate::notice::Note::plain(format!("Delete upload {}?", short_link(&rec.link)), crate::editor::style::ToastKind::Info);
     n.actions = vec![crate::notice::NoteAct::DeleteUpload, crate::notice::NoteAct::KeepUpload];
     n.ttl = std::time::Duration::from_secs(10);
     *lock(&ASKED) = Some(rec);
@@ -636,10 +724,11 @@ pub fn answer(delete: bool, done: impl FnOnce(crate::notice::Note) + Send + 'sta
         let del = |_: &str, _: &str, _: &[(&str, &str)]| -> Result<(u32, String), String> { Err("no network in tests".into()) };
         #[cfg(not(test))]
         let del = |h: &str, p: &str, hd: &[(&str, &str)]| crate::export::http_delete(h, p, hd);
-        let (text, kind) = delete_record(&Store::open_default(), &rec, &cfg.upload_client_id, &del);
+        let s3 = s3_delete_with(&cfg);
+        let (text, kind) = delete_record(&Store::open_default(), &rec, &cfg.upload_client_id, &del, &s3);
         done(crate::notice::Note::plain(text, kind));
     });
-    Some(crate::notice::Note::plain("Deleting from Imgur\u{2026}", crate::editor::style::ToastKind::Info))
+    Some(crate::notice::Note::plain("Deleting upload\u{2026}", crate::editor::style::ToastKind::Info))
 }
 
 #[cfg(test)]

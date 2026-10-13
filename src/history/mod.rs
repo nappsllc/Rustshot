@@ -237,8 +237,7 @@ pub fn days_from_civil(y: i32, m: u32, d: u32) -> i64 {
     era * 146_097 + doe - 719_468
 }
 
-/// The civil date `days` after 1970-01-01.
-#[cfg(test)]
+/// The civil date `days` after 1970-01-01 (also S3 request dates).
 pub fn civil_from_days(days: i64) -> (i32, u32, u32) {
     let z = days + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
@@ -467,6 +466,12 @@ pub fn meta_to_json(m: &Meta) -> String {
         // Kept on this computer only (PRIVACY.md); never logged.
         s("upload_deletehash", i.deletehash.reveal());
         s("upload_kind", i.kind.id());
+        if let Some(obj) = &i.s3 {
+            s("upload_dest", i.dest());
+            for (k, v) in crate::uploads::s3_fields(obj) {
+                s(&format!("upload_{k}"), &v);
+            }
+        }
         if let Some(t) = &i.thumb {
             s("upload_thumb", &crate::uploads::b64_encode(t));
         }
@@ -575,6 +580,7 @@ pub fn meta_from_json(s: &str) -> Result<Meta> {
             time: num("upload_time") as u64,
             kind: crate::uploads::UpKind::from_id(&k),
             thumb: opt("upload_thumb").and_then(|t| crate::uploads::b64_decode(&t)),
+            s3: (opt("upload_dest").as_deref() == Some("s3")).then(|| crate::uploads::s3_from_fields(|k| opt(&format!("upload_{k}")))).flatten(),
         }),
         uploaded: opt("uploaded"),
         duration_ms: num("duration_ms") as u64,

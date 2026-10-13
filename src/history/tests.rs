@@ -60,6 +60,7 @@ fn meta_round_trips() {
             time: 1_791_000_000,
             kind: crate::uploads::UpKind::Video,
             thumb: Some(vec![0x89, b'P', b'N', b'G', 0, 1, 2]),
+            s3: None,
         }),
         duration_ms: 42_000,
         file: Some(PathBuf::from("/home/u/Videos/rec.mp4")),
