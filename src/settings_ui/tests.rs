@@ -801,6 +801,54 @@ fn image_rows_write_their_keys() {
     assert!(c.trim_margins && c.border_width == u32::from(BORDER_DEFAULT));
 }
 
+/// General › Saving "Save at": screen pixels by default; 1× and a custom
+/// percent are written and read back; the percent slider is live only
+/// for Custom.
+#[test]
+fn save_at_round_trips() {
+    let cfg = Config::default();
+    let f = Form::new(&cfg, None);
+    assert_eq!((SAVE_AT[f.save_at].1, f.save_pct), ("screen", 50));
+    let mut f = Form::new(&cfg, None);
+    f.save_at = 2;
+    f.save_pct = 75;
+    let c = f.apply(&cfg, &cfg);
+    assert_eq!((c.save_scale.as_str(), c.save_scale_percent), ("custom", 75));
+    let back = Form::new(&c, None);
+    assert_eq!((back.save_at, back.save_pct), (2, 75));
+    assert_eq!(config::to_toml(&back.apply(&c, &c)), config::to_toml(&c), "round trip");
+    let mut one = Form::new(&c, None);
+    one.save_at = 1;
+    assert_eq!(one.apply(&c, &c).save_scale, "logical");
+    // In the window: the segment's "1×", then Custom with its slider.
+    let dir = std::env::temp_dir().join(format!("rustshot-saveat-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let p = dir.join("config.toml");
+    config::save_at(&p, &Config::default()).unwrap();
+    let mut s = settings_at(&p);
+    s.section = GENERAL;
+    let mut focus = FocusState::default();
+    reveal(&mut s, &mut focus, "save_at");
+    let r = focus.rect_of("save_at").unwrap();
+    let seg = |s: &mut Settings, focus: &mut FocusState, frac: f32| {
+        let (x, y) = ((r.x + r.w * frac) as i32, (r.y + r.h / 2.0) as i32);
+        let mut input = Input::default();
+        for e in [Ev::Move { x, y }, Ev::Down { x, y }, Ev::Up { x, y }] {
+            input.feed(&e);
+        }
+        render(s, &DARK, 1.0, &input, focus);
+    };
+    seg(&mut s, &mut focus, 0.58);
+    assert_eq!(s.form.save_at, 1, "1×");
+    seg(&mut s, &mut focus, 0.9);
+    assert_eq!(s.form.save_at, 2, "Custom");
+    render(&mut s, &DARK, 1.0, &Input::default(), &mut focus);
+    assert!(focus.rect_of("save_pct").is_some());
+    assert!(matches!(&s.on(Click::Apply)[..], [Act::Saved(c)] if c.save_scale == "custom" && c.save_scale_percent == 50));
+    assert_eq!(settings_at(&p).form.save_at, 2);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Poll the Upload section's workers until the secret is saved (or 10 s);
 /// the window's acts from it.
 fn settle_save(s: &mut Settings) -> Vec<Act> {

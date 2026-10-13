@@ -414,6 +414,183 @@ fn saving_writes_the_file_and_the_entry_never_the_original() {
     assert!(w.e.closing);
 }
 
+const CTRL: Mods = Mods { ctrl: true, shift: false, alt: false };
+const CTRL_SHIFT: Mods = Mods { ctrl: true, shift: true, alt: false };
+
+/// Pixels that differ by more than a little: how many.
+fn differing(a: &PixBuf, b: &PixBuf) -> usize {
+    assert_eq!(a.dimensions(), b.dimensions());
+    a.as_raw().as_chunks::<4>().0.iter().zip(b.as_raw().as_chunks::<4>().0).filter(|(p, q)| p.iter().zip(q.iter()).any(|(u, v)| u.abs_diff(*v) > 8)).count()
+}
+
+/// Rotate, Flip and their undo: the picture turns and the objects with
+/// it; undo gives them back exactly; Save writes them in the original's
+/// pixels with the stack, History shows what was saved, and the entry
+/// opens again as it was left.
+#[test]
+fn image_edits_turn_undo_save_and_reopen() {
+    use crate::imgedit::Orient;
+    let (_r, mut w) = window("img-turn", page(1180, 760), objects(), DARK, 1.0);
+    let before = w.e.canvas.objects().to_vec();
+    key(&mut w, 'R' as u32, CTRL);
+    assert_eq!((w.e.canvas.size(), w.e.canvas.edits().orient), ((760, 1180), Orient { rot: 1, flip: false }));
+    assert!(w.e.canvas.unsaved());
+    let Obj::Arrow { a, .. } = &w.e.canvas.objects()[0] else { panic!("the arrow") };
+    assert_eq!(*a, Pt::new(760.0 - 653.0, 417.0), "turned with the picture");
+    assert_eq!(w.e.canvas.doc().objects[0], before[0], "saved in the original's pixels");
+    key(&mut w, 'Z' as u32, CTRL);
+    assert_eq!(w.e.canvas.size(), (1180, 760));
+    assert_eq!(w.e.canvas.objects(), &before[..], "undo: exactly as before");
+    assert!(!w.e.canvas.unsaved());
+    key(&mut w, 'Y' as u32, CTRL);
+    assert_eq!(w.e.canvas.size(), (760, 1180));
+    key(&mut w, 'H' as u32, CTRL_SHIFT);
+    assert_eq!(w.e.canvas.edits().orient, Orient::ID.rotated(true).flipped_h());
+    // A rect drawn on the turned picture.
+    key(&mut w, 'R' as u32, Mods::default());
+    let v = w.e.canvas.view;
+    drag(&mut w, v.to_win(Pt::new(100.0, 100.0)), v.to_win(Pt::new(200.0, 150.0)));
+    assert_eq!(w.e.canvas.objects().len(), 5);
+    let o = w.e.canvas.edits().orient;
+    let (Obj::Rect { r, .. }, Obj::Rect { r: q, .. }) = (&w.e.canvas.objects()[4], &w.e.canvas.doc().objects[4]) else { panic!("a rect") };
+    assert_eq!(*q, o.inverse().rect(*r, (760, 1180)));
+    let shown = w.e.canvas.export();
+    // Save over the file.
+    w.e.perform(Do::Write { choice: Choice::Overwrite, close: false, remember: false });
+    assert!(!w.e.canvas.unsaved());
+    let e = w.e.store.get(&w.e.entry.id).unwrap();
+    let file = PixBuf::from_png(&std::fs::read(e.meta.saved.as_ref().unwrap()).unwrap()).unwrap();
+    assert_eq!(file, shown, "the file is the picture as shown");
+    let orig = w.e.store.original(&e).unwrap();
+    assert_eq!(orig.dimensions(), (1180, 760), "the original is never turned");
+    let doc = w.e.store.doc(&e).unwrap();
+    assert_eq!((doc.edits, doc.objects.len()), (w.e.canvas.edits(), 5));
+    let pic = crate::history_ui::picture(&w.e.store, &e).unwrap();
+    assert!(differing(&pic, &file) * 1000 < (760 * 1180), "History's picture is the saved one");
+    // Opened again: turned as it was left, nothing unsaved.
+    let mut c = Canvas::new(orig, doc.objects.clone(), w.e.cfg.clone(), DARK);
+    c.set_doc(doc.crop, None);
+    c.set_edits(doc.edits);
+    assert_eq!(c.size(), (760, 1180));
+    assert!(!c.unsaved());
+    let nums = |o: &Obj| format!("{o:?}").split(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-')).filter_map(|t| t.parse::<f32>().ok()).collect::<Vec<_>>();
+    for (p, q) in c.objects().iter().zip(w.e.canvas.objects()) {
+        let (a, b) = (nums(p), nums(q));
+        assert!(a.len() == b.len() && a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 1e-2), "{p:?} vs {q:?}");
+    }
+    assert!(differing(&c.export(), &file) * 1000 < (760 * 1180));
+    // Reset image edits: the picture as captured (the objects stay).
+    w.e.image_act(super::image::ImgAct::Reset);
+    assert_eq!((w.e.canvas.size(), w.e.canvas.edits()), ((1180, 760), Default::default()));
+    assert_eq!(w.e.canvas.objects().len(), 5);
+}
+
+/// The Image menu from the status bar's chip; Resize… typed into (the
+/// height follows), Enter applies, one undo step; Canvas… with the
+/// presentation look; Esc cancels; Save at does not shrink a resized
+/// picture again.
+#[test]
+fn the_image_menu_and_its_dialogs() {
+    use super::image::ImgDialog;
+    let (_r, mut w) = window("img-menu", page(1180, 760), objects(), LIGHT, 1.0);
+    let th = LIGHT;
+    let _ = th;
+    let chip = {
+        let k = 1.0;
+        let lay = draw::layout(&w.e, W as f32, H as f32, w.e.canvas.bar_width());
+        let mut px = [0u8; 4];
+        let inp = crate::ui::Input::default();
+        let mut focus = crate::ui::FocusState::default();
+        let mut clip = crate::ui::SystemClipboard;
+        let ui = crate::ui::Ui::new(crate::uifb::Fb::new(&mut px, 1), &LIGHT, &inp, &mut focus, &mut clip, k, FRect { x: 0.0, y: 0.0, w: 1.0, h: 1.0 });
+        let c = draw::chip(&ui, &w.e, &lay).1;
+        let (m, rows) = { w.e.img_menu = true; let r = draw::img_menu_lay(&ui, &w.e, &lay); w.e.img_menu = false; r };
+        (c, m, rows)
+    };
+    let mid = |r: FRect| Pt::new(r.x + r.w / 2.0, r.y + r.h / 2.0);
+    click(&mut w, mid(chip.0));
+    assert!(w.e.img_menu, "the chip opens the menu");
+    assert!(chip.1.y1() <= chip.0.y, "above the chip");
+    // A press elsewhere closes it.
+    click(&mut w, Pt::new(600.0, 300.0));
+    assert!(!w.e.img_menu);
+    click(&mut w, mid(chip.0));
+    click(&mut w, mid(chip.2[0].0));
+    assert!(!w.e.img_menu && matches!(w.e.img_dialog, Some(ImgDialog::Resize(_))), "Resize…");
+    // The width is selected: typing replaces it.
+    for c in "590".encode_utf16() {
+        at(&mut w, Ev::Char(c));
+    }
+    let Some(ImgDialog::Resize(f)) = &w.e.img_dialog else { panic!() };
+    assert_eq!((f.w.text.as_str(), f.h.text.as_str(), f.pct.text.as_str()), ("590", "380", "50"));
+    key(&mut w, crate::wind::key::RETURN, Mods::default());
+    assert!(w.e.img_dialog.is_none());
+    assert_eq!(w.e.canvas.edits().resize.map(|r| (r.w, r.h)), Some((590, 380)));
+    assert_eq!(w.e.canvas.export().dimensions(), (590, 380));
+    assert_eq!(w.e.canvas.size(), (1180, 760), "the canvas still edits the full picture");
+    key(&mut w, 'Z' as u32, CTRL);
+    assert_eq!(w.e.canvas.edits().resize, None, "one undo step");
+    key(&mut w, 'Y' as u32, CTRL);
+    // Canvas… by its key: the presentation look by default.
+    key(&mut w, 'K' as u32, CTRL_SHIFT);
+    assert!(matches!(w.e.img_dialog, Some(ImgDialog::Canvas(_))));
+    key(&mut w, crate::wind::key::ESCAPE, Mods::default());
+    assert!(w.e.img_dialog.is_none() && w.e.canvas.edits().canvas.is_none(), "Esc cancels");
+    key(&mut w, 'K' as u32, CTRL_SHIFT);
+    key(&mut w, crate::wind::key::RETURN, Mods::default());
+    assert_eq!(w.e.canvas.edits().canvas, Some(crate::imgedit::Pad::presentation()));
+    assert_eq!(w.e.canvas.export().dimensions(), (590 + 128, 380 + 128));
+    // Save at 50 %: a resized picture is not shrunk again.
+    w.e.cfg.save_scale = "custom".into();
+    w.e.cfg.save_scale_percent = 50;
+    w.e.perform(Do::Write { choice: Choice::Overwrite, close: false, remember: false });
+    let e = w.e.store.get(&w.e.entry.id).unwrap();
+    let file = PixBuf::from_png(&std::fs::read(e.meta.saved.as_ref().unwrap()).unwrap()).unwrap();
+    assert_eq!(file.dimensions(), (718, 508));
+    // Without the resize it is.
+    w.e.canvas.set_resize(None);
+    w.e.perform(Do::Write { choice: Choice::Overwrite, close: false, remember: false });
+    let file = PixBuf::from_png(&std::fs::read(e.meta.saved.as_ref().unwrap()).unwrap()).unwrap();
+    assert_eq!(file.dimensions(), ((1180 + 128) / 2, (760 + 128) / 2));
+    // The menu's Reset is there; while typing in a field the keys are the field's.
+    key(&mut w, 'R' as u32, CTRL_SHIFT);
+    for c in "abc".encode_utf16() {
+        at(&mut w, Ev::Char(c));
+    }
+    let Some(ImgDialog::Resize(f)) = &w.e.img_dialog else { panic!() };
+    assert!(f.size().is_none());
+    key(&mut w, crate::wind::key::RETURN, Mods::default());
+    assert!(w.e.img_dialog.is_some(), "Enter with a bad size does nothing");
+    key(&mut w, crate::wind::key::ESCAPE, Mods::default());
+    assert!(w.e.img_dialog.is_none());
+}
+
+/// Preview PNGs: the Image menu, the Resize and Canvas dialogs, a turned
+/// picture, and a presentation canvas export (dark and light).
+#[test]
+fn preview_image_edit_pngs() {
+    use super::image::ImgAct;
+    for (tn, th) in [("dark", DARK), ("light", LIGHT)] {
+        let (_r, mut w) = window(&format!("pv-img-{tn}"), page(1180, 760), objects(), th, 1.0);
+        w.e.img_menu = true;
+        w.render();
+        crate::ui::preview::save(&format!("edit-image-menu-{tn}.png"), w.pixels());
+        w.image_act(ImgAct::Resize);
+        for c in "800".encode_utf16() {
+            at(&mut w, Ev::Char(c));
+        }
+        crate::ui::preview::save(&format!("edit-resize-{tn}.png"), w.pixels());
+        key(&mut w, crate::wind::key::ESCAPE, Mods::default());
+        w.image_act(ImgAct::Canvas);
+        w.render();
+        crate::ui::preview::save(&format!("edit-canvas-{tn}.png"), w.pixels());
+        key(&mut w, crate::wind::key::RETURN, Mods::default());
+        crate::ui::preview::save(&format!("edit-presentation-export-{tn}.png"), &w.e.canvas.export());
+        key(&mut w, 'R' as u32, CTRL);
+        crate::ui::preview::save(&format!("edit-rotated-{tn}.png"), w.pixels());
+    }
+}
+
 #[test]
 fn closing_with_unsaved_changes_asks() {
     let (_r, mut w) = window("close", page(400, 300), Vec::new(), LIGHT, 1.0);

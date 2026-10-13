@@ -377,7 +377,7 @@ fn resize_body(ui: &mut Ui, f: &mut ResizeForm, pic: &PixBuf, cfg: &crate::confi
         label(ui, "Resampling", tok);
         ui.seg("rs_filter", &["Lanczos-3 (sharp)", "Area average (smooth)"], &mut f.filter, tok);
     });
-    // "3840 × 2160 → 1920 × 1080 · ≈ 1.2 MB as PNG"
+    // "3840 × 2160 → 1920 × 1080 · about 1.2 MB as PNG"
     let fmt = crate::export::Format::from_config(cfg);
     let line = match f.size() {
         Some((w, h)) => {
@@ -462,8 +462,7 @@ fn canvas_body(ui: &mut Ui, f: &mut CanvasForm, small: &(PixBuf, f32), tok: &Tok
     ui.row(|ui| {
         label(ui, "Corners", tok);
         ui.width(180.0).slider("cv_radius", &mut f.radius, 0, 48);
-        let s = format!("{} px", f.radius);
-        unit(ui, &s, tok);
+        unit(ui, "px", tok);
     });
     ui.row(|ui| {
         label(ui, "Shadow", tok);

@@ -213,7 +213,7 @@ fn transforms(out: &mut String, e: &crate::imgedit::Edits) {
         W(out).str("axis", "h");
         out.push('}');
     }
-    if e.orient.rot % 4 != 0 {
+    if !e.orient.rot.is_multiple_of(4) {
         op(out, "rotate");
         W(out).num("deg", (e.orient.rot % 4) as f32 * 90.0);
         out.push('}');
@@ -1130,7 +1130,7 @@ mod tests {
         assert_eq!(to_json_full(&d.objects, d.crop, &d.edits, size), s, "stable");
         for i in 0..8 {
             let o = Orient { rot: i % 4, flip: i >= 4 };
-            let canvas = (i % 2 == 0).then(|| Pad::presentation());
+            let canvas = (i % 2 == 0).then(Pad::presentation);
             let e = Edits { orient: o, canvas, ..Default::default() };
             let s = to_json_full(&[], None, &e, size);
             assert_eq!(from_json_doc(&s).unwrap().edits, e, "{s}");

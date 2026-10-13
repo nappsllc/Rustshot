@@ -1351,4 +1351,34 @@ mod border_tests {
         assert_eq!(back.get_pixel(1, 1), [255, 255, 255, 255]);
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// Settings › Saving "Save at": the screen's pixels (as captured), 1×
+    /// (a 200 % capture halved, area-averaged) or a percent; the border
+    /// keeps its logical width at the new size; a Resize wins.
+    #[test]
+    fn save_at_scales_what_goes_out() {
+        let at = |mode: &str, pct: u32| Config { save_scale: mode.into(), save_scale_percent: pct, ..Config::default() };
+        // A 2x checkerboard of 2x2 blocks: halved it is flat per block.
+        let mut img = PixBuf::new(40, 20);
+        for (i, p) in img.as_raw_mut().as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            let (x, y) = (i % 40, i / 40);
+            *p = if (x / 2 + y / 2) % 2 == 0 { [255, 0, 0, 255] } else { [0, 0, 255, 255] };
+        }
+        assert_eq!(for_output(img.clone(), &at("screen", 50), 2.0, false), img);
+        let one = for_output(img.clone(), &at("logical", 50), 2.0, false);
+        assert_eq!(one.dimensions(), (20, 10));
+        assert_eq!(one.get_pixel(0, 0), [255, 0, 0, 255], "area average: a 2x2 block is one pixel");
+        assert_eq!(one.get_pixel(1, 0), [0, 0, 255, 255]);
+        assert_eq!(for_output(img.clone(), &at("logical", 50), 1.0, false), img, "a 100 % capture is 1× already");
+        assert_eq!(for_output(img.clone(), &at("logical", 50), 1.5, false).dimensions(), (27, 13));
+        assert_eq!(for_output(img.clone(), &at("custom", 25), 1.0, false).dimensions(), (10, 5));
+        assert_eq!(for_output(img.clone(), &at("custom", 100), 2.0, false), img);
+        assert_eq!(for_output(img.clone(), &at("custom", 25), 1.0, true), img, "resized on purpose: kept");
+        // The border: 2 logical px; at 200 % saved at 1×: 2 px.
+        let b = Config { border_width: 2, ..at("logical", 50) };
+        assert_eq!(for_output(img.clone(), &b, 2.0, false).dimensions(), (24, 14));
+        assert_eq!(output_border(&b, 2.0), 2);
+        assert_eq!(output_border(&Config { border_width: 2, ..Config::default() }, 2.0), 4, "screen pixels: 4");
+        assert_eq!((save_factor(&at("logical", 50), 2.0), save_factor(&at("custom", 5), 1.0)), (0.5, 0.1));
+    }
 }

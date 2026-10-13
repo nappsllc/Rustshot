@@ -127,8 +127,8 @@ pub fn dominant(img: &PixBuf) -> (C4, C4) {
             let k = ((p[0] as usize >> 4) << 8) | ((p[1] as usize >> 4) << 4) | (p[2] as usize >> 4);
             let b = &mut bins[k];
             b.0 += 1;
-            for c in 0..3 {
-                b.1[c] += p[c] as u32;
+            for (s, v) in b.1.iter_mut().zip(p) {
+                *s += v as u32;
             }
         }
     }
@@ -324,7 +324,7 @@ mod tests {
         let above = out.get_pixel(90, 30)[0];
         let below = out.get_pixel(90, 109)[0];
         assert!(below < above, "below {below}, above {above}");
-        assert!(below >= 128 - 33 && below < 128, "25 % at most: {below}");
+        assert!((128 - 33..128).contains(&below), "25 % at most: {below}");
         // Far away: the plain background.
         assert_eq!(out.get_pixel(1, 1), [128, 128, 128, 255]);
         // No shadow, no rounding: the corner pixel is the picture's.

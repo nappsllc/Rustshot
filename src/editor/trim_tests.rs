@@ -316,6 +316,28 @@ fn the_export_has_the_border_and_the_history_original_not() {
     assert_eq!((job.img.dimensions(), job.sel_global), ((400, 250), (300, 200)), "no border for OCR");
 }
 
+/// Settings › Saving "Save at 1×": a 200 % capture goes out at half its
+/// pixels (Copy, Save, Upload, Pin), the history keeps all of them.
+#[test]
+fn save_at_one_x_halves_the_export_and_the_history_keeps_it_all() {
+    let mut s = shot();
+    s.scale = 2.0;
+    let mut a = app_with(Some(fr(300.0, 200.0, 400.0, 250.0)), s);
+    a.history_root = Some(std::env::temp_dir().join("rustshot-saveat-hist-unused"));
+    let e = ed(&mut a);
+    e.cfg.save_scale = "logical".into();
+    e.cfg.border_width = 2;
+    e.tasks = vec![Task::Copy];
+    let State::Edit(e) = std::mem::replace(&mut a.st, State::Hidden) else { unreachable!() };
+    let mut e = *e;
+    a.finish(&mut e, false);
+    let State::Finish(job) = &a.st else { panic!("finish job") };
+    // 200 x 125 at 1x, and a 2 px border (2 logical px at 1x).
+    assert_eq!(job.img.dimensions(), (204, 129));
+    assert_eq!(job.sel_global, (298, 198));
+    assert_eq!(job.hist.as_ref().expect("history shot").original.dimensions(), (400, 250), "the history keeps the screen's pixels");
+}
+
 /// The preview: a band of the border color outside the outline, nothing
 /// inside the selection; none when off.
 #[test]
