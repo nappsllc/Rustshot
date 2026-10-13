@@ -134,13 +134,10 @@ impl Snapshot {
         s
     }
 
-    /// The client area of the frontmost window lying inside `sel` (image
-    /// px), when it has one apart from its frame.
-    pub fn client_within(&self, sel: R) -> Option<R> {
-        self.tops.iter().zip(&self.clients).find_map(|(&t, c)| {
-            let r = self.rects[t as usize];
-            (r.intersect(&sel) == r).then_some(*c).flatten()
-        })
+    /// The client area (image px) of the window whose rect `sel` is (a
+    /// window snap), when it has one apart from its frame.
+    pub fn client_of(&self, sel: R) -> Option<R> {
+        self.tops.iter().zip(&self.clients).find_map(|(&t, c)| (self.rects[t as usize] == sel).then_some(*c).flatten())
     }
 
     fn push(&mut self, r: R) -> u32 {
@@ -580,19 +577,20 @@ mod tests {
         }
     }
 
-    /// The client area of the frontmost window inside a selection, in
-    /// image px and clipped to its window; none when it is the frame.
+    /// The client area of the window a selection snapped to, in image px
+    /// and clipped to its window; none for any other selection, or when
+    /// it is the frame.
     #[test]
-    fn client_area_of_the_window_inside_the_selection() {
+    fn client_area_of_a_window_snap() {
         let popup = n(50, 50, 100, 100, vec![]).with_client(Some(rr(50, 50, 100, 100)));
         let win = n(100, 100, 800, 600, vec![]).with_client(Some(rr(108, 140, 784, 552)));
         let back = n(0, 0, 1000, 800, vec![]).with_client(Some(rr(10, 30, 980, 760)));
         let s = Snapshot::build(&[popup, win, back], (20, 20), (1900, 1000));
         // The shot starts at (20, 20): image px are 20 less.
-        assert_eq!(s.client_within(rr(80, 80, 800, 600)), Some(rr(88, 120, 784, 552)));
-        assert_eq!(s.client_within(rr(70, 70, 900, 700)), Some(rr(88, 120, 784, 552)), "a bit more than the window");
-        assert_eq!(s.client_within(rr(90, 90, 700, 500)), None, "the window is not inside");
-        assert_eq!(s.client_within(rr(0, 0, 1900, 1000)), Some(rr(88, 120, 784, 552)), "the popup has no client area of its own");
-        assert_eq!(Snapshot::build(&[n(0, 0, 10, 10, vec![])], (0, 0), (100, 100)).client_within(rr(0, 0, 100, 100)), None);
+        assert_eq!(s.client_of(rr(80, 80, 800, 600)), Some(rr(88, 120, 784, 552)));
+        assert_eq!(s.client_of(rr(70, 70, 900, 700)), None, "a region around the window is no snap");
+        assert_eq!(s.client_of(rr(30, 30, 100, 100)), None, "the popup's client area is its frame");
+        assert_eq!(s.client_of(rr(0, 0, 980, 780)), Some(rr(0, 10, 980, 760)), "clipped to the shot");
+        assert_eq!(Snapshot::build(&[n(0, 0, 10, 10, vec![])], (0, 0), (100, 100)).client_of(rr(0, 0, 10, 10)), None);
     }
 }

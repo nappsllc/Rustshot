@@ -148,7 +148,7 @@ fn trim_margins_trims_every_new_region_and_window() {
     let mut a = app_with(None, window_shot());
     ed(&mut a).cfg.trim_margins = true;
     let app_win = Node::new(R::xywh(100, 80, 900, 600), vec![]).with_client(Some(R::xywh(101, 120, 898, 559)));
-    ed(&mut a).snap = Some(Snapshot::build(&[app_win], (0, 0), (1200, 800)));
+    ed(&mut a).snap = Some(Snapshot::build(std::slice::from_ref(&app_win), (0, 0), (1200, 800)));
     click(&mut a, 500, 600);
     assert_eq!(ed(&mut a).sel, Some(fr(398.0, 298.0, 204.0, 124.0)), "the green box in the client area");
     // Off (the default): as selected.
@@ -174,7 +174,7 @@ fn a_window_frame_without_margins_falls_back_to_its_client_area() {
     let app_win = Node::new(R::xywh(100, 80, 900, 600), vec![]).with_client(Some(R::xywh(101, 120, 898, 559)));
     ed(&mut a).snap = Some(Snapshot::build(std::slice::from_ref(&app_win), (0, 0), (1200, 800)));
     assert_eq!(ed(&mut a).trimmed_sel(), Some(fr(398.0, 298.0, 204.0, 124.0)));
-    // A client area with nothing to trim is the trim.
+    // A client area with nothing to trim: the window stays whole.
     let mut s = window_shot();
     let w = s.size.0 as usize;
     for y in 120..679usize {
@@ -184,8 +184,12 @@ fn a_window_frame_without_margins_falls_back_to_its_client_area() {
         }
     }
     let mut a = app_with(Some(frame), s);
-    ed(&mut a).snap = Some(Snapshot::build(&[app_win], (0, 0), (1200, 800)));
-    assert_eq!(ed(&mut a).trimmed_sel(), Some(fr(101.0, 120.0, 898.0, 559.0)));
+    ed(&mut a).snap = Some(Snapshot::build(std::slice::from_ref(&app_win), (0, 0), (1200, 800)));
+    assert_eq!(ed(&mut a).trimmed_sel(), None);
+    // A region around the window (no snap) never takes its client area.
+    let mut a = app_with(Some(fr(90.0, 70.0, 920.0, 620.0)), window_shot());
+    ed(&mut a).snap = Some(Snapshot::build(std::slice::from_ref(&app_win), (0, 0), (1200, 800)));
+    assert_eq!(ed(&mut a).trimmed_sel(), Some(fr(98.0, 78.0, 904.0, 604.0)), "only the white around the window");
 }
 
 /// The size label's menu: a click on the label opens it under the label,
@@ -219,6 +223,41 @@ fn the_size_label_menu_trims() {
     click(&mut a, (row.x + row.w / 2.0) as i32, (row.y + row.h / 2.0) as i32);
     assert_eq!(ed(&mut a).sel, Some(CARD));
     assert!(!ed(&mut a).size_menu);
+}
+
+/// With a drawing tool a press on the label draws as anywhere else; the
+/// select tool opens the menu; video mode never opens it (nor swallows
+/// the next press).
+#[test]
+fn the_label_menu_waits_for_no_drawing_tool() {
+    // A whole-screen selection: the label sits inside it.
+    let mut a = app_with(Some(fr(0.0, 0.0, 1200.0, 800.0)), shot());
+    settled(&mut a);
+    let label = ed(&mut a).label_at.expect("label");
+    let (lx, ly) = ((label.x + label.w / 2.0) as i32, (label.y + label.h / 2.0) as i32);
+    key_m(&mut a, 'R' as u32, NONE);
+    a.on_event(Ev::Move { x: lx, y: ly });
+    a.on_event(Ev::Down { x: lx, y: ly });
+    a.on_event(Ev::Move { x: lx + 60, y: ly + 50 });
+    a.on_event(Ev::Up { x: lx + 60, y: ly + 50 });
+    assert!(!ed(&mut a).size_menu, "the rectangle tool draws");
+    assert_eq!(ed(&mut a).objects.len(), 1);
+    key_m(&mut a, 'V' as u32, NONE);
+    settled(&mut a);
+    click(&mut a, lx, ly);
+    assert!(ed(&mut a).size_menu, "the select tool opens the menu");
+    // Video mode: no menu, and the next press is not swallowed.
+    let mut a = app_with(Some(fr(100.0, 100.0, 800.0, 500.0)), shot());
+    ed(&mut a).rec.open = true;
+    ed(&mut a).size_menu = true;
+    settled(&mut a);
+    assert!(!ed(&mut a).size_menu, "a menu that cannot open is not left open");
+    let label = ed(&mut a).label_at.expect("label");
+    assert!(!ed(&mut a).on_label(Pt::new(label.x + 2.0, label.y + 2.0)));
+    // No border preview there either (recordings get none).
+    ed(&mut a).cfg.border_width = 3;
+    settled(&mut a);
+    assert!(ed(&mut a).scene.as_ref().and_then(|s| s.sel_ui.as_ref()).is_some_and(|u| u.border.is_none()));
 }
 
 /// Opening and closing the menu, and the trim, repaint every pixel

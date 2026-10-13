@@ -585,10 +585,10 @@ const SIZE_MENU_W: f32 = 200.0;
 
 /// Open the size label's menu on `tb`: under the label at `label` (above
 /// it when it does not fit), kept on the monitor `area`; `key` is the
-/// trim's key. Not over another popover or the Record panel.
-pub fn add_size_menu(tb: &mut Toolbar, label: FRect, key: String, area: FRect, s: f32) {
+/// trim's key. Not over another popover or the Record panel (false then).
+pub fn add_size_menu(tb: &mut Toolbar, label: FRect, key: String, area: FRect, s: f32) -> bool {
     if tb.pop.is_some() || tb.video || tb.docked {
-        return;
+        return false;
     }
     let m = MARGIN * s;
     let (pw, ph) = (SIZE_MENU_W * s, (SIZE_MENU.len() as f32 * MENU_ROW + 2.0 * PAD) * s);
@@ -601,6 +601,7 @@ pub fn add_size_menu(tb: &mut Toolbar, label: FRect, key: String, area: FRect, s
     }
     tb.texts.push(key);
     tb.pop = Some(FRect { x: px, y: py, w: pw, h: ph });
+    true
 }
 
 /// Top-left of a `pw`x`ph` popover 6 px from the bar on the side away from

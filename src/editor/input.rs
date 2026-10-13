@@ -685,7 +685,7 @@ impl Edit {
                 self.save_menu = !self.save_menu;
                 self.palette_open = false;
             }
-            Act::Trim if self.host.is_some() => {}
+            Act::Trim if self.host.is_some() || self.rec.open => {}
             Act::Trim => {
                 self.trim_selection(true);
             }

@@ -692,7 +692,7 @@ impl Edit {
         };
 
         let border = crate::export::border(&self.cfg, self.shot.scale).map(|(b, c)| (b as f32, C4::rgb(c[0], c[1], c[2])));
-        let sel_ui = self.sel.map(|sr| SelUi { sr, hot: self.hot_handle, border: border.filter(|_| self.host.is_none()) });
+        let sel_ui = self.sel.map(|sr| SelUi { sr, hot: self.hot_handle, border: border.filter(|_| self.host.is_none() && !self.rec.open) });
         let snap_r = self.snap_rect();
         let snap = snap_r.map(|r| SnapUi { r, hint: self.cfg.snap_tab_hint && self.hover_win.has_parts(), area });
         let label = self.sel.map(|sr| {
@@ -713,11 +713,16 @@ impl Edit {
             let ui = Ui { th: &self.th, s, font: self.ui_font };
             chrome::size_label_rect(&ui, l.sr, l.show_pos, l.area, (l.avoid, l.lead))
         });
-        if !self.size_menu || self.host.is_some() {
-            self.size_menu = false;
-        } else if let (Some(tb), Some(at)) = (self.toolbar.as_mut(), self.label_at) {
+        // A menu that cannot open (video mode, another popover) is not
+        // left open to swallow the next press.
+        if self.size_menu {
             let key = chrome::act_tip(Act::Trim, &self.keys).1.join("+");
-            toolbar::add_size_menu(tb, at, key, area, s);
+            self.size_menu = self.host.is_none()
+                && !self.rec.open
+                && match (self.toolbar.as_mut(), self.label_at) {
+                    (Some(tb), Some(at)) => toolbar::add_size_menu(tb, at, key, area, s),
+                    _ => false,
+                };
         }
         let tfont = self.text_font();
         let text = self.text.as_ref().map(|td| TextUi {

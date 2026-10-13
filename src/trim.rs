@@ -4,13 +4,15 @@
 //!
 //! Each edge is scanned inward while its row (or column) stays within
 //! [`TOL`] per channel of the edge's dominant color (the per-channel median
-//! of the image's outermost line on that side) for at least [`MATCH`] of
-//! its pixels, so JPEG-like
-//! noise and a stray pixel or two still count as margin. Top and bottom
-//! first, then left and right over the rows left: one pass, so a uniform
-//! panel inside the margin (a dialog on a page) is kept whole. [`PAD`]
-//! pixels of the margin are kept on every trimmed side. Pure: tested on
-//! synthetic images everywhere.
+//! of the outermost line on that side, the corners the top and bottom
+//! margins took left out) for all but [`MATCH`]'s 2 % of its pixels (at
+//! least [`MIN_MISS`] of them), so JPEG-like noise and a stray pixel or two
+//! still count as margin. Top and bottom first, then left and right over
+//! the rows left: one pass, so a uniform panel inside the margin (a dialog
+//! on a page) is kept whole. [`PAD`] pixels of the margin are kept on
+//! every trimmed side. A solid block of one color flush with a side and
+//! as tall as what is left is taken for margin there (nothing tells them
+//! apart). Pure: tested on synthetic images everywhere.
 
 use crate::pixbuf::PixBuf;
 
@@ -18,6 +20,8 @@ use crate::pixbuf::PixBuf;
 pub const TOL: u8 = 6;
 /// The share of a line's pixels that must match for it to be margin.
 pub const MATCH: f32 = 0.98;
+/// Off pixels any line of 5 px or more may have and still be margin.
+pub const MIN_MISS: usize = 2;
 /// Margin kept around the content on each trimmed side (px).
 pub const PAD: u32 = 2;
 
@@ -64,7 +68,7 @@ fn near(a: [u8; 3], b: [u8; 3]) -> bool {
 /// Whether enough of the `n` pixels are near `c`.
 fn matches(n: usize, c: [u8; 3], px: impl Iterator<Item = [u8; 3]>) -> bool {
     let need = (n as f32 * MATCH).ceil() as usize;
-    let miss_max = n - need.min(n);
+    let miss_max = (n - need.min(n)).max(if n >= 5 { MIN_MISS } else { 0 });
     let mut miss = 0;
     for p in px {
         if !near(p, c) {
@@ -104,11 +108,10 @@ pub fn content(img: &PixBuf) -> Option<Rect> {
         while b > t && matches(n, c, row(b - 1, l, r).map(|(x, y)| v.px(x, y))) {
             b -= 1;
         }
-        // Left. The side's color is the median of its whole outer
-        // column: content that touches the side makes it mixed, so the
-        // content's own color is not taken for a margin.
+        // Left: its color from the rows left (the corners, the top and
+        // bottom margins' own, left out).
         let n = (b - t) as usize;
-        let c = median(h as usize, col(l, 0, h).map(|(x, y)| v.px(x, y)));
+        let c = median(n, col(l, t, b).map(|(x, y)| v.px(x, y)));
         while l < r && matches(n, c, col(l, t, b).map(|(x, y)| v.px(x, y))) {
             l += 1;
         }
@@ -116,7 +119,7 @@ pub fn content(img: &PixBuf) -> Option<Rect> {
             return None;
         }
         // Right.
-        let c = median(h as usize, col(r - 1, 0, h).map(|(x, y)| v.px(x, y)));
+        let c = median(n, col(r - 1, t, b).map(|(x, y)| v.px(x, y)));
         while r > l && matches(n, c, col(r - 1, t, b).map(|(x, y)| v.px(x, y))) {
             r -= 1;
         }
@@ -165,9 +168,21 @@ mod tests {
 
     #[test]
     fn content_at_an_edge_keeps_that_edge() {
+        // Content touching the left side (text-like: not one color down
+        // its edge column).
         let mut img = PixBuf::from_pixel(60, 40, [0, 0, 0, 255]);
         fill(&mut img, (0, 10, 30, 20), [255, 255, 0, 255]);
+        for y in (10..30).step_by(3) {
+            fill(&mut img, (0, y, 2, 1), [0, 0, 255, 255]);
+        }
         assert_eq!(content(&img), Some((0, 8, 32, 24)));
+        // Tall white bands above and below, gray at the sides: the sides'
+        // color comes from between the bands, so they are cut too.
+        let mut img = PixBuf::from_pixel(100, 200, [128, 128, 128, 255]);
+        fill(&mut img, (0, 0, 100, 80), [255, 255, 255, 255]);
+        fill(&mut img, (0, 120, 100, 80), [255, 255, 255, 255]);
+        fill(&mut img, (40, 80, 20, 40), [255, 0, 0, 255]);
+        assert_eq!(content(&img), Some((38, 78, 24, 44)));
         // Less margin than the padding on a side: that side stays.
         let mut img = PixBuf::from_pixel(60, 40, [0, 0, 0, 255]);
         fill(&mut img, (1, 1, 30, 20), [255, 255, 0, 255]);
@@ -213,6 +228,20 @@ mod tests {
         fill(&mut img, (50, 60, 120, 70), [10, 10, 10, 255]);
         fill(&mut img, (60, 70, 100, 50), [240, 30, 30, 255]);
         assert_eq!(content(&img), Some((48, 58, 124, 74)));
+    }
+
+    /// A short side tolerates two stray pixels (2 % of it would be none).
+    #[test]
+    fn short_lines_allow_two_stray_pixels() {
+        let mut img = PixBuf::from_pixel(200, 30, [255, 255, 255, 255]);
+        fill(&mut img, (20, 5, 160, 20), [0, 128, 0, 255]);
+        fill(&mut img, (3, 7, 1, 1), [0, 0, 0, 255]);
+        fill(&mut img, (5, 20, 1, 1), [0, 0, 0, 255]);
+        assert_eq!(content(&img), Some((18, 3, 164, 24)));
+        // Three: that column is content.
+        fill(&mut img, (5, 12, 1, 1), [0, 0, 0, 255]);
+        fill(&mut img, (5, 15, 1, 1), [0, 0, 0, 255]);
+        assert_eq!(content(&img).map(|r| r.0), Some(3));
     }
 
     #[test]

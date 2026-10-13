@@ -3471,7 +3471,7 @@ fn end_interaction(edit: &mut Edit) {
             }
             // Settings › Capture "Trim margins automatically": a new
             // region or window, not the whole screen of a plain click.
-            if window && edit.cfg.trim_margins && edit.host.is_none() {
+            if window && edit.cfg.trim_margins && edit.host.is_none() && !edit.rec.open {
                 edit.trim_selection(false);
             }
             if edit.accept_on_select {
