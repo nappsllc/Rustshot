@@ -4695,9 +4695,13 @@ mod tests {
             e.rec.load_cams();
             e.rec.ring_pal = true;
             save(&mut app, &format!("{tn}-video-ring-palette.png"));
-            // The camera's Background row: Blur light; a build without a model.
-            for (name, avail) in [("blur", true), ("noblur", false)] {
-                crate::cam::bg::set_available(Some(avail));
+            // The camera's Background row: Blur light; the model downloading,
+            // its download failed (a press retries), downloads off, damaged.
+            use crate::cam::bg::Blur;
+            let off = Blur::Off { asset: crate::fetch::MODEL.asset, url: String::new(), path: "selfie.bin".into() };
+            let states = [("blur", Blur::Ready), ("downloading", Blur::Downloading(40)), ("failed", Blur::Failed("HTTP 404".into())), ("noblur", off), ("damaged", Blur::Damaged("selfie.bin".into()))];
+            for (name, state) in states {
+                crate::cam::bg::set_state(Some(state));
                 let mut app = video(th, vsel);
                 edit_of(&mut app).rec.opts.cam_bg = crate::cam::bg::Bg::Light;
                 save(&mut app, &format!("{tn}-video-camera-{name}.png"));

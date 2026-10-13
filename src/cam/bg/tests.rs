@@ -317,6 +317,50 @@ fn bad_mask_values_do_not_stick() {
     assert!(s.m.v.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)), "{:?}", s.m.v);
 }
 
+/// The model still on its way: the picture stays as it is, no segmenter
+/// is made, and the model is asked for once; once it is here, the
+/// segmenter starts.
+#[test]
+fn waits_for_the_model() {
+    static READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut once = Some(Fake { calls: calls.clone(), delay: Duration::ZERO });
+    let mut fx = Effect::with_ready(Box::new(move || once.take().map(|f| Box::new(f) as Box<dyn Segment>)), || READY.load(Ordering::SeqCst));
+    let raw = noise_pic(64, 1);
+    let mut p = super::super::fit_square(&raw, 32);
+    let was = p.clone();
+    let asked = super::REQUESTS.load(Ordering::SeqCst);
+    for _ in 0..3 {
+        fx.apply(Bg::Light, &raw, &mut p);
+    }
+    assert_eq!((&p, fx.running()), (&was, None), "no segmenter yet");
+    assert!(super::REQUESTS.load(Ordering::SeqCst) > asked, "the model is asked for");
+    READY.store(true, Ordering::SeqCst);
+    fx.apply(Bg::Light, &raw, &mut p);
+    fx.settle();
+    assert_eq!(fx.running(), Some(true));
+}
+
+/// The notes of each state: the panel's are short, Settings' say why
+/// and what to do.
+#[test]
+fn blur_state_notes() {
+    use super::{Blur, DAMAGED, FAILED, FAILED_SHORT, UNAVAILABLE};
+    assert_eq!(Blur::Ready.panel_note(), None);
+    assert_eq!(Blur::Fetchable.panel_note(), None);
+    assert_eq!(Blur::Downloading(47).panel_note(), Some("Downloading model… 40%"));
+    assert_eq!(Blur::Downloading(100).panel_note(), Some("Downloading model… 100%"));
+    assert_eq!(Blur::Failed("x".into()).panel_note(), Some(FAILED_SHORT));
+    assert!(Blur::Fetchable.settings_note().contains("215 KB"));
+    assert_eq!(Blur::Failed("HTTP 404".into()).settings_note(), format!("{FAILED}: HTTP 404"));
+    let off = Blur::Off { asset: "selfie-f11cb3ec.bin", url: "https://github.com/x".into(), path: "/d/models/selfie.bin".into() };
+    assert_eq!(off.panel_note(), Some(UNAVAILABLE));
+    let n = off.settings_note();
+    assert!(n.contains("selfie-f11cb3ec.bin") && n.contains("https://github.com/x") && n.contains("selfie.bin"), "{n}");
+    assert!(Blur::Damaged("/d/m".into()).settings_note().starts_with(DAMAGED));
+    assert!(Blur::Failed(String::new()).choosable() && !off.choosable() && !Blur::Downloading(3).choosable());
+}
+
 #[test]
 fn without_a_segmenter_nothing_changes() {
     let mut fx = Effect::with_maker(Box::new(|| None));

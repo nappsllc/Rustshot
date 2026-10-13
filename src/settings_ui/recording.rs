@@ -11,7 +11,7 @@
 //! cameras, listed on a worker thread when the tab is first shown (Media
 //! Foundation and PulseAudio can take a moment), and the encoder status.
 
-use super::draw::srow;
+use super::draw::{srow, srow_ex};
 use crate::config::{self, Config};
 use crate::keymap::Chord;
 use crate::ui::compact::Tok;
@@ -420,23 +420,40 @@ pub fn camera(ui: &mut Ui, s: &mut super::Settings, tok: &Tok) {
     srow(ui, tok, "Mirror", Some("Like a mirror, as most video calls show you"), |ui| {
         ui.switch("rec_camera_mirror", &mut f.mirror, tok);
     });
+    use crate::cam::bg::Blur;
     let state = crate::cam::bg::state();
-    let blur = state.choosable();
-    ui.enabled = on && !no_cams && blur;
     let note = state.settings_note();
-    srow(ui, tok, "Background", Some(&note), |ui| {
+    // Off or damaged: no choices; the note (which file goes where) takes
+    // the row's width and the lines it needs, in the error color.
+    if matches!(state, Blur::Off { .. } | Blur::Damaged(_)) {
+        ui.enabled = on && !no_cams;
+        let w = ui.bounds().w - 14.0;
+        let n = super::draw::wrap_at_breaks(&note, w, |s| ui.text_w(11.0, s)).len();
+        let h = (16.0 + 13.0 * n as f32 + 6.0).max(super::draw::ROW_H);
+        srow_ex(ui, tok, "Background", Some(&note), true, h, |_| {});
+        ui.enabled = on;
+        return ring_row(ui, f, tok, on, no_cams);
+    }
+    ui.enabled = on && !no_cams && state.choosable();
+    let failed = matches!(state, Blur::Failed(_));
+    let h = if failed { 16.0 + 13.0 * 3.0 + 6.0 } else { super::draw::ROW_H };
+    srow_ex(ui, tok, "Background", Some(&note), failed, h, |ui| {
         // A blur chosen: the model comes (if it is not here) while the
         // window stays responsive; a failed download is retried.
         let was = f.bg;
-        ui.seg("rec_camera_bg", &labels(&BACKGROUNDS), &mut f.bg, tok);
-        let failed = matches!(state, crate::cam::bg::Blur::Failed(_));
-        if f.bg != was && BACKGROUNDS[f.bg].1 != "off" {
-            crate::cam::bg::request_model();
-        }
         if failed && ui.clink("rec_camera_bg_retry", "Retry", 12.0, false, tok) {
             crate::cam::bg::request_model();
         }
+        ui.seg("rec_camera_bg", &labels(&BACKGROUNDS), &mut f.bg, tok);
+        if f.bg != was && BACKGROUNDS[f.bg].1 != "off" {
+            crate::cam::bg::request_model();
+        }
     });
+    ring_row(ui, f, tok, on, no_cams);
+}
+
+/// The camera's Ring row (after Background).
+fn ring_row(ui: &mut Ui, f: &mut RecForm, tok: &Tok, on: bool, no_cams: bool) {
     ui.enabled = on && !no_cams;
     srow(ui, tok, "Ring", Some("Color and width of the outline"), |ui| {
         ui.width(120.0).slider("rec_camera_ring_width", &mut f.ring_w, 0, config::RING_WIDTH_MAX as u8);

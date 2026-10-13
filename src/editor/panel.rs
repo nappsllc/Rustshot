@@ -636,6 +636,13 @@ mod tests {
         assert!(matches!(row.kind, Kind::Row { value: Some(UNAVAILABLE), dim: true, .. }));
         assert!(!tb.items.iter().any(|i| matches!(i.kind, Kind::Seg { act: Act::RecBg(_), .. })));
         assert_eq!(tb.act_at(centre(row.r)), None);
+        // A failed download: the note, and a press of the row retries.
+        v.blur_note = Some(crate::cam::bg::FAILED_SHORT);
+        v.blur_retry = true;
+        let tb = panel(sel, &v);
+        let row = find(&tb, |k| matches!(k, Kind::Row { act: Act::RecBg(_), .. }));
+        assert!(matches!(row.kind, Kind::Row { value: Some(crate::cam::bg::FAILED_SHORT), dim: false, .. }) && !row.disabled);
+        assert_eq!(tb.act_at(centre(row.r)), Some(Act::RecBg(Bg::Light)));
     }
 
     /// The grip hint: centred under the bubble, 12 px below it.

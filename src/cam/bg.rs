@@ -206,10 +206,19 @@ pub fn downloading() -> bool {
 /// A blur was chosen: get the model if it is not here (in the background;
 /// the bubble blurs once it is). A failed download is tried again.
 pub fn request_model() {
+    // (Tests never go to the network: they count.)
     #[cfg(test)]
-    if STATE.with(|a| a.borrow().is_some()) {
-        return;
-    }
+    REQUESTS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    #[cfg(not(test))]
+    request_model_now();
+}
+
+/// [`request_model`] calls (tests).
+#[cfg(test)]
+pub static REQUESTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(not(test))]
+fn request_model_now() {
     #[cfg(target_os = "macos")]
     if super::seg_macos::available() {
         return;
@@ -820,6 +829,12 @@ impl Default for Effect {
 }
 
 impl Effect {
+    /// Tests: an effect whose segmenter can be made once `ready` says so.
+    #[cfg(test)]
+    pub fn with_ready(make: Maker, ready: fn() -> bool) -> Effect {
+        Effect { ready: Some(ready), ..Effect::with_maker(make) }
+    }
+
     pub fn with_maker(make: Maker) -> Effect {
         Effect { make: Some(make), worker: None, pacer: Pacer::default(), smooth: Smooth::default(), stale: false, mask: Vec::new(), scratch: Scratch::default(), ready: None, asked: false }
     }
