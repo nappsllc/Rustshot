@@ -198,6 +198,27 @@ mod tests {
         assert_eq!((m.get("a"), m.get("b")), (Ok(None), Ok(Some("two".into()))));
     }
 
+    /// The real Credential Manager: a throwaway credential written, read,
+    /// replaced and deleted again.
+    ///
+    ///     cargo test keystore::tests::live_credman -- --ignored
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "writes (then deletes) a credential in the user's Credential Manager"]
+    fn live_credman_round_trip() {
+        let store = win::Credman;
+        let name = format!("rustshot:s3:rustshot-live-test-{}", std::process::id());
+        assert_eq!(store.get(&name), Ok(None));
+        store.set(&name, "Rustshot live test", "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY").unwrap();
+        assert_eq!(store.get(&name).unwrap().as_deref(), Some("wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"));
+        assert_eq!(store.has(&name), Ok(true));
+        store.set(&name, "Rustshot live test", "ünïcode-ключ").unwrap();
+        assert_eq!(store.get(&name).unwrap().as_deref(), Some("ünïcode-ключ"));
+        store.delete(&name).unwrap();
+        assert_eq!(store.get(&name), Ok(None));
+        store.delete(&name).unwrap();
+    }
+
     #[test]
     fn names_are_per_bucket() {
         assert_eq!(s3_name(" shots "), "rustshot:s3:shots");
