@@ -146,6 +146,44 @@ pub fn with_border(img: PixBuf, cfg: &Config, scale: f32) -> PixBuf {
     out
 }
 
+/// Settings › Saving "Save at": the factor the exported picture of a
+/// capture at `scale` is scaled by (1: the screen's pixels; never more).
+pub fn save_factor(cfg: &Config, scale: f32) -> f32 {
+    match cfg.save_scale.trim() {
+        "logical" if scale > 1.0 => 1.0 / scale,
+        "custom" => cfg.save_scale_percent.clamp(10, 100) as f32 / 100.0,
+        _ => 1.0,
+    }
+}
+
+/// `img` scaled by `f` (below 1: area-averaged; else itself).
+pub fn scaled(img: PixBuf, f: f32) -> PixBuf {
+    if f.is_nan() || f >= 0.999 || f <= 0.0 {
+        return img;
+    }
+    let (w, h) = img.dimensions();
+    let (nw, nh) = (((w as f32 * f).round() as u32).max(1), ((h as f32 * f).round() as u32).max(1));
+    if (nw, nh) == (w, h) {
+        return img;
+    }
+    crate::imgedit::resample::resize(&img, nw, nh, crate::imgedit::Filter::Area)
+}
+
+/// `img` (a capture at `scale`) as Copy, Save, Upload and Pin hand it
+/// out: at the Save at size ([`save_factor`]; `keep_size`: it was resized
+/// on purpose already, the Edit window's Resize) with the border round it
+/// ([`with_border`], its width at the new size). The history keeps the
+/// capture as it was.
+pub fn for_output(img: PixBuf, cfg: &Config, scale: f32, keep_size: bool) -> PixBuf {
+    let f = if keep_size { 1.0 } else { save_factor(cfg, scale) };
+    with_border(scaled(img, f), cfg, scale * f)
+}
+
+/// The border [`for_output`] puts round a capture at `scale` (px).
+pub fn output_border(cfg: &Config, scale: f32) -> u32 {
+    border(cfg, scale * save_factor(cfg, scale)).map_or(0, |(b, _)| b)
+}
+
 /// Encode `img` as `fmt`; `quality` (1-100) only affects JPEG.
 pub fn encode(img: &PixBuf, fmt: Format, quality: u8) -> Result<Vec<u8>> {
     match fmt {

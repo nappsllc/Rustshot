@@ -37,6 +37,18 @@
 //! come opaque `rect` fills over everything outside the crop
 //! (`"stands_for":"crop"`), which it draws and this reader drops: what
 //! a crop hides stays hidden in v0.2 and v0.3 too.
+//!
+//! The Edit window's image edits are `"transforms"` after the crop
+//! ([`to_json_full`]), an ordered list applied on export after it:
+//! `{"op":"flip","axis":"h"}`, `{"op":"rotate","deg":90}`,
+//! `{"op":"resize","w":1920,"h":1080,"from":[3840,2160],"filter":"lanczos3"}`,
+//! `{"op":"canvas","pad":[t,r,b,l],"bg":"#ffffff"|"presentation","radius":12,"shadow":true}`.
+//! The objects stay in the original's pixels: an older build ignores the
+//! key and shows the picture unturned, at its size, without the canvas,
+//! with every object (every redaction) where it belongs on it, so nothing
+//! needs a stand-in; turning, resizing and padding hide nothing. This
+//! reader fails closed on a stack it does not know (an unknown op, values
+//! out of range, a turn after a resize).
 
 use super::{CalloutStyle, FRect, Obj, Pt, TextFmt};
 use crate::text::{Align, Family};
@@ -172,12 +184,131 @@ pub fn to_json(objs: &[Obj]) -> String {
     to_json_doc(objs, None, (0, 0))
 }
 
-/// What `annotations.json` holds: the objects, and the Edit window's
-/// crop (image px; `None`: the whole picture).
+/// What `annotations.json` holds: the objects, the Edit window's crop
+/// (image px; `None`: the whole picture) and its image edits (applied
+/// after the crop: [`crate::imgedit`]).
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Doc {
     pub objects: Vec<Obj>,
     pub crop: Option<FRect>,
+    pub edits: crate::imgedit::Edits,
+}
+
+/// The image edits as `"transforms"`: the orientation as a flip then a
+/// rotate, then the resize, then the canvas (nothing when there are none).
+fn transforms(out: &mut String, e: &crate::imgedit::Edits) {
+    use crate::imgedit::Bg;
+    if e.is_empty() {
+        return;
+    }
+    out.push_str(",\"transforms\":[");
+    let mut first = true;
+    let mut op = |out: &mut String, name: &str| {
+        out.push_str(if first { "{\"op\":" } else { ",{\"op\":" });
+        first = false;
+        string(out, name);
+    };
+    if e.orient.flip {
+        op(out, "flip");
+        W(out).str("axis", "h");
+        out.push('}');
+    }
+    if e.orient.rot % 4 != 0 {
+        op(out, "rotate");
+        W(out).num("deg", (e.orient.rot % 4) as f32 * 90.0);
+        out.push('}');
+    }
+    if let Some(r) = e.resize {
+        op(out, "resize");
+        let mut w = W(out);
+        w.num("w", r.w as f32);
+        w.num("h", r.h as f32);
+        w.pt("from", Pt::new(r.from.0 as f32, r.from.1 as f32));
+        w.str("filter", r.filter.id());
+        out.push('}');
+    }
+    if let Some(c) = e.canvas {
+        op(out, "canvas");
+        let mut w = W(out);
+        w.rect("pad", FRect { x: c.top as f32, y: c.right as f32, w: c.bottom as f32, h: c.left as f32 });
+        match c.bg {
+            Bg::Solid(col) => w.color("bg", col),
+            Bg::Presentation => w.str("bg", "presentation"),
+        }
+        w.num("radius", c.radius);
+        w.bool("shadow", c.shadow);
+        out.push('}');
+    }
+    out.push(']');
+}
+
+/// `"transforms"` read back (see [`transforms`]): rotates and flips in
+/// any number and order, then at most one resize, then at most one
+/// canvas. Anything else (an unknown op, a value out of range, a resize
+/// before a turn) is an error: a newer build's stack is not guessed at.
+fn transforms_of(v: Option<&V>) -> Result<crate::imgedit::Edits> {
+    use crate::imgedit::{Bg, Edits, Filter, Orient, Pad, Resize, MAX_SIDE};
+    let mut e = Edits::default();
+    let items = match v {
+        None | Some(V::Null) => return Ok(e),
+        Some(V::Arr(a)) if a.len() <= 64 => a,
+        Some(_) => bail!("annotations.json: transforms: not a list"),
+    };
+    // 0: turns, 1: after the resize, 2: after the canvas.
+    let mut stage = 0;
+    for it in items {
+        let V::Obj(fields) = it else { bail!("annotations.json: a transform is not an object") };
+        let f = F { ty: "transform", fields };
+        let side = |k: &str| -> Result<u32> {
+            let v = f.num(k)?;
+            if v.fract() != 0.0 || !(1.0..=MAX_SIDE as f32).contains(&v) {
+                bail!("annotations.json: transform.{k}: {v} is not a size");
+            }
+            Ok(v as u32)
+        };
+        match f.str("op")? {
+            "rotate" | "flip" if stage > 0 => bail!("annotations.json: a turn after a resize or a canvas"),
+            "rotate" => {
+                let d = f.num("deg")?;
+                let Some(q) = [90.0, 180.0, 270.0].iter().position(|v| *v == d).map(|i| i as u8 + 1) else {
+                    bail!("annotations.json: rotate.deg: {d} is not 90, 180 or 270")
+                };
+                e.orient = e.orient.then(Orient { rot: q, flip: false });
+            }
+            "flip" => {
+                e.orient = match f.str("axis")? {
+                    "h" => e.orient.flipped_h(),
+                    "v" => e.orient.flipped_v(),
+                    a => bail!("annotations.json: flip.axis: {a:?}"),
+                };
+            }
+            "resize" if stage > 0 => bail!("annotations.json: a second resize, or one after the canvas"),
+            "resize" => {
+                let [fw, fh] = f.nums::<2>("from")?;
+                let from = |v: f32| if v.fract() == 0.0 && (1.0..=MAX_SIDE as f32).contains(&v) { Ok(v as u32) } else { Err(anyhow!("annotations.json: resize.from: {v}")) };
+                let filter = Filter::from_id(f.str("filter")?).ok_or_else(|| anyhow!("annotations.json: resize.filter: unknown"))?;
+                e.resize = Some(Resize { w: side("w")?, h: side("h")?, from: (from(fw)?, from(fh)?), filter });
+                stage = 1;
+            }
+            "canvas" if stage > 1 => bail!("annotations.json: a second canvas"),
+            "canvas" => {
+                let [t, r, b, l] = f.nums::<4>("pad")?;
+                let px = |v: f32| if v.fract() == 0.0 && (0.0..=crate::imgedit::frame::MAX_PAD as f32).contains(&v) { Ok(v as u32) } else { Err(anyhow!("annotations.json: canvas.pad: {v}")) };
+                let bg = match f.need("bg")? {
+                    V::Str(s) if s == "presentation" => Bg::Presentation,
+                    _ => Bg::Solid(f.color("bg")?),
+                };
+                let radius = f.num("radius")?;
+                if !(0.0..=crate::imgedit::frame::MAX_RADIUS).contains(&radius) {
+                    bail!("annotations.json: canvas.radius: {radius}");
+                }
+                e.canvas = Some(Pad { top: px(t)?, right: px(r)?, bottom: px(b)?, left: px(l)?, bg, radius, shadow: f.bool_or("shadow", false)? });
+                stage = 2;
+            }
+            o => bail!("annotations.json: unknown transform {o:?}"),
+        }
+    }
+    Ok(e)
 }
 
 /// The color of a crop's stand-in fills.
@@ -242,6 +373,14 @@ pub fn doc_stand_ins(objs: &[Obj], crop: FRect, size: (u32, u32)) -> Vec<Obj> {
 /// on top of every object), so a crop that hides something keeps it
 /// hidden there too; this reader drops them.
 pub fn to_json_doc(objs: &[Obj], crop: Option<FRect>, size: (u32, u32)) -> String {
+    to_json_full(objs, crop, &Default::default(), size)
+}
+
+/// [`to_json_doc`] with the image edits as `"transforms"` after the crop.
+/// The objects stay in the original's pixels, where an older build (that
+/// ignores the key) draws them: it shows the picture unturned, at its
+/// size, with every redaction where it belongs.
+pub fn to_json_full(objs: &[Obj], crop: Option<FRect>, edits: &crate::imgedit::Edits, size: (u32, u32)) -> String {
     let mut out = String::new();
     let _ = write!(out, "{{\"version\":{WRITTEN}");
     let crop = crop.and_then(|c| super::mask::crop_rect(c, size)).filter(|c| *c != FRect { x: 0.0, y: 0.0, w: size.0 as f32, h: size.1 as f32 });
@@ -249,6 +388,7 @@ pub fn to_json_doc(objs: &[Obj], crop: Option<FRect>, size: (u32, u32)) -> Strin
         out.push_str(",\"crop\":");
         rect(&mut out, c);
     }
+    transforms(&mut out, edits);
     out.push_str(",\"objects\":[");
     let stand_ins = crop.map_or(Vec::new(), |c| doc_stand_ins(objs, c, size));
     for (i, o) in objs.iter().chain(&stand_ins).enumerate() {
@@ -683,7 +823,8 @@ pub fn from_json_doc(s: &str) -> Result<Doc> {
         }
     };
     let objects = objects_of(&top)?;
-    Ok(Doc { objects, crop })
+    let edits = transforms_of(top.iter().find(|(n, _)| n == "transforms").map(|(_, v)| v))?;
+    Ok(Doc { objects, crop, edits })
 }
 
 fn objects_of(top: &[(String, V)]) -> Result<Vec<Obj>> {
@@ -913,7 +1054,7 @@ mod tests {
         let s = to_json_doc(&objs, Some(crop), size);
         assert!(s.starts_with("{\"version\":1,\"crop\":[40,30,150,100],\"objects\":["), "{s}");
         let d = from_json_doc(&s).unwrap();
-        assert_eq!(d, Doc { objects: objs.clone(), crop: Some(crop) }, "the stand-ins are dropped");
+        assert_eq!(d, Doc { objects: objs.clone(), crop: Some(crop), ..Default::default() }, "the stand-ins are dropped");
         assert_eq!(from_json(&s).unwrap(), objs);
         assert_eq!(to_json_doc(&d.objects, d.crop, size), s, "stable");
         // No crop (or the whole picture): as before.
@@ -955,6 +1096,121 @@ mod tests {
                     assert_eq!(p, [0, 0, 0, 255], "({x}, {y}) outside the crop shows");
                 }
             }
+        }
+    }
+
+    fn sample_edits() -> crate::imgedit::Edits {
+        use crate::imgedit::{Bg, Edits, Filter, Orient, Pad, Resize};
+        Edits {
+            orient: Orient { rot: 1, flip: true },
+            resize: Some(Resize { w: 50, h: 75, from: (100, 150), filter: Filter::Area }),
+            canvas: Some(Pad { top: 1, right: 2, bottom: 3, left: 4, bg: Bg::Solid(C4::new(10, 20, 30, 40)), radius: 12.0, shadow: true }),
+        }
+    }
+
+    /// The image edits round-trip in every orientation; a stack this
+    /// build does not know fails closed.
+    #[test]
+    fn transforms_round_trip_and_fail_closed() {
+        use crate::imgedit::{Bg, Edits, Orient, Pad};
+        let size = (150, 100);
+        let objs = every_kind();
+        let crop = Some(FRect { x: 10.0, y: 0.0, w: 100.0, h: 100.0 });
+        let s = to_json_full(&objs, crop, &sample_edits(), size);
+        assert!(
+            s.starts_with(
+                "{\"version\":1,\"crop\":[10,0,100,100],\"transforms\":[{\"op\":\"flip\",\"axis\":\"h\"},{\"op\":\"rotate\",\"deg\":90},\
+                 {\"op\":\"resize\",\"w\":50,\"h\":75,\"from\":[100,150],\"filter\":\"area\"},\
+                 {\"op\":\"canvas\",\"pad\":[1,2,3,4],\"bg\":\"#0a141e28\",\"radius\":12,\"shadow\":true}],\"objects\":["
+            ),
+            "{s}"
+        );
+        let d = from_json_doc(&s).unwrap();
+        assert_eq!((d.edits, &d.objects, d.crop), (sample_edits(), &objs, crop));
+        assert_eq!(to_json_full(&d.objects, d.crop, &d.edits, size), s, "stable");
+        for i in 0..8 {
+            let o = Orient { rot: i % 4, flip: i >= 4 };
+            let canvas = (i % 2 == 0).then(|| Pad::presentation());
+            let e = Edits { orient: o, canvas, ..Default::default() };
+            let s = to_json_full(&[], None, &e, size);
+            assert_eq!(from_json_doc(&s).unwrap().edits, e, "{s}");
+            assert_eq!(s.contains("transforms"), !e.is_empty());
+        }
+        assert!(matches!(from_json_doc(&to_json_full(&[], None, &Edits { canvas: Some(Pad::presentation()), ..Default::default() }, size)).unwrap().edits.canvas, Some(Pad { bg: Bg::Presentation, .. })));
+        // Any order of turns is read (composed); the rest must follow them.
+        let turns = r##"{"version":1,"transforms":[{"op":"rotate","deg":90},{"op":"flip","axis":"v"},{"op":"rotate","deg":180}],"objects":[]}"##;
+        assert_eq!(from_json_doc(turns).unwrap().edits.orient, Orient::ID.rotated(true).flipped_v().rotated(true).rotated(true));
+        for bad in [
+            r##"{"version":1,"transforms":{"op":"rotate"},"objects":[]}"##,
+            r##"{"version":1,"transforms":[{"op":"rotate","deg":45}],"objects":[]}"##,
+            r##"{"version":1,"transforms":[{"op":"skew","deg":5}],"objects":[]}"##,
+            r##"{"version":1,"transforms":[{"op":"flip","axis":"d"}],"objects":[]}"##,
+            r##"{"version":1,"transforms":[{"op":"resize","w":5,"h":5,"from":[10,10],"filter":"area"},{"op":"rotate","deg":90}],"objects":[]}"##,
+            r##"{"version":1,"transforms":[{"op":"resize","w":5,"h":5,"from":[10,10],"filter":"magic"}],"objects":[]}"##,
+            r##"{"version":1,"transforms":[{"op":"resize","w":0,"h":5,"from":[10,10],"filter":"area"}],"objects":[]}"##,
+            r##"{"version":1,"transforms":[{"op":"resize","w":5.5,"h":5,"from":[10,10],"filter":"area"}],"objects":[]}"##,
+            r##"{"version":1,"transforms":[{"op":"canvas","pad":[-1,0,0,0],"bg":"#fff","radius":0}],"objects":[]}"##,
+            r##"{"version":1,"transforms":[{"op":"canvas","pad":[1,0,0,0],"bg":"wood","radius":0}],"objects":[]}"##,
+            r##"{"version":1,"transforms":[{"op":"canvas","pad":[1,0,0,0],"bg":"#fff","radius":0},{"op":"canvas","pad":[1,0,0,0],"bg":"#fff","radius":0}],"objects":[]}"##,
+            r##"{"version":1,"transforms":[{"op":"canvas","pad":[1,0,0,0],"bg":"#fff","radius":0},{"op":"flip","axis":"h"}],"objects":[]}"##,
+        ] {
+            assert!(from_json_doc(bad).is_err(), "{bad}");
+        }
+    }
+
+    /// v0.2.0's and v0.3.0's own readers (and so this build before image
+    /// edits, which reads the same) ignore `"transforms"`: they read the
+    /// same objects as without them, in the original's pixels, and draw
+    /// every redaction over what it hides. The new export shows nothing
+    /// of the secrets either.
+    #[test]
+    fn older_builds_ignore_transforms_and_still_redact() {
+        use crate::objects::{v020, v030};
+        let size = (300u32, 200u32);
+        // Secrets: red squares; each covered by an opaque fill.
+        let mut pic = crate::pixbuf::PixBuf::from_pixel(size.0, size.1, [255, 255, 255, 255]);
+        let secrets = [FRect { x: 30.0, y: 40.0, w: 40.0, h: 12.0 }, FRect { x: 150.0, y: 120.0, w: 60.0, h: 20.0 }, FRect { x: 260.0, y: 10.0, w: 20.0, h: 20.0 }];
+        for s in &secrets {
+            for y in s.y as u32..(s.y + s.h) as u32 {
+                for x in s.x as u32..(s.x + s.w) as u32 {
+                    let i = ((y * size.0 + x) * 4) as usize;
+                    pic.as_raw_mut()[i..i + 4].copy_from_slice(&[230, 20, 20, 255]);
+                }
+            }
+        }
+        let black = C4::rgb(0, 0, 0);
+        let mut objs: Vec<Obj> = secrets.iter().map(|s| Obj::RectFill { r: FRect { x: s.x - 3.0, y: s.y - 3.0, w: s.w + 6.0, h: s.h + 6.0 }, color: black, width: 1.0 }).collect();
+        objs.push(Obj::Blur { r: FRect { x: 100.0, y: 20.0, w: 50.0, h: 40.0 }, sigma: 10.0 });
+        objs.push(Obj::Arrow { a: Pt::new(10.0, 190.0), b: Pt::new(120.0, 150.0), color: C4::rgb(0, 120, 255), width: 4.0 });
+        let crop = Some(FRect { x: 0.0, y: 0.0, w: 290.0, h: 200.0 });
+        let red = |p: [u8; 4]| p[3] > 0 && p[0] > 150 && p[1] < 90 && p[2] < 90;
+        let mut e = sample_edits();
+        e.resize = None; // the full-size picture: every pixel is checked
+        for edits in [e, sample_edits(), crate::imgedit::Edits { orient: crate::imgedit::Orient { rot: 2, flip: false }, ..Default::default() }] {
+            let s = to_json_full(&objs, crop, &edits, size);
+            let plain = to_json_doc(&objs, crop, size);
+            // What they read: exactly what they read without the edits.
+            let v3 = v030::json::from_json(&s).expect("v0.3.0 reads it");
+            assert_eq!(v3, v030::json::from_json(&plain).unwrap());
+            assert_eq!(&v3[..objs.len()], &objs[..], "in the original's pixels");
+            let v2 = v020::json::from_json(&s).expect("v0.2.0 reads it");
+            assert_eq!(format!("{v2:?}"), format!("{:?}", v020::json::from_json(&plain).unwrap()));
+            for s in &secrets {
+                assert!(
+                    v2.iter().any(|o| matches!(o, v020::Obj::RectFill { r, .. } if r.x <= s.x && r.y <= s.y && r.x + r.w >= s.x + s.w && r.y + r.h >= s.y + s.h)),
+                    "v0.2.0 covers {s:?}"
+                );
+            }
+            // Drawn as v0.3 draws them (over the whole original): no secret shows.
+            let old = crate::editor::bake_objects(&pic, &v3, None);
+            assert!(!old.as_raw().as_chunks::<4>().0.iter().any(|p| red(*p)), "v0.3 shows a secret");
+            // This build: turned, cropped, on its canvas, resized.
+            let out = crate::imgedit::render(&pic, &objs, crop, None, &edits);
+            assert_eq!(out.dimensions(), edits.out_size((290, 200)));
+            assert!(!out.as_raw().as_chunks::<4>().0.iter().any(|p| red(*p)), "{edits:?}: the export shows a secret");
+            // And without the fills, the secrets would show (the check bites).
+            let bare = crate::imgedit::render(&pic, &objs[3..], crop, None, &edits);
+            assert!(bare.as_raw().as_chunks::<4>().0.iter().any(|p| red(*p)));
         }
     }
 

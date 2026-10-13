@@ -851,7 +851,7 @@ impl Store {
         let thumb = match thumb {
             Some(t) => t,
             None => {
-                made = thumbnail_doc(original, objects, None, meta.mask.as_deref());
+                made = thumbnail_doc(original, objects, None, meta.mask.as_deref(), &Default::default());
                 &made
             }
         };
@@ -972,19 +972,19 @@ impl Store {
     /// to. `original.png` stays as it was.
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn save_edit(&self, id: &str, objects: &[Obj], saved: Option<(PathBuf, u64)>) -> Result<Meta> {
-        self.save_edit_doc(id, objects, None, saved)
+        self.save_edit_doc(id, objects, None, &Default::default(), saved)
     }
 
     /// [`Store::save_edit`] with the Edit window's crop (written with its
     /// stand-ins for older builds, [`crate::objects::to_json_doc`]).
-    pub fn save_edit_doc(&self, id: &str, objects: &[Obj], crop: Option<crate::objects::FRect>, saved: Option<(PathBuf, u64)>) -> Result<Meta> {
+    pub fn save_edit_doc(&self, id: &str, objects: &[Obj], crop: Option<crate::objects::FRect>, edits: &crate::imgedit::Edits, saved: Option<(PathBuf, u64)>) -> Result<Meta> {
         let dir = self.entry_dir(id).ok_or_else(|| anyhow!("bad history id {id:?}"))?;
         let original = PixBuf::from_png(&std::fs::read(dir.join(ORIGINAL)).unwrap_or_default()).ok();
         let mask = std::fs::read_to_string(dir.join(META)).ok().and_then(|s| meta_from_json(&s).ok()).and_then(|m| m.mask);
-        let thumb = original.as_ref().map(|o| thumbnail_doc(o, objects, crop, mask.as_deref()));
+        let thumb = original.as_ref().map(|o| thumbnail_doc(o, objects, crop, mask.as_deref(), edits));
         let size = original.as_ref().map_or((0, 0), PixBuf::dimensions);
         let _l = self.lock_existing(id, &dir)?;
-        write_atomic(&dir.join(ANNOTATIONS), crate::objects::to_json_doc(objects, crop, size).as_bytes())?;
+        write_atomic(&dir.join(ANNOTATIONS), crate::objects::to_json_full(objects, crop, edits, size).as_bytes())?;
         if let Some(t) = thumb {
             write_atomic(&dir.join(THUMB), &t.to_png()?)?;
         }
@@ -1127,8 +1127,8 @@ impl Store {
 }
 
 /// The thumbnail of a screenshot as it exports ([`render`]).
-pub fn thumbnail_doc(original: &PixBuf, objects: &[Obj], crop: Option<crate::objects::FRect>, mask: Option<&[crate::objects::Pt]>) -> PixBuf {
-    crate::scale::fit(&render(original, objects, crop, mask), THUMB_W, THUMB_H)
+pub fn thumbnail_doc(original: &PixBuf, objects: &[Obj], crop: Option<crate::objects::FRect>, mask: Option<&[crate::objects::Pt]>, edits: &crate::imgedit::Edits) -> PixBuf {
+    crate::scale::fit(&crate::imgedit::render(original, objects, crop, mask, edits), THUMB_W, THUMB_H)
 }
 
 /// The picture as it exports: `original` with `objects`, transparent

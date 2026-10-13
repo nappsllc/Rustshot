@@ -82,7 +82,7 @@ impl Window {
     /// A worker's export result, applied as the timer would (tests).
     #[cfg(test)]
     pub fn apply_done_for_tests(&mut self, res: crate::export::ExportResult, saves: bool, objs: Vec<crate::objects::Obj>) {
-        let d = export_done(res, saves, &self.e.store, &self.e.entry.id.clone(), objs, self.e.canvas.crop(), &self.e.cfg);
+        let d = export_done(res, saves, &self.e.store, &self.e.entry.id.clone(), crate::objects::Doc { objects: objs.clone(), ..self.e.canvas.doc() }, objs, &self.e.cfg);
         let _ = self.done.0.send(d);
         self.tick();
     }
@@ -189,10 +189,17 @@ impl Window {
         use crate::export::Task;
         // Settings › Capture "Add a border" (the capture's scale); not on
         // what Copy text reads.
-        let img = self.e.canvas.export();
-        let img = if r == Request::CopyText { img } else { crate::export::with_border(img, &self.e.cfg, self.e.entry.meta.scale) };
+        // Settings › Saving "Save at" too (not after a Resize: that size
+        // was chosen); Copy text reads the picture before the resize and
+        // the canvas.
+        let img = if r == Request::CopyText {
+            self.e.canvas.export_picture()
+        } else {
+            let resized = self.e.canvas.edits().resize.is_some();
+            crate::export::for_output(self.e.canvas.export(), &self.e.cfg, self.e.entry.meta.scale, resized)
+        };
         let objs = self.e.canvas.objects().to_vec();
-        let crop = self.e.canvas.crop();
+        let doc = self.e.canvas.doc();
         if r == Request::Pin {
             #[cfg(not(test))]
             let at = crate::capture::cursor_pos();
@@ -246,7 +253,7 @@ impl Window {
         let tx = self.done.0.clone();
         crate::busy::spawn(move || {
             let res = crate::export::run_export(&img, (0, 0), std::slice::from_ref(&task), &cfg);
-            let _ = tx.send(export_done(res, saves, &store, &id, objs, crop, &cfg));
+            let _ = tx.send(export_done(res, saves, &store, &id, doc, objs, &cfg));
         });
     }
 
@@ -490,14 +497,14 @@ impl Window {
 /// A worker's export finished: a save (`saves`) that wrote a file is an
 /// edit of the entry (its objects and the file) and saves the edits; a
 /// cancelled or failed one saves nothing.
-fn export_done(res: crate::export::ExportResult, saves: bool, store: &crate::history::Store, id: &str, objs: Vec<crate::objects::Obj>, crop: Option<crate::objects::FRect>, cfg: &crate::config::Config) -> Done {
+fn export_done(res: crate::export::ExportResult, saves: bool, store: &crate::history::Store, id: &str, doc: crate::objects::Doc, objs: Vec<crate::objects::Obj>, cfg: &crate::config::Config) -> Done {
     let file = res.done.iter().find_map(|d| match d {
         crate::export::Done::Saved(p) | crate::export::Done::SavedDesktop(p) => Some(p.clone()),
         _ => None,
     });
     if saves && let Some(p) = file {
         let bytes = std::fs::metadata(&p).map_or(0, |m| m.len());
-        let recorded = super::record_save(store, id, &objs, crop, &p, bytes);
+        let recorded = super::record_save(store, id, &doc, &p, bytes);
         let s = super::Saved { path: p, bytes, recorded };
         return Done { text: s.note(), kind: if recorded { ToastKind::Success } else { ToastKind::Info }, uploaded: None, saved: Some((objs, s)) };
     }

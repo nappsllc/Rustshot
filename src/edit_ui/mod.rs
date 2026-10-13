@@ -215,17 +215,18 @@ impl Saved {
 /// replacing the file there (Overwrite) all at once; then the entry gets
 /// its objects, Edited and the file. A file written for an entry deleted
 /// meanwhile is still a save.
-pub fn write(store: &Store, id: &str, img: &crate::pixbuf::PixBuf, objects: &[crate::objects::Obj], crop: Option<crate::objects::FRect>, path: &Path, cfg: &Config) -> Result<Saved, String> {
+pub fn write(store: &Store, id: &str, img: &crate::pixbuf::PixBuf, doc: &crate::objects::Doc, path: &Path, cfg: &Config) -> Result<Saved, String> {
     crate::export::save_image(img, path, cfg.jpeg_quality).map_err(|e| format!("{e:#}"))?;
     let bytes = std::fs::metadata(path).map_or(0, |m| m.len());
-    let recorded = record_save(store, id, objects, crop, path, bytes);
+    let recorded = record_save(store, id, doc, path, bytes);
     Ok(Saved { path: path.to_path_buf(), bytes, recorded })
 }
 
-/// Entry `id` was saved to `path`: its objects, Edited and the file.
-/// False when the entry is gone.
-pub fn record_save(store: &Store, id: &str, objects: &[crate::objects::Obj], crop: Option<crate::objects::FRect>, path: &Path, bytes: u64) -> bool {
-    match store.save_edit_doc(id, objects, crop, Some((path.to_path_buf(), bytes))) {
+/// Entry `id` was saved to `path`: its document (objects, crop and image
+/// edits, in the original's pixels), Edited and the file. False when the
+/// entry is gone.
+pub fn record_save(store: &Store, id: &str, doc: &crate::objects::Doc, path: &Path, bytes: u64) -> bool {
+    match store.save_edit_doc(id, &doc.objects, doc.crop, &doc.edits, Some((path.to_path_buf(), bytes))) {
         Ok(_) => {
             crate::history::changed();
             true
@@ -428,8 +429,9 @@ fn run(id: &str, rx: std::sync::mpsc::Receiver<Msg>, unsaved: Arc<AtomicBool>) {
         return;
     }
     let mut canvas = Canvas::new(img, doc.objects, cfg.clone(), th);
-    // Its crop and a freeform capture's lasso.
+    // Its crop, a freeform capture's lasso and its image edits.
     canvas.set_doc(doc.crop, e.meta.mask.clone());
+    canvas.set_edits(doc.edits);
     let title = format!("Edit \u{2014} {}", crate::history::title(&e.meta));
     // Pruning leaves the entry alone while it is open.
     let held = crate::history::hold_open(&e.id, &e.dir);
@@ -561,10 +563,12 @@ impl Edit {
                 let path = target(choice, self.entry.meta.saved.as_deref(), &self.cfg);
                 // Text being typed is part of what is saved.
                 self.canvas.commit_drafts();
-                let img = crate::export::with_border(self.canvas.export(), &self.cfg, self.entry.meta.scale);
+                // Save at (unless resized on purpose) and the border.
+                let resized = self.canvas.edits().resize.is_some();
+                let img = crate::export::for_output(self.canvas.export(), &self.cfg, self.entry.meta.scale, resized);
                 let objs = self.canvas.objects().to_vec();
-                let crop = self.canvas.crop();
-                match write(&self.store, &self.entry.id, &img, &objs, crop, &path, &self.cfg) {
+                let doc = self.canvas.doc();
+                match write(&self.store, &self.entry.id, &img, &doc, &path, &self.cfg) {
                     Ok(s) => {
                         self.saved(objs, &s);
                         let kind = if s.recorded { crate::editor::style::ToastKind::Success } else { crate::editor::style::ToastKind::Info };

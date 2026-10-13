@@ -21,6 +21,7 @@ mod history_ui;
 mod edit_ui;
 mod hotkey;
 mod icon_path;
+mod imgedit;
 mod imgur;
 mod instance;
 mod keymap;
@@ -544,9 +545,11 @@ fn run_direct(cfg: &Config, args: &CaptureArgs, shot: Shot, region: Option<(i32,
         },
         None => (shot.image.clone(), shot.origin),
     };
-    // Settings › Capture "Add a border", around what is exported.
-    let b = export::border(cfg, shot.scale).map_or(0, |(b, _)| b as i32);
-    let (img, global) = (export::with_border(img, cfg, shot.scale), (global.0 - b, global.1 - b));
+    // Settings › Capture "Add a border", around what is exported, at the
+    // Settings › Saving "Save at" size (the history keeps the capture).
+    let b = export::output_border(cfg, shot.scale) as i32;
+    let original = img.clone();
+    let (img, global) = (export::for_output(img, cfg, shot.scale, false), (global.0 - b, global.1 - b));
     let res = export::run_export(&img, global, &tasks, cfg);
     let raw_stdout = tasks.iter().any(|t| matches!(t, Task::Raw));
     for m in &res.messages {
@@ -566,7 +569,7 @@ fn run_direct(cfg: &Config, args: &CaptureArgs, shot: Shot, region: Option<(i32,
             _ => None,
         });
         let meta = history::Meta { captured: export::local_ymdhms(), scale: shot.scale, saved, ..Default::default() };
-        history::record(cfg, &root, history::ShotRec { original: img.clone(), objects: Vec::new(), meta })
+        history::record(cfg, &root, history::ShotRec { original: original.clone(), objects: Vec::new(), meta })
     });
     if let Some(rx) = res.upload {
         match export::wait_upload(rx, cfg.copy_url_after_upload) {

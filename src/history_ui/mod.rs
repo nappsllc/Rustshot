@@ -464,8 +464,9 @@ pub fn picture(store: &Store, e: &Entry) -> anyhow::Result<PixBuf> {
     {
         anyhow::bail!("its crop lies outside the picture, so it is not shown");
     }
-    // Its crop and lasso too (what they leave out is never shown).
-    Ok(crate::history::render(&orig, &doc.objects, doc.crop, e.meta.mask.as_deref()))
+    // Its crop and lasso too (what they leave out is never shown), and
+    // its image edits.
+    Ok(crate::imgedit::render(&orig, &doc.objects, doc.crop, e.meta.mask.as_deref(), &doc.edits))
 }
 
 /// The file a capture opens as: the saved one (or the recording) when it
@@ -527,7 +528,8 @@ pub fn run_export(store: &Store, id: &str, task: crate::export::Task, cfg: &Conf
         };
     }
     let img = match picture(store, &e) {
-        Ok(i) => crate::export::with_border(i, cfg, e.meta.scale),
+        // Save at (unless the Edit window resized it on purpose), the border.
+        Ok(i) => crate::export::for_output(i, cfg, e.meta.scale, store.doc(&e).is_ok_and(|d| d.edits.resize.is_some())),
         Err(err) => return fail(format!("Could not read the capture: {err:#}")),
     };
     if task == Task::Pin {

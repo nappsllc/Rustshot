@@ -35,6 +35,7 @@ mod select;
 mod input;
 mod assist;
 mod snip;
+mod imgedit;
 mod trim_sel;
 pub use assist::AcceptOn;
 // The editor in a normal window: the Edit window's canvas.
@@ -1599,8 +1600,10 @@ impl App {
         // image's top-left moves out by it (a pin stays in place).
         // Copy text (OCR) reads the capture alone.
         let framed = tasks.iter().any(|t| !matches!(t, Task::Text | Task::Geometry));
-        let b = export::border(&edit.cfg, edit.shot.scale).filter(|_| framed).map_or(0, |(b, _)| b as i32);
-        let img = if framed { export::with_border(img, &edit.cfg, edit.shot.scale) } else { img };
+        // Settings › Saving "Save at" too (the history keeps the capture
+        // at the screen's pixels).
+        let b = if framed { export::output_border(&edit.cfg, edit.shot.scale) as i32 } else { 0 };
+        let img = if framed { export::for_output(img, &edit.cfg, edit.shot.scale, false) } else { img };
         self.st = State::Finish(Box::new(FinishJob {
             img,
             sel_global: (g.0 - b, g.1 - b),
@@ -3038,6 +3041,11 @@ impl Edit {
         let ch = &mut self.snip.crop_hist;
         ch.resize(self.hi + 1, crop);
         ch.push(crop);
+        // So do its image edits.
+        let ed = self.snip.edits;
+        let eh = &mut self.snip.edits_hist;
+        eh.resize(self.hi + 1, ed);
+        eh.push(ed);
         self.sel_hist.resize(self.hi + 1, None);
         self.sel_hist.push(None);
         self.hi = self.hist.len() - 1;
@@ -3046,6 +3054,7 @@ impl Edit {
             let excess = self.hist.len() - limit;
             self.hist.drain(0..excess);
             self.snip.crop_hist.drain(0..excess.min(self.snip.crop_hist.len()));
+            self.snip.edits_hist.drain(0..excess.min(self.snip.edits_hist.len()));
             self.sel_hist.drain(0..excess.min(self.sel_hist.len()));
             self.hi -= excess;
         }
@@ -3061,6 +3070,7 @@ impl Edit {
             self.hi -= 1;
             self.objects = self.hist[self.hi].clone();
             self.snip.crop = self.snip.crop_hist.get(self.hi).copied().flatten();
+            self.restore_edits();
             self.dirty = true;
         }
     }
@@ -3075,6 +3085,7 @@ impl Edit {
             }
             self.objects = self.hist[self.hi].clone();
             self.snip.crop = self.snip.crop_hist.get(self.hi).copied().flatten();
+            self.restore_edits();
             self.dirty = true;
         }
     }
