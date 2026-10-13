@@ -633,22 +633,24 @@ fn wait_pid_window(pid: u32, ms: u64) -> Option<HWND> {
 const NO_OTHER_HOTKEYS: &str =
     "record_hotkey = \"\"\ncapture_full_hotkey = \"\"\ncapture_window_hotkey = \"\"\nrepeat_hotkey = \"\"\ncapture_text_hotkey = \"\"\n";
 
-/// Tab presses from the Settings rail to Accept's key cap in Key bindings:
-/// the eight global rows, then the overlay rows (`KEY_ROWS` in
-/// src/settings_ui/draw.rs): Tools (11 caps), Select · Callout ·
-/// Spotlight · Magnify (4), Selected objects (4), Stroke size (2), Typing
-/// bold · italic · underline (3), Copy · Save · Upload (3), Copy text ·
-/// Copy color (2), then Accept.
-const ACCEPT_TABS: usize = 8 + 11 + 4 + 4 + 2 + 3 + 3 + 2 + 1;
-/// From Accept's cap to the footer's OK: the 17 overlay caps after it (the Edit window's zoom: 4),
-/// the 3 While recording rows, the header's Reset to defaults, then Open
-/// config file, Apply, Cancel, OK.
-const ACCEPT_TO_OK: usize = 17 + 3 + 1 + 4;
-/// Tab presses from the rail to General's Save to field: Theme, the
-/// four accent swatches, Launch at login, Show icon in tray, Copy after
-/// capture, Play shutter sound, Show thumbnail after capture, Show hints
-/// in the overlay, Change…, then the field.
-const FOLDER_TABS: usize = 13;
+/// Rail keys from General to Settings › Saving (Capture, Overlay, Saving).
+const TO_SAVING: [u32; 3] = [0x28; 3];
+/// Tab presses from the rail to Saving's Save to field: Change…, then the
+/// field.
+const FOLDER_TABS: usize = 2;
+/// From the Save to field to the Format choice: Ask where to save, Format.
+const FOLDER_TO_FORMAT: usize = 2;
+/// Rail keys to Shortcuts › Overlay actions: End (About), Up.
+const TO_ACTIONS: [u32; 2] = [0x23, 0x26];
+/// Tab presses from the Settings rail to Accept's key cap in Shortcuts ›
+/// Overlay actions (`ACTION_ROWS` in src/settings_ui/draw.rs): Copy ·
+/// Save · Upload (3), Copy text · Copy color (2), then Accept.
+const ACCEPT_TABS: usize = 3 + 2 + 1;
+/// From Accept's cap to the footer's OK: the section's 13 caps after it
+/// (Cancel 1, Save As · Save to Desktop · Open with 3, Record · Pin 2, UI
+/// size 3, the Edit window's zoom 4), the header's Reset to defaults, then
+/// Open config file, Apply, Cancel, OK.
+const ACCEPT_TO_OK: usize = 13 + 1 + 4;
 
 /// Keys posted one by one with a short pause (each is its own frame).
 fn keys(hwnd: HWND, vks: &[u32]) {
@@ -659,9 +661,10 @@ fn keys(hwnd: HWND, vks: &[u32]) {
 }
 
 /// The Settings window in a private daemon (own instance name, config dir
-/// and unusual hotkeys): General → JPG into another folder (with the
-/// rewrite question), Key bindings → Accept on J (a key no overlay action
-/// has); the daemon reloads (its capture hotkey moves to the one now in
+/// and unusual hotkeys): Saving → JPG into another folder (with the
+/// rewrite question), Shortcuts › Overlay actions → Accept on J (a key no
+/// overlay action has; the Tab counts are checked by `e2e_tab_counts` in
+/// src/settings_ui/tests.rs); the daemon reloads (its capture hotkey moves to the one now in
 /// the file), and a capture
 /// accepted with J writes `<folder>/<date>/<name>.jpg`.
 ///
@@ -697,16 +700,19 @@ fn settings_window_saves_and_the_daemon_reloads() {
         assert_eq!(wait_exit(&mut c, 5000), Some(0), "`rustshot settings` hands over to the daemon");
         let w = wait_pid_window(pid, 5000).expect("settings window in the daemon");
         std::thread::sleep(Duration::from_millis(500));
-        // The rail, then General's Save to field: End, clear, type.
-        keys(w, &[TAB; 1 + FOLDER_TABS]);
+        // The rail → Saving, then its Save to field: End, clear, type.
+        keys(w, &[TAB]);
+        keys(w, &TO_SAVING);
+        keys(w, &[TAB; FOLDER_TABS]);
         keys(w, &[0x23]);
         keys(w, &[0x08; 120]); // clear the folder
         for ch in shots.display().to_string().chars() {
             char_msg(w, ch);
         }
         std::thread::sleep(Duration::from_millis(200));
-        // The PNG / JPG choice: JPG.
-        keys(w, &[TAB, 0x27]);
+        // The format choice: PNG → JPG.
+        keys(w, &[TAB; FOLDER_TO_FORMAT]);
+        keys(w, &[0x27]);
         // Meanwhile the file gets a new capture hotkey (as if edited by hand):
         // the window's untouched values follow the file.
         std::fs::write(&cfg, format!("# e2e\n{}", base.replace("F11", "F9"))).unwrap();
@@ -726,8 +732,9 @@ fn settings_window_saves_and_the_daemon_reloads() {
         assert_eq!(wait_exit(&mut run(&["settings"]).spawn().unwrap(), 5000), Some(0));
         let w = wait_pid_window(pid, 5000).expect("settings window again");
         std::thread::sleep(Duration::from_millis(500));
-        // The rail → Key bindings; Accept's cap: record J; then OK.
-        keys(w, &[TAB, 0x28, 0x28, 0x28]);
+        // The rail → Shortcuts › Overlay actions; Accept's cap: record J; then OK.
+        keys(w, &[TAB]);
+        keys(w, &TO_ACTIONS);
         keys(w, &[TAB; ACCEPT_TABS]);
         keys(w, &[RET, 'J' as u32]);
         keys(w, &[TAB; ACCEPT_TO_OK]);

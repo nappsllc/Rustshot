@@ -176,7 +176,9 @@ launcher_after = "pin"
     # In an isolated daemon (as the tray's Settings...), with posted clicks
     # as tests/e2e.rs does. A click also focuses the toggle (Enter would
     # flip it back), so OK is clicked too. Client points at 100 % (680 px
-    # wide): General > Behavior > Play shutter sound (641, 332), OK (461, 497).
+    # wide): the rail's Capture (60, 96), then Capture > After capture >
+    # Play shutter sound (641, 304), OK (461, 497) (`sandbox_click_points`
+    # in src/settings_ui/tests.rs checks the first two).
     $dm = WithEnv $vars { Start-Process $exe -ArgumentList 'daemon' -PassThru }
     $null = WaitFor { [W]::FindWindow('rustshot_tray_sbx-030', [NullString]::Value) -ne [IntPtr]::Zero } 10
     Start-Sleep 1
@@ -188,7 +190,9 @@ launcher_after = "pin"
         $c = New-Object V3+RECT
         [void][V3]::GetClientRect($h, [ref]$c)
         $sc = $c.R / 680.0
-        [V3]::PostClientClick($h, [int](641 * $sc), [int](332 * $sc))
+        [V3]::PostClientClick($h, [int](60 * $sc), [int](96 * $sc))
+        Start-Sleep -Milliseconds 300
+        [V3]::PostClientClick($h, [int](641 * $sc), [int](304 * $sc))
         Start-Sleep -Milliseconds 500
         Shot 'v030-settings-toggled'
         [V3]::PostClientClick($h, [int](461 * $sc), [int](497 * $sc))   # OK
