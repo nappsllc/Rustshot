@@ -1,6 +1,6 @@
 use super::*;
 use crate::settings_ui::draw::{paint, viewport};
-use crate::settings_ui::{Act, Click, Form, Settings, RECORDING, W, H};
+use crate::settings_ui::{Act, Click, Form, Settings, CAMERA, RECORDING, W, H};
 use crate::theme::{Theme, DARK, LIGHT};
 use crate::ui::{preview, FocusState, Input};
 use std::path::Path;
@@ -210,22 +210,21 @@ fn render(s: &mut Settings, th: &Theme, k: f32) -> (crate::pixbuf::PixBuf, f32) 
     let img = preview::render(W, H, k, th, &Input::default(), &mut focus, |ui| {
         paint(ui, s);
     });
-    (img, s.content_h[RECORDING])
+    (img, s.content_h[s.section])
 }
 
-/// The section scrolls to its end in every state, the tallest (Linux
-/// encoder row, a GIF's notes, no camera) included, and its rows keep
-/// their controls apart from the labels.
+/// Recording and Camera fit the body in every state, the tallest (Linux
+/// encoder row, a GIF's notes, no camera) included.
 #[test]
-fn recording_section_scrolls_to_its_end() {
-    let mut s = sample(Config { rec_format: "gif".into(), ..Config::default() });
-    s.rec_lists.linux = true;
-    s.rec_lists.found = Some(Found { cams: Vec::new(), ..find() });
-    let (_, h1) = render(&mut s, &DARK, 1.0);
-    assert!(h1 > viewport().h, "{h1}");
-    s.scroll[RECORDING] = 1e6;
-    render(&mut s, &DARK, 1.0);
-    assert!((s.scroll[RECORDING] - (h1 - viewport().h)).abs() < 0.5);
+fn recording_sections_fit() {
+    for sec in [RECORDING, CAMERA] {
+        let mut s = sample(Config { rec_format: "gif".into(), ..Config::default() });
+        s.section = sec;
+        s.rec_lists.linux = true;
+        s.rec_lists.found = Some(Found { cams: Vec::new(), ..find() });
+        let (_, h) = render(&mut s, &DARK, 1.0);
+        assert!(h > 100.0 && h <= viewport().h, "section {sec}: {h}");
+    }
 }
 
 #[test]
@@ -236,16 +235,19 @@ fn preview_recording_section_pngs() {
             let sfx = if k == 1.0 { String::new() } else { "-150".into() };
             let mut s = sample(Config { rec_mic: true, rec_camera: true, ..Config::default() });
             let (img, _) = render(&mut s, th, k);
-            preview::save(&format!("settings-recording-top-{tname}{sfx}.png"), &img);
-            s.scroll[RECORDING] = 1e6;
+            preview::save(&format!("settings-recording-video-{tname}{sfx}.png"), &img);
+            s.section = CAMERA;
             let (img, _) = render(&mut s, th, k);
-            preview::save(&format!("settings-recording-bottom-{tname}{sfx}.png"), &img);
+            preview::save(&format!("settings-recording-camera-{tname}{sfx}.png"), &img);
         }
 
-        // GIF: no quality, no sound.
+        // GIF: no quality, no sound; a colored ring.
         let mut s = sample(Config { rec_format: "gif".into(), rec_camera_ring_color: "#2dc06f".into(), rec_camera_ring_width: 6, ..Config::default() });
         let (img, _) = render(&mut s, th, 1.0);
         preview::save(&format!("settings-recording-gif-{tname}.png"), &img);
+        s.section = CAMERA;
+        let (img, _) = render(&mut s, th, 1.0);
+        preview::save(&format!("settings-recording-gif-camera-{tname}.png"), &img);
 
         // Linux: the encoder row, three states.
         for (name, found) in [
@@ -264,7 +266,9 @@ fn preview_recording_section_pngs() {
         // No camera, a saved microphone that is gone.
         let mut s = sample(Config { rec_mic: true, rec_mic_device: "{unplugged}".into(), ..Config::default() });
         s.rec_lists.found = Some(Found { cams: Vec::new(), ..find() });
-        s.scroll[RECORDING] = 1e6;
+        let (img, _) = render(&mut s, th, 1.0);
+        preview::save(&format!("settings-recording-unplugged-{tname}.png"), &img);
+        s.section = CAMERA;
         let (img, _) = render(&mut s, th, 1.0);
         preview::save(&format!("settings-recording-nocam-{tname}.png"), &img);
     }
@@ -277,25 +281,26 @@ fn preview_recording_section_pngs() {
 #[test]
 fn a_gif_keeps_the_camera_rows_enabled() {
     let cams = Found { cams: vec![("{cam-1}".into(), "Integrated Camera".into())], ..find() };
-    let left = |camera: bool, format: &str| {
+    let left = |camera: bool, format: &str, section: usize| {
         let mut s = sample(Config { rec_format: format.into(), rec_camera: camera, ..Config::default() });
         s.rec_lists.found = Some(cams.clone());
-        s.scroll[RECORDING] = 1e6;
+        s.section = section;
         let (img, _) = render(&mut s, &DARK, 1.0);
         // The labels' half (the controls are right-aligned).
         let w = img.width() as usize;
         img.as_raw().chunks_exact(w * 4).flat_map(|r| r[..w * 4 * 45 / 100].to_vec()).collect::<Vec<u8>>()
     };
-    assert!(left(false, "gif") == left(true, "gif"), "the Camera label greys with the switch off");
-    assert!(left(false, "mp4") == left(true, "mp4"));
+    assert!(left(false, "gif", CAMERA) == left(true, "gif", CAMERA), "the Camera label greys with the switch off");
+    assert!(left(false, "mp4", CAMERA) == left(true, "mp4", CAMERA));
+    assert!(left(true, "gif", CAMERA) == left(true, "mp4", CAMERA), "a GIF keeps the camera rows");
     // And GIF still greys the sound rows (the left side differs from MP4).
-    assert!(left(true, "gif") != left(true, "mp4"), "GIF greys System sound and Microphone");
+    assert!(left(true, "gif", RECORDING) != left(true, "mp4", RECORDING), "GIF greys System sound and Microphone");
 }
 
-/// Click the control `id` at `fx` of its width (scrolled to the end).
+/// Click the control `id` at `fx` of its width, in Camera.
 fn click_at(s: &mut Settings, id: &str, fx: f32) {
     use crate::wind::Ev;
-    s.scroll[RECORDING] = 1e6;
+    s.section = CAMERA;
     let mut focus = FocusState::default();
     for _ in 0..2 {
         preview::render(W, H, 1.0, &DARK, &Input::default(), &mut focus, |ui| {
@@ -353,7 +358,7 @@ fn preview_background_row_pngs() {
         for (name, avail) in [("blur", true), ("noblur", false)] {
             crate::cam::bg::set_available(Some(avail));
             let mut s = sample(Config { rec_camera: true, rec_camera_bg: "light".into(), ..Config::default() });
-            s.scroll[RECORDING] = 1e6;
+            s.section = CAMERA;
             let (img, _) = render(&mut s, th, 1.0);
             preview::save(&format!("settings-recording-camera-{name}-{tname}.png"), &img);
         }

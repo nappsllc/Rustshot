@@ -834,10 +834,11 @@ fn keys(hwnd: HWND, vks: &[u32]) {
 }
 
 /// The Settings window in a private daemon (own instance name, config dir
-/// and unusual hotkeys): General → JPG into another folder (with the
-/// rewrite question), Key bindings → Accept on J (a key no overlay action
-/// has); the daemon reloads (its capture hotkey moves to the one now in
-/// the file), and a capture
+/// and unusual hotkeys): Saving → JPG into another folder (with the
+/// rewrite question), Shortcuts › Overlay actions → Accept on J (a key no
+/// overlay action has; the rail keys are checked by `e2e_rail_keys` in
+/// src/settings_ui/tests.rs); the daemon reloads (its capture hotkey
+/// moves to the one now in the file), and a capture
 /// accepted with J writes `<folder>/<date>/<name>.jpg`.
 ///
 ///     cargo test --test e2e settings_window -- --ignored --nocapture
@@ -845,7 +846,9 @@ fn keys(hwnd: HWND, vks: &[u32]) {
 #[ignore = "live display access"]
 fn settings_window_saves_and_the_daemon_reloads() {
     const RET: u32 = 0x0D;
-    const DOWN: u32 = 0x28;
+    // Rail keys: General → Saving (Capture, Overlay, Saving); End (About), Up → Shortcuts › Overlay actions.
+    const TO_SAVING: [u32; 3] = [0x28; 3];
+    const TO_ACTIONS: [u32; 2] = [0x23, 0x26];
     const MODS: u32 = 1 | 2 | 4; // Alt+Ctrl+Shift
     const F9: u32 = 0x78;
     const F11: u32 = 0x7A;
@@ -874,7 +877,10 @@ fn settings_window_saves_and_the_daemon_reloads() {
         assert_eq!(wait_exit(&mut c, 5000), Some(0), "`rustshot settings` hands over to the daemon");
         let w = wait_pid_window(pid, 5000).expect("settings window in the daemon");
         std::thread::sleep(Duration::from_millis(500));
-        // The rail, then General's Save to field: End, clear, type.
+        // The rail → Saving (Capture, Overlay, Saving), then its Save to
+        // field: End, clear, type.
+        tab_to(w, &focus, "rail", 80);
+        keys(w, &TO_SAVING);
         tab_to(w, &focus, "folder", 60);
         keys(w, &[0x23]);
         keys(w, &[0x08; 120]); // clear the folder
@@ -882,8 +888,8 @@ fn settings_window_saves_and_the_daemon_reloads() {
             char_msg(w, ch);
         }
         std::thread::sleep(Duration::from_millis(200));
-        // The PNG / JPG choice: JPG.
-        tab_to(w, &focus, "format", 5);
+        // The format choice: PNG → JPG.
+        tab_to(w, &focus, "format_all", 5);
         keys(w, &[0x27]);
         // Meanwhile the file gets a new capture hotkey (as if edited by hand):
         // the window's untouched values follow the file.
@@ -905,9 +911,9 @@ fn settings_window_saves_and_the_daemon_reloads() {
         assert_eq!(wait_exit(&mut run(&["settings"]).spawn().unwrap(), 5000), Some(0));
         let w = wait_pid_window(pid, 5000).expect("settings window again");
         std::thread::sleep(Duration::from_millis(500));
-        // The rail → Key bindings; Accept's cap: record J; then OK.
-        tab_to(w, &focus, "rail", 5);
-        keys(w, &[DOWN, DOWN, DOWN]);
+        // The rail → Shortcuts › Overlay actions; Accept's cap: record J; then OK.
+        tab_to(w, &focus, "rail", 80);
+        keys(w, &TO_ACTIONS);
         tab_to(w, &focus, "key_accept", 200);
         keys(w, &[RET, 'J' as u32]);
         tab_to(w, &focus, "ok", 200);

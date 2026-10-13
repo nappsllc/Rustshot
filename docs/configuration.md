@@ -59,7 +59,7 @@ user_colors = ["#f04438", "#ff8a1f", "#ffc532", "#2dc06f", "#19b5d6",
 # style on its own (tool_<id>_size, tool_<id>_color, tool_<id>_fill,
 # tool_text_font, tool_text_style, tool_text_align, tool_callout_font,
 # tool_callout_text_style, tool_callout_style, recent_colors).
-# Settings › Capture › "Reset tool sizes & colors" clears them.
+# Settings › Overlay › "Reset tool sizes & colors" clears them.
 
 # Global hotkeys (Meta = Win, Cmd or Super; "" = none)
 capture_hotkey = "Shift+Meta+X"         # the overlay
@@ -148,7 +148,7 @@ Global hotkey defaults apply to a new `config.toml`; a file that already
 has a key keeps its value. A config saved by 0.1.x may still have
 <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> (Record) and
 <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> (Copy text), which some
-Windows builds reserve; rebind them in Settings › Key bindings if Rustshot
+Windows builds reserve; rebind them in Settings › Shortcuts › Global if Rustshot
 reports that it could not register one.
 
 ## File-name tokens
@@ -174,8 +174,8 @@ subfolder pattern `/` nests folders (`%Y/%m`) and `..` is dropped.
 ## Remapping editor shortcuts
 
 Every editor key except the arrows, <kbd>Tab</kbd>, the mouse wheel and
-hold-while-drawing modifiers can be remapped in **Settings › Key
-bindings**: click a row (or its key cap) and press the new keys;
+hold-while-drawing modifiers can be remapped in **Settings › Shortcuts ›
+Overlay tools** and **Overlay actions**: click a row (or its key cap) and press the new keys;
 <kbd>Esc</kbd> cancels, <kbd>Backspace</kbd> unbinds, **Reset to
 defaults** puts every key back. Keys bound to two actions are shown in red
 with a note; the first action in the list wins.

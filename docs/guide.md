@@ -46,7 +46,7 @@ is drawn or resized) a **magnifier** follows the pointer: 17 × 17 pixels at
 8× with a pixel grid, the pointer's pixel outlined, and under it the
 position and color (`640, 360 · #1e2027`); a thin accent crosshair runs
 through the pointer across the whole overlay. <kbd>H</kbd> copies that
-color as `#rrggbb`. Settings › Capture *Show magnifier* turns it off,
+color as `#rrggbb`. Settings › Overlay *Show magnifier* turns it off,
 *Square magnifier* makes it square.
 
 **Right-click** anywhere (but on an object with the select tool) opens a
@@ -159,14 +159,14 @@ with that folder and name; the format follows the extension you pick), and
 clipboard and uploads stay PNG. With *Copy to clipboard after capture* on,
 a save (or an upload) also copies the image.
 
-**Add a border** (Settings › Capture, `border_width` 1-8 logical px and
+**Add a border** (Settings › Saving, `border_width` 1-8 logical px and
 `border_color`): a frame of that color around every exported image (copy,
 save, upload, pin, Open with, and the same from History and the Edit
 window), outside the capture so nothing is covered; the overlay previews it
 as a band around the selection. The History keeps the capture without it.
 
 The folder, subfolder pattern, file-name pattern, format and JPEG quality
-(1-100, default 90) are in Settings › General and Settings › Capture; the
+(1-100, default 90) are in Settings › Saving and Settings › File names; the
 pattern editor's token buttons insert at the caret, and the line above them
 shows where the next capture would go. The tokens are listed in
 [configuration.md](configuration.md#file-name-tokens).
@@ -250,7 +250,7 @@ what is known about it (when, the size, the file it was saved to, the
 monitor, the window and app it came from, the uploaded link). Recordings
 keep their file's place and a poster. Entries older than 30 days go, then
 the oldest until the history fits in 2 GB (`history_days`,
-`history_max_mb`; Settings › Capture › History). Turning *Keep a history of
+`history_max_mb`; Settings › History). Turning *Keep a history of
 captures* off (`history = false`) keeps nothing new. Saved and uploaded
 files are never touched (only **Clear history…** with *Also delete saved
 files* removes them). Uninstalling keeps the history unless you tick *Also
@@ -324,7 +324,7 @@ pointer is an I-beam over them, and you select words as in a document:
 | Leave Text mode | <kbd>Esc</kbd>, Copy text again, or a tool (then <kbd>Ctrl</kbd>+<kbd>C</kbd> copies the picture) |
 
 The notice says *Copied text · 3 lines* (or *No text found*). Settings ›
-Capture › *Copy text* picks **Copy all at once** instead (the old
+Overlay › *Copy text* picks **Copy all at once** instead (the old
 behavior: the overlay closes and the text is copied;
 `copy_text_mode = "all"`). <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd>
 always copies everything straight from an area pick. Text mode reads only
@@ -348,7 +348,7 @@ and the whole rest of the line after `password:` or `passphrase:`.
 Each find becomes an ordinary object over its words (padded by 3 px or
 15 % of their height, whichever is more), all in one undo step, so you can
 delete or adjust any of them; the notice says *Redacted 3 items* or
-*Nothing sensitive found*. Settings › Capture › *Redact style*:
+*Nothing sensitive found*. Settings › Overlay › *Redact style*:
 
 - **Solid** (the default, `redact_style = "solid"`): an opaque fill in the
   color around the words (the median of the box's edge), so it blends in.
@@ -465,12 +465,14 @@ link after upload*).
 - **Imgur** (the default): anonymous, with Rustshot's client id (or your
   own).
 - **S3-compatible**: any bucket that speaks the S3 API: Amazon S3,
-  Cloudflare R2, MinIO, Backblaze B2, Wasabi and the like. Set:
+  Cloudflare R2, MinIO, Backblaze B2, Wasabi and the like. Set, in
+  Settings › S3 storage (Upload's **Set up…** opens it):
   - **Endpoint**: `https://<account>.r2.cloudflarestorage.com` (R2),
     `https://s3.<region>.amazonaws.com` (AWS), your server's address
     (`https://` only; a `:port` is fine).
-  - **Region**: `auto` for R2 (the default), the bucket's region for AWS.
-  - **Bucket** and **Access key ID**.
+  - **Bucket and region** (one row): the region is `auto` for R2 (the
+    default), the bucket's region for AWS.
+  - **Access key ID**.
   - **Secret access key**: typed into a masked field (trimmed) and kept in
     the OS credential store, never in `config.toml` or a log, under
     `rustshot:s3:<bucket>@<endpoint host>/<access key id>` (so the same
@@ -635,28 +637,37 @@ Open **Settings…** from the tray menu, or run `rustshot settings`. A rail
 on the left picks the section:
 
 - **General:** theme (System, Dark, Light) and accent (Periwinkle, Teal,
-  Amber or any `#rrggbb`), *Launch at login*, *Show icon in tray*, *Copy to
-  clipboard after capture*, *Play shutter sound*, *Show thumbnail after
-  capture*, *Show hints in the overlay*, *Save to* and the file name.
-- **Capture:** daily subfolders, *Ask where to save*, the format and JPEG
-  quality, the file-name pattern editor, the overlay's UI size (Auto
-  follows each display's scaling; 75-200 % on top of it), *Snap to
-  windows*, the magnifier, *Accept on select*, *Use Win+Shift+S and Print
-  Screen* (Windows), the renderer (Windows), *Reset tool sizes & colors*,
-  then *Image*: *Trim margins automatically*, *Add a border* (width and
-  color) and *HDR screenshots* (Windows), and the History limits.
+  Amber or any `#rrggbb`), *Launch at login*, *Show icon in tray* and the
+  daily update check.
+- **Capture:** *Use Win+Shift+S and Print Screen* (Windows), *Snap to
+  windows*, *Accept on select*; after a capture: *Copy to clipboard after
+  capture*, *Play shutter sound*, *Show thumbnail after capture* and *Trim
+  margins automatically*.
+- **Overlay:** the magnifier (and *Square magnifier*), *Show hints in the
+  overlay*; the toolbar: *Copy text*, *Redact style*, the UI size (Auto
+  follows each display's scaling; 75-200 % on top of it), *Reset tool
+  sizes & colors* and the renderer (Windows).
+- **Saving:** *Save to*, *Ask where to save*, the format and JPEG
+  quality, *Add a border* (width and color) and *HDR screenshots*
+  (Windows).
+- **File names:** daily subfolders and the file-name pattern editor.
+- **History:** whether History keeps captures, its limits and *Clear
+  history…*.
 - **Recording:** video mode's defaults (format, frame rate, quality, GIF
-  length, countdown, sound, microphone, camera bubble and its
-  background); on Linux also the
-  MP4 encoder.
-- **Key bindings:** the global hotkeys, every editor shortcut and the
-  *While recording* chords.
+  length, countdown, sound and microphone); on Linux also the MP4
+  encoder.
+- **Camera:** the camera bubble and its background.
 - **Upload:** the destination (*Imgur* or *S3-compatible*), the Imgur
-  client id or the bucket's settings with **Test connection** (see
-  [Uploads](#uploads)), *Copy link after upload* and *Upload recordings
-  automatically*.
-- **About:** the version, *Check for updates*, the daily update check and
-  links.
+  client id (or, for S3, a line with the bucket and **Set up…**), *Copy
+  link after upload* and *Upload recordings automatically*.
+- **S3 storage:** the bucket's settings with **Test connection** (see
+  [Uploads](#uploads)).
+- **Shortcuts › Global, Recording, Overlay tools, Overlay actions:** the
+  global hotkeys, the record hotkey with the *While recording* chords,
+  and every editor shortcut.
+- **About:** the version, *Check for updates* and links.
+
+Every section fits the window; nothing scrolls.
 
 **OK** saves and closes, **Apply** saves and keeps the window open,
 **Cancel** (or <kbd>Esc</kbd>) discards. The running daemon picks the new
@@ -668,7 +679,7 @@ pasting into the text fields needs `wl-paste` (Wayland), `xclip` or
 ## Updates
 
 The daemon checks GitHub for a new release once a day (turn it off in
-Settings › About or with `check_updates = false`); `rustshot update` checks
+Settings › General or with `check_updates = false`); `rustshot update` checks
 now. A new version opens a dialog with the release notes: **Update**
 downloads it, checks its SHA-256 against the release's `SHA256SUMS` (it
 refuses to install on a mismatch or a missing entry), waits for an open

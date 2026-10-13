@@ -557,7 +557,7 @@ impl Window {
                 let _ = std::fs::create_dir_all(&root);
                 std::thread::spawn(move || crate::actions::open_path(&root));
             }
-            Act::Settings => crate::settings_ui::show_at(crate::settings_ui::CAPTURE),
+            Act::Settings => crate::settings_ui::show_at(crate::settings_ui::HISTORY),
             Act::TurnOn => {
                 let path = crate::config::config_path();
                 match crate::config::edit_top_keys_at(&path, &[("history".into(), Some("true".into()))]) {

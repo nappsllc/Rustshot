@@ -1,14 +1,18 @@
-//! The Settings window (the Settings board, 680 × 520): a rail with
-//! **General** (theme, accent, start at login, tray icon, copy after
-//! capture, shutter sound, where and how captures are saved),
-//! **Capture** (daily subfolders, the file-name pattern editor, Save As,
-//! format and JPEG quality, the overlay's UI size, snapping and renderer,
-//! "Reset tool sizes & colors"), **Recording** (the Record popover's
-//! defaults: [`recording`]), **Key bindings** (the global hotkeys and the
-//! overlay keymap), **Upload** (Imgur) and **About**, with a footer of
-//! **OK** / **Cancel** / **Apply** (the board leaves it out; the window
-//! keeps its explicit save). Drawn in [`draw`]. Opened from the tray
-//! ("Settings…") and by `rustshot settings` ([`show`], [`run_here`]).
+//! The Settings window (the Settings board, 680 × 520): a rail of short
+//! sections, each fitting the body without scrolling ([`SECTIONS`]):
+//! **General** (theme, accent, launch at login, tray icon, update
+//! checks), **Capture** (Win+Shift+S, snapping, Accept on select, what
+//! happens after a capture), **Overlay** (magnifier, hints, UI size,
+//! renderer, "Reset tool sizes & colors"), **Saving** (folder, Save As,
+//! format and JPEG quality), **File names** (daily subfolders and the
+//! file-name pattern editor), **History**, **Recording** and **Camera**
+//! (the Record popover's defaults: [`recording`]), **Upload** (Imgur),
+//! then under *Shortcuts* **Global**, **Recording** (the record hotkey and
+//! the while-recording keys), **Overlay tools**, **Overlay actions**, and
+//! **About**, with a footer of **OK** / **Cancel** / **Apply** (the board
+//! leaves it out; the window keeps its explicit save). Drawn in [`draw`].
+//! Opened from the tray ("Settings…") and by `rustshot settings`
+//! ([`show`], [`run_here`]).
 //!
 //! The form ([`Form`]) is a plain copy of the settings it edits; saving
 //! writes only the values the user changed onto the file as it is on disk
@@ -53,22 +57,96 @@ pub(crate) mod draw;
 mod recording;
 mod upload;
 
-/// The rail's sections (icon, name); About sits at the bottom.
-pub const SECTIONS: [(&str, &str); 6] = [
+/// The rail's sections (icon, name); About sits at the bottom. Each one
+/// fits the body without scrolling (`every_section_fits`).
+pub const SECTIONS: [(&str, &str); 15] = [
     ("set-sliders", "General"),
     ("set-camera", "Capture"),
+    ("region", "Overlay"),
+    ("set-folder", "Saving"),
+    ("text", "File names"),
+    ("history", "History"),
     ("video", "Recording"),
-    ("set-keyboard", "Key bindings"),
+    ("round", "Camera"),
     ("cloud", "Upload"),
+    ("layers", "S3 storage"),
+    ("set-keyboard", "Global"),
+    ("film", "Recording"),
+    ("pencil", "Overlay tools"),
+    ("copy", "Overlay actions"),
     ("info", "About"),
+];
+/// The header's title of each section: the rail's name, with its group
+/// for the shortcut sections.
+pub const TITLES: [&str; SECTIONS.len()] = [
+    "General",
+    "Capture",
+    "Overlay",
+    "Saving",
+    "File names",
+    "History",
+    "Recording",
+    "Camera",
+    "Upload",
+    "S3 storage",
+    "Shortcuts \u{b7} Global",
+    "Shortcuts \u{b7} Recording",
+    "Shortcuts \u{b7} Overlay tools",
+    "Shortcuts \u{b7} Overlay actions",
+    "About",
 ];
 /// Section indices.
 pub const GENERAL: usize = 0;
 pub const CAPTURE: usize = 1;
-pub const RECORDING: usize = 2;
-pub const KEYS: usize = 3;
-pub const UPLOAD: usize = 4;
-pub const ABOUT: usize = 5;
+pub const OVERLAY: usize = 2;
+pub const SAVING: usize = 3;
+pub const FILE_NAMES: usize = 4;
+pub const HISTORY: usize = 5;
+pub const RECORDING: usize = 6;
+pub const CAMERA: usize = 7;
+pub const UPLOAD: usize = 8;
+/// An S3-compatible bucket's settings (Upload › Upload to S3-compatible).
+pub const S3_STORAGE: usize = 9;
+/// The shortcut sections: the global hotkeys, the record hotkey and the
+/// while-recording keys, the overlay's tool keys, its action keys.
+pub const KEYS_GLOBAL: usize = 10;
+pub const KEYS_RECORDING: usize = 11;
+pub const KEYS_TOOLS: usize = 12;
+pub const KEYS_ACTIONS: usize = 13;
+pub const ABOUT: usize = 14;
+/// The rail's group labels: (first section, label).
+pub const RAIL_GROUPS: [(usize, &str); 1] = [(KEYS_GLOBAL, "Shortcuts")];
+
+/// One of the shortcut sections (key rows, Reset to defaults).
+pub fn is_keys(section: usize) -> bool {
+    (KEYS_GLOBAL..=KEYS_ACTIONS).contains(&section)
+}
+
+/// The section that lists global hotkey `slot` (see [`GLOBALS`]): the
+/// record hotkey is with the while-recording keys.
+pub fn section_of_slot(slot: usize) -> usize {
+    if slot == 2 { KEYS_RECORDING } else { KEYS_GLOBAL }
+}
+
+/// The section that lists overlay or while-recording action `a`.
+pub fn section_of_action(a: Action) -> usize {
+    if a.while_recording() {
+        KEYS_RECORDING
+    } else if draw::TOOL_ROWS.iter().any(|(_, acts)| acts.contains(&a)) {
+        KEYS_TOOLS
+    } else {
+        KEYS_ACTIONS
+    }
+}
+
+/// The section with key box `field` ("global3", "key_rec_pause"; the
+/// hotkey dialog's "Change shortcuts…"); Global when it is none of them.
+pub fn section_of_field(field: &str) -> usize {
+    if let Some(slot) = field.strip_prefix("global").and_then(|n| n.parse::<usize>().ok()) {
+        return section_of_slot(slot);
+    }
+    field.strip_prefix("key_").and_then(Action::from_id).map_or(KEYS_GLOBAL, section_of_action)
+}
 
 /// (label, config value)
 const THEMES: [(&str, &str); 3] = [("System", "auto"), ("Dark", "dark"), ("Light", "light")];
@@ -817,8 +895,8 @@ pub struct Settings {
     pub form: Form,
     /// The rail's section ([`SECTIONS`] index).
     pub section: usize,
-    /// Each section's scroll offset and content height (logical px).
-    scroll: [f32; SECTIONS.len()],
+    /// Each section's content height as last drawn (logical px; it fits
+    /// the body, nothing scrolls).
     content_h: [f32; SECTIONS.len()],
     modal: Option<Modal>,
     /// The rewrite question was answered (or the file is ours now).
@@ -839,10 +917,10 @@ pub struct Settings {
     /// Some of them are hotkey notes: the dialog they make has "Change
     /// shortcuts…" (to this key box, when one needs a new key).
     pending_keys: Option<Option<String>>,
-    /// The key box to start recording in at the next frame of Key
-    /// bindings ("Change shortcuts…").
+    /// The key box to start recording in at the next frame of its
+    /// shortcut section ("Change shortcuts…").
     pub record_field: Option<String>,
-    /// A control to focus (with the ring, scrolled into view) at the next
+    /// A control to focus (with the ring) at the next
     /// frame of its section.
     pub focus_field: Option<String>,
     /// The icon off means no background process here
@@ -881,7 +959,6 @@ impl Settings {
             guide_error: None,
             toast: None,
             section: GENERAL,
-            scroll: [0.0; SECTIONS.len()],
             content_h: [0.0; SECTIONS.len()],
             modal: None,
             confirmed: false,
@@ -1214,14 +1291,11 @@ impl Settings {
         self.modal = Some(Modal::TrayOffNotice);
     }
 
-    /// The dialog's "Change shortcuts…": Key bindings, at the top (the
-    /// global rows) or the bottom (the while-recording ones), the row's
-    /// key box recording.
+    /// The dialog's "Change shortcuts…": the shortcut section that lists
+    /// the row ([`section_of_field`]), its key box recording.
     fn change_shortcuts(&mut self) {
         if let Some(Modal::Hotkeys { field, .. }) = self.modal.take() {
-            self.section = KEYS;
-            let rec = field.as_deref().is_some_and(|f| f.starts_with("key_rec_"));
-            self.scroll[KEYS] = if rec { 1e6 } else { 0.0 };
+            self.section = field.as_deref().map_or(KEYS_GLOBAL, section_of_field);
             self.record_field = field;
         }
         self.show_pending();
@@ -1707,7 +1781,7 @@ pub fn tell_daemon_reload() {
 }
 
 /// Open the window at `section` (History's "History settings" link goes
-/// to Capture), or bring the open one there.
+/// to [`HISTORY`]), or bring the open one there.
 pub fn show_at(section: usize) {
     #[cfg(not(target_os = "macos"))]
     {
@@ -1757,8 +1831,8 @@ pub fn notify_hotkeys(text: &str, field: Option<String>) -> bool {
 }
 
 /// A hotkey note with keys to change: the hotkey dialog in the Settings
-/// window, opened at Key bindings when it is not open. (macOS and tests:
-/// a tray note.)
+/// window, opened at the shortcut section with `field` when it is not
+/// open. (macOS and tests: a tray note.)
 pub fn show_hotkeys(text: &str, field: Option<String>) {
     if notify_hotkeys(text, field.clone()) {
         return;
@@ -1767,8 +1841,9 @@ pub fn show_hotkeys(text: &str, field: Option<String>) {
         crate::tray::notify(text);
         return;
     }
+    let section = field.as_deref().map_or(KEYS_GLOBAL, section_of_field);
     *lock(&START_NOTE) = Some((text.to_string(), field));
-    show_at(KEYS);
+    show_at(section);
 }
 
 /// The hotkey note a window opened by [`show_hotkeys`] starts with.

@@ -93,12 +93,12 @@ screenshots, editing and video capture.** Windows, Linux and macOS.
   all), then <kbd>Ctrl</kbd>+<kbd>C</kbd> or **Copy**; with nothing selected <kbd>Ctrl</kbd>+<kbd>C</kbd>
   copies all the text, and **Copy all** does too. <kbd>Esc</kbd> leaves Text mode
   (then <kbd>Ctrl</kbd>+<kbd>C</kbd> copies the picture as before). The Copy text hotkey
-  still copies all at once (Settings › Capture › Copy text picks the
+  still copies all at once (Settings › Overlay › Copy text picks the
   button's way too).
 - Quick Redact (<kbd>Shift</kbd>+<kbd>R</kbd>): e-mail addresses, phone and card numbers,
   IBANs, IP addresses, URLs with tokens, keys, passwords and JWTs are
   covered with an opaque fill in the surrounding color, all in one undo
-  step (Settings › Capture › Redact style: Solid, or Blur). Long-press
+  step (Settings › Overlay › Redact style: Solid, or Blur). Long-press
   Copy text to choose which kinds.
 
 **Pin**
@@ -112,7 +112,7 @@ screenshots, editing and video capture.** Windows, Linux and macOS.
 
 **Shortcuts**
 - Global hotkeys and every editor key can be remapped in Settings ›
-  Key bindings.
+  Shortcuts (Global, Recording, Overlay tools, Overlay actions).
 - On Windows, Rustshot can take over <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd>
   and <kbd>Print Screen</kbd>.
 
@@ -232,7 +232,7 @@ off in Rustshot, and Windows uses the Snipping Tool again. More detail:
 | Square, circle or 45° line | hold <kbd>Shift</kbd> while drawing |
 
 On macOS, <kbd>⌘</kbd> works wherever <kbd>Ctrl</kbd> is listed. Every key
-can be remapped in Settings › Key bindings. The
+can be remapped in Settings › Shortcuts. The
 [user guide](docs/guide.md) covers the Edit window, recording chords and
 the rest.
 
@@ -342,7 +342,7 @@ From the v0.3.0 release notes:
 - **Unsigned builds:** see the note under [Install](#install).
 - **Settings from 0.1.x:** your config may still bind Win+Shift+R and
   Win+Shift+T for Record and Copy text, which some Windows builds
-  reserve. Rebind them in Settings › Key bindings. The defaults are now
+  reserve. Rebind them in Settings › Shortcuts › Global. The defaults are now
   Win+Shift+G and Win+Shift+Z.
 
 The [platform notes](docs/guide.md#platform-notes) cover Wayland and
