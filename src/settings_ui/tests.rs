@@ -1164,6 +1164,8 @@ fn hotkey_notes_route_to_dialog_or_balloon() {
 /// The tray-icon-off question: one more line (and "Set up…") while
 /// Win+Shift+S does not open Rustshot; "Set up…" keeps the icon and goes
 /// to the Win+Shift+S row. Saving the icon on again starts the daemon.
+/// Windows only: elsewhere tray off keeps a hidden daemon.
+#[cfg(windows)]
 #[test]
 fn tray_off_question_variants() {
     // Registered and chosen: the plain text, Turn off / Cancel.
