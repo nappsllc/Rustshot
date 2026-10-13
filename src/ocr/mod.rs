@@ -96,7 +96,35 @@ pub fn ordered(mut lines: Vec<Line>) -> Vec<Line> {
         let (bt, bl) = b.top_left();
         at.total_cmp(&bt).then(al.total_cmp(&bl))
     });
-    lines
+    // Columns: a line joins the one column it overlaps across (by half
+    // the narrower width); none, or a line across several (a heading, a
+    // footer), starts a column of its own. Columns read in the order
+    // they start, each top to bottom.
+    let span = |l: &Line| {
+        let x0 = l.words.iter().map(|w| w.x).fold(f32::INFINITY, f32::min);
+        let x1 = l.words.iter().map(|w| w.x + w.w).fold(f32::NEG_INFINITY, f32::max);
+        (x0, x1)
+    };
+    let overlaps = |a: (f32, f32), b: (f32, f32)| {
+        let o = a.1.min(b.1) - a.0.max(b.0);
+        o > 0.0 && o >= 0.5 * (a.1 - a.0).min(b.1 - b.0)
+    };
+    let mut cols: Vec<((f32, f32), Vec<Line>)> = Vec::new();
+    for l in lines {
+        let s = span(&l);
+        let hits: Vec<usize> = cols.iter().enumerate().filter(|(_, c)| overlaps(c.0, s)).map(|(i, _)| i).collect();
+        match hits[..] {
+            [i] => {
+                let c = &mut cols[i];
+                // Matched against its last line (a heading leads on into the
+                // column under it, not into both).
+                c.0 = s;
+                c.1.push(l);
+            }
+            _ => cols.push((s, vec![l])),
+        }
+    }
+    cols.into_iter().flat_map(|c| c.1).collect()
 }
 
 /// The text of `lines`: top to bottom (then left to right where two lines

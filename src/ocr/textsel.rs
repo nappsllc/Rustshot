@@ -75,24 +75,27 @@ pub fn over_text(lines: &[Line], p: (f32, f32), slack: f32) -> bool {
 }
 
 /// The word a drag at `p` reaches: the line whose band holds `p.y` (else
-/// the nearest line), and in it the word under `p.x` (in a gap: the
+/// the nearest line; of two in one band, the nearer across), and in it the word under `p.x` (in a gap: the
 /// nearer of the two; before the first or past the last: that one).
 pub fn nearest(lines: &[Line], p: (f32, f32)) -> Option<Pos> {
-    let mut best: Option<(f32, usize)> = None;
+    let mut best: Option<(f32, f32, usize)> = None;
     for (li, l) in lines.iter().enumerate() {
         let Some(b) = line_box(l) else { continue };
-        let d = if p.1 < b.y {
+        let dy = if p.1 < b.y {
             b.y - p.1
         } else if p.1 >= b.y1() {
             p.1 - b.y1() + 0.001
         } else {
             0.0
         };
-        if best.is_none_or(|(bd, _)| d < bd) {
-            best = Some((d, li));
+        // Among lines in the same band (two columns, a table row), the
+        // one under the pointer across.
+        let dx = (b.x - p.0).max(p.0 - b.x1()).max(0.0);
+        if best.is_none_or(|(by, bx, _)| dy < by || (dy == by && dx < bx)) {
+            best = Some((dy, dx, li));
         }
     }
-    let li = best?.1;
+    let li = best?.2;
     let words = &lines[li].words;
     let mut wbest: Option<(f32, usize)> = None;
     for (wi, w) in words.iter().enumerate() {
@@ -198,6 +201,32 @@ mod tests {
         assert_eq!(nearest(&d, (10.0, 27.0)), Some((1, 0)));
         assert_eq!(nearest(&d, (10.0, 400.0)), Some((1, 0)), "below everything: the last line");
         assert_eq!(nearest(&[], (0.0, 0.0)), None);
+    }
+
+    /// Two lines in one row (a table, "name … 10:42"): a press on the
+    /// right one picks its word, not the left line's.
+    #[test]
+    fn a_shared_row_is_hit_by_x_too() {
+        let w = |t: &str, x: f32| Word { text: t.into(), x, y: 0.0, w: 50.0, h: 20.0 };
+        let lines = vec![Line { words: vec![w("Alice", 0.0), w("said", 60.0)] }, Line { words: vec![w("10:42", 400.0)] }];
+        assert_eq!(nearest(&lines, (420.0, 10.0)), Some((1, 0)));
+        assert_eq!(nearest(&lines, (30.0, 10.0)), Some((0, 0)));
+        assert_eq!(nearest(&lines, (300.0, 10.0)), Some((1, 0)), "in the gap: the nearer line across");
+    }
+
+    /// Two columns under a heading read column by column, the footer last.
+    #[test]
+    fn columns_read_one_after_the_other() {
+        let l = |t: &str, x: f32, y: f32, w: f32| Line { words: vec![Word { text: t.into(), x, y, w, h: 18.0 }] };
+        let lines = vec![
+            l("Heading across", 0.0, 0.0, 600.0),
+            l("left one", 0.0, 30.0, 250.0),
+            l("right one", 350.0, 30.0, 250.0),
+            l("left two", 0.0, 60.0, 250.0),
+            l("right two", 350.0, 60.0, 250.0),
+            l("footer across", 0.0, 100.0, 600.0),
+        ];
+        assert_eq!(crate::ocr::join_lines(lines), "Heading across\nleft one\nleft two\nright one\nright two\nfooter across");
     }
 
     #[test]
