@@ -21,6 +21,8 @@
 //! hand them over). [`configure`] sets it for the process at every
 //! capture; recordings follow the last capture's setting.
 
+#![cfg_attr(not(windows), allow(dead_code))] // Linux, macOS: the setting only
+
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Luminance (in SDR-white units) below which the curve is the identity.
