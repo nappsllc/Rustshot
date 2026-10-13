@@ -23,6 +23,16 @@ pub fn dpi_for(k: u32) -> u32 {
     96 * k.max(1)
 }
 
+/// The words with their boxes: tesseract's `tsv` output.
+pub fn recognize_lines(img: &PixBuf) -> Result<Vec<super::Line>, OcrError> {
+    let (img, k) = super::prepare(img, None);
+    let png = img.to_png().map_err(|e| OcrError::Failed(format!("{e:#}")))?;
+    let mut a = args(dpi_for(k));
+    a.push("tsv".into());
+    let out = run(PROGRAM, &a, png, super::TIMEOUT)?;
+    Ok(super::tsv::parse_tsv(&out, k))
+}
+
 pub fn recognize(img: &PixBuf) -> Result<String, OcrError> {
     let (img, k) = super::prepare(img, None);
     let png = img.to_png().map_err(|e| OcrError::Failed(format!("{e:#}")))?;
