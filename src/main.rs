@@ -1021,6 +1021,46 @@ fn screenclip(_uri: &str) -> Result<()> {
     Err(anyhow!("screenclip is only for Windows"))
 }
 
+/// The app icon that build.rs compiles into rustshot.exe (resource 1).
+#[cfg(test)]
+mod icon_resource_tests {
+    /// Every image below 256 px is a classic 32-bit DIB (BITMAPINFOHEADER):
+    /// Task Manager and other ExtractIcon users do not decode PNG images, so
+    /// a PNG there shows them a wrong icon (19926bf). The 256 px one may be
+    /// PNG.
+    #[test]
+    fn small_icon_images_are_dibs() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        // build.rs hands this very file to rc.exe, unchanged.
+        let build = std::fs::read_to_string(root.join("build.rs")).unwrap();
+        assert!(build.contains(r#"manifest.join("packaging").join("icons").join("rustshot.ico")"#));
+        assert!(build.contains(r#"1 ICON "{ico}""#));
+        let b = std::fs::read(root.join("packaging/icons/rustshot.ico")).unwrap();
+        let u16_at = |i: usize| u16::from_le_bytes([b[i], b[i + 1]]);
+        let u32_at = |i: usize| u32::from_le_bytes(b[i..i + 4].try_into().unwrap()) as usize;
+        assert_eq!((u16_at(0), u16_at(2)), (0, 1), "an icon file");
+        let n = u16_at(4) as usize;
+        assert!(n >= 5);
+        let mut small = 0;
+        for k in 0..n {
+            let e = 6 + 16 * k;
+            let side = if b[e] == 0 { 256 } else { b[e] as usize };
+            let img = &b[u32_at(e + 12)..][..u32_at(e + 8)];
+            if side < 256 {
+                small += 1;
+                assert_eq!(u32_at_slice(img, 0), 40, "{side} px: a BITMAPINFOHEADER DIB, not PNG");
+                assert_eq!(u16::from_le_bytes([img[14], img[15]]), 32, "{side} px: 32 bits a pixel");
+                assert_eq!(u32_at_slice(img, 4), side, "{side} px: its width");
+            }
+        }
+        assert!(small >= 4, "the small sizes are there");
+    }
+
+    fn u32_at_slice(v: &[u8], i: usize) -> usize {
+        u32::from_le_bytes(v[i..i + 4].try_into().unwrap()) as usize
+    }
+}
+
 #[cfg(test)]
 mod cli_tests {
     use super::*;

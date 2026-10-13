@@ -322,6 +322,12 @@ fn sizes_are_capped_and_headers_checked() {
     // A zlib bomb's header: refused before anything is allocated.
     let bomb = deflate::zlib_compress(&vec![0u8; 1 << 20], deflate::Effort::DEFAULT);
     assert_eq!(decode(&file_with_header(60000, 60000, 8, 6, &bomb)), Err(PngError("picture too big")));
+    // The cap is the image editor's: 200 MP.
+    assert_eq!(MAX_PIXELS, 200_000_000);
+    assert_eq!(decode(&file_with_header(20_000, 10_001, 8, 6, &bomb)), Err(PngError("picture too big")));
+    // Just under it, with far too little data: an error, and nothing near
+    // the claimed 800 MB is allocated up front.
+    assert_eq!(decode(&file_with_header(14_142, 14_142, 8, 6, &bomb)), Err(PngError("not enough image data")));
     assert_eq!(decode(&file_with_header(1 << 17, 1, 8, 6, &bomb)), Err(PngError("bad size")));
     assert_eq!(decode(&file_with_header(0, 5, 8, 6, &bomb)), Err(PngError("bad size")));
     // More data than the picture needs: an error, not more memory.

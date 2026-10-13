@@ -192,8 +192,10 @@ pub fn inflate(src: &[u8], limit: usize) -> Result<(Vec<u8>, usize), Error> {
 
 fn inflate_into(src: &[u8], limit: usize, out: &mut Vec<u8>) -> Result<usize, Error> {
     // Room for what the input could give (DEFLATE expands at most 1032:1),
-    // up to the limit: no regrowing on the way.
-    out.reserve(limit.min(src.len().saturating_mul(1032)));
+    // up to the limit, taken fallibly: no regrowing on the way, and a huge
+    // stream is an error instead of an abort.
+    let room = limit.min(src.len().saturating_mul(1032).saturating_add(1024));
+    out.try_reserve_exact(room).map_err(|_| "deflate: out of memory")?;
     let mut b = Bits::new(src);
     loop {
         let last = b.bits(1);
@@ -1070,6 +1072,8 @@ mod tests {
 
     #[test]
     fn limit_and_corruption_fail_cleanly() {
+        // No limit: the room taken up front follows the input, not the limit.
+        assert_eq!(inflate(&[0x03, 0x00], usize::MAX).map(|v| v.0), Ok(vec![]));
         let d = vec![1u8; 10_000];
         let z = zlib_compress(&d, Effort::DEFAULT);
         assert!(zlib_decompress(&z, 9_999).is_err(), "over the limit");

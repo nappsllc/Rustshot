@@ -4,16 +4,13 @@
 //! gray + alpha and RGBA, 1 to 16 bits a sample, interlaced (Adam7) or
 //! not, `tRNS` transparency, and gives RGBA8 (16-bit samples keep their
 //! high byte, low-bit gray is scaled to 0..=255). Chunk CRCs and the zlib
-//! Adler-32 are checked; sizes are capped before anything is allocated; bad
-//! input is an error, never a panic.
+//! Adler-32 are checked; sizes are capped ([`MAX_PIXELS`], the editor's
+//! own cap) before anything is allocated, and allocations are fallible: bad
+//! or huge input is an error, never a panic or an abort.
 //!
 //! [`encode`] writes RGBA8 or RGB8: each row with the filter whose output
 //! has the smallest sum of absolute values (the usual heuristic), then one
 //! zlib stream.
-//!
-//! build.rs includes this file too (`#[path]`, for the icon), so it uses
-//! nothing from the crate but `deflate`.
-#![allow(dead_code)] // each of the crate and build.rs uses a part
 
 use crate::deflate;
 
@@ -31,8 +28,9 @@ impl std::error::Error for PngError {}
 
 /// Largest width or height.
 pub const MAX_SIDE: u32 = 1 << 16;
-/// Largest RGBA8 output (512 MiB: 16384 x 8192 pixels).
-pub const MAX_BYTES: usize = 512 << 20;
+/// Largest picture: what the image editor takes ([`crate::imgedit::MAX_PIXELS`],
+/// 200 MP, 800 MB of RGBA).
+pub const MAX_PIXELS: u64 = crate::imgedit::MAX_PIXELS;
 
 const SIG: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
 
@@ -187,7 +185,7 @@ pub fn decode(b: &[u8]) -> Result<Image, PngError> {
                 if h.w == 0 || h.h == 0 || h.w > MAX_SIDE || h.h > MAX_SIDE {
                     return err("bad size");
                 }
-                if h.w as usize * h.h as usize * 4 > MAX_BYTES {
+                if h.w as u64 * h.h as u64 > MAX_PIXELS {
                     return err("picture too big");
                 }
                 hdr = Some(h);
@@ -213,9 +211,7 @@ pub fn decode(b: &[u8]) -> Result<Image, PngError> {
                     return err("IDAT chunks apart");
                 }
                 seen_idat = true;
-                if idat.len() + len > MAX_BYTES * 2 {
-                    return err("too much image data");
-                }
+                idat.try_reserve(len).map_err(|_| PngError("out of memory"))?;
                 idat.extend_from_slice(data);
             }
             b"IEND" => break,
@@ -246,7 +242,9 @@ pub fn decode(b: &[u8]) -> Result<Image, PngError> {
         return err("not enough image data");
     }
     drop(idat);
-    let mut out = vec![0u8; h.w as usize * h.h as usize * 4];
+    let mut out = Vec::new();
+    out.try_reserve_exact(h.w as usize * h.h as usize * 4).map_err(|_| PngError("out of memory"))?;
+    out.resize(h.w as usize * h.h as usize * 4, 0);
     let bpp = h.bpp();
     let mut at = 0;
     let mut px = Vec::new();
@@ -409,6 +407,7 @@ fn to_rgba(h: &Header, row: &[u8], palette: &[[u8; 4]], key: Option<[u16; 3]>, o
 /// What [`encode`] is given.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Color {
+    #[cfg_attr(not(test), allow(dead_code))] // tests' previews
     Rgb,
     Rgba,
 }
