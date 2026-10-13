@@ -23,7 +23,7 @@ fn base64_round_trips() {
 fn the_deletehash_is_never_printed() {
     let s = Secret::new("s3cr3tHash");
     assert_eq!(format!("{s:?}"), "Secret(hidden)");
-    let info = Info { deletehash: s.clone(), time: 1, kind: UpKind::Image, thumb: None };
+    let info = Info { deletehash: s.clone(), time: 1, kind: UpKind::Image, thumb: None, s3: None };
     let rec = Record { link: "https://i.imgur.com/a.png".into(), info, entry: None };
     assert!(!format!("{rec:?}").contains("s3cr3tHash"));
     assert_eq!(format!("{:?}", Secret::default()), "Secret(none)");
@@ -76,7 +76,7 @@ fn thumbnails_are_72_by_48() {
 }
 
 fn rec(link: &str, dh: &str, time: u64) -> Record {
-    Record { link: link.into(), info: Info { deletehash: Secret::new(dh), time, kind: UpKind::Image, thumb: Some(vec![7, 8]) }, entry: None }
+    Record { link: link.into(), info: Info { deletehash: Secret::new(dh), time, kind: UpKind::Image, thumb: Some(vec![7, 8]), s3: None }, entry: None }
 }
 
 /// uploads.json: records round-trip (thumbnail included), the newest
@@ -118,7 +118,7 @@ fn recent_uploads_merge_history_and_the_book() {
         dir: PathBuf::from(id),
         meta: Meta {
             uploaded: link.map(String::from),
-            upload: link.map(|_| Info { deletehash: Secret::new("h"), time, kind: UpKind::Image, thumb: None }),
+            upload: link.map(|_| Info { deletehash: Secret::new("h"), time, kind: UpKind::Image, thumb: None, s3: None }),
             ..meta_at((2026, 10, 12, 9, 0, 0))
         },
         size: 0,
@@ -180,7 +180,7 @@ fn delete_requests_are_built_and_answered() {
 }
 
 /// The tray's list comes from the index (never a listing on the caller's
-/// thread); filed and forgotten uploads update it; Delete from Imgur…
+/// thread); filed and forgotten uploads update it; Delete upload…
 /// is asked, then answered.
 #[test]
 fn the_index_follows_uploads_and_the_tray_asks() {
@@ -194,7 +194,7 @@ fn the_index_follows_uploads_and_the_tray_asks() {
     assert_eq!(by_tag(12345), None);
     // The question, then Cancel: nothing happens.
     let n = ask_delete(t).unwrap();
-    assert_eq!(n.text, "Delete i.imgur.com/idx1.png from Imgur?");
+    assert_eq!(n.text, "Delete upload i.imgur.com/idx1.png?");
     assert_eq!(n.actions, vec![crate::notice::NoteAct::DeleteUpload, crate::notice::NoteAct::KeepUpload]);
     assert!(answer(false, |_| panic!("no delete")).is_none());
     assert!(answer(true, |_| panic!("asked once")).is_none(), "answered already");
@@ -231,4 +231,60 @@ fn entries_keep_their_upload() {
     forget(&st, Some(&id), link).unwrap();
     let m = st.get(&id).unwrap().meta;
     assert_eq!((m.uploaded, m.upload), (None, None));
+}
+
+fn s3_obj(key: &str) -> crate::s3::Object {
+    crate::s3::Object {
+        target: crate::s3::Target { endpoint: "https://acc.r2.cloudflarestorage.com".into(), region: "auto".into(), bucket: "shots".into(), path_style: false },
+        key: key.into(),
+    }
+}
+
+/// An S3 upload's record keeps where the object is (destination "s3"),
+/// in uploads.json and in a History entry's meta.json alike.
+#[test]
+fn s3_records_keep_the_object() {
+    let r = Record { info: Info { s3: Some(s3_obj("2026/10/12/a b-x1.png")), ..rec("", "", 30).info }, ..rec("https://cdn.example.com/2026/10/12/a%20b-x1.png", "", 0) };
+    assert_eq!((r.info.dest(), r.info.deletable()), ("s3", true));
+    let text = book_to_json(std::slice::from_ref(&r));
+    assert!(text.contains("\"dest\":\"s3\"") && text.contains("\"s3_key\":\"2026/10/12/a b-x1.png\"") && text.contains("\"s3_path_style\":\"0\""), "{text}");
+    assert_eq!(book_from_json(&text), vec![r.clone()]);
+    assert_eq!(rec("l", "dA1b2", 1).info.dest(), "imgur");
+    assert!(!rec("l", "", 1).info.deletable(), "an Imgur upload without its key");
+
+    let m = Meta { uploaded: Some(r.link.clone()), upload: Some(r.info.clone()), ..meta_at((2026, 10, 12, 9, 0, 0)) };
+    let json = crate::history::meta_to_json(&m);
+    assert!(json.contains("\"upload_dest\":\"s3\"") && json.contains("\"upload_s3_bucket\":\"shots\""), "{json}");
+    assert_eq!(crate::history::meta_from_json(&json).unwrap().upload, Some(r.info));
+}
+
+/// Delete upload… on an S3 record sends the signed DELETE (`s3`), never
+/// Imgur's; a failure says why and keeps the record.
+#[test]
+fn deleting_an_s3_upload_uses_the_bucket() {
+    let _l = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let root = TempRoot::new("uploads-s3-del");
+    let st = Store::new(&root.0);
+    let (id, dir) = st.reserve((2026, 10, 12, 9, 14, 8)).unwrap();
+    let pic = PixBuf::from_pixel(30, 20, [40, 80, 120, 255]);
+    st.write_shot(&dir, &pic, &[], None, &meta_at((2026, 10, 12, 9, 14, 8))).unwrap();
+    let link = "https://cdn.example.com/k-1.png";
+    note_s3(link, s3_obj("k-1.png"), UpKind::Image);
+    let m = finished_in(&st, &id, link).unwrap();
+    let rec = Record { link: link.into(), info: m.upload.clone().unwrap(), entry: Some(id.clone()) };
+    assert_eq!(rec.info.s3.as_ref().map(|o| o.key.as_str()), Some("k-1.png"));
+    let imgur = |_: &str, _: &str, _: &[(&str, &str)]| -> Result<(u32, String), String> { panic!("not Imgur") };
+    let refused = |_: &crate::s3::Object| Err("Access Denied (AccessDenied)".to_string());
+    let (text, kind) = delete_record(&st, &rec, "cid", &imgur, &refused);
+    assert_eq!((text.as_str(), kind), ("Couldn't delete the upload: Access Denied (AccessDenied)", crate::editor::style::ToastKind::Error));
+    assert!(st.get(&id).unwrap().meta.uploaded.is_some());
+    let asked = RefCell::new(None);
+    let ok = |o: &crate::s3::Object| {
+        *asked.borrow_mut() = Some(o.clone());
+        Ok(())
+    };
+    let (text, _) = delete_record(&st, &rec, "cid", &imgur, &ok);
+    assert_eq!(text, "Deleted from S3");
+    assert_eq!(asked.borrow().as_ref(), Some(&s3_obj("k-1.png")));
+    assert_eq!(st.get(&id).unwrap().meta.uploaded, None);
 }

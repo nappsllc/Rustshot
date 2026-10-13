@@ -60,7 +60,7 @@ pub enum NoteAct {
     Card,
     /// The delayed capture's pill: call the capture off.
     CancelDelay,
-    /// The tray's "Delete from Imgur?": delete it, or not.
+    /// The tray's "Delete upload?": delete it, or not.
     DeleteUpload,
     KeepUpload,
 }
@@ -78,7 +78,7 @@ impl NoteAct {
             NoteAct::Dismiss => "Close",
             NoteAct::Card => "",
             NoteAct::CancelDelay | NoteAct::KeepUpload => "Cancel",
-            NoteAct::DeleteUpload => "Delete from Imgur",
+            NoteAct::DeleteUpload => "Delete upload",
         }
     }
 
@@ -382,9 +382,13 @@ pub fn render_note(note: &Note, th: &Theme, s: f32, k: f32, hover: Option<NoteAc
     (w, h, px)
 }
 
-/// Whether uploading is set up (an Imgur client id): Copy link is offered.
+/// Whether uploading is set up (an Imgur client id; for S3 an endpoint,
+/// bucket and access key id): Copy link is offered.
 pub fn upload_configured(cfg: &crate::config::Config) -> bool {
-    !cfg.upload_client_id.trim().is_empty()
+    match crate::s3::Dest::of(cfg) {
+        crate::s3::Dest::S3 => crate::s3::Target::from_config(cfg).check().is_ok() && !cfg.s3_access_key_id.trim().is_empty(),
+        crate::s3::Dest::Imgur => !cfg.upload_client_id.trim().is_empty(),
+    }
 }
 
 /// Carry out button `a` of a note about `file`: the note to show next, if
@@ -405,43 +409,31 @@ pub fn run_action(a: NoteAct, file: &std::path::Path, entry: Option<String>, don
             Ok(()) => Note::plain("Copied to clipboard", ToastKind::Success),
             Err(e) => Note::plain(format!("Copy failed: {}", reason(&format!("{e:#}"))), ToastKind::Error),
         }),
-        NoteAct::CopyLink => {
-            let path = file.to_path_buf();
-            let cfg = crate::config::load();
-            let spawned = std::thread::Builder::new().name("upload-recording".into()).spawn(move || {
-                let res = upload(&path, &cfg.upload_client_id);
-                if let Ok(link) = &res {
-                    // Its record: the recording's History entry, or uploads.json.
-                    let root = crate::history::find_root();
-                    let at = root.as_deref().zip(entry.as_deref()).filter(|_| cfg.history);
-                    crate::uploads::finished(link, at);
-                }
-                let copied = res.as_ref().is_ok_and(|u| crate::export::copy_text_to_clipboard(u).is_ok());
-                done(upload_note(&res, copied));
-            });
-            Some(match spawned {
-                Ok(_) => Note { ttl: UPLOAD_TTL, ..Note::plain("Uploading\u{2026}", ToastKind::Info) },
-                Err(e) => Note::plain(format!("Upload failed: {e}"), ToastKind::Error),
-            })
-        }
+        // The upload may be under way already (Upload recordings
+        // automatically): see `rec_upload`.
+        NoteAct::CopyLink => Some(crate::rec_upload::copy_link(file, entry, done)),
     }
 }
 
-/// Upload the recording `file` (tests never do): an MP4 through Imgur's
-/// video upload (multipart, then the transcode polled, see `imgur`), a
-/// GIF like a screenshot.
-fn upload(file: &std::path::Path, client_id: &str) -> Result<String, String> {
+/// Upload the recording `file` to the configured destination (tests
+/// never do): an S3 bucket (`s3`, in parts when large), or Imgur, an
+/// MP4 through its video upload (multipart, then the transcode polled,
+/// see `imgur`), a GIF like a screenshot.
+pub fn upload_recording(file: &std::path::Path, cfg: &crate::config::Config) -> Result<String, String> {
     #[cfg(test)]
     {
-        let _ = (file, client_id);
+        let _ = (file, cfg);
         Err("no uploader in tests".into())
     }
     #[cfg(not(test))]
     {
+        if crate::s3::Dest::of(cfg) == crate::s3::Dest::S3 {
+            return crate::s3::upload_now(cfg, crate::s3::Source::File(file));
+        }
         if is_video(file) {
-            crate::imgur::upload_video_file(file, client_id)
+            crate::imgur::upload_video_file(file, &cfg.upload_client_id)
         } else {
-            std::fs::read(file).map_err(|e| format!("read {}: {e}", file.display())).and_then(|b| crate::export::do_upload(&b, client_id))
+            std::fs::read(file).map_err(|e| format!("read {}: {e}", file.display())).and_then(|b| crate::export::do_upload(&b, &cfg.upload_client_id))
         }
     }
 }
