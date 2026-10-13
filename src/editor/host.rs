@@ -172,6 +172,7 @@ impl Canvas {
 
     /// The document's crop and the capture's lasso (as saved: no unsaved
     /// change).
+    #[cfg_attr(target_os = "macos", allow(dead_code))] // no Edit window there yet
     pub fn set_doc(&mut self, crop: Option<FRect>, mask: Option<Vec<Pt>>) {
         let size = self.size();
         let crop = crop.and_then(|c| crate::objects::mask::crop_rect(c, size));

@@ -121,6 +121,7 @@ pub fn flatten_white(img: &PixBuf) -> std::borrow::Cow<'_, PixBuf> {
 }
 
 /// Whether `img` has any transparent (or translucent) pixel.
+#[cfg_attr(all(not(windows), not(test)), allow(dead_code))] // the Windows clipboard's
 pub fn has_alpha(img: &PixBuf) -> bool {
     img.as_raw().as_chunks::<4>().0.iter().any(|p| p[3] != 255)
 }

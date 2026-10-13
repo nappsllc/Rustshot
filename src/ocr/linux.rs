@@ -24,6 +24,7 @@ pub fn dpi_for(k: u32) -> u32 {
 }
 
 /// The words with their boxes: tesseract's `tsv` output.
+#[cfg_attr(test, allow(dead_code))]
 pub fn recognize_lines(img: &PixBuf) -> Result<Vec<super::Line>, OcrError> {
     let (img, k) = super::prepare(img, None);
     let png = img.to_png().map_err(|e| OcrError::Failed(format!("{e:#}")))?;

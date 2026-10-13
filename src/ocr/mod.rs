@@ -175,6 +175,7 @@ pub fn prepare(img: &PixBuf, max_side: Option<u32>) -> (PixBuf, u32) {
 
 /// Recognize the words of `img` with their boxes (blocking; off the UI
 /// thread): the lines as the engine found them ([`ordered`] sorts them).
+#[cfg_attr(test, allow(dead_code))] // tests fake it (Linux: no engine test)
 pub fn recognize_lines(img: &PixBuf) -> Result<Vec<Line>, OcrError> {
     if img.width() == 0 || img.height() == 0 {
         return Ok(Vec::new());
