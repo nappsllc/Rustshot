@@ -1,10 +1,10 @@
 # Rustshot
 
-A fast, tiny screenshot and annotation tool for **Windows, macOS and Linux**,
-modelled on [Flameshot](https://flameshot.org) and written in Rust.
+A tiny yet powerful, beautiful, open-source tool for screenshots, editing and
+video capture on **Windows, macOS and Linux**.
 
 Press a hotkey, drag a region, annotate it, and copy, save or upload it.
-The whole app is a single native binary under 1 MB with no runtime and no GUI
+The whole app is a single native binary of about 2 MB with no runtime and no GUI
 toolkit: every pixel of the overlay is drawn by Rustshot's own anti-aliased
 renderer.
 
