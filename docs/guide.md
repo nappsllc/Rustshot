@@ -9,6 +9,7 @@ remapped (see [configuration.md](configuration.md#remapping-editor-shortcuts)).
 - [Saving](#saving)
 - [The launcher and delayed captures](#the-launcher-and-delayed-captures)
 - [Open with](#open-with)
+- [Share](#share)
 - [Pins and the thumbnail](#pins-and-the-thumbnail)
 - [History and the Edit window](#history-and-the-edit-window)
 - [Copy text (OCR)](#copy-text-ocr)
@@ -115,8 +116,8 @@ size apply to the selection too. Every edit is one undo step.
   strength. It shares a toolbar button with **invert**: a click picks blur,
   holding the button down opens a menu with both.
 
-Save As, Save to Desktop and Open with… are in the menu of the Save
-button's chevron. Object actions (<kbd>Del</kbd>, <kbd>Ctrl</kbd>+<kbd>D</kbd>,
+Save As, Save to Desktop, Open with… and Share… are in the menu of the
+Save button's chevron. Object actions (<kbd>Del</kbd>, <kbd>Ctrl</kbd>+<kbd>D</kbd>,
 …) win over the other keys while objects are selected.
 
 ## Saving
@@ -171,6 +172,22 @@ saved opens as that file; otherwise it is written to a private
 Linux, 0700 with 0600 files), whose files are removed once they are a day
 old, when the daemon starts.
 
+## Share
+
+**Share…** (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd>, also in the Edit
+window; in the overlay it is in the Save button's chevron menu, in History
+in a card's ⋯ menu) opens the system's share sheet with the capture: on Windows
+the Share window (titled "Rustshot capture"; a picture goes as a file and
+as an image, a recording as its MP4 or GIF file), on macOS the share menu
+at the pointer. The file is the same as Open with's: the saved file, else a
+PNG in the private `rustshot-open` folder. One sheet at a time: while one
+is open, Share says "A share sheet is already open". The overlay closes at
+once; Rustshot keeps running (also for a one-off capture without the tray)
+until the share is done: the sheet closed or the target took it, at most
+10 minutes (60 s after a target was chosen, or when Windows cannot tell
+when the share ends). Linux has no standard share sheet, so Share is not
+offered there.
+
 ## Pins and the thumbnail
 
 **Pin to screen** (<kbd>Ctrl</kbd>+<kbd>P</kbd>, or the pin button at the
@@ -224,9 +241,9 @@ Recordings or Uploaded. <kbd>Ctrl</kbd>/<kbd>Shift</kbd>+click or a drag
 on empty space selects several (Copy, Save to folder…, Delete). Hovering a
 card offers Edit, Copy, Save, Upload, Pin and more; a double-click (or
 <kbd>Enter</kbd>, <kbd>E</kbd>) edits; <kbd>Del</kbd> removes from History
-only. A card's ⋯ menu has Save As…, Open with…, Show in folder and Copy
-file path, and for an uploaded capture **Copy link** and **Delete
-upload…**.
+only. A card's ⋯ menu has Save As…, Open with…, Share… (Windows, macOS),
+Show in folder and Copy file path, and for an uploaded capture **Copy
+link** and **Delete upload…**.
 
 Every upload's link, where it went (Imgur and its *deletehash*, the key
 that deletes it; or the S3 bucket, the object's key and the access key id

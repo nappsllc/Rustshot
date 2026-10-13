@@ -636,7 +636,7 @@ impl Edit {
             recents: &recents,
         });
         let busy = !self.tasks.is_empty();
-        let save_keys = [Act::SaveAs, Act::SaveDesktop, Act::OpenWith].map(|a| chrome::act_tip(a, &self.keys).1.join("+"));
+        let save_keys: Vec<String> = toolbar::save_menu().iter().map(|&(a, _)| chrome::act_tip(a, &self.keys).1.join("+")).collect();
         let slot_keys = toolbar::SLOT_MENU.map(|(a, _)| chrome::act_tip(a, &self.keys).1.join("+"));
         if self.pick.is_none() {
             self.assist.pick_at = None;
@@ -666,7 +666,7 @@ impl Edit {
                 colors: tools::has_color(cur),
                 fills: tools::has_fill(cur),
                 pick: pv.as_ref(),
-                save_menu: self.save_menu.then_some(&save_keys),
+                save_menu: self.save_menu.then_some(save_keys.as_slice()),
                 slot_menu: self.slot_menu.then_some(&slot_keys),
             })
         }).or(standalone);

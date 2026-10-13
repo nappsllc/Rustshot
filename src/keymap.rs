@@ -43,6 +43,8 @@ pub enum Action {
     SaveDesktop,
     /// Open the capture with an app the user picks (the system's chooser).
     OpenWith,
+    /// Hand the capture to the system's share sheet (Windows, macOS).
+    Share,
     Upload,
     /// Pin the selection to the screen (an always-on-top window).
     Pin,
@@ -92,7 +94,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Action; 51] = [
+    pub const ALL: [Action; 52] = [
         Action::ToolSelect,
         Action::ToolPencil,
         Action::ToolLine,
@@ -117,6 +119,7 @@ impl Action {
         Action::SaveAs,
         Action::SaveDesktop,
         Action::OpenWith,
+        Action::Share,
         Action::Upload,
         Action::Pin,
         Action::Trim,
@@ -210,6 +213,7 @@ impl Action {
             Action::SaveAs => ("save_as", "Save As", &["Ctrl+Shift+S"]),
             Action::SaveDesktop => ("save_desktop", "Save to Desktop", &["Ctrl+D"]),
             Action::OpenWith => ("open_with", "Open with\u{2026}", &["Ctrl+O"]),
+            Action::Share => ("share", "Share\u{2026}", &["Ctrl+Shift+E"]),
             Action::Upload => ("upload", "Upload", &["Ctrl+U"]),
             Action::Pin => ("pin", "Pin to screen", &["Ctrl+P"]),
             Action::Trim => ("trim", "Trim to content", &["Shift+A"]),
@@ -507,7 +511,7 @@ mod tests {
     #[test]
     fn defaults_match_spec_table() {
         let km = Keymap::defaults();
-        let want: [(Action, &[&str]); 51] = [
+        let want: [(Action, &[&str]); 52] = [
             (Action::ToolSelect, &["V"]),
             (Action::ToolPencil, &["P"]),
             (Action::ToolLine, &["L"]),
@@ -532,6 +536,7 @@ mod tests {
             (Action::SaveAs, &["Ctrl+Shift+S"]),
             (Action::SaveDesktop, &["Ctrl+D"]),
             (Action::OpenWith, &["Ctrl+O"]),
+            (Action::Share, &["Ctrl+Shift+E"]),
             (Action::Upload, &["Ctrl+U"]),
             (Action::Pin, &["Ctrl+P"]),
             (Action::Trim, &["Shift+A"]),

@@ -474,9 +474,19 @@ fn new_buttons_have_tooltips_and_shortcuts() {
     ed(&mut a).prepare(None, m, Instant::now());
     let tb = ed(&mut a).toolbar.clone().unwrap();
     let rows: Vec<Act> = tb.items.iter().filter_map(|i| match i.kind { toolbar::Kind::MenuItem { act, .. } => Some(act), _ => None }).collect();
-    assert_eq!(rows, [Act::SaveAs, Act::SaveDesktop, Act::OpenWith]);
-    assert_eq!(tb.texts.len(), 3);
+    // Share last, where the OS has a share sheet (not on Linux).
+    if crate::share::supported() {
+        assert_eq!(rows, [Act::SaveAs, Act::SaveDesktop, Act::OpenWith, Act::Share]);
+        assert_eq!(tb.texts.len(), 4);
+        assert!(tb.texts[3].ends_with('E') && tb.texts[3].contains("Shift"), "{:?}", tb.texts);
+    } else {
+        assert_eq!(rows, [Act::SaveAs, Act::SaveDesktop, Act::OpenWith]);
+        assert_eq!(tb.texts.len(), 3);
+    }
     assert!(tb.texts[0].ends_with('S') && tb.texts[1].ends_with('D') && tb.texts[2].ends_with('O'), "{:?}", tb.texts);
+    assert_eq!(chrome::act_tip(Act::Share, &km).0, "Share\u{2026}");
+    assert_eq!(chrome::act_icon(Act::Share), "share");
+    assert!(crate::icon_path::ICONS.iter().any(|(n, _)| *n == "share"));
     assert!(tb.pop.is_some());
     assert_eq!(at(Act::Fill), at(Act::Size(1)) + 1, "next to the size");
     assert_eq!(at(Act::Tool(Tool::Callout)), at(Act::Tool(Tool::Text)) + 1);

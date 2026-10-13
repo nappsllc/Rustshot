@@ -64,8 +64,9 @@ screenshots, editing and video capture.** Windows, Linux and macOS.
 **Share**
 - Copy to the clipboard, or save as PNG, JPEG or BMP into dated folders
   with your own file-name pattern.
-- Save As, Save to Desktop, **Open with…** any app, or (on Windows) drag
-  the thumbnail into another app.
+- Save As, Save to Desktop, **Open with…** any app, **Share…** through the
+  system's share sheet (Windows, macOS), or (on Windows) drag the thumbnail
+  into another app.
 - An optional border (any color, 1 to 8 px) around everything you copy,
   save, upload or pin.
 - Upload to Imgur, or to your own S3-compatible bucket (Amazon S3,
@@ -198,6 +199,7 @@ off in Rustshot, and Windows uses the Snipping Tool again. More detail:
 | Stroke size − / + | <kbd>[</kbd> / <kbd>]</kbd> or the mouse wheel |
 | Copy / Save / Save As / Upload | <kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>Ctrl</kbd>+<kbd>S</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> / <kbd>Ctrl</kbd>+<kbd>U</kbd> |
 | Save to Desktop / Open with… / Pin | <kbd>Ctrl</kbd>+<kbd>D</kbd> / <kbd>Ctrl</kbd>+<kbd>O</kbd> / <kbd>Ctrl</kbd>+<kbd>P</kbd> |
+| Share… (Windows, macOS) | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd> |
 | Copy text (OCR) / Copy color under pointer | <kbd>O</kbd> (or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd>) / <kbd>H</kbd> |
 | Undo / Redo | <kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> (or <kbd>Ctrl</kbd>+<kbd>Y</kbd>) |
 | Delete / Duplicate selected objects | <kbd>Del</kbd> / <kbd>Ctrl</kbd>+<kbd>D</kbd> |

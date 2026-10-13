@@ -837,6 +837,10 @@ impl Edit {
                 self.tasks = vec![Task::OpenWith];
                 self.done = true;
             }
+            Act::Share => {
+                self.tasks = vec![Task::Share];
+                self.done = true;
+            }
             Act::Upload => {
                 self.tasks = vec![Task::Upload];
                 self.done = true;

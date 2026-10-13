@@ -74,6 +74,7 @@ pub enum Request {
     SaveAs,
     SaveDesktop,
     OpenWith,
+    Share,
     Copy,
     Upload,
     Pin,
@@ -468,6 +469,7 @@ impl Canvas {
                 Task::Save { .. } => Request::Save,
                 Task::SaveDesktop => Request::SaveDesktop,
                 Task::OpenWith => Request::OpenWith,
+                Task::Share => Request::Share,
                 Task::Upload => Request::Upload,
                 Task::Pin => Request::Pin,
                 Task::Text => Request::CopyText,
@@ -584,7 +586,7 @@ impl Canvas {
         let cur = e.cur_tool();
         let recents = e.recents();
         let pv = e.pick.as_ref().map(|p| toolbar::PickView { ring: false, alpha: p.has_alpha(), recents: &recents });
-        let save_keys = [Act::SaveAs, Act::SaveDesktop, Act::OpenWith].map(|a| chrome::act_tip(a, &e.keys).1.join("+"));
+        let save_keys: Vec<String> = toolbar::save_menu().iter().map(|&(a, _)| chrome::act_tip(a, &e.keys).1.join("+")).collect();
         let slot_keys = toolbar::SLOT_MENU.map(|(a, _)| chrome::act_tip(a, &e.keys).1.join("+"));
         let inp = toolbar::Input {
             sel: e.sel.unwrap_or(FRect { x: 0.0, y: 0.0, w: 1.0, h: 1.0 }),
@@ -602,7 +604,7 @@ impl Canvas {
             colors: tools::has_color(cur) || e.sel_color().is_some(),
             fills: tools::has_fill(cur),
             pick: pv.as_ref(),
-            save_menu: e.save_menu.then_some(&save_keys),
+            save_menu: e.save_menu.then_some(save_keys.as_slice()),
             slot_menu: e.slot_menu.then_some(&slot_keys),
         };
         e.toolbar = Some(toolbar::layout_docked(&inp, self.bar));

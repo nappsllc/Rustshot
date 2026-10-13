@@ -2174,6 +2174,9 @@ fn act_of(a: Action) -> Option<Act> {
         Action::SaveAs => Act::SaveAs,
         Action::SaveDesktop => Act::SaveDesktop,
         Action::OpenWith => Act::OpenWith,
+        // No share sheet on Linux: the key does nothing there.
+        Action::Share if !crate::share::supported() => return None,
+        Action::Share => Act::Share,
         Action::Upload => Act::Upload,
         Action::Pin => Act::Pin,
         Action::Trim => Act::Trim,
