@@ -40,7 +40,7 @@ use crate::pixbuf::PixBuf;
 use anyhow::{anyhow, bail, Context, Result};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::sync::mpsc::{Receiver, Sender};
+use crate::chan::{Receiver, Sender};
 
 pub const ORIGINAL: &str = "original.png";
 pub const ANNOTATIONS: &str = "annotations.json";
@@ -1250,7 +1250,7 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 fn send(job: Job) {
     let mut w = lock(&WORKER);
     let tx = w.get_or_insert_with(|| {
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = crate::chan::channel();
         std::thread::Builder::new().name("rustshot-history".into()).spawn(move || run(rx)).expect("history thread");
         tx
     });
@@ -1395,7 +1395,7 @@ pub fn flush(limit: std::time::Duration) {
     if lock(&WORKER).is_none() {
         return;
     }
-    let (tx, rx) = std::sync::mpsc::channel();
+    let (tx, rx) = crate::chan::channel();
     send(Job::Flush(tx));
     let _ = rx.recv_timeout(limit);
 }

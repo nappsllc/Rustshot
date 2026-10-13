@@ -21,7 +21,7 @@ use crate::pixbuf::PixBuf;
 use crate::rec_ui::x11::{self as x, Disp, Kind, Win};
 use crate::theme::Theme;
 use core::ffi::{c_char, c_int, c_long, c_uint, c_ulong, c_void};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use crate::chan::{self as mpsc, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 

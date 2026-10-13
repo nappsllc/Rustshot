@@ -851,12 +851,12 @@ pub fn checking() -> bool {
 /// that is not the daemon (Win+Shift+S with the tray icon off: nothing
 /// else checks). Same rules as the daemon's: the stamp on success,
 /// `skip_version` honoured. `None` when disabled or store-managed.
-pub fn spawn_once(enabled: bool) -> Option<std::sync::mpsc::Receiver<Release>> {
+pub fn spawn_once(enabled: bool) -> Option<crate::chan::Receiver<Release>> {
     if !enabled || update_channel().is_some() || cfg!(test) {
         return None;
     }
     let stamp = crate::config::config_dir().join(STAMP_FILE);
-    let (tx, rx) = std::sync::mpsc::channel();
+    let (tx, rx) = crate::chan::channel();
     CHECKING.fetch_add(1, Ordering::SeqCst);
     std::thread::spawn(move || {
         struct Done;
@@ -892,7 +892,7 @@ fn once(stamp: &Path, now: u64, check: impl FnOnce() -> Result<Option<Release>, 
 /// install is managed by a store. The thread is detached and never blocks exit.
 /// A release equal to the config's `skip_version` (re-read each time) is not
 /// reported.
-pub fn spawn_checker(enabled: bool) -> Option<std::sync::mpsc::Receiver<Release>> {
+pub fn spawn_checker(enabled: bool) -> Option<crate::chan::Receiver<Release>> {
     // Every call starts a new generation: an older checker (one that was
     // turned off and on again while it slept) sees it and stops before it
     // checks or writes the day's stamp.
@@ -900,7 +900,7 @@ pub fn spawn_checker(enabled: bool) -> Option<std::sync::mpsc::Receiver<Release>
     if !enabled || update_channel().is_some() {
         return None;
     }
-    let (tx, rx) = std::sync::mpsc::channel();
+    let (tx, rx) = crate::chan::channel();
     std::thread::spawn(move || {
         let stamp = crate::config::config_dir().join(STAMP_FILE);
         // Also stops when turned off in Settings meanwhile (a new checker

@@ -41,7 +41,7 @@ use crate::rec::{AudioSource, FrameSource, RecFormat, RecSpec, VideoEncoder};
 use crate::theme::Theme;
 use anyhow::{anyhow, bail, Context, Result};
 use core::ffi::{c_char, c_int, c_long, c_short, c_uint, c_ulong, c_ushort, c_void};
-use std::sync::mpsc;
+use crate::chan as mpsc;
 use std::sync::Arc;
 
 #[repr(C)]

@@ -18,7 +18,7 @@ use crate::editor::Pending;
 use crate::export::Task;
 use crate::hotkey::HotEvent;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Sender;
+use crate::chan::Sender;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -400,14 +400,14 @@ pub fn show() {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn claim() -> Option<std::sync::mpsc::Receiver<()>> {
+fn claim() -> Option<crate::chan::Receiver<()>> {
     let mut open = lock(&OPEN);
     if let Some(tx) = open.as_ref()
         && tx.send(()).is_ok()
     {
         return None;
     }
-    let (tx, rx) = std::sync::mpsc::channel();
+    let (tx, rx) = crate::chan::channel();
     *open = Some(tx);
     Some(rx)
 }

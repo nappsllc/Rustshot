@@ -28,8 +28,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 #[cfg(not(target_os = "macos"))]
-use std::sync::mpsc::Receiver;
-use std::sync::mpsc::Sender;
+use crate::chan::Receiver;
+use crate::chan::Sender;
 
 pub mod draw;
 
@@ -676,7 +676,7 @@ pub fn run_here() {
     show();
     #[cfg(not(target_os = "macos"))]
     {
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = crate::chan::channel();
         {
             let mut open = lock(&OPEN);
             if let Some(t) = open.as_ref()
@@ -734,7 +734,7 @@ pub fn show() {
         {
             return;
         }
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = crate::chan::channel();
         *open = Some(tx);
         drop(open);
         std::thread::Builder::new().name("rustshot-history-ui".into()).spawn(move || run(rx)).ok();

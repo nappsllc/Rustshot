@@ -17,7 +17,7 @@ use crate::config::Config;
 use crate::ui::compact::Tok;
 use crate::ui::TextState;
 use crate::ui::Ui;
-use std::sync::mpsc::Receiver;
+use crate::chan::Receiver;
 
 /// (label, config value) of the destinations.
 pub const DESTS: [(&str, &str); 2] = [("Imgur", "imgur"), ("S3-compatible", "s3")];
@@ -192,8 +192,8 @@ pub struct State {
 fn answer<T>(rx: &Receiver<T>, gone: impl FnOnce() -> T) -> Option<T> {
     match rx.try_recv() {
         Ok(v) => Some(v),
-        Err(std::sync::mpsc::TryRecvError::Empty) => None,
-        Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(gone()),
+        Err(crate::chan::TryRecvError::Empty) => None,
+        Err(crate::chan::TryRecvError::Disconnected) => Some(gone()),
     }
 }
 
@@ -212,7 +212,7 @@ impl State {
     /// Keep `secret` under `slot` on a worker; `close`: OK asked, close
     /// once it is kept.
     pub fn save(&mut self, slot: Slot, secret: String, close: bool) {
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = crate::chan::channel();
         let (sl, se) = (slot.clone(), secret.clone());
         let tx2 = tx.clone();
         if let Err(e) = std::thread::Builder::new().name("s3-secret".into()).spawn(move || {
@@ -235,7 +235,7 @@ impl State {
         }
         let (target, key, secret) = (f.target(), f.access_key.text.trim().to_string(), f.secret.text.trim().to_string());
         self.probe = Some(Probe::Running);
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = crate::chan::channel();
         let spawned = std::thread::Builder::new().name("s3-test".into()).spawn(move || {
             let _ = tx.send(crate::s3::test_with(&target, &key, &secret, &crate::s3::PLATFORM));
         });
@@ -253,7 +253,7 @@ impl State {
             && !self.stored.iter().any(|(s, _)| s == slot)
         {
             let slot = slot.clone();
-            let (tx, rx) = std::sync::mpsc::channel();
+            let (tx, rx) = crate::chan::channel();
             let name = crate::keystore::s3_name(&slot.0, &slot.1, &slot.2);
             let spawned = std::thread::Builder::new().name("s3-secret-check".into()).spawn(move || {
                 let _ = tx.send(crate::keystore::os().has(&name).unwrap_or(false));

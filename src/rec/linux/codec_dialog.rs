@@ -344,7 +344,7 @@ mod imp {
     use crate::ui::{FocusState, Input};
     use crate::wind::{self, Cursor, Driver, Ev, Hwnd, WindowSpec};
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::mpsc::{Receiver, Sender};
+    use crate::chan::{Receiver, Sender};
     use std::sync::Arc;
 
     struct Dialog {
@@ -363,7 +363,7 @@ mod imp {
 
     impl Dialog {
         fn new(cmd: Option<&'static str>, th: Theme) -> Dialog {
-            let (tx, rx) = std::sync::mpsc::channel();
+            let (tx, rx) = crate::chan::channel();
             Dialog {
                 hwnd: Hwnd::default(),
                 m: Machine::new(cmd),

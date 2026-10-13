@@ -1354,7 +1354,7 @@ mod tests {
     /// cadence (the dialog going idle must not slow the other window).
     #[test]
     fn run_window_cadence_is_per_window() {
-        use std::sync::mpsc;
+        use crate::chan as mpsc;
         use std::time::{Duration, Instant};
         let _guard = windows_lock();
         RETIMES.lock().unwrap_or_else(|e| e.into_inner()).clear();

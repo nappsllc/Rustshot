@@ -432,8 +432,8 @@ impl Edit {
         let Some(run) = &self.snip.ocr else { return false };
         let res = match run.rx.try_recv() {
             Ok(r) => r,
-            Err(std::sync::mpsc::TryRecvError::Empty) => return false,
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(OcrError::Failed("the recognizer stopped".into())),
+            Err(crate::chan::TryRecvError::Empty) => return false,
+            Err(crate::chan::TryRecvError::Disconnected) => Err(OcrError::Failed("the recognizer stopped".into())),
         };
         let run = self.snip.ocr.take().expect("a run");
         // The selection (or its lasso) changed meanwhile: these words are

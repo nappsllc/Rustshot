@@ -193,7 +193,7 @@ pub fn share_now(file: &Path, owner: Option<usize>) -> Result<(), String> {
 /// may still ask for the data.
 #[cfg(all(windows, not(test)))]
 fn imp(file: PathBuf, owner: Option<usize>, sheet: Sheet) -> Result<(), String> {
-    let (tx, rx) = std::sync::mpsc::channel();
+    let (tx, rx) = crate::chan::channel();
     let kind = kind_of(&file);
     let max = max_wait();
     std::thread::Builder::new()

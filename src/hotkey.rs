@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::wind::key;
-use std::sync::mpsc::{self, Receiver, Sender};
+use crate::chan::{self as mpsc, Receiver, Sender};
 
 #[derive(Debug, Clone)]
 pub enum HotEvent {

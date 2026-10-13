@@ -6,7 +6,7 @@ use super::End;
 use crate::rec::{AudioSource, FrameSource, RecSpec, Session, VideoEncoder};
 use anyhow::{Context, Result};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use crate::chan::{self as mpsc, Receiver, RecvTimeoutError, Sender};
 use std::sync::Arc;
 use std::time::Duration;
 

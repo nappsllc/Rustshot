@@ -9,7 +9,7 @@ use crate::theme::Theme;
 use crate::ui::compact::Tok;
 use crate::ui::{FocusState, Input, Ui};
 use crate::wind::{self, Cursor, Driver, Ev, Hwnd, WindowSpec};
-use std::sync::mpsc::Receiver;
+use crate::chan::Receiver;
 
 /// The board's paddings (logical px).
 pub const PAD: f32 = 20.0;
@@ -211,7 +211,7 @@ impl Window {
 
     #[cfg(test)]
     pub(super) fn for_tests(plan: Plan) -> Window {
-        let (_tx, rx) = std::sync::mpsc::channel();
+        let (_tx, rx) = crate::chan::channel();
         Window::new(Form::new(plan), crate::theme::DARK, rx)
     }
 

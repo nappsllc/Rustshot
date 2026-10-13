@@ -12,7 +12,7 @@ use crate::pixbuf::PixBuf;
 use crate::ui::paint::WTok;
 use crate::ui::{FocusState, Input, Ui};
 use crate::wind::{self, Cursor, Driver, Ev, Hwnd, Mods, key};
-use std::sync::mpsc::{Receiver, Sender};
+use crate::chan::{Receiver, Sender};
 use std::time::{Duration, Instant};
 
 /// A worker's result: a message, the uploaded link to keep, and a save
@@ -57,7 +57,7 @@ impl Window {
             canvas: PixBuf::default(),
             out: PixBuf::default(),
             rx,
-            done: std::sync::mpsc::channel(),
+            done: crate::chan::channel(),
             mouse: Pt::new(-1.0, -1.0),
             held: false,
             press: None,

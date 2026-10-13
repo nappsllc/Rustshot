@@ -33,7 +33,7 @@ use crate::wind::{AuxKind, Layer};
 use anyhow::{Context, Result};
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::mpsc;
+use crate::chan as mpsc;
 
 /// Pixels per point at (x, y) points.
 fn scale_at(x: i32, y: i32) -> f32 {

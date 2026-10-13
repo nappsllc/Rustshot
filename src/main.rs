@@ -6,6 +6,7 @@ mod autostart;
 mod busy;
 mod cam;
 mod capture;
+mod chan;
 mod config;
 mod desktop;
 mod deflate;

@@ -13,7 +13,7 @@ use crate::hotkey::HotEvent;
 use crate::sni::{self, Ask, Sni, View};
 use crate::tray;
 use anyhow::Result;
-use std::sync::mpsc::Sender;
+use crate::chan::Sender;
 use std::time::{Duration, Instant};
 
 /// How long one wait for the bus lasts (the tray's changes are looked at
@@ -161,7 +161,7 @@ mod tests {
             println!("SKIP: no StatusNotifierWatcher");
             return;
         }
-        let (tx, _rx) = std::sync::mpsc::channel();
+        let (tx, _rx) = crate::chan::channel();
         spawn(tx);
         let name = sni::item_name(std::process::id());
         let until = Instant::now() + Duration::from_secs(10);

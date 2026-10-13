@@ -422,8 +422,8 @@ pub fn cameras() -> Vec<CamDevice> {
 /// [`cameras`] listed on a worker thread (it can take a moment: Media
 /// Foundation starts and asks every device); the list arrives on the
 /// receiver. Tests list their fake cameras at once.
-pub fn cameras_async() -> std::sync::mpsc::Receiver<Vec<CamDevice>> {
-    let (tx, rx) = std::sync::mpsc::channel();
+pub fn cameras_async() -> crate::chan::Receiver<Vec<CamDevice>> {
+    let (tx, rx) = crate::chan::channel();
     #[cfg(test)]
     {
         let _ = tx.send(cameras());

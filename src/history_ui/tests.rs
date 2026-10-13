@@ -696,7 +696,7 @@ fn history_window_smoke() {
     }
     let _guard = crate::wind::test_window_lock();
     let (_r, st) = fixture("smoke");
-    let (_tx, rx) = std::sync::mpsc::channel();
+    let (_tx, rx) = crate::chan::channel();
     let mut w = window::Window::new(history(&st), rx);
     let mut d = crate::wind::AutoClose::new(&mut w, 1000);
     let spec = crate::wind::WindowSpec { title: "Rustshot History".into(), w: W, h: H, resizable: true, min: MIN, controls: crate::wind::Controls::MinMaxClose };

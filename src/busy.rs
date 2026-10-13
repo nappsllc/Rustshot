@@ -41,8 +41,8 @@ impl Drop for Guard {
 mod tests {
     #[test]
     fn counts_until_done() {
-        let (go, wait) = std::sync::mpsc::channel::<()>();
-        let (done, finished) = std::sync::mpsc::channel::<()>();
+        let (go, wait) = crate::chan::channel::<()>();
+        let (done, finished) = crate::chan::channel::<()>();
         super::spawn(move || {
             let _ = wait.recv();
             let _ = done.send(());

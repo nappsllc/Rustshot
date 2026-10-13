@@ -19,7 +19,7 @@ use crate::text::AnnotFont;
 use chrome::ToastKind;
 use toolbar::{Act, Dev, Toolbar};
 use std::sync::atomic::{AtomicI32, Ordering};
-use std::sync::mpsc::Receiver;
+use crate::chan::Receiver;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -556,7 +556,7 @@ struct App {
     /// An update is installing (`HotEvent::RestartWhenIdle`): no new capture.
     updating: bool,
     /// Told (once) as soon as we are idle; the worker installs only then.
-    idle_reply: Option<std::sync::mpsc::Sender<()>>,
+    idle_reply: Option<crate::chan::Sender<()>>,
     /// This process's Edit windows: quitting asks those with unsaved
     /// edits, an update's restart waits for them.
     edits: &'static crate::edit_ui::Windows,
@@ -1722,8 +1722,8 @@ impl App {
         self.ocr.retain(|job| {
             let res = match job.rx.try_recv() {
                 Ok(res) => res,
-                Err(std::sync::mpsc::TryRecvError::Empty) => return true,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(crate::ocr::OcrError::Failed("the recognizer stopped".into())),
+                Err(crate::chan::TryRecvError::Empty) => return true,
+                Err(crate::chan::TryRecvError::Disconnected) => Err(crate::ocr::OcrError::Failed("the recognizer stopped".into())),
             };
             done.push((res, job.at, job.th));
             false
@@ -1753,11 +1753,11 @@ impl App {
         let Some(rx) = guard.take() else { return };
         let res = match rx.try_recv() {
             Ok(res) => res,
-            Err(std::sync::mpsc::TryRecvError::Empty) => {
+            Err(crate::chan::TryRecvError::Empty) => {
                 *guard = Some(rx);
                 return;
             }
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
+            Err(crate::chan::TryRecvError::Disconnected) => return,
         };
         let (text, kind, copied) = match &res {
             Ok(url) => {
@@ -2352,7 +2352,7 @@ struct RecPop {
     /// when the popover opens or record mode begins.
     cams: Option<Vec<crate::cam::CamDevice>>,
     /// The camera list on its way.
-    cams_rx: Option<std::sync::mpsc::Receiver<Vec<crate::cam::CamDevice>>>,
+    cams_rx: Option<crate::chan::Receiver<Vec<crate::cam::CamDevice>>>,
     /// The open device list.
     dev_open: Option<Dev>,
     /// The camera ring's palette is open.
@@ -2454,8 +2454,8 @@ impl RecPop {
         let Some(rx) = &self.cams_rx else { return false };
         let list = match rx.try_recv() {
             Ok(l) => l,
-            Err(std::sync::mpsc::TryRecvError::Empty) => return false,
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => Vec::new(),
+            Err(crate::chan::TryRecvError::Empty) => return false,
+            Err(crate::chan::TryRecvError::Disconnected) => Vec::new(),
         };
         self.cams = Some(list);
         self.cams_rx = None;
@@ -4052,7 +4052,7 @@ mod tests {
         let dirty = app.edits.add_for_tests("2026-10-05/143300", true);
         app.restart_pending = true;
         assert!(!app.restart_due(), "unsaved edits");
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = crate::chan::channel();
         app.idle_reply = Some(tx);
         app.idle_gate();
         assert!(rx.try_recv().is_err(), "no install meanwhile");
@@ -4100,8 +4100,8 @@ mod tests {
     }
 
     /// An upload still in flight keeps the daemon from being idle.
-    pub(super) fn upload_in_flight(app: &App) -> std::sync::mpsc::Sender<Result<String, String>> {
-        let (tx, rx) = std::sync::mpsc::channel();
+    pub(super) fn upload_in_flight(app: &App) -> crate::chan::Sender<Result<String, String>> {
+        let (tx, rx) = crate::chan::channel();
         *app.upload_slot.lock().unwrap() = Some(rx);
         tx
     }
@@ -4112,7 +4112,7 @@ mod tests {
     fn reload_takes_the_new_config() {
         let mut app = preview_app(theme::DARK, None);
         app.kind = RunKind::Daemon;
-        let (_tx, rx) = std::sync::mpsc::channel();
+        let (_tx, rx) = crate::chan::channel();
         app.updates = Some(rx);
         let cfg = Config { save_format: "jpg".into(), check_updates: false, ..Config::default() };
         app.reload_config(cfg.clone());
@@ -4127,7 +4127,7 @@ mod tests {
     #[test]
     fn idle_gate_waits_for_capture_and_upload() {
         let mut app = preview_app(theme::DARK, None); // a capture is open
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = crate::chan::channel();
         assert!(app.on_hot(HotEvent::RestartWhenIdle(tx)));
         app.idle_gate();
         assert!(rx.try_recv().is_err(), "capture open: no reply");
@@ -4225,7 +4225,7 @@ mod tests {
         app.cfg.check_updates = false;
         app.st = State::Hidden;
         app.bg = Background::OnDemand;
-        let (go, wait) = std::sync::mpsc::channel::<()>();
+        let (go, wait) = crate::chan::channel::<()>();
         crate::busy::spawn(move || {
             let _ = wait.recv();
         });
@@ -4252,7 +4252,7 @@ mod tests {
     fn idle_gate_refuses_captures_while_waiting() {
         let mut app = preview_app(theme::DARK, None);
         app.st = State::Hidden;
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = crate::chan::channel();
         app.pending = Some(Pending::editor()); // a capture about to open
         app.on_hot(HotEvent::RestartWhenIdle(tx));
         app.idle_gate();
@@ -4723,7 +4723,7 @@ mod tests {
             rec_ui::FAKE_CAMS.with(|c| *c.borrow_mut() = rec_ui::fake_cams());
             // The cameras still being listed.
             let mut app = video(th, vsel);
-            let (_tx, rx) = std::sync::mpsc::channel();
+            let (_tx, rx) = crate::chan::channel();
             edit_of(&mut app).rec.cams_rx = Some(rx);
             save(&mut app, &format!("{tn}-video-looking-for-cameras.png"));
             // Linux without ffmpeg: GIF only, MP4 disabled with its tooltip.

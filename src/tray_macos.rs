@@ -14,7 +14,7 @@ use crate::wind::{msg0, msg1, msg2, msg3, ns_string, objc_cls, objc_sel};
 use core::ffi::c_void;
 use std::cell::RefCell;
 use std::sync::Mutex;
-use std::sync::mpsc::Sender;
+use crate::chan::Sender;
 
 static TX: Mutex<Option<Sender<HotEvent>>> = Mutex::new(None);
 

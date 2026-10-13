@@ -9,7 +9,7 @@
 
 use crate::hotkey::HotEvent;
 use crate::tray::{self, MenuItem};
-use std::sync::mpsc::Sender;
+use crate::chan::Sender;
 use std::sync::{Mutex, OnceLock};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -433,7 +433,7 @@ mod tests {
     #[ignore = "creates the real notification-area icon; fails if a daemon is running"]
     fn live_icon_added_and_removed() {
         let Instance::Primary(g) = acquire_or_signal() else { panic!("a daemon is already running") };
-        let (tx, _rx) = std::sync::mpsc::channel();
+        let (tx, _rx) = crate::chan::channel();
         g.listen(tx.clone());
         crate::tray::spawn(tx, true);
         std::thread::sleep(std::time::Duration::from_millis(1500));

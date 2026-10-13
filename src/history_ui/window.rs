@@ -8,7 +8,7 @@ use crate::objects::{FRect, Pt};
 use crate::pixbuf::PixBuf;
 use crate::ui::{FocusState, Input, Ui};
 use crate::wind::{self, Cursor, Driver, Ev, Hwnd, key};
-use std::sync::mpsc::{Receiver, Sender};
+use crate::chan::{Receiver, Sender};
 use std::time::{Duration, Instant};
 
 /// What a press started.
@@ -401,12 +401,12 @@ impl Window {
             canvas: PixBuf::default(),
             out: PixBuf::default(),
             rx,
-            done: std::sync::mpsc::channel(),
-            picked: std::sync::mpsc::channel(),
+            done: crate::chan::channel(),
+            picked: crate::chan::channel(),
             busy: 0,
             checked: Instant::now(),
             scanning: false,
-            scanned: std::sync::mpsc::channel(),
+            scanned: crate::chan::channel(),
         }
     }
 

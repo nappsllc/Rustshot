@@ -17,7 +17,7 @@
 use crate::editor::style::ToastKind;
 use crate::notice::Note;
 use crate::pixbuf::PixBuf;
-use std::sync::mpsc::{self, Receiver};
+use crate::chan::{self as mpsc, Receiver};
 
 #[cfg(windows)]
 mod win;
