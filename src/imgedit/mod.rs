@@ -226,12 +226,6 @@ impl Resize {
         let k = |v: u32, t: u32, f: u32| ((v as f64 * t as f64 / f as f64).round() as u32).clamp(1, MAX_SIDE);
         (k(src.0, self.w, self.from.0), k(src.1, self.h, self.from.1))
     }
-
-    /// The picture grows on one side at least (an upscale, bilinear).
-    pub fn enlarges(&self, src: (u32, u32)) -> bool {
-        let (w, h) = self.target(src);
-        w > src.0 || h > src.1
-    }
 }
 
 /// The Edit window's image edits (none: the picture as captured).
@@ -249,9 +243,15 @@ impl Edits {
 
     /// The output size for a picture whose crop is `src` (in the
     /// original's orientation).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn out_size(&self, src: (u32, u32)) -> (u32, u32) {
-        let o = self.orient.size(src);
-        let r = self.resize.map_or(o, |r| r.target(o));
+        self.finish_size(self.orient.size(src))
+    }
+
+    /// The output size for a picture already turned (`src`: the crop as
+    /// it shows): the resize, then the canvas.
+    pub fn finish_size(&self, src: (u32, u32)) -> (u32, u32) {
+        let r = self.resize.map_or(src, |r| r.target(src));
         self.canvas.map_or(r, |c| c.size(r))
     }
 

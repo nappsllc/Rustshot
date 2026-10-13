@@ -193,6 +193,12 @@ fn corner_cov(x: u32, y: u32, w: u32, h: u32, r: f32) -> u32 {
 
 /// `img` on its canvas `p`.
 pub fn apply(img: &PixBuf, p: &Pad) -> PixBuf {
+    apply_at(img, p, 1.0)
+}
+
+/// [`apply`] for a preview drawn at `k` of the size (`p` already scaled):
+/// the shadow's blur and offset scaled too.
+pub fn apply_at(img: &PixBuf, p: &Pad, k: f32) -> PixBuf {
     let p = p.sanitized();
     let (w, h) = img.dimensions();
     let (ow, oh) = p.size((w, h));
@@ -230,9 +236,10 @@ pub fn apply(img: &PixBuf, p: &Pad) -> PixBuf {
     };
     let grad = lut.len() > 1;
     // The shadow: a blurred rect (its corners' rounding is lost in the blur).
-    let s = SHADOW_BLUR / 2.0;
+    let s = (SHADOW_BLUR * k / 2.0).max(0.5);
     let (x0, x1) = (p.left as f32, p.left as f32 + w as f32);
-    let (y0, y1) = (p.top as f32 + SHADOW_DY, p.top as f32 + h as f32 + SHADOW_DY);
+    let dy = SHADOW_DY * k;
+    let (y0, y1) = (p.top as f32 + dy, p.top as f32 + h as f32 + dy);
     let gx: Vec<f32> = if p.shadow { (0..ow).map(|x| blurred_span(x as f32 + 0.5, x0, x1, s) * SHADOW_ALPHA * 255.0).collect() } else { Vec::new() };
     let d = out.as_raw_mut();
     let threads = if (ow as usize * oh as usize) < 300_000 { 1 } else { std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, 16) };

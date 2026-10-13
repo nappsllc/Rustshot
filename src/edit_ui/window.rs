@@ -44,6 +44,9 @@ pub struct Window {
     /// Told after every event: there are unsaved edits (the daemon's
     /// quit and an update's restart wait for them).
     pub unsaved: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// An image dialog's input and focus (its controls are the kit's).
+    dlg_in: Input,
+    dlg_focus: FocusState,
 }
 
 impl Window {
@@ -63,6 +66,23 @@ impl Window {
             last_frame: Duration::ZERO,
             scale: None,
             unsaved: Default::default(),
+            dlg_in: Input::default(),
+            dlg_focus: FocusState::default(),
+        }
+    }
+
+    /// An Image menu row or key: a dialog opens with its first field
+    /// focused (all of it selected).
+    pub fn image_act(&mut self, a: super::image::ImgAct) {
+        self.e.image_act(a);
+        if let Some(d) = &self.e.img_dialog {
+            self.dlg_in = Input::default();
+            self.dlg_in.mouse = self.mouse;
+            self.dlg_focus = FocusState::default();
+            self.dlg_focus.focus(match d {
+                super::image::ImgDialog::Resize(_) => "rs_w",
+                super::image::ImgDialog::Canvas(_) => "cv_pad",
+            });
         }
     }
 
@@ -107,10 +127,18 @@ impl Window {
         self.e.canvas.set_rects(p(lay.canvas), p(lay.bar), win, k);
     }
 
-    /// Compose the frame.
+    /// Compose the frame (twice when an image dialog's answer or its
+    /// focus changed what shows).
     pub fn render(&mut self) {
+        if self.render_once() {
+            self.render_once();
+        }
+    }
+
+    /// One frame; true: another is due.
+    fn render_once(&mut self) -> bool {
         if self.canvas.width() == 0 {
-            return;
+            return false;
         }
         let t0 = Instant::now();
         self.place();
@@ -131,21 +159,44 @@ impl Window {
         let mut clip = crate::ui::SystemClipboard;
         let fb = crate::uifb::Fb::new(self.canvas.as_raw_mut(), w as usize);
         let area = FRect { x: 0.0, y: 0.0, w: lay.w, h: lay.h };
-        let mut ui = Ui::new(fb, &th, &inp, &mut focus, &mut clip, k, area);
+        // An image dialog takes the input (its fields and buttons).
+        let dlg = self.e.img_dialog.is_some();
+        let (input, focus) = if dlg { (&self.dlg_in, &mut self.dlg_focus) } else { (&inp, &mut focus) };
+        let mut ui = Ui::new(fb, &th, input, focus, &mut clip, k, area);
         let _lp = crate::perf::span(crate::perf::K::Label);
         draw::paint_strip(&mut ui, &lay, &tok);
         draw::paint_rail(&mut ui, &self.e, &lay, &tok, self.hover);
-        draw::paint_status(&mut ui, &self.e, &lay, &tok);
+        draw::paint_status(&mut ui, &self.e, &lay, &tok, self.hover);
         draw::paint_zoom(&mut ui, &self.e, &lay, &tok, self.hover);
         drop(_lp);
         self.e.canvas.paint_bar(&mut ui.fb, now);
         draw::paint_toast(&mut ui, &self.e, &lay, now);
+        draw::paint_img_menu(&mut ui, &self.e, &lay, &tok, self.hover);
         draw::paint_dialog(&mut ui, &self.e, &lay, &tok, self.hover);
-        ui.finish();
+        let mut answer = None;
+        if let (Some(d), Some((pic, small))) = (self.e.img_dialog.as_mut(), self.e.dlg_pic.as_ref()) {
+            let ctok = crate::ui::compact::Tok::of(&th);
+            answer = super::image::paint(&mut ui, d, (lay.w, lay.h), pic, small, &self.e.cfg, &ctok);
+        }
+        let out = ui.finish();
         self.last_frame = t0.elapsed();
         if crate::perf::on() {
             crate::perf::note(&format!("edit-frame {:.3}", self.last_frame.as_secs_f64() * 1000.0));
         }
+        if !dlg {
+            return false;
+        }
+        // Esc cancels, Enter applies (unless a control took them).
+        if answer.is_none() {
+            answer = if out.escape { Some(super::image::DlgOut::Cancel) } else if out.enter { Some(super::image::DlgOut::Apply) } else { None };
+        }
+        let typed = !self.dlg_in.keys.is_empty() || self.dlg_in.pressed.is_some() || self.dlg_in.released.is_some();
+        self.dlg_in.end_frame();
+        if let Some(a) = answer {
+            self.e.image_answer(a);
+        }
+        // A changed field: the estimate and the preview follow at once.
+        answer.is_some() || out.redraw || typed
     }
 
     /// The logical-px hit under window point `p` (physical px).
@@ -282,7 +333,17 @@ impl Window {
             }
             return true;
         }
-        match self.e.canvas.keymap().resolve_edit_window(vk, mods) {
+        // The Image menu: Esc closes it.
+        if self.e.img_menu && vk == key::ESCAPE {
+            self.e.img_menu = false;
+            return true;
+        }
+        let act = self.e.canvas.keymap().resolve_edit_window(vk, mods);
+        if let Some(a) = act.and_then(super::image::act_of) {
+            self.image_act(a);
+            return true;
+        }
+        match act {
             Some(Action::ZoomIn) => self.e.canvas.zoom_step(1),
             Some(Action::ZoomOut) => self.e.canvas.zoom_step(-1),
             Some(Action::ZoomFit) => self.e.canvas.zoom_fit(),
@@ -318,12 +379,32 @@ impl Window {
                 self.e.canvas.select(i, mods.ctrl);
             }
             Hit::Dialog(b) => self.dialog_btn(b),
+            Hit::ImgChip => self.e.img_menu = !self.e.img_menu,
+            Hit::ImgItem(i) => self.image_act(super::image::MENU[i].0),
+            Hit::ImgMenu => {}
         }
     }
 
     /// One event; true: a frame is due.
     pub fn event(&mut self, ev: Ev) -> bool {
         let now = Instant::now();
+        // An image dialog: its controls take the pointer and the keys.
+        if self.e.img_dialog.is_some() && matches!(ev, Ev::Move { .. } | Ev::Down { .. } | Ev::Up { .. } | Ev::Wheel { .. } | Ev::Key { .. } | Ev::Char(_) | Ev::Focus(_)) {
+            if let Ev::Move { x, y } | Ev::Down { x, y } | Ev::Up { x, y } = ev {
+                self.mouse = Pt::new(x as f32, y as f32);
+            }
+            self.held = matches!(ev, Ev::Down { .. }) || (self.held && !matches!(ev, Ev::Up { .. }));
+            self.dlg_in.feed(&ev);
+            return true;
+        }
+        // The Image menu: a press anywhere else closes it.
+        if self.e.img_menu
+            && let Ev::Down { x, y } = ev
+            && !matches!(self.hit_at(Pt::new(x as f32, y as f32)), Some(Hit::ImgItem(_) | Hit::ImgMenu | Hit::ImgChip))
+        {
+            self.e.img_menu = false;
+            return true;
+        }
         match ev {
             Ev::Resize(w, h) => {
                 self.canvas = PixBuf::new(w.max(1), h.max(1));

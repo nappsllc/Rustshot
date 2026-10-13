@@ -27,6 +27,7 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
 pub mod draw;
+pub mod image;
 mod window;
 
 /// Default and minimum size, logical px.
@@ -485,11 +486,85 @@ pub struct Edit {
     pub quitting: bool,
     /// The entry is held open (never pruned meanwhile).
     pub held: Option<crate::history::OpenGuard>,
+    /// The Image menu is open (from the status bar's size chip).
+    pub img_menu: bool,
+    /// Resize… or Canvas… is open, with the picture it works on (before
+    /// the resize and the canvas) and that picture fitted for the preview
+    /// (and its scale).
+    pub img_dialog: Option<image::ImgDialog>,
+    pub dlg_pic: Option<(crate::pixbuf::PixBuf, (crate::pixbuf::PixBuf, f32))>,
 }
 
 impl Edit {
     pub fn new(store: Store, entry: Entry, canvas: Canvas, cfg: Config) -> Edit {
-        Edit { store, entry, canvas, cfg, flow: Flow::default(), collapsed: false, rail_drag: None, toast: None, closing: false, quitting: false, held: None }
+        Edit {
+            store,
+            entry,
+            canvas,
+            cfg,
+            flow: Flow::default(),
+            collapsed: false,
+            rail_drag: None,
+            toast: None,
+            closing: false,
+            quitting: false,
+            held: None,
+            img_menu: false,
+            img_dialog: None,
+            dlg_pic: None,
+        }
+    }
+
+    /// An Image menu row (or its key).
+    pub fn image_act(&mut self, a: image::ImgAct) {
+        use image::{CanvasForm, ImgAct, ImgDialog, ResizeForm};
+        self.img_menu = false;
+        if self.flow.dialog.is_some() {
+            return;
+        }
+        match a {
+            ImgAct::RotateLeft => self.canvas.rotate(false),
+            ImgAct::RotateRight => self.canvas.rotate(true),
+            ImgAct::FlipH => self.canvas.flip(true),
+            ImgAct::FlipV => self.canvas.flip(false),
+            ImgAct::Reset => self.canvas.reset_image(),
+            ImgAct::Resize | ImgAct::Canvas => {
+                self.canvas.commit_drafts();
+                let pic = self.canvas.export_picture();
+                let (w, h) = pic.dimensions();
+                let fit = crate::scale::fit_size(w, h, 400, 240);
+                let k = fit.0 as f32 / w.max(1) as f32;
+                let small = crate::imgedit::resample::resize(&pic, fit.0, fit.1, crate::imgedit::Filter::Area);
+                let e = self.canvas.edits();
+                self.img_dialog = Some(if a == ImgAct::Resize {
+                    ImgDialog::Resize(ResizeForm::new(self.canvas.source_size(), e.resize))
+                } else {
+                    ImgDialog::Canvas(CanvasForm::new(e.canvas))
+                });
+                self.dlg_pic = Some((pic, (small, k)));
+            }
+        }
+    }
+
+    /// The open image dialog was answered.
+    pub fn image_answer(&mut self, out: image::DlgOut) {
+        use image::{DlgOut, ImgDialog};
+        let Some(d) = self.img_dialog.as_ref() else { return };
+        match (d, out) {
+            (_, DlgOut::Cancel) => {}
+            (ImgDialog::Resize(f), DlgOut::Apply) => match f.result() {
+                Some(r) => self.canvas.set_resize(r),
+                None => return,
+            },
+            (ImgDialog::Resize(_), DlgOut::Remove) => self.canvas.set_resize(None),
+            (ImgDialog::Canvas(f), DlgOut::Apply) => match f.result() {
+                Some(p) => self.canvas.set_canvas(Some(p)),
+                None => return,
+            },
+            (ImgDialog::Canvas(_), DlgOut::Remove) => self.canvas.set_canvas(None),
+        }
+        self.img_dialog = None;
+        self.dlg_pic = None;
     }
 
     /// The daemon is quitting: ask about unsaved edits (else close).

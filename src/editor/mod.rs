@@ -2211,6 +2211,9 @@ fn act_of(a: Action) -> Option<Act> {
         Action::UiBigger | Action::UiSmaller | Action::UiReset => return None,
         Action::RecPause | Action::RecMute | Action::RecHidePill => return None,
         Action::ZoomIn | Action::ZoomOut | Action::ZoomFit | Action::ZoomActual => return None,
+        // The Edit window's own (its image menu).
+        Action::RotateLeft | Action::RotateRight | Action::FlipHorizontal | Action::FlipVertical => return None,
+        Action::ImageResize | Action::ImageCanvas | Action::ImageReset => return None,
     })
 }
 

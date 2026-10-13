@@ -607,6 +607,18 @@ fn general(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) 
     if ui.focus.is_focused("filename") {
         s.pattern = Pattern::File;
     }
+    srow(ui, tok, "Save at", Some("Copy, Save, Upload and Pin; History keeps the original"), |ui| {
+        let on = ui.enabled;
+        ui.enabled = on && f.save_at == 2;
+        let pct = format!("{} %", f.save_pct);
+        let w = ui.text_w(12.0, "100 %").ceil();
+        let r = ui.alloc(Some(w), CTL);
+        let c = if ui.enabled { tok.tx } else { tok.tx3 };
+        ui.text_at(12.0, &pct, r.x, r.y + r.h / 2.0, c, false);
+        ui.width(96.0).slider("save_pct", &mut f.save_pct, 10, 100);
+        ui.enabled = on;
+        ui.seg("save_at", &labels(&SAVE_AT), &mut f.save_at, tok);
+    });
     // Turned off: say how to get back before it goes.
     if hid {
         s.ask_hide_tray();
@@ -832,7 +844,7 @@ fn wayland() -> bool {
 }
 
 /// The overlay rows of Key bindings: (label, actions).
-pub const KEY_ROWS: [(&str, &[Action]); 17] = [
+pub const KEY_ROWS: [(&str, &[Action]); 19] = [
     (
         "Tools",
         &[
@@ -871,6 +883,11 @@ pub const KEY_ROWS: [(&str, &[Action]); 17] = [
     ("Trim to content", &[Action::Trim]),
     ("UI size + \u{b7} - \u{b7} Auto", &[Action::UiBigger, Action::UiSmaller, Action::UiReset]),
     ("Edit window zoom + \u{b7} - \u{b7} Fit \u{b7} 1:1", &[Action::ZoomIn, Action::ZoomOut, Action::ZoomFit, Action::ZoomActual]),
+    (
+        "Edit window: rotate left \u{b7} right \u{b7} flip horizontal \u{b7} vertical",
+        &[Action::RotateLeft, Action::RotateRight, Action::FlipHorizontal, Action::FlipVertical],
+    ),
+    ("Edit window: resize \u{b7} canvas \u{b7} reset image edits", &[Action::ImageResize, Action::ImageCanvas, Action::ImageReset]),
 ];
 
 /// Save As, Save to Desktop, Open with and, with a share sheet (not on

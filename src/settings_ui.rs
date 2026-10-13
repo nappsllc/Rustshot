@@ -82,6 +82,9 @@ pub const COPY_TEXT: [(&str, &str); 2] = [("Copy all at once", "all"), ("Let me 
 /// Capture › Redact style (`redact_style`): an opaque fill, or a mosaic
 /// under a blur.
 pub const REDACT_STYLES: [(&str, &str); 2] = [("Solid", "solid"), ("Blur", "blur")];
+/// General › Saving "Save at" (`save_scale`): the screen's pixels, 1× (the
+/// logical size of a high-DPI capture) or a custom percent.
+pub const SAVE_AT: [(&str, &str); 3] = [("Screen pixels", "screen"), ("1\u{d7}", "logical"), ("Custom", "custom")];
 /// Capture › HDR screenshots (`hdr_screenshots`; Windows).
 pub const HDR_MODES: [(&str, &str); 2] = [("Tone-map to SDR", "tonemap"), ("Keep as captured", "keep")];
 /// Capture › Add a border: the width a new border starts at (logical px).
@@ -293,6 +296,10 @@ pub struct Form {
     pub border_w: u8,
     pub border_hex: TextState,
     pub hdr: usize,
+    /// General › Saving "Save at" ([`SAVE_AT`] index) and its custom
+    /// percent (10-100).
+    pub save_at: usize,
+    pub save_pct: u8,
 }
 
 impl Form {
@@ -343,6 +350,8 @@ impl Form {
             border_w: if cfg.border_width > 0 { cfg.border_width.min(config::BORDER_MAX) as u8 } else { BORDER_DEFAULT },
             border_hex: TextState::new(cfg.border_color.trim()),
             hdr: HDR_MODES.iter().position(|m| cfg.hdr_screenshots.trim() == m.1).unwrap_or(0),
+            save_at: SAVE_AT.iter().position(|m| cfg.save_scale.trim() == m.1).unwrap_or(0),
+            save_pct: cfg.save_scale_percent.clamp(10, 100) as u8,
         }
     }
 
@@ -488,6 +497,12 @@ impl Form {
         }
         if self.trim != was.trim {
             c.trim_margins = self.trim;
+        }
+        if self.save_at != was.save_at && let Some(m) = SAVE_AT.get(self.save_at) {
+            c.save_scale = m.1.into();
+        }
+        if self.save_pct != was.save_pct {
+            c.save_scale_percent = u32::from(self.save_pct.clamp(10, 100));
         }
         if self.border != was.border || (self.border && self.border_w != was.border_w) {
             c.border_width = if self.border { u32::from(self.border_w.clamp(1, config::BORDER_MAX as u8)) } else { 0 };

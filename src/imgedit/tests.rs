@@ -225,8 +225,6 @@ fn resize_targets_follow_the_picture() {
     let r = Resize { w: 960, h: 540, from: (1920, 1080), filter: Filter::Lanczos3 };
     assert_eq!(r.target((1920, 1080)), (960, 540));
     assert_eq!(r.target((1000, 500)), (500, 250), "a new crop: the same factors");
-    assert!(!r.enlarges((1920, 1080)));
-    assert!(Resize { w: 2000, ..r }.enlarges((1920, 1080)));
     let e = Edits { resize: Some(r), ..Default::default() };
     assert_eq!(e.out_size((1920, 1080)), (960, 540));
     let turned = e.reoriented(Orient::ID.rotated(true));

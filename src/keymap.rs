@@ -98,10 +98,21 @@ pub enum Action {
     Redact,
     /// The freeform (lasso) selection on / off (remembered).
     SelectFreeform,
+    /// The Edit window's image edits (its keys, asked there first, as the
+    /// zoom's): a quarter turn left / right, mirror left-right /
+    /// top-bottom, the Resize… and Canvas… dialogs, back to the picture
+    /// as captured.
+    RotateLeft,
+    RotateRight,
+    FlipHorizontal,
+    FlipVertical,
+    ImageResize,
+    ImageCanvas,
+    ImageReset,
 }
 
 impl Action {
-    pub const ALL: [Action; 55] = [
+    pub const ALL: [Action; 62] = [
         Action::ToolSelect,
         Action::ToolPencil,
         Action::ToolLine,
@@ -157,6 +168,13 @@ impl Action {
         Action::ToolCrop,
         Action::Redact,
         Action::SelectFreeform,
+        Action::RotateLeft,
+        Action::RotateRight,
+        Action::FlipHorizontal,
+        Action::FlipVertical,
+        Action::ImageResize,
+        Action::ImageCanvas,
+        Action::ImageReset,
     ];
 
     /// A while-recording chord: global (Meta allowed), not an overlay key.
@@ -173,7 +191,20 @@ impl Action {
 
     /// An Edit window key (its zoom): asked there before the editor's.
     pub fn edit_window(self) -> bool {
-        matches!(self, Action::ZoomIn | Action::ZoomOut | Action::ZoomFit | Action::ZoomActual)
+        matches!(
+            self,
+            Action::ZoomIn
+                | Action::ZoomOut
+                | Action::ZoomFit
+                | Action::ZoomActual
+                | Action::RotateLeft
+                | Action::RotateRight
+                | Action::FlipHorizontal
+                | Action::FlipVertical
+                | Action::ImageResize
+                | Action::ImageCanvas
+                | Action::ImageReset
+        )
     }
 
     /// A typing key (the text style): active only while a text or a
@@ -257,6 +288,15 @@ impl Action {
             Action::ToolCrop => ("tool_crop", "Crop", &["C"]),
             Action::Redact => ("redact", "Quick Redact", &["Shift+R"]),
             Action::SelectFreeform => ("select_freeform", "Freeform selection", &["Shift+F"]),
+            // Ctrl+L / Ctrl+R as in photo viewers; the Ctrl+Shift ones are
+            // free in the overlay and the Edit window alike.
+            Action::RotateLeft => ("rotate_left", "Rotate left", &["Ctrl+L"]),
+            Action::RotateRight => ("rotate_right", "Rotate right", &["Ctrl+R"]),
+            Action::FlipHorizontal => ("flip_horizontal", "Flip horizontal", &["Ctrl+Shift+H"]),
+            Action::FlipVertical => ("flip_vertical", "Flip vertical", &["Ctrl+Shift+V"]),
+            Action::ImageResize => ("image_resize", "Resize\u{2026}", &["Ctrl+Shift+R"]),
+            Action::ImageCanvas => ("image_canvas", "Canvas\u{2026}", &["Ctrl+Shift+K"]),
+            Action::ImageReset => ("image_reset", "Reset image edits", &[]),
         }
     }
 
@@ -526,7 +566,7 @@ mod tests {
     #[test]
     fn defaults_match_spec_table() {
         let km = Keymap::defaults();
-        let want: [(Action, &[&str]); 52] = [
+        let want: [(Action, &[&str]); 59] = [
             (Action::ToolSelect, &["V"]),
             (Action::ToolPencil, &["P"]),
             (Action::ToolLine, &["L"]),
@@ -579,6 +619,13 @@ mod tests {
             (Action::TextBold, &["Ctrl+B"]),
             (Action::TextItalic, &["Ctrl+I"]),
             (Action::TextUnderline, &["Ctrl+U"]),
+            (Action::RotateLeft, &["Ctrl+L"]),
+            (Action::RotateRight, &["Ctrl+R"]),
+            (Action::FlipHorizontal, &["Ctrl+Shift+H"]),
+            (Action::FlipVertical, &["Ctrl+Shift+V"]),
+            (Action::ImageResize, &["Ctrl+Shift+R"]),
+            (Action::ImageCanvas, &["Ctrl+Shift+K"]),
+            (Action::ImageReset, &[]),
         ];
         for (a, keys) in want {
             assert_eq!(shown(&km, a), keys, "{a:?}");
