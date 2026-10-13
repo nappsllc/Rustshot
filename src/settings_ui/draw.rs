@@ -300,7 +300,7 @@ fn body(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) {
             CAPTURE => capture(ui, s, tok, click),
             RECORDING => recording::section(ui, s, tok),
             KEYS => keys(ui, s, tok),
-            UPLOAD => upload(ui, s, tok),
+            UPLOAD => super::upload::section(ui, s, tok, click),
             _ => about(ui, s, tok, click),
         }
         ui.cursor_y()
@@ -910,17 +910,6 @@ fn keys(ui: &mut Ui, s: &mut Settings, tok: &Tok) {
         }
     }
     ui.allow_meta = false;
-}
-
-fn upload(ui: &mut Ui, s: &mut Settings, tok: &Tok) {
-    let f = &mut s.form;
-    ui.sec("Imgur", tok);
-    srow(ui, tok, "Client ID", Some("Rustshot's own unless you register one"), |ui| {
-        ui.width(FIELD_W).text_field("upload_client_id", &mut f.upload_id);
-    });
-    srow(ui, tok, "Copy link after upload", Some("Ctrl+U in the overlay uploads; the link replaces the image"), |ui| {
-        ui.switch("copy_url", &mut f.copy_url, tok);
-    });
 }
 
 /// The More from PowerNapps tiles: none until there are real apps (the

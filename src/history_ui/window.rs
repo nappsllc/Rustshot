@@ -514,10 +514,11 @@ impl Window {
                 self.spawn(move || super::share(&store, &id, &cfg, owner))
             }
             Act::DeleteUpload(id) => {
-                self.h.note("Deleting from Imgur\u{2026}", crate::editor::style::ToastKind::Info);
+                self.h.note("Deleting upload\u{2026}", crate::editor::style::ToastKind::Info);
                 self.spawn(move || {
                     let del = |h: &str, p: &str, hd: &[(&str, &str)]| delete_http(h, p, hd);
-                    super::delete_upload(&store, &id, &cfg.upload_client_id, &del)
+                    let s3 = crate::uploads::s3_delete_with(&cfg);
+                    super::delete_upload(&store, &id, &cfg.upload_client_id, &del, &s3)
                 })
             }
             Act::Delete(ids) => {

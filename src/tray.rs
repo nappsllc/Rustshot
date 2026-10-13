@@ -48,7 +48,7 @@ pub enum MenuItem {
     /// Upload `i` of the recent ones (a click copies its link); `tag`
     /// changes with the link, so a changed list is a changed menu.
     Upload { i: u8, tag: u32 },
-    /// "Delete … from Imgur…" for upload `i` (its question first).
+    /// "Delete upload ……" for upload `i` (its question first).
     DeleteUpload { i: u8, tag: u32 },
 }
 
@@ -64,7 +64,7 @@ impl MenuItem {
                 n => format!("Cancel capture ({n} s)").into(),
             },
             MenuItem::Upload { tag, .. } => upload_label(tag).into(),
-            MenuItem::DeleteUpload { tag, .. } => format!("Delete {} from Imgur\u{2026}", upload_label(tag)).into(),
+            MenuItem::DeleteUpload { tag, .. } => format!("Delete upload {}\u{2026}", upload_label(tag)).into(),
             m => m.fixed_label().into(),
         }
     }
@@ -238,7 +238,7 @@ pub struct Extras {
     pub delay: bool,
     /// One tag per recent upload (newest first).
     pub uploads: Vec<u32>,
-    /// Which of them can be deleted from Imgur (their key was kept).
+    /// Which of them can be deleted (an S3 object, or an Imgur upload whose key was kept).
     pub deletable: Vec<bool>,
 }
 
@@ -297,7 +297,7 @@ pub fn current_menu() -> Vec<MenuItem> {
         launcher: true,
         delay: DELAYING.load(Ordering::SeqCst),
         uploads: recent.iter().map(|r| tag_of(&r.link)).collect(),
-        deletable: recent.iter().map(|r| crate::uploads::valid_deletehash(r.info.deletehash.reveal())).collect(),
+        deletable: recent.iter().map(|r| r.info.deletable()).collect(),
     };
     *RECENT.lock().unwrap_or_else(|e| e.into_inner()) = recent.into_iter().map(|r| r.link).collect();
     menu_more(auto, rec_menu(), crate::pin::count() > 0, history, crate::rec_ui::supported(), &x)
@@ -904,7 +904,7 @@ mod tests {
         let l = "https://i.imgur.com/aB3x.png";
         *RECENT.lock().unwrap() = vec!["https://i.imgur.com/zz.png".into(), l.into()];
         assert_eq!(MenuItem::Upload { i: 0, tag: tag_of(l) }.label(), "i.imgur.com/aB3x.png", "by its tag, not its place");
-        assert_eq!(MenuItem::DeleteUpload { i: 0, tag: tag_of(l) }.label(), "Delete i.imgur.com/aB3x.png from Imgur\u{2026}");
+        assert_eq!(MenuItem::DeleteUpload { i: 0, tag: tag_of(l) }.label(), "Delete upload i.imgur.com/aB3x.png\u{2026}");
         assert_eq!(MenuItem::Upload { i: 4, tag: 7 }.label(), "(gone)");
         assert_eq!(format!("{:?}", item_event(MenuItem::DeleteUpload { i: 0, tag: 5 })), "Some(UploadDelete(5))");
     }

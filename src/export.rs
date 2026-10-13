@@ -259,7 +259,7 @@ pub fn format_filename(pattern: &str) -> String {
 }
 
 /// Expand pattern tokens for `now` (`%s` = `epoch`); no sanitising.
-fn expand_pattern(pattern: &str, now: Tm, epoch: u64) -> String {
+pub(crate) fn expand_pattern(pattern: &str, now: Tm, epoch: u64) -> String {
     let (ty, tmo, td, th, tmi, ts) = now;
     let (y, mo, d) = (ty as i64, tmo as i64, td as i64);
     let (h, mi, s) = (th as i64, tmi as i64, ts as i64);
@@ -689,7 +689,7 @@ pub fn run_export(
                         continue;
                     }
                 };
-                upload = Some(spawn_upload(bytes, cfg.upload_client_id.clone()));
+                upload = Some(spawn_upload(bytes, cfg.clone()));
             }
             Task::OpenWith => {
                 let saved = done.iter().rev().find_map(|d| match d {
@@ -828,18 +828,26 @@ thread_local! {
     pub static FAKE_UPLOAD: std::cell::Cell<Option<FakeUpload>> = const { std::cell::Cell::new(None) };
 }
 
-fn spawn_upload(png: Vec<u8>, client_id: String) -> Receiver<Result<String, String>> {
+/// Upload `png` on a worker to the configured destination: Imgur, or
+/// the S3 bucket (named by the file name pattern, `.png`).
+fn spawn_upload(png: Vec<u8>, cfg: Config) -> Receiver<Result<String, String>> {
     let (tx, rx) = mpsc::channel();
     #[cfg(test)]
     let fake = FAKE_UPLOAD.with(|f| f.get());
     crate::busy::spawn(move || {
         #[cfg(test)]
         let r = {
-            let _ = client_id;
+            let _ = &cfg;
             fake.map_or_else(|| Err("no uploader in tests".to_string()), |f| f(&png))
         };
         #[cfg(not(test))]
-        let r = do_upload(&png, &client_id);
+        let r = match crate::s3::Dest::of(&cfg) {
+            crate::s3::Dest::S3 => {
+                let name = format!("{}.png", format_filename(&cfg.filename_pattern));
+                crate::s3::upload_now(&cfg, crate::s3::Source::Bytes(&png, &name))
+            }
+            crate::s3::Dest::Imgur => do_upload(&png, &cfg.upload_client_id),
+        };
         // The record's thumbnail (the deletehash came with the reply).
         if let Ok(link) = &r {
             crate::uploads::note_thumb(link, crate::uploads::thumb_png(&png));
@@ -870,6 +878,8 @@ mod curl;
 pub use curl::download_http_exact;
 #[cfg(not(windows))]
 pub use curl::download_to;
+#[cfg(all(not(windows), not(test)))]
+pub use curl::http_request;
 
 #[cfg(test)]
 mod tests {

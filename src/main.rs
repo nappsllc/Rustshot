@@ -24,6 +24,8 @@ mod icon_path;
 mod imgur;
 mod instance;
 mod keymap;
+// Secrets in the OS credential store (the S3 secret access key).
+mod keystore;
 // The capture launcher (tray "Capture…", `rustshot launcher`) and its delay.
 mod launcher;
 // Blocks, delegate classes and dispatch for the macOS recorder; the block
@@ -37,6 +39,8 @@ mod ocr;
 mod open_with;
 mod perf;
 // Pin to screen: the selection as an always-on-top window.
+// Random bytes from the OS CSPRNG (S3 object keys, retry jitter).
+mod osrand;
 mod pin;
 mod pixbuf;
 #[cfg(windows)]
@@ -46,9 +50,13 @@ mod raster;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod rec;
 mod rec_ui;
+// Recording uploads behind the toast's Copy link (started at Stop when set).
+mod rec_upload;
 // Win+Shift+S / Print Screen as `ms-screenclip:` handler (Windows); the
 // URI parsing is tested everywhere.
 mod screenclip_win;
+// S3-compatible uploads (Amazon S3, Cloudflare R2): SigV4 by hand.
+mod s3;
 mod settings_ui;
 mod scale;
 mod sha256;
