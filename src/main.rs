@@ -63,6 +63,8 @@ mod screenclip_win;
 // S3-compatible uploads (Amazon S3, Cloudflare R2): SigV4 by hand.
 mod s3;
 mod settings_ui;
+#[allow(dead_code)] // filled in as the features land
+mod sharex_text;
 mod scale;
 mod sha256;
 // "Share…": the system's share sheet (Windows, macOS).

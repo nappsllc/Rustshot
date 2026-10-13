@@ -627,6 +627,9 @@ fn capture(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) 
     srow(ui, tok, "Trim margins automatically", Some(&help), |ui| {
         ui.switch("trim_margins", &mut f.trim, tok);
     });
+    srow(ui, tok, crate::sharex_text::INCLUDE_POINTER, Some(crate::sharex_text::INCLUDE_POINTER_HELP), |ui| {
+        ui.switch("include_cursor", &mut f.cursor, tok);
+    });
 }
 
 /// Overlay: what shows while selecting, and how the toolbar draws.
@@ -726,6 +729,13 @@ fn image_rows(ui: &mut Ui, f: &mut crate::settings_ui::Form, tok: &Tok) {
         if ui.swatch("border_swatch", c, false, tok) {
             ui.focus.focus("border_color");
         }
+        ui.enabled = on;
+    });
+    srow(ui, tok, crate::sharex_text::WATERMARK_ON_EXPORT, Some(crate::sharex_text::WATERMARK_HELP), |ui| {
+        ui.switch("export_watermark", &mut f.watermark, tok);
+        let on = ui.enabled;
+        ui.enabled = on && f.watermark;
+        ui.width(150.0).text_field("watermark_text", &mut f.watermark_text);
         ui.enabled = on;
     });
     if cfg!(windows) {

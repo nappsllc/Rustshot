@@ -370,6 +370,11 @@ pub struct Form {
     /// the export border (on, its width 1-8 and color: `border_width`,
     /// `border_color`), HDR screenshots ([`HDR_MODES`] index).
     pub trim: bool,
+    /// Capture "Include mouse pointer" (`include_cursor`).
+    pub cursor: bool,
+    /// Saving "Watermark on export" (`export_watermark`) and its text.
+    pub watermark: bool,
+    pub watermark_text: TextState,
     pub border: bool,
     pub border_w: u8,
     pub border_hex: TextState,
@@ -424,6 +429,9 @@ impl Form {
             copy_text: COPY_TEXT.iter().position(|a| cfg.copy_text_mode.trim() == a.1).unwrap_or(1),
             redact_style: REDACT_STYLES.iter().position(|a| cfg.redact_style.trim() == a.1).unwrap_or(0),
             trim: cfg.trim_margins,
+            cursor: cfg.include_cursor,
+            watermark: cfg.export_watermark,
+            watermark_text: TextState::new(&cfg.watermark_text),
             border: cfg.border_width > 0,
             border_w: if cfg.border_width > 0 { cfg.border_width.min(config::BORDER_MAX) as u8 } else { BORDER_DEFAULT },
             border_hex: TextState::new(cfg.border_color.trim()),
@@ -575,6 +583,15 @@ impl Form {
         }
         if self.trim != was.trim {
             c.trim_margins = self.trim;
+        }
+        if self.cursor != was.cursor {
+            c.include_cursor = self.cursor;
+        }
+        if self.watermark != was.watermark {
+            c.export_watermark = self.watermark;
+        }
+        if self.watermark_text.text != was.watermark_text.text {
+            c.watermark_text = self.watermark_text.text.clone();
         }
         if self.save_at != was.save_at && let Some(m) = SAVE_AT.get(self.save_at) {
             c.save_scale = m.1.into();
