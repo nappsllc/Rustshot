@@ -176,7 +176,40 @@ pub fn scaled(img: PixBuf, f: f32) -> PixBuf {
 /// capture as it was.
 pub fn for_output(img: PixBuf, cfg: &Config, scale: f32, keep_size: bool) -> PixBuf {
     let f = if keep_size { 1.0 } else { save_factor(cfg, scale) };
-    with_border(scaled(img, f), cfg, scale * f)
+    with_watermark(with_border(scaled(img, f), cfg, scale * f), cfg, scale * f)
+}
+
+/// Settings › Saving "Watermark on export" as an effect (None: off, or
+/// nothing to draw).
+pub fn export_watermark(cfg: &Config) -> Option<crate::imgedit::effects::Watermark> {
+    use crate::imgedit::effects::{ANCHORS, Str, Watermark};
+    if !cfg.export_watermark {
+        return None;
+    }
+    let image = !cfg.watermark_image.trim().is_empty();
+    let text = if image { cfg.watermark_image.trim() } else { cfg.watermark_text.trim() };
+    if text.is_empty() {
+        return None;
+    }
+    let (r, g, b, a) = crate::config::parse_color(&cfg.watermark_color).unwrap_or((255, 255, 255, 255));
+    Some(Watermark {
+        image,
+        text: Str::new(text),
+        anchor: ANCHORS.iter().position(|a| *a == cfg.watermark_anchor).unwrap_or(8) as u8,
+        margin: cfg.watermark_margin,
+        opacity: cfg.watermark_opacity.min(100) as f32 / 100.0,
+        size: cfg.watermark_size.clamp(1, 100) as f32,
+        tiled: cfg.watermark_tiled,
+        color: crate::uifb::C4::new(r, g, b, a),
+    })
+}
+
+/// img with the export watermark ([xport_watermark]; its margin in
+/// logical px at scale), or itself.
+pub fn with_watermark(img: PixBuf, cfg: &Config, scale: f32) -> PixBuf {
+    let Some(w) = export_watermark(cfg) else { return img };
+    let e = crate::imgedit::effects::Effects { watermark: Some(w), ..Default::default() };
+    crate::imgedit::effects::apply(img, &e, scale.max(0.25))
 }
 
 /// The border [`for_output`] puts round a capture at `scale` (px).
@@ -1380,5 +1413,32 @@ mod border_tests {
         assert_eq!(output_border(&b, 2.0), 2);
         assert_eq!(output_border(&Config { border_width: 2, ..Config::default() }, 2.0), 4, "screen pixels: 4");
         assert_eq!((save_factor(&at("logical", 50), 2.0), save_factor(&at("custom", 5), 1.0)), (0.5, 0.1));
+    }
+}
+
+#[cfg(test)]
+mod watermark_tests {
+    use super::*;
+
+    #[test]
+    fn export_watermark_follows_the_settings() {
+        let mut cfg = Config::default();
+        assert!(export_watermark(&cfg).is_none(), "off by default");
+        cfg.export_watermark = true;
+        assert!(export_watermark(&cfg).is_none(), "nothing to draw");
+        cfg.watermark_text = "Rustshot".into();
+        cfg.watermark_anchor = "top-left".into();
+        cfg.watermark_opacity = 50;
+        let w = export_watermark(&cfg).unwrap();
+        assert!(!w.image && w.text.as_str() == "Rustshot" && w.anchor == 0 && w.opacity == 0.5);
+        cfg.watermark_image = "C:\\logo.png".into();
+        assert!(export_watermark(&cfg).unwrap().image, "an image wins over the text");
+        cfg.watermark_image.clear();
+        let img = PixBuf::from_pixel(200, 100, [0, 0, 0, 255]);
+        let out = for_output(img.clone(), &cfg, 1.0, false);
+        assert_eq!(out.dimensions(), img.dimensions());
+        assert_ne!(out, img);
+        cfg.export_watermark = false;
+        assert_eq!(for_output(img.clone(), &cfg, 1.0, false), img);
     }
 }
