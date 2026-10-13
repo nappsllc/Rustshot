@@ -501,14 +501,23 @@ fn uploaded_filter_and_card_menu() {
     let plain = h.entries.iter().find(|e| e.meta.uploaded.is_none() && !e.meta.kind.is_recording()).unwrap().clone();
     let rec = h.entries.iter().find(|e| e.meta.kind.is_recording()).unwrap().clone();
     use draw::MenuAct as M;
-    assert_eq!(draw::card_acts(&h, &plain), [M::SaveAs, M::OpenWith, M::ShowInFolder, M::CopyPath, M::Delete]);
-    assert_eq!(draw::card_acts(&h, &rec), [M::OpenWith, M::ShowInFolder, M::CopyPath, M::Delete]);
+    // Share after Open with where the OS has a share sheet (not Linux).
+    let acts = |e: &crate::history::Entry| -> Vec<M> { draw::card_acts(&h, e).into_iter().filter(|a| *a != M::Share).collect() };
+    for e in [&plain, &rec, &up] {
+        let all = draw::card_acts(&h, e);
+        let ow = all.iter().position(|a| *a == M::OpenWith).unwrap();
+        assert_eq!(all.get(ow + 1) == Some(&M::Share), crate::share::supported(), "{all:?}");
+    }
+    assert_eq!(acts(&plain), [M::SaveAs, M::OpenWith, M::ShowInFolder, M::CopyPath, M::Delete]);
+    assert_eq!(acts(&rec), [M::OpenWith, M::ShowInFolder, M::CopyPath, M::Delete]);
     // Uploaded before records were kept: no deletehash, no delete.
-    assert_eq!(draw::card_acts(&h, &up), [M::SaveAs, M::OpenWith, M::ShowInFolder, M::CopyPath, M::CopyLink, M::Delete]);
+    assert_eq!(acts(&up), [M::SaveAs, M::OpenWith, M::ShowInFolder, M::CopyPath, M::CopyLink, M::Delete]);
     with_record(&st);
     h.reload();
     let up = h.entry(&up.id).unwrap().clone();
-    assert_eq!(draw::card_acts(&h, &up), [M::SaveAs, M::OpenWith, M::ShowInFolder, M::CopyPath, M::CopyLink, M::DeleteUpload, M::Delete]);
+    let acts = |e: &crate::history::Entry| -> Vec<M> { draw::card_acts(&h, e).into_iter().filter(|a| *a != M::Share).collect() };
+    assert_eq!(acts(&up), [M::SaveAs, M::OpenWith, M::ShowInFolder, M::CopyPath, M::CopyLink, M::DeleteUpload, M::Delete]);
+    assert_eq!(M::Share.label(), "Share\u{2026}");
     assert_eq!(M::DeleteUpload.label(), "Delete from Imgur\u{2026}");
     assert_eq!(M::OpenWith.label(), "Open with\u{2026}");
 }
@@ -591,6 +600,46 @@ fn open_with_picks_the_file() {
     inp.feed(&Ev::Key { vk: 'O' as u32, up: false, repeat: false, mods: Mods { ctrl: true, ..Mods::default() } });
     let (_, acts) = render(&mut h, &DARK, 960, 640, 1.0, &inp);
     assert_eq!(acts, [Act::OpenWith(e.id)]);
+}
+
+/// Share… hands the same file as Open with to the sheet (none comes up
+/// in tests): the saved file of an unedited capture, a recording's file,
+/// else a temporary picture; Ctrl+Shift+E asks for it where there is a
+/// sheet.
+#[test]
+fn share_hands_the_file() {
+    let (_r, st) = fixture("share");
+    let dir = std::env::temp_dir().join(format!("rustshot-hist-share-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let saved = dir.join("kept.png");
+    std::fs::write(&saved, b"png").unwrap();
+    let e = st.list().into_iter().find(|e| !e.meta.edited && !e.meta.kind.is_recording()).unwrap();
+    st.update(&e.id, |m| m.saved = Some(saved.clone())).unwrap();
+    crate::share::SHARED.with(|s| s.borrow_mut().clear());
+    let edited = st.list().into_iter().find(|e| e.meta.edited).unwrap();
+    let ok = crate::editor::style::ToastKind::Success;
+    if crate::share::supported() {
+        assert_eq!(share(&st, &e.id, &Config::default(), None).kind, ok);
+        assert_eq!(share(&st, &edited.id, &Config::default(), None).kind, ok);
+        let shared = crate::share::SHARED.with(|s| s.borrow().clone());
+        assert_eq!(shared[0], saved);
+        assert!(shared[1].starts_with(crate::open_with::temp_dir()) && shared[1].extension().unwrap() == "png");
+        let _ = std::fs::remove_file(&shared[1]);
+    } else {
+        assert_ne!(share(&st, &e.id, &Config::default(), None).kind, ok, "no sheet here");
+    }
+    assert_ne!(share(&st, "missing", &Config::default(), None).kind, ok);
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut h = history(&st);
+    h.sel = vec![e.id.clone()];
+    let mut inp = Input::default();
+    inp.feed(&Ev::Key { vk: 'E' as u32, up: false, repeat: false, mods: Mods { ctrl: true, shift: true, ..Mods::default() } });
+    let (_, acts) = render(&mut h, &DARK, 960, 640, 1.0, &inp);
+    if crate::share::supported() {
+        assert_eq!(acts, [Act::Share(e.id)]);
+    } else {
+        assert!(acts.is_empty(), "{acts:?}");
+    }
 }
 
 #[test]

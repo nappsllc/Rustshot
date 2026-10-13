@@ -113,6 +113,8 @@ pub enum Act {
     /// Open the capture with an app the user picks (the Save menu's
     /// "Open with…").
     OpenWith,
+    /// The system's share sheet (the Save menu's "Share…").
+    Share,
     Upload,
     /// Pin the selection to the screen.
     Pin,
@@ -280,9 +282,9 @@ pub struct Input<'a> {
     pub fills: bool,
     /// The color picker while it is open (over the others).
     pub pick: Option<&'a PickView<'a>>,
-    /// The save menu while it is open: the keys of Save As, Save to
-    /// Desktop and Open with.
-    pub save_menu: Option<&'a [String; 3]>,
+    /// The save menu while it is open: the keys of its rows
+    /// ([`save_menu`]).
+    pub save_menu: Option<&'a [String]>,
     /// The Blur / Invert menu while it is open: their keys.
     pub slot_menu: Option<&'a [String; 2]>,
 }
@@ -559,17 +561,25 @@ fn place_slot_menu(bar: FRect, above: bool, items: &mut Vec<Item>, inp: &Input) 
 /// The Blur / Invert menu's width (logical px).
 const SLOT_MENU_W: f32 = 160.0;
 
-/// The save menu's rows.
-pub const SAVE_MENU: [(Act, &str); 3] = [(Act::SaveAs, "Save as\u{2026}"), (Act::SaveDesktop, "Save to Desktop"), (Act::OpenWith, "Open with\u{2026}")];
+/// The save menu's rows (Share last, where there is a share sheet: see
+/// [`save_menu`]).
+pub const SAVE_MENU: [(Act, &str); 4] =
+    [(Act::SaveAs, "Save as\u{2026}"), (Act::SaveDesktop, "Save to Desktop"), (Act::OpenWith, "Open with\u{2026}"), (Act::Share, "Share\u{2026}")];
+
+/// The save menu's rows here: no Share on Linux (no standard sheet).
+pub fn save_menu() -> &'static [(Act, &'static str)] {
+    if crate::share::supported() { &SAVE_MENU } else { &SAVE_MENU[..3] }
+}
 
 /// The save menu under (or over) the Save button: Save As, Save to
-/// Desktop, Open with.
+/// Desktop, Open with, Share.
 fn place_save_menu(bar: FRect, above: bool, items: &mut Vec<Item>, inp: &Input) -> FRect {
     let s = inp.s;
-    let (pw, ph) = (MENU_W * s, (SAVE_MENU.len() as f32 * MENU_ROW + 2.0 * PAD) * s);
+    let rows = save_menu();
+    let (pw, ph) = (MENU_W * s, (rows.len() as f32 * MENU_ROW + 2.0 * PAD) * s);
     let anchor = items.iter().find(|it| it.kind == Kind::Btn(Act::Save)).map_or(bar, |it| it.r);
     let (px, py) = place_pop(pw, ph, anchor, bar, above, inp);
-    for (i, (act, label)) in SAVE_MENU.into_iter().enumerate() {
+    for (i, &(act, label)) in rows.iter().enumerate() {
         let r = FRect { x: px + PAD * s, y: py + (PAD + i as f32 * MENU_ROW) * s, w: pw - 2.0 * PAD * s, h: MENU_ROW * s };
         items.push(Item { kind: Kind::MenuItem { act, label, key: i }, r, disabled: false });
     }

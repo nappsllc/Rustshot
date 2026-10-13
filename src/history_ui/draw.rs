@@ -119,6 +119,7 @@ pub enum MenuAct {
     Settings,
     SaveAs,
     OpenWith,
+    Share,
     ShowInFolder,
     CopyPath,
     CopyLink,
@@ -134,6 +135,7 @@ impl MenuAct {
             MenuAct::Settings => "Settings\u{2026}",
             MenuAct::SaveAs => "Save As\u{2026}",
             MenuAct::OpenWith => "Open with\u{2026}",
+            MenuAct::Share => "Share\u{2026}",
             MenuAct::CopyLink => "Copy link",
             MenuAct::DeleteUpload => "Delete from Imgur\u{2026}",
             MenuAct::ShowInFolder => "Show in folder",
@@ -415,7 +417,8 @@ pub fn menu_lay(lay: &Lay, h: &History, items: &[(FRect, Target)]) -> Option<(FR
     Some((r, rows))
 }
 
-/// A card's ⋯ menu: Save As (screenshots), Open with, Show in folder,
+/// A card's ⋯ menu: Save As (screenshots), Open with, Share (Windows,
+/// macOS), Show in folder,
 /// Copy file path, then Copy link and Delete from Imgur… when it was
 /// uploaded (the latter when its deletehash was kept), Delete.
 pub fn card_acts(h: &History, e: &Entry) -> Vec<MenuAct> {
@@ -423,7 +426,11 @@ pub fn card_acts(h: &History, e: &Entry) -> Vec<MenuAct> {
     if !e.meta.kind.is_recording() {
         v.push(MenuAct::SaveAs);
     }
-    v.extend([MenuAct::OpenWith, MenuAct::ShowInFolder, MenuAct::CopyPath]);
+    v.push(MenuAct::OpenWith);
+    if crate::share::supported() {
+        v.push(MenuAct::Share);
+    }
+    v.extend([MenuAct::ShowInFolder, MenuAct::CopyPath]);
     if e.meta.uploaded.is_some() {
         v.push(MenuAct::CopyLink);
         if h.can_unupload(&e.id) {

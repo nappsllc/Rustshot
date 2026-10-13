@@ -146,6 +146,11 @@ pub fn input(h: &mut History, lay: &Lay, targets: &[(FRect, Target)], inp: &Inpu
                     acts.push(if mods.shift { Act::SaveAs(e.id.clone()) } else { Act::Save(e.id.clone()) });
                 }
             }
+            v if v == 'E' as u32 && mods.ctrl && mods.shift && !typing && crate::share::supported() => {
+                if let Some(e) = h.single() {
+                    acts.push(Act::Share(e.id.clone()));
+                }
+            }
             v if v == 'O' as u32 && mods.ctrl && !typing => {
                 if let Some(e) = h.single() {
                     acts.push(Act::OpenWith(e.id.clone()));
@@ -283,6 +288,7 @@ fn click(h: &mut History, lay: &Lay, t: Target, mods: crate::wind::Mods, moved: 
                 (MenuAct::Settings, _) => vec![Act::Settings],
                 (MenuAct::SaveAs, Some(id)) => vec![Act::SaveAs(id)],
                 (MenuAct::OpenWith, Some(id)) => vec![Act::OpenWith(id)],
+                (MenuAct::Share, Some(id)) => vec![Act::Share(id)],
                 (MenuAct::CopyLink, Some(id)) => vec![Act::CopyLink(id)],
                 (MenuAct::DeleteUpload, Some(id)) => {
                     h.ask_unupload = Some(id);
@@ -500,6 +506,12 @@ impl Window {
                 #[allow(clippy::unnecessary_cast)] // a pointer, a u64 or a usize
                 let owner = Some(self.hwnd.0 as usize);
                 self.spawn(move || super::open_with(&store, &id, &cfg, owner))
+            }
+            Act::Share(id) => {
+                // The sheet comes up over this window.
+                #[allow(clippy::unnecessary_cast)] // a pointer, a u64 or a usize
+                let owner = Some(self.hwnd.0 as usize);
+                self.spawn(move || super::share(&store, &id, &cfg, owner))
             }
             Act::DeleteUpload(id) => {
                 self.h.note("Deleting from Imgur\u{2026}", crate::editor::style::ToastKind::Info);

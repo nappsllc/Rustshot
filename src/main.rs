@@ -51,6 +51,8 @@ mod screenclip_win;
 mod settings_ui;
 mod scale;
 mod sha256;
+// "Share…": the system's share sheet (Windows, macOS).
+mod share;
 mod snap;
 #[cfg(any(target_os = "linux", test))]
 mod sni;
@@ -636,6 +638,8 @@ fn main() {
 /// measurements. The editor also logs `phase=overlay` just before the
 /// export crop.
 fn exit(code: i32) -> ! {
+    // A share sheet still up keeps the process (its owner window) alive.
+    share::wait_idle(share::MAX_WAIT);
     #[cfg(windows)]
     memlog("exit");
     std::process::exit(code)

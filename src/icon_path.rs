@@ -264,6 +264,13 @@ pub const ICONS: &[(&str, &[Shape])] = &[
         Path("M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12"),
         Path("M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"),
     ]),
+    ("share", &[ // share-2
+        Circle(18.0, 5.0, 3.0),
+        Circle(6.0, 12.0, 3.0),
+        Circle(18.0, 19.0, 3.0),
+        Path("m8.59 13.51 6.83 3.98"),
+        Path("m15.41 6.51-6.82 3.98"),
+    ]),
 ];
 
 /// The Settings window's rail and row icons (Lucide, as on the Settings
