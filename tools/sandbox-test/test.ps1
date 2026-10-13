@@ -74,6 +74,9 @@ function KillAll { Get-Process rustshot -ErrorAction SilentlyContinue | Stop-Pro
 # 0.4.0 (tray icon off, on-demand screenclip, register-screenclip, border,
 # image edits, freeform, Text mode, Quick Redact): Checks040.
 . "$T\v040.ps1"
+# 0.4.1 (the exe's small icons as the shell extracts them, the in-repo PNG
+# encoder read back by GDI+ and WIC): Checks041.
+. "$T\v041.ps1"
 # Start menu / desktop shortcut names over 0.1.0's lowercase ones.
 . "$T\shortcuts.ps1"
 # Data files downloaded on demand (0.5.0): ChecksData, NoDataFolders.
@@ -100,6 +103,15 @@ if (Test-Path "$T\v040-only") {
     Copy-Item $portable.FullName "$env:TEMP\rustshot.exe"
     Add-Content $log "      portable exe: $($portable.FullName) $((Get-Item $portable.FullName).Length) B"
     Checks040 "$env:TEMP\rustshot.exe"
+    Add-Content $log 'DONE'
+    return
+}
+# <T>\v041-only: just the 0.4.1 checks.
+if (Test-Path "$T\v041-only") {
+    $portable = PortableExe
+    Copy-Item $portable.FullName "$env:TEMP\rustshot.exe"
+    Add-Content $log "      portable exe: $($portable.FullName) $((Get-Item $portable.FullName).Length) B"
+    Checks041 "$env:TEMP\rustshot.exe"
     Add-Content $log 'DONE'
     return
 }
@@ -350,6 +362,7 @@ if ($portable) {
     HistoryChecks "$env:TEMP\rustshot.exe"
     Checks030 "$env:TEMP\rustshot.exe"
     Checks040 "$env:TEMP\rustshot.exe"
+    Checks041 "$env:TEMP\rustshot.exe"
     ChecksData "$env:TEMP\rustshot.exe"
     RecordingChecks "$env:TEMP\rustshot.exe"
     Start-Process "$env:TEMP\rustshot.exe"

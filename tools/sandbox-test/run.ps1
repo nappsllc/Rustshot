@@ -17,8 +17,8 @@ param(
     [string]$Old,
     # Work folder (mapped into the sandbox as Desktop\test). Results: <Work>\out\results.txt.
     [string]$Work = (Join-Path $env:TEMP 'rustshot-sandbox'),
-    # Just one group: probe (hotkey probe), rec (recording), v030 / v040 (0.3.0 / 0.4.0 checks), data (data files).
-    [ValidateSet('', 'probe', 'rec', 'v030', 'v040', 'data')] [string]$Only = '',
+    # Just one group: probe (hotkey probe), rec (recording), v030 / v040 / v041 (0.3.0 / 0.4.0 / 0.4.1 checks), data (data files).
+    [ValidateSet('', 'probe', 'rec', 'v030', 'v040', 'v041', 'data')] [string]$Only = '',
     # Skip signing the MSIX (the MSIX checks then FAIL with "inputs present").
     [switch]$NoSign,
     # Prepare <Work> and the .wsb only.
