@@ -165,6 +165,16 @@ save, upload, pin, Open with, and the same from History and the Edit
 window), outside the capture so nothing is covered; the overlay previews it
 as a band around the selection. The History keeps the capture without it.
 
+**Save at** (Settings › General › Saving, `save_scale`): *Screen pixels*
+(the default: the capture as the screen has it), *1×* (a capture from a
+high-DPI display at its logical size: a 200 % screen's capture at half its
+pixels, area-averaged so text stays smooth) or *Custom* (10-100 %,
+`save_scale_percent`). It applies to what you copy, save, upload and pin,
+from the overlay, the direct captures, History and the Edit window; the
+border keeps its logical width at the new size. The History keeps the
+capture at full size, and a picture you resized in the Edit window keeps
+the size you chose.
+
 The folder, subfolder pattern, file-name pattern, format and JPEG quality
 (1-100, default 90) are in Settings › General and Settings › Capture; the
 pattern editor's token buttons insert at the caret, and the line above them
@@ -305,6 +315,45 @@ for older builds (0.2, 0.3), which know nothing of it, opaque fills over
 everything outside the crop are written after the objects
 (`"stands_for":"crop"`), so what a crop hides stays hidden there too.
 Every export (Save, Copy, Upload, History's own Copy) is the cropped part. What a crop or a lasso leaves out is blanked before the objects are drawn, so a magnifier (or a blur, an invert) inside never shows it; for older builds a magnifier that reads from outside the crop gets its loupe covered too.
+
+**Image edits** in the Edit window: click the picture's size at the left
+of the status bar for the **Image** menu, or use the keys.
+
+| Do | Keys |
+|---|---|
+| Rotate left / right (a quarter turn) | <kbd>Ctrl</kbd>+<kbd>L</kbd> / <kbd>Ctrl</kbd>+<kbd>R</kbd> |
+| Flip horizontal / vertical | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> |
+| Resize… | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> |
+| Canvas… | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>K</kbd> |
+| Reset image edits | the menu (no key; bind `image_reset`) |
+
+- **Rotate** and **Flip** turn the picture and every object with it.
+  Text stays upright: its box's centre moves where the picture takes it
+  and the letters are not turned (callouts and numbers alike); strokes,
+  shapes, redactions and magnifiers follow exactly.
+- **Resize…** takes a width and height in px or a percent, *Keep aspect
+  ratio*, and the resampling: *Lanczos-3* (sharp) or *Area average*
+  (smooth). It shows the new size and about how large the file will be
+  (in the Save format). A size larger than the picture is enlarged
+  bilinearly, and the dialog says so. The Edit window keeps showing the
+  picture at full size; the status bar shows what it exports as
+  ("1180 × 760 → 590 × 380").
+- **Canvas…** adds padding (all sides or each), on a solid color (white,
+  gray, black, transparent or any `#rrggbb`) or *Presentation*: a soft
+  diagonal gradient of the picture's two dominant colors, with 12 px
+  rounded corners and a drop shadow (24 px blur, 25 %). The corner radius
+  and the shadow can be changed for either, and the dialog shows a
+  preview.
+
+Every one of them is an undo step, and none touches `original.png`: they
+are saved in `annotations.json` as an ordered `"transforms"` list after the
+crop (flip, rotate, resize, canvas) and applied on export: the cropped
+picture is turned, the objects are drawn on it, then it is resized (the
+objects scale with it) and put on its canvas.
+The objects stay in the original's pixels, so an older build (0.2, 0.3),
+which ignores the list, shows the picture unturned with every redaction
+where it belongs; this build refuses a list it does not know rather than
+guess.
 
 ## Copy text (OCR)
 
@@ -632,7 +681,8 @@ on the left picks the section:
 - **General:** theme (System, Dark, Light) and accent (Periwinkle, Teal,
   Amber or any `#rrggbb`), *Launch at login*, *Show icon in tray*, *Copy to
   clipboard after capture*, *Play shutter sound*, *Show thumbnail after
-  capture*, *Show hints in the overlay*, *Save to* and the file name.
+  capture*, *Show hints in the overlay*, *Save to*, the file name and
+  *Save at* (screen pixels, 1× or a percent).
 - **Capture:** daily subfolders, *Ask where to save*, the format and JPEG
   quality, the file-name pattern editor, the overlay's UI size (Auto
   follows each display's scaling; 75-200 % on top of it), *Snap to
