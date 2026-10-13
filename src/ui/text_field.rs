@@ -259,6 +259,9 @@ impl Ui<'_> {
                         if masked_key(vk, mods) == Some(true) && !st.selection().is_empty() {
                             st.insert("");
                             changed = true;
+                        } else if vk == key::DELETE {
+                            // Shift+Del with nothing selected: Del, as elsewhere.
+                            changed |= st.key(key::DELETE, Mods { ctrl: false, shift: false, alt: false }, &mut *self.clip).0;
                         }
                         self.consume(i);
                     }

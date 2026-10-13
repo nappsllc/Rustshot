@@ -237,6 +237,7 @@ fn s3_obj(key: &str) -> crate::s3::Object {
     crate::s3::Object {
         target: crate::s3::Target { endpoint: "https://acc.r2.cloudflarestorage.com".into(), region: "auto".into(), bucket: "shots".into(), path_style: false },
         key: key.into(),
+        access_key: "AKREC".into(),
     }
 }
 

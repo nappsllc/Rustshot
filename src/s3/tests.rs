@@ -150,6 +150,8 @@ fn endpoints_parse_to_a_host() {
     assert_eq!(parse_endpoint("https://abc123.r2.cloudflarestorage.com/"), Ok("abc123.r2.cloudflarestorage.com".into()));
     assert_eq!(parse_endpoint(" s3.eu-west-1.amazonaws.com "), Ok("s3.eu-west-1.amazonaws.com".into()));
     assert_eq!(parse_endpoint("HTTPS://MinIO.lan:9000"), Ok("minio.lan:9000".into()));
+    // The default port is never in the signed Host (the transports leave it out).
+    assert_eq!(parse_endpoint("https://s3.example.com:443/"), Ok("s3.example.com".into()));
     assert!(parse_endpoint("http://s3.amazonaws.com").unwrap_err().contains("https"));
     assert!(parse_endpoint("https://host/bucket").is_err());
     assert!(parse_endpoint("https://user@host").is_err());
@@ -169,6 +171,11 @@ fn buckets_and_styles() {
     t.path_style = false;
     assert_eq!(t.host_path("k.png"), Ok(("shots.acc.r2.cloudflarestorage.com".into(), "/k.png".into())));
     assert_eq!(t.object_url("k.png").unwrap(), "https://shots.acc.r2.cloudflarestorage.com/k.png");
+    // A dotted bucket would not match the endpoint's certificate as a
+    // subdomain: always path-style.
+    t.bucket = "shots.example.com".into();
+    assert!(t.path_style());
+    assert_eq!(t.host_path("k.png"), Ok(("acc.r2.cloudflarestorage.com".into(), "/shots.example.com/k.png".into())));
     t.bucket = String::new();
     assert_eq!(t.check(), Err("no bucket is set".into()));
 }
@@ -195,11 +202,16 @@ fn keys_fill_in_the_prefix_tokens() {
 }
 
 #[test]
-fn random_tails_are_base36_and_vary() {
-    let a = random_tail(6);
-    assert_eq!(a.len(), 6);
-    assert!(a.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()));
-    assert_ne!(random_tail(12), random_tail(12));
+fn random_tails_are_128_bits_of_base32() {
+    let a = random_tail();
+    assert_eq!(a.len(), 26);
+    assert!(a.bytes().all(|b| b.is_ascii_lowercase() || (b'2'..=b'7').contains(&b)));
+    assert_ne!(random_tail(), random_tail());
+    // RFC 4648 vectors (lowercase, no padding).
+    assert_eq!(base32(b""), "");
+    assert_eq!(base32(b"f"), "my");
+    assert_eq!(base32(b"foobar"), "mzxw6ytboi");
+    assert_eq!(base32(&[0xff; 16]).len(), 26);
 }
 
 #[test]
@@ -297,6 +309,7 @@ fn r2() -> Target {
 }
 
 const CLOCK: &dyn Fn() -> u64 = &|| 1_791_000_000;
+const NOSLEEP: &dyn Fn(std::time::Duration) = &|_| {};
 
 /// A small PUT is signed with its body's hash and the content type; the
 /// signature verifies (recomputed from what was sent).
@@ -305,7 +318,7 @@ fn a_picture_is_put_signed_with_its_hash() {
     let m = Mock::new(|_| ok(200));
     let t = r2();
     let send = |r: &HttpReq| m.send(r);
-    let c = Client { target: &t, creds: S3EX, send: &send, clock: CLOCK };
+    let c = Client { target: &t, creds: S3EX, send: &send, clock: CLOCK, sleep: NOSLEEP };
     c.put_object("2026/10/12/a.png", "image/png", Body::Bytes(b"PNGDATA")).unwrap();
     let s = m.sent.borrow()[0].clone();
     assert_eq!((s.method.as_str(), s.host.as_str(), s.path.as_str()), ("PUT", "acc.r2.cloudflarestorage.com", "/shots/2026/10/12/a.png"));
@@ -328,16 +341,17 @@ fn a_picture_is_put_signed_with_its_hash() {
 /// A file is streamed unsigned; S3's error XML becomes the message.
 #[test]
 fn files_stream_unsigned_and_errors_read_well() {
-    let dir = std::env::temp_dir().join(format!("rustshot-s3-test-{}", random_tail(8)));
+    let dir = std::env::temp_dir().join(format!("rustshot-s3-test-{}", random_tail()));
     std::fs::create_dir_all(&dir).unwrap();
     let f = dir.join("rec.mp4");
     std::fs::write(&f, b"0123456789abcdef").unwrap();
     let m = Mock::new(|_| HttpResp { status: 403, body: "<?xml version=\"1.0\"?><Error><Code>SignatureDoesNotMatch</Code><Message>The request signature we calculated does not match.</Message></Error>".into(), ..Default::default() });
     let t = Target { path_style: false, ..r2() };
     let send = |r: &HttpReq| m.send(r);
-    let c = Client { target: &t, creds: S3EX, send: &send, clock: CLOCK };
-    let e = c.upload_file(&f, 16, "rec.mp4", "video/mp4").unwrap_err();
+    let c = Client { target: &t, creds: S3EX, send: &send, clock: CLOCK, sleep: NOSLEEP };
+    let e = c.upload_file(&f, 16, "rec.mp4", "video/mp4", &mut None).unwrap_err();
     assert_eq!(e, "The request signature we calculated does not match (SignatureDoesNotMatch)");
+    assert_eq!(m.methods().len(), 1, "a refusal is not retried");
     let s = m.sent.borrow()[0].clone();
     assert_eq!((s.host.as_str(), s.path.as_str()), ("shots.acc.r2.cloudflarestorage.com", "/rec.mp4"));
     assert_eq!(s.header("x-amz-content-sha256"), Some(UNSIGNED));
@@ -346,17 +360,20 @@ fn files_stream_unsigned_and_errors_read_well() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+fn big_file(tag: &str, size: u64) -> (std::path::PathBuf, std::path::PathBuf) {
+    let dir = std::env::temp_dir().join(format!("rustshot-s3-test-{tag}-{}", random_tail()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let f = dir.join("big.mp4");
+    std::fs::File::create(&f).unwrap().set_len(size).unwrap();
+    (dir, f)
+}
+
 /// The multipart flow on a file just over the threshold: create, each
 /// part with its range, complete with the ETags in order.
 #[test]
 fn a_large_file_goes_up_in_parts() {
-    let dir = std::env::temp_dir().join(format!("rustshot-s3-test-{}", random_tail(8)));
-    std::fs::create_dir_all(&dir).unwrap();
-    let f = dir.join("big.mp4");
     let size = MULTIPART_OVER + 3;
-    let file = std::fs::File::create(&f).unwrap();
-    file.set_len(size).unwrap();
-    drop(file);
+    let (dir, f) = big_file("parts", size);
     let m = Mock::new(|s| {
         if s.method == "POST" && s.path.ends_with("?uploads=") {
             HttpResp { status: 200, body: "<InitiateMultipartUploadResult><Bucket>shots</Bucket><Key>big.mp4</Key><UploadId>up/1&amp;2</UploadId></InitiateMultipartUploadResult>".into(), ..Default::default() }
@@ -369,8 +386,10 @@ fn a_large_file_goes_up_in_parts() {
     });
     let t = r2();
     let send = |r: &HttpReq| m.send(r);
-    let c = Client { target: &t, creds: S3EX, send: &send, clock: CLOCK };
-    c.upload_file(&f, size, "big.mp4", "video/mp4").unwrap();
+    let c = Client { target: &t, creds: S3EX, send: &send, clock: CLOCK, sleep: NOSLEEP };
+    let mut partial = None;
+    c.upload_file(&f, size, "big.mp4", "video/mp4", &mut partial).unwrap();
+    assert_eq!(partial, None);
     let methods = m.methods();
     assert_eq!(methods.len(), 1 + 5 + 1, "{methods:?}");
     assert_eq!(methods[0], "POST /shots/big.mp4?uploads=");
@@ -390,43 +409,199 @@ fn a_large_file_goes_up_in_parts() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A failed part aborts the upload (no orphaned parts); so does an error
-/// that comes with a 200 on complete.
+/// Transport errors, 5xx and SlowDown are tried again (signed afresh,
+/// waiting longer each time); after the last try the error stands. A
+/// refusal is not retried.
 #[test]
-fn a_failed_multipart_upload_is_aborted() {
-    let dir = std::env::temp_dir().join(format!("rustshot-s3-test-{}", random_tail(8)));
-    std::fs::create_dir_all(&dir).unwrap();
-    let f = dir.join("big.mp4");
-    let size = MULTIPART_OVER * 2;
-    std::fs::File::create(&f).unwrap().set_len(size).unwrap();
-    for fail_at in ["part", "complete"] {
-        let m = Mock::new(move |s| {
+fn transient_failures_are_retried_with_backoff() {
+    let n = RefCell::new(0u32);
+    let clock_n = RefCell::new(1_791_000_000u64);
+    let flaky = |r: &HttpReq| {
+        *n.borrow_mut() += 1;
+        let k = *n.borrow();
+        let _ = r;
+        match k {
+            1 => Err("connection reset".to_string()),
+            2 => Ok(HttpResp { status: 503, body: "<Error><Code>SlowDown</Code><Message>Please reduce your request rate.</Message></Error>".into(), ..Default::default() }),
+            _ => Ok(ok(200)),
+        }
+    };
+    let waits = RefCell::new(Vec::new());
+    let sleep = |d: std::time::Duration| waits.borrow_mut().push(d);
+    let clock = || {
+        *clock_n.borrow_mut() += 60;
+        *clock_n.borrow()
+    };
+    let t = r2();
+    let c = Client { target: &t, creds: S3EX, send: &flaky, clock: &clock, sleep: &sleep };
+    c.put_object("k.png", "image/png", Body::Bytes(b"x")).unwrap();
+    assert_eq!(*n.borrow(), 3);
+    let w = waits.borrow().clone();
+    assert_eq!(w.len(), 2);
+    assert!(w[0] >= BACKOFF && w[0] < BACKOFF * 2, "{w:?}");
+    assert!(w[1] >= BACKOFF * 2 && w[1] < BACKOFF * 4, "{w:?}");
+
+    // Always failing: ATTEMPTS tries, then the error.
+    let tries = RefCell::new(0u32);
+    let down = |_: &HttpReq| {
+        *tries.borrow_mut() += 1;
+        Ok(HttpResp { status: 500, body: "<Error><Code>InternalError</Code><Message>We encountered an internal error.</Message></Error>".into(), ..Default::default() })
+    };
+    let c = Client { target: &t, creds: S3EX, send: &down, clock: CLOCK, sleep: NOSLEEP };
+    assert_eq!(c.delete_object("k"), Err("We encountered an internal error (InternalError)".into()));
+    assert_eq!(*tries.borrow(), ATTEMPTS);
+
+    // Each try is signed when it is sent (a new date, a new signature).
+    let seen = RefCell::new(Vec::new());
+    let k = RefCell::new(0);
+    let record = |r: &HttpReq| {
+        seen.borrow_mut().push(r.headers.iter().find(|(h, _)| h == "Authorization").unwrap().1.clone());
+        *k.borrow_mut() += 1;
+        Ok(if *k.borrow() == 1 { ok(502) } else { ok(200) })
+    };
+    let c = Client { target: &t, creds: S3EX, send: &record, clock: &clock, sleep: NOSLEEP };
+    c.put_object("k", "text/plain", Body::Bytes(b"y")).unwrap();
+    let s = seen.borrow();
+    assert_eq!(s.len(), 2);
+    assert_ne!(s[0], s[1], "re-signed");
+    assert!(retryable(&Ok(ok(429))) && !retryable(&Ok(ok(403))) && !retryable(&Ok(ok(200))));
+}
+
+/// A part that keeps failing with a server error leaves the upload for
+/// the next try (not aborted); the next try lists the parts there and
+/// sends only the missing ones. A refused part aborts.
+#[test]
+fn a_failed_multipart_upload_resumes_or_aborts() {
+    let size = MULTIPART_OVER * 2; // 8 parts
+    let (dir, f) = big_file("resume", size);
+    let fail3 = std::rc::Rc::new(std::cell::Cell::new(true));
+    let m = Mock::new({
+        let fail3 = fail3.clone();
+        move |s| {
             if s.path.ends_with("?uploads=") {
                 HttpResp { status: 200, body: "<UploadId>U</UploadId>".into(), ..Default::default() }
-            } else if s.method == "PUT" && s.path.contains("partNumber=3") && fail_at == "part" {
+            } else if s.method == "GET" {
+                // Parts 1 and 2 are there (part 2 with a wrong size: sent again).
+                let p = |n: u64, size: u64| format!("<Part><PartNumber>{n}</PartNumber><ETag>\"have{n}\"</ETag><Size>{size}</Size></Part>");
+                HttpResp { status: 200, body: format!("<ListPartsResult><IsTruncated>false</IsTruncated>{}{}</ListPartsResult>", p(1, PART_SIZE), p(2, 5)), ..Default::default() }
+            } else if s.method == "PUT" && s.path.contains("partNumber=3&") && fail3.get() {
                 HttpResp { status: 500, body: "<Error><Code>InternalError</Code><Message>We encountered an internal error.</Message></Error>".into(), ..Default::default() }
             } else if s.method == "PUT" {
                 HttpResp { status: 200, headers: vec![("etag".into(), "\"e\"".into())], ..Default::default() }
             } else if s.method == "POST" {
-                HttpResp { status: 200, body: "<Error><Code>InternalError</Code><Message>Try again</Message></Error>".into(), ..Default::default() }
+                ok(200)
             } else {
                 ok(204)
             }
-        });
-        let t = r2();
-        let send = |r: &HttpReq| m.send(r);
-        let c = Client { target: &t, creds: S3EX, send: &send, clock: CLOCK };
-        let e = c.upload_file(&f, size, "big.mp4", "video/mp4").unwrap_err();
-        let methods = m.methods();
-        assert_eq!(methods.last().unwrap(), "DELETE /shots/big.mp4?uploadId=U", "{fail_at}: {methods:?}");
-        if fail_at == "part" {
-            assert!(e.starts_with("part 3 of 8: We encountered an internal error"), "{e}");
-            assert_eq!(methods.len(), 1 + 3 + 1, "stops at the failed part");
-        } else {
-            assert_eq!(e, "Try again (InternalError)");
         }
-    }
+    });
+    let t = r2();
+    let send = |r: &HttpReq| m.send(r);
+    let c = Client { target: &t, creds: S3EX, send: &send, clock: CLOCK, sleep: NOSLEEP };
+    let mut partial = None;
+    let e = c.upload_file(&f, size, "big.mp4", "video/mp4", &mut partial).unwrap_err();
+    assert!(e.starts_with("part 3 of 8: We encountered an internal error"), "{e}");
+    let methods = m.methods();
+    assert_eq!(methods.len(), 1 + 2 + ATTEMPTS as usize, "part 3 tried {ATTEMPTS} times: {methods:?}");
+    assert!(!methods.iter().any(|x| x.starts_with("DELETE")), "kept for the next try");
+    assert_eq!(partial, Some(Partial { key: "big.mp4".into(), upload_id: "U".into(), size }));
+
+    // The next try: ListParts, then parts 2..8 (2 had the wrong size), then complete.
+    fail3.set(false);
+    m.sent.borrow_mut().clear();
+    c.upload_file(&f, size, "big.mp4", "video/mp4", &mut partial).unwrap();
+    let methods = m.methods();
+    assert_eq!(methods[0], "GET /shots/big.mp4?uploadId=U");
+    assert!(!methods.iter().any(|x| x.ends_with("?uploads=")), "no new upload");
+    assert!(!methods.iter().any(|x| x.contains("partNumber=1&")), "part 1 reused");
+    assert_eq!(methods.iter().filter(|x| x.starts_with("PUT")).count(), 7);
+    let xml = String::from_utf8(m.sent.borrow().last().unwrap().body.clone()).unwrap();
+    assert!(xml.starts_with("<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>\"have1\"</ETag>"), "{xml}");
+    assert_eq!(partial, None);
+
+    // A refused part: aborted, nothing kept.
+    let refused = Mock::new(|s| {
+        if s.path.ends_with("?uploads=") {
+            HttpResp { status: 200, body: "<UploadId>V</UploadId>".into(), ..Default::default() }
+        } else if s.method == "PUT" {
+            HttpResp { status: 403, body: "<Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>".into(), ..Default::default() }
+        } else {
+            ok(204)
+        }
+    });
+    let send = |r: &HttpReq| refused.send(r);
+    let c = Client { target: &t, creds: S3EX, send: &send, clock: CLOCK, sleep: NOSLEEP };
+    let mut partial = None;
+    assert!(c.upload_file(&f, size, "big.mp4", "video/mp4", &mut partial).unwrap_err().contains("AccessDenied"));
+    assert_eq!(refused.methods().last().unwrap(), "DELETE /shots/big.mp4?uploadId=V");
+    assert_eq!(partial, None);
+
+    // An upload id that is gone (completed, aborted, expired): start over.
+    let gone = Mock::new(|s| {
+        if s.method == "GET" {
+            HttpResp { status: 404, body: "<Error><Code>NoSuchUpload</Code></Error>".into(), ..Default::default() }
+        } else if s.path.ends_with("?uploads=") {
+            HttpResp { status: 200, body: "<UploadId>W</UploadId>".into(), ..Default::default() }
+        } else if s.method == "PUT" {
+            HttpResp { status: 200, headers: vec![("etag".into(), "\"e\"".into())], ..Default::default() }
+        } else {
+            ok(200)
+        }
+    });
+    let send = |r: &HttpReq| gone.send(r);
+    let c = Client { target: &t, creds: S3EX, send: &send, clock: CLOCK, sleep: NOSLEEP };
+    let mut partial = Some(Partial { key: "big.mp4".into(), upload_id: "OLD".into(), size });
+    c.upload_file(&f, size, "big.mp4", "video/mp4", &mut partial).unwrap();
+    let ms = gone.methods();
+    assert_eq!((ms[0].as_str(), ms[1].as_str()), ("GET /shots/big.mp4?uploadId=OLD", "POST /shots/big.mp4?uploads="));
+    assert_eq!(ms.iter().filter(|x| x.starts_with("PUT")).count(), 8);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An error that comes with a 200 on complete (and stays) fails the
+/// upload after its retries.
+#[test]
+fn an_error_with_200_on_complete_fails() {
+    let size = MULTIPART_OVER + 1;
+    let (dir, f) = big_file("complete", size);
+    let m = Mock::new(|s| {
+        if s.path.ends_with("?uploads=") {
+            HttpResp { status: 200, body: "<UploadId>U</UploadId>".into(), ..Default::default() }
+        } else if s.method == "PUT" {
+            HttpResp { status: 200, headers: vec![("etag".into(), "\"e\"".into())], ..Default::default() }
+        } else if s.method == "POST" {
+            HttpResp { status: 200, body: "<Error><Code>InternalError</Code><Message>Try again</Message></Error>".into(), ..Default::default() }
+        } else {
+            ok(204)
+        }
+    });
+    let t = r2();
+    let send = |r: &HttpReq| m.send(r);
+    let c = Client { target: &t, creds: S3EX, send: &send, clock: CLOCK, sleep: NOSLEEP };
+    let mut partial = None;
+    assert_eq!(c.upload_file(&f, size, "big.mp4", "video/mp4", &mut partial), Err("Try again (InternalError)".into()));
+    assert_eq!(m.methods().iter().filter(|x| x.starts_with("POST /shots/big.mp4?uploadId=")).count(), ATTEMPTS as usize);
+    assert!(partial.is_some(), "kept: the parts are there");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn list_parts_pages_and_parses() {
+    let body = "<ListPartsResult><Part><PartNumber>2</PartNumber><ETag>&quot;b&quot;</ETag><Size>10</Size></Part><Part><PartNumber>1</PartNumber><ETag>\"a\"</ETag><Size>16</Size></Part></ListPartsResult>";
+    assert_eq!(parse_parts(body), vec![(2, "\"b\"".to_string(), 10), (1, "\"a\"".to_string(), 16)]);
+    let page = RefCell::new(0);
+    let m = Mock::new(move |s| {
+        *page.borrow_mut() += 1;
+        if s.path.contains("part-number-marker=1") {
+            HttpResp { status: 200, body: "<IsTruncated>false</IsTruncated><Part><PartNumber>2</PartNumber><ETag>\"b\"</ETag><Size>5</Size></Part>".into(), ..Default::default() }
+        } else {
+            HttpResp { status: 200, body: "<IsTruncated>true</IsTruncated><NextPartNumberMarker>1</NextPartNumberMarker><Part><PartNumber>1</PartNumber><ETag>\"a\"</ETag><Size>5</Size></Part>".into(), ..Default::default() }
+        }
+    });
+    let t = r2();
+    let send = |r: &HttpReq| m.send(r);
+    let c = Client { target: &t, creds: S3EX, send: &send, clock: CLOCK, sleep: NOSLEEP };
+    assert_eq!(c.list_parts("k", "U").unwrap().unwrap().len(), 2);
 }
 
 /// Test connection: PUT then DELETE `rustshot-test-<tail>.txt`; delete
@@ -436,20 +611,20 @@ fn test_connection_puts_then_deletes() {
     let m = Mock::new(|s| ok(if s.method == "DELETE" { 204 } else { 200 }));
     let t = r2();
     let send = |r: &HttpReq| m.send(r);
-    let c = Client { target: &t, creds: S3EX, send: &send, clock: CLOCK };
+    let c = Client { target: &t, creds: S3EX, send: &send, clock: CLOCK, sleep: NOSLEEP };
     c.test_connection("k3y").unwrap();
     assert_eq!(m.methods(), ["PUT /shots/rustshot-test-k3y.txt", "DELETE /shots/rustshot-test-k3y.txt"]);
     assert_eq!(m.sent.borrow()[0].header("content-type"), Some("text/plain"));
 
     let denied = Mock::new(|_| HttpResp { status: 403, body: "<Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>".into(), ..Default::default() });
     let send = |r: &HttpReq| denied.send(r);
-    let c = Client { target: &t, creds: S3EX, send: &send, clock: CLOCK };
+    let c = Client { target: &t, creds: S3EX, send: &send, clock: CLOCK, sleep: NOSLEEP };
     assert_eq!(c.test_connection("x"), Err("upload failed: Access Denied (AccessDenied)".into()));
     assert_eq!(denied.methods().len(), 1, "no delete after a refused upload");
 
     let gone = Mock::new(|_| ok(404));
     let send = |r: &HttpReq| gone.send(r);
-    let c = Client { target: &t, creds: S3EX, send: &send, clock: CLOCK };
+    let c = Client { target: &t, creds: S3EX, send: &send, clock: CLOCK, sleep: NOSLEEP };
     assert_eq!(c.delete_object("k"), Ok(()));
 }
 
@@ -459,24 +634,25 @@ fn incomplete_settings_send_nothing() {
     let m = Mock::new(|_| panic!("sent"));
     let send = |r: &HttpReq| m.send(r);
     let t = r2();
-    let c = Client { target: &t, creds: Creds { access_key: "AK", secret: "" }, send: &send, clock: CLOCK };
+    let c = Client { target: &t, creds: Creds { access_key: "AK", secret: "" }, send: &send, clock: CLOCK, sleep: NOSLEEP };
     assert!(c.put_object("k", "text/plain", Body::Empty).unwrap_err().contains("secret"));
-    let c = Client { target: &t, creds: Creds { access_key: " ", secret: "s" }, send: &send, clock: CLOCK };
+    let c = Client { target: &t, creds: Creds { access_key: " ", secret: "s" }, send: &send, clock: CLOCK, sleep: NOSLEEP };
     assert!(c.put_object("k", "text/plain", Body::Empty).unwrap_err().contains("access key"));
     let bad = Target { endpoint: "http://insecure".into(), ..r2() };
-    let c = Client { target: &bad, creds: S3EX, send: &send, clock: CLOCK };
+    let c = Client { target: &bad, creds: S3EX, send: &send, clock: CLOCK, sleep: NOSLEEP };
     assert!(c.delete_object("k").unwrap_err().contains("https"));
 }
 
 /// The whole upload with the config's values: the key under the prefix,
-/// the link under the public base, the object for the record.
+/// the link under the public base, the object (and the access key id)
+/// for the record.
 #[test]
 fn uploads_use_the_config() {
     let cfg = Config {
         upload_destination: "s3".into(),
         s3_endpoint: "https://acc.r2.cloudflarestorage.com".into(),
         s3_bucket: "shots".into(),
-        s3_access_key_id: "AKID".into(),
+        s3_access_key_id: " AKID ".into(),
         s3_public_url: "https://cdn.example.com".into(),
         s3_key_prefix: "caps/%Y/".into(),
         ..Config::default()
@@ -485,17 +661,82 @@ fn uploads_use_the_config() {
     assert_eq!(Dest::of(&Config::default()), Dest::Imgur);
     let m = Mock::new(|_| ok(200));
     let send = |r: &HttpReq| m.send(r);
-    let (link, obj) = upload(&cfg, Source::Bytes(b"PNG", "shot.png"), "secret", &send, CLOCK).unwrap();
+    let io = Io { send: &send, clock: CLOCK, sleep: NOSLEEP };
+    let (link, obj) = upload(&cfg, Source::Bytes(b"PNG", "shot.png"), "secret", &io).unwrap();
     let year = crate::export::local_ymdhms().0;
     assert!(obj.key.starts_with(&format!("caps/{year}/shot-")) && obj.key.ends_with(".png"), "{}", obj.key);
+    assert_eq!(obj.key.len(), format!("caps/{year}/shot-").len() + 26 + 4, "128 random bits");
     assert_eq!(link, format!("https://cdn.example.com/{}", obj.key));
     assert_eq!(obj.target, Target::from_config(&cfg));
+    assert_eq!(obj.access_key, "AKID");
     let s = m.sent.borrow()[0].clone();
     assert_eq!(s.path, format!("/shots/{}", obj.key));
     assert!(s.header("authorization").unwrap().contains("Credential=AKID/"));
 }
 
-/// Body chunks: bytes split, a file range read, a short file an error.
+/// Delete upload… signs with the access key id the record kept and the
+/// secret stored for it; a record without one falls back to the current
+/// id and says so when that fails.
+#[test]
+fn deletes_use_the_records_credentials() {
+    let t = Target { endpoint: "https://del.example.com".into(), region: "auto".into(), bucket: "rs-del".into(), path_style: true };
+    crate::keystore::os().set("rustshot:s3:rs-del@del.example.com/AKOLD", "", "old-secret").unwrap();
+    let m = Mock::new(|_| ok(204));
+    let send = |r: &HttpReq| m.send(r);
+    let io = Io { send: &send, clock: CLOCK, sleep: NOSLEEP };
+    let obj = Object { target: t.clone(), key: "k.png".into(), access_key: "AKOLD".into() };
+    delete_now(&obj, "AKNEW", &io).unwrap();
+    assert!(m.sent.borrow()[0].header("authorization").unwrap().contains("Credential=AKOLD/"));
+    let legacy = Object { access_key: String::new(), ..obj };
+    let e = delete_now(&legacy, "AKNEW", &io).unwrap_err();
+    assert!(e.contains("AKNEW") && e.contains("the current one was used"), "{e}");
+}
+
+/// A recording whose multipart upload failed goes on under the same key
+/// when it is uploaded again (the next Copy link).
+#[test]
+fn a_recording_upload_resumes_under_the_same_key() {
+    let size = MULTIPART_OVER + 1;
+    let (dir, f) = big_file("app-resume", size);
+    let cfg = Config {
+        upload_destination: "s3".into(),
+        s3_endpoint: "https://acc.r2.cloudflarestorage.com".into(),
+        s3_bucket: "resume-shots".into(),
+        s3_access_key_id: "AKID".into(),
+        ..Config::default()
+    };
+    let up = std::rc::Rc::new(std::cell::Cell::new(false));
+    let m = Mock::new({
+        let up = up.clone();
+        move |s| {
+            if s.path.ends_with("?uploads=") {
+                HttpResp { status: 200, body: "<UploadId>R</UploadId>".into(), ..Default::default() }
+            } else if s.method == "GET" {
+                HttpResp { status: 200, body: "<IsTruncated>false</IsTruncated>".into(), ..Default::default() }
+            } else if s.method == "PUT" && !up.get() {
+                HttpResp { status: 503, ..Default::default() }
+            } else if s.method == "PUT" {
+                HttpResp { status: 200, headers: vec![("etag".into(), "\"e\"".into())], ..Default::default() }
+            } else {
+                ok(200)
+            }
+        }
+    });
+    let send = |r: &HttpReq| m.send(r);
+    let io = Io { send: &send, clock: CLOCK, sleep: NOSLEEP };
+    assert!(upload(&cfg, Source::File(&f), "secret", &io).is_err());
+    let first_key = m.sent.borrow()[0].path.clone();
+    up.set(true);
+    m.sent.borrow_mut().clear();
+    let (link, obj) = upload(&cfg, Source::File(&f), "secret", &io).unwrap();
+    let ms = m.methods();
+    assert!(ms[0].starts_with("GET ") && ms[0].ends_with("?uploadId=R"), "{ms:?}");
+    assert_eq!(first_key.split('?').next(), Some(format!("/resume-shots/{}", obj.key).as_str()));
+    assert!(link.ends_with(&obj.key));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// Body chunks: bytes split, a file range read, a short file an error.
 #[test]
 fn bodies_come_in_chunks() {
     let mut got = Vec::new();
@@ -505,7 +746,7 @@ fn bodies_come_in_chunks() {
     })
     .unwrap();
     assert_eq!(got, [b"abc".to_vec(), b"def".to_vec(), b"g".to_vec()]);
-    let dir = std::env::temp_dir().join(format!("rustshot-s3-test-{}", random_tail(8)));
+    let dir = std::env::temp_dir().join(format!("rustshot-s3-test-{}", random_tail()));
     std::fs::create_dir_all(&dir).unwrap();
     let f = dir.join("f.bin");
     std::fs::write(&f, b"0123456789").unwrap();

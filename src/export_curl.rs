@@ -136,15 +136,25 @@ pub fn http_delete(host: &str, path: &str, headers: &[(&str, &str)]) -> Result<(
     Ok((code.trim().parse().unwrap_or(0), body.to_string()))
 }
 
-/// One HTTPS request for S3 (`crate::s3`) via `curl`. The URL and headers
-/// go in a config file only we can read (`-K`), never on the command line
-/// (the `Authorization` header is a live signature other users' process
-/// lists must not show); the body goes on stdin, fed from a thread as
-/// curl reads it (`--data-binary @-`); `-i` prints the response headers
-/// (a part's `ETag`) before the body. No redirects are followed.
+/// The most of a response kept (S3 answers with small XML; anything
+/// larger is not an S3 reply).
+pub const MAX_RESPONSE: u64 = 1024 * 1024;
+
+/// One HTTPS request for S3 (`crate::s3`) via `curl`, no redirects
+/// followed, the response headers kept (`-i`: a part's `ETag`).
+///
+/// The URL and headers (the `Authorization` header is a live signature)
+/// never go on the command line, where other users' process lists would
+/// show them. Without a body to stream on stdin (a DELETE, a GET, a
+/// whole file sent with `-T`, which also streams it from disk) they go on
+/// stdin (`-K -`) and touch no disk. A body that must come from memory
+/// or a file range goes on stdin (`--data-binary @-`, which curl reads
+/// whole: up to one 16 MB part) and the config into a file only we can
+/// read, in a private (0700) folder, removed as soon as curl is done (and
+/// by the next request if a crash left it behind).
 #[cfg_attr(test, allow(dead_code))] // tests use a mock transport
 pub fn http_request(r: &crate::s3::HttpReq) -> Result<crate::s3::HttpResp, String> {
-    use std::io::Write;
+    use std::io::{Read, Write};
     let headers: Vec<(&str, &str)> = r
         .headers
         .iter()
@@ -153,42 +163,89 @@ pub fn http_request(r: &crate::s3::HttpReq) -> Result<crate::s3::HttpResp, Strin
         .collect();
     let mut conf = curl_config(&r.host, &r.path, &headers);
     conf.push_str(&format!("request = \"{}\"\n", r.method));
-    let send_body = matches!(r.method, "PUT" | "POST");
-    if send_body && !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("content-type")) {
+    let sends = matches!(r.method, "PUT" | "POST");
+    if sends && !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("content-type")) {
         // curl would add a form content type of its own.
         conf.push_str("header = \"Content-Type:\"\n");
     }
-    let conf_path = private_conf(&conf)?;
-    let mut cmd = Command::new("curl");
-    cmd.args(["-q", "-sS", "-i", "--proto", "=https", "--max-redirs", "0", "--connect-timeout", "15", "--max-time", "1800", "-w", "\n%{http_code}", "-K"]).arg(&conf_path);
-    if send_body {
-        cmd.args(["--data-binary", "@-"]);
+    // How the body goes: streamed from the file itself, on stdin, or none.
+    let whole_file = match r.body {
+        crate::s3::Body::File { path, offset: 0, len } if std::fs::metadata(path).is_ok_and(|m| m.len() == len) => Some(path),
+        _ => None,
+    };
+    let piped_body = sends && whole_file.is_none();
+    if let Some(p) = whole_file {
+        let q = |s: &str| s.replace(['\r', '\n'], "").replace('\\', r"\\").replace('"', r#"\""#);
+        conf.push_str(&format!("upload-file = \"{}\"\n", q(&p.to_string_lossy())));
     }
-    let spawned = cmd.stdin(if send_body { Stdio::piped() } else { Stdio::null() }).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn();
+    let conf_file = if piped_body { Some(private_conf(&conf)?) } else { None };
+    let mut cmd = Command::new("curl");
+    let max = MAX_RESPONSE.to_string();
+    cmd.args(["-q", "-sS", "-i", "--proto", "=https", "--max-redirs", "0", "--connect-timeout", "15", "--max-time", "1800", "--max-filesize", &max, "-w", "\n%{http_code}", "-K"]);
+    match &conf_file {
+        Some(p) => {
+            cmd.arg(p).args(["--data-binary", "@-"]);
+        }
+        None => {
+            cmd.arg("-");
+        }
+    }
+    let spawned = cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn();
     let mut child = match spawned {
         Ok(c) => c,
         Err(e) => {
-            let _ = std::fs::remove_file(&conf_path);
+            if let Some(p) = &conf_file {
+                let _ = std::fs::remove_file(p);
+            }
             return Err(format!("spawn curl: {e}"));
         }
     };
     let stdin = child.stdin.take();
-    let out = std::thread::scope(|s| {
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let (out, err, over) = std::thread::scope(|s| {
         if let Some(mut stdin) = stdin {
             // Fed on a thread: curl may answer (an error) before it read it all.
             s.spawn(move || {
-                let _ = r.body.for_each_chunk(1 << 20, &mut |c| stdin.write_all(c).map_err(|e| e.to_string()));
+                if piped_body {
+                    let _ = r.body.for_each_chunk(1 << 20, &mut |c| stdin.write_all(c).map_err(|e| e.to_string()));
+                } else {
+                    let _ = stdin.write_all(conf.as_bytes());
+                }
             });
         }
-        child.wait_with_output()
+        let errs = s.spawn(move || {
+            let mut e = Vec::new();
+            if let Some(mut x) = stderr {
+                let _ = x.by_ref().take(64 * 1024).read_to_end(&mut e);
+            }
+            e
+        });
+        // At most the cap (and the headers): a reply larger than any S3
+        // one is cut off and curl stopped.
+        let mut out = Vec::new();
+        let limit = MAX_RESPONSE + 64 * 1024;
+        if let Some(mut o) = stdout {
+            let _ = o.by_ref().take(limit + 1).read_to_end(&mut out);
+        }
+        let over = out.len() as u64 > limit;
+        if over {
+            let _ = child.kill();
+        }
+        (out, errs.join().unwrap_or_default(), over)
     });
-    // curl has read its config long before it exits.
-    let _ = std::fs::remove_file(&conf_path);
-    let out = out.map_err(|e| format!("curl: {e}"))?;
-    if !out.status.success() {
-        return Err(format!("curl: {}", String::from_utf8_lossy(&out.stderr).trim()));
+    let status = child.wait();
+    if let Some(p) = &conf_file {
+        let _ = std::fs::remove_file(p);
     }
-    Ok(parse_included(&String::from_utf8_lossy(&out.stdout)))
+    if over {
+        return Err("the server's reply is too large for an S3 reply".into());
+    }
+    let status = status.map_err(|e| format!("curl: {e}"))?;
+    if !status.success() {
+        return Err(format!("curl: {}", String::from_utf8_lossy(&err).trim()));
+    }
+    Ok(parse_included(&String::from_utf8_lossy(&out)))
 }
 
 /// curl's `-i` output with `-w "\n%{http_code}"` after it: the last header
@@ -210,13 +267,49 @@ pub fn parse_included(text: &str) -> crate::s3::HttpResp {
     crate::s3::HttpResp { status: code.trim().parse().unwrap_or(0), headers, body: rest.to_string() }
 }
 
-/// Write `conf` to a new file only this user can read (in
-/// `$XDG_RUNTIME_DIR`, else the temp folder); its path.
+/// How old a leftover config file must be before a later request removes
+/// it (curl reads its config at once; one this old is from a crash).
+const STALE: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// The private folder config files go in: `$XDG_RUNTIME_DIR/rustshot-curl`
+/// (else `rustshot-curl-<uid>` in the temp folder), made 0700 and owned by
+/// us (anything else there is refused); leftovers older than [`STALE`]
+/// are removed.
+fn private_dir() -> Result<std::path::PathBuf, String> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+    unsafe extern "C" {
+        fn getuid() -> u32;
+    }
+    let uid = unsafe { getuid() };
+    let dir = match std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from).filter(|d| d.is_dir()) {
+        Some(d) => d.join("rustshot-curl"),
+        None => std::env::temp_dir().join(format!("rustshot-curl-{uid}")),
+    };
+    let _ = std::fs::DirBuilder::new().mode(0o700).create(&dir);
+    let m = std::fs::symlink_metadata(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    if !m.is_dir() || m.uid() != uid {
+        return Err(format!("{} is not our own folder", dir.display()));
+    }
+    if m.permissions().mode() & 0o077 != 0 {
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    if let Ok(rd) = std::fs::read_dir(&dir) {
+        for e in rd.flatten() {
+            let old = e.metadata().ok().and_then(|m| m.modified().ok()).and_then(|t| t.elapsed().ok()).is_some_and(|a| a > STALE);
+            if old {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
+    Ok(dir)
+}
+
+/// Write `conf` to a new file only this user can read, with a name no
+/// one can guess, in [`private_dir`]; its path.
 fn private_conf(conf: &str) -> Result<std::path::PathBuf, String> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
-    let dir = std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from).filter(|d| d.is_dir()).unwrap_or_else(std::env::temp_dir);
-    let path = dir.join(format!("rustshot-curl-{}-{}.conf", std::process::id(), crate::s3::random_tail(10)));
+    let path = private_dir()?.join(format!("{}-{}.conf", std::process::id(), crate::s3::random_tail()));
     let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path).map_err(|e| format!("write {}: {e}", path.display()))?;
     if let Err(e) = f.write_all(conf.as_bytes()) {
         let _ = std::fs::remove_file(&path);

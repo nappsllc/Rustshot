@@ -38,6 +38,8 @@ mod ocr;
 mod open_with;
 mod perf;
 // Pin to screen: the selection as an always-on-top window.
+// Random bytes from the OS CSPRNG (S3 object keys, retry jitter).
+mod osrand;
 mod pin;
 mod pixbuf;
 #[cfg(windows)]

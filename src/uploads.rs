@@ -348,14 +348,16 @@ fn set(m: &mut Meta, link: String, info: Info) {
 // --- uploads.json ----------------------------------------------------------------
 
 /// An S3 object as the records keep it: `s3_endpoint`, `s3_region`,
-/// `s3_bucket`, `s3_key`, `s3_path_style` ("1" or "0").
-pub fn s3_fields(o: &crate::s3::Object) -> [(&'static str, String); 5] {
+/// `s3_bucket`, `s3_key`, `s3_path_style` ("1" or "0"), `s3_access_key`
+/// (the id; its secret stays in the OS credential store).
+pub fn s3_fields(o: &crate::s3::Object) -> [(&'static str, String); 6] {
     [
         ("s3_endpoint", o.target.endpoint.clone()),
         ("s3_region", o.target.region.clone()),
         ("s3_bucket", o.target.bucket.clone()),
         ("s3_key", o.key.clone()),
         ("s3_path_style", if o.target.path_style { "1" } else { "0" }.into()),
+        ("s3_access_key", o.access_key.clone()),
     ]
 }
 
@@ -372,6 +374,7 @@ pub fn s3_from_fields(get: impl Fn(&str) -> Option<String>) -> Option<crate::s3:
             path_style: get("s3_path_style").as_deref() != Some("0"),
         },
         key,
+        access_key: get("s3_access_key").unwrap_or_default(),
     })
 }
 

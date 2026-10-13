@@ -484,9 +484,22 @@ fn overlay_helper_settings_are_saved() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Poll the Upload section's workers until the secret is saved (or 10 s);
+/// the window's acts from it.
+fn settle_save(s: &mut Settings) -> Vec<Act> {
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut acts = Vec::new();
+    while s.upload.saving() && std::time::Instant::now() < until {
+        acts.extend(s.poll_upload().1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    acts
+}
+
 /// Upload › S3-compatible: every value saves and reads back; the typed
-/// secret goes to the credential store (here the in-memory one), never
-/// into config.toml, and the field empties.
+/// secret (trimmed) goes to the credential store (here the in-memory
+/// one) on a worker, under the endpoint, bucket and key id, never into
+/// config.toml, and the field empties.
 #[test]
 fn s3_settings_save_and_the_secret_goes_to_the_store() {
     let dir = scratch("s3-save");
@@ -500,13 +513,16 @@ fn s3_settings_save_and_the_secret_goes_to_the_store() {
     f.region.set("auto");
     f.bucket.set("rs-save-test");
     f.access_key.set("AKIDSAVE");
-    f.secret.set("s3cr3t+Key/forTest");
+    f.secret.set(" s3cr3t+Key/forTest ");
     f.public_url.set("https://cdn.example.com");
     f.prefix.set("shots/%Y/");
     f.path_style = false;
     f.auto_rec = true;
     assert!(s.dirty());
     assert!(matches!(&s.on(Click::Apply)[..], [Act::Saved(_)]), "{:?}", s.modal);
+    assert!(s.upload.saving(), "on a worker, not the window's thread");
+    assert!(settle_save(&mut s).is_empty(), "Apply keeps the window open");
+    assert!(s.modal.is_none(), "{:?}", s.modal);
     let text = std::fs::read_to_string(&p).unwrap();
     assert!(!text.contains("s3cr3t"), "never in the file: {text}");
     let c = config::parse_config(&text).unwrap();
@@ -515,18 +531,25 @@ fn s3_settings_save_and_the_secret_goes_to_the_store() {
         ("s3", "https://acc.r2.cloudflarestorage.com", "rs-save-test", "AKIDSAVE")
     );
     assert_eq!((c.s3_public_url.as_str(), c.s3_key_prefix.as_str(), c.s3_path_style, c.upload_recordings), ("https://cdn.example.com", "shots/%Y/", false, true));
-    assert_eq!(crate::keystore::os().get("rustshot:s3:rs-save-test").unwrap().as_deref(), Some("s3cr3t+Key/forTest"));
+    let name = "rustshot:s3:rs-save-test@acc.r2.cloudflarestorage.com/AKIDSAVE";
+    assert_eq!(crate::keystore::os().get(name).unwrap().as_deref(), Some("s3cr3t+Key/forTest"), "trimmed");
     assert!(s.form.up.secret.text.is_empty() && !s.dirty(), "the field empties");
-    assert!(s.upload.stored("rs-save-test"));
+    assert_eq!(s.upload.stored(s.form.up.slot()), Some(true));
     assert!(!format!("{:?}", s.form).contains("s3cr3t"), "never in a Debug print");
     // Read back into a new window.
     let s2 = settings_at(&p);
     assert_eq!((s2.form.up.dest, s2.form.up.bucket.text.as_str(), s2.form.up.path_style), (upload::S3, "rs-save-test", false));
+    // OK closes once the secret is kept.
+    let mut s = settings_at(&p);
+    s.form.up.secret.set("second");
+    assert!(matches!(&s.on(Click::Ok)[..], [Act::Saved(_)]), "not closed yet");
+    assert_eq!(settle_save(&mut s), vec![Act::Close]);
+    assert_eq!(crate::keystore::os().get(name).unwrap().as_deref(), Some("second"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A secret without a bucket is not kept anywhere: the window says why
-/// and keeps it typed.
+/// A secret without a bucket or a key id is not kept anywhere: the window
+/// says why and keeps it typed.
 #[test]
 fn a_secret_needs_a_bucket() {
     let dir = scratch("s3-nobucket");
@@ -536,10 +559,46 @@ fn a_secret_needs_a_bucket() {
     s.form.up.secret.set("orphan");
     s.on(Click::Apply);
     assert!(matches!(&s.modal, Some(Modal::Error(e)) if e.contains("bucket")), "{:?}", s.modal);
+    assert!(!s.upload.saving());
     assert_eq!(s.form.up.secret.text, "orphan");
     assert!(!std::fs::read_to_string(&p).unwrap().contains("orphan"));
-    assert!(upload::store_secret(crate::keystore::os(), "b", "").is_ok(), "nothing typed: nothing to do");
+    let slot = ("h".to_string(), "b".to_string(), "k".to_string());
+    assert!(upload::store_secret(crate::keystore::os(), &slot, " \n").is_ok(), "nothing typed: nothing to do");
+    assert_eq!(crate::keystore::os().get("rustshot:s3:b@h/k"), Ok(None));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Whether a secret is stored is asked on a worker, once the slot has
+/// stayed as typed for a moment, and remembered per (endpoint, bucket,
+/// key id); drawing never asks the store.
+#[test]
+fn the_stored_check_is_settled_and_cached() {
+    let slot = ("acc.r2.cloudflarestorage.com".to_string(), "rs-check".to_string(), "AKC".to_string());
+    crate::keystore::os().set("rustshot:s3:rs-check@acc.r2.cloudflarestorage.com/AKC", "", "x").unwrap();
+    let mut st = upload::State::default();
+    assert_eq!(st.stored(Some(slot.clone())), None, "not known while drawing");
+    assert!(!st.poll().changed, "not settled yet: not asked");
+    st.settle_now();
+    st.poll();
+    st.wait();
+    assert_eq!(st.stored(Some(slot.clone())), Some(true));
+    let other = (slot.0.clone(), slot.1.clone(), "AKOTHER".to_string());
+    assert_eq!(st.stored(Some(other.clone())), None, "another key id is another slot");
+    st.settle_now();
+    st.poll();
+    st.wait();
+    assert_eq!(st.stored(Some(other)), Some(false));
+    assert_eq!(st.stored(None), None);
+    assert_eq!(upload::secret_help(false, None, false), format!("Kept in {}", crate::keystore::place()));
+    assert!(upload::secret_help(false, Some(true), true).starts_with("Saving"));
+}
+
+/// No public URL base: a warning, and the copied link is the endpoint's.
+#[test]
+fn an_empty_public_url_warns() {
+    assert_eq!(upload::public_help(" "), (upload::PUBLIC_WARNING, true));
+    assert!(upload::PUBLIC_WARNING.starts_with("Links won't be public unless the bucket is public"));
+    assert!(!upload::public_help("https://cdn.example.com").1);
 }
 
 /// Test connection runs on a worker with the form's values and says how
@@ -564,13 +623,14 @@ fn test_connection_reports_on_the_row() {
     s.form.up.secret.set("typed");
     s.on(Click::TestUpload);
     s.upload.wait();
+    // Tried ATTEMPTS times (no waits in tests), then the transport's reason.
     assert_eq!(s.upload.probe, Some(upload::Probe::Failed("upload failed: no network in tests".into())));
     let (text, err) = upload::probe_help(s.upload.probe.as_ref());
     assert_eq!((text.as_str(), err), ("Upload failed: no network in tests", true));
-    assert!(!s.upload.poll(), "answered once");
+    assert!(!s.upload.poll().changed, "answered once");
 }
 
-/// The file breaks while the window is open: Save refuses to write
+// The file breaks while the window is open: Save refuses to write
 /// (never merges onto the defaults) and shows the error; the edits stay
 /// and save once the file is fixed.
 #[test]
@@ -976,7 +1036,12 @@ fn preview_settings_pngs() {
             f.bucket.set("rs-preview-shots");
             f.access_key.set("8a1d3c9e2b7f40d6");
             f.public_url.set("https://cdn.example.com");
-            let _ = crate::keystore::os().set("rustshot:s3:rs-preview-shots", "", "x");
+            let _ = crate::keystore::os().set("rustshot:s3:rs-preview-shots@4f1c0e.r2.cloudflarestorage.com/8a1d3c9e2b7f40d6", "", "x");
+            // The stored check answered (it runs on a worker).
+            render(&mut s, th, k, &Input::default(), &mut FocusState::default());
+            s.upload.settle_now();
+            s.upload.poll();
+            s.upload.wait();
             s.upload.probe = Some(upload::Probe::Failed("upload failed: Access Denied (AccessDenied)".into()));
             let (img, _) = render(&mut s, th, k, &Input::default(), &mut FocusState::default());
             preview::save(&png("upload-s3", tname, k), &img);

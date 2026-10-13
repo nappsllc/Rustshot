@@ -29,6 +29,7 @@ pub mod sigv4;
 use crate::config::Config;
 use sigv4::{Canon, Creds};
 use std::path::Path;
+use std::time::Duration;
 
 const MIB: u64 = 1024 * 1024;
 /// Files larger than this go up in parts.
@@ -174,6 +175,9 @@ pub struct Target {
 pub struct Object {
     pub target: Target,
     pub key: String,
+    /// The access key id it was uploaded with (its secret is stored
+    /// under it); "" in records from before it was kept.
+    pub access_key: String,
 }
 
 /// The `host[:port]` of an endpoint: `https://` (or no scheme), a host
@@ -207,7 +211,13 @@ pub fn parse_endpoint(s: &str) -> Result<String, String> {
     {
         return Err(format!("\"{p}\" is not a port"));
     }
-    Ok(rest.to_ascii_lowercase())
+    // The default port is never in the Host header (WinHTTP and curl
+    // leave it out), so it must not be in the signed one either.
+    let host = host.to_ascii_lowercase();
+    Ok(match port.map(|p| p.parse::<u16>().unwrap_or(443)) {
+        Some(443) | None => host,
+        Some(p) => format!("{host}:{p}"),
+    })
 }
 
 /// A bucket name S3 and R2 accept (3–63 of `a-z 0-9 . -`, starting and
@@ -241,12 +251,25 @@ impl Target {
         Ok(())
     }
 
+    /// Path-style addressing: as set, and always for a bucket with a dot
+    /// (`<a.b>.<endpoint>` would not match the endpoint's TLS
+    /// certificate, `*.<endpoint>`).
+    pub fn path_style(&self) -> bool {
+        self.path_style || self.bucket.contains('.')
+    }
+
     /// The host and encoded path of `key`.
     pub fn host_path(&self, key: &str) -> Result<(String, String), String> {
         self.check()?;
         let host = parse_endpoint(&self.endpoint)?;
         let k = sigv4::uri_encode(key, true);
-        Ok(if self.path_style { (host, format!("/{}/{k}", self.bucket)) } else { (format!("{}.{host}", self.bucket), format!("/{k}")) })
+        Ok(if self.path_style() { (host, format!("/{}/{k}", self.bucket)) } else { (format!("{}.{host}", self.bucket), format!("/{k}")) })
+    }
+
+    /// The endpoint's host (and non-default port), "" when it does not
+    /// parse: part of the stored secret's name.
+    pub fn host(&self) -> String {
+        parse_endpoint(&self.endpoint).unwrap_or_default()
     }
 
     /// `https://…` of `key` itself (no public base).
@@ -311,16 +334,34 @@ pub fn object_key(prefix: &str, now: crate::export::Tm, epoch: u64, name: &str, 
     key
 }
 
-/// `n` random-looking base-36 characters (keys, the test object): the
-/// clock and a counter through SHA-256 (nothing here needs to be secret).
-pub fn random_tail(n: usize) -> String {
-    static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
-    let c = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let seed = format!("{t}:{c}:{}", std::process::id());
-    let d = crate::sha256::digest(seed.as_bytes());
-    const A: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
-    d.iter().cycle().take(n).map(|b| A[(*b % 36) as usize] as char).collect()
+/// The object key's random part: 128 bits from the OS CSPRNG
+/// ([`crate::osrand`]) as 26 lowercase base-32 characters (`a-z 2-7`).
+/// For a public bucket the link's unguessability is its only protection.
+pub fn random_tail() -> String {
+    let mut b = [0u8; 16];
+    crate::osrand::fill(&mut b);
+    base32(&b)
+}
+
+/// Lowercase RFC 4648 base 32 without padding (5 bits a character, so no
+/// bias).
+pub fn base32(data: &[u8]) -> String {
+    const A: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
+    let mut out = String::with_capacity(data.len() * 8 / 5 + 1);
+    let (mut acc, mut bits) = (0u32, 0u32);
+    for &d in data {
+        acc = acc << 8 | d as u32;
+        bits += 8;
+        while bits >= 5 {
+            bits -= 5;
+            out.push(A[(acc >> bits & 31) as usize] as char);
+        }
+        acc &= (1 << bits) - 1;
+    }
+    if bits > 0 {
+        out.push(A[(acc << (5 - bits) & 31) as usize] as char);
+    }
+    out
 }
 
 // --- multipart planning ------------------------------------------------------------
@@ -367,13 +408,54 @@ pub fn failure(r: &HttpResp) -> String {
     }
 }
 
+/// How many times a request is tried (the first try and three retries).
+pub const ATTEMPTS: u32 = 4;
+/// The first retry's wait; each later one doubles, plus up to as much
+/// again at random (jitter).
+pub const BACKOFF: Duration = Duration::from_millis(500);
+
+/// S3 error codes worth trying again.
+const RETRY_CODES: [&str; 4] = ["SlowDown", "RequestTimeout", "InternalError", "ServiceUnavailable"];
+
+/// Whether an attempt's outcome is worth another try: the transport
+/// failed, the server had trouble (5xx, 429) or said to slow down.
+pub fn retryable(r: &Result<HttpResp, String>) -> bool {
+    match r {
+        Err(_) => true,
+        Ok(resp) => {
+            let code = xml_tag(&resp.body, "Code");
+            resp.status >= 500 || resp.status == 429 || code.is_some_and(|c| RETRY_CODES.contains(&c.as_str()))
+        }
+    }
+}
+
+/// The wait before retry `n` (0-based): [`BACKOFF`] × 2ⁿ plus jitter.
+pub fn backoff(n: u32) -> Duration {
+    let base = BACKOFF.as_millis() as u64 * (1 << n.min(6));
+    Duration::from_millis(base + crate::osrand::u64() % base.max(1))
+}
+
 /// Signs and sends requests for one bucket.
 pub struct Client<'a> {
     pub target: &'a Target,
     pub creds: Creds<'a>,
     pub send: SendFn<'a>,
-    /// Seconds since 1970 (each request is signed when it is sent).
+    /// Seconds since 1970 (each attempt is signed when it is sent).
     pub clock: &'a dyn Fn() -> u64,
+    /// Waits between attempts (tests: none).
+    pub sleep: &'a dyn Fn(Duration),
+}
+
+/// An uploaded part: its number, ETag and size.
+pub type Part = (usize, String, u64);
+
+/// A multipart upload left unfinished: its parts stay in the bucket for
+/// the next try ([`Client::upload_file`] lists and reuses them).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Partial {
+    pub key: String,
+    pub upload_id: String,
+    pub size: u64,
 }
 
 impl<'a> Client<'a> {
@@ -406,9 +488,19 @@ impl<'a> Client<'a> {
         Ok(HttpReq { method, host, path, headers, body })
     }
 
+    /// Send a request, signed afresh for each of up to [`ATTEMPTS`] tries
+    /// while the outcome is [`retryable`] (waiting [`backoff`] between).
     fn call(&self, method: &'static str, key: &str, query: &[(String, String)], headers: Vec<(String, String)>, body: Body) -> Result<HttpResp, String> {
-        let r = self.request(method, key, query, headers, body)?;
-        (self.send)(&r)
+        let mut n = 0;
+        loop {
+            let r = self.request(method, key, query, headers.clone(), body)?;
+            let out = (self.send)(&r);
+            n += 1;
+            if n >= ATTEMPTS || !retryable(&out) {
+                return out;
+            }
+            (self.sleep)(backoff(n - 1));
+        }
     }
 
     pub fn put_object(&self, key: &str, ctype: &str, body: Body) -> Result<(), String> {
@@ -442,6 +534,31 @@ impl<'a> Client<'a> {
         r.header("etag").map(str::to_string).filter(|e| !e.is_empty()).ok_or_else(|| format!("no ETag for part {n}"))
     }
 
+    /// The parts already uploaded to `upload_id`: (number, ETag, size)
+    /// each. `Ok(None)`: the upload is gone (completed, aborted, expired).
+    pub fn list_parts(&self, key: &str, upload_id: &str) -> Result<Option<Vec<Part>>, String> {
+        let mut out = Vec::new();
+        let mut marker = String::new();
+        loop {
+            let mut q = vec![("uploadId".to_string(), upload_id.to_string())];
+            if !marker.is_empty() {
+                q.push(("part-number-marker".to_string(), marker.clone()));
+            }
+            let r = self.call("GET", key, &q, Vec::new(), Body::Empty)?;
+            if r.status == 404 || xml_tag(&r.body, "Code").as_deref() == Some("NoSuchUpload") {
+                return Ok(None);
+            }
+            if !r.ok() {
+                return Err(failure(&r));
+            }
+            out.extend(parse_parts(&r.body));
+            match (xml_tag(&r.body, "IsTruncated").as_deref(), xml_tag(&r.body, "NextPartNumberMarker")) {
+                (Some("true"), Some(m)) if !m.is_empty() && m != marker => marker = m,
+                _ => return Ok(Some(out)),
+            }
+        }
+    }
+
     pub fn complete_multipart(&self, key: &str, upload_id: &str, etags: &[String]) -> Result<(), String> {
         let q = [("uploadId".to_string(), upload_id.to_string())];
         let xml = complete_xml(etags);
@@ -457,28 +574,68 @@ impl<'a> Client<'a> {
     }
 
     /// Upload the file at `path` (`size` bytes) to `key`: one PUT, or in
-    /// parts when it is large (aborted on any failure).
-    pub fn upload_file(&self, path: &Path, size: u64, key: &str, ctype: &str) -> Result<(), String> {
+    /// parts when it is large. Each request is retried ([`ATTEMPTS`]).
+    /// `partial` is the unfinished upload of this file a failed try left
+    /// (its uploaded parts are listed and reused while the upload id is
+    /// still valid); a failure that may pass leaves it set for the next
+    /// try, one that will not (refused, 4xx) aborts the upload.
+    pub fn upload_file(&self, path: &Path, size: u64, key: &str, ctype: &str, partial: &mut Option<Partial>) -> Result<(), String> {
         if size > MAX_OBJECT {
             return Err("the file is larger than S3 takes (5 TB)".into());
         }
         let parts = plan(size);
         if parts.is_empty() {
+            *partial = None;
             return self.put_object(key, ctype, Body::File { path, offset: 0, len: size });
         }
-        let id = self.create_multipart(key, ctype)?;
-        let mut etags = Vec::with_capacity(parts.len());
+        // The parts a failed try left, when they still fit this file.
+        let mut have: Vec<Option<String>> = vec![None; parts.len()];
+        let mut id = None;
+        if let Some(p) = partial.take().filter(|p| p.key == key && p.size == size)
+            && let Some(listed) = match self.list_parts(key, &p.upload_id) {
+                Ok(l) => l,
+                Err(e) => {
+                    // Not reachable now: tried again next time.
+                    *partial = Some(p);
+                    return Err(e);
+                }
+            }
+        {
+            for (n, etag, len) in listed {
+                if (1..=parts.len()).contains(&n) && parts[n - 1].1 == len {
+                    have[n - 1] = Some(etag);
+                }
+            }
+            id = Some(p.upload_id);
+        }
+        let id = match id {
+            Some(i) => i,
+            None => self.create_multipart(key, ctype)?,
+        };
+        let mut last_retryable = true;
         let mut run = || -> Result<(), String> {
             for (i, (offset, len)) in parts.iter().enumerate() {
-                let e = self.upload_part(key, &id, i + 1, Body::File { path, offset: *offset, len: *len }).map_err(|e| format!("part {} of {}: {e}", i + 1, parts.len()))?;
-                etags.push(e);
+                if have[i].is_some() {
+                    continue;
+                }
+                let r = self.upload_part(key, &id, i + 1, Body::File { path, offset: *offset, len: *len });
+                last_retryable = r.is_err() && retryable_text(r.as_ref().err());
+                have[i] = Some(r.map_err(|e| format!("part {} of {}: {e}", i + 1, parts.len()))?);
             }
-            self.complete_multipart(key, &id, &etags)
+            let etags: Vec<String> = have.iter().map(|e| e.clone().unwrap_or_default()).collect();
+            let r = self.complete_multipart(key, &id, &etags);
+            last_retryable = r.is_err();
+            r
         };
         let r = run();
         if r.is_err() {
-            // Parts left behind would be stored (and billed) until aborted.
-            let _ = self.abort_multipart(key, &id);
+            if last_retryable {
+                // Kept for the next try (and billed until then: the README
+                // suggests a lifecycle rule for abandoned uploads).
+                *partial = Some(Partial { key: key.to_string(), upload_id: id, size });
+            } else {
+                let _ = self.abort_multipart(key, &id);
+            }
         }
         r
     }
@@ -490,6 +647,27 @@ impl<'a> Client<'a> {
         self.put_object(&key, "text/plain", Body::Bytes(b"Rustshot connection test\n")).map_err(|e| format!("upload failed: {e}"))?;
         self.delete_object(&key).map_err(|e| format!("uploaded, but the delete failed: {e}"))
     }
+}
+
+/// Whether a part's failure (its message) may pass on a later try: a
+/// transport error or a server one, not a refusal (`AccessDenied`,
+/// `NoSuchBucket`, …).
+fn retryable_text(e: Option<&String>) -> bool {
+    let Some(e) = e else { return false };
+    !["AccessDenied", "NoSuchBucket", "NoSuchUpload", "InvalidAccessKeyId", "SignatureDoesNotMatch", "EntityTooLarge", "InvalidPart"].iter().any(|c| e.contains(c))
+}
+
+/// The `<Part>`s of a `ListParts` reply: (number, ETag, size).
+pub fn parse_parts(body: &str) -> Vec<Part> {
+    body.split("<Part>")
+        .skip(1)
+        .filter_map(|p| {
+            let p = p.split("</Part>").next()?;
+            let n = xml_tag(p, "PartNumber")?.trim().parse().ok()?;
+            let size = xml_tag(p, "Size")?.trim().parse().ok()?;
+            Some((n, xml_tag(p, "ETag")?, size))
+        })
+        .collect()
 }
 
 /// The `CompleteMultipartUpload` document.
@@ -525,41 +703,79 @@ pub enum Source<'a> {
     File(&'a Path),
 }
 
+/// Unfinished multipart uploads by file and bucket, for the next try
+/// (the next Copy link on the same recording).
+static PARTIALS: std::sync::Mutex<Vec<(std::path::PathBuf, Target, Partial)>> = std::sync::Mutex::new(Vec::new());
+
+fn partials() -> std::sync::MutexGuard<'static, Vec<(std::path::PathBuf, Target, Partial)>> {
+    PARTIALS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The transport and timing an upload uses (the platform's, or fakes).
+pub struct Io<'a> {
+    pub send: SendFn<'a>,
+    pub clock: &'a dyn Fn() -> u64,
+    pub sleep: &'a dyn Fn(Duration),
+}
+
 /// Upload `src` with `cfg`'s S3 settings (the secret from `secret`):
-/// the link and where the object is.
-pub fn upload(cfg: &Config, src: Source, secret: &str, send: SendFn, clock: &dyn Fn() -> u64) -> Result<(String, Object), String> {
+/// the link and where the object is. A file whose earlier try left an
+/// unfinished multipart upload goes on from its uploaded parts (same key).
+pub fn upload(cfg: &Config, src: Source, secret: &str, io: &Io) -> Result<(String, Object), String> {
     let target = Target::from_config(cfg);
     target.check()?;
     let name = match &src {
         Source::Bytes(_, n) => n.to_string(),
         Source::File(p) => p.file_name().map_or_else(|| "recording".into(), |n| n.to_string_lossy().into_owned()),
     };
-    let now = crate::export::local_ymdhms();
-    let key = object_key(&cfg.s3_key_prefix, now, clock(), &name, &random_tail(6));
     let ctype = content_type(&name);
-    let client = Client { target: &target, creds: Creds { access_key: &cfg.s3_access_key_id, secret }, send, clock };
-    match src {
-        Source::Bytes(b, _) => client.put_object(&key, ctype, Body::Bytes(b))?,
+    let access_key = cfg.s3_access_key_id.trim();
+    let client = Client { target: &target, creds: Creds { access_key, secret }, send: io.send, clock: io.clock, sleep: io.sleep };
+    let fresh_key = || object_key(&cfg.s3_key_prefix, crate::export::local_ymdhms(), (io.clock)(), &name, &random_tail());
+    let key = match src {
+        Source::Bytes(b, _) => {
+            let key = fresh_key();
+            client.put_object(&key, ctype, Body::Bytes(b))?;
+            key
+        }
         Source::File(p) => {
             let size = std::fs::metadata(p).map_err(|e| format!("read {}: {e}", p.display()))?.len();
-            client.upload_file(p, size, &key, ctype)?;
+            let mut partial = {
+                let mut all = partials();
+                all.iter().position(|(f, t, _)| f == p && *t == target).map(|i| all.remove(i).2)
+            };
+            let key = partial.as_ref().filter(|q| q.size == size).map_or_else(fresh_key, |q| q.key.clone());
+            let r = client.upload_file(p, size, &key, ctype, &mut partial);
+            if let Some(q) = partial {
+                partials().push((p.to_path_buf(), target.clone(), q));
+            }
+            r?;
+            key
         }
-    }
+    };
     let link = public_link(&cfg.s3_public_url, &target, &key)?;
-    Ok((link, Object { target, key }))
+    Ok((link, Object { target, key, access_key: access_key.to_string() }))
 }
 
-/// The secret for `bucket` from the OS credential store.
-pub fn stored_secret(bucket: &str) -> Result<String, String> {
-    match crate::keystore::os().get(&crate::keystore::s3_name(bucket)) {
+/// The secret for `target`'s bucket and `access_key` from the OS
+/// credential store.
+pub fn stored_secret(target: &Target, access_key: &str) -> Result<String, String> {
+    let name = crate::keystore::s3_name(&target.host(), &target.bucket, access_key);
+    match crate::keystore::os().get(&name) {
         Ok(Some(s)) if !s.is_empty() => Ok(s),
-        Ok(_) => Err(format!("no secret access key is stored for \"{bucket}\" (Settings \u{203a} Upload)")),
+        Ok(_) => Err(format!("no secret access key is stored for \"{}\" with key ID {} (Settings \u{203a} Upload)", target.bucket, access_key.trim())),
         Err(e) => Err(format!("could not read the secret access key: {e}")),
     }
 }
 
 fn unix_now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+fn real_sleep(d: Duration) {
+    if !cfg!(test) {
+        std::thread::sleep(d);
+    }
 }
 
 /// The platform's HTTPS (never in tests: they fail instead).
@@ -575,42 +791,49 @@ fn platform_send(r: &HttpReq) -> Result<HttpResp, String> {
     }
 }
 
+/// The platform's transport, clock and sleep.
+pub const PLATFORM: Io<'static> = Io { send: &platform_send, clock: &unix_now, sleep: &real_sleep };
+
 /// [`upload`] with the stored secret over the platform's HTTPS; the
 /// object is noted for the upload's record (`crate::uploads::note_s3`).
 #[cfg_attr(test, allow(dead_code))] // tests never upload
 pub fn upload_now(cfg: &Config, src: Source) -> Result<String, String> {
-    let secret = stored_secret(cfg.s3_bucket.trim())?;
+    let secret = stored_secret(&Target::from_config(cfg), &cfg.s3_access_key_id)?;
     let video = matches!(&src, Source::File(p) if p.extension().is_some_and(|e| e.eq_ignore_ascii_case("mp4")));
-    let (link, obj) = upload(cfg, src, &secret, &platform_send, &unix_now)?;
+    let (link, obj) = upload(cfg, src, &secret, &PLATFORM)?;
     crate::uploads::note_s3(&link, obj, if video { crate::uploads::UpKind::Video } else { crate::uploads::UpKind::Image });
     Ok(link)
 }
 
-/// Delete an uploaded object (the record's) with its bucket's stored secret.
-pub fn delete_now(obj: &Object, access_key: &str, send: SendFn) -> Result<(), String> {
-    let secret = stored_secret(&obj.target.bucket)?;
-    let client = Client { target: &obj.target, creds: Creds { access_key, secret: &secret }, send, clock: &unix_now };
-    client.delete_object(&obj.key)
+/// Delete an uploaded object with the secret stored for its bucket and
+/// the access key id its record kept (`current`, the configured one,
+/// for a record from before ids were kept: said so if it fails).
+pub fn delete_now(obj: &Object, current: &str, io: &Io) -> Result<(), String> {
+    let (access_key, fallback) = if obj.access_key.trim().is_empty() { (current.trim(), true) } else { (obj.access_key.trim(), false) };
+    let note = |e: String| if fallback { format!("{e} (this upload's record has no access key ID; the current one was used)") } else { e };
+    let secret = stored_secret(&obj.target, access_key).map_err(note)?;
+    let client = Client { target: &obj.target, creds: Creds { access_key, secret: &secret }, send: io.send, clock: io.clock, sleep: io.sleep };
+    client.delete_object(&obj.key).map_err(note)
 }
 
 /// [`delete_now`] over the platform's HTTPS.
-pub fn delete_platform(obj: &Object, access_key: &str) -> Result<(), String> {
-    delete_now(obj, access_key, &platform_send)
+pub fn delete_platform(obj: &Object, current: &str) -> Result<(), String> {
+    delete_now(obj, current, &PLATFORM)
 }
 
 /// Settings' Test connection with these values (`secret`: typed, or the
 /// stored one when blank).
-pub fn test_with(target: &Target, access_key: &str, secret: &str) -> Result<(), String> {
+pub fn test_with(target: &Target, access_key: &str, secret: &str, io: &Io) -> Result<(), String> {
     target.check()?;
     let stored;
-    let secret = if secret.is_empty() {
-        stored = stored_secret(&target.bucket)?;
+    let secret = if secret.trim().is_empty() {
+        stored = stored_secret(target, access_key)?;
         stored.as_str()
     } else {
-        secret
+        secret.trim()
     };
-    let client = Client { target, creds: Creds { access_key, secret }, send: &platform_send, clock: &unix_now };
-    client.test_connection(&random_tail(8))
+    let client = Client { target, creds: Creds { access_key: access_key.trim(), secret }, send: io.send, clock: io.clock, sleep: io.sleep };
+    client.test_connection(&random_tail())
 }
 
 #[cfg(test)]

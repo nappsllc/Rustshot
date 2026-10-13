@@ -243,6 +243,9 @@ pub fn http_get(host: &str, path: &str, headers: &[(&str, &str)]) -> Result<Stri
     }
 }
 
+/// The most of an S3 reply read.
+const S3_MAX_RESPONSE: usize = 1024 * 1024;
+
 /// One HTTPS request for S3 (`crate::s3`): any port, the body streamed
 /// with `WinHttpWriteData` (a file is read as it is sent), no redirects
 /// (a signed request is for its own host only), the response headers
@@ -323,7 +326,20 @@ pub fn http_request(r: &crate::s3::HttpReq) -> Result<crate::s3::HttpResp, Strin
             Err(_) => Vec::new(),
         };
         let resp = Response { req, _conn: conn, _session: session, status };
-        let body = read_all(&resp)?;
+        // S3 answers with small XML: a reply past 1 MiB is not one.
+        let mut out: Vec<u8> = Vec::new();
+        let mut buf = vec![0u8; 16 * 1024];
+        loop {
+            let n = read_some(&resp, &mut buf)?;
+            if n == 0 {
+                break;
+            }
+            out.extend_from_slice(&buf[..n]);
+            if out.len() > S3_MAX_RESPONSE {
+                return Err("the server's reply is too large for an S3 reply".into());
+            }
+        }
+        let body = String::from_utf8_lossy(&out).into_owned();
         Ok(crate::s3::HttpResp { status, headers, body })
     }
 }

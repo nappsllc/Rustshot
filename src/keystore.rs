@@ -37,8 +37,11 @@ pub trait Store: Send + Sync {
 }
 
 /// The name of the S3 secret for `bucket`.
-pub fn s3_name(bucket: &str) -> String {
-    format!("rustshot:s3:{}", bucket.trim())
+/// The name of the S3 secret for `bucket` at endpoint `host` and access
+/// key id `key_id`: `rustshot:s3:<bucket>@<host>/<key id>`, so the same
+/// bucket name at two providers (or a rotated key) keeps its own secret.
+pub fn s3_name(host: &str, bucket: &str, key_id: &str) -> String {
+    format!("rustshot:s3:{}@{}/{}", bucket.trim(), host.trim(), key_id.trim())
 }
 
 /// What a person sees for it in the store's app.
@@ -135,9 +138,16 @@ mod win {
                     return if not_found(&e) { Ok(None) } else { Err(format!("Credential Manager: {}", e.message())) };
                 }
                 let c = &*p;
-                let blob = std::slice::from_raw_parts(c.CredentialBlob, c.CredentialBlobSize as usize);
-                let units: Vec<u16> = blob.as_chunks::<2>().0.iter().map(|b| u16::from_le_bytes(*b)).collect();
+                // A credential made by hand without a password has no blob
+                // (a null pointer): an empty secret, never a slice of null.
+                let mut units: Vec<u16> = if c.CredentialBlob.is_null() || c.CredentialBlobSize == 0 {
+                    Vec::new()
+                } else {
+                    let blob = std::slice::from_raw_parts(c.CredentialBlob, c.CredentialBlobSize as usize);
+                    blob.as_chunks::<2>().0.iter().map(|b| u16::from_le_bytes(*b)).collect()
+                };
                 let s = String::from_utf16(&units).map_err(|_| "Credential Manager: the stored secret is not text".to_string());
+                units.iter_mut().for_each(|u| *u = 0);
                 CredFree(p as *const _);
                 s.map(Some)
             }
@@ -162,6 +172,23 @@ mod win {
             // The copy in memory goes as soon as it is written.
             blob.iter_mut().for_each(|b| *b = 0);
             r.map_err(|e| format!("Credential Manager: {}", e.message()))
+        }
+
+        fn has(&self, name: &str) -> Result<bool, String> {
+            let target = wide(name);
+            let mut p: *mut CREDENTIALW = std::ptr::null_mut();
+            unsafe {
+                match CredReadW(PCWSTR(target.as_ptr()), CRED_TYPE_GENERIC, None, &mut p) {
+                    Ok(()) => {
+                        // Present: nothing copied out of it.
+                        let some = !(*p).CredentialBlob.is_null() && (*p).CredentialBlobSize > 0;
+                        CredFree(p as *const _);
+                        Ok(some)
+                    }
+                    Err(e) if not_found(&e) => Ok(false),
+                    Err(e) => Err(format!("Credential Manager: {}", e.message())),
+                }
+            }
         }
 
         fn delete(&self, name: &str) -> Result<(), String> {
@@ -221,7 +248,7 @@ mod tests {
 
     #[test]
     fn names_are_per_bucket() {
-        assert_eq!(s3_name(" shots "), "rustshot:s3:shots");
+        assert_eq!(s3_name("acc.r2.cloudflarestorage.com", " shots ", "AK1 "), "rustshot:s3:shots@acc.r2.cloudflarestorage.com/AK1");
         assert!(s3_label("shots").contains("shots"));
     }
 }

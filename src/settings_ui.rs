@@ -1031,14 +1031,22 @@ impl Settings {
         // The form shows what was saved (merged with the file, trimmed).
         self.form = self.form_for(&cfg);
         let mut acts = vec![Act::Saved(Box::new(cfg.clone()))];
-        if let Err(e) = upload::store_secret(crate::keystore::os(), &cfg.s3_bucket, &secret) {
-            // Kept typed, to try again.
-            self.form.up.secret.set(&secret);
-            self.modal = Some(Modal::Error(e));
-            return acts;
-        }
-        if !secret.is_empty() {
-            self.upload.forget_stored();
+        // Kept on a worker (a locked keyring may ask for its password);
+        // OK closes the window once it is kept (`poll_upload`).
+        let mut close = close;
+        if !secret.trim().is_empty() {
+            match upload::slot_of(&crate::s3::Target::from_config(&cfg), &cfg.s3_access_key_id) {
+                Some(slot) => {
+                    self.upload.save(slot, secret, close);
+                    close = false;
+                }
+                None => {
+                    // Kept typed, to try again.
+                    self.form.up.secret.set(&secret);
+                    self.modal = Some(Modal::Error("Enter the bucket and the access key ID first: the secret access key is kept for them.".into()));
+                    return acts;
+                }
+            }
         }
         if let (Some(on), true) = (self.form.autostart, self.form.autostart != self.autostart) {
             match (self.set_autostart)(on) {
@@ -1065,6 +1073,23 @@ impl Settings {
             acts.push(Act::Close);
         }
         acts
+    }
+
+    /// The Upload section's workers answered: whether to repaint, and what
+    /// the window must do (close once OK's secret is kept). A secret that
+    /// could not be kept goes back into its field, with the reason.
+    pub fn poll_upload(&mut self) -> (bool, Vec<Act>) {
+        let p = self.upload.poll();
+        let mut acts = Vec::new();
+        match p.saved {
+            Some((Ok(()), _, close)) if close => acts.push(Act::Close),
+            Some((Err(e), secret, _)) => {
+                self.form.up.secret.set(&secret);
+                self.notify(e);
+            }
+            _ => {}
+        }
+        (p.changed, acts)
     }
 
     /// Remove every `tool_<id>_size` / `tool_<id>_color` from the file
@@ -1482,7 +1507,11 @@ impl Driver for Window {
                 // The Recording section's devices were listed.
                 changed |= self.s.rec_lists.poll();
                 // Upload's Test connection answered.
-                changed |= self.s.upload.poll();
+                let (ch, acts) = self.s.poll_upload();
+                changed |= ch;
+                for a in acts {
+                    self.perform(a);
+                }
                 while let Ok(p) = self.picked.1.try_recv() {
                     self.picking = false;
                     if let Some(p) = p {

@@ -703,31 +703,46 @@ link after upload*).
     (`https://` only; a `:port` is fine).
   - **Region**: `auto` for R2 (the default), the bucket's region for AWS.
   - **Bucket** and **Access key ID**.
-  - **Secret access key**: typed into a masked field and kept in the OS
-    credential store, never in `config.toml` or a log — Windows Credential
-    Manager (a generic credential `rustshot:s3:<bucket>`), the Secret
+  - **Secret access key**: typed into a masked field (trimmed) and kept in
+    the OS credential store, never in `config.toml` or a log, under
+    `rustshot:s3:<bucket>@<endpoint host>/<access key id>` (so the same
+    bucket name at two providers, or a rotated key, keeps its own) —
+    Windows Credential Manager (a generic credential), the Secret
     Service on Linux (GNOME Keyring, KWallet, KeePassXC; without one
     Rustshot refuses to save the secret and says so), the login Keychain
     on macOS.
   - **Public URL base**: what links start with — a CDN in front of the
     bucket, or its `https://pub-….r2.dev` address. Empty: the object's
-    own URL (only useful for a public bucket).
+    own URL on the endpoint, which opens for others only when the bucket
+    is public (Settings warns).
   - **Key prefix**: where in the bucket, with the file-name tokens
     (`%Y/%m/%d/` by default). The object is named after the capture's
-    file name plus a short random tail (`2026/10/12/rustshot_2026-10-12_09-14-a8f3k2.png`),
-    so nothing is overwritten.
+    file name plus 128 random bits from the OS generator
+    (`2026/10/12/rustshot_2026-10-12_09-14-<26 characters>.png`), so
+    nothing is overwritten and links cannot be guessed.
   - **Path-style URLs** (on by default; R2 and most self-hosted servers
     want it): `https://<endpoint>/<bucket>/<key>`; off, virtual-hosted
-    `https://<bucket>.<endpoint>/<key>` (AWS).
+    `https://<bucket>.<endpoint>/<key>` (AWS; a bucket name with a dot
+    always goes path-style, since it would not match the endpoint's TLS
+    certificate).
   - **Test connection** uploads a tiny `rustshot-test-<random>.txt` and
     deletes it again, and says what the bucket answered.
 
   Requests are signed with AWS Signature Version 4 (written in Rustshot,
   no SDK); pictures are hashed and signed, recordings stream with
   `UNSIGNED-PAYLOAD` over HTTPS, and files over 64 MB go up as a multipart
-  upload in 16 MB parts (aborted if any part fails, so no orphaned parts
-  are left behind). The objects need no special ACL: make the bucket (or
-  the CDN in front of it) public for the links to open for others.
+  upload in 16 MB parts. Every request is tried up to four times
+  (network errors, 5xx, `SlowDown`; waiting 0.5, 1, 2 s plus a random
+  extra, signed afresh each time). A multipart upload that still fails
+  is kept: the next **Copy link** on that recording lists the parts
+  already in the bucket and sends only the rest (it starts over if the
+  upload is gone); one the bucket refuses (`AccessDenied` and the like)
+  is aborted. Parts of an upload never finished (the app quit, the
+  recording deleted) stay billed until the bucket removes them — add a
+  lifecycle rule *abort incomplete multipart uploads after 1 day* (R2:
+  Settings › Object lifecycle rules; AWS: Management › Lifecycle). The
+  objects need no special ACL: make the bucket (or the CDN in front of
+  it) public for the links to open for others.
 
 ## Configuration
 

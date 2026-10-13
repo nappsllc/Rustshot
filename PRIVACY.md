@@ -32,15 +32,24 @@ Rustshot does not collect, store or transmit personal data or telemetry.
   base and key prefix are in `config.toml`. The **secret access key** is
   never written to `config.toml`, `uploads.json`, History or any log: it is
   kept in your operating system's credential store (Windows Credential
-  Manager, as the generic credential `rustshot:s3:<bucket>`; on Linux the
+  Manager, as the generic credential
+  `rustshot:s3:<bucket>@<endpoint host>/<access key id>`; on Linux the
   Secret Service, e.g. GNOME Keyring or KWallet — without one Rustshot does
   not save it at all; on macOS the login Keychain) and read from there when
-  an upload is signed. It is used only to compute request signatures and is
-  never sent anywhere itself. On Linux and macOS the signed request's
-  headers are handed to `curl` in a temporary file only you can read
-  (deleted right after), not on its command line. **Test connection**
-  uploads one tiny `rustshot-test-<random>.txt` to your bucket and deletes
-  it again.
+  an upload is signed. Each upload's record keeps the access key **id** it
+  used (not the secret), so Delete upload… finds the right secret. The
+  secret is used only to compute request signatures and is never sent
+  anywhere itself. On Linux, Rustshot talks to the Secret Service with
+  its `plain` session algorithm: the secret crosses your local session
+  bus (a socket only your user can open) unencrypted, as most apps that
+  use the Secret Service do; the keyring itself stores it encrypted.
+  On Linux and macOS the signed request's URL and headers go to `curl` on
+  its standard input when there is no body to stream there (a delete, a
+  whole file it reads itself); otherwise in a file only you can read, in
+  a private folder (`$XDG_RUNTIME_DIR/rustshot-curl`), deleted as soon as
+  curl is done (a leftover from a crash is removed by the next upload).
+  It is never on curl's command line. **Test connection** uploads one tiny
+  `rustshot-test-<random>.txt` to your bucket and deletes it again.
 - **Open with…** writes an unsaved capture to a private `rustshot-open`
   folder (Windows `%TEMP%`, Linux `$XDG_RUNTIME_DIR` or the cache folder,
   readable by you only) for the app you pick (removed once a day old);
