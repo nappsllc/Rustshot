@@ -467,8 +467,8 @@ recording starts video mode, and a delay waits that long.
   Choose defaults by link type › MS-SCREENCLIP*.)
 - When Windows does not open Rustshot yet, turning the option on shows
   **One more step to use Win+Shift+S** with the steps and an **Open
-  Default apps** button (on Windows 11 with the April 2023 update or later
-  it opens Rustshot's own page there). Back in the window, once Rustshot is
+  Default apps** button (*Settings › Apps › Default apps*, where *Choose
+  defaults by link type* is). Back in the window, once Rustshot is
   the chosen app, a toast says *Win+Shift+S now opens Rustshot*. While the
   option is on but another app is chosen, the daemon shows the same message
   when it starts; **Don't show again** turns that off
@@ -479,8 +479,10 @@ recording starts video mode, and a delay waits that long.
   case: Windows still remembers the removed app, so it shows "This file does
   not have an app associated with it" instead of asking; pick Rustshot for
   MS-SCREENCLIP under Default apps as the message says. With the tray
-  icon off and another app chosen, the line reads *Set up Win+Shift+S —
-  otherwise Rustshot can't be opened by a shortcut* (it opens the message).
+  icon off and Rustshot not the chosen app, the line reads *Set up
+  Win+Shift+S — otherwise Rustshot can't be opened by a shortcut*, even
+  while the option is off; clicking it turns the option on and opens the
+  message.
 - To undo it, turn the option off (or run `rustshot register-screenclip
   off`): Rustshot's keys go and, when Rustshot was the chosen app, the
   choice too, so the Snipping Tool opens again. Uninstalling does the same.

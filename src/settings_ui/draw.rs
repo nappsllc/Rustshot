@@ -581,9 +581,16 @@ fn capture(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) 
     let wayland = wayland();
     let show_renderer = s.renderer;
     let done = s.tools_reset;
-    // Which app Win+Shift+S opens, once the toggle is saved on.
-    // (With the tray icon off, red unless it is Rustshot: no other way in.)
-    let clip_line = (s.screenclip == Some(true)).then(|| crate::screenclip_win::state_line(&s.handler, s.form.show_tray));
+    // Which app Win+Shift+S opens, once the toggle is saved on. With the
+    // tray icon off, red unless it is Rustshot (no other way in), even
+    // while the toggle is off: its click turns it on.
+    let registered = s.screenclip == Some(true);
+    let clip_line = if !s.form.show_tray {
+        let h = if registered { s.handler.clone() } else { Handler::None };
+        Some(crate::screenclip_win::state_line(&h, false))
+    } else {
+        (registered && s.form.screenclip == Some(true)).then(|| crate::screenclip_win::state_line(&s.handler, true))
+    };
     let f = &mut s.form;
     let mut target = s.pattern;
     let mut token = None;
@@ -687,8 +694,7 @@ fn capture(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) 
         srow_ex(ui, tok, "Use Win+Shift+S and Print Screen", Some(SCREENCLIP_HELP), false, ROW_H, |ui| {
             ui.switch("screenclip", on, tok);
         });
-        if *on
-            && let Some((text, tone)) = &clip_line
+        if let Some((text, tone)) = &clip_line
             && screenclip_line(ui, tok, text, *tone)
         {
             *click = Some(Click::FixScreenclip);

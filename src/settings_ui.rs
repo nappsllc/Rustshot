@@ -720,9 +720,6 @@ pub struct Settings {
     guide_away: bool,
     /// The guide waits for the open question to close.
     guide_queued: bool,
-    /// The guide's button opens Rustshot's own Default apps page (the
-    /// steps differ).
-    app_page: bool,
     /// A short message at the bottom of the window, and when it came.
     pub toast: Option<(String, std::time::Instant)>,
     pub form: Form,
@@ -775,7 +772,6 @@ impl Settings {
             handler: Handler::None,
             guide_away: false,
             guide_queued: false,
-            app_page: false,
             toast: None,
             section: GENERAL,
             scroll: [0.0; SECTIONS.len()],
@@ -828,7 +824,35 @@ impl Settings {
 
     /// The guide's text: its title and body.
     pub fn guide_texts(&self, broken: bool) -> (&'static str, String) {
-        (crate::screenclip_win::GUIDE_TITLE, crate::screenclip_win::guide_text(broken, self.app_page))
+        (crate::screenclip_win::GUIDE_TITLE, crate::screenclip_win::guide_text(broken))
+    }
+
+    /// The registration as it is now (another flow may have turned it on:
+    /// [`crate::screenclip_win::show_setup_guide`]); the form's toggle
+    /// follows unless the user changed it.
+    pub fn sync_screenclip(&mut self, state: Option<bool>) {
+        if self.form.screenclip == self.screenclip {
+            self.form.screenclip = state;
+        }
+        self.screenclip = state;
+    }
+
+    /// The red line's click: turn the registration on (as Apply would)
+    /// when it is off, then the guide.
+    fn fix_screenclip(&mut self) {
+        if self.screenclip == Some(false) {
+            match (self.set_screenclip)(true) {
+                Ok(()) => {
+                    self.screenclip = Some(true);
+                    self.form.screenclip = Some(true);
+                }
+                Err(e) => {
+                    self.modal = Some(Modal::Error(format!("Could not change Win+Shift+S: {e}")));
+                    return;
+                }
+            }
+        }
+        self.open_guide();
     }
 
     /// Close the guide; a ticked "Don't show again" writes
@@ -1121,7 +1145,7 @@ impl Settings {
                 vec![]
             }
             Click::FixScreenclip => {
-                self.open_guide();
+                self.fix_screenclip();
                 vec![]
             }
             Click::Escape | Click::Enter => vec![],
@@ -1390,7 +1414,6 @@ fn run(rx: Receiver<Msg>) {
     let autostart = crate::update::managed_install().is_none().then(crate::autostart::is_enabled);
     let mut s = Settings::open(config::config_path(), autostart)
         .with_screenclip(crate::screenclip_win::state(), crate::screenclip_win::handler());
-    s.app_page = crate::screenclip_win::opens_app_page();
     s.hotkey_failures = hotkey::outstanding();
     s.section = START_SECTION.swap(GENERAL, std::sync::atomic::Ordering::SeqCst).min(SECTIONS.len() - 1);
     if START_GUIDE.swap(false, std::sync::atomic::Ordering::SeqCst) {
@@ -1621,6 +1644,7 @@ impl Driver for Window {
                         }
                         Msg::Guide => {
                             self.s.section = CAPTURE;
+                            self.s.sync_screenclip(crate::screenclip_win::state());
                             self.s.open_guide();
                             changed = true;
                         }

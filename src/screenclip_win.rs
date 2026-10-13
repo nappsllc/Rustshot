@@ -307,13 +307,6 @@ pub const GUIDE_STEPS: &str = "Windows lets only you choose which app opens Win+
 1. Click Open Default apps below.\n\
 2. Scroll to the bottom and click \"Choose defaults by link type\".\n\
 3. Find MS-SCREENCLIP and pick Rustshot.";
-/// The steps when the button opens Rustshot's own Default apps page
-/// ([`default_apps_uri`] on a Windows that has it): no link-type list to
-/// scroll to.
-pub const GUIDE_STEPS_APP_PAGE: &str = "Windows lets only you choose which app opens Win+Shift+S.\n\
-1. Click Open Default apps below.\n\
-2. Click the box under MS-SCREENCLIP.\n\
-3. Pick Rustshot and click Set default.";
 /// Said first when the choice names an app that is gone.
 pub const GUIDE_BROKEN: &str =
     "Win+Shift+S is currently set to an app that is no longer installed, so Windows shows an error instead of asking.";
@@ -323,11 +316,9 @@ pub const GUIDE_DONT_SHOW: &str = "Don't show again";
 /// The toast once Windows uses Rustshot.
 pub const NOW_OURS: &str = "Win+Shift+S now opens Rustshot";
 
-/// The guide's body for a choice that is `broken` or not; `app_page`:
-/// the button opens Rustshot's own page ([`opens_app_page`]).
-pub fn guide_text(broken: bool, app_page: bool) -> String {
-    let steps = if app_page { GUIDE_STEPS_APP_PAGE } else { GUIDE_STEPS };
-    if broken { format!("{GUIDE_BROKEN}\n{steps}") } else { steps.to_string() }
+/// The guide's body for a choice that is `broken` or not.
+pub fn guide_text(broken: bool) -> String {
+    if broken { format!("{GUIDE_BROKEN}\n{GUIDE_STEPS}") } else { GUIDE_STEPS.to_string() }
 }
 
 /// How a handler line reads.
@@ -356,55 +347,14 @@ pub fn state_line(h: &Handler, show_tray: bool) -> (String, Tone) {
     }
 }
 
-/// The Settings page to send the user to. Windows 11 21H2 / 22H2 with the
-/// April 2023 update (22000.1817, 22621.1555) and later open an app's own
-/// Default apps page for `ms-settings:defaultapps?registeredAppUser=<its
-/// RegisteredApplications name>`; older builds get the plain Default apps
-/// page (where "Choose defaults by link type" is).
-pub fn default_apps_uri(build: u32, ubr: u32, app: &str) -> String {
-    let plain = !app.is_empty() && app.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'));
-    if has_app_page(build, ubr) && plain {
-        format!("ms-settings:defaultapps?registeredAppUser={app}")
-    } else {
-        "ms-settings:defaultapps".into()
-    }
-}
+/// The Settings page the guide's button opens: the plain Default apps
+/// page, where "Choose defaults by link type" is (the guide's steps).
+pub const DEFAULT_APPS_URI: &str = "ms-settings:defaultapps";
 
-/// This Windows build opens an app's own Default apps page.
-pub fn has_app_page(build: u32, ubr: u32) -> bool {
-    match build {
-        b if b >= 22631 => true,
-        22621..=22630 => ubr >= 1555,
-        22000..=22620 => ubr >= 1817,
-        _ => false,
-    }
-}
-
-/// The Windows build and update revision (`CurrentBuildNumber`, `UBR`);
-/// zeros where they cannot be read (and off Windows).
-pub fn windows_build() -> (u32, u32) {
-    #[cfg(windows)]
-    {
-        reg::windows_build()
-    }
-    #[cfg(not(windows))]
-    (0, 0)
-}
-
-/// The Open Default apps button goes to Rustshot's own page here.
-pub fn opens_app_page() -> bool {
-    let (b, u) = windows_build();
-    has_app_page(b, u)
-}
-
-/// Open Windows' Default apps (Rustshot's page where the build has it).
+/// Open Windows' Default apps.
 pub fn open_default_apps() {
     #[cfg(windows)]
-    {
-        let (b, u) = windows_build();
-        let uri = default_apps_uri(b, u, &Names::real().app);
-        reg::shell_open(&uri);
-    }
+    reg::shell_open(DEFAULT_APPS_URI);
 }
 
 /// The registry, HKCU only.
@@ -481,20 +431,6 @@ pub mod reg {
             let n = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
             Some(String::from_utf16_lossy(&buf[..n]))
         }
-    }
-
-    /// `CurrentBuildNumber` and `UBR` of this Windows (zeros if unread).
-    pub fn windows_build() -> (u32, u32) {
-        const KEY: &str = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion";
-        let build = get_in(HKEY_LOCAL_MACHINE, KEY, Some("CurrentBuildNumber"), RRF_RT_REG_SZ)
-            .and_then(|b| b.trim().parse().ok())
-            .unwrap_or(0);
-        let mut ubr = 0u32;
-        let mut len = 4u32;
-        let r = unsafe {
-            RegGetValueW(HKEY_LOCAL_MACHINE, &HSTRING::from(KEY), &HSTRING::from("UBR"), RRF_RT_REG_DWORD, None, Some((&raw mut ubr).cast()), Some(&mut len))
-        };
-        (build, if r == ERROR_SUCCESS { ubr } else { 0 })
     }
 
     /// Open a `ms-settings:` page.
@@ -679,15 +615,30 @@ pub fn handler_state() -> Handler {
     handler()
 }
 
-/// Public entry for other flows: show "One more step to use
-/// Win+Shift+S" — the Settings window opens at Capture with the guide
-/// over it (or the open window shows it). The guide needs the
-/// registration on (`state() == Some(true)`) and Windows not opening
-/// Rustshot yet; otherwise only Capture shows (where the toggle is).
-/// `owner` is accepted for callers that have a window; the guide lives in
-/// the Settings window, so it is not used.
+/// Public entry for other flows (the tray-off confirmation): set up
+/// Win+Shift+S. The registration is turned on first when it is off (as
+/// the Settings toggle does), then "One more step to use Win+Shift+S"
+/// shows — the Settings window opens at Capture with the guide over it
+/// (or the open window shows it; nothing over it when Windows already
+/// opens Rustshot). Where it is not offered (MSIX, off Windows) nothing
+/// happens. `owner` is accepted for callers that have a window; the guide
+/// lives in the Settings window, so it is not used.
 pub fn show_setup_guide(owner: Option<crate::wind::Hwnd>) {
     let _ = owner;
+    match state() {
+        None => return,
+        Some(false) => {
+            if let Err(e) = set(true) {
+                let text = format!("Could not change Win+Shift+S: {e}");
+                eprintln!("rustshot: {text}");
+                if !crate::settings_ui::notify(&text) {
+                    crate::tray::notify(&text);
+                }
+                return;
+            }
+        }
+        Some(true) => {}
+    }
     crate::settings_ui::show_guide();
 }
 
@@ -943,16 +894,14 @@ mod tests {
 
     #[test]
     fn guide_and_state_texts() {
-        let plain = guide_text(false, false);
+        let plain = guide_text(false);
         assert_eq!(
             plain,
             "Windows lets only you choose which app opens Win+Shift+S.\n1. Click Open Default apps below.\n2. Scroll to the bottom and click \"Choose defaults by link type\".\n3. Find MS-SCREENCLIP and pick Rustshot."
         );
-        let broken = guide_text(true, false);
+        let broken = guide_text(true);
         assert!(broken.starts_with("Win+Shift+S is currently set to an app that is no longer installed, so Windows shows an error instead of asking.\n"));
         assert!(broken.ends_with(&plain));
-        assert!(guide_text(false, true).contains("MS-SCREENCLIP") && !guide_text(false, true).contains("Scroll"));
-        assert!(guide_text(true, true).starts_with(GUIDE_BROKEN));
         let other = Handler::Other { progid: SNIP.into(), name: "Snipping Tool".into() };
         let broken = Handler::Broken { progid: SNIP.into() };
         assert_eq!(state_line(&Handler::Ours, true), ("Opens Rustshot".into(), Tone::Good));
@@ -967,19 +916,11 @@ mod tests {
         assert_eq!(state_line(&Handler::Ours, false), ("Opens Rustshot".into(), Tone::Good));
     }
 
+    /// The plain Default apps page, where the guide's steps apply.
     #[test]
     fn default_apps_page() {
-        let plain = "ms-settings:defaultapps";
-        let ours = "ms-settings:defaultapps?registeredAppUser=Rustshot";
-        assert_eq!(default_apps_uri(19045, 5000, "Rustshot"), plain, "Windows 10");
-        assert_eq!(default_apps_uri(22000, 1816, "Rustshot"), plain);
-        assert_eq!(default_apps_uri(22000, 1817, "Rustshot"), ours);
-        assert_eq!(default_apps_uri(22621, 1554, "Rustshot"), plain);
-        assert_eq!(default_apps_uri(22621, 1555, "Rustshot"), ours);
-        assert_eq!(default_apps_uri(22631, 0, "Rustshot"), ours);
-        assert_eq!(default_apps_uri(26300, 9457, "Rustshot"), ours);
-        assert_eq!(default_apps_uri(26300, 0, "a b&c"), plain, "only a plain name goes in the URI");
-        assert_eq!(default_apps_uri(0, 0, "Rustshot"), plain, "unknown build");
+        assert_eq!(DEFAULT_APPS_URI, "ms-settings:defaultapps");
+        assert!(GUIDE_STEPS.contains("Choose defaults by link type"));
     }
 
     /// Register, re-point and unregister a throwaway scheme under HKCU
@@ -1094,8 +1035,6 @@ mod tests {
             register(n, Path::new(r"C:\x\rustshot.exe")).unwrap();
             set(&format!(r"{root}\UserChoiceLatest\ProgId"), Some("ProgId"), &n.progid).unwrap();
             assert_eq!(handler(n), Handler::Ours);
-            let (build, _) = super::super::windows_build();
-            assert!(build >= 10240, "a Windows 10+ build number: {build}");
         }
 
         /// A moved exe is re-pointed; another copy that still exists is not.

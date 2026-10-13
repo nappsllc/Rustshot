@@ -441,6 +441,39 @@ fn screenclip_row_line() {
     let mut focus = FocusState::default();
     reveal(&mut s, &mut focus, "screenclip");
     assert!(focus.rect_of("screenclip_fix").is_none());
+    // The tray icon off and the toggle off: the red line all the same;
+    // its click registers (as Apply would) and shows the guide.
+    {
+        use std::sync::atomic::{AtomicU8, Ordering};
+        static SET: AtomicU8 = AtomicU8::new(9);
+        set_fake(0);
+        let mut s = sample().with_screenclip(Some(false), Handler::None);
+        s.read_handler = fake_handler;
+        s.set_screenclip = |on| {
+            SET.store(on as u8, Ordering::SeqCst);
+            Ok(())
+        };
+        s.form.show_tray = false;
+        s.section = CAPTURE;
+        let mut focus = FocusState::default();
+        reveal(&mut s, &mut focus, "screenclip");
+        assert_eq!(click(&mut s, &mut focus, "screenclip_fix", 1.0), Some(Click::FixScreenclip));
+        s.on(Click::FixScreenclip);
+        assert_eq!(SET.load(Ordering::SeqCst), 1);
+        assert_eq!((s.screenclip, s.form.screenclip), (Some(true), Some(true)));
+        assert_eq!(s.modal, Some(Modal::Guide { broken: false, dont_show: false }));
+        // A failure says so and leaves it off.
+        let mut s = sample().with_screenclip(Some(false), Handler::None);
+        s.set_screenclip = |_| Err("Access is denied.".into());
+        s.on(Click::FixScreenclip);
+        assert_eq!(s.screenclip, Some(false));
+        assert!(matches!(&s.modal, Some(Modal::Error(e)) if e.contains("Win+Shift+S")));
+        // Registered elsewhere (show_setup_guide): the window follows.
+        let mut s = sample().with_screenclip(Some(false), Handler::None);
+        s.sync_screenclip(Some(true));
+        assert_eq!((s.screenclip, s.form.screenclip), (Some(true), Some(true)));
+        assert!(!s.dirty());
+    }
     // The guide's controls click through.
     for k in [1.0f32, 1.5] {
         let mut s = sample();
@@ -1049,15 +1082,18 @@ fn preview_settings_pngs() {
             s.scroll[CAPTURE] = 1e6;
             let (img, _) = render(&mut s, th, k, &Input::default(), &mut FocusState::default());
             preview::save(&png("capture-screenclip-no-tray", tname, k), &img);
-            // The guide (the plain page's steps and the app page's), and
-            // the toast once Rustshot is chosen.
-            for (name, broken, app_page, dont_show) in
-                [("screenclip-guide", false, false, false), ("screenclip-guide-broken", true, false, true), ("screenclip-guide-app-page", false, true, false)]
-            {
+            // The tray icon off with the toggle off too.
+            let mut s = sample().with_screenclip(Some(false), Handler::None);
+            s.form.show_tray = false;
+            s.section = CAPTURE;
+            s.scroll[CAPTURE] = 1e6;
+            let (img, _) = render(&mut s, th, k, &Input::default(), &mut FocusState::default());
+            preview::save(&png("capture-screenclip-no-tray-off", tname, k), &img);
+            // The guide, and the toast once Rustshot is chosen.
+            for (name, broken, dont_show) in [("screenclip-guide", false, false), ("screenclip-guide-broken", true, true)] {
                 let mut s = sample();
                 s.section = CAPTURE;
                 s.scroll[CAPTURE] = 1e6;
-                s.app_page = app_page;
                 s.modal = Some(Modal::Guide { broken, dont_show });
                 let (img, _) = render(&mut s, th, k, &Input::default(), &mut FocusState::default());
                 preview::save(&png(name, tname, k), &img);
