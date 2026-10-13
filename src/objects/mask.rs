@@ -166,7 +166,7 @@ pub fn crop(img: &PixBuf, r: FRect) -> PixBuf {
     match crop_px(r, img.dimensions()) {
         Some((0, 0, w, h)) if (w, h) == img.dimensions() => img.clone(),
         Some((x, y, w, h)) => img.crop(x, y, w, h),
-        None => PixBuf::from_pixel(1, 1, [255, 255, 255, 0]),
+        None => PixBuf::new(1, 1),
     }
 }
 
