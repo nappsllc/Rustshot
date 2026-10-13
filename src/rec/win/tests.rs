@@ -1005,3 +1005,49 @@ fn live_rec_gpu_conversion_falls_back_to_the_cpu() {
         }
     }
 }
+
+/// An output the GPU canvas cannot take any more in the middle of an MP4
+/// on the GPU path (it came back in HDR, or its device was re-created):
+/// the source goes back to the CPU canvas before copying into it, no
+/// panic, and the file is finished with every frame.
+#[test]
+#[ignore = "records the real desktop"]
+fn live_rec_gpu_output_changes_mid_recording() {
+    crate::capture::enable_dpi_awareness();
+    if skip_without_mf(false) {
+        return;
+    }
+    let win = TestWindow::open(220, 220, 320, 240, 33);
+    let area = win.rect();
+    let out = nv12::fit(area.2, area.3);
+    let tick = || Instant::now() + Duration::from_millis(33);
+    for hdr in [true, false] {
+        let mut s = match DxgiSource::open_nv12(area, out) {
+            Ok(s) => s,
+            Err(e) => return eprintln!("SKIP: desktop duplication is unavailable here: {e:#}"),
+        };
+        if !s.on_gpu() {
+            return eprintln!("SKIP: no GPU conversion on this machine");
+        }
+        let dir = out_dir();
+        let path = dir.join(if hdr { "to-hdr.mp4" } else { "new-device.mp4" });
+        let mut e = MfEncoder::create(&path, area.2, area.3, 30, Quality::Medium, false).unwrap();
+        for i in 0..30u64 {
+            if i == 10 {
+                s.test_output_changes(0, hdr);
+            }
+            let mut f = s.next(tick()).unwrap();
+            if i > 10 {
+                assert!(f.nv12.is_none() && !s.on_gpu(), "frame {i}: back on the CPU");
+                assert_eq!(f.bgra.len(), (area.2 * area.3 * 4) as usize);
+            }
+            f.ts = Duration::from_millis(i * 1000 / 30);
+            e.push_video(&f).unwrap();
+        }
+        Box::new(e).finish().unwrap();
+        let p = mf::probe(&path).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(p.frames, 30, "hdr {hdr}: {p:?}");
+    }
+    drop(win);
+}

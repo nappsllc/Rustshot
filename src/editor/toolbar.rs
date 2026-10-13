@@ -162,6 +162,8 @@ pub enum Act {
     /// The Save split button's chevron: the menu with Save As and Save
     /// to Desktop.
     SaveMenu,
+    /// Tighten the selection to its content (the size label's menu).
+    Trim,
 }
 
 /// Which device dropdown of the Record popover.
@@ -584,6 +586,32 @@ fn place_save_menu(bar: FRect, above: bool, items: &mut Vec<Item>, inp: &Input) 
         items.push(Item { kind: Kind::MenuItem { act, label, key: i }, r, disabled: false });
     }
     FRect { x: px, y: py, w: pw, h: ph }
+}
+
+/// The selection size label's menu (a click on the label).
+pub const SIZE_MENU: [(Act, &str); 1] = [(Act::Trim, "Trim to content")];
+/// Its width (logical px).
+const SIZE_MENU_W: f32 = 200.0;
+
+/// Open the size label's menu on `tb`: under the label at `label` (above
+/// it when it does not fit), kept on the monitor `area`; `key` is the
+/// trim's key. Not over another popover or the Record panel (false then).
+pub fn add_size_menu(tb: &mut Toolbar, label: FRect, key: String, area: FRect, s: f32) -> bool {
+    if tb.pop.is_some() || tb.video || tb.docked {
+        return false;
+    }
+    let m = MARGIN * s;
+    let (pw, ph) = (SIZE_MENU_W * s, (SIZE_MENU.len() as f32 * MENU_ROW + 2.0 * PAD) * s);
+    let px = label.x.clamp(area.x + m, (area.x1() - m - pw).max(area.x + m));
+    let below = label.y1() + POP_GAP * s;
+    let py = if below + ph <= area.y1() - m { below } else { (label.y - POP_GAP * s - ph).max(area.y + m) };
+    for (i, (act, text)) in SIZE_MENU.into_iter().enumerate() {
+        let r = FRect { x: px + PAD * s, y: py + (PAD + i as f32 * MENU_ROW) * s, w: pw - 2.0 * PAD * s, h: MENU_ROW * s };
+        tb.items.push(Item { kind: Kind::MenuItem { act, label: text, key: tb.texts.len() }, r, disabled: false });
+    }
+    tb.texts.push(key);
+    tb.pop = Some(FRect { x: px, y: py, w: pw, h: ph });
+    true
 }
 
 /// Top-left of a `pw`x`ph` popover 6 px from the bar on the side away from

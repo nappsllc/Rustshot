@@ -68,6 +68,8 @@ mod sni;
 mod sound;
 mod text;
 mod theme;
+mod hdr;
+mod trim;
 mod tray;
 #[cfg(target_os = "linux")]
 mod tray_linux;
@@ -542,6 +544,9 @@ fn run_direct(cfg: &Config, args: &CaptureArgs, shot: Shot, region: Option<(i32,
         },
         None => (shot.image.clone(), shot.origin),
     };
+    // Settings › Capture "Add a border", around what is exported.
+    let b = export::border(cfg, shot.scale).map_or(0, |(b, _)| b as i32);
+    let (img, global) = (export::with_border(img, cfg, shot.scale), (global.0 - b, global.1 - b));
     let res = export::run_export(&img, global, &tasks, cfg);
     let raw_stdout = tasks.iter().any(|t| matches!(t, Task::Raw));
     for m in &res.messages {
@@ -950,6 +955,7 @@ fn run() -> Result<()> {
             match plan {
                 Plan::Editor(pending) => exit(editor_main(cfg, RunKind::OneShot, pending)),
                 Plan::Direct { screen, region } => {
+                    hdr::configure(&cfg);
                     let shot = match screen {
                         Some(n) => capture::grab_monitor(n as usize),
                         None => capture::grab_edit(None, cfg.capture_active_monitor),

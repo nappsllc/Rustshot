@@ -522,7 +522,7 @@ pub fn run_export(store: &Store, id: &str, task: crate::export::Task, cfg: &Conf
         };
     }
     let img = match picture(store, &e) {
-        Ok(i) => i,
+        Ok(i) => crate::export::with_border(i, cfg, e.meta.scale),
         Err(err) => return fail(format!("Could not read the capture: {err:#}")),
     };
     if task == Task::Pin {

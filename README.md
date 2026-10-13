@@ -40,7 +40,12 @@ screenshots, editing and video capture.** Windows, Linux and macOS.
 - A pixel magnifier shows the position and color under the pointer.
   <kbd>H</kbd> copies the color as `#rrggbb`.
 - *Accept on select*: copy or save the moment you release the mouse.
+- *Trim to content*: <kbd>Shift</kbd>+<kbd>A</kbd> (or click the `W × H`
+  readout) cuts the uniform margins off the selection. Settings can trim
+  every new region or window for you.
 - Works across multiple monitors. The UI follows each display's scaling.
+- On Windows, HDR displays are tone-mapped to SDR, so screenshots and
+  recordings look as they do on screen instead of washed out.
 
 **Annotate & edit**
 - Pencil, line, arrow, rectangle, ellipse, marker, text, callout,
@@ -62,6 +67,8 @@ screenshots, editing and video capture.** Windows, Linux and macOS.
 - Save As, Save to Desktop, **Open with…** any app, **Share…** through the
   system's share sheet (Windows, macOS), or (on Windows) drag the thumbnail
   into another app.
+- An optional border (any color, 1 to 8 px) around everything you copy,
+  save, upload or pin.
 - Upload to Imgur, or to your own S3-compatible bucket (Amazon S3,
   Cloudflare R2, MinIO, …), with the link copied for you. Images and MP4
   recordings can be uploaded, and you can delete an upload later
@@ -198,6 +205,7 @@ off in Rustshot, and Windows uses the Snipping Tool again. More detail:
 | Delete / Duplicate selected objects | <kbd>Del</kbd> / <kbd>Ctrl</kbd>+<kbd>D</kbd> |
 | Bring to front / Send to back | <kbd>Ctrl</kbd>+<kbd>]</kbd> / <kbd>Ctrl</kbd>+<kbd>[</kbd> |
 | Select the whole screen / Toggle the palette | <kbd>Ctrl</kbd>+<kbd>A</kbd> / <kbd>Space</kbd> |
+| Trim the selection to its content | <kbd>Shift</kbd>+<kbd>A</kbd> |
 | Screenshot / Video mode | <kbd>1</kbd> / <kbd>2</kbd> |
 | Bigger / Smaller UI / Auto | <kbd>Ctrl</kbd>+<kbd>=</kbd> / <kbd>Ctrl</kbd>+<kbd>-</kbd> / <kbd>Ctrl</kbd>+<kbd>0</kbd> |
 | Accept / Cancel | <kbd>Enter</kbd> / <kbd>Esc</kbd> |
