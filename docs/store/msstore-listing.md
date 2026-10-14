@@ -272,7 +272,7 @@ PERMISSIONS
 NETWORK (internetClient)
 • No telemetry and no update check in the Store build (the Store updates it).
 • Uploads go to Imgur or the user's own S3-compatible storage only when the user chooses Upload (Ctrl+U) or Copy link on a recording.
-• The camera background-blur model is built into the app; nothing is downloaded except an upload the user starts. [When the on-demand language files and model ship, replace this line with: "Language files and the camera background-blur model are downloaded on demand from github.com (the project's releases) when the user first needs them."]
+• Language files and the camera background-blur model are downloaded on demand from github.com (the project's releases) when the user first needs them. Each file is checked against a SHA-256 built into the app; Settings › General › "Download language and blur files" turns this off. Nothing else is downloaded except an upload the user starts.
 
 Privacy policy: https://github.com/nappsllc/rustshot/blob/main/PRIVACY.md
 ```

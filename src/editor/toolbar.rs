@@ -143,8 +143,13 @@ pub enum Act {
     RecCountdown(bool),
     /// A GIF's max length (seconds).
     RecGifMax(u32),
-    /// "Start recording".
+    /// "Start recording" (while the blur question is up: record with the
+    /// camera fully blurred).
     RecStart,
+    /// The blur question: turn the camera off and record.
+    RecAskCamOff,
+    /// The blur question: back to the panel.
+    RecAskCancel,
     /// The palette's rainbow swatch: the color picker for the tool.
     Wheel,
     /// The camera ring's width, a step thinner or thicker.
@@ -383,9 +388,16 @@ pub struct RecView<'a> {
     /// The cameras are still being listed (the row says so, disabled).
     pub cams_looking: bool,
     pub shape: Shape,
-    /// The camera's background, and whether this build can blur it.
+    /// The camera's background; whether a blur can be chosen; if not,
+    /// the row's note (the model downloading, off, damaged; a failed
+    /// download, when a press of the row retries).
     pub bg: crate::cam::bg::Bg,
     pub blur: bool,
+    pub blur_note: Option<&'static str>,
+    pub blur_retry: bool,
+    /// Start was pressed with a blur chosen that cannot be had: the
+    /// question's two lines (in place of Start recording).
+    pub blur_ask: Option<(&'static str, &'static str)>,
     /// The chosen microphone's name ("Default microphone" for the default).
     pub mic_label: &'a str,
     /// The chosen camera's name ("Default camera" for the first).

@@ -5,3 +5,6 @@
 *.desktop text eol=lf
 *.nsi text eol=lf
 *.ps1 text eol=crlf
+# Data files the app downloads by SHA-256 (src/fetch.rs): the same bytes on every checkout.
+lang/*.txt text eol=lf
+models/*.bin binary

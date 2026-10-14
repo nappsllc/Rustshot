@@ -34,9 +34,10 @@ discards everything inside it).
 | `history.ps1` | History in an isolated instance: entries from direct and daemon captures, `rustshot history` and its hotkey, `history = false`, `history --list`. |
 | `rec.ps1`     | 2 s MP4 and GIF recordings through the record hotkey, checked by box layout, Media Foundation and GIF structure. |
 | `v030.ps1`    | 0.3.0: a delayed region capture from the CLI, `--accept-on-select` with a region, `rustshot launcher` (alone and in the daemon) and a Screen / 3 s / Save launch with its countdown pill, Open with (Ctrl+O) writing into a private `%TEMP%\rustshot-open`, the new config keys after a Settings save, and no global Ctrl+O. |
+| `data.ps1`    | Data files (downloaded on demand, in no package): no `models\` or `lang\` beside the installed exe; `rustshot data` names the model's release URL and where it goes; offline `data --fetch` says it couldn't download (exit 1) and leaves no partial file; the repo's model put into the isolated cache by hand is "SHA-256 verified"; a damaged one with `download_data = false` is reported as damaged. |
 | `v040.ps1`    | 0.4.0: the tray icon off (a 0.3.0 config with `show_tray = false` gets the one-time notice and `tray_off_mode_seen`; then `rustshot daemon` exits, a plain launch opens Settings, `daemon --force` runs), `rustshot screenclip "ms-screenclip:?source=HotKey"` with no daemon (an on-demand capture holding no global hotkeys, ended by an Esc posted to its overlay), `register-screenclip on` / `off` (inside the sandbox only: the ProgID, Capabilities and RegisteredApplications values, gone again), the export border, image edits (crop, flip, rotate, canvas) from an `annotations.json` fixture rendered by History's Open with, a freeform lasso snip saved with a transparent outside, Text mode (O, Ctrl+A, Ctrl+C) and Quick Redact (Shift+R, solid) on a window showing an e-mail address and an IP. |
 | `v041.ps1`    | 0.4.1: the exe's 16 and 32 px icons as `ExtractIconEx` returns them (what Task Manager and Explorer show; the small entries are DIBs) are not blank (saved as `out041-icon-*.png`), and a `full --region` PNG from the in-repo encoder decodes in GDI+ and WIC at its size, with the same pixels in both and as a BMP of the same region (sizes against GDI+'s own PNG in the log). |
 
 The checks of the portable exe use their own `RUSTSHOT_INSTANCE`, `APPDATA`
-and `LOCALAPPDATA` and unusual hotkeys. `-Only probe|rec|v030|v040|v041` runs one
-group.
+and `LOCALAPPDATA` and unusual hotkeys. `-Only probe|rec|v030|v040|v041|data`
+runs one group.

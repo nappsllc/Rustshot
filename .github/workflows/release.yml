@@ -37,6 +37,24 @@ jobs:
         run: |
           mv artifacts/rustshot-windows-x86_64/rustshot.exe \
              "artifacts/rustshot-windows-x86_64/rustshot-${GITHUB_REF_NAME#v}-windows-x86_64.exe"
+      # Data files the app downloads on demand from this release (src/fetch.rs):
+      # the camera blur's model as selfie-<first 8 hex of its SHA-256>.bin and
+      # each lang/<tag>.txt as lang-<tag>.txt (none yet: nothing to add). The
+      # app checks each against the SHA-256 it was built with, and this
+      # SHA256SUMS.
+      - name: Add the data files
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          mkdir -p artifacts/rustshot-data
+          sum=$(sha256sum models/selfie.bin | cut -c1-8)
+          cp models/selfie.bin "artifacts/rustshot-data/selfie-$sum.bin"
+          for f in lang/*.txt; do
+            tag=$(basename "$f" .txt)
+            case "$tag" in *[!A-Za-z0-9-]*|'') continue ;; esac
+            cp "$f" "artifacts/rustshot-data/lang-$tag.txt"
+          done
+          ls -l artifacts/rustshot-data
       # The in-app updater refuses any asset without a matching entry here.
       - name: Write SHA256SUMS
         run: |

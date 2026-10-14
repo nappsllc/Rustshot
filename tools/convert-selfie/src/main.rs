@@ -1,9 +1,9 @@
 //! `convert-selfie <model.tflite> [selfie.bin]`: MediaPipe's Selfie
 //! Segmentation (landscape, 144x256) to Rustshot's compact model, which
-//! the `selfie_model` feature embeds (`assets/selfie.bin` by default).
+//! Rustshot downloads on demand (`models/selfie.bin` by default).
 //! Weights are stored as f16 (float32 weights are rounded to it); the
 //! operators and shapes are checked again by the app when it loads it
-//! (`cargo test --features selfie_model embedded_model`).
+//! (`cargo test model_manifest_matches_the_file`).
 
 mod flat;
 #[path = "../../../src/cam/seg/format.rs"]
@@ -20,10 +20,10 @@ fn main() -> ExitCode {
     let list = args.iter().any(|a| a == "--list");
     args.retain(|a| a != "--list");
     let (input, output) = match &args[..] {
-        [i] => (PathBuf::from(i), PathBuf::from("assets/selfie.bin")),
+        [i] => (PathBuf::from(i), PathBuf::from("models/selfie.bin")),
         [i, o] => (PathBuf::from(i), PathBuf::from(o)),
         _ => {
-            eprintln!("usage: convert-selfie [--list] <selfie_segmentation_landscape.tflite> [out: assets/selfie.bin]");
+            eprintln!("usage: convert-selfie [--list] <selfie_segmentation_landscape.tflite> [out: models/selfie.bin]");
             return ExitCode::from(2);
         }
     };

@@ -26,49 +26,35 @@ use ops::{dims4, Dim, Geo};
 use std::sync::Mutex;
 use team::{Rows, Team};
 
-/// The model in this build: `assets/selfie.bin` (converted with
-/// `tools/convert-selfie`), embedded whenever it is there (build.rs sets
-/// `selfie_embedded`; `RUSTSHOT_NO_SELFIE=1` builds without it). It is
-/// stored DEFLATE-compressed (build.rs) and inflated on the first call,
-/// i.e. when the blur first turns on; then kept.
-pub fn embedded() -> Option<&'static [u8]> {
-    #[cfg(selfie_embedded)]
-    {
-        static M: std::sync::OnceLock<Option<Vec<u8>>> = std::sync::OnceLock::new();
-        M.get_or_init(|| inflate_model(EMBEDDED_Z, EMBEDDED_LEN)).as_deref()
-    }
-    #[cfg(not(selfie_embedded))]
-    None
+/// The model's bytes from its file ([`crate::fetch::MODEL`]: downloaded
+/// on demand into the data cache, or in `RUSTSHOT_DATA_DIR`), read and
+/// checked against the SHA-256 this build expects; None when it is not
+/// there or does not match (said on stderr). Called on the segmentation
+/// thread when the blur first runs.
+pub fn model_bytes() -> Option<Vec<u8>> {
+    let f = &crate::fetch::MODEL;
+    let Some(path) = crate::datadir::cached(f.rel) else {
+        eprintln!("rustshot: camera blur: model file not found");
+        return None;
+    };
+    read_model(&path, f)
 }
 
-/// Whether this build embeds the model (without inflating it).
-pub const HAS_EMBEDDED: bool = cfg!(selfie_embedded);
-
-#[cfg(selfie_embedded)]
-pub(crate) static EMBEDDED_Z: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/selfie.bin.z"));
-#[cfg(selfie_embedded)]
-pub(crate) const EMBEDDED_LEN: usize = include!(concat!(env!("OUT_DIR"), "/selfie_len.rs"));
-
-/// build.rs's `compress_model` undone: inflate, then interleave the two
-/// byte planes (even offsets first) back into the file.
-#[cfg_attr(not(selfie_embedded), allow(dead_code))]
-fn inflate_model(z: &[u8], len: usize) -> Option<Vec<u8>> {
-    let (planes, _) = match crate::deflate::inflate(z, len) {
-        Ok(v) if v.0.len() == len => v,
-        r => {
-            eprintln!("rustshot: camera blur: the embedded model does not inflate ({:?})", r.err());
+/// `path`'s bytes when they are `f` (size and SHA-256).
+pub fn read_model(path: &std::path::Path, f: &crate::fetch::DataFile) -> Option<Vec<u8>> {
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("rustshot: camera blur: read {}: {e}", path.display());
             return None;
         }
     };
-    let (even, odd) = planes.split_at(len.div_ceil(2));
-    let mut out = Vec::with_capacity(len);
-    for (i, &b) in even.iter().enumerate() {
-        out.push(b);
-        if let Some(&o) = odd.get(i) {
-            out.push(o);
-        }
+    if bytes.len() as u64 != f.size || crate::sha256::hex(&crate::sha256::digest(&bytes)) != f.sha256 {
+        eprintln!("rustshot: camera blur: {} is damaged (size or SHA-256 differs)", path.display());
+        return None;
     }
-    Some(out)
+    eprintln!("rustshot: camera blur: model {} verified (SHA-256 {})", path.display(), &f.sha256[..8]);
+    Some(bytes)
 }
 
 /// What a convolution keeps ready.
