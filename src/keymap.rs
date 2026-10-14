@@ -109,6 +109,9 @@ pub enum Action {
     ImageResize,
     ImageCanvas,
     ImageReset,
+    /// Scrolling capture of the selection: the window under it is
+    /// scrolled and the frames stitched (the size label menu's row).
+    ScrollCapture,
     /// The ruler: measure a line (or, with Ctrl, a rect) in px; kept as a
     /// dimension line or discarded. U: free, and next to the other tools.
     ToolRuler,
@@ -121,7 +124,7 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Action; 65] = [
+    pub const ALL: [Action; 66] = [
         Action::ToolSelect,
         Action::ToolPencil,
         Action::ToolLine,
@@ -184,6 +187,7 @@ impl Action {
         Action::ImageResize,
         Action::ImageCanvas,
         Action::ImageReset,
+        Action::ScrollCapture,
         Action::ToolRuler,
         Action::ReadQr,
         Action::ImageEffects,
@@ -320,6 +324,8 @@ impl Action {
             Action::ToolRuler => ("tool_ruler", tr!("action.tool_ruler"), &["U"]),
             Action::ReadQr => ("read_qr", tr!("action.read_qr"), &["Q"]),
             Action::ImageEffects => ("image_effects", tr!("action.image_effects"), &[]),
+            // Shift+S: S is the spotlight, Ctrl+S Save, Ctrl+Shift+S Save As.
+            Action::ScrollCapture => ("scroll_capture", tr!("action.scroll_capture"), &["Shift+S"]),
         }
     }
 

@@ -740,11 +740,11 @@ impl Edit {
         // A menu that cannot open (video mode, another popover) is not
         // left open to swallow the next press.
         if self.size_menu {
-            let key = chrome::act_tip(Act::Trim, &self.keys).1.join("+");
+            let keys: Vec<String> = toolbar::size_menu().iter().map(|(a, _)| chrome::act_tip(*a, &self.keys).1.join("+")).collect();
             self.size_menu = self.host.is_none()
                 && !self.rec.open
                 && match (self.toolbar.as_mut(), self.label_at) {
-                    (Some(tb), Some(at)) => toolbar::add_size_menu(tb, at, key, area, s),
+                    (Some(tb), Some(at)) => toolbar::add_size_menu(tb, at, &keys, area, s),
                     _ => false,
                 };
         }

@@ -261,7 +261,7 @@ mod window_tests {
     /// and 2x (previews per language).
     #[test]
     fn fits_in_long_languages() {
-        for lang in preview::LANGS {
+        for lang in preview::langs() {
             crate::i18n::with_lang(lang, || {
                 for k in [1.0f32, 2.0] {
                     let mut f = Form::new(Plan { source: Source::Region, delay: 3, after: After::Edit });

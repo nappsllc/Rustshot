@@ -710,7 +710,7 @@ fn history_window_smoke() {
 #[test]
 fn fits_in_long_languages() {
     let (w, hh) = MIN;
-    for lang in crate::ui::preview::LANGS {
+    for lang in crate::ui::preview::langs() {
         crate::i18n::with_lang(lang, || {
             for k in [1.0f32, 1.5] {
                 let (_r, st) = fixture(&format!("fit-{lang}-{k}"));

@@ -280,7 +280,9 @@ pub fn toast_at(ui: &mut Ui, msg: &str, k: f32) {
     }
     let cu = crate::editor::style::Ui { th: ui.theme, s: ui.k, font: Some(&crate::fonts::UI) };
     let area = phys(ui, FRect { x: RAIL_W, y: 0.0, w: W as f32 - RAIL_W, h: H as f32 - FOOT_H + 16.0 });
-    crate::editor::style::toast(&mut ui.fb, &cu, msg, crate::editor::style::ToastKind::Success, area, k);
+    // The All keys warning is no success.
+    let kind = if *msg == crate::rec::marks::text::all_keys_warning() { crate::editor::style::ToastKind::Info } else { crate::editor::style::ToastKind::Success };
+    crate::editor::style::toast(&mut ui.fb, &cu, msg, kind, area, k);
 }
 
 /// The section body: every section fits between the header and the
@@ -945,7 +947,7 @@ pub const TOOL_ROWS: [(Key, &[Action]); 7] = [
 /// keys (zoom, image edits) end the list.
 pub const ACTION_ROWS: [(Key, &[Action]); 7] = [
     (key!("settings.keys.row.copy"), &[Action::Copy, Action::Save, Action::Upload, Action::CopyText, Action::CopyColor]),
-    (key!("settings.keys.row.save_as"), &[Action::SaveAs, Action::SaveDesktop, Action::OpenWith]),
+    (key!("settings.keys.row.save_as"), &[Action::SaveAs, Action::SaveDesktop, Action::OpenWith, Action::ScrollCapture]),
     SEND_ROW,
     (key!("settings.keys.row.ui_size"), &[Action::UiBigger, Action::UiSmaller, Action::UiReset]),
     (key!("settings.keys.row.zoom"), &[Action::ZoomIn, Action::ZoomOut, Action::ZoomFit, Action::ZoomActual]),

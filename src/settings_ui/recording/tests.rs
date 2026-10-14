@@ -218,7 +218,8 @@ fn render(s: &mut Settings, th: &Theme, k: f32) -> (crate::pixbuf::PixBuf, f32) 
 #[test]
 fn recording_sections_fit() {
     for sec in [RECORDING, CAMERA] {
-        let mut s = sample(Config { rec_format: "gif".into(), ..Config::default() });
+        // All keys on: its short warning in place of the note.
+        let mut s = sample(Config { rec_format: "gif".into(), rec_show_keys: true, rec_show_all_keys: true, ..Config::default() });
         s.section = sec;
         s.rec_lists.linux = true;
         s.rec_lists.found = Some(Found { cams: Vec::new(), ..find() });

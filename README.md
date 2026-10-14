@@ -50,6 +50,12 @@ screenshots, editing and video capture.** Windows, Linux and macOS.
 - *Trim to content*: <kbd>Shift</kbd>+<kbd>A</kbd> (or click the `W × H`
   readout) cuts the uniform margins off the selection. Settings can trim
   every new region or window for you.
+- *Scrolling capture*: <kbd>Shift</kbd>+<kbd>S</kbd> (or click the `W × H`
+  readout) scrolls the window under the selection and stitches it into one
+  tall picture (up to 20 000 px; sticky headers and footers come once),
+  which opens in the Edit window. A pill shows the height so far; Stop or
+  <kbd>Esc</kbd> ends it early. Windows and X11 (not Wayland, where an app
+  cannot scroll another's window).
 - Works across multiple monitors. The UI follows each display's scaling.
 - On Windows, HDR displays are tone-mapped to SDR, so screenshots and
   recordings look as they do on screen instead of washed out.
@@ -79,6 +85,20 @@ screenshots, editing and video capture.** Windows, Linux and macOS.
 - Record a region, a window or a screen to MP4 (30 or 60 fps) or GIF.
 - System sound, your microphone, and a camera bubble you can drag.
 - A 3-2-1 countdown, and pause, mute and discard while recording.
+- *Show clicks & keys* (Settings › Recording): a ring pulses where you
+  click (left and right in their own colors) and the last shortcuts show
+  at the bottom ("Ctrl + Shift + S"), in the video only. Only chords with
+  <kbd>Ctrl</kbd>, <kbd>Alt</kbd> or <kbd>Win</kbd> by default (typed text
+  never shows, and AltGr characters are no chords); *All keys* shows every
+  key, but on Windows never while a password field has (or may have) the
+  focus. It can still show passwords typed into terminals, remote desktops,
+  games and some apps, and on Linux none are detected. Nothing shows while
+  paused or on the lock screen. Windows and X11.
+- *Trim after recording* (Settings › Recording › Ask): after Stop, cut the
+  start and end on a timeline of thumbnails with a preview, then **Save
+  trimmed**. MP4s are cut without re-encoding (on Windows the few frames
+  before the first key frame are encoded again, so its own player starts
+  exactly there too); GIFs by frames.
 
 **Share**
 - Copy to the clipboard, or save as PNG, JPEG or BMP into dated folders
@@ -258,6 +278,7 @@ off in Rustshot, and Windows uses the Snipping Tool again. More detail:
 | Bring to front / Send to back | <kbd>Ctrl</kbd>+<kbd>]</kbd> / <kbd>Ctrl</kbd>+<kbd>[</kbd> |
 | Select the whole screen / Toggle the palette | <kbd>Ctrl</kbd>+<kbd>A</kbd> / <kbd>Space</kbd> |
 | Trim the selection to its content | <kbd>Shift</kbd>+<kbd>A</kbd> |
+| Scrolling capture of the selection | <kbd>Shift</kbd>+<kbd>S</kbd> (<kbd>Esc</kbd> stops it) |
 | Screenshot / Video mode | <kbd>1</kbd> / <kbd>2</kbd> |
 | Bigger / Smaller UI / Auto | <kbd>Ctrl</kbd>+<kbd>=</kbd> / <kbd>Ctrl</kbd>+<kbd>-</kbd> / <kbd>Ctrl</kbd>+<kbd>0</kbd> |
 | Accept / Cancel | <kbd>Enter</kbd> / <kbd>Esc</kbd> |
@@ -384,6 +405,11 @@ publishes a GitHub Release
 UI design boards are in
 [docs/design/rustshot-ui](docs/design/rustshot-ui), and the specs and
 plans are in [docs/superpowers](docs/superpowers).
+
+Translations are plain text files in [`lang/`](lang); how to write, test
+and send one: [docs/translating.md](docs/translating.md) (languages in
+[i18n/languages.md](i18n/languages.md), terms in
+[i18n/glossary.md](i18n/glossary.md)).
 
 ## Known limitations
 

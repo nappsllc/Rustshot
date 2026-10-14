@@ -200,7 +200,7 @@ settings.keys.row.size = Stroke size - / + · Palette
 settings.keys.row.typing = Typing: bold · italic · underline
 settings.keys.row.undo = Undo · Redo · Select all
 settings.keys.row.copy = Copy · Save · Upload · Copy text · color
-settings.keys.row.save_as = Save As · Desktop · Open with
+settings.keys.row.save_as = Save As · Desktop · Open with · Scroll
 settings.keys.row.ui_size = UI size + · - · Auto
 settings.keys.row.zoom = Edit window zoom + · - · Fit · 1:1
 settings.keys.row.rotate = Rotate left · right · Flip H · V
@@ -295,6 +295,16 @@ settings.recording.gif_no_sound = GIFs have no sound
 settings.camera.no_camera = No camera found
 settings.camera.background.help = Blurs what is behind you
 settings.recording.encoder_auto = Auto
+settings.recording.show = Show clicks & keys
+settings.recording.show.help = Shown in the video; nothing else is saved
+settings.recording.clicks = Clicks
+settings.recording.keystrokes = Keystrokes
+settings.recording.all_keys = All keys
+settings.recording.all_keys.help = All keys can show passwords
+settings.recording.trim = Trim after recording
+settings.recording.trim.help = Cut the start and end before it is saved
+settings.recording.trim_off = Off
+settings.recording.trim_ask = Ask
 settings.upload.imgur = Imgur
 settings.upload.s3 = S3-compatible
 settings.s3.keep_failed_in = Could not keep the secret access key in {place}: {e}
@@ -408,6 +418,7 @@ tip.share = Share…
 tip.upload = Upload
 tip.pin_to_screen = Pin to screen
 tip.trim_to_content = Trim to content
+tip.scroll_capture = Scrolling capture
 tip.close = Close
 tip.accept = Accept
 tip.record_video = Record video
@@ -517,6 +528,31 @@ rec.warn.ended = {what} stopped during the recording: {why}
 rec.bar.asking = Asking…
 rec.bar.stop = Stop
 rec.what.microphone = microphone
+rec.marks.unavailable = clicks and keystrokes not shown
+rec.marks.all_keys_warning = All keys can show passwords typed into terminals, remote desktops, games and some apps.
+rec.marks.no_detection_linux = Rustshot can't detect password fields on Linux.
+
+# Trim after recording
+trim.title = Trim recording
+trim.save = Save trimmed
+trim.keep = Keep full length
+trim.selected = Selected {time}
+trim.no_preview = No preview: the recording is trimmed all the same
+trim.loading = Loading…
+trim.hint = Drag the handles · I / O at the playhead · Space plays
+trim.failed = Could not trim the recording
+
+# Scrolling capture
+scroll.running = Scrolling…
+scroll.lost = Scrolling capture stopped: the next part did not match
+scroll.cap = Scrolling capture stopped at its size limit (20 000 px, 400 MB)
+scroll.no_target = Nothing to scroll under the selection
+scroll.unsupported = Scrolling capture is not available here
+scroll.nothing = Nothing scrolled under the selection
+scroll.changed = Scrolling capture stopped: another window came over the selection
+scroll.pointer_left = Scrolling capture stopped: the pointer left the selection
+scroll.elevated = Cannot scroll a window running as administrator
+scroll.save_failed = Could not save the scrolling capture: {error}
 
 # Camera
 cam.blur_unavailable = Blur unavailable — downloads are off
@@ -937,6 +973,7 @@ action.flip_vertical = Flip vertical
 action.image_resize = Resize…
 action.image_canvas = Canvas…
 action.image_reset = Reset image edits
+action.scroll_capture = Scrolling capture
 
 # Exports
 export.copy = Copy

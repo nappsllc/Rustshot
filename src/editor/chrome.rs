@@ -112,7 +112,7 @@ pub fn act_icon(a: Act) -> &'static str {
         Act::CopyAll | Act::TextCopy => "copy",
         Act::RedactKind(_) => "",
         // A menu row (the size label's): no icon.
-        Act::Trim => "",
+        Act::Trim | Act::Scroll => "",
         Act::ObjFront => "front",
         Act::ObjBack => "back",
         Act::ObjDup => "dup",
@@ -1274,6 +1274,7 @@ pub fn act_tip(a: Act, km: &Keymap) -> (&'static str, Vec<String>) {
         Act::Upload => tr!("tip.upload"),
         Act::Pin => tr!("tip.pin_to_screen"),
         Act::Trim => tr!("tip.trim_to_content"),
+        Act::Scroll => tr!("tip.scroll_capture"),
         Act::Exit => tr!("tip.close"),
         Act::Accept => tr!("tip.accept"),
         Act::Record => tr!("tip.record_video"),

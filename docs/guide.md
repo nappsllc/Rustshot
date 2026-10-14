@@ -101,6 +101,25 @@ selection back. *Trim margins automatically* (Settings › Capture,
 `trim_margins = true`) trims every new region or window as you select it
 (not a click that selects the whole screen).
 
+**Scrolling capture** (<kbd>Shift</kbd>+<kbd>S</kbd>, or *Scrolling
+capture* in the `W × H` readout's menu) takes a page longer than the
+screen: select the part of a window that scrolls, and Rustshot closes the
+overlay, scrolls that window step by step (it waits for smooth scrolling to
+settle after each), grabs the selection each time and stitches the frames
+by finding how far the content moved. Rows that stay put at the top and
+bottom (a sticky header, a footer, a toolbar) come once, and a small
+animation in the page does not throw it off. A pill beside the selection
+shows the height so far; **Stop** or <kbd>Esc</kbd> ends it, and it ends
+by itself at the bottom of the page, at 20 000 px, or when the next part no
+longer matches (said in a toast; what was stitched is kept). The picture
+opens in the Edit window (with History off it is saved where a capture
+would be). Only the window under the selection is scrolled: on Windows
+with wheel messages to it (or UI Automation's scroll pattern when those
+do nothing), on X11 with wheel presses while the pointer is over it (it is
+moved there once; moving it away stops the run, and it goes back at the
+end). Not on Wayland, where an app cannot scroll
+another's window, nor on macOS yet.
+
 ## Annotating
 
 The tools: select (<kbd>V</kbd>), pencil (<kbd>P</kbd>), line
@@ -602,9 +621,48 @@ Per platform:
   AVAssetWriter and AVCaptureSession. This code has not been run on a Mac
   yet.
 
-Limitations: one recording at a time; no editing or trimming; MJPG-only
-cameras are not supported; a selection spanning two
-screens on Wayland records the whole shared screen.
+### Clicks and keystrokes
+
+Settings › Recording › **Show clicks & keys**: **Clicks** draws a ring
+that pulses where you press a mouse button (yellow for the left, blue for
+the right); **Keystrokes** shows the last shortcuts in a pill at the bottom
+centre ("Ctrl + Shift + S", repeats as "×2"), which fades 1.5 s after the
+last one. Both are drawn into the video's frames only, never on the
+screen. By default only chords with <kbd>Ctrl</kbd>, <kbd>Alt</kbd> or
+<kbd>Win</kbd> show, so what you type does not; **All keys** shows every
+key, except (Windows) while a password field has, or may have, the focus
+(after each focus change keys are hidden until Windows says what has it).
+All keys can still show passwords typed into terminals, remote desktops,
+games and some apps, and Linux has no password detection: Settings and
+the start of a recording say so. Nothing shows while the recording is
+paused or the lock screen is up, and AltGr characters (@, €, ą) are never
+shown as Ctrl + Alt chords. Rustshot
+listens to the input only while the recording runs and keeps nothing (see
+[PRIVACY.md](../PRIVACY.md)). Windows and X11; on Wayland no app sees
+another's input, and macOS needs the Input Monitoring permission.
+
+### Trim after recording
+
+Settings › Recording › **Trim after recording: Ask** opens a window after
+Stop: the preview, a timeline of thumbnails with the start and end handles
+(drag them, or <kbd>I</kbd> / <kbd>O</kbd> at the playhead), **Play**
+(<kbd>Space</kbd>; it plays the selection once), <kbd>←</kbd> / <kbd>→</kbd>
+a frame (<kbd>Shift</kbd>: a second). **Save trimmed** (<kbd>Enter</kbd>)
+replaces the recording with the cut, **Keep full length** (<kbd>Esc</kbd>,
+or closing the window) keeps it as it is; the notice, the history and an
+automatic upload come after. An MP4 is cut without re-encoding: the
+samples from the key frame before the start are copied and the file's
+edit list starts and ends it exactly. Windows' own player ignores edit
+lists, so on Windows the frames from the start to the next key frame are
+encoded again with the same encoder and the rest is copied (when that
+encoder's settings cannot be matched, the edit-list cut is used, and that
+player then starts at the key frame). A GIF is cut by frames. The window
+needs a decoder for its pictures: Media Foundation on Windows, `ffmpeg` on
+Linux (without it, it trims without pictures). Not on macOS yet.
+
+Limitations: one recording at a time; MJPG-only cameras are not
+supported; a selection spanning two screens on Wayland records the whole
+shared screen.
 
 ## Uploads
 

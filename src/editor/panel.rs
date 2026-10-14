@@ -741,7 +741,7 @@ mod tests {
     #[test]
     fn panel_text_fits_in_long_languages() {
         use super::super::chrome::{tw, Ui};
-        for lang in crate::ui::preview::LANGS {
+        for lang in crate::ui::preview::langs() {
             crate::i18n::with_lang(lang, || {
                 let ui = Ui { th: &crate::theme::DARK, s: 1.0, font: Some(crate::fonts::ui_font()) };
                 for (fmt, cam) in [(RecFormat::Mp4, false), (RecFormat::Mp4, true), (RecFormat::Gif, false)] {

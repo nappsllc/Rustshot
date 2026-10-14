@@ -13,6 +13,7 @@ pub mod bar;
 pub mod border;
 pub mod countdown;
 pub mod meter;
+pub mod trim;
 #[cfg(windows)]
 mod win;
 #[cfg(windows)]

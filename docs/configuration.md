@@ -157,6 +157,10 @@ rec_camera_ring_color = ""        # "" = the accent, or "#rrggbb"
 rec_camera_ring_width = 2         # 0 (no ring) to 16
 rec_camera_bg = "off"             # the bubble's background: "off", "light" or "strong" (blurred)
 rec_linux_encoder = "auto"        # Linux MP4: "auto", "ffmpeg" or "openh264"
+rec_show_clicks = false           # a ring where you click, drawn into the video
+rec_show_keys = false             # the last shortcuts at the bottom ("Ctrl + S")
+rec_show_all_keys = false         # with rec_show_keys: every key (never in a password field, Windows)
+rec_trim = "off"                  # after Stop: "off" (save at once) or "ask" (the trim window)
 ```
 
 Global hotkey defaults apply to a new `config.toml`; a file that already
@@ -212,7 +216,7 @@ The action ids:
 |---|---|
 | Tools | `tool_select`, `tool_pencil`, `tool_line`, `tool_arrow`, `tool_rectangle`, `tool_circle`, `tool_marker`, `tool_text`, `tool_callout`, `tool_counter`, `tool_pixelate`, `tool_invert`, `tool_spotlight`, `tool_magnify`, `tool_blur`, `tool_ruler`, `tool_crop`, `size_down`, `size_up` |
 | Output | `copy`, `copy_text`, `read_qr`, `redact`, `copy_color`, `save`, `save_as`, `save_desktop`, `open_with`, `share`, `upload`, `pin` |
-| Selection | `trim` (Trim to content, <kbd>Shift</kbd>+<kbd>A</kbd>), `select_freeform` |
+| Selection | `trim` (Trim to content, <kbd>Shift</kbd>+<kbd>A</kbd>), `select_freeform`, `scroll_capture` (Scrolling capture, <kbd>Shift</kbd>+<kbd>S</kbd>) |
 | Editing | `undo`, `redo`, `select_all`, `toggle_palette`, `accept`, `cancel`, `record` |
 | UI size | `ui_bigger`, `ui_smaller`, `ui_reset` |
 | Selected objects | `delete_object`, `duplicate`, `bring_front`, `send_back` |

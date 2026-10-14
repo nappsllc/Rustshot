@@ -1210,7 +1210,7 @@ mod tests {
     /// their words, so a long one must still leave room at the sides.
     #[test]
     fn notices_fit_in_long_languages() {
-        for lang in crate::ui::preview::LANGS {
+        for lang in crate::ui::preview::langs() {
             crate::i18n::with_lang(lang, || {
                 let notes = [
                     compose(&[Done::Copied], false),

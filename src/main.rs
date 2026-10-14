@@ -72,6 +72,8 @@ mod rec_upload;
 mod screenclip_win;
 // S3-compatible uploads (Amazon S3, Cloudflare R2): SigV4 by hand.
 mod s3;
+// Scrolling capture: scroll the window under a region and stitch it.
+mod scroll;
 mod settings_ui;
 mod scale;
 mod sha256;

@@ -726,7 +726,7 @@ mod tests {
     /// pseudo-languages, at 1x and 1.5x (previews per language).
     #[test]
     fn fits_in_long_languages() {
-        for lang in preview::LANGS {
+        for lang in preview::langs() {
             crate::i18n::with_lang(lang, || {
                 for k in [1.0f32, 1.5] {
                     for (name, m) in screens() {
