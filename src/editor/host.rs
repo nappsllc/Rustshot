@@ -1403,6 +1403,28 @@ impl Canvas {
         let t = self.e.toolbar.as_ref()?;
         t.items.iter().find(|i| matches!(i.kind, toolbar::Kind::Btn(a) if chrome::act_icon(a) == icon)).map(|i| i.r)
     }
+
+    /// Open Save's menu (as its chevron does).
+    pub fn open_save_menu_for_tests(&mut self) {
+        self.e.save_menu = true;
+    }
+
+    /// The rows of the docked toolbar's open menu (window px).
+    pub fn bar_menu_rows(&self) -> Vec<FRect> {
+        let Some(t) = self.e.toolbar.as_ref() else { return Vec::new() };
+        t.items.iter().filter(|i| matches!(i.kind, toolbar::Kind::MenuItem { .. })).map(|i| i.r).collect()
+    }
+
+    /// The docked toolbar's buttons: (icon, rect in window px).
+    pub fn bar_buttons(&self) -> Vec<(&'static str, FRect)> {
+        let Some(t) = self.e.toolbar.as_ref() else { return Vec::new() };
+        (t.items.iter())
+            .filter_map(|i| match i.kind {
+                toolbar::Kind::Btn(a) => Some((chrome::act_icon(a), i.r)),
+                _ => None,
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]

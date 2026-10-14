@@ -627,8 +627,16 @@ pub fn layout(inp: &Input) -> Toolbar {
 fn docked_groups(inp: &Input) -> [Group; 4] {
     let [mut tools, history, size, _] = groups(inp);
     tools.push((Kind::Btn(Act::Crop), false, BTN));
-    let out = [Act::Save, Act::SaveAs, Act::SaveDesktop, Act::Copy, Act::Upload].into_iter().map(|a| (Kind::Btn(a), false, BTN)).collect();
-    [tools, history, size, out]
+    let btn = |a: Act| (Kind::Btn(a), false, BTN);
+    let out: Group = [Act::Save, Act::SaveAs, Act::SaveDesktop, Act::Copy, Act::Upload].into_iter().map(btn).collect();
+    let mut gs = [tools, history, size, out];
+    // A window too narrow for them all (the Edit window at its smallest):
+    // Save As and Save to Desktop go into Save's menu (its chevron),
+    // as the overlay's.
+    if row_w(&gs) + 2.0 * DOCK_PAD > inp.area.w / inp.s.max(0.01) + 0.5 {
+        gs[3] = vec![btn(Act::Save), (Kind::Btn(Act::SaveMenu), false, SAVE_MENU_W), btn(Act::Copy), btn(Act::Upload)];
+    }
+    gs
 }
 
 /// The width the docked toolbar's buttons take (logical px).

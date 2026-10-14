@@ -924,6 +924,60 @@ fn fits_in_long_languages() {
     }
 }
 
+/// The docked toolbar fits the window at its smallest, in every language
+/// and at every scale: each button inside the window and clear of the
+/// zoom control (Save As and Save to Desktop in Save's menu then, its
+/// rows inside too); a wide window keeps them as buttons.
+#[test]
+fn toolbar_fits_at_the_minimum_width() {
+    let (mw, mh) = MIN;
+    for lang in crate::ui::preview::langs() {
+        crate::i18n::with_lang(lang, || {
+            for k in [1.0f32, 1.25, 1.5, 2.0] {
+                let (pw, ph) = ((mw as f32 * k).round() as u32, (mh as f32 * k).round() as u32);
+                let (_r, mut w) = window(&format!("bar-fit-{lang}-{k}"), page(1180, 760), objects(), DARK, k);
+                w.event(Ev::Resize(pw, ph));
+                w.render();
+                let at = format!("{lang} {k}x");
+                let buttons = w.e.canvas.bar_buttons();
+                assert!(buttons.len() >= 20, "{at}: the toolbar is there ({})", buttons.len());
+                let lay = draw::layout(&w.e, mw as f32, mh as f32, w.e.canvas.bar_width());
+                let mut zoom = crate::ui::paint::px(lay.zoom.r, k);
+                if crate::i18n::is_rtl() {
+                    zoom.x = pw as f32 - zoom.x1();
+                }
+                for (icon, r) in &buttons {
+                    assert!(r.x >= -0.5 && r.x1() <= pw as f32 + 0.5, "{at}: {icon} at {r:?} past the window's edge ({pw})");
+                    let apart = r.x1() <= zoom.x + 0.5 || r.x >= zoom.x1() - 0.5 || r.y1() <= zoom.y + 0.5 || r.y >= zoom.y1() - 0.5;
+                    assert!(apart, "{at}: {icon} at {r:?} under the zoom control at {zoom:?}");
+                }
+                for a in ["save", "copy", "cloud"] {
+                    assert!(buttons.iter().any(|(i, _)| *i == a), "{at}: {a}");
+                }
+                let menu = w.e.canvas.button("chevron");
+                let as_buttons = w.e.canvas.button("save-as").is_some() && w.e.canvas.button("save-desktop").is_some();
+                assert!(menu.is_some() || as_buttons, "{at}: Save As and Save to Desktop are somewhere");
+                // Save's menu opens inside the window.
+                if menu.is_some() {
+                    w.e.canvas.open_save_menu_for_tests();
+                    w.render();
+                    let rows = w.e.canvas.bar_menu_rows();
+                    assert!(rows.len() >= 3, "{at}: the save menu's rows ({})", rows.len());
+                    for r in rows {
+                        assert!(r.x >= -0.5 && r.x1() <= pw as f32 + 0.5 && r.y1() <= ph as f32 + 0.5, "{at}: a save menu row at {r:?}");
+                    }
+                }
+            }
+        });
+    }
+    // Wide: every save button on the bar, no menu.
+    let (_r, mut w) = window("bar-wide", page(1180, 760), objects(), DARK, 1.0);
+    w.event(Ev::Resize(1440, 900));
+    w.render();
+    assert!(w.e.canvas.button("save-as").is_some() && w.e.canvas.button("save-desktop").is_some());
+    assert!(w.e.canvas.button("chevron").is_none());
+}
+
 /// The Microsoft Store screenshot (docs/store/screenshots): the Edit
 /// window at 125 % with the Canvas dialog on Presentation (gradient,
 /// padding, rounded corners and a shadow) and its preview.
