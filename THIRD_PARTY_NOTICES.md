@@ -1,6 +1,6 @@
 # Third-party notices
 
-Rustshot is GPL-3.0-only (see LICENSE). It embeds the following works.
+Rustshot is Apache-2.0 (see LICENSE and NOTICE). It embeds the following works.
 
 ## Lucide icons — ISC License
 
@@ -63,7 +63,7 @@ full license text follows at the end of this file.
 
 ## Rust crates (statically linked or build-time)
 
-All are GPL-3.0-compatible (Apache-2.0, MIT, Zlib, 0BSD, Unicode-3.0, IJG).
+All are Apache-2.0-compatible (Apache-2.0, MIT, Zlib, 0BSD, Unicode-3.0, IJG).
 Full texts: https://www.apache.org/licenses/LICENSE-2.0,
 https://opensource.org/license/mit, https://zlib.net/zlib_license.html.
 

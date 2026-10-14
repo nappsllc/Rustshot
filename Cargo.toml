@@ -2,7 +2,7 @@
 name = "rustshot"
 version = "0.5.1"
 edition = "2024"
-license = "GPL-3.0-only"
+license = "Apache-2.0"
 description = "Tiny yet powerful, beautiful, open-source and cross-platform tool for screenshots, editing and video capture"
 
 [dependencies]

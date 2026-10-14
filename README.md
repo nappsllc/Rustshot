@@ -11,7 +11,7 @@
 [![tests](https://img.shields.io/badge/tests-1500%2B-brightgreen?style=flat-square)](https://github.com/nappsllc/rustshot/actions/workflows/ci.yml)
 [![coverage](https://img.shields.io/codecov/c/github/nappsllc/rustshot?style=flat-square&logo=codecov&logoColor=white)](https://codecov.io/gh/nappsllc/rustshot)
 [![languages](https://img.shields.io/badge/languages-35-blueviolet?style=flat-square)](i18n/languages.md)
-[![license](https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square)](LICENSE)
+[![license](https://img.shields.io/badge/license-Apache--2.0-blue?style=flat-square)](LICENSE)
 [![Buy me a coffee](https://raw.githubusercontent.com/pachadotdev/buymeacoffee-badges/main/bmc-yellow.svg)](https://buymeacoffee.com/denis.platonov)
 
 **Tiny yet powerful, beautiful, open-source and cross-platform tool for
@@ -451,7 +451,8 @@ mixed-DPI setups.
 
 ## License
 
-Rustshot is free software under the **GNU General Public License v3.0
-only** ([LICENSE](LICENSE)). It bundles the Inter font (SIL OFL 1.1) and
+Rustshot is licensed under the **Apache License 2.0** ([LICENSE](LICENSE),
+[NOTICE](NOTICE)). It bundles the Inter font (SIL OFL 1.1) and
 Lucide icons (ISC), and downloads Google's MediaPipe selfie segmentation
 model (Apache-2.0) on demand; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Releases up to and including 0.5.1 remain under GPL-3.0-only.
