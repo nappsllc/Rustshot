@@ -78,6 +78,9 @@ pub fn stand_in_cell(sigma: f32) -> f32 {
 pub const MAX_OBJECTS: usize = 10_000;
 pub const MAX_POINTS: usize = 100_000;
 pub const MAX_TEXT: usize = 100_000;
+/// A pointer's picture: its side (px) and its base64 PNG (bytes).
+pub const MAX_CURSOR_SIDE: u32 = 256;
+const MAX_CURSOR_B64: usize = 400_000;
 
 fn num(out: &mut String, v: f32) {
     let v = if v.is_finite() { v } else { 0.0 };
@@ -465,6 +468,7 @@ pub fn to_json_full(objs: &[Obj], crop: Option<FRect>, edits: &crate::imgedit::E
             Obj::Spotlight { .. } => "spotlight",
             Obj::Magnify { .. } => "magnify",
             Obj::Blur { .. } => "blur",
+            Obj::Cursor { .. } => "cursor",
         };
         out.push_str("{\"type\":");
         string(&mut out, ty);
@@ -535,6 +539,11 @@ pub fn to_json_full(objs: &[Obj], crop: Option<FRect>, edits: &crate::imgedit::E
                 w.num("zoom", *zoom);
                 w.color("color", *color);
                 w.num("width", *width);
+            }
+            Obj::Cursor { at, img } => {
+                w.pt("at", *at);
+                let png = img.to_png().unwrap_or_default();
+                w.str("png", &crate::uploads::b64_encode(&png));
             }
         }
         out.push('}');
@@ -941,6 +950,16 @@ fn objects_of(top: &[(String, V)]) -> Result<Vec<Obj>> {
                 color: f.color("color")?,
                 width: f.num("width")?,
             },
+            "cursor" => {
+                let png = f.str("png")?;
+                let img = (png.len() <= MAX_CURSOR_B64)
+                    .then(|| crate::uploads::b64_decode(png))
+                    .flatten()
+                    .and_then(|b| crate::pixbuf::PixBuf::from_png(&b).ok())
+                    .filter(|i| i.width() <= MAX_CURSOR_SIDE && i.height() <= MAX_CURSOR_SIDE)
+                    .ok_or_else(|| anyhow!("annotations.json: cursor: not a small PNG"))?;
+                Obj::Cursor { at: f.pt("at")?, img: std::sync::Arc::new(img) }
+            }
             _ => continue,
         };
         let mut o = o;

@@ -1355,6 +1355,12 @@ pub fn view_obj(o: &Obj, v: &View) -> Obj {
         Obj::Magnify { src, dst, radius, zoom, color, width } => {
             Obj::Magnify { src: p(src), dst: p(dst), radius: radius * z, zoom: *zoom, color: *color, width: width * z }
         }
+        // The pointer's picture at the zoom (it is small: resampled each time).
+        Obj::Cursor { at, img } => {
+            let (w, h) = (((img.width() as f32 * z).round() as u32).max(1), ((img.height() as f32 * z).round() as u32).max(1));
+            let img = if (w, h) == img.dimensions() { img.clone() } else { std::sync::Arc::new(crate::imgedit::resample::resize(img, w, h, crate::imgedit::Filter::Area)) };
+            Obj::Cursor { at: p(at), img }
+        }
     }
 }
 

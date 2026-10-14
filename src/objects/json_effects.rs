@@ -207,6 +207,27 @@ mod tests {
         }
     }
 
+    /// The pointer object round-trips (its picture as a PNG); older
+    /// builds skip the kind (it hides nothing); a big or broken picture
+    /// fails closed.
+    #[test]
+    fn the_pointer_round_trips_and_older_builds_skip_it() {
+        use crate::objects::{Obj, Pt};
+        let mut img = crate::pixbuf::PixBuf::new(3, 4);
+        img.as_raw_mut()[..8].copy_from_slice(&[1, 2, 3, 255, 9, 8, 7, 100]);
+        let c = Obj::Cursor { at: Pt::new(10.0, 20.5), img: std::sync::Arc::new(img) };
+        let line = Obj::Line { a: Pt::new(0.0, 0.0), b: Pt::new(5.0, 5.0), color: C4::rgb(1, 2, 3), width: 2.0 };
+        let s = to_json_full(&[line.clone(), c.clone()], None, &Edits::default(), (100, 100));
+        assert_eq!(from_json_doc(&s).unwrap().objects, vec![line.clone(), c]);
+        assert_eq!(crate::objects::v020::json::from_json(&s).unwrap().len(), 1, "v0.2.0: the line only");
+        assert_eq!(crate::objects::v030::json::from_json(&s).unwrap(), vec![line]);
+        let bad = "{\"version\":1,\"objects\":[{\"type\":\"cursor\",\"at\":[0,0],\"png\":\"bm90IGEgcG5n\"}]}";
+        assert!(from_json_doc(bad).is_err());
+        let big = crate::pixbuf::PixBuf::new(300, 2).to_png().unwrap();
+        let doc = format!("{{\"version\":1,\"objects\":[{{\"type\":\"cursor\",\"at\":[0,0],\"png\":\"{}\"}}]}}", crate::uploads::b64_encode(&big));
+        assert!(from_json_doc(&doc).is_err(), "past 256 px");
+    }
+
     /// Older builds read the document (v0.3's reader and v0.2's ignore the key).
     #[test]
     fn older_builds_ignore_effects() {

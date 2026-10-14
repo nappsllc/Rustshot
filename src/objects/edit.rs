@@ -84,6 +84,7 @@ pub fn sanitize(o: &mut Obj) {
             *zoom = if zoom.is_finite() { zoom.clamp(1.0, 8.0) } else { 2.0 };
             *width = if width.is_finite() { width.clamp(1.0, 20.0) } else { 3.0 };
         }
+        Obj::Cursor { at, .. } => cp(at),
     }
     if let Some(v) = size(o) {
         let (lo, hi) = size_range(o);
@@ -147,6 +148,7 @@ pub fn sel_box(o: &Obj, font: Option<&AnnotFont>) -> Option<FRect> {
         }
         Obj::Counter { c, d, .. } => Some(FRect { x: c.x - d / 2.0, y: c.y - d / 2.0, w: *d, h: *d }),
         Obj::Magnify { dst, radius, .. } => Some(FRect { x: dst.x - radius, y: dst.y - radius, w: 2.0 * radius, h: 2.0 * radius }),
+        Obj::Cursor { at, img } => Some(FRect { x: at.x, y: at.y, w: img.width() as f32, h: img.height() as f32 }),
     }
 }
 
@@ -191,13 +193,14 @@ pub fn hit(o: &Obj, p: Pt, tol: f32, font: Option<&AnnotFont>) -> bool {
         Obj::Magnify { src, dst, radius, zoom, .. } => {
             (p.x - dst.x).hypot(p.y - dst.y) <= radius + tol || (p.x - src.x).hypot(p.y - src.y) <= radius / zoom.max(1.0) + tol
         }
+        Obj::Cursor { .. } => sel_box(o, font).is_some_and(|b| inside(b, p, tol)),
     }
 }
 
 /// Which box handles `o` gets alone.
 pub fn boxes(o: &Obj) -> Boxes {
     match o {
-        Obj::Line { .. } | Obj::Arrow { .. } | Obj::Marker { .. } | Obj::Magnify { .. } => Boxes::None,
+        Obj::Line { .. } | Obj::Arrow { .. } | Obj::Marker { .. } | Obj::Magnify { .. } | Obj::Cursor { .. } => Boxes::None,
         Obj::Text { .. } | Obj::Counter { .. } => Boxes::Corners,
         _ => Boxes::All,
     }
@@ -267,6 +270,7 @@ pub fn translate(o: &mut Obj, dx: f32, dy: f32) {
             mv(src, dx, dy);
             mv(dst, dx, dy);
         }
+        Obj::Cursor { at, .. } => mv(at, dx, dy),
     }
 }
 
@@ -321,6 +325,8 @@ pub fn map_box(o: &mut Obj, from: FRect, to: FRect) {
             m(dst);
             *radius = (*radius * k).clamp(20.0, 300.0);
         }
+        // The pointer moves with the group; its picture keeps its size.
+        Obj::Cursor { at, .. } => m(at),
     }
 }
 
@@ -340,7 +346,7 @@ pub fn color(o: &Obj) -> Option<C4> {
         | Obj::Counter { color, .. }
         | Obj::Callout { color, .. }
         | Obj::Magnify { color, .. } => Some(*color),
-        Obj::Pixelate { .. } | Obj::Invert { .. } | Obj::Spotlight { .. } | Obj::Blur { .. } => None,
+        Obj::Pixelate { .. } | Obj::Invert { .. } | Obj::Spotlight { .. } | Obj::Blur { .. } | Obj::Cursor { .. } => None,
     }
 }
 
@@ -359,7 +365,7 @@ pub fn set_color(o: &mut Obj, c: C4) {
         | Obj::Counter { color, .. }
         | Obj::Callout { color, .. }
         | Obj::Magnify { color, .. } => *color = c,
-        Obj::Pixelate { .. } | Obj::Invert { .. } | Obj::Spotlight { .. } | Obj::Blur { .. } => {}
+        Obj::Pixelate { .. } | Obj::Invert { .. } | Obj::Spotlight { .. } | Obj::Blur { .. } | Obj::Cursor { .. } => {}
     }
 }
 
@@ -381,7 +387,7 @@ pub fn size(o: &Obj) -> Option<f32> {
         Obj::Pixelate { cell, .. } => Some(*cell),
         Obj::Blur { sigma, .. } => Some(*sigma),
         Obj::Magnify { radius, .. } => Some(*radius),
-        Obj::Invert { .. } | Obj::Spotlight { .. } => None,
+        Obj::Invert { .. } | Obj::Spotlight { .. } | Obj::Cursor { .. } => None,
     }
 }
 
@@ -401,7 +407,7 @@ pub fn set_size(o: &mut Obj, v: f32) {
         Obj::Pixelate { cell, .. } => *cell = v,
         Obj::Blur { sigma, .. } => *sigma = v,
         Obj::Magnify { radius, .. } => *radius = v,
-        Obj::Invert { .. } | Obj::Spotlight { .. } => {}
+        Obj::Invert { .. } | Obj::Spotlight { .. } | Obj::Cursor { .. } => {}
     }
 }
 

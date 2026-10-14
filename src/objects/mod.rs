@@ -341,6 +341,15 @@ pub enum Obj {
         r: FRect,
         sigma: f32,
     },
+    /// The mouse pointer captured with the screen (Settings › Capture
+    /// "Include mouse pointer"): its picture (straight-alpha RGBA,
+    /// capture px) with its top-left at `at`. Moved and deleted like
+    /// the others, never resized; drawn as it was (no color, no size).
+    /// Older builds skip the kind (it hides nothing).
+    Cursor {
+        at: Pt,
+        img: std::sync::Arc<PixBuf>,
+    },
 }
 
 /// `r` grown by `m` on every side.
@@ -599,6 +608,7 @@ impl Obj {
                 let m = size + 2.0;
                 Some(FRect { x: pos.x - m, y: pos.y - m, w: w + 2.0 * m, h: h + 2.0 * m })
             }
+            Obj::Cursor { at, img } => Some(FRect { x: at.x.floor() - 1.0, y: at.y.floor() - 1.0, w: img.width() as f32 + 2.0, h: img.height() as f32 + 2.0 }),
         }
     }
 
@@ -706,6 +716,7 @@ impl Obj {
             // The dim is the spotlight pass over the finished image.
             Obj::Spotlight { .. } => {}
             Obj::Magnify { src, dst, radius, zoom, color, width } => magnify(sf, None, *src, *dst, *radius, *zoom, *color, *width),
+            Obj::Cursor { at, img } => cursor(sf, *at, img),
         }
     }
 
@@ -740,6 +751,19 @@ impl Obj {
         match self {
             Obj::Magnify { src, dst, radius, zoom, color, width } => magnify(sf, Some(source), *src, *dst, *radius, *zoom, *color, *width),
             o => o.render_into(sf, font),
+        }
+    }
+}
+
+/// The pointer's picture with its top-left at `at` (whole pixels).
+fn cursor(sf: &mut Surf, at: Pt, img: &PixBuf) {
+    let (x0, y0) = (at.x.round() as i32, at.y.round() as i32);
+    let w = img.width() as usize;
+    for (y, row) in img.as_raw().chunks_exact(w.max(1) * 4).enumerate() {
+        for (x, p) in row.as_chunks::<4>().0.iter().enumerate() {
+            if p[3] != 0 {
+                sf.blend_px(x0 + x as i32, y0 + y as i32, C4::new(p[0], p[1], p[2], p[3]), 1.0, Blend::Normal);
+            }
         }
     }
 }

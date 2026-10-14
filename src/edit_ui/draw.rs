@@ -217,6 +217,7 @@ pub fn obj_icon(o: &Obj) -> &'static str {
         Obj::Spotlight { .. } => "spotlight",
         Obj::Magnify { .. } => "magnify",
         Obj::Blur { .. } => "blur",
+        Obj::Cursor { .. } => "select",
     }
 }
 

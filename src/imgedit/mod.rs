@@ -155,6 +155,11 @@ impl Orient {
                 *src = p(*src);
                 *dst = p(*dst);
             }
+            // The pointer stays upright, its box where the picture turned it.
+            Obj::Cursor { at, img } => {
+                let b = self.upright(FRect { x: at.x, y: at.y, w: img.width() as f32, h: img.height() as f32 }, size);
+                *at = Pt::new(b.x, b.y);
+            }
         }
         o
     }

@@ -1429,7 +1429,16 @@ impl App {
         };
         let sel = initial_sel.filter(|r| !r.is_trivial());
         let accept_now = accept_on_select && sel.is_some();
+        // Settings › Capture "Include mouse pointer": an object over the
+        // capture, there from the start (an undo never takes it away).
+        let pointer = if cfg.include_cursor { crate::pointer::object(shot.origin) } else { None };
         let mut edit = Edit::new(shot, base, cfg, th, self.font.clone(), self.ui_font, rec);
+        if let Some(p) = pointer {
+            edit.objects.push(p);
+            edit.hist = vec![edit.objects.clone()];
+            edit.hi = 0;
+            edit.dirty = true;
+        }
         edit.gdi = gdi;
         edit.sel = sel;
         edit.tasks = tasks;
@@ -3298,7 +3307,7 @@ impl Edit {
             Some(Obj::Path { pts, .. }) => pts.len() >= 2,
             // A highlighter stroke reaches 2 px from where it began.
             Some(Obj::MarkerPath { pts, .. }) => pts.iter().any(|p| (p.x - pts[0].x).hypot(p.y - pts[0].y) >= 2.0),
-            Some(Obj::Text { .. }) | Some(Obj::Counter { .. }) => true,
+            Some(Obj::Text { .. }) | Some(Obj::Counter { .. }) | Some(Obj::Cursor { .. }) => true,
         }
     }
 
@@ -4010,6 +4019,8 @@ mod snip_tests;
 mod trim_tests;
 #[cfg(test)]
 mod ruler_tests;
+#[cfg(test)]
+mod pointer_qr_tests;
 
 #[cfg(test)]
 mod tests {
