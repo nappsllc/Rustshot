@@ -104,10 +104,63 @@ fn error_of(body: &str) -> Option<String> {
     json_str(body, "message", Some("error")).or_else(|| json_str(body, "error", None))
 }
 
+/// The start of an upload error Imgur gave for the client ID rather than
+/// for the picture (a rate limit, an unknown or blocked ID, over
+/// capacity): the notices then say so and offer Settings › Upload (see
+/// [`refused_reason`]).
+pub const REFUSED: &str = "imgur refused: ";
+
+/// The reply's numeric `"status": 429`.
+fn json_status(body: &str) -> Option<u32> {
+    body.match_indices("\"status\"").find_map(|(i, k)| {
+        let rest = body[i + k.len()..].trim_start().strip_prefix(':')?.trim_start();
+        let n: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        n.parse().ok()
+    })
+}
+
+/// Why Imgur refused an upload for its client ID, if it did: HTTP 429,
+/// 403 or 401 (`status`, else the reply's own `status`), or an error
+/// saying the client is invalid or Imgur is over capacity. Other
+/// failures (a bad file, a timeout) are None.
+pub fn refusal(status: Option<u32>, body: &str) -> Option<String> {
+    let status = status.filter(|s| *s != 0).or_else(|| json_status(body));
+    let why = error_of(body).filter(|e| !e.trim().is_empty());
+    if let Some(s @ (401 | 403 | 429)) = status {
+        return Some(why.unwrap_or_else(|| format!("HTTP {s}")));
+    }
+    let e = why?;
+    let l = e.to_ascii_lowercase();
+    let client = l.contains("client") && (l.contains("invalid") || l.contains("unauthori") || l.contains("not found"));
+    (client || l.contains("capacity") || l.contains("rate limit") || l.contains("too many requests")).then_some(e)
+}
+
+/// [`refusal`] as an upload error: [`REFUSED`], then the reason.
+pub fn refused_error(status: Option<u32>, body: &str) -> Option<String> {
+    refusal(status, body).map(|r| format!("{REFUSED}{r}"))
+}
+
+/// The reason in an upload error made by [`refused_error`].
+pub fn refused_reason(e: &str) -> Option<&str> {
+    e.strip_prefix(REFUSED)
+}
+
+/// The transport GET's `Err("HTTP <code>")`, as [`refused_error`] for a
+/// refusal's code.
+fn refused_get(e: String) -> String {
+    match e.strip_prefix("HTTP ").and_then(|c| c.trim().parse::<u32>().ok()) {
+        Some(c) => refused_error(Some(c), "").unwrap_or(e),
+        None => e,
+    }
+}
+
 /// Parse an upload or image response (`status` the HTTP status).
 pub fn parse_reply(status: u32, body: &str) -> Result<Reply, String> {
     let failed = body.contains("\"success\":false") || body.contains("\"success\": false") || !(200..300).contains(&status);
     if failed {
+        if let Some(e) = refused_error(Some(status).filter(|s| !(200..300).contains(s)), body) {
+            return Err(e);
+        }
         let why = error_of(body).unwrap_or_else(|| format!("HTTP {status}"));
         return Err(why);
     }
@@ -143,7 +196,7 @@ pub fn upload_video(data: &[u8], name: &str, client_id: &str, seed: u64, http: &
         }
         (http.sleep)(POLL_EVERY);
         waited += POLL_EVERY;
-        let text = (http.get)(HOST, &format!("/3/image/{}", r.id), &[("Authorization", &auth)])?;
+        let text = (http.get)(HOST, &format!("/3/image/{}", r.id), &[("Authorization", &auth)]).map_err(refused_get)?;
         r = parse_reply(200, &text)?;
     }
     if r.link != first {
@@ -199,7 +252,8 @@ mod tests {
         assert_eq!(parse_reply(400, bad), Err("File type invalid (1)".into()));
         let nested = r#"{"data":{"error":{"code":1003,"message":"File is over the size limit","type":"ImgurException"}},"success":false,"status":400}"#;
         assert_eq!(parse_reply(400, nested), Err("File is over the size limit".into()));
-        assert_eq!(parse_reply(429, "Too Many Requests"), Err("HTTP 429".into()));
+        assert_eq!(parse_reply(429, "Too Many Requests"), Err(format!("{REFUSED}HTTP 429")));
+        assert_eq!(parse_reply(500, "oops"), Err("HTTP 500".into()));
         assert_eq!(parse_reply(200, &ok.replace("pending", "failed")), Err("Imgur could not process the video".into()));
     }
 
@@ -250,6 +304,50 @@ mod tests {
         let http = Http { post: &never, get: &get, sleep: &sleep };
         let big = vec![0u8; MAX_VIDEO_BYTES as usize + 1];
         assert!(upload_video(&big, "a.mp4", "c", 0, &http).unwrap_err().contains("200 MB"));
+    }
+
+    /// Refusals for the client ID (429, 403, 401; Imgur's "over capacity"
+    /// and invalid-client errors, by status or by the reply alone) are
+    /// told apart from other failures.
+    #[test]
+    fn client_refusals_are_marked() {
+        let limit = r#"{"data":{"error":"Too Many Requests","request":"\/3\/image","method":"POST"},"success":false,"status":429}"#;
+        assert_eq!(refusal(Some(429), limit), Some("Too Many Requests".into()));
+        assert_eq!(refusal(None, limit), Some("Too Many Requests".into()), "curl: the reply's own status");
+        assert_eq!(refusal(Some(403), ""), Some("HTTP 403".into()));
+        assert_eq!(refusal(Some(401), "<html>"), Some("HTTP 401".into()));
+        let cap = r#"{"data":{"error":"Imgur is temporarily over capacity. Please try again later."},"success":false,"status":500}"#;
+        assert_eq!(refusal(Some(500), cap), Some("Imgur is temporarily over capacity. Please try again later.".into()));
+        let bad_id = r#"{"data":{"error":"Invalid client_id","request":"\/3\/image"},"success":false,"status":400}"#;
+        assert_eq!(refusal(None, bad_id), Some("Invalid client_id".into()));
+        let nested = r#"{"data":{"error":{"code":1003,"message":"File is over the size limit","type":"ImgurException"}},"success":false,"status":400}"#;
+        assert_eq!(refusal(Some(400), nested), None);
+        assert_eq!(refusal(Some(500), "oops"), None);
+        assert_eq!(refusal(None, r#"{"data":{"id":"a","processing":{"status":"pending"}},"status":200}"#), None);
+        assert_eq!(refused_error(Some(429), ""), Some(format!("{REFUSED}HTTP 429")));
+        assert_eq!(refused_reason(&format!("{REFUSED}Invalid client_id")), Some("Invalid client_id"));
+        assert_eq!(refused_reason("HTTP 500"), None);
+        assert_eq!(parse_reply(403, bad_id), Err(format!("{REFUSED}Invalid client_id")));
+        assert_eq!(parse_reply(200, &bad_id.replace("Invalid client_id", "File type invalid (1)")), Err("File type invalid (1)".into()));
+    }
+
+    /// A video refused at the upload, or while its transcode is polled.
+    #[test]
+    fn refused_videos_say_so() {
+        let post = |_: &str, _: &str, _: &[(&str, &str)], _: &[u8]| -> Result<(u32, String), String> { Ok((429, "Too Many Requests".into())) };
+        let get = |_: &str, _: &str, _: &[(&str, &str)]| -> Result<String, String> { panic!("no poll after an error") };
+        let sleep = |_: Duration| {};
+        let http = Http { post: &post, get: &get, sleep: &sleep };
+        assert_eq!(upload_video(b"x", "a.mp4", "c", 0, &http), Err(format!("{REFUSED}HTTP 429")));
+        let post = |_: &str, _: &str, _: &[(&str, &str)], _: &[u8]| {
+            Ok((200, r#"{"data":{"id":"s","link":"https://i.imgur.com/s.mp4","processing":{"status":"pending"}},"success":true}"#.to_string()))
+        };
+        let get = |_: &str, _: &str, _: &[(&str, &str)]| -> Result<String, String> { Err("HTTP 403".into()) };
+        let http = Http { post: &post, get: &get, sleep: &sleep };
+        assert_eq!(upload_video(b"x", "a.mp4", "c", 0, &http), Err(format!("{REFUSED}HTTP 403")));
+        let get = |_: &str, _: &str, _: &[(&str, &str)]| -> Result<String, String> { Err("HTTP 502".into()) };
+        let http = Http { post: &post, get: &get, sleep: &sleep };
+        assert_eq!(upload_video(b"x", "a.mp4", "c", 0, &http), Err("HTTP 502".into()));
     }
 
     /// A transcode that never ends: the link after `POLL_FOR`.

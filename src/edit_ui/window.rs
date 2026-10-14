@@ -22,6 +22,9 @@ struct Done {
     kind: ToastKind,
     uploaded: Option<String>,
     saved: Option<(Vec<crate::objects::Obj>, super::Saved)>,
+    /// Shown in the notice window instead of the toast, where there is
+    /// one (Imgur's refusal, with Open Upload settings).
+    note: Option<crate::notice::Note>,
 }
 
 pub struct Window {
@@ -327,7 +330,7 @@ impl Window {
             crate::busy::spawn(move || {
                 let res = crate::ocr::recognize(&img);
                 let note = crate::ocr::finish(&res);
-                let _ = tx.send(Done { text: note.text, kind: note.kind, uploaded: None, saved: None });
+                let _ = tx.send(Done { text: note.text, kind: note.kind, uploaded: None, saved: None, note: None });
             });
             return;
         }
@@ -345,7 +348,7 @@ impl Window {
                     Ok(()) => String::new(),
                     Err(e) => e,
                 };
-                let _ = tx.send(Done { text, kind: ToastKind::Error, uploaded: None, saved: None });
+                let _ = tx.send(Done { text, kind: ToastKind::Error, uploaded: None, saved: None, note: None });
             });
             return;
         }
@@ -631,7 +634,10 @@ impl Window {
                 self.e.entry.meta.uploaded = Some(u);
                 crate::history::changed();
             }
-            if !d.text.is_empty() {
+            let shown = d.note.is_some_and(|n| crate::notice::show_at_pointer(n, *self.e.canvas.theme()));
+            if shown {
+                self.e.toast = None;
+            } else if !d.text.is_empty() {
                 self.e.note(d.text, d.kind);
             }
             changed = true;
@@ -672,15 +678,18 @@ fn export_done(res: crate::export::ExportResult, saves: bool, store: &crate::his
         let bytes = std::fs::metadata(&p).map_or(0, |m| m.len());
         let recorded = super::record_save(store, id, &doc, &p, bytes);
         let s = super::Saved { path: p, bytes, recorded };
-        return Done { text: s.note(), kind: if recorded { ToastKind::Success } else { ToastKind::Info }, uploaded: None, saved: Some((objs, s)) };
+        return Done { text: s.note(), kind: if recorded { ToastKind::Success } else { ToastKind::Info }, uploaded: None, saved: Some((objs, s)), note: None };
     }
-    let plain = |text: String, kind| Done { text, kind, uploaded: None, saved: None };
+    let plain = |text: String, kind| Done { text, kind, uploaded: None, saved: None, note: None };
     match res.upload.map(|rx| rx.recv()) {
         Some(Ok(Ok(url))) => {
             let copied = cfg.copy_url_after_upload && crate::export::copy_text_to_clipboard(&url).is_ok();
             Done { uploaded: Some(url), ..plain(if copied { tr!("editor.uploaded_copied").into() } else { tr!("editor.uploaded").into() }, ToastKind::Success) }
         }
-        Some(Ok(Err(e))) => plain(tr!("editor.upload_failed", e), ToastKind::Error),
+        Some(Ok(Err(e))) => match crate::notice::refused_text(&e) {
+            Some(text) => Done { note: Some(crate::notice::upload_failed_note(&e)), ..plain(text, ToastKind::Error) },
+            None => plain(tr!("editor.upload_failed", e), ToastKind::Error),
+        },
         Some(Err(_)) => plain(tr!("history.upload_failed").into(), ToastKind::Error),
         None => match crate::notice::compose(&res.done, false) {
             Some(n) => plain(n.text, n.kind),

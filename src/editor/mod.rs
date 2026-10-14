@@ -2051,7 +2051,7 @@ impl App {
             }
             Err(e) => {
                 eprintln!("error: upload failed: {e}");
-                (tr!("editor.upload_failed", e), ToastKind::Error, false)
+                (crate::notice::refused_text(e).unwrap_or_else(|| tr!("editor.upload_failed", e)), ToastKind::Error, false)
             }
         };
         if matches!(self.st, State::Edit(_)) || self.one_shot() {

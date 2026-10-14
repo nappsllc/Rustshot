@@ -3,6 +3,11 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use crate::uisize::UiSize;
 
+/// The built-in Imgur client ID (`upload_client_id`'s default): shared
+/// with other installs, so it can hit Imgur's limits (Settings › Upload
+/// says so and links to registering one's own).
+pub const BUILTIN_IMGUR_CLIENT_ID: &str = "313baf0c7b4d3ff";
+
 /// Settings, mirroring Flameshot's key names where they apply.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
@@ -436,7 +441,7 @@ impl Default for Config {
             .iter()
             .map(|s| s.to_string())
             .collect(),
-            upload_client_id: "313baf0c7b4d3ff".into(),
+            upload_client_id: BUILTIN_IMGUR_CLIENT_ID.into(),
             copy_url_after_upload: true,
             upload_destination: "imgur".into(),
             s3_endpoint: String::new(),

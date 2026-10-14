@@ -207,6 +207,25 @@ pub fn screenclip_line(ui: &mut Ui, tok: &Tok, text: &str, tone: crate::screencl
     clicked
 }
 
+/// A one-line note under a row's control, right-aligned like
+/// [`note_line`], that ends in off-site link `label` (Upload's "Get a
+/// key"). Returns whether the link was clicked.
+pub fn note_link_line(ui: &mut Ui, tok: &Tok, id: &str, text: &str, label: &str) -> bool {
+    let b = ui.bounds();
+    let y = ui.cursor_y();
+    let (gap, lw) = (6.0, (ui.text_w(11.0, label) + 19.0).ceil());
+    let fit = ui.fit_text(11.0, text, (b.w - lw - gap).max(40.0));
+    let tw = ui.text_w(11.0, &fit).ceil();
+    let (tx, cy) = (ui.px(b.x1() - lw - gap - tw), ui.px(y + 7.0));
+    ui.text_at(11.0, &fit, tx, cy, tok.tx2, false);
+    let saved = ui.ctl_h;
+    ui.ctl_h = 14.0;
+    let clicked = ui.place(FRect { x: b.x1() - lw, y, w: lw, h: 14.0 }).clink(id, label, 11.0, true, tok);
+    ui.ctl_h = saved;
+    ui.space(18.0 + 2.0);
+    clicked
+}
+
 
 /// A section heading indented `x` (Key bindings: 8).
 fn sec_at(ui: &mut Ui, tok: &Tok, s: &str, x: f32) {
@@ -315,7 +334,7 @@ fn body(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) {
             HISTORY => history(ui, s, tok, click),
             RECORDING => recording::section(ui, s, tok),
             CAMERA => recording::camera(ui, s, tok),
-            UPLOAD => super::upload::section(ui, s, tok),
+            UPLOAD => super::upload::section(ui, s, tok, click),
             S3_STORAGE => super::upload::s3_section(ui, s, tok, click),
             KEYS_GLOBAL => keys_global(ui, s, tok),
             KEYS_RECORDING => keys_recording(ui, s, tok),

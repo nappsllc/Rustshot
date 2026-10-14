@@ -926,7 +926,10 @@ pub fn wait_upload(rx: Receiver<Result<String, String>>, copy_url: bool) -> Opti
             Some(url)
         }
         Ok(Err(e)) => {
-            eprintln!("error: upload failed: {e}");
+            match crate::notice::refused_text(&e) {
+                Some(t) => eprintln!("error: {t}"),
+                None => eprintln!("error: upload failed: {e}"),
+            }
             None
         }
         Err(_) => {
@@ -1340,11 +1343,11 @@ mod tests {
     fn live_imgur_upload() {
         let img = PixBuf::from_pixel(1, 1, [1, 2, 3, 255]);
         let png = png_bytes(&img).unwrap();
-        match do_upload(&png, "313baf0c7b4d3ff") {
+        match do_upload(&png, crate::config::BUILTIN_IMGUR_CLIENT_ID) {
             Ok(link) => assert!(link.starts_with("https://i.imgur.com/"), "{link}"),
             // Transport verified either way; 429 means imgur rate-limits the
             // shared anonymous client-id, not that the request failed.
-            Err(e) if e.contains("\"code\":\"429\"") => {}
+            Err(e) if e.contains("\"code\":\"429\"") || crate::imgur::refused_reason(&e).is_some() => {}
             Err(e) => panic!("upload failed: {e}"),
         }
     }

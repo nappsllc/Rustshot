@@ -372,9 +372,16 @@ pub fn s3_summary(f: &UpForm) -> String {
     }
 }
 
+/// The Imgur client ID field holds the shared built-in one: Upload says
+/// so under it, with "Get a key". (An empty field turns Imgur uploads
+/// off rather than using it.)
+pub fn builtin_key(client_id: &str) -> bool {
+    client_id.trim() == crate::config::BUILTIN_IMGUR_CLIENT_ID
+}
+
 /// Settings › Upload: where uploads go and what follows them; an S3
 /// bucket's own settings are in [`s3_section`].
-pub fn section(ui: &mut Ui, s: &mut super::Settings, tok: &Tok) {
+pub fn section(ui: &mut Ui, s: &mut super::Settings, tok: &Tok, click: &mut Option<Click>) {
     let mut open_s3 = false;
     let f = &mut s.form.up;
     ui.sec(tr!("settings.upload.destination"), tok);
@@ -386,6 +393,9 @@ pub fn section(ui: &mut Ui, s: &mut super::Settings, tok: &Tok) {
         srow(ui, tok, tr!("settings.upload.imgur_client_id"), Some(tr!("settings.upload.imgur_client_id.help")), |ui| {
             ui.width(FIELD_W).text_field("upload_client_id", &mut f.client_id);
         });
+        if builtin_key(&f.client_id.text) && super::draw::note_link_line(ui, tok, "imgur_get_key", tr!("settings.upload.builtin_key"), tr!("settings.upload.get_key")) {
+            *click = Some(Click::Link(crate::actions::IMGUR_ADD_CLIENT));
+        }
     } else {
         let summary = s3_summary(f);
         srow(ui, tok, tr!("settings.upload.s3_storage"), Some(&summary), |ui| {

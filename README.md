@@ -490,6 +490,8 @@ From the v0.5.1 release notes:
 - **Linux OCR:** needs `tesseract` (for example `apt install
   tesseract-ocr`).
 - **Unsigned builds:** see the note under [Install](#install).
+- **Imgur:** Imgur uploads use a shared client ID by default; add your own
+  in Settings › Upload if they're refused.
 
 The [platform notes](docs/guide.md#platform-notes) cover Wayland and
 mixed-DPI setups.

@@ -359,6 +359,11 @@ pub fn do_upload(png: &[u8], client_id: &str) -> Result<String, String> {
         ));
     }
     let text = String::from_utf8_lossy(&out.stdout);
+    // A rate limit or a refused client ID (the reply's own status): the
+    // notices offer Settings.
+    if let Some(e) = crate::imgur::refused_error(None, &text) {
+        return Err(e);
+    }
     crate::uploads::note_reply(&text, crate::uploads::UpKind::Image);
     extract_json_string(&text, "link").ok_or_else(|| format!("no link in response: {}", crate::uploads::redact(&text)))
 }
