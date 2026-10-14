@@ -243,13 +243,17 @@ fn upload_winhttp(png: &[u8], client_id: &str) -> Result<String, String> {
     let headers = format!(
         "Authorization: Client-ID {client_id}\r\nContent-Type: application/octet-stream"
     );
-    let (_status, text) = winhttp(
+    let (status, text) = winhttp(
         "POST",
         "api.imgur.com",
         "/3/image?title=rustshot&description=rustshot%20capture",
         &headers,
         png,
     )?;
+    // A rate limit or a refused client ID: the notices offer Settings.
+    if let Some(e) = crate::imgur::refused_error(Some(status), &text) {
+        return Err(e);
+    }
     crate::uploads::note_reply(&text, crate::uploads::UpKind::Image);
     extract_json_string(&text, "link").ok_or_else(|| format!("no link in response: {}", crate::uploads::redact(&text)))
 }

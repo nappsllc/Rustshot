@@ -494,14 +494,17 @@ pub struct Done {
     pub text: String,
     pub kind: crate::editor::style::ToastKind,
     pub changed: bool,
+    /// Shown in the notice window instead of the toast, where there is
+    /// one (Imgur's refusal, with Open Upload settings).
+    pub note: Option<Box<crate::notice::Note>>,
 }
 
 fn ok(text: impl Into<String>) -> Done {
-    Done { text: text.into(), kind: crate::editor::style::ToastKind::Success, changed: false }
+    Done { text: text.into(), kind: crate::editor::style::ToastKind::Success, changed: false, note: None }
 }
 
 fn fail(text: impl Into<String>) -> Done {
-    Done { text: text.into(), kind: crate::editor::style::ToastKind::Error, changed: false }
+    Done { text: text.into(), kind: crate::editor::style::ToastKind::Error, changed: false, note: None }
 }
 
 pub(super) fn ok_done() -> Done {
@@ -569,12 +572,15 @@ pub fn run_export(store: &Store, id: &str, task: crate::export::Task, cfg: &Conf
                 let _ = crate::uploads::finished_in(store, id, &url);
                 Done { changed: true, ..ok(if copied { tr!("editor.uploaded_copied") } else { tr!("editor.uploaded") }) }
             }
-            Ok(Err(err)) => fail(tr!("editor.upload_failed", e = err)),
+            Ok(Err(err)) => match crate::notice::refused_text(&err) {
+                Some(text) => Done { note: Some(Box::new(crate::notice::upload_failed_note(&err))), ..fail(text) },
+                None => fail(tr!("editor.upload_failed", e = err)),
+            },
             Err(_) => fail(tr!("history.upload_failed")),
         };
     }
     match crate::notice::compose(&res.done, false) {
-        Some(n) => Done { text: n.text, kind: n.kind, changed },
+        Some(n) => Done { text: n.text, kind: n.kind, changed, note: None },
         None => Done { text: String::new(), ..ok("") },
     }
 }
@@ -622,7 +628,7 @@ pub fn delete_upload(store: &Store, id: &str, client_id: &str, http: crate::uplo
     let (Some(link), Some(info)) = (e.meta.uploaded.clone(), e.meta.upload.clone()) else { return fail(tr!("history.no_upload")) };
     let rec = crate::uploads::Record { link, info, entry: Some(id.to_string()) };
     let (text, kind) = crate::uploads::delete_record(store, &rec, client_id, http, s3);
-    Done { text, kind, changed: true }
+    Done { text, kind, changed: true, note: None }
 }
 
 /// Save every capture of `ids` as a PNG into `dir` (named by when they

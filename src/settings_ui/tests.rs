@@ -1877,6 +1877,12 @@ fn preview_settings_pngs() {
             let th2 = s.preview_theme();
             let (img, _) = render(&mut s, &th2, k, &Input::default(), &mut FocusState::default());
             preview::save(&png("overlay-teal-reset", tname, k), &img);
+            // Upload › Imgur with the shared built-in key: its line and
+            // "Get a key".
+            let mut s = sample();
+            s.section = UPLOAD;
+            let (img, _) = render(&mut s, th, k, &Input::default(), &mut FocusState::default());
+            preview::save(&png("upload-imgur", tname, k), &img);
             // Upload › S3-compatible, filled in, a secret stored and the
             // test failed; then one being typed.
             let mut s = sample();
@@ -2434,6 +2440,64 @@ fn about_links() {
         assert_eq!(click(&mut s, &mut focus, &format!("link_{i}"), 1.0), Some(Click::Link(url)), "{}", label.get());
     }
     assert_eq!(click(&mut s, &mut focus, "link_powernapps", 1.0), Some(Click::Link(crate::actions::POWERNAPPS)));
+}
+
+/// Upload: with the shared built-in Imgur key, a line under the field
+/// says so and "Get a key" opens Imgur's app registration (one of the
+/// links `open_link` allows); with a key of one's own, or S3, no line.
+#[test]
+fn upload_get_a_key_link() {
+    let mut s = sample();
+    s.section = UPLOAD;
+    assert!(upload::builtin_key(&s.form.up.client_id.text), "the default is the built-in key");
+    let mut focus = FocusState::default();
+    assert_eq!(click(&mut s, &mut focus, "imgur_get_key", 1.0), Some(Click::Link(crate::actions::IMGUR_ADD_CLIENT)));
+    assert_eq!(s.on(Click::Link(crate::actions::IMGUR_ADD_CLIENT)), vec![Act::Link(crate::actions::IMGUR_ADD_CLIENT)]);
+    assert!(crate::actions::LINKS.iter().any(|(k, u)| *u == "https://api.imgur.com/oauth2/addclient" && k.get() == "Get a key"));
+    // The link sits under the field, inside the body.
+    let field = focus.rect_of("upload_client_id").expect("the field");
+    let link = focus.rect_of("imgur_get_key").expect("the link");
+    assert!(link.y >= field.y1() && link.x1() <= field.x1() + 0.5, "{field:?} {link:?}");
+    s.form.up.client_id.set(" abc123 ");
+    assert!(!upload::builtin_key(&s.form.up.client_id.text));
+    let mut focus = FocusState::default();
+    render(&mut s, &DARK, 1.0, &Input::default(), &mut focus);
+    assert!(focus.rect_of("imgur_get_key").is_none(), "an own key: no line");
+    s.form.up.client_id.set(crate::config::BUILTIN_IMGUR_CLIENT_ID);
+    s.form.up.dest = upload::S3;
+    let mut focus = FocusState::default();
+    render(&mut s, &DARK, 1.0, &Input::default(), &mut focus);
+    assert!(focus.rect_of("imgur_get_key").is_none(), "S3: no Imgur line");
+}
+
+/// The built-in key's line is one line in English and the
+/// `RUSTSHOT_FIT_LANGS` catalogs: its text is never cut short with "…"
+/// next to "Get a key". (The 40 %-longer pseudo-languages cut it; the
+/// layout still fits, `every_section_fits`.)
+#[test]
+fn upload_builtin_key_line_fits() {
+    let mut cut = Vec::new();
+    for lang in crate::ui::preview::langs().into_iter().filter(|l| !l.starts_with("qps")) {
+        crate::i18n::with_lang(lang, || {
+            let mut s = sample();
+            s.section = UPLOAD;
+            for k in [1.0f32, 2.0] {
+                let mut focus = FocusState::default();
+                render(&mut s, &DARK, k, &Input::default(), &mut focus);
+                let field = focus.rect_of("upload_client_id").expect("the field");
+                let link = focus.rect_of("imgur_get_key").expect("the link");
+                assert!(link.y >= field.y1(), "{lang}");
+                let body_w = viewport().w - 2.0 * super::draw::PAD_X;
+                // As the kit measures it (`Ui::text_w`).
+                let text_w = crate::uifb::text_width(&crate::fonts::UI, 11.0 * crate::ui::compact::CSS * k, tr!("settings.upload.builtin_key")) / k;
+                let over = text_w + 6.0 + link.w / k - body_w;
+                if over > 0.0 {
+                    cut.push(format!("{lang} at {k}: {over:.0} px over"));
+                }
+            }
+        });
+    }
+    assert!(cut.is_empty(), "{cut:#?}");
 }
 
 /// Smoke (needs a display; CI runs it under `xvfb-run` on Linux): the real

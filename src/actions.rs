@@ -68,14 +68,20 @@ pub fn toggle_autostart() -> Result<bool, String> {
 /// parameters, so they can change without an app update.
 pub const POWERNAPPS: &str = "https://powernapps.net/r/rustshot";
 
-/// The links of Settings → About: the only URLs [`open_link`] opens.
-pub const LINKS: [(crate::i18n::Key, &str); 6] = [
+/// Imgur's page for registering an app (a client ID of one's own):
+/// Settings › Upload's "Get a key".
+pub const IMGUR_ADD_CLIENT: &str = "https://api.imgur.com/oauth2/addclient";
+
+/// The links of Settings → About (the first five), PowerNapps' and
+/// Settings › Upload's "Get a key": the only URLs [`open_link`] opens.
+pub const LINKS: [(crate::i18n::Key, &str); 7] = [
     (key!("settings.about.link.website"), POWERNAPPS),
     (key!("settings.about.link.source"), "https://github.com/nappsllc/rustshot"),
     (key!("settings.about.link.issue"), "https://github.com/nappsllc/rustshot/issues"),
     (key!("settings.about.link.whats_new"), "https://github.com/nappsllc/rustshot/releases"),
     (key!("settings.about.link.licenses"), "https://github.com/nappsllc/rustshot/blob/main/THIRD_PARTY_NOTICES.md"),
     (key!("settings.about.link.powernapps"), POWERNAPPS),
+    (key!("settings.upload.get_key"), IMGUR_ADD_CLIENT),
 ];
 
 /// Open one of [`LINKS`] in the default browser; any other URL is refused.

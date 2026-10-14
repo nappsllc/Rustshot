@@ -591,7 +591,10 @@ impl Window {
         }
         while let Ok(d) = self.done.1.try_recv() {
             self.busy = self.busy.saturating_sub(1);
-            if !d.text.is_empty() {
+            let shown = d.note.is_some_and(|n| crate::notice::show_at_pointer(*n, crate::theme::resolve(&self.h.cfg)));
+            if shown {
+                self.h.toast = None;
+            } else if !d.text.is_empty() {
                 self.h.note(d.text, d.kind);
             }
             if d.changed {

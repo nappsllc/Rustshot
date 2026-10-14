@@ -69,6 +69,8 @@ pub enum NoteAct {
     /// it shows ([`crate::qr_ui`]).
     QrCopy,
     QrOpen,
+    /// Imgur refused an upload for its client ID: Settings › Upload.
+    UploadSettings,
 }
 
 impl NoteAct {
@@ -88,6 +90,7 @@ impl NoteAct {
             NoteAct::UseEnglish => tr!("notice.act.use_english"),
             NoteAct::QrCopy => tr!("notice.act.qr_copy"),
             NoteAct::QrOpen => tr!("notice.act.qr_open"),
+            NoteAct::UploadSettings => tr!("notice.act.upload_settings"),
         }
     }
 
@@ -104,7 +107,7 @@ impl NoteAct {
 
     /// The first button is the accent one.
     fn primary(self) -> bool {
-        matches!(self, NoteAct::CopyLink | NoteAct::Copy | NoteAct::Edit | NoteAct::DeleteUpload | NoteAct::QrCopy)
+        matches!(self, NoteAct::CopyLink | NoteAct::Copy | NoteAct::Edit | NoteAct::DeleteUpload | NoteAct::QrCopy | NoteAct::UploadSettings)
     }
 }
 
@@ -268,8 +271,35 @@ pub fn upload_note(res: &Result<String, String>, copied: bool) -> Note {
             let head = if copied { tr!("history.link_copied") } else { tr!("editor.uploaded") };
             Note::new(tr!("notice.upload_done", head, link = short), ToastKind::Success)
         }
-        Err(e) => Note::new(tr!("editor.upload_failed", e = reason(e)), ToastKind::Error),
+        Err(e) => upload_failed_note(e),
     }
+}
+
+/// A refused Imgur upload's note stays this long (it reads longer).
+pub const REFUSED_TTL: Duration = Duration::from_secs(10);
+
+/// What a failed upload says: Imgur's refusal for the client ID (see
+/// [`crate::imgur::REFUSED`]) with what to do about it, else "Upload
+/// failed: <reason>".
+pub fn upload_failed_text(e: &str) -> String {
+    refused_text(e).unwrap_or_else(|| tr!("editor.upload_failed", e = reason(e)))
+}
+
+/// Imgur's refusal for the client ID, with what to do about it; None for
+/// any other upload error.
+pub fn refused_text(e: &str) -> Option<String> {
+    crate::imgur::refused_reason(e).map(|r| tr!("notice.imgur_refused", reason = reason(r)))
+}
+
+/// [`upload_failed_text`] as a note; a refusal's has Open Upload
+/// settings.
+pub fn upload_failed_note(e: &str) -> Note {
+    let mut n = Note::new(upload_failed_text(e), ToastKind::Error);
+    if crate::imgur::refused_reason(e).is_some() {
+        n.actions = vec![NoteAct::UploadSettings, NoteAct::Dismiss];
+        n.ttl = REFUSED_TTL;
+    }
+    n
 }
 
 /// Room around the panel for its shadow (logical px): sides, top (also
@@ -293,7 +323,15 @@ pub struct ActLayout {
     pub panel: FRect,
     pub text_x: f32,
     pub buttons: Vec<(NoteAct, FRect)>,
+    /// The text's lines: one, unless it is wider than [`TEXT_MAX`]
+    /// (Imgur's refusal reads in a few).
+    pub lines: Vec<String>,
 }
+
+/// A note with buttons wraps text wider than this (logical px), so a long
+/// one still fits a small monitor; its lines are [`LINE_H`] apart.
+const TEXT_MAX: f32 = 560.0;
+const LINE_H: f32 = 16.0;
 
 /// Board metrics (logical px): the panel 36 high, padding 10 left and 6
 /// right, the icon 16 and 8 to the text, buttons 24 high 8 apart with 10
@@ -316,17 +354,24 @@ pub fn act_layout(note: &Note, s: f32) -> ActLayout {
     let px = |v: f32| v * s;
     let (x0, y0) = (px(SIDE), px(TOP));
     let text_x = x0 + px(10.0 + 16.0 + 8.0);
-    let mut x = text_x + text_w(s, 12.0, &note.text);
+    let measure = |t: &str| text_w(s, 12.0, t);
+    let lines = if measure(&note.text) > px(TEXT_MAX) {
+        crate::settings_ui::draw::wrap_at_breaks(&note.text, px(TEXT_MAX), measure)
+    } else {
+        vec![note.text.clone()]
+    };
+    let h = ACT_H + LINE_H * lines.len().saturating_sub(1) as f32;
+    let mut x = text_x + lines.iter().map(|l| measure(l)).fold(0.0, f32::max);
     let mut buttons = Vec::new();
     for a in &note.actions {
         x += px(8.0);
         let w = (text_w(s, BTN_TEXT, a.label()) + px(2.0 * BTN_PAD)).ceil();
-        buttons.push((*a, FRect { x: x.round(), y: (y0 + px(ACT_H - BTN_H) / 2.0).round(), w, h: px(BTN_H).round() }));
+        buttons.push((*a, FRect { x: x.round(), y: (y0 + px(h - BTN_H) / 2.0).round(), w, h: px(BTN_H).round() }));
         x += w;
     }
-    let panel = FRect { x: x0, y: y0, w: (x + px(6.0) - x0).ceil(), h: px(ACT_H).round() };
+    let panel = FRect { x: x0, y: y0, w: (x + px(6.0) - x0).ceil(), h: px(h).round() };
     let size = ((panel.x1() + px(SIDE)).ceil() as u32, (panel.y1() + px(BOTTOM)).ceil() as u32);
-    ActLayout { size, panel, text_x, buttons }
+    ActLayout { size, panel, text_x, buttons, lines }
 }
 
 /// The button of `l` under `p` (window px).
@@ -360,7 +405,11 @@ fn draw_actions(f: &mut crate::uifb::Fb, ui: &Ui, note: &Note, l: &ActLayout, ho
     let isz = 16.0 * s;
     crate::icon_path::draw_icon(f, icon, panel.x + 10.0 * s, cy - isz / 2.0, isz, color.fade(k));
     let tpx = 12.0 * s;
-    f.draw_text(font, tpx, &note.text, l.text_x, cy - crate::uifb::text_height(font, tpx) / 2.0, th.text.fade(k));
+    let top = cy - LINE_H * s * l.lines.len().saturating_sub(1) as f32 / 2.0;
+    for (i, line) in l.lines.iter().enumerate() {
+        let ly = top + LINE_H * s * i as f32;
+        f.draw_text(font, tpx, line, l.text_x, ly - crate::uifb::text_height(font, tpx) / 2.0, th.text.fade(k));
+    }
     for &(a, r) in &l.buttons {
         let r = mv(r);
         let rad = 6.0 * s;
@@ -427,7 +476,7 @@ pub fn upload_configured(cfg: &crate::config::Config) -> bool {
 pub fn run_action(a: NoteAct, file: &std::path::Path, entry: Option<String>, done: impl FnOnce(Note) + Send + 'static) -> Option<Note> {
     match a {
         // A thumbnail's buttons act on its picture (`run_note_action`).
-        NoteAct::ThumbCopy | NoteAct::ThumbSave | NoteAct::Pin | NoteAct::Edit | NoteAct::Dismiss | NoteAct::Card | NoteAct::CancelDelay | NoteAct::DeleteUpload | NoteAct::KeepUpload | NoteAct::UseEnglish | NoteAct::QrCopy | NoteAct::QrOpen => None,
+        NoteAct::ThumbCopy | NoteAct::ThumbSave | NoteAct::Pin | NoteAct::Edit | NoteAct::Dismiss | NoteAct::Card | NoteAct::CancelDelay | NoteAct::DeleteUpload | NoteAct::KeepUpload | NoteAct::UseEnglish | NoteAct::QrCopy | NoteAct::QrOpen | NoteAct::UploadSettings => None,
         NoteAct::Open => {
             crate::actions::open_path(file);
             None
@@ -725,7 +774,8 @@ pub fn thumb_layout(t: &Thumb, s: f32) -> ThumbLayout {
     }
     buttons.push((NoteAct::Card, card));
     let size = ((card.x1() + px(TH_SIDE)) as u32, (card.y1() + px(TH_BOTTOM)) as u32);
-    let act = ActLayout { size, panel: card, text_x: card.x + px(10.0 + 14.0 + 6.0), buttons };
+    // (The card fits its one line itself.)
+    let act = ActLayout { size, panel: card, text_x: card.x + px(10.0 + 14.0 + 6.0), buttons, lines: Vec::new() };
     ThumbLayout { act, img, pic, pill }
 }
 
@@ -909,6 +959,11 @@ pub fn run_note_action(note: &Note, a: NoteAct, th: Theme, done: impl FnOnce(Not
             use_english();
             Next::Hide
         }
+        NoteAct::UploadSettings => {
+            #[cfg(not(test))]
+            crate::settings_ui::show_at(crate::settings_ui::UPLOAD);
+            Next::Hide
+        }
         NoteAct::Edit => {
             if let Some(id) = note.entry.as_ref().or(note.thumb.as_ref().and_then(|t| t.entry.as_ref())) {
                 crate::edit_ui::open(id);
@@ -987,6 +1042,16 @@ pub fn showing() -> bool {
     return win::showing();
     #[cfg(any(not(windows), test))]
     false
+}
+
+/// [`show`] on the monitor with the pointer (a window's notice: Imgur's
+/// refusal from the History or Edit window).
+pub fn show_at_pointer(note: Note, th: Theme) -> bool {
+    #[cfg(not(test))]
+    let at = crate::capture::cursor_pos();
+    #[cfg(test)]
+    let at = (0, 0);
+    show(note, at, th)
 }
 
 /// Show `note` near global point `at` (the capture's centre), replacing
@@ -1137,6 +1202,31 @@ mod tests {
         let long = upload_note(&Err("x".repeat(500)), true).text;
         assert_eq!(long.chars().count(), "Upload failed: ".len() + REASON_MAX);
         assert!(long.ends_with('\u{2026}'));
+        assert!(n.actions.is_empty(), "other failures: no Settings button");
+    }
+
+    /// Imgur refused the upload for its client ID: says why and what to
+    /// do, with Open Upload settings (which opens Settings › Upload).
+    #[test]
+    fn imgur_refusals_offer_upload_settings() {
+        let n = upload_note(&Err(format!("{}HTTP 429", crate::imgur::REFUSED)), true);
+        assert_eq!(
+            n.text,
+            "Imgur refused the upload (HTTP 429). The built-in Imgur key is shared and can hit limits \u{2014} add your own client ID in Settings \u{203a} Upload, or upload to your own S3/R2 storage."
+        );
+        assert_eq!((n.kind, n.ttl, n.actions.as_slice()), (ToastKind::Error, REFUSED_TTL, &[NoteAct::UploadSettings, NoteAct::Dismiss][..]));
+        assert_eq!(NoteAct::UploadSettings.label(), "Open Upload settings");
+        assert_eq!(run_note_action(&n, NoteAct::UploadSettings, crate::theme::DARK, |_| {}), Next::Hide);
+        assert_eq!(refused_text("HTTP 500"), None);
+        assert_eq!(upload_failed_text("HTTP 500"), "Upload failed: HTTP 500");
+        // From the transport's reply to the note: a refusal, or not.
+        let refused = crate::imgur::refused_error(Some(403), r#"{"data":{"error":"Invalid client_id"},"success":false,"status":403}"#).unwrap();
+        assert!(upload_failed_text(&refused).starts_with("Imgur refused the upload (Invalid client_id)."));
+        // The long text wraps (a few lines, the buttons beside them).
+        let l = act_layout(&n, 1.0);
+        assert!(l.lines.len() >= 2 && l.lines.concat().replace(" ", "") == n.text.replace(" ", ""), "{:?}", l.lines);
+        assert!(l.buttons.iter().all(|(_, r)| r.y >= l.panel.y && r.y1() <= l.panel.y1()));
+        assert_eq!(act_layout(&upload_note(&Err("HTTP 500".into()), true), 1.0).lines.len(), 1);
     }
 
     #[test]
@@ -1191,13 +1281,14 @@ mod tests {
             ("uploading", compose(&[], true)),
             ("link-copied", Some(upload_note(&Ok("https://i.imgur.com/aB3xYz9.png".into()), true))),
             ("upload-failed", Some(upload_note(&Err("WinHttpSendRequest: The operation timed out".into()), true))),
+            ("imgur-refused", Some(upload_note(&Err(format!("{}HTTP 429", crate::imgur::REFUSED)), true))),
             ("save-failed", compose(&[Done::Failed("Save", "access denied (os error 5)".into())], false)),
             ("saved-desktop", compose(&[Done::SavedDesktop(PathBuf::from("/home/me/Desktop/2026-10-11_14-02.png"))], false)),
         ];
         for (tn, th, bg) in [("dark", &crate::theme::DARK, [38u8, 44, 58]), ("light", &crate::theme::LIGHT, [214, 222, 232])] {
             for s in [1.0f32, 2.0] {
                 for (name, note) in &notes {
-                    let (w, h, px) = render(note.as_ref().unwrap(), th, s, 1.0);
+                    let (w, h, px) = render_note(note.as_ref().unwrap(), th, s, 1.0, None);
                     let img = crate::pixbuf::PixBuf::from_raw(w, h, crate::rec_ui::layer_over(&px, bg)).unwrap();
                     std::fs::write(dir.join(format!("{tn}-notice-{name}@{s}x.png")), img.to_png().unwrap()).unwrap();
                 }
@@ -1218,6 +1309,7 @@ mod tests {
                     compose(&[], true),
                     Some(upload_note(&Ok("https://i.imgur.com/aB3xYz9.png".into()), true)),
                     Some(upload_note(&Err("WinHttpSendRequest: The operation timed out".into()), true)),
+                    Some(upload_note(&Err(format!("{}Imgur is temporarily over capacity. Please try again later.", crate::imgur::REFUSED)), true)),
                     compose(&[Done::Failed("Save", "access denied (os error 5)".into())], false),
                     compose(&[Done::SavedDesktop(PathBuf::from("/home/me/Desktop/2026-10-11_14-02.png"))], false),
                     Some(recording_saved(&PathBuf::from("rustshot-2026-10-10-2131.mp4"), Duration::from_secs(42), 1_400_000, &[], true)),
