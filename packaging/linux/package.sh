@@ -22,6 +22,7 @@ cp packaging/linux/io.github.nappsllc.rustshot.desktop "$stage/"
 cp packaging/icons/rustshot-256.png "$stage/io.github.nappsllc.rustshot.png"
 cp LICENSE "$stage/LICENSE"
 cp THIRD_PARTY_NOTICES.md "$stage/"
+cp NOTICE "$stage/NOTICE"
 cat > "$stage/INSTALL.txt" <<EOF
 Rustshot $version (linux x86_64, X11)
 

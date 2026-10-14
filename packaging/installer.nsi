@@ -76,6 +76,7 @@ Section "${PRODUCT_DISPLAY} (required)" SecMain
   File "..\target\release\${PRODUCT_EXE}"
   File "..\LICENSE"
   File "..\THIRD_PARTY_NOTICES.md"
+  File "..\NOTICE"
   WriteUninstaller "$INSTDIR\uninstall.exe"
   WriteRegStr HKCU "Software\${PRODUCT_NAME}" "InstallDir" "$INSTDIR"
   ; Start menu. 0.1.x made "rustshot\rustshot.lnk" (lowercase, no icon);
@@ -192,6 +193,7 @@ Section "-un.Main"
   Delete "$INSTDIR\uninstall.exe"
   Delete "$INSTDIR\LICENSE"
   Delete "$INSTDIR\THIRD_PARTY_NOTICES.md"
+  Delete "$INSTDIR\NOTICE"
   ; In-app update downloads (files only; see update_install::update_dir).
   Delete "$LOCALAPPDATA\${PRODUCT_NAME}\update\*"
   RMDir "$LOCALAPPDATA\${PRODUCT_NAME}\update"

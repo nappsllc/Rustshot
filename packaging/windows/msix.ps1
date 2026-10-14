@@ -31,6 +31,7 @@ New-Item -ItemType Directory -Force "$stage\Assets" | Out-Null
 Copy-Item $exe $stage
 Copy-Item LICENSE "$stage\LICENSE.txt"
 Copy-Item THIRD_PARTY_NOTICES.md $stage
+Copy-Item NOTICE "$stage\NOTICE.txt"
 Copy-Item packaging\icons\msix\*.png "$stage\Assets"
 # The package's languages (what the Store lists): one per lang\<tag>.txt, in
 # the forms Microsoft's "supported languages" table lists for the Store
