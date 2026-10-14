@@ -22,7 +22,7 @@ pub enum Task {
     /// Recognize the text in the selection and copy it (OCR, [`crate::ocr`]):
     /// the editor runs it on a worker thread after the export.
     Text,
-    /// Read the QR codes in the selection ([crate::qr_ui]): the editor
+    /// Read the QR codes in the selection ([`crate::qr_ui`]): the editor
     /// runs it on a worker thread after the export.
     Qr,
     /// Pin the image to the screen where it was captured (the editor opens
@@ -182,7 +182,7 @@ pub fn for_output(img: PixBuf, cfg: &Config, scale: f32, keep_size: bool) -> Pix
     with_watermark(with_border(scaled(img, f), cfg, scale * f), cfg, scale * f)
 }
 
-/// Settings › Saving "Watermark on export" as an effect (None: off, or
+/// Settings › Saving "Watermark on export" as an effect (`None`: off, or
 /// nothing to draw).
 pub fn export_watermark(cfg: &Config) -> Option<crate::imgedit::effects::Watermark> {
     use crate::imgedit::effects::{ANCHORS, Str, Watermark};
@@ -207,8 +207,8 @@ pub fn export_watermark(cfg: &Config) -> Option<crate::imgedit::effects::Waterma
     })
 }
 
-/// img with the export watermark ([xport_watermark]; its margin in
-/// logical px at scale), or itself.
+/// `img` with the export watermark ([`export_watermark`]; its margin in
+/// logical px at `scale`), or itself.
 pub fn with_watermark(img: PixBuf, cfg: &Config, scale: f32) -> PixBuf {
     let Some(w) = export_watermark(cfg) else { return img };
     let e = crate::imgedit::effects::Effects { watermark: Some(w), ..Default::default() };

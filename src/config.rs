@@ -236,9 +236,9 @@ pub struct Config {
     /// with the screen and added as an object (movable, deletable).
     pub include_cursor: bool,
     /// Settings › Saving "Watermark on export": every exported image gets
-    /// the watermark below (text, or a PNG image when watermark_image is
-    /// set), at watermark_anchor (top-left … bottom-right, center) with
-    /// watermark_margin px, watermark_opacity and watermark_size
+    /// the watermark below (text, or a PNG image when `watermark_image` is
+    /// set), at `watermark_anchor` (top-left … bottom-right, center) with
+    /// `watermark_margin` px, `watermark_opacity` and `watermark_size`
     /// (% of the width) in percent, or tiled.
     pub export_watermark: bool,
     pub watermark_text: String,

@@ -21,7 +21,7 @@ pub enum ImgAct {
     FlipH,
     FlipV,
     Canvas,
-    /// Watermark, drop shadow, torn edge, reflection ([super::effects_dlg]).
+    /// Watermark, drop shadow, torn edge, reflection ([`super::effects_dlg`]).
     Effects,
     Reset,
 }

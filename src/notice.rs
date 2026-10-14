@@ -64,7 +64,7 @@ pub enum NoteAct {
     DeleteUpload,
     KeepUpload,
     /// Read QR code's toast: copy the codes' text; open the http(s) link
-    /// it shows ([crate::qr_ui]).
+    /// it shows ([`crate::qr_ui`]).
     QrCopy,
     QrOpen,
 }
