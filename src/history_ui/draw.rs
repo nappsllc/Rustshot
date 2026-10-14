@@ -1169,10 +1169,10 @@ fn paint_row(ui: &mut Ui, h: &mut History, lay: &Lay, it: &ItemLay, e: &Entry, t
     let ty_x = dim_x - 14.0 - 92.0;
     let title = history::title(&e.meta);
     // The name and its Edited tag end before the cloud (or the type),
-    // a gap between: the tag takes at most 40 % of the room, cut first.
+    // a gap between: the tag takes at most half the room, cut first.
     let end = if e.meta.uploaded.is_some() { ty_x - 19.0 - 8.0 } else { ty_x - 14.0 };
     let room = (end - x).max(20.0);
-    let tag = if e.meta.edited { fit_tag(ui, 10.5, tr!("history.edited"), room * 0.4) } else { None };
+    let tag = if e.meta.edited { fit_tag(ui, 10.5, tr!("history.edited"), room * 0.5) } else { None };
     let edited_w = tag.as_ref().map_or(0.0, |s| ui.text_w(10.5, s) + 6.0);
     let name = ui.fit_text(12.5, &title, (room - edited_w).max(20.0));
     highlighted(ui, &name, &it.hl, x, cy, 12.5, t);
