@@ -176,6 +176,11 @@ pub fn px(r: FRect, k: f32) -> FRect {
 }
 
 pub fn fill(f: &mut Fb, r: FRect, radius: f32, c: C4) {
+    // (Tests: an opaque fill hides the text under it.)
+    #[cfg(test)]
+    if c.a == 255 {
+        crate::ui::preview::note_cover(Some(r));
+    }
     f.fill_rounded(r.x as i32, r.y as i32, r.w as i32, r.h as i32, radius, c);
 }
 
@@ -194,6 +199,8 @@ pub fn outer_ring(f: &mut Fb, r: FRect, radius: f32, gap: f32, w: f32, c: C4) {
 /// The boards' raised shadow under `r` (physical px): `layers` of
 /// `theme::SHADOW` (offset y, spread) in the token colors.
 pub fn shadow(f: &mut Fb, t: &WTok, r: FRect, radius: f32, k: f32, layers: &[usize]) {
+    #[cfg(test)]
+    crate::ui::preview::note_cover(Some(r));
     for &i in layers.iter().rev() {
         let (dy, sp) = (crate::theme::SHADOW[i].0 * k, crate::theme::SHADOW[i].1 * k);
         let s = FRect { x: (r.x - sp).round(), y: (r.y + dy - sp).round(), w: (r.w + 2.0 * sp).round(), h: (r.h + 2.0 * sp).round() };

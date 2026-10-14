@@ -609,6 +609,9 @@ pub fn polylines(name: &str) -> Option<Vec<Vec<Pt>>> {
 /// Stroke icon `name` into a `size`×`size` box at (x, y).
 pub fn draw_icon(fb: &mut Fb, name: &str, x: f32, y: f32, size: f32, c: C4) {
     let Some(lines) = polylines(name) else { return };
+    // (Tests: text must not run over an icon.)
+    #[cfg(test)]
+    crate::ui::preview::note_text(&format!("icon {name}"), crate::objects::FRect { x: x + size * 0.1, y: y + size * 0.1, w: size * 0.8, h: size * 0.8 });
     let k = size / 24.0;
     let width = (1.8 * k).max(1.0);
     let mut s = fb.surf();

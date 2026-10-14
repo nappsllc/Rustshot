@@ -427,6 +427,8 @@ impl<'a> Ui<'a> {
         // right, flipped in `finish` (the windows mirror their pointer
         // events: [`rtl_ev`]).
         fb.mirror = crate::i18n::is_rtl();
+        #[cfg(test)]
+        preview::frame_start();
         let mut ui = Ui {
             fb,
             theme,
@@ -702,24 +704,75 @@ pub mod preview {
 
     /// `w`×`h` logical px at scale `k`, window background, one frame of `f`.
     /// What a frame drawn by [`render`] did wrong: text past the window's
-    /// edge, a button label cut with "…" (the fit tests).
+    /// edge, text over other text, a label, help line or placeholder from
+    /// the catalog cut with "…" (the fit tests).
     #[derive(Default)]
     struct Check {
         w: f32,
         problems: Vec<String>,
+        /// This frame's text so far (physical px), less what a surface
+        /// drawn later covers.
+        texts: Vec<(String, FRect)>,
     }
 
     thread_local!(static CHECK: std::cell::RefCell<Option<Check>> = const { std::cell::RefCell::new(None) });
 
-    /// Text `s` was drawn from physical x `x`, `w` wide.
-    pub(crate) fn note_text(s: &str, x: f32, w: f32) {
+    /// A frame starts ([`Ui::new`]): the text of the last one is gone.
+    pub(crate) fn frame_start() {
         CHECK.with(|c| {
-            if let Some(c) = c.borrow_mut().as_mut()
-                && (x < -1.0 || x + w > c.w + 1.0)
-            {
-                c.problems.push(format!("text past the window's edge ({x:.0}..{:.0} of {:.0}): {s:?}", x + w, c.w));
+            if let Some(c) = c.borrow_mut().as_mut() {
+                c.texts.clear();
             }
         });
+    }
+
+    /// Text `s` was drawn in `r` (physical px: its advance and line
+    /// height): past the window's edge, or over text drawn before it in
+    /// this frame (two labels run into each other; the same string drawn
+    /// twice in place is a bold one).
+    pub(crate) fn note_text(s: &str, r: FRect) {
+        CHECK.with(|c| {
+            let mut c = c.borrow_mut();
+            let Some(c) = c.as_mut() else { return };
+            // (Icons: only over text; the editor's toolbar may run past the edge.)
+            if !s.starts_with("icon ") && (r.x < -1.0 || r.x1() > c.w + 1.0) {
+                c.problems.push(format!("text past the window's edge ({:.0}..{:.0} of {:.0}): {s:?}", r.x, r.x1(), c.w));
+            }
+            let words = |s: &str| s.chars().any(|c| c.is_alphanumeric());
+            if words(s) {
+                for (o, q) in &c.texts {
+                    let ow = r.x1().min(q.x1()) - r.x.max(q.x);
+                    let oh = r.y1().min(q.y1()) - r.y.max(q.y);
+                    let same = o == s && (r.x - q.x).abs() < 2.0 && (r.y - q.y).abs() < 1.0;
+                    if ow > 2.0 && oh > r.h.min(q.h) * 0.4 && !same && words(o) {
+                        let p = format!("text over text: {s:?} at {:.0},{:.0} over {o:?} at {:.0},{:.0}", r.x, r.y, q.x, q.y);
+                        if !c.problems.contains(&p) {
+                            c.problems.push(p);
+                        }
+                    }
+                }
+                c.texts.push((s.to_string(), r));
+            }
+        });
+    }
+
+    /// A surface was drawn over `r` (physical px; None: all of the frame,
+    /// a modal's dimming): the text under it is no longer there.
+    pub(crate) fn note_cover(r: Option<FRect>) {
+        CHECK.with(|c| {
+            if let Some(c) = c.borrow_mut().as_mut() {
+                c.texts.retain(|(_, q)| r.is_some_and(|r| q.x1() <= r.x || q.x >= r.x1() || q.y1() <= r.y || q.y >= r.y1()));
+            }
+        });
+    }
+
+    /// `s` (as drawn, not cut) did not fit and was cut with "…": a
+    /// problem when it is a string of the current language's catalog (a
+    /// label, help line or placeholder; not a file name or a title).
+    pub(crate) fn note_fit_cut(s: &str) {
+        if crate::i18n::is_catalog_text(s) {
+            note_cut(s);
+        }
     }
 
     /// A button's label did not fit and was cut.
@@ -756,7 +809,7 @@ pub mod preview {
         CHECK.with(|c| {
             let mut c = c.borrow_mut();
             // A new window: what earlier frames noted is gone.
-            *c = Some(Check { w: pw as f32, problems: Vec::new() });
+            *c = Some(Check { w: pw as f32, ..Check::default() });
         });
     }
 

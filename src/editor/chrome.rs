@@ -68,6 +68,8 @@ pub(super) fn panel(f: &mut Fb, ui: &Ui, r: FRect, radius: f32, layers: &[usize]
 
 /// Shadow layers (SHADOW indices) + surface fill + 1 px inner border.
 pub fn surface(f: &mut Fb, ui: &Ui, r: FRect, radius: f32, layers: &[usize], k: f32) {
+    #[cfg(test)]
+    crate::ui::preview::note_cover(Some(r));
     panel(f, ui, r, radius, layers, ui.th.surface, ui.th.border, k);
 }
 

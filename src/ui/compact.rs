@@ -200,6 +200,8 @@ impl Ui<'_> {
             return s.to_string();
         }
         let ends: Vec<usize> = s.char_indices().map(|(i, _)| i).collect();
+        #[cfg(test)]
+        super::preview::note_fit_cut(s);
         let cut = |n: usize| format!("{}\u{2026}", s[..ends.get(n).copied().unwrap_or(s.len())].trim_end());
         // ends[n] is the end of the first n characters; 0 always "fits".
         let (mut lo, mut hi) = (0usize, ends.len());

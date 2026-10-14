@@ -117,6 +117,13 @@ impl Key {
         if v.is_empty() { table_of(0)[self.0 as usize] } else { v }
     }
 
+    /// The current language has this string itself (English always does):
+    /// not the English one a missing key falls back to.
+    pub fn own(self) -> bool {
+        let lang = current_index();
+        lang == 0 || !table_of(lang)[self.0 as usize].is_empty()
+    }
+
     /// The plural form for `n` in the current language (its `other`, then
     /// English, when it lacks that form).
     #[inline(never)]
@@ -932,6 +939,28 @@ pub fn with_rtl<R>(f: impl FnOnce() -> R) -> R {
     }
     let _back = Back(old);
     f()
+}
+
+/// Whether `s` is a whole string of the current language's catalog (its
+/// own or the English one a missing key falls back to; every plural
+/// form): the fit tests' cut labels, help lines and placeholders.
+#[cfg(test)]
+pub fn is_catalog_text(s: &str) -> bool {
+    thread_local!(static SETS: std::cell::RefCell<std::collections::HashMap<usize, std::collections::HashSet<&'static str>>> = Default::default());
+    let lang = current_index();
+    SETS.with(|m| {
+        let mut m = m.borrow_mut();
+        let set = m.entry(lang).or_insert_with(|| {
+            let mut set = std::collections::HashSet::new();
+            for i in 0..names().len() {
+                let v = table_of(lang)[i];
+                let v = if v.is_empty() { table_of(0)[i] } else { v };
+                set.extend(v.split('\u{1f}').filter(|f| !f.is_empty()));
+            }
+            set
+        });
+        set.contains(s)
+    })
 }
 
 /// Run `f` with this thread in language `code`, then switch back.

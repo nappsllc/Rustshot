@@ -16,7 +16,20 @@ pub const RAIL_W: f32 = 200.0;
 pub const RAIL_MIN: f32 = 44.0;
 pub(super) const RAIL_HEAD: f32 = 36.0;
 const ROW_H: f32 = 32.0;
-pub(super) const NOTE_H: f32 = 52.0;
+/// The list's note: two lines' height at least.
+const NOTE_H: f32 = 52.0;
+
+/// The list's note in lines (its width in the expanded list).
+fn note_lines() -> Vec<String> {
+    let note = tr!("edit.objects_note");
+    crate::ui::controls::wrap(note, RAIL_W - 24.0, |s| crate::uifb::text_width(&crate::fonts::UI, 11.0 * crate::ui::compact::CSS, s))
+}
+
+/// The note's height: room for all its lines (a long translation takes
+/// a third, not the status bar).
+pub(super) fn note_h() -> f32 {
+    NOTE_H + 15.0 * (note_lines().len() as f32 - 2.0).max(0.0)
+}
 const DLG_W: f32 = 420.0;
 
 /// The zoom control: −, the value, +, Fit, 1:1.
@@ -81,7 +94,16 @@ pub fn img_menu_lay(ui: &Ui, e: &Edit, lay: &Lay) -> (FRect, Vec<(FRect, usize)>
     let (_, c) = chip(ui, e, lay);
     let seps = 3.0;
     let h = super::image::MENU.len() as f32 * super::image::MENU_ROW + seps * 9.0 + 12.0;
-    let r = FRect { x: c.x, y: (c.y - 6.0 - h).max(BAR_H + 4.0), w: super::image::MENU_W, h };
+    // Wide enough for the longest label and its shortcut (a long
+    // translation), within the window.
+    let need = (super::image::MENU.iter())
+        .map(|&(_, label, _, action)| {
+            let cap = e.canvas.keymap().chords(action).first().map_or(0.0, |ch| ui.text_w(11.0, &ch.label()) + 16.0);
+            6.0 + 32.0 + ui.text_w(12.0, label.get()) + cap + 8.0 + 6.0
+        })
+        .fold(super::image::MENU_W, f32::max);
+    let w = need.min(lay.w - c.x - 8.0).ceil();
+    let r = FRect { x: c.x, y: (c.y - 6.0 - h).max(BAR_H + 4.0), w, h };
     let mut y = r.y + 6.0;
     let mut rows = Vec::new();
     for i in 0..super::image::MENU.len() {
@@ -147,7 +169,7 @@ pub fn layout(e: &Edit, w: f32, h: f32, bar_w: f32) -> Lay {
             y += ROW_H + 2.0;
         }
     }
-    let note_top = rail.y1() - NOTE_H;
+    let note_top = rail.y1() - note_h();
     rows.retain(|(r, _)| r.y1() <= note_top);
     Lay { w, h, bar, rail, canvas, status, zoom, zoom_in_status, collapse, rows }
 }
@@ -365,10 +387,9 @@ pub fn paint_rail(ui: &mut Ui, e: &Edit, lay: &Lay, t: &WTok, hover: Option<Hit>
         fill(ui, FRect { x: rr.x, y: y - 1.0, w: rr.w, h: 2.0 }, 1.0, t.ac);
     }
     // The note at the bottom.
-    let ny = r.y1() - NOTE_H;
+    let ny = r.y1() - note_h();
     line_h(ui, r.x, ny, r.w - 1.0, t.sep);
-    let note = tr!("edit.objects_note");
-    let lines = crate::ui::controls::wrap(note, r.w - 24.0, |s| ui.text_w(11.0, s));
+    let lines = note_lines();
     for (n, l) in lines.iter().enumerate() {
         text(ui, 11.0, l, r.x + 12.0, ny + 10.0 + 8.0 + n as f32 * 15.0, t.tx3, false);
     }
@@ -445,9 +466,11 @@ pub fn paint_img_menu(ui: &mut Ui, e: &Edit, lay: &Lay, t: &WTok, hover: Option<
         let cy = rr.y + rr.h / 2.0;
         let c = if off { t.tx3 } else if hov { t.ich } else { t.ic };
         icon(ui, ic, rr.x + 8.0, cy - 8.0, 16.0, c);
-        text(ui, 12.0, label.get(), rr.x + 32.0, cy, if off { t.tx3 } else { t.tx }, false);
-        if let Some(ch) = e.canvas.keymap().chords(action).first() {
-            let cap = ch.label();
+        let cap = e.canvas.keymap().chords(action).first().map(|ch| ch.label());
+        let cw = cap.as_ref().map_or(0.0, |c| ui.text_w(11.0, c) + 16.0);
+        let shown = ui.fit_text(12.0, label.get(), rr.w - 32.0 - 8.0 - cw);
+        text(ui, 12.0, &shown, rr.x + 32.0, cy, if off { t.tx3 } else { t.tx }, false);
+        if let Some(cap) = cap {
             let w = ui.text_w(11.0, &cap);
             text(ui, 11.0, &cap, rr.x1() - 8.0 - w, cy, t.tx3, false);
         }

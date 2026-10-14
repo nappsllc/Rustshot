@@ -31,9 +31,10 @@ pub(super) fn tw(ui: &Ui, size: f32, s: &str) -> f32 {
 pub(super) fn text(ui: &mut Ui, size: f32, s: &str, x: f32, cy: f32, c: C4) -> f32 {
     let font = &crate::fonts::UI;
     let px = ui.px(size);
-    let w = ui.fb.draw_text(font, px, s, x.round(), (cy - text_height(font, px) / 2.0).round(), c);
+    let (y, h) = ((cy - text_height(font, px) / 2.0).round(), text_height(font, px));
+    let w = ui.fb.draw_text(font, px, s, x.round(), y, c);
     #[cfg(test)]
-    super::preview::note_text(s, x.round(), w);
+    super::preview::note_text(s, FRect { x: x.round(), y, w, h });
     w
 }
 
@@ -185,6 +186,8 @@ impl Ui<'_> {
     /// Dim everything drawn so far (a modal question is up) and draw a
     /// raised card at `r` (logical px) to lay the question out in.
     pub fn modal_card(&mut self, r: FRect) {
+        #[cfg(test)]
+        super::preview::note_cover(None);
         let (w, h) = (self.fb.stride as i32, self.fb.height());
         let a = if self.theme.dark { 120 } else { 70 };
         self.fb.fill_rect(self.fb.ox, self.fb.oy, w, h, C4::new(0, 0, 0, a));
@@ -756,6 +759,8 @@ pub(super) fn mix(a: C4, b: C4, t: f32) -> C4 {
 /// The open dropdown list (drawn last, over everything): a popover
 /// surface with the selected item checked and the highlighted one tinted.
 pub(super) fn draw_popup(ui: &mut Ui, items: &[String], r: FRect, sel: usize, hover: usize) {
+    #[cfg(test)]
+    super::preview::note_cover(Some(r));
     let cu = ui.chrome();
     // The full stack reads as a grey halo on the light surface: only the
     // contact and near layers there.

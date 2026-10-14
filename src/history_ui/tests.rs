@@ -750,10 +750,11 @@ fn fits_in_long_languages() {
                     crate::ui::preview::begin_check((w as f32 * k).round() as u32);
                     let mut focus = FocusState::default();
                     let (img, _) = render_with(&mut h, &DARK, w, hh, k, &Input::default(), &mut focus);
-                    crate::ui::preview::assert_fits(&focus, w, hh, k, &format!("history {name} {lang} {k}x"));
+                    // (Saved first: a failure has its picture.)
                     if k == 1.0 {
                         crate::ui::preview::save(&format!("history-{name}-{lang}.png"), &img);
                     }
+                    crate::ui::preview::assert_fits(&focus, w, hh, k, &format!("history {name} {lang} {k}x"));
                 }
             }
         });

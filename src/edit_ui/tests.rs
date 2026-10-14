@@ -1030,7 +1030,7 @@ fn right_to_left_mirrors_the_window_not_its_text() {
     for (rr, i) in &lay.rows {
         asym += assert_reads_ltr(&ltr, &rtl, (u(rr.x + 36.0), u(rr.y + 2.0), u(rr.x1() - 8.0), u(rr.y1() - 2.0)), &format!("row {i}"));
     }
-    let ny = rail.y1() - draw::NOTE_H;
+    let ny = rail.y1() - draw::note_h();
     asym += assert_reads_ltr(&ltr, &rtl, (u(rail.x + 4.0), u(ny + 2.0), u(rail.x1() - 4.0), u(rail.y1() - 2.0)), "the list's note");
     assert!(asym >= 6, "the heading, four rows and the note lines: {asym}");
     // The canvas: the same pixels, moved to the left.
