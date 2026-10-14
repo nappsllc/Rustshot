@@ -97,10 +97,14 @@ fn cursor_per_region_with_a_drawing_tool() {
     }
     // The size label draws with a drawing tool, is a button (its menu)
     // with none.
+    // (Its left end: without a Record button (macOS tests) the label
+    // follows the freeform toggle and its right part is under the bar.)
     let label = e.label_at.expect("size label");
-    assert_eq!(e.cursor_at(mid(label), NONE), Cursor::Cross);
+    let end = Pt::new(label.x + 4.0, label.y + label.h / 2.0);
+    assert!(!tb.contains(end), "{label:?} {:?}", tb.bar);
+    assert_eq!(e.cursor_at(end, NONE), Cursor::Cross);
     e.tool = None;
-    assert_eq!(e.cursor_at(mid(label), NONE), Cursor::Arrow);
+    assert_eq!(e.cursor_at(end, NONE), Cursor::Arrow);
 }
 
 #[test]
