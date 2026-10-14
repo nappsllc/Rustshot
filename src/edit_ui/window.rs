@@ -82,6 +82,7 @@ impl Window {
             self.dlg_focus.focus(match d {
                 super::image::ImgDialog::Resize(_) => "rs_w",
                 super::image::ImgDialog::Canvas(_) => "cv_pad",
+                super::image::ImgDialog::Effects(_) => "fx_wm_text",
             });
         }
     }

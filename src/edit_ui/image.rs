@@ -21,17 +21,20 @@ pub enum ImgAct {
     FlipH,
     FlipV,
     Canvas,
+    /// Watermark, drop shadow, torn edge, reflection ([super::effects_dlg]).
+    Effects,
     Reset,
 }
 
 /// The menu's rows: what, label, icon, the key shown.
-pub const MENU: [(ImgAct, &str, &str, Action); 7] = [
+pub const MENU: [(ImgAct, &str, &str, Action); 8] = [
     (ImgAct::Resize, "Resize\u{2026}", "scaling", Action::ImageResize),
     (ImgAct::RotateLeft, "Rotate left", "rotate-ccw", Action::RotateLeft),
     (ImgAct::RotateRight, "Rotate right", "rotate-cw", Action::RotateRight),
     (ImgAct::FlipH, "Flip horizontal", "flip-h", Action::FlipHorizontal),
     (ImgAct::FlipV, "Flip vertical", "flip-v", Action::FlipVertical),
     (ImgAct::Canvas, "Canvas\u{2026}", "frame", Action::ImageCanvas),
+    (ImgAct::Effects, crate::sharex_text::EFFECTS, "sparkles", Action::ImageEffects),
     (ImgAct::Reset, "Reset image edits", "undo", Action::ImageReset),
 ];
 
@@ -313,6 +316,7 @@ impl CanvasForm {
 pub enum ImgDialog {
     Resize(ResizeForm),
     Canvas(CanvasForm),
+    Effects(super::effects_dlg::EffectsForm),
 }
 
 /// A dialog's answer this frame.
@@ -320,8 +324,10 @@ pub enum ImgDialog {
 pub enum DlgOut {
     Apply,
     Cancel,
-    /// Canvas: none; Resize: the picture's own size.
+    /// Canvas: none; Resize: the picture's own size; Effects: none.
     Remove,
+    /// Effects: keep the watermark for every export (the dialog stays).
+    ForExports,
 }
 
 /// The dialog's card (logical px) in a `w`×`h` window.
@@ -329,6 +335,7 @@ pub fn card(d: &ImgDialog, w: f32, h: f32) -> FRect {
     let (cw, ch) = match d {
         ImgDialog::Resize(f) => (440.0, if f.enlarges() { 286.0 } else { 262.0 }),
         ImgDialog::Canvas(f) => (480.0, if f.sides { 512.0 } else { 476.0 }),
+        ImgDialog::Effects(_) => (520.0, super::effects_dlg::CARD_H),
     };
     FRect { x: ((w - cw) / 2.0).round(), y: ((h - ch) / 2.0).max(8.0).round(), w: cw, h: ch }
 }
@@ -365,6 +372,7 @@ pub fn paint(ui: &mut Ui, d: &mut ImgDialog, win: (f32, f32), pic: &PixBuf, smal
         let title = match d {
             ImgDialog::Resize(_) => "Resize image",
             ImgDialog::Canvas(_) => "Canvas",
+            ImgDialog::Effects(_) => crate::sharex_text::EFFECTS_TITLE,
         };
         let t = ui.alloc(None, 24.0);
         ui.text_at(14.0, title, t.x, t.y + t.h / 2.0, tok.tx, true);
@@ -372,6 +380,13 @@ pub fn paint(ui: &mut Ui, d: &mut ImgDialog, win: (f32, f32), pic: &PixBuf, smal
         match d {
             ImgDialog::Resize(f) => resize_body(ui, f, pic, cfg, tok, &mut out),
             ImgDialog::Canvas(f) => canvas_body(ui, f, small, tok, &mut out),
+            ImgDialog::Effects(f) => {
+                let mut extra = None;
+                super::effects_dlg::body(ui, f, small, tok, &mut out, &mut extra);
+                if extra.is_some() && out.is_none() {
+                    out = Some(DlgOut::ForExports);
+                }
+            }
         }
     });
     ui.ctl_h = saved_h;

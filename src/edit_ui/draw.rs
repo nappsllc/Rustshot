@@ -87,7 +87,7 @@ pub fn img_menu_lay(ui: &Ui, e: &Edit, lay: &Lay) -> (FRect, Vec<(FRect, usize)>
     for i in 0..super::image::MENU.len() {
         rows.push((FRect { x: r.x + 6.0, y, w: r.w - 12.0, h: super::image::MENU_ROW }, i));
         y += super::image::MENU_ROW;
-        if matches!(i, 0 | 4 | 5) {
+        if matches!(i, 0 | 4 | 6) {
             y += 9.0;
         }
     }
@@ -447,7 +447,7 @@ pub fn paint_img_menu(ui: &mut Ui, e: &Edit, lay: &Lay, t: &WTok, hover: Option<
             let w = ui.text_w(11.0, &cap);
             text(ui, 11.0, &cap, rr.x1() - 8.0 - w, cy, t.tx3, false);
         }
-        if matches!(i, 0 | 4 | 5) {
+        if matches!(i, 0 | 4 | 6) {
             line_h(ui, r.x + 10.0, rr.y1() + 4.0, r.w - 20.0, t.sep);
         }
     }

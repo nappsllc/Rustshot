@@ -238,6 +238,13 @@ impl Canvas {
         self.after_input();
     }
 
+    /// Effects… answered (one undo step).
+    pub fn set_effects(&mut self, fx: crate::imgedit::effects::Effects) {
+        let e = self.e.image_edits();
+        self.e.set_image_edits(crate::imgedit::Edits { effects: fx, ..e });
+        self.after_input();
+    }
+
     pub fn set_canvas(&mut self, c: Option<crate::imgedit::Pad>) {
         let e = self.e.image_edits();
         self.e.set_image_edits(crate::imgedit::Edits { canvas: c.filter(|c| !c.is_noop()), ..e });

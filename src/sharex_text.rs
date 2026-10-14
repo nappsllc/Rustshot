@@ -60,7 +60,7 @@ pub const FX_GAP: &str = "Gap";
 pub const FX_APPLY: &str = "Apply";
 pub const FX_CANCEL: &str = "Cancel";
 pub const FX_REMOVE: &str = "No effects";
-pub const FX_FOR_EXPORTS: &str = "Use for every export";
+pub const FX_FOR_EXPORTS: &str = "For all exports";
 pub const FX_BAD: &str = "Check the fields: numbers, and colors such as #ffffff";
 
 // The pointer object

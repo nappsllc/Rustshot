@@ -1,9 +1,9 @@
 //! Effects, the last stage of the stack (after the canvas): a watermark
 //! (text or a PNG image; one of nine anchors plus a margin, opacity, size
 //! as a share of the width, or tiled), torn edges (one or more sides, a
-//! jagged deterministic outline from a seed), a drop shadow (offset, blur,
-//! color, opacity; the presentation shadow's look by default) and a
-//! reflection below (height, starting opacity, fading out). They add to
+//! jagged deterministic outline from a seed), a reflection below (height,
+//! starting opacity, fading out) and a drop shadow round it all (offset,
+//! blur, color, opacity; the presentation shadow's look by default). They add to
 //! the picture and hide nothing of what an older build shows, so they
 //! need no stand-in (`"effects"` in annotations.json, ignored by older
 //! builds).
@@ -202,7 +202,8 @@ fn fin(v: f32, d: f32) -> f32 {
     if v.is_finite() { v } else { d }
 }
 
-/// The effects (each one off when `None`), applied in this order.
+/// The effects (each one off when `None`), applied in this order:
+/// watermark, torn edges, reflection, shadow (round both).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Effects {
     pub watermark: Option<Watermark>,
@@ -232,13 +233,13 @@ impl Effects {
 
     fn size_at(&self, (mut w, mut h): (u32, u32), k: f32) -> (u32, u32) {
         let e = self.sanitized();
+        if let Some(r) = e.reflection {
+            h += (r.gap as f32 * k).round() as u32 + r.rows(h);
+        }
         if let Some(s) = e.shadow {
             let [t, r, b, l] = s.room(k);
             w += l + r;
             h += t + b;
-        }
-        if let Some(r) = e.reflection {
-            h += (r.gap as f32 * k).round() as u32 + r.rows(h);
         }
         (w, h)
     }
@@ -258,11 +259,11 @@ pub fn apply(img: PixBuf, e: &Effects, k: f32) -> PixBuf {
     if let Some(t) = e.torn.filter(|t| t.sides != 0) {
         torn(&mut img, &t, k);
     }
-    if let Some(s) = e.shadow {
-        img = shadow(&img, &s, k);
-    }
     if let Some(r) = e.reflection {
         img = reflection(&img, &r, k);
+    }
+    if let Some(s) = e.shadow {
+        img = shadow(&img, &s, k);
     }
     img
 }
@@ -804,6 +805,7 @@ fn reflection(img: &PixBuf, r: &Reflection, k: f32) -> PixBuf {
 }
 
 /// The size [`apply`] gives at `k` (thumbnails).
+#[cfg(test)]
 pub fn size_at(e: &Effects, src: (u32, u32), k: f32) -> (u32, u32) {
     e.size_at(src, k)
 }

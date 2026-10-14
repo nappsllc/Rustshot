@@ -28,6 +28,7 @@ use std::sync::{Arc, Mutex};
 
 pub mod draw;
 pub mod image;
+pub mod effects_dlg;
 mod window;
 
 /// Default and minimum size, logical px.
@@ -528,7 +529,7 @@ impl Edit {
             ImgAct::FlipH => self.canvas.flip(true),
             ImgAct::FlipV => self.canvas.flip(false),
             ImgAct::Reset => self.canvas.reset_image(),
-            ImgAct::Resize | ImgAct::Canvas => {
+            ImgAct::Resize | ImgAct::Canvas | ImgAct::Effects => {
                 self.canvas.commit_drafts();
                 let pic = self.canvas.export_picture();
                 let (w, h) = pic.dimensions();
@@ -541,6 +542,8 @@ impl Edit {
                     let mut f = ResizeForm::new(src, e.resize);
                     f.canvas = e.canvas;
                     ImgDialog::Resize(f)
+                } else if a == ImgAct::Effects {
+                    ImgDialog::Effects(effects_dlg::EffectsForm::new(e.effects, e.canvas, &self.cfg))
                 } else {
                     let mut f = CanvasForm::new(e.canvas);
                     f.src = Some(e.resize_to(src));
@@ -554,6 +557,18 @@ impl Edit {
     /// The open image dialog was answered.
     pub fn image_answer(&mut self, out: image::DlgOut) {
         use image::{DlgOut, ImgDialog};
+        if out == DlgOut::ForExports {
+            if let Some(ImgDialog::Effects(f)) = self.img_dialog.as_mut()
+                && let Some(edits) = f.export_edits()
+            {
+                if !cfg!(test) {
+                    crate::config::queue_key_edits(&crate::config::config_path(), edits, false);
+                }
+                f.apply_export(&mut self.cfg);
+                f.saved = true;
+            }
+            return;
+        }
         let Some(d) = self.img_dialog.as_ref() else { return };
         match (d, out) {
             (_, DlgOut::Cancel) => {}
@@ -567,6 +582,12 @@ impl Edit {
                 None => return,
             },
             (ImgDialog::Canvas(_), DlgOut::Remove) => self.canvas.set_canvas(None),
+            (ImgDialog::Effects(f), DlgOut::Apply) => match f.result() {
+                Some(e) => self.canvas.set_effects(e),
+                None => return,
+            },
+            (ImgDialog::Effects(_), DlgOut::Remove) => self.canvas.set_effects(Default::default()),
+            (_, DlgOut::ForExports) => return,
         }
         self.img_dialog = None;
         self.dlg_pic = None;
