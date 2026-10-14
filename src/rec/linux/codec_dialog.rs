@@ -721,4 +721,29 @@ mod tests {
             preview::save(&format!("encoder-{name}-dark-150.png"), &img);
         }
     }
+
+    /// Every screen fits the dialog in English and the long
+    /// pseudo-languages, at 1x and 1.5x (previews per language).
+    #[test]
+    fn fits_in_long_languages() {
+        for lang in preview::LANGS {
+            crate::i18n::with_lang(lang, || {
+                for k in [1.0f32, 1.5] {
+                    for (name, m) in screens() {
+                        let mut focus = FocusState::default();
+                        preview::render(W, H, k, &crate::theme::DARK, &Input::default(), &mut focus, |ui| {
+                            paint(ui, &m);
+                        });
+                        let img = preview::render(W, H, k, &crate::theme::DARK, &Input::default(), &mut focus, |ui| {
+                            paint(ui, &m);
+                        });
+                        preview::assert_fits(&focus, W, H, k, &format!("encoder {name} {lang} {k}x"));
+                        if k == 1.0 {
+                            preview::save(&format!("encoder-{name}-{lang}.png"), &img);
+                        }
+                    }
+                }
+            });
+        }
+    }
 }

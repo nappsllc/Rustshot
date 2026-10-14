@@ -408,6 +408,10 @@ impl Ui<'_> {
         let cy = b.y + b.h / 2.0;
         let room = b.w / self.k - 16.0 - if icon.is_some() { 22.0 } else { 0.0 };
         let shown = self.fit_text(size, label, room);
+        #[cfg(test)]
+        if shown != label {
+            super::preview::note_cut(label);
+        }
         let content = self.px(self.text_w(size, &shown) + if icon.is_some() { 22.0 } else { 0.0 });
         let mut x = (b.x + (b.w - content) / 2.0).max(b.x + self.px(8.0)).round();
         if let Some(name) = icon {

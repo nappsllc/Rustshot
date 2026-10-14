@@ -56,7 +56,14 @@ const DOT_GAP: f32 = 4.0;
 
 /// The mode switch's width (logical px).
 pub fn mode_w() -> f32 {
-    2.0 * SEG_IN + MODE_BTN[0] + SEG_GAP + MODE_BTN[1]
+    2.0 * SEG_IN + mode_btn_w(0) + SEG_GAP + mode_btn_w(1)
+}
+
+/// Mode button `i`'s width (0: Screenshot, 1: Video; logical px): the
+/// board's, or wider for a longer word (its icon, gap and 6 px spare).
+fn mode_btn_w(i: usize) -> f32 {
+    let label = if i == 1 { tr!("tip.video") } else { tr!("tip.screenshot") };
+    MODE_BTN[i].max((10.0 + 14.0 + 6.0 + crate::uifb::text_width(crate::fonts::ui_font(), 11.5, label) + 6.0).ceil())
 }
 
 /// Top-left of a `bw`x`bh` panel centred under `sel` (`above`: it went
@@ -93,7 +100,7 @@ pub fn place_top(sel: FRect, area: FRect, s: f32, video: bool, avoid: Option<FRe
     items.push(Item { kind: Kind::ModeTrack, r: track, disabled: false });
     let mut bx = x + SEG_IN * s;
     for (i, video_btn) in [false, true].into_iter().enumerate() {
-        let bw = MODE_BTN[i] * s;
+        let bw = mode_btn_w(i) * s;
         let r = FRect { x: bx, y: y + SEG_IN * s, w: bw, h: h - 2.0 * SEG_IN * s };
         items.push(Item { kind: Kind::Mode { video: video_btn, on: video_btn == video }, r, disabled: false });
         bx += bw + SEG_GAP * s;
@@ -213,7 +220,12 @@ pub fn layout(inp: &Input, rv: &RecView) -> Toolbar {
         if rv.blur {
             use crate::cam::bg::Bg;
             let segs = [(Bg::Off, tr!("settings.camera.bg_off")), (Bg::Light, tr!("settings.camera.bg_light")), (Bg::Strong, tr!("settings.camera.bg_strong"))].map(|(b, l)| (Act::RecBg(b), l, "", rv.bg == b, false));
-            seg(&mut local, r.x1() - 6.0 - BG_SEG_W, y + (SMALL_ROW_H - 26.0) / 2.0, BG_SEG_W, 26.0, 2.0, &segs);
+            // Wider for longer words, up to the row's name.
+            let font = crate::fonts::ui_font();
+            let widest = segs.iter().map(|s| crate::uifb::text_width(font, 12.0, s.1)).fold(0.0f32, f32::max);
+            let room = r.w - 6.0 - 8.0 - crate::uifb::text_width(font, 12.0, tr!("rec.panel.background")) - 12.0;
+            let bw = BG_SEG_W.max((3.0 * (widest + 8.0) + 4.0 + 2.0 * SEG_GAP).ceil()).min(room.max(BG_SEG_W));
+            seg(&mut local, r.x1() - 6.0 - bw, y + (SMALL_ROW_H - 26.0) / 2.0, bw, 26.0, 2.0, &segs);
         }
         y += SMALL_ROW_H + GAP;
     }
@@ -263,8 +275,14 @@ pub fn layout(inp: &Input, rv: &RecView) -> Toolbar {
     // A GIF: Max length 15 / 30 / 60 s, then it stops by itself.
     if !mp4 {
         let r = FRect { x: x0, y, w: inner, h: SMALL_ROW_H };
-        local.push(Item { kind: Kind::Row { act: Act::RecGifMax(rv.gif_max), icon: "", label: tr!("tip.max_length"), value: Some(max_len_text(rv.gif_max)), dim: false }, r, disabled: true });
         let sw = 96.0;
+        // The value ("30 s · then it stops") only when it fits before the
+        // choices (they say the same).
+        let font = crate::fonts::ui_font();
+        let value = max_len_text(rv.gif_max);
+        let end = r.x + 8.0 + crate::uifb::text_width(font, 12.0, tr!("tip.max_length")) + 10.0 + crate::uifb::text_width(font, 12.0, value);
+        let value = (end + 6.0 <= r.x1() - 6.0 - sw).then_some(value);
+        local.push(Item { kind: Kind::Row { act: Act::RecGifMax(rv.gif_max), icon: "", label: tr!("tip.max_length"), value, dim: false }, r, disabled: true });
         let segs: Vec<(Act, &'static str, &'static str, bool, bool)> =
             crate::rec_ui::GIF_MAX.iter().map(|&n| (Act::RecGifMax(n), len_label(n), "", rv.gif_max == n, false)).collect();
         seg(&mut local, r.x1() - 6.0 - sw, y + (SMALL_ROW_H - 26.0) / 2.0, sw, 26.0, 2.0, &segs);
@@ -646,5 +664,63 @@ mod tests {
         assert!(tb.extra.contains(&g));
         i.grip = None;
         assert!(!layout(&i).items.iter().any(|it| it.kind == Kind::Grip));
+    }
+
+    /// Every word of the recording panel fits its place in English and the
+    /// long pseudo-languages: segment labels in their segments, row names
+    /// before what follows them, values before the switch, captions in
+    /// their columns, the mode buttons and Start recording.
+    #[test]
+    fn panel_text_fits_in_long_languages() {
+        use super::super::chrome::{tw, Ui};
+        for lang in crate::ui::preview::LANGS {
+            crate::i18n::with_lang(lang, || {
+                let ui = Ui { th: &crate::theme::DARK, s: 1.0, font: Some(crate::fonts::ui_font()) };
+                for (fmt, cam) in [(RecFormat::Mp4, false), (RecFormat::Mp4, true), (RecFormat::Gif, false)] {
+                    let mut v = rv(fmt);
+                    v.camera = cam;
+                    v.cams = true;
+                    v.mic = false;
+                    let tb = panel(r(240.0, 110.0, 960.0, 420.0), &v);
+                    let what = |s: &str| format!("{lang} {fmt:?} camera {cam}: {s:?}");
+                    for it in &tb.items {
+                        let r = it.r;
+                        match it.kind {
+                            Kind::Seg { label, icon, .. } => {
+                                let size = super::super::chrome::seg_text_size(&ui, r, label, icon);
+                                let w = if icon.is_empty() { 0.0 } else { 16.0 + if label.is_empty() { 0.0 } else { 6.0 } } + tw(&ui, size, label);
+                                assert!(w <= r.w - 4.0, "{} in {:.0}", what(label), r.w);
+                            }
+                            Kind::Caption(s) => assert!(tw(&ui, 11.0, s) <= r.w, "{}", what(s)),
+                            Kind::Mode { video, .. } => {
+                                let label = if video { tr!("tip.video") } else { tr!("tip.screenshot") };
+                                assert!(10.0 + 14.0 + 6.0 + tw(&ui, 11.5, label) <= r.w - 6.0, "{} in {:.0}", what(label), r.w);
+                            }
+                            Kind::Primary { label, .. } => assert!(10.0 + 10.0 + tw(&ui, 13.0, label) + 10.0 + 22.0 <= r.w - 16.0, "{}", what(label)),
+                            Kind::Row { icon, label, value, .. } => {
+                                let x = r.x + if icon.is_empty() { 8.0 } else { 38.0 };
+                                let end = x + tw(&ui, 12.0, label);
+                                // What follows the name on its row.
+                                let next = tb
+                                    .items
+                                    .iter()
+                                    .filter(|o| !matches!(o.kind, Kind::Row { .. }) && o.r.y < r.y1() && o.r.y1() > r.y && o.r.x > r.x + 20.0)
+                                    .map(|o| o.r.x)
+                                    .fold(r.x1() - 6.0 - 32.0, f32::min);
+                                let vx = if icon.is_empty() { end + 10.0 } else { r.x + 38.0 + 92.0 + 10.0 };
+                                if let Some(v) = value.filter(|v| !v.is_empty()) {
+                                    assert!(end + 6.0 <= vx, "{} runs into its value", what(label));
+                                    assert!(tw(&ui, 12.0, v) <= r.x1() - (6.0 + 32.0 + 10.0) - vx, "{} cut", what(v));
+                                    assert!(vx + tw(&ui, 12.0, v) <= next + 0.5, "{} runs into the next part", what(v));
+                                } else {
+                                    assert!(end + 6.0 <= next, "{} runs into the next part ({end:.0} > {next:.0})", what(label));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            });
+        }
     }
 }

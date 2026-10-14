@@ -602,6 +602,18 @@ fn within(a: FRect, b: FRect) -> bool {
 /// One segment of a segmented control: the accent tint when chosen; an
 /// icon (16 px) and / or a label (12 px), centred, 6 px apart.
 #[allow(clippy::too_many_arguments)]
+/// A segment's text size: 12 (11 in a short one), smaller (down to 10)
+/// when a long word needs it to fit with 2 px to spare each side.
+pub(super) fn seg_text_size(ui: &Ui, r: FRect, label: &str, icon: &str) -> f32 {
+    let mut size: f32 = if r.h < ui.px(24.0) { 11.0 } else { 12.0 };
+    let isz = if icon.is_empty() { 0.0 } else { ui.px(16.0) };
+    let gap = if icon.is_empty() || label.is_empty() { 0.0 } else { ui.px(6.0) };
+    while size > 10.0 && isz + gap + tw(ui, size, label) > r.w - ui.px(4.0) {
+        size -= 0.5;
+    }
+    size
+}
+
 fn segment(f: &mut Fb, ui: &Ui, r: FRect, label: &str, icon: &str, on: bool, hovered: bool, k: f32) {
     let th = ui.th;
     let r = round(r);
@@ -613,7 +625,7 @@ fn segment(f: &mut Fb, ui: &Ui, r: FRect, label: &str, icon: &str, on: bool, hov
         fill(f, r, rad, th.bg_hover.fade(k));
     }
     let fg = if on { th.accent_fg } else if hovered { th.icon_hover } else { th.icon };
-    let size = if r.h < ui.px(24.0) { 11.0 } else { 12.0 };
+    let size = seg_text_size(ui, r, label, icon);
     let isz = if icon.is_empty() { 0.0 } else { ui.px(16.0) };
     let gap = if icon.is_empty() || label.is_empty() { 0.0 } else { ui.px(6.0) };
     let w = isz + gap + tw(ui, size, label);

@@ -701,8 +701,76 @@ pub mod preview {
     }
 
     /// `w`×`h` logical px at scale `k`, window background, one frame of `f`.
+    /// What a frame drawn by [`render`] did wrong: text past the window's
+    /// edge, a button label cut with "…" (the fit tests).
+    #[derive(Default)]
+    struct Check {
+        w: f32,
+        problems: Vec<String>,
+    }
+
+    thread_local!(static CHECK: std::cell::RefCell<Option<Check>> = const { std::cell::RefCell::new(None) });
+
+    /// Text `s` was drawn from physical x `x`, `w` wide.
+    pub(crate) fn note_text(s: &str, x: f32, w: f32) {
+        CHECK.with(|c| {
+            if let Some(c) = c.borrow_mut().as_mut()
+                && (x < -1.0 || x + w > c.w + 1.0)
+            {
+                c.problems.push(format!("text past the window's edge ({x:.0}..{:.0} of {:.0}): {s:?}", x + w, c.w));
+            }
+        });
+    }
+
+    /// A button's label did not fit and was cut.
+    pub(crate) fn note_cut(s: &str) {
+        CHECK.with(|c| {
+            if let Some(c) = c.borrow_mut().as_mut() {
+                c.problems.push(format!("label cut: {s:?}"));
+            }
+        });
+    }
+
+    /// The languages the fit tests run in: English and the long
+    /// pseudo-languages (accented, Hebrew and Arabic letters).
+    pub const LANGS: [&str; 4] = ["en", "qps", "qps-rtl", "qps-ar"];
+
+    /// Note problems in the frames drawn on this thread from now on, in a
+    /// window `pw` physical px wide ([`render`] does this itself).
+    pub fn begin_check(pw: u32) {
+        CHECK.with(|c| {
+            let mut c = c.borrow_mut();
+            // A new window: what earlier frames noted is gone.
+            *c = Some(Check { w: pw as f32, problems: Vec::new() });
+        });
+    }
+
+    /// The problems noted since the last call (frames drawn by [`render`]
+    /// on this thread).
+    pub fn take_problems() -> Vec<String> {
+        CHECK.with(|c| c.borrow_mut().as_mut().map(|c| std::mem::take(&mut c.problems)).unwrap_or_default())
+    }
+
+    /// A frame fits its `w`×`h` window (logical px) at scale `k`: every
+    /// control inside it and none over another, no text past its edge, no
+    /// label cut (`what` names the frame in the failure).
+    pub fn assert_fits(focus: &FocusState, w: u32, h: u32, k: f32, what: &str) {
+        let problems = take_problems();
+        assert!(problems.is_empty(), "{what}: {problems:#?}");
+        let rects: Vec<FRect> = focus.all_rects().into_iter().map(|r| FRect { x: r.x / k, y: r.y / k, w: r.w / k, h: r.h / k }).collect();
+        for (a, ra) in rects.iter().enumerate() {
+            assert!(ra.x >= -0.5 && ra.y >= -0.5 && ra.x1() <= w as f32 + 0.5 && ra.y1() <= h as f32 + 0.5, "{what}: {ra:?} outside {w}x{h}");
+            for rb in &rects[a + 1..] {
+                let ow = ra.x1().min(rb.x1()) - ra.x.max(rb.x);
+                let oh = ra.y1().min(rb.y1()) - ra.y.max(rb.y);
+                assert!(ow <= 1.0 || oh <= 1.0, "{what}: {ra:?} and {rb:?} overlap");
+            }
+        }
+    }
+
     pub fn render(w: u32, h: u32, k: f32, th: &Theme, input: &Input, focus: &mut FocusState, f: impl FnOnce(&mut Ui)) -> PixBuf {
         let (pw, ph) = ((w as f32 * k).round() as u32, (h as f32 * k).round() as u32);
+        begin_check(pw);
         let bg = th.surface.with_alpha(255);
         let mut img = PixBuf::from_pixel(pw, ph, [bg.r, bg.g, bg.b, 255]);
         let mut clip = FakeClip::default();

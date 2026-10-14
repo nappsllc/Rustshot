@@ -494,7 +494,7 @@ fn paint(ui: &mut Ui, m: &Machine, v: &mut View) -> Option<Btn> {
                 Mark::Icon(name, col) => ui.icon(name, ICON, col),
             }
             ui.space(4.0);
-            ui.heading(&c.title);
+            ui.heading_fit(&c.title, lay.title.w - ICON - 4.0 - 2.0 * crate::ui::layout::GAP);
         })
     });
     if let (Some(t), Some(r)) = (&c.text, lay.text) {
@@ -1589,5 +1589,31 @@ mod tests {
         assert_eq!(v.scroll, 30.0, "same release keeps the scroll");
         v.notes(&rel("9.9.10"));
         assert_eq!(v.scroll, 0.0);
+    }
+
+    /// Every screen fits the dialog in English and the long
+    /// pseudo-languages, at 1x and 1.5x (previews per language).
+    #[test]
+    fn fits_in_long_languages() {
+        for lang in preview::LANGS {
+            crate::i18n::with_lang(lang, || {
+                for k in [1.0f32, 1.5] {
+                    for (name, m) in screens() {
+                        let mut focus = FocusState::default();
+                        let mut v = View::default();
+                        preview::render(W, H, k, &crate::theme::DARK, &Input::default(), &mut focus, |ui| {
+                            paint(ui, &m, &mut v);
+                        });
+                        let img = preview::render(W, H, k, &crate::theme::DARK, &Input::default(), &mut focus, |ui| {
+                            paint(ui, &m, &mut v);
+                        });
+                        preview::assert_fits(&focus, W, H, k, &format!("update {name} {lang} {k}x"));
+                        if k == 1.0 {
+                            preview::save(&format!("update-{name}-{lang}.png"), &img);
+                        }
+                    }
+                }
+            });
+        }
     }
 }

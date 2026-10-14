@@ -1188,6 +1188,34 @@ mod tests {
         }
     }
 
+    /// Every notice fits a small monitor (1280 px at 100 %, 1920 at
+    /// 150 %) in English and the long pseudo-languages: they grow with
+    /// their words, so a long one must still leave room at the sides.
+    #[test]
+    fn notices_fit_in_long_languages() {
+        for lang in crate::ui::preview::LANGS {
+            crate::i18n::with_lang(lang, || {
+                let notes = [
+                    compose(&[Done::Copied], false),
+                    compose(&[Done::Copied, saved("2026-10-10_19-48.jpg")], false),
+                    compose(&[], true),
+                    Some(upload_note(&Ok("https://i.imgur.com/aB3xYz9.png".into()), true)),
+                    Some(upload_note(&Err("WinHttpSendRequest: The operation timed out".into()), true)),
+                    compose(&[Done::Failed("Save", "access denied (os error 5)".into())], false),
+                    compose(&[Done::SavedDesktop(PathBuf::from("/home/me/Desktop/2026-10-11_14-02.png"))], false),
+                    Some(recording_saved(&PathBuf::from("rustshot-2026-10-10-2131.mp4"), Duration::from_secs(42), 1_400_000, &[], true)),
+                    Some(language_note("Deutsch")),
+                ];
+                for note in notes.iter().flatten() {
+                    for (s, screen) in [(1.0f32, 1280u32), (1.5, 1920)] {
+                        let (w, _) = note_size(note, s);
+                        assert!(w + (48.0 * s) as u32 <= screen, "{lang} at {s}: {w} px for {:?}", note.text);
+                    }
+                }
+            });
+        }
+    }
+
     /// After a recording: "Saved <file> · 00:42 · 1.4 MB" with Copy link
     /// (an MP4, uploading set up) or Copy (a GIF: the file), Open and Show
     /// in folder; it stays 6 s.

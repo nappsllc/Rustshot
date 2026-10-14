@@ -95,6 +95,12 @@ impl Window {
 
     /// The frame as composed (tests).
     #[cfg(test)]
+    /// The image dialog's controls (tests: where they are).
+    #[cfg(test)]
+    pub fn dialog_focus(&self) -> &FocusState {
+        &self.dlg_focus
+    }
+
     pub fn pixels(&self) -> &PixBuf {
         &self.canvas
     }
