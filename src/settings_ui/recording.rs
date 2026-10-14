@@ -91,7 +91,16 @@ pub struct RecForm {
     pub hotkey: Option<Chord>,
     /// [`ENCODERS`] index.
     pub encoder: usize,
+    /// Show clicks / keystrokes / every key in the recording.
+    pub show_clicks: bool,
+    pub show_keys: bool,
+    pub all_keys: bool,
+    /// [`TRIMS`] index (Trim after recording).
+    pub trim: usize,
 }
+
+/// Trim after recording (`rec_trim`).
+pub const TRIMS: [(Key, &str); 2] = [(key!("settings.recording.trim_off"), "off"), (key!("settings.recording.trim_ask"), "ask")];
 
 impl RecForm {
     pub fn new(cfg: &Config) -> RecForm {
@@ -115,6 +124,10 @@ impl RecForm {
             countdown: cfg.rec_countdown,
             hotkey: Chord::parse(&cfg.record_hotkey),
             encoder: index_str(&ENCODERS, &cfg.rec_linux_encoder),
+            show_clicks: cfg.rec_show_clicks,
+            show_keys: cfg.rec_show_keys,
+            all_keys: cfg.rec_show_all_keys,
+            trim: index_str(&TRIMS, &cfg.rec_trim),
         }
     }
 
@@ -177,6 +190,18 @@ impl RecForm {
         }
         if self.encoder != was.encoder {
             c.rec_linux_encoder = ENCODERS[self.encoder].1.into();
+        }
+        if self.show_clicks != was.show_clicks {
+            c.rec_show_clicks = self.show_clicks;
+        }
+        if self.show_keys != was.show_keys {
+            c.rec_show_keys = self.show_keys;
+        }
+        if self.all_keys != was.all_keys {
+            c.rec_show_all_keys = self.all_keys;
+        }
+        if self.trim != was.trim {
+            c.rec_trim = TRIMS[self.trim].1.into();
         }
     }
 
@@ -382,6 +407,7 @@ pub fn section(ui: &mut Ui, s: &mut super::Settings, tok: &Tok) {
             ui.width(120.0).dropdown("rec_linux_encoder", &items, &mut f.encoder);
         });
     }
+    let warn = extras(ui, f, tok);
 
     ui.sec(tr!("settings.recording.sound"), tok);
     ui.enabled = on && !gif;
@@ -394,6 +420,37 @@ pub fn section(ui: &mut Ui, s: &mut super::Settings, tok: &Tok) {
         device_dropdown(ui, "rec_mic_device", DEVICE_W, mics, &mut f.mic_dev);
     });
     ui.enabled = on;
+    if warn {
+        s.toast = Some((crate::rec::marks::text::all_keys_warning(), std::time::Instant::now()));
+    }
+}
+
+/// The rows' height: a little under the others' (the section fits the
+/// body with the Linux encoder row and a GIF's notes).
+const EXTRA_H: f32 = 32.0;
+
+/// The Recording section's clicks & keys and trim rows (with the video's).
+/// True when All keys was just turned on (its warning is said then, in
+/// full, and stays short under the row).
+fn extras(ui: &mut Ui, f: &mut RecForm, tok: &Tok) -> bool {
+    use crate::rec::marks::text as mt;
+    let on = ui.enabled;
+    let warn = f.show_keys && f.all_keys;
+    let note = if warn { mt::ALL_KEYS_SHORT } else { mt::SHOW_NOTE };
+    let mut turned_on = false;
+    srow_ex(ui, tok, mt::SHOW.get(), Some(note.get()), warn, EXTRA_H, |ui| {
+        // Right to left: All keys, Keystrokes, Clicks.
+        ui.enabled = on && f.show_keys;
+        turned_on = ui.checkbox("rec_show_all_keys", mt::ALL_KEYS.get(), &mut f.all_keys, tok) && f.all_keys;
+        ui.enabled = on;
+        ui.checkbox("rec_show_keys", mt::KEYS.get(), &mut f.show_keys, tok);
+        ui.checkbox("rec_show_clicks", mt::CLICKS.get(), &mut f.show_clicks, tok);
+    });
+    ui.enabled = on;
+    srow_ex(ui, tok, tr!("settings.recording.trim"), Some(tr!("settings.recording.trim.help")), false, EXTRA_H, |ui| {
+        ui.seg("rec_trim", &labels(&TRIMS), &mut f.trim, tok);
+    });
+    turned_on
 }
 
 /// The Camera section: the bubble a recording shows.
