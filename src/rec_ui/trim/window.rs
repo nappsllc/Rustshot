@@ -121,6 +121,14 @@ fn phys(ui: &Ui, r: FRect) -> FRect {
     FRect { x: (r.x * k).round(), y: (r.y * k).round(), w: (r.w * k).round(), h: (r.h * k).round() }
 }
 
+/// Right to left the window is mirrored but its media is not (the
+/// preview, the filmstrip with its timeline, the Play glyph: a recording
+/// plays left to right in every language): `draw` fills region `r`
+/// (physical px) as it will show, at the region's mirrored place.
+fn media(ui: &mut Ui, r: FRect, draw: impl FnOnce(&mut Fb)) {
+    crate::ui::clipped_ltr(&mut ui.fb, r, draw);
+}
+
 /// The window's pictures.
 #[derive(Default)]
 pub(super) struct Pics {
@@ -146,10 +154,12 @@ pub(super) fn paint(ui: &mut Ui, t: &mut Trim, pics: &Pics, now: Instant) -> Opt
     ui.fb.fill_rounded(pr.x as i32, pr.y as i32, pr.w as i32, pr.h as i32, ui.px(8.0), well);
     match (&pics.frame, pics.ready) {
         (Some((_, p)), _) => {
-            let (w, h) = p.dimensions();
-            let x = pr.x as i32 + (pr.w as i32 - w as i32) / 2;
-            let y = pr.y as i32 + (pr.h as i32 - h as i32) / 2;
-            blit(&mut ui.fb, p, x, y, 1.0);
+            media(ui, pr, |fb| {
+                let (w, h) = p.dimensions();
+                let x = pr.x as i32 + (pr.w as i32 - w as i32) / 2;
+                let y = pr.y as i32 + (pr.h as i32 - h as i32) / 2;
+                blit(fb, p, x, y, 1.0);
+            });
         }
         (None, r) => {
             let s = if r == Some(false) { text::NO_PREVIEW.get() } else { text::LOADING.get() };
@@ -167,8 +177,9 @@ pub(super) fn paint(ui: &mut Ui, t: &mut Trim, pics: &Pics, now: Instant) -> Opt
     });
     // Its glyph (Play / Pause), as the launcher's steppers draw theirs.
     let icon = if t.playing() { "pause" } else { "play" };
-    let (s, cx, cy) = (ui.px(16.0), ui.px(l.play.x + l.play.w / 2.0), ui.px(l.play.y + l.play.h / 2.0));
-    crate::icon_path::draw_icon(&mut ui.fb, icon, cx - s / 2.0, cy - s / 2.0, s, tok.tx);
+    let pb = phys(ui, l.play);
+    let (s, cx, cy) = (ui.px(16.0), pb.x + pb.w / 2.0, pb.y + pb.h / 2.0);
+    media(ui, pb, |fb| crate::icon_path::draw_icon(fb, icon, cx - s / 2.0, cy - s / 2.0, s, tok.tx));
     if toggled {
         t.toggle_play(now);
     }
@@ -208,47 +219,29 @@ pub(super) fn paint(ui: &mut Ui, t: &mut Trim, pics: &Pics, now: Instant) -> Opt
 /// The thumbnails, the selection, its handles and the playhead; presses
 /// and drags on it.
 fn strip(ui: &mut Ui, l: &Lay, t: &mut Trim, pics: &Pics, tok: &Tok) {
+    // Media: drawn left to right in a region around it (its handles and
+    // the playhead's knob), the pointer read back within it.
     let s = phys(ui, l.strip);
-    let well = if ui.theme.dark { C4::rgb(14, 15, 18) } else { C4::rgb(226, 228, 233) };
-    ui.fb.fill_rounded(s.x as i32, s.y as i32, s.w as i32, s.h as i32, ui.px(6.0), well);
-    let cell = s.w / THUMBS as f32;
-    for (i, p) in pics.thumbs.iter().enumerate() {
-        if let Some(p) = p {
-            blit(&mut ui.fb, p, (s.x + i as f32 * cell).round() as i32, s.y as i32, 1.0);
-        }
-    }
-    // Outside the selection: dimmed.
-    let (sx, ex) = (ui.px(x_of(l, t.len, t.start)), ui.px(x_of(l, t.len, t.end)));
-    let dim = C4::new(0, 0, 0, 150);
-    ui.fb.fill_rect(s.x as i32, s.y as i32, (sx - s.x).round() as i32, s.h as i32, dim);
-    ui.fb.fill_rect(ex.round() as i32, s.y as i32, (s.x1() - ex).round() as i32, s.h as i32, dim);
-    // The selection's frame and handles (accent).
-    let ac = tok.ac;
-    let bw = ui.px(2.0).round().max(1.0) as i32;
-    ui.fb.fill_rect(sx.round() as i32, s.y as i32, (ex - sx).round() as i32, bw, ac);
-    ui.fb.fill_rect(sx.round() as i32, (s.y1()) as i32 - bw, (ex - sx).round() as i32, bw, ac);
-    let hw = ui.px(super::HANDLE_W);
-    for x in [sx, ex] {
-        let x0 = x - hw / 2.0;
-        ui.fb.fill_rounded(x0.round() as i32, s.y as i32 - bw, hw.round() as i32, s.h as i32 + 2 * bw, ui.px(3.0), ac);
-        let gx = (x0 + hw / 2.0).round() as i32;
-        let gh = ui.px(14.0) as i32;
-        ui.fb.fill_rect(gx - bw / 2, (s.y + s.h / 2.0) as i32 - gh / 2, bw.max(1), gh, tok.acfg);
-    }
-    // The playhead.
-    let hx = ui.px(x_of(l, t.len, t.head)).round() as i32;
-    let white = if ui.theme.dark { C4::rgb(255, 255, 255) } else { tok.tx };
-    ui.fb.fill_rect(hx - bw / 2, s.y as i32 - ui.px(4.0) as i32, bw.max(2), s.h as i32 + ui.px(8.0) as i32, white);
-    ui.fb.fill_circle(hx as f32, s.y - ui.px(5.0), ui.px(4.0), white);
-    // Input: a press within the strip (and a little around it).
-    let inp = ui.input;
     let k = ui.k;
+    let m = ui.px(12.0).ceil();
+    let region = FRect { x: s.x - m, y: s.y - m, w: s.w + 2.0 * m, h: s.h + 2.0 * m };
+    let look = Look {
+        well: if ui.theme.dark { C4::rgb(14, 15, 18) } else { C4::rgb(226, 228, 233) },
+        white: if ui.theme.dark { C4::rgb(255, 255, 255) } else { tok.tx },
+        ac: tok.ac,
+        acfg: tok.acfg,
+        k,
+    };
+    let (sx, ex, hx) = (ui.px(x_of(l, t.len, t.start)), ui.px(x_of(l, t.len, t.end)), ui.px(x_of(l, t.len, t.head)));
+    let lx_of = |fb: &Fb, px: f32| crate::ui::ltr_x(fb, region, px) / k;
+    let inp = ui.input;
+    let (lx, pressed) = (lx_of(&ui.fb, inp.mouse.x), inp.pressed.map(|p| (lx_of(&ui.fb, p.x), p.y / k)));
+    media(ui, region, |fb| paint_strip(fb, s, (sx, ex, hx), pics, &look));
+    // Input: a press within the strip (and a little around it).
     let hit = FRect { x: l.strip.x - super::REACH, y: l.strip.y - 10.0, w: l.strip.w + 2.0 * super::REACH, h: l.strip.h + 20.0 };
-    let lx = inp.mouse.x / k;
-    if let Some(p) = inp.pressed
-        && crate::ui::contains(hit, crate::objects::Pt::new(p.x / k, p.y / k))
+    if let Some((x, y)) = pressed
+        && crate::ui::contains(hit, crate::objects::Pt::new(x, y))
     {
-        let x = p.x / k;
         t.press(time_at(l, t.len, x), near_handle(l, t, x));
     } else if inp.held && t.grab.is_some() && inp.moved {
         t.drag(time_at(l, t.len, lx));
@@ -259,6 +252,49 @@ fn strip(ui: &mut Ui, l: &Lay, t: &mut Trim, pics: &Pics, tok: &Tok) {
         }
         t.release();
     }
+}
+
+/// The strip's colours and scale.
+struct Look {
+    well: C4,
+    white: C4,
+    ac: C4,
+    acfg: C4,
+    k: f32,
+}
+
+/// The strip at `s` (physical px): its thumbnails, the selection from
+/// `sx` to `ex`, its handles, the playhead at `hx`.
+fn paint_strip(fb: &mut Fb, s: FRect, (sx, ex, hx): (f32, f32, f32), pics: &Pics, lk: &Look) {
+    let px = |v: f32| v * lk.k;
+    fb.fill_rounded(s.x as i32, s.y as i32, s.w as i32, s.h as i32, px(6.0), lk.well);
+    let cell = s.w / THUMBS as f32;
+    for (i, p) in pics.thumbs.iter().enumerate() {
+        if let Some(p) = p {
+            blit(fb, p, (s.x + i as f32 * cell).round() as i32, s.y as i32, 1.0);
+        }
+    }
+    // Outside the selection: dimmed.
+    let dim = C4::new(0, 0, 0, 150);
+    fb.fill_rect(s.x as i32, s.y as i32, (sx - s.x).round() as i32, s.h as i32, dim);
+    fb.fill_rect(ex.round() as i32, s.y as i32, (s.x1() - ex).round() as i32, s.h as i32, dim);
+    // The selection's frame and handles (accent).
+    let ac = lk.ac;
+    let bw = px(2.0).round().max(1.0) as i32;
+    fb.fill_rect(sx.round() as i32, s.y as i32, (ex - sx).round() as i32, bw, ac);
+    fb.fill_rect(sx.round() as i32, (s.y1()) as i32 - bw, (ex - sx).round() as i32, bw, ac);
+    let hw = px(super::HANDLE_W);
+    for x in [sx, ex] {
+        let x0 = x - hw / 2.0;
+        fb.fill_rounded(x0.round() as i32, s.y as i32 - bw, hw.round() as i32, s.h as i32 + 2 * bw, px(3.0), ac);
+        let gx = (x0 + hw / 2.0).round() as i32;
+        let gh = px(14.0) as i32;
+        fb.fill_rect(gx - bw / 2, (s.y + s.h / 2.0) as i32 - gh / 2, bw.max(1), gh, lk.acfg);
+    }
+    // The playhead.
+    let hx = hx.round() as i32;
+    fb.fill_rect(hx - bw / 2, s.y as i32 - px(4.0) as i32, bw.max(2), s.h as i32 + px(8.0) as i32, lk.white);
+    fb.fill_circle(hx as f32, s.y - px(5.0), px(4.0), lk.white);
 }
 
 /// The window driver.
@@ -394,6 +430,9 @@ impl Driver for Window {
     }
 
     fn on_event(&mut self, ev: Ev) -> bool {
+        // Right to left: the pointer mirrored, as the frame is (the media
+        // takes it back as it shows: [`as_shown`]).
+        let ev = crate::ui::rtl_ev(ev, self.canvas.width());
         match ev {
             Ev::Resize(w, h) => {
                 self.canvas = PixBuf::new(w.max(1), h.max(1));
