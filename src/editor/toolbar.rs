@@ -1379,7 +1379,7 @@ mod tests {
     fn tooltips_fit_in_long_languages() {
         let small = FRect { x: 0.0, y: 0.0, w: 1280.0, h: 720.0 };
         let km = crate::keymap::Keymap::defaults();
-        for lang in crate::ui::preview::LANGS {
+        for lang in crate::ui::preview::langs() {
             crate::i18n::with_lang(lang, || {
                 for s in [1.0f32, 1.5] {
                     let mut i = inp(r(100.0, 100.0, 1080.0, 500.0));
