@@ -1178,7 +1178,10 @@ impl App {
                 return;
             }
         };
-        if let Some(n) = end.note() {
+        // Why it ended, when that is worth saying (a page that did not
+        // scroll at all: the capture is the selection as it was).
+        let note = end.note().or((end == crate::scroll::End::Bottom && pic.height() <= area.3).then_some(crate::scroll::text::NOTHING));
+        if let Some(n) = note {
             eprintln!("rustshot: {n}");
             self.scroll_said(n, area, false);
         }

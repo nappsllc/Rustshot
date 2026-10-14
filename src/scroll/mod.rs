@@ -49,6 +49,8 @@ pub mod text {
     #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub const NO_TARGET: &str = "Nothing to scroll under the selection";
     pub const UNSUPPORTED: &str = "Scrolling capture is not available here";
+    /// Nothing moved at all: the capture is the selection as it was.
+    pub const NOTHING: &str = "Nothing scrolled under the selection";
 }
 
 /// Scrolls the target window.
