@@ -5,9 +5,9 @@
 # stays in English; `language = "de"` with no network starts in English;
 # the repo's de.txt put in the cache by hand is verified and switches the
 # window to German; Arabic opens too), and the overlay's new tools on a
-# window of this sandbox: the ruler (U, a drag), Read QR code (Q, on a code
-# the QR window draws: the toast then has buttons, a missing code gives a
-# plain one) and Scrolling capture (Shift+S on a long text box: the box
+# window of this sandbox: the ruler (U, a drag), Read QR code (Q in a
+# one-shot capture over a QR picture prints its link; with none, "No QR
+# code found") and Scrolling capture (Shift+S on a long text box: the box
 # scrolls and the stitched picture is taller than the selection).
 # Isolated instance: own RUSTSHOT_INSTANCE, APPDATA and LOCALAPPDATA,
 # unusual hotkeys. Only the PIDs started here are stopped. Real key and
@@ -122,7 +122,8 @@ function Checks050($exe) {
     $focus = "$root\focus.txt"
     $vars = @{ APPDATA = $appdata; LOCALAPPDATA = $local; RUSTSHOT_INSTANCE = 'sbx-050'; RUSTSHOT_TEST_FOCUS_FILE = $focus }
     $base = "history = false`noverlay_hints = false`nmagnifier = false`nrecord_hotkey = `"`"`ncapture_full_hotkey = `"`"`ncapture_window_hotkey = `"`"`nrepeat_hotkey = `"`"`ncapture_text_hotkey = `"`"`n"
-    $ver = ((& $exe --version) -join '').Trim() -replace '^Rustshot\s+', ''
+    # (A GUI-subsystem exe: its --version line does not reach a pipe here; the version resource says the same.)
+    $ver = ((Get-Item $exe).VersionInfo.ProductVersion -replace '^(\d+\.\d+\.\d+).*$', '$1')
     $cache = "$local\rustshot-data"
     $repoLang = "$T\data\lang"
 
@@ -243,28 +244,24 @@ Add-Type -AssemblyName System.Windows.Forms, System.Drawing
         Start-Sleep 4
         $sz = (New-Object System.Drawing.Bitmap "$T\data\qr.png"); $qw = $sz.Width; $qh = $sz.Height; $sz.Dispose()
         $res = @{}
+        # A one-shot capture (`gui`) prints what it read: the code's text on stdout, "No QR code found" on stderr.
         foreach ($case in @('code', 'none')) {
             if ($case -eq 'none') { StopPid $fp; Start-Sleep 1 }
-            $g = WithEnv $vars { Start-Process $exe -ArgumentList 'gui', '--region', "${qw}x${qh}+100+100" -PassThru -RedirectStandardError "$out\v050-qr-$case-stderr.txt" }; $null = $g.Handle
+            $so = "$out\v050-qr-$case-stdout.txt"; $se = "$out\v050-qr-$case-stderr.txt"
+            $g = WithEnv $vars { Start-Process $exe -ArgumentList 'gui', '--region', "${qw}x${qh}+100+100" -PassThru -RedirectStandardOutput $so -RedirectStandardError $se }; $null = $g.Handle
             $ovUp = WaitFor { [W]::Overlay() -ne [IntPtr]::Zero } 10
             Start-Sleep 1
-            $toast = [IntPtr]::Zero
             if ($ovUp) {
                 KeyPress 0x12
                 [void][W]::SetForegroundWindow([W]::Overlay()); Start-Sleep -Milliseconds 300
                 KeyPress 0x51                                     # Q: Read QR code
-                $null = WaitFor { [V50]::Find('rustshot_notice', [uint32]$g.Id) -ne [IntPtr]::Zero } 15
-                $toast = [V50]::Find('rustshot_notice', [uint32]$g.Id)
             }
-            $ex = if ($toast -ne [IntPtr]::Zero) { [V50]::GetWindowLong($toast, -20) } else { 0 }
-            $r = New-Object V50+RECT; if ($toast -ne [IntPtr]::Zero) { [void][V50]::GetWindowRect($toast, [ref]$r) }
-            # A toast with buttons (Copy / Open link) takes clicks; a plain one is click-through (WS_EX_TRANSPARENT).
-            $res[$case] = @{ up = $toast -ne [IntPtr]::Zero; buttons = ($toast -ne [IntPtr]::Zero) -and (($ex -band 0x20) -eq 0); w = $r.R - $r.L; exited = $g.HasExited }
-            $null = WaitFor { $g.HasExited } 10
+            $done = WaitFor { $g.HasExited } 20
             StopPid $g
+            $res[$case] = @{ ov = $ovUp; done = $done; exit = $(if ($done) { $g.ExitCode }); so = ((Get-Content $so -Raw -ErrorAction SilentlyContinue) + '').Trim(); se = ((Get-Content $se -Raw -ErrorAction SilentlyContinue) + '').Trim() }
         }
-        Check 'v050 qr: Q on the QR window shows a toast with buttons (Copy / Open link: a code was read)' ($res.code.up -and $res.code.buttons) "toast=$($res.code.up) buttons=$($res.code.buttons) w=$($res.code.w)"
-        Check 'v050 qr: Q with no code on screen shows a plain toast (no buttons)' ($res.none.up -and -not $res.none.buttons) "toast=$($res.none.up) buttons=$($res.none.buttons) w=$($res.none.w)"
+        Check 'v050 qr: Q on the QR window reads the code (its link on stdout)' ($res.code.so -eq 'https://github.com/rustshot/rustshot') "overlay=$($res.code.ov) exited=$($res.code.done) exit=$($res.code.exit) stdout=[$($res.code.so)] stderr=[$($res.code.se)]"
+        Check 'v050 qr: Q with no code on screen says "No QR code found"' ($res.none.so -eq '' -and $res.none.se -match 'No QR code found') "overlay=$($res.none.ov) exit=$($res.none.exit) stdout=[$($res.none.so)] stderr=[$($res.none.se)]"
         StopPid $fp
     } else {
         Add-Content $log 'SKIP  v050 qr: no <T>\data\qr.png (run.ps1 -QrPng)'
@@ -283,7 +280,6 @@ $t.Font = New-Object System.Drawing.Font('Consolas', 14)
 $t.Text = ((1..160) | ForEach-Object { "line {0:000}  the quick brown fox jumps over the lazy dog {1}" -f $_, ('#' * ($_ % 23)) }) -join "`r`n"
 $t.Name = 'longtext'
 $f.Controls.Add($t)
-$f.Add_Shown({ $t.SelectionStart = 0; $t.ScrollToCaret() })
 [System.Windows.Forms.Application]::Run($f)
 '@
     $fp = Start-Process powershell.exe -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $form -PassThru
@@ -297,6 +293,10 @@ $f.Add_Shown({ $t.SelectionStart = 0; $t.ScrollToCaret() })
         if ($c -eq [IntPtr]::Zero) { return -1 }
         [int][V50]::SendMessage($c, 0x00CE, [IntPtr]::Zero, [IntPtr]::Zero)
     }
+    # The text box at its top (WM_VSCROLL SB_TOP), then where it is.
+    $tb = [V50]::FindPrefix('WindowsForms10.Window', [uint32]$fp.Id)
+    if ($tb -ne [IntPtr]::Zero) { $tb = [V50]::FindWindowEx($tb, [IntPtr]::Zero, [NullString]::Value, [NullString]::Value) }
+    if ($tb -ne [IntPtr]::Zero) { [void][V50]::SendMessage($tb, 0x0115, [IntPtr]6, [IntPtr]::Zero); Start-Sleep -Milliseconds 500 }
     $line0 = & $firstLine $fp.Id
     $before = @(Get-ChildItem $save -Recurse -Filter *.png | Where-Object Name -ne 'v050-plain.png').Count
     $g = WithEnv $vars { Start-Process $exe -ArgumentList 'gui', '--region', '480x300+120+160' -PassThru -RedirectStandardError "$out\v050-scroll-stderr.txt" }; $null = $g.Handle
