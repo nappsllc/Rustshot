@@ -259,6 +259,8 @@ pub struct ObjSelUi {
     pub round: Vec<Pt>,
     /// The handle under the pointer: (round?, index).
     pub hot: Option<(bool, usize)>,
+    /// The object a press would pick up: its frame, faint.
+    pub hover: Vec<FRect>,
 }
 
 /// The callout caret: its rect and color.
@@ -580,6 +582,30 @@ pub fn merge_rects(mut v: Vec<PxRect>) -> Vec<PxRect> {
             }
             i += 1;
         }
+    }
+    v
+}
+
+/// `v` as at most `max` rects covering it: the pair whose union adds the
+/// least area merged until few enough are left (never the bounding box of
+/// everything unless that is what is left: a crosshair's full-width line
+/// and a loupe stay apart).
+pub fn cap_rects(mut v: Vec<PxRect>, max: usize) -> Vec<PxRect> {
+    let area = |r: &PxRect| r.w() as i64 * r.h() as i64;
+    while v.len() > max.max(1) {
+        let mut best = (i64::MAX, 0, 1);
+        for i in 0..v.len() {
+            for j in i + 1..v.len() {
+                let cost = area(&v[i].union(&v[j])) - area(&v[i]) - area(&v[j]);
+                if cost < best.0 {
+                    best = (cost, i, j);
+                }
+            }
+        }
+        let (_, i, j) = best;
+        let u = v[i].union(&v[j]);
+        v.swap_remove(j);
+        v[i] = u;
     }
     v
 }

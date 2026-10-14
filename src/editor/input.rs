@@ -502,35 +502,18 @@ impl Edit {
                 self.handle_press(h);
                 return;
             }
-            // The select tool picks (or starts a marquee); Ctrl+click picks
-            // with the others (the number tool keeps Ctrl for its tail).
-            // With a drawing tool, Ctrl+press on an object not selected
-            // still draws when it drags (Ctrl snaps lines): a click picks.
-            self.obj.click_pick = None;
+            // The select tool picks (or starts a marquee); with no tool
+            // and the drawing tools a press on an object picks it up too
+            // (a drag moves it, a click selects it; Ctrl draws over it).
             if self.tool == Some(Tool::Select) {
                 if self.select_press(p, mods, true) {
                     return;
                 }
-            } else if mods.ctrl
-                && self.tool != Some(Tool::Counter)
-                && self.tool != Some(Tool::Ruler)
-                && let Some(i) = self.obj_at(p)
-            {
-                let draws = matches!(self.tool, Some(t) if t != Tool::Text && t != Tool::Callout);
-                if !draws || self.obj.sel.contains(&i) {
-                    self.select_press(p, mods, false);
-                    return;
-                }
-                self.obj.click_pick = Some((i, p));
-            }
-            self.obj.sel.clear();
-            // The callout tool on a bubble types in it.
-            if self.tool == Some(Tool::Callout)
-                && let Some(i) = self.obj_at(p).filter(|i| matches!(self.objects[*i], Obj::Callout { .. }))
-            {
-                self.begin_callout_edit(i, Some(p), false);
+            } else if let cursor::Under::Grab(_) = self.under(p, mods) {
+                self.select_press(p, mods, false);
                 return;
             }
+            self.obj.sel.clear();
             if let Some(tool) = self.tool {
                 if tool == Tool::Text {
                     self.text = Some(TextDraft {
@@ -644,9 +627,6 @@ impl Edit {
                 }
                 Interact::Drawing { start } => {
                     let start = *start;
-                    if self.obj.click_pick.is_some_and(|(_, q)| (p.x - q.x).hypot(p.y - q.y) >= CLICK_PX) {
-                        self.obj.click_pick = None;
-                    }
                     self.drag_draft(start, p, mods);
                 }
                 Interact::ObjMove { .. } | Interact::ObjResize { .. } | Interact::ObjPoint { .. } | Interact::Marquee { .. } => {

@@ -39,6 +39,7 @@ mod ruler;
 mod qr_read;
 mod imgedit;
 mod trim_sel;
+mod cursor;
 pub use assist::AcceptOn;
 // The editor in a normal window: the Edit window's canvas.
 pub mod host;
@@ -2206,13 +2207,10 @@ impl Driver for App {
         let now = Instant::now();
         edit.prepare(self.notice.as_ref(), self.mouse, now);
         wind::set_fast_timer(self.hwnd, animating(edit, self.notice.as_ref(), now) || edit.rec.meter.is_some());
-        let rects = compose::merge_rects(edit.dirty_rects(edit.painted.as_ref()));
+        let rects = compose::cap_rects(compose::merge_rects(edit.dirty_rects(edit.painted.as_ref())), MAX_DAMAGE_RECTS);
         // The target state: every pixel that differs from it is invalid now.
         edit.painted = edit.scene.clone();
         crate::perf::damage(rects.len(), rects.iter().map(|r| r.w() as u64 * r.h() as u64).sum());
-        if rects.len() > MAX_DAMAGE_RECTS {
-            return None;
-        }
         Some(rects.into_iter().map(|r| [r.x0, r.y0, r.x1, r.y1]).collect())
     }
 
@@ -2238,51 +2236,7 @@ impl Driver for App {
 
     fn cursor(&self) -> Cursor {
         let State::Edit(edit) = &self.st else { return Cursor::Arrow };
-        if edit.assist.ring.is_some() {
-            return Cursor::Arrow;
-        }
-        if edit.pick.as_ref().is_some_and(|p| p.eyedrop) {
-            return Cursor::Cross;
-        }
-        if edit.text.is_some() {
-            return Cursor::IBeam;
-        }
-        let p = Pt::new(self.mouse.0 as f32, self.mouse.1 as f32);
-        if let Some(c) = edit.snip_cursor(p) {
-            return c;
-        }
-        if edit.on_label(p) && matches!(edit.interact, Interact::None) {
-            return Cursor::Arrow;
-        }
-        if edit.in_cedit(p) {
-            return Cursor::IBeam;
-        }
-        if !edit.obj.sel.is_empty()
-            && let Some(h) = edit.obj_handle_at(p)
-        {
-            return match h {
-                select::OHandle::Box(h) => handle_cursor(h),
-                select::OHandle::Point(..) => Cursor::Move,
-            };
-        }
-        if edit.tool == Some(Tool::Select) {
-            return if edit.obj_at(p).is_some() { Cursor::Move } else { Cursor::Arrow };
-        }
-        if edit.tool.is_some() {
-            return Cursor::Cross;
-        }
-        if let Some(sr) = edit.sel {
-            if let Some((h, _)) = handle_points(sr)
-                .into_iter()
-                .find(|(_, q)| (q.x - p.x).hypot(q.y - p.y) <= HANDLE_HIT * edit.ui_scale())
-            {
-                return handle_cursor(h);
-            }
-            if hit(sr, p) {
-                return Cursor::Move;
-            }
-        }
-        Cursor::Cross
+        edit.cursor_at(Pt::new(self.mouse.0 as f32, self.mouse.1 as f32), drag_mods())
     }
 }
 
@@ -3143,8 +3097,9 @@ struct Edit {
     ruler: Option<ruler::Ruler>,
 }
 
-/// More merged dirty rects than this invalidate the whole window (a
-/// selection drag with the magnifier and its crosshair takes up to 16).
+/// The most dirty rects a repaint invalidates: more are merged where that
+/// adds the least area (a selection drag with the magnifier and its
+/// crosshair takes up to 20).
 const MAX_DAMAGE_RECTS: usize = 24;
 
 const HANDLE_HIT: f32 = 10.0; // handle hit radius, logical px (20 px target)
@@ -3781,9 +3736,11 @@ impl Edit {
         });
         let mini = self.obj.mini.as_ref().and_then(|m| m.index_at(p));
         let ohot = self.obj_hot_at(p);
-        let changed = hover != self.hover || hot != self.hot_handle || mini != self.obj.mini_hover || ohot != self.obj.hot;
+        let ohover = self.hover_obj(p, drag_mods());
+        let changed = hover != self.hover || hot != self.hot_handle || mini != self.obj.mini_hover || ohot != self.obj.hot || ohover != self.obj.hover;
         self.obj.mini_hover = mini;
         self.obj.hot = ohot;
+        self.obj.hover = ohover;
         if hover != self.hover {
             self.hover = hover;
             self.hover_at = Instant::now();
@@ -3812,13 +3769,6 @@ fn hit(r: FRect, p: Pt) -> bool {
 
 fn end_interaction(edit: &mut Edit) {
     match std::mem::replace(&mut edit.interact, Interact::None) {
-        Interact::Drawing { .. } if edit.obj.click_pick.is_some() => {
-            // A Ctrl+click on an object: it is selected, nothing drawn.
-            let (i, _) = edit.obj.click_pick.take().expect("click pick");
-            edit.draft = None;
-            edit.stroke_pts.clear();
-            edit.obj.sel = vec![i];
-        }
         Interact::Drawing { .. } if edit.tool == Some(Tool::Ruler) => {
             // The measurement stays until Enter keeps it or Esc drops it.
             edit.ruler = edit.ruler.filter(|r| !r.trivial()).map(|r| ruler::Ruler { done: true, ..r });

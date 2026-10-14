@@ -130,10 +130,14 @@ The tools: select (<kbd>V</kbd>), pencil (<kbd>P</kbd>), line
 magnify (<kbd>Z</kbd>). Hold <kbd>Shift</kbd> while drawing for squares,
 circles and 45° lines.
 
-Annotations stay editable until the capture is finished: pick one with the
-select tool (or <kbd>Ctrl</kbd>+click with any tool) and drag it (it snaps
-to other objects' edges and the selection's center within 6 px; hold
-<kbd>Alt</kbd> to drag without snapping), resize it by its square handles,
+Annotations stay editable until the capture is finished. With any tool,
+point at an object: the pointer turns into the move cursor and a faint
+outline shows what a press picks up. Drag it to move it, click it to
+select it; hold <kbd>Ctrl</kbd> while you start a stroke to draw over an
+object instead. Pixelate, blur, invert, spotlight, magnify and the ruler
+act on what is under them, so they always draw. A dragged object snaps
+to other objects' edges and the selection's center within 6 px (hold
+<kbd>Alt</kbd> to drag without snapping). Resize a selected one by its square handles,
 re-aim a line's or arrow's ends, a callout's tail or the magnifier's source
 and loupe by their round handles. <kbd>Shift</kbd>+click adds or removes
 objects; a drag on empty space with the select tool draws a marquee. The

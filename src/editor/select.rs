@@ -1,8 +1,9 @@
 //! Editing committed objects in the overlay. The select tool (V) picks
 //! the object under a press (Shift toggles it, a drag on empty space is a
-//! marquee); with any other tool Ctrl+click does (the number tool keeps
-//! Ctrl for its tail), so a plain press always draws and drawing stays
-//! fast. A selection moves by dragging (snapping to other objects' edges
+//! marquee); with no tool and with the drawing tools a press on an object
+//! picks it up as well (the move cursor and a faint outline show it on
+//! hover; Ctrl held draws over it instead; the tools acting on what is
+//! under them always draw, see `cursor`). A selection moves by dragging (snapping to other objects' edges
 //! and the image centre within 6 px, Alt: free; a 40 % ghost stays at the
 //! origin), resizes by its square handles, re-aims ends / tails / the
 //! loupe by its round handles, nudges with the arrows (Shift: 10 px), and
@@ -51,11 +52,10 @@ pub(super) struct ObjState {
     /// The mini-toolbar item and the handle under the pointer.
     pub mini_hover: Option<usize>,
     pub hot: Option<(bool, usize)>,
+    /// The object a press would pick up (outlined faintly).
+    pub hover: Option<usize>,
     /// The mini-toolbar as laid out by the last frame (hit tests).
     pub mini: Option<MiniUi>,
-    /// Ctrl+press on an object with a drawing tool: a click (no drag)
-    /// selects it (a drag draws, Ctrl snapping as before).
-    pub click_pick: Option<(usize, Pt)>,
     /// The last coalescing undo step: its kind and when.
     pub coalesce: Option<(&'static str, Instant)>,
     /// The objects as they were when the color picker opened over a
@@ -566,7 +566,10 @@ impl Edit {
                 if was_sel && self.obj.sel.len() > 1 {
                     // A click in a group picks that one.
                     self.obj.sel = vec![hit];
-                } else if was_sel && self.tool == Some(Tool::Select) && matches!(self.objects.get(hit), Some(Obj::Callout { .. })) {
+                } else if (was_sel && self.tool == Some(Tool::Select) || self.tool == Some(Tool::Callout))
+                    && matches!(self.objects.get(hit), Some(Obj::Callout { .. }))
+                {
+                    // A click on a bubble (the callout tool: any) types in it.
                     self.begin_callout_edit(hit, Some(start), false);
                 }
             }
@@ -1016,8 +1019,19 @@ impl Edit {
             Some(CaretUi { r: FRect { x: at.x, y: at.y, w: (2.0 * s).round().max(1.0), h: lay.line_h.round() }, color: ink.with_alpha(255) })
         });
         let idle = matches!(self.interact, Interact::None);
+        // The object a press would pick up: a faint outline.
+        let hover = self.obj.hover.filter(|i| idle && !self.obj.sel.contains(i)).and_then(|i| self.objects.get(i));
+        let osel = match hover {
+            Some(o) => {
+                // A frame for lines too (a line along one is hidden by it).
+                let mut u = osel.unwrap_or_default();
+                u.hover.extend(self.frame_of(o));
+                Some(u)
+            }
+            None => osel,
+        };
         // The font list belongs to what it was opened over: another
-        // selection (Ctrl+click to the next text) closes it.
+        // selection (a click on the next text) closes it.
         if self.obj.font_menu && self.obj.font_menu_sel != self.obj.sel {
             self.obj.font_menu = false;
         }

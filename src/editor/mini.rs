@@ -316,10 +316,17 @@ pub(crate) fn square_handle(p: Pt, s: f32, hot: bool) -> [FRect; 3] {
 }
 
 /// The selection chrome of the objects.
+/// The hover outline's opacity (the selection's is full).
+const HOVER_K: f32 = 0.55;
+
 pub fn osel(f: &mut Fb, ui: &Ui, u: &ObjSelUi) {
     let th = ui.th;
     let s = ui.s;
     let lw = s.round().max(1.0);
+    for b in &u.hover {
+        let r = FRect { x: b.x.round() - lw / 2.0, y: b.y.round() - lw / 2.0, w: b.w.round() + lw, h: b.h.round() + lw };
+        f.stroke_dashed_rect(r, DASH.0 * s, DASH.1 * s, lw, th.accent.fade(HOVER_K));
+    }
     for b in &u.boxes {
         // On the pixel grid, half a line out (the board's x.5 rect).
         let r = FRect { x: b.x.round() - lw / 2.0, y: b.y.round() - lw / 2.0, w: b.w.round() + lw, h: b.h.round() + lw };
@@ -353,7 +360,7 @@ pub fn osel_bounds(ui: &Ui, u: &ObjSelUi) -> Vec<FRect> {
     let lw = s.round().max(1.0);
     let m = lw + 2.0;
     let mut v = Vec::new();
-    for b in &u.boxes {
+    for b in u.boxes.iter().chain(&u.hover) {
         let (x0, y0, x1, y1) = (b.x.round() - m, b.y.round() - m, b.x1().round() + m, b.y1().round() + m);
         let t = 2.0 * m;
         v.push(FRect { x: x0, y: y0, w: x1 - x0, h: t });

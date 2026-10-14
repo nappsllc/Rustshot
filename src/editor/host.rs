@@ -658,29 +658,7 @@ impl Canvas {
         if !self.on_canvas(p) || self.on_bar(p) {
             return Cursor::Arrow;
         }
-        let e = &self.e;
-        let ip = self.view.to_img(p);
-        if e.pick.as_ref().is_some_and(|k| k.eyedrop) {
-            return Cursor::Cross;
-        }
-        if e.text.is_some() || e.in_cedit(ip) {
-            return Cursor::IBeam;
-        }
-        if let Some(c) = e.snip_cursor(ip) {
-            return c;
-        }
-        if !e.obj.sel.is_empty()
-            && let Some(h) = e.obj_handle_at(ip)
-        {
-            return match h {
-                select::OHandle::Box(h) => handle_cursor(h),
-                select::OHandle::Point(..) => Cursor::Move,
-            };
-        }
-        if e.tool == Some(Tool::Select) {
-            return if e.obj_at(ip).is_some() { Cursor::Move } else { Cursor::Arrow };
-        }
-        Cursor::Cross
+        self.e.cursor_at(self.view.to_img(p), super::drag_mods())
     }
 
     /// The pointer in image px (the status bar).
@@ -1378,6 +1356,7 @@ fn map_osel(u: &ObjSelUi, v: &View) -> ObjSelUi {
         square: u.square.iter().map(|p| v.to_win(*p)).collect(),
         round: u.round.iter().map(|p| v.to_win(*p)).collect(),
         hot: u.hot,
+        hover: u.hover.iter().map(|b| v.rect(*b)).collect(),
     }
 }
 

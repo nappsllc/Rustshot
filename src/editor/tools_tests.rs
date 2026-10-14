@@ -458,8 +458,9 @@ fn eyedropper_samples_the_screenshot() {
     let eye = item(&mut a, |k| *k == toolbar::Kind::Btn(Act::Eyedrop));
     click(&mut a, mid(eye));
     assert!(ed(&mut a).pick.as_ref().unwrap().eyedrop);
-    assert_eq!(a.cursor(), Cursor::Cross);
+    assert_eq!(a.cursor(), Cursor::Arrow, "over the toolbar");
     mv(&mut a, BLUE_AT);
+    assert_eq!(a.cursor(), Cursor::Cross);
     let e = ed(&mut a);
     e.prepare(None, BLUE_AT, Instant::now());
     let l = e.scene.as_ref().unwrap().loupe.clone().expect("loupe");

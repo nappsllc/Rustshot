@@ -224,6 +224,202 @@ fn coalesce(rects: Vec<[i32; 4]>, max: usize) -> Vec<[i32; 4]> {
     v
 }
 
+// --- the overlay's pointer moves: one frame per display refresh ---------
+//
+// A mouse reporting at 1-8 kHz sends a move far more often than the
+// display shows a frame (60-240 Hz), and input outranks WM_PAINT in the
+// queue: handled (and painted) one by one, the moves kept the thread busy
+// and the paint waited behind them, so the loupe and crosshair trailed the
+// pointer. The overlay's WM_MOUSEMOVE now only notes where the pointer
+// is; the loop draws that, once per refresh, late in it (the freshest
+// position, done before the compositor takes the frame). Any other input
+// (a press, a key) first takes the noted move, so its order is kept.
+
+/// Sent to the overlay by its loop: handle the noted move and paint now.
+const WM_APP_MOVE: u32 = WM_APP + 0x31;
+
+/// The overlay's noted move: its window, where, and the times of the
+/// oldest and newest move behind it (`perf`).
+#[derive(Clone, Copy)]
+struct Noted {
+    hwnd: isize,
+    x: i32,
+    y: i32,
+    times: Option<(std::time::Instant, std::time::Instant)>,
+}
+
+thread_local! {
+    static NOTED: std::cell::Cell<Option<Noted>> = const { std::cell::Cell::new(None) };
+    static PACER: std::cell::RefCell<Pacer> = const { std::cell::RefCell::new(Pacer::new()) };
+}
+
+/// Note a move to `(x, y)` (at `t`, see `perf::move_time`).
+fn note_move(hwnd: HWND, x: i32, y: i32, t: Option<std::time::Instant>) {
+    let prev = NOTED.get().filter(|n| n.hwnd == hwnd.0 as isize);
+    let times = match (prev.and_then(|p| p.times), t) {
+        (Some((first, _)), Some(t)) => Some((first, t)),
+        (None, Some(t)) => Some((t, t)),
+        (old, None) => old,
+    };
+    NOTED.set(Some(Noted { hwnd: hwnd.0 as isize, x, y, times }));
+}
+
+/// Hand the noted move of `hwnd` (if any) to the driver; true when there
+/// was one.
+unsafe fn take_move(hwnd: HWND, drv: &mut dyn Driver) -> bool {
+    let Some(n) = NOTED.get().filter(|n| n.hwnd == hwnd.0 as isize) else { return false };
+    NOTED.set(None);
+    let _m = crate::perf::mouse_move(n.times);
+    drv.on_event(Ev::Move { x: n.x, y: n.y });
+    true
+}
+
+/// A move is noted (for any overlay on this thread).
+fn move_noted() -> bool {
+    NOTED.get().is_some()
+}
+
+/// Messages that must see the noted move first (they act where the
+/// pointer is, or change what it is over).
+fn takes_move_first(msg: u32) -> bool {
+    matches!(
+        msg,
+        WM_LBUTTONDOWN
+            | WM_LBUTTONUP
+            | WM_MBUTTONDOWN
+            | WM_MBUTTONUP
+            | WM_RBUTTONDOWN
+            | WM_RBUTTONUP
+            | WM_MOUSEWHEEL
+            | WM_KEYDOWN
+            | WM_KEYUP
+            | WM_CHAR
+    )
+}
+
+/// The cursor the driver wants now, set when the pointer is over `hwnd`
+/// (or it has the capture): after a deferred move nothing else asks
+/// (WM_SETCURSOR came with the move, before it was handled).
+unsafe fn refresh_cursor(hwnd: HWND, drv: &dyn Driver) {
+    unsafe {
+        let mut p = POINT::default();
+        let over = windows::Win32::UI::Input::KeyboardAndMouse::GetCapture() == hwnd
+            || (GetCursorPos(&mut p).is_ok() && WindowFromPoint(p) == hwnd);
+        if over && let Ok(c) = LoadCursorW(None, cursor_id(drv.cursor())) {
+            let _ = SetCursor(Some(c));
+        }
+    }
+}
+
+/// When to draw the noted move: once per display refresh, `lead` ms
+/// before the vblank (what the last frames took, plus a margin), so the
+/// frame is done in time and shows the freshest position.
+pub(crate) struct Pacer {
+    /// The vblank the last frame was made for (ms, QPC clock).
+    made_for: Option<f64>,
+    /// What a frame takes (ms, smoothed).
+    cost: f64,
+    /// The display's timing: the last vblank (ms) and the period (ms),
+    /// and when they were read (ms).
+    timing: Option<(f64, f64, f64)>,
+}
+
+/// Ready this long before the vblank besides the frame's cost (ms).
+const PACE_MARGIN_MS: f64 = 1.5;
+/// The timing is read again after this long (ms): the vblanks are
+/// extrapolated from it in between.
+const PACE_TIMING_MS: f64 = 500.0;
+/// No DWM timing: frames this far apart (ms).
+const PACE_FALLBACK_MS: f64 = 1000.0 / 120.0;
+
+impl Pacer {
+    pub(crate) const fn new() -> Pacer {
+        Pacer { made_for: None, cost: 2.0, timing: None }
+    }
+
+    /// From `now` (ms), with a vblank at `vblank` and the refresh
+    /// `period` (ms): how long to wait before drawing (0: now) and the
+    /// vblank (its time) the frame will be for.
+    pub(crate) fn plan(&self, now: f64, vblank: f64, period: f64) -> (f64, f64) {
+        let period = period.max(1.0);
+        let lead = (self.cost + PACE_MARGIN_MS).clamp(0.0, period);
+        // The vblank that ends the interval `now` is in; one frame each.
+        let mut target = vblank + (((now - vblank) / period).floor() + 1.0) * period;
+        if self.made_for.is_some_and(|m| m > target - period / 2.0) {
+            target += period;
+        }
+        ((target - lead - now).max(0.0), target)
+    }
+
+    /// A frame for the vblank at `target` was drawn; it took `ms`.
+    pub(crate) fn made(&mut self, target: f64, ms: f64) {
+        self.made_for = Some(target);
+        // Up at once, down slowly: a slow frame is planned for again.
+        let ms = ms.clamp(0.0, 50.0);
+        self.cost = if ms > self.cost { ms } else { self.cost * 0.9 + ms * 0.1 };
+    }
+
+    /// The display's last vblank and period (ms), read from DWM now and
+    /// then; a fixed cadence without it.
+    fn timing(&mut self, now: f64) -> (f64, f64) {
+        if let Some((vb, period, at)) = self.timing
+            && now - at < PACE_TIMING_MS
+        {
+            return (vb, period);
+        }
+        let t = unsafe {
+            let mut ti: windows::Win32::Graphics::Dwm::DWM_TIMING_INFO = std::mem::zeroed();
+            ti.cbSize = std::mem::size_of_val(&ti) as u32;
+            windows::Win32::Graphics::Dwm::DwmGetCompositionTimingInfo(HWND::default(), &mut ti).ok().and_then(|_| {
+                let (vb, period) = (ti.qpcVBlank, ti.qpcRefreshPeriod);
+                let f = qpc_freq();
+                (period > 0 && f > 0.0).then(|| (vb as f64 * 1000.0 / f, period as f64 * 1000.0 / f))
+            })
+        };
+        let (vb, period) = t.unwrap_or((0.0, PACE_FALLBACK_MS));
+        self.timing = Some((vb, period, now));
+        (vb, period)
+    }
+}
+
+fn qpc_freq() -> f64 {
+    let mut f = 0i64;
+    // SAFETY: writes an i64 we own.
+    unsafe {
+        let _ = windows::Win32::System::Performance::QueryPerformanceFrequency(&mut f);
+    }
+    f as f64
+}
+
+/// The noted move's frame: how long until it is due (ms; 0 = now), or
+/// `None` with no move noted.
+fn move_wait() -> Option<(f64, f64)> {
+    if !move_noted() {
+        return None;
+    }
+    let now = crate::perf::qpc_ms();
+    Some(PACER.with_borrow_mut(|p| {
+        let (vb, period) = p.timing(now);
+        p.plan(now, vb, period)
+    }))
+}
+
+/// Draw the noted move now: the newest moves still queued are noted
+/// first (the freshest position), then the overlay handles it and paints.
+unsafe fn draw_move(hwnd: HWND, target: f64) {
+    unsafe {
+        let mut m = MSG::default();
+        while PeekMessageW(&mut m, Some(hwnd), WM_MOUSEMOVE, WM_MOUSEMOVE, PM_REMOVE).as_bool() {
+            DispatchMessageW(&m);
+        }
+        let t0 = std::time::Instant::now();
+        crate::perf::frame_for(target);
+        let _ = SendMessageW(hwnd, WM_APP_MOVE, None, None);
+        let ms = t0.elapsed().as_secs_f64() * 1000.0;
+        PACER.with_borrow_mut(|p| p.made(target, ms));
+    }
+}
+
 /// Re-arm the window timer (same id replaces the old interval).
 pub fn retime(hwnd: HWND, ms: u64) {
     if hwnd.is_invalid() {
@@ -260,14 +456,37 @@ unsafe extern "system" fn wndproc(
         if let Some(r) = overlay_frame(hwnd, msg, wp, lp) {
             return r;
         }
+        // Moves are noted and drawn once per refresh (see `Pacer`).
+        if msg == WM_MOUSEMOVE {
+            crate::perf::move_arrived();
+            note_move(hwnd, x_of(lp), y_of(lp), crate::perf::move_time(wp.0));
+            return LRESULT(0);
+        }
+        if msg == WM_APP_MOVE {
+            if take_move(hwnd, drv) {
+                let _ = UpdateWindow(hwnd);
+                refresh_cursor(hwnd, drv);
+            }
+            return LRESULT(0);
+        }
+        if takes_move_first(msg) {
+            take_move(hwnd, drv);
+        }
         if msg == WM_DESTROY {
+            NOTED.set(None);
             unpin(hwnd);
             drv.on_quit();
             forget_tick(hwnd);
             PostQuitMessage(0);
             return LRESULT(0);
         }
-        common(hwnd, msg, wp, lp, drv).unwrap_or_else(|| DefWindowProcW(hwnd, msg, wp, lp))
+        let r = common(hwnd, msg, wp, lp, drv).unwrap_or_else(|| DefWindowProcW(hwnd, msg, wp, lp));
+        // A key can change the cursor without a move (Ctrl over an object
+        // draws over it: the cross, not the move cursor).
+        if matches!(msg, WM_KEYDOWN | WM_KEYUP) {
+            refresh_cursor(hwnd, drv);
+        }
+        r
     }
 }
 
@@ -290,7 +509,8 @@ unsafe fn common(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM, drv: &mut dyn Dri
             WM_MOUSEMOVE => {
                 // No automatic repaint: the driver calls `invalidate` itself
                 // when a move actually changes what should be on screen.
-                let _m = crate::perf::mouse_move();
+                crate::perf::move_arrived();
+                let _m = crate::perf::mouse_move(crate::perf::move_time(wp.0).map(|t| (t, t)));
                 drv.on_event(Ev::Move {
                     x: x_of(lp),
                     y: y_of(lp),
@@ -562,29 +782,60 @@ pub fn run(driver: &mut dyn Driver) -> i32 {
             Ok(hwnd) => {
                 driver.on_create(hwnd);
                 let _ = SetTimer(Some(hwnd), 1, tick_ms(hwnd) as u32, None);
-                let mut msg = MSG::default();
-                let mut code = 0;
-                loop {
-                    match GetMessageW(&mut msg, None, 0, 0).0 {
-                        0 => break,
-                        -1 => {
-                            eprintln!("overlay message loop failed: {}", windows::core::Error::from_thread());
-                            code = 1;
-                            break;
-                        }
-                        _ => {
-                            let _ = TranslateMessage(&msg);
-                            DispatchMessageW(&msg);
-                        }
-                    }
-                }
+                overlay_loop(hwnd);
                 let _ = DestroyWindow(hwnd);
-                code
+                0
             }
             Err(e) => {
                 eprintln!("failed to create overlay window: {e}");
                 1
             }
+        }
+    }
+}
+
+/// The overlay's message loop until WM_QUIT: everything queued is
+/// handled as it comes; a noted move is drawn when its frame is due, also
+/// in the middle of a stream of input (a fast mouse never starves it).
+unsafe fn overlay_loop(hwnd: HWND) {
+    use windows::Win32::System::Threading::{CreateWaitableTimerExW, SetWaitableTimer, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, INFINITE, TIMER_ALL_ACCESS};
+    unsafe {
+        // A wait's timeout follows the system tick (15.6 ms by default):
+        // a high-resolution timer wakes the loop on time for the frame.
+        let timer = CreateWaitableTimerExW(None, PCWSTR::null(), CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS.0)
+            .or_else(|_| CreateWaitableTimerExW(None, PCWSTR::null(), 0, TIMER_ALL_ACCESS.0))
+            .ok();
+        let mut msg = MSG::default();
+        'outer: loop {
+            while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                if msg.message == WM_QUIT {
+                    break 'outer;
+                }
+                let _ = TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+                if let Some((wait, target)) = move_wait()
+                    && wait <= 0.0
+                {
+                    draw_move(hwnd, target);
+                }
+            }
+            match move_wait() {
+                Some((wait, target)) if wait <= 0.0 => draw_move(hwnd, target),
+                Some((wait, _)) => {
+                    // Until the next message, or the move's frame.
+                    let due = -((wait * 10_000.0).ceil() as i64).max(1);
+                    match timer.filter(|t| SetWaitableTimer(*t, &due, 0, None, None, false).is_ok()) {
+                        Some(t) => MsgWaitForMultipleObjectsEx(Some(&[t]), INFINITE, QS_ALLINPUT, MWMO_INPUTAVAILABLE),
+                        None => MsgWaitForMultipleObjectsEx(None, (wait.ceil() as u32).max(1), QS_ALLINPUT, MWMO_INPUTAVAILABLE),
+                    };
+                }
+                None => {
+                    MsgWaitForMultipleObjectsEx(None, INFINITE, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+                }
+            }
+        }
+        if let Some(t) = timer {
+            let _ = windows::Win32::Foundation::CloseHandle(t);
         }
     }
 }
@@ -1545,6 +1796,159 @@ mod tests {
             println!("centre pixel {:#08x?}, want {want:#08x}", d.sampled);
             assert_eq!(d.sampled, Some(want));
         }
+    }
+
+    /// The pacer: one frame per refresh, started `cost + margin` before
+    /// the vblank; a frame already made for a vblank waits for the next;
+    /// a slow frame moves the start earlier; a vblank read again later
+    /// (another base) neither skips nor repeats a frame.
+    #[test]
+    fn pacer_plans_one_frame_per_refresh_late_in_it() {
+        let period = 1000.0 / 120.0;
+        let mut p = Pacer::new();
+        let lead = p.cost + PACE_MARGIN_MS;
+        // Just after a vblank at 100: wait until the next one less the lead.
+        let (wait, target) = p.plan(100.5, 100.0, period);
+        assert!((target - (100.0 + period)).abs() < 1e-9, "{target}");
+        assert!((wait - (target - lead - 100.5)).abs() < 1e-9, "{wait}");
+        // Past the start: now.
+        let (wait, target) = p.plan(100.0 + period - 0.5, 100.0, period);
+        assert_eq!(wait, 0.0);
+        p.made(target, 1.0);
+        // Made for that vblank: the next frame is for the one after.
+        let (wait, next) = p.plan(100.0 + period - 0.2, 100.0, period);
+        assert!((next - (target + period)).abs() < 1e-9);
+        assert!(wait > period - lead - 0.5, "{wait}");
+        // The same vblank read again from a later base: still the next one.
+        let (_, again) = p.plan(100.0 + period - 0.2, 100.0 + 50.0 * period, period);
+        assert!((again - next).abs() < 1e-6, "{again} vs {next}");
+        // A slow frame: started earlier next time (and a frame never
+        // starts before its interval).
+        p.made(next, 6.0);
+        let (wait, t3) = p.plan(next + 0.1, 100.0, period);
+        assert!((wait - (t3 - 6.0 - PACE_MARGIN_MS - (next + 0.1))).abs() < 1e-9, "{wait}");
+        p.made(t3, 40.0);
+        let (wait, _) = p.plan(t3 + 0.1, 100.0, period);
+        assert_eq!(wait, 0.0, "a frame slower than the refresh starts at once");
+        // The cost comes down slowly after.
+        p.made(t3 + period, 1.0);
+        assert!(p.cost > 30.0, "{}", p.cost);
+    }
+
+    /// Noted moves: the newest position wins, the times run from the
+    /// oldest to the newest, another window's note is not taken.
+    #[test]
+    fn noted_moves_coalesce() {
+        let (a, b) = (HWND(8 as *mut _), HWND(16 as *mut _));
+        let t0 = std::time::Instant::now();
+        let t1 = t0 + std::time::Duration::from_millis(3);
+        NOTED.set(None);
+        note_move(a, 1, 2, Some(t0));
+        note_move(a, 5, 6, Some(t1));
+        let n = NOTED.get().expect("noted");
+        assert_eq!((n.x, n.y, n.times), (5, 6, Some((t0, t1))));
+        assert!(move_noted());
+        struct Rec(Vec<Ev>);
+        impl Driver for Rec {
+            fn on_create(&mut self, _: HWND) {}
+            fn on_event(&mut self, ev: Ev) -> bool {
+                self.0.push(ev);
+                false
+            }
+            fn frame(&mut self) -> Option<&mut PixBuf> {
+                None
+            }
+            fn cursor(&self) -> Cursor {
+                Cursor::Arrow
+            }
+        }
+        let mut r = Rec(Vec::new());
+        assert!(!unsafe { take_move(b, &mut r) }, "not b's");
+        assert!(unsafe { take_move(a, &mut r) });
+        assert!(matches!(r.0[..], [Ev::Move { x: 5, y: 6 }]));
+        assert!(!move_noted() && !unsafe { take_move(a, &mut r) });
+        for m in [WM_LBUTTONDOWN, WM_LBUTTONUP, WM_RBUTTONDOWN, WM_MOUSEWHEEL, WM_KEYDOWN, WM_CHAR] {
+            assert!(takes_move_first(m), "{m:#x}");
+        }
+        for m in [WM_PAINT, WM_TIMER, WM_SETCURSOR, WM_MOUSEMOVE] {
+            assert!(!takes_move_first(m), "{m:#x}");
+        }
+    }
+
+    /// What the paced-overlay test saw.
+    #[derive(Default)]
+    struct PacedSeen {
+        evs: Vec<Ev>,
+        paints: u32,
+    }
+
+    /// A real overlay window (off screen) flooded with moves from another
+    /// thread, then a press and a release: the driver gets a handful of
+    /// moves (not one per message), the last at the final position and
+    /// before the press, and painted frames for them.
+    struct Paced {
+        seen: std::sync::Arc<std::sync::Mutex<PacedSeen>>,
+        helper: Option<std::thread::JoinHandle<()>>,
+        hwnd: usize,
+        fb: PixBuf,
+    }
+
+    impl Driver for Paced {
+        fn on_create(&mut self, hwnd: HWND) {
+            self.hwnd = hwnd.0 as usize;
+            show_at(hwnd, -30000, -30000, 320, 240);
+            let raw = hwnd.0 as usize;
+            self.helper = Some(std::thread::spawn(move || unsafe {
+                let hwnd = HWND(raw as *mut core::ffi::c_void);
+                let at = |x: i32, y: i32| LPARAM(((y as isize) << 16) | (x as isize & 0xffff));
+                for i in 0..2000 {
+                    let _ = PostMessageW(Some(hwnd), WM_MOUSEMOVE, WPARAM(0), at(i % 300, i % 200));
+                }
+                let _ = PostMessageW(Some(hwnd), WM_LBUTTONDOWN, WPARAM(1), at(7, 9));
+                let _ = PostMessageW(Some(hwnd), WM_LBUTTONUP, WPARAM(0), at(7, 9));
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
+            }));
+        }
+        fn on_event(&mut self, ev: Ev) -> bool {
+            let mv = matches!(ev, Ev::Move { .. });
+            if matches!(ev, Ev::Timer) {
+                return false;
+            }
+            self.seen.lock().unwrap().evs.push(ev);
+            if mv {
+                invalidate(HWND(self.hwnd as *mut _));
+            }
+            false
+        }
+        fn frame(&mut self) -> Option<&mut PixBuf> {
+            self.seen.lock().unwrap().paints += 1;
+            Some(&mut self.fb)
+        }
+        fn cursor(&self) -> Cursor {
+            Cursor::Arrow
+        }
+    }
+
+    #[test]
+    fn overlay_draws_moves_once_per_frame_and_keeps_their_order() {
+        let _guard = windows_lock();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(PacedSeen::default()));
+        let mut d = Paced { seen: seen.clone(), helper: None, hwnd: 0, fb: PixBuf::new(320, 240) };
+        std::thread::spawn(move || {
+            assert_eq!(run(&mut d), 0);
+            d.helper.take().expect("helper").join().expect("helper thread");
+        })
+        .join()
+        .expect("overlay thread");
+        let seen = seen.lock().unwrap();
+        let moves: Vec<(i32, i32)> = seen.evs.iter().filter_map(|e| if let Ev::Move { x, y } = e { Some((*x, *y)) } else { None }).collect();
+        assert!(!moves.is_empty() && moves.len() < 200, "{} moves handled for 2000 messages", moves.len());
+        assert_eq!(moves.last(), Some(&(1999 % 300, 1999 % 200)), "the newest position");
+        let down = seen.evs.iter().position(|e| matches!(e, Ev::Down { .. })).expect("a press");
+        assert!(matches!(seen.evs[down - 1], Ev::Move { x: 199, y: 199 }), "the move before the press: {:?}", &seen.evs[down - 1]);
+        assert!(matches!(seen.evs[down..], [Ev::Down { x: 7, y: 9 }, Ev::Up { x: 7, y: 9 }, ..]), "{:?}", &seen.evs[down..]);
+        assert!(seen.paints >= 1, "frames painted");
     }
 
     /// What the pinned-overlay test saw after outside code tried to move it.
