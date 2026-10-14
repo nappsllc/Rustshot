@@ -197,3 +197,66 @@ pub fn esc_down() -> bool {
         }
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::{run, Ctl, End, Pace};
+    use crate::rec_ui::x11 as xw;
+    use std::time::{Duration, Instant};
+
+    /// Live (X11, the Docker harness's Xvfb): a window of our own whose
+    /// content scrolls on wheel button 5 is captured whole through XTest.
+    /// `cargo test live_x11_scroll_capture -- --ignored --nocapture`
+    #[test]
+    #[ignore = "live: X11 display (Docker)"]
+    fn live_x11_scroll_capture() {
+        if std::env::var_os("DISPLAY").is_none() || !super::available() {
+            eprintln!("SKIP: no X11 display with XTest");
+            return;
+        }
+        let _g = crate::wind::test_window_lock();
+        const CONTENT: u32 = 1200;
+        let (x, y, w, h) = (200i32, 150i32, 360u32, 240u32);
+        let page: Vec<u8> = (0..CONTENT)
+            .flat_map(|r| {
+                let band = r / 20;
+                (0..w).flat_map(move |c| {
+                    let mark = c < 30 + band * 37 % 280;
+                    if mark { [(band * 53 % 200) as u8, (band * 97 % 220) as u8, ((r % 20) * 10) as u8, 255] } else { [255, 255, 255, 255] }
+                })
+            })
+            .collect();
+        let d = xw::Disp::open().expect("display");
+        let mut win = xw::Win::with_kind(&d, true, None, xw::Kind::Overlay).expect("window");
+        let n = (w * 4) as usize;
+        let mut off = 0u32;
+        let draw = |win: &mut xw::Win, off: u32| win.put(x, y, w, h, &page[off as usize * n..(off + h) as usize * n]);
+        draw(&mut win, off);
+        xw::flush(&d);
+        std::thread::sleep(Duration::from_millis(300));
+        let area = (x, y, w, h);
+        let mut wheel = super::XWheel::at((x + w as i32 / 2, y + h as i32 / 2)).expect("the wheel");
+        let job = std::thread::spawn(move || {
+            let ctl = Ctl::default();
+            let mut grab = || super::super::grab_area(area);
+            run(&mut grab, &mut wheel, &ctl, Pace::default(), &|| false)
+        });
+        let t0 = Instant::now();
+        while !job.is_finished() && t0.elapsed() < Duration::from_secs(60) {
+            while let Some(ev) = xw::next_event(&d) {
+                // SAFETY: every event starts with its type; buttons share the pointer head.
+                let (ty, p) = unsafe { (ev.type_, ev.pointer) };
+                if ty == xw::EV_BUTTON_PRESS && p.button == 5 {
+                    off = (off + 40).min(CONTENT - h);
+                    draw(&mut win, off);
+                }
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let (pic, end) = job.join().expect("the run").expect("scrolled");
+        println!("X11 scrolling capture: {end:?} {}x{} in {:?}", pic.width(), pic.height(), t0.elapsed());
+        assert_eq!(end, End::Bottom);
+        assert_eq!(pic.height(), CONTENT, "the whole content");
+        assert_eq!(pic.as_raw()[..], page[..], "exactly the page");
+    }
+}

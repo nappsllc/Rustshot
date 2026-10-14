@@ -292,4 +292,57 @@ mod tests {
         assert_eq!(v(0x1234), 0);
         assert_eq!(super::super::key_label(v(0x2f)).as_deref(), Some("/"));
     }
+
+    /// Live (X11, the Docker harness's Xvfb only: it fakes input): XTest
+    /// presses Ctrl+S and clicks, the raw-event listener files them.
+    /// `cargo test live_x11_marks -- --ignored --nocapture`
+    #[test]
+    #[ignore = "live: X11 display (Docker), fakes input"]
+    fn live_x11_marks_listen_to_raw_events() {
+        use super::super::{Button, MarkOpts, Marks};
+        use core::ffi::{c_int, c_uint, c_ulong, c_void};
+        use std::sync::Arc;
+        use std::time::{Duration, Instant};
+        // Only in a container's own X server: never fake input on a desktop.
+        if std::env::var_os("DISPLAY").is_none() || std::env::var_os("RS_SUMMARY").is_none() && !std::path::Path::new("/.dockerenv").exists() {
+            eprintln!("SKIP: not in the Docker harness");
+            return;
+        }
+        #[link(name = "X11")]
+        unsafe extern "C" {
+            fn XKeysymToKeycode(dpy: *mut c_void, keysym: c_ulong) -> u8;
+        }
+        type FakeKey = unsafe extern "C" fn(*mut c_void, c_uint, c_int, c_ulong) -> c_int;
+        type FakeButton = unsafe extern "C" fn(*mut c_void, c_uint, c_int, c_ulong) -> c_int;
+        let lib = crate::rec::linux::dl::Lib::open("libXtst.so.6").expect("libXtst");
+        let (key, button): (FakeKey, FakeButton) = unsafe { (lib.sym("XTestFakeKeyEvent").unwrap(), lib.sym("XTestFakeButtonEvent").unwrap()) };
+        let marks = Arc::new(Marks::new(MarkOpts { clicks: true, keys: true, all_keys: false }));
+        let hooks = super::start(marks.clone()).expect("listening");
+        std::thread::sleep(Duration::from_millis(300));
+        unsafe {
+            let dpy = super::XOpenDisplay(core::ptr::null());
+            assert!(!dpy.is_null());
+            let (ctrl, s) = (XKeysymToKeycode(dpy, 0xffe3) as c_uint, XKeysymToKeycode(dpy, 0x73) as c_uint);
+            for (k, down) in [(ctrl, 1), (s, 1), (s, 0), (ctrl, 0)] {
+                key(dpy, k, down, 0);
+            }
+            // A typed letter: not shown (no Ctrl, Alt or Win).
+            key(dpy, s, 1, 0);
+            key(dpy, s, 0, 0);
+            button(dpy, 3, 1, 0);
+            button(dpy, 3, 0, 0);
+            super::XFlush(dpy);
+            super::XCloseDisplay(dpy);
+        }
+        let t0 = Instant::now();
+        let mut scene = marks.scene(Instant::now());
+        while (scene.pill.is_none() || scene.rings.is_empty()) && t0.elapsed() < Duration::from_secs(3) {
+            std::thread::sleep(Duration::from_millis(20));
+            scene = marks.scene(Instant::now());
+        }
+        drop(hooks);
+        println!("X11 marks: {scene:?}");
+        assert_eq!(scene.pill.map(|p| p.0).as_deref(), Some("Ctrl + S"));
+        assert_eq!(scene.rings.first().map(|r| r.0.button), Some(Button::Right));
+    }
 }
