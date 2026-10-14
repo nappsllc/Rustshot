@@ -315,6 +315,9 @@ fn freeform_lasso_saves_a_transparent_outside() {
         for i in 1..=20 {
             let (x, y) = (w[0].0 + (w[1].0 - w[0].0) * i / 20, w[0].1 + (w[1].1 - w[0].1) * i / 20);
             mouse_move(hwnd, x, y);
+            // At a hand's pace: the overlay draws (and the lasso takes)
+            // the newest move once per display refresh.
+            std::thread::sleep(Duration::from_millis(30));
         }
     }
     mouse_up(hwnd, pts[0].0, pts[0].1);
