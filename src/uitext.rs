@@ -252,8 +252,9 @@ mod tests {
     #[test]
     fn only_strings_with_missing_glyphs_fall_back() {
         assert!(!needed(&UI, "Save as\u{2026} \u{00d7}"));
-        assert!(needed(&UI, "Größe"));
-        assert!(needed(&UI, "Сохранить"));
+        assert!(!needed(&UI, "Größe"));
+        assert!(!needed(&UI, "Сохранить"));
+        assert!(needed(&UI, "الحفظ"));
         assert!(needed(&UI, "保存"));
     }
 

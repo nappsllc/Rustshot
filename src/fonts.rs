@@ -87,7 +87,7 @@ impl UiFont {
 
     fn kern(&self, a: usize, b: usize) -> f32 {
         baked::KERN
-            .binary_search_by_key(&(a as u8, b as u8), |&(l, r, _)| (l, r))
+            .binary_search_by_key(&(a as u16, b as u16), |&(l, r, _)| (l, r))
             .map_or(0.0, |i| baked::KERN[i].2 as f32)
     }
 
@@ -258,7 +258,11 @@ mod tests {
         for ch in ['A', 'g', '0', '×', '·', '…', '—', '⇧', '⌘', '⌥', '⏎', '←', '↓'] {
             assert!(UI.has_glyph(ch), "missing {ch:?}");
         }
-        assert!(!UI.has_glyph('Ж'));
+        // Latin, Greek, Cyrillic and Vietnamese are baked; CJK is not.
+        for ch in ['é', 'ß', 'ł', 'ş', 'Δ', 'Ж', 'ї', 'ữ', '°', '²', '€', '›'] {
+            assert!(UI.has_glyph(ch), "missing {ch:?}");
+        }
+        assert!(!UI.has_glyph('保'));
     }
 
     #[test]
@@ -386,7 +390,8 @@ mod tests {
             + std::mem::size_of_val(&baked::KERN)
             + baked::OUTLINES_Z.len();
         eprintln!("baked font tables: {bytes} bytes ({} compressed outline bytes)", baked::OUTLINES_Z.len());
-        assert!(bytes < 12 * 1024, "{bytes} bytes");
+        // Latin, Greek, Cyrillic and Vietnamese: about 42 KB.
+        assert!(bytes < 48 * 1024, "{bytes} bytes");
     }
 
     /// The outlines inflate quickly enough to do at startup.

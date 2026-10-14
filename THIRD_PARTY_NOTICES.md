@@ -52,8 +52,11 @@ SOFTWARE.
 
 ## Inter — SIL Open Font License 1.1
 
-`assets/fonts/Inter-Medium.subset.ttf` is a subset of Inter by Rasmus
-Andersson (https://rsms.me/inter). The build bakes its outlines and metrics
+`assets/fonts/Inter-Medium.subset.ttf` is a subset of Inter 4.1 Medium by
+Rasmus Andersson (https://rsms.me/inter; from the official release
+Inter-4.1.zip, SHA-256 9883fdd4a49d4fb66bd8177ba6625ef9a64aa45899767dde3d36aa425756b11e,
+file extras/ttf/Inter-Medium.ttf), cut to Latin (incl. Latin-1, Extended-A,
+Vietnamese), Greek, Cyrillic and UI symbols with fontTools. The build bakes its outlines and metrics
 into the executable (a derivative of the font under the same license); the
 Linux build also embeds the TTF itself as the annotation-text fallback. The
 full license text follows at the end of this file.

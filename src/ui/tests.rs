@@ -417,7 +417,7 @@ fn headings_draw_whole_words_outside_ascii() {
 /// face too, so a click after each character puts the caret there.
 #[test]
 fn text_field_caret_on_mixed_strings() {
-    let s = "Gr\u{f6}\u{df}e_%Y-%m-%d_screenshot";
+    let s = "Gr\u{4fdd}\u{5b58}e_%Y-%m-%d_screenshot";
     let font = &crate::fonts::UI;
     assert!(crate::uitext::needed(font, s));
     for (end, _) in s.char_indices().skip(1).step_by(3) {

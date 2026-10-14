@@ -162,7 +162,7 @@ fn bake_font() {
             gids.push(g);
         }
     }
-    assert!(gids.len() <= 256, "more than 256 glyphs: widen the slot type");
+    assert!(gids.len() <= 65536, "more than 65536 glyphs: widen the slot type");
     let slot = |g: GlyphId| gids.iter().position(|&x| x == g).unwrap();
     let int = |v: f32| -> i16 {
         assert!(v.fract() == 0.0 && v.abs() < 32767.0, "value {v} is not an i16");
@@ -241,13 +241,13 @@ fn bake_font() {
     writeln!(w, "pub const DESCENT: i16 = {};", int(font.descent_unscaled())).unwrap();
     writeln!(w, "pub const LINE_GAP: i16 = {};", int(font.line_gap_unscaled())).unwrap();
     writeln!(w, "/// (codepoint, glyph slot), sorted by codepoint.").unwrap();
-    writeln!(w, "pub static CMAP: [(char, u8); {}] = [", cmap.len()).unwrap();
+    writeln!(w, "pub static CMAP: [(char, u16); {}] = [", cmap.len()).unwrap();
     for &(c, g) in &cmap {
         writeln!(w, "    ({c:?}, {}),", slot(g)).unwrap();
     }
     writeln!(w, "];\npub static GLYPHS: [G; {}] = [\n{glyphs}];", gids.len()).unwrap();
     writeln!(w, "/// (left slot, right slot, adjustment), sorted.").unwrap();
-    writeln!(w, "pub static KERN: [(u8, u8, i16); {}] = {kern:?};", kern.len()).unwrap();
+    writeln!(w, "pub static KERN: [(u16, u16, i16); {}] = {kern:?};", kern.len()).unwrap();
     let packed: Vec<u8> = ops
         .chunks(4)
         .map(|c| c.iter().enumerate().fold(0u8, |acc, (i, &o)| acc | (o << (2 * i))))
