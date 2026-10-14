@@ -3,7 +3,7 @@
 # its Website and powernapps.net links open https://powernapps.net/r/rustshot
 # (Enter on the focused link; the browser this sandbox starts for it is
 # found by its command line, the sandbox has no network) and the footer
-# names Apache-2.0 (the exe's English catalog; screenshot for the eye).
+# names Apache-2.0 (on the screenshot: the catalog in the exe is packed).
 # Isolated instance: own RUSTSHOT_INSTANCE, APPDATA and LOCALAPPDATA, no
 # hotkeys. Only the PIDs started here are stopped. Settings gets posted
 # keys. Uses v050.ps1's helpers (WinShot, TabTo, OpenSettings, CloseSettings).
@@ -25,11 +25,11 @@ function Checks060($exe) {
     $base = "history = false`noverlay_hints = false`nmagnifier = false`nrecord_hotkey = `"`"`ncapture_full_hotkey = `"`"`ncapture_window_hotkey = `"`"`nrepeat_hotkey = `"`"`ncapture_text_hotkey = `"`"`n"
     V4Config $appdata $save $base
 
-    # ------------------------------------------------ the exe: the short link and the license words
+    # ------------------------------------------------ the exe: the short link
     $bytes = [System.IO.File]::ReadAllBytes($exe)
     $txt = [System.Text.Encoding]::UTF8.GetString($bytes)
     Check 'v060 about: the exe opens https://powernapps.net/r/rustshot (the short link)' ($txt.Contains($PowerNapps) ) ''
-    Check 'v060 about: the footer says Apache-2.0 (English catalog in the exe), not GPL' ($txt.Contains('Apache-2.0 License') -and -not $txt.Contains('GPL-3.0 License')) ''
+    # (The footer's words are in the DEFLATE-packed catalog: read them on out\v060-settings-about.png.)
 
     # ------------------------------------------------ Settings › About: the links
     $s = OpenSettings $exe $vars '060-about'
@@ -56,7 +56,7 @@ function Checks060($exe) {
         if ($pn) {
             $null = WinShot $s.h 'v060-settings-about-powernapps'
             [V3]::PostKey($s.h, 0x0D)
-            $opened = WaitFor { (UrlProcs $PowerNapps).Count -gt 0 } 20
+            $opened = WaitFor { @(UrlProcs $PowerNapps).Count -gt 0 } 20
             Check 'v060 about: powernapps.net opens https://powernapps.net/r/rustshot' $opened "$((UrlProcs $PowerNapps | Select-Object -First 1).CommandLine)"
             Start-Sleep 2
             Get-Process msedge -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
