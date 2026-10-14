@@ -27,15 +27,15 @@ pub enum ImgAct {
 }
 
 /// The menu's rows: what, label, icon, the key shown.
-pub const MENU: [(ImgAct, &str, &str, Action); 8] = [
-    (ImgAct::Resize, "Resize\u{2026}", "scaling", Action::ImageResize),
-    (ImgAct::RotateLeft, "Rotate left", "rotate-ccw", Action::RotateLeft),
-    (ImgAct::RotateRight, "Rotate right", "rotate-cw", Action::RotateRight),
-    (ImgAct::FlipH, "Flip horizontal", "flip-h", Action::FlipHorizontal),
-    (ImgAct::FlipV, "Flip vertical", "flip-v", Action::FlipVertical),
-    (ImgAct::Canvas, "Canvas\u{2026}", "frame", Action::ImageCanvas),
-    (ImgAct::Effects, crate::sharex_text::EFFECTS, "sparkles", Action::ImageEffects),
-    (ImgAct::Reset, "Reset image edits", "undo", Action::ImageReset),
+pub const MENU: [(ImgAct, crate::i18n::Key, &str, Action); 8] = [
+    (ImgAct::Resize, key!("edit.img.resize"), "scaling", Action::ImageResize),
+    (ImgAct::RotateLeft, key!("edit.img.rotate_left"), "rotate-ccw", Action::RotateLeft),
+    (ImgAct::RotateRight, key!("edit.img.rotate_right"), "rotate-cw", Action::RotateRight),
+    (ImgAct::FlipH, key!("edit.img.flip_h"), "flip-h", Action::FlipHorizontal),
+    (ImgAct::FlipV, key!("edit.img.flip_v"), "flip-v", Action::FlipVertical),
+    (ImgAct::Canvas, key!("edit.img.canvas"), "frame", Action::ImageCanvas),
+    (ImgAct::Effects, key!("edit.img.effects"), "sparkles", Action::ImageEffects),
+    (ImgAct::Reset, key!("edit.img.reset"), "undo", Action::ImageReset),
 ];
 
 /// The menu's row height and width (logical px).
@@ -212,7 +212,7 @@ pub fn estimate_bytes(pic: &PixBuf, (w, h): (u32, u32), f: Filter, fmt: crate::e
 
 /// "840 KB", "1.2 MB".
 pub fn bytes_text(b: u64) -> String {
-    if b < 1024 * 1024 { format!("{} KB", b.div_ceil(1024).max(1)) } else { format!("{:.1} MB", b as f64 / (1024.0 * 1024.0)) }
+    if b < 1024 * 1024 { tr!("size.kb", n = b.div_ceil(1024).max(1)) } else { tr!("size.mb", n = format!("{:.1}", b as f64 / (1024.0 * 1024.0))) }
 }
 
 /// The Canvas dialog's fields.
@@ -234,7 +234,7 @@ pub struct CanvasForm {
 }
 
 /// The solid backgrounds offered as swatches.
-pub const SWATCHES: [(&str, &str); 4] = [("White", "#ffffff"), ("Light gray", "#eef0f4"), ("Black", "#000000"), ("Transparent", "#00000000")];
+pub const SWATCHES: [(crate::i18n::Key, &str); 4] = [(key!("color.white"), "#ffffff"), (key!("color.light_gray"), "#eef0f4"), (key!("color.black"), "#000000"), (key!("color.transparent"), "#00000000")];
 
 impl CanvasForm {
     pub fn new(cur: Option<Pad>) -> CanvasForm {
@@ -372,7 +372,7 @@ pub fn paint(ui: &mut Ui, d: &mut ImgDialog, win: (f32, f32), pic: &PixBuf, smal
         let title = match d {
             ImgDialog::Resize(_) => "Resize image",
             ImgDialog::Canvas(_) => "Canvas",
-            ImgDialog::Effects(_) => crate::sharex_text::EFFECTS_TITLE,
+            ImgDialog::Effects(_) => tr!("fx.title"),
         };
         let t = ui.alloc(None, 24.0);
         ui.text_at(14.0, title, t.x, t.y + t.h / 2.0, tok.tx, true);
@@ -397,59 +397,59 @@ pub fn paint(ui: &mut Ui, d: &mut ImgDialog, win: (f32, f32), pic: &PixBuf, smal
 
 fn resize_body(ui: &mut Ui, f: &mut ResizeForm, pic: &PixBuf, cfg: &crate::config::Config, tok: &Tok, out: &mut Option<DlgOut>) {
     ui.row(|ui| {
-        label(ui, "Width", tok);
+        label(ui, tr!("edit.img.width"), tok);
         ui.width(84.0).text_field("rs_w", &mut f.w);
         unit(ui, "px", tok);
         ui.space(14.0);
         ui.width(46.0).alloc(Some(46.0), 28.0);
         let r = ui.last_alloc;
-        ui.text_at(12.0, "Height", r.x, r.y + r.h / 2.0, tok.tx2, false);
+        ui.text_at(12.0, tr!("edit.img.height"), r.x, r.y + r.h / 2.0, tok.tx2, false);
         ui.width(84.0).text_field("rs_h", &mut f.h);
         unit(ui, "px", tok);
     });
     ui.row(|ui| {
-        label(ui, "Scale", tok);
+        label(ui, tr!("edit.img.scale"), tok);
         ui.width(84.0).text_field("rs_pct", &mut f.pct);
         unit(ui, "%", tok);
         ui.space(14.0);
-        if ui.checkbox("rs_lock", "Keep aspect ratio", &mut f.lock, tok) {
+        if ui.checkbox("rs_lock", tr!("edit.img.keep_aspect"), &mut f.lock, tok) {
             f.relock();
         }
     });
     f.sync();
     ui.row(|ui| {
-        label(ui, "Resampling", tok);
-        ui.seg("rs_filter", &["Lanczos-3 (sharp)", "Area average (smooth)"], &mut f.filter, tok);
+        label(ui, tr!("edit.img.resampling"), tok);
+        ui.seg("rs_filter", &[tr!("edit.img.lanczos"), tr!("edit.img.area")], &mut f.filter, tok);
     });
     // "3840 × 2160 → 1920 × 1080 · about 1.2 MB as PNG"
     let fmt = crate::export::Format::from_config(cfg);
     let line = match f.size() {
         Some((w, h)) => {
-            let est = f.estimate(pic, fmt, cfg.jpeg_quality).map(|b| format!(" \u{b7} about {} as {}", bytes_text(b), fmt.ext().to_uppercase())).unwrap_or_default();
-            format!("{} \u{d7} {} \u{2192} {w} \u{d7} {h}{est}", f.src.0, f.src.1)
+            let est = f.estimate(pic, fmt, cfg.jpeg_quality).map(|b| format!(" {}", tr!("edit.img.estimate", size = bytes_text(b), format = fmt.ext().to_uppercase()))).unwrap_or_default();
+            format!("{}{est}", tr!("edit.img.new_size", sw = f.src.0, sh = f.src.1, w, h))
         }
-        None if f.over_cap() => format!("Too large: up to {} megapixels, the canvas included", crate::imgedit::MAX_PIXELS / 1_000_000),
-        None => format!("Enter a size from 1 to {} px", crate::imgedit::MAX_SIDE),
+        None if f.over_cap() => tr!("edit.img.too_large", mp = crate::imgedit::MAX_PIXELS / 1_000_000),
+        None => tr!("edit.img.enter_size", max = crate::imgedit::MAX_SIDE),
     };
     let r = ui.alloc(None, 22.0);
     ui.text_at(11.5, &line, r.x, r.y + r.h / 2.0, if f.size().is_some() { tok.tx2 } else { tok.er }, false);
     if f.enlarges() {
         let r = ui.alloc(None, 18.0);
-        ui.text_at(11.5, "Larger than the picture: it is enlarged smoothly (bilinear) and looks softer", r.x, r.y + r.h / 2.0, tok.er, false);
+        ui.text_at(11.5, tr!("edit.img.enlarged"), r.x, r.y + r.h / 2.0, tok.er, false);
     }
     ui.space(6.0);
     ui.row_rtl(|ui| {
         let ok = f.size().is_some();
         let on = ui.enabled;
         ui.enabled = on && ok;
-        if ui.cbutton("rs_apply", "Apply", None, true, tok) {
+        if ui.cbutton("rs_apply", tr!("common.apply"), None, true, tok) {
             *out = Some(DlgOut::Apply);
         }
         ui.enabled = on;
-        if ui.cbutton("rs_cancel", "Cancel", None, false, tok) {
+        if ui.cbutton("rs_cancel", tr!("common.cancel"), None, false, tok) {
             *out = Some(DlgOut::Cancel);
         }
-        if ui.cbutton("rs_orig", "Original size", None, false, tok) {
+        if ui.cbutton("rs_orig", tr!("edit.img.original"), None, false, tok) {
             *out = Some(DlgOut::Remove);
         }
     });
@@ -457,15 +457,15 @@ fn resize_body(ui: &mut Ui, f: &mut ResizeForm, pic: &PixBuf, cfg: &crate::confi
 
 fn canvas_body(ui: &mut Ui, f: &mut CanvasForm, small: &(PixBuf, f32), tok: &Tok, out: &mut Option<DlgOut>) {
     ui.row(|ui| {
-        label(ui, "Background", tok);
+        label(ui, tr!("rec.panel.background"), tok);
         let mut bg = f.bg;
-        if ui.seg("cv_bg", &["Solid color", "Presentation"], &mut bg, tok) {
+        if ui.seg("cv_bg", &[tr!("edit.img.solid"), tr!("edit.img.presentation")], &mut bg, tok) {
             f.pick_bg(bg);
         }
     });
     let on = ui.enabled;
     ui.row(|ui| {
-        label(ui, "Color", tok);
+        label(ui, tr!("tip.color"), tok);
         ui.enabled = on && f.bg == 0;
         let cur = crate::config::parse_color(f.color.text.trim());
         for (i, (_, hex)) in SWATCHES.iter().enumerate() {
@@ -481,13 +481,13 @@ fn canvas_body(ui: &mut Ui, f: &mut CanvasForm, small: &(PixBuf, f32), tok: &Tok
         ui.enabled = on;
     });
     ui.row(|ui| {
-        label(ui, "Padding", tok);
+        label(ui, tr!("edit.img.padding"), tok);
         ui.enabled = on && !f.sides;
         ui.width(70.0).text_field("cv_pad", &mut f.pad);
         unit(ui, "px", tok);
         ui.enabled = on;
         ui.space(14.0);
-        if ui.checkbox("cv_sides", "Each side", &mut f.sides, tok) && f.sides {
+        if ui.checkbox("cv_sides", tr!("edit.img.each_side"), &mut f.sides, tok) && f.sides {
             for s in &mut f.side {
                 s.set(&f.pad.text);
             }
@@ -496,7 +496,7 @@ fn canvas_body(ui: &mut Ui, f: &mut CanvasForm, small: &(PixBuf, f32), tok: &Tok
     if f.sides {
         ui.row(|ui| {
             ui.space(LABEL_W + 8.0);
-            for (i, name) in ["Top", "Right", "Bottom", "Left"].iter().enumerate() {
+            for (i, name) in [tr!("edit.img.top"), tr!("edit.img.right"), tr!("edit.img.bottom"), tr!("edit.img.left")].iter().enumerate() {
                 let w = ui.text_w(11.5, name).ceil();
                 let r = ui.alloc(Some(w), 28.0);
                 ui.text_at(11.5, name, r.x, r.y + r.h / 2.0, tok.tx3, false);
@@ -505,14 +505,14 @@ fn canvas_body(ui: &mut Ui, f: &mut CanvasForm, small: &(PixBuf, f32), tok: &Tok
         });
     }
     ui.row(|ui| {
-        label(ui, "Corners", tok);
+        label(ui, tr!("edit.img.corners"), tok);
         ui.width(180.0).slider("cv_radius", &mut f.radius, 0, 48);
         unit(ui, "px", tok);
     });
     ui.row(|ui| {
-        label(ui, "Shadow", tok);
+        label(ui, tr!("edit.img.shadow"), tok);
         ui.switch("cv_shadow", &mut f.shadow, tok);
-        unit(ui, "24 px blur, 25 %", tok);
+        unit(ui, tr!("edit.img.shadow_spec"), tok);
     });
     // The preview, centered in its box.
     let pb = ui.alloc(None, 170.0);
@@ -534,9 +534,9 @@ fn canvas_body(ui: &mut Ui, f: &mut CanvasForm, small: &(PixBuf, f32), tok: &Tok
         }
         None => {
             let msg = if f.over_cap() {
-                format!("Too large: up to {} megapixels with the padding", crate::imgedit::MAX_PIXELS / 1_000_000)
+                tr!("edit.img.too_large_pad", mp = crate::imgedit::MAX_PIXELS / 1_000_000)
             } else {
-                "Enter the padding in px and a color such as #ffffff".to_string()
+                tr!("edit.img.enter_padding").to_string()
             };
             ui.text_at(12.0, &msg, bx.x + 12.0 * k, bx.y + bx.h / 2.0, tok.er, false);
         }
@@ -545,14 +545,14 @@ fn canvas_body(ui: &mut Ui, f: &mut CanvasForm, small: &(PixBuf, f32), tok: &Tok
     ui.row_rtl(|ui| {
         let ok = f.result().is_some();
         ui.enabled = on && ok;
-        if ui.cbutton("cv_apply", "Apply", None, true, tok) {
+        if ui.cbutton("cv_apply", tr!("common.apply"), None, true, tok) {
             *out = Some(DlgOut::Apply);
         }
         ui.enabled = on;
-        if ui.cbutton("cv_cancel", "Cancel", None, false, tok) {
+        if ui.cbutton("cv_cancel", tr!("common.cancel"), None, false, tok) {
             *out = Some(DlgOut::Cancel);
         }
-        if ui.cbutton("cv_remove", "No canvas", None, false, tok) {
+        if ui.cbutton("cv_remove", tr!("edit.img.no_canvas"), None, false, tok) {
             *out = Some(DlgOut::Remove);
         }
     });

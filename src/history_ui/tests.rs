@@ -496,7 +496,7 @@ fn uploaded_filter_and_card_menu() {
     let shown: Vec<String> = h.shown().iter().map(|(i, _)| history::title(&h.entries[*i].meta)).collect();
     assert_eq!(shown, ["Slack \u{2014} #design-review"]);
     assert_eq!(h.groups().len(), 1);
-    assert_eq!(draw::FILTERS[3], (Filter::Uploaded, "Uploaded"));
+    assert_eq!((draw::FILTERS[3].0, draw::FILTERS[3].1.get()), (Filter::Uploaded, "Uploaded"));
     let up = h.entries.iter().find(|e| e.meta.uploaded.is_some()).unwrap().clone();
     let plain = h.entries.iter().find(|e| e.meta.uploaded.is_none() && !e.meta.kind.is_recording()).unwrap().clone();
     let rec = h.entries.iter().find(|e| e.meta.kind.is_recording()).unwrap().clone();
@@ -702,6 +702,62 @@ fn history_window_smoke() {
     let spec = crate::wind::WindowSpec { title: "Rustshot History".into(), w: W, h: H, resizable: true, min: MIN, controls: crate::wind::Controls::MinMaxClose };
     crate::wind::run_window(spec, &mut d).expect("history window");
     assert!(d.frames > 0, "drew a frame");
+}
+
+/// The window at its smallest fits in English and the long
+/// pseudo-languages: the grid, the list, a search, several selected,
+/// Clear history?, a card's menu, empty and off (previews per language).
+#[test]
+fn fits_in_long_languages() {
+    let (w, hh) = MIN;
+    for lang in crate::ui::preview::LANGS {
+        crate::i18n::with_lang(lang, || {
+            for k in [1.0f32, 1.5] {
+                let (_r, st) = fixture(&format!("fit-{lang}-{k}"));
+                let empty = TempRoot::new(&format!("fit-empty-{lang}-{k}"));
+                let states: Vec<(&str, History)> = vec![
+                    ("grid", history(&st)),
+                    ("list", {
+                        let mut h = history(&st);
+                        h.view = View::List;
+                        h
+                    }),
+                    ("search", {
+                        let mut h = history(&st);
+                        h.search.set("stripe");
+                        h.focus_search = true;
+                        h
+                    }),
+                    ("multi", {
+                        let mut h = history(&st);
+                        h.sel = [0, 1, 3].iter().map(|i| h.entries[*i].id.clone()).collect();
+                        h
+                    }),
+                    ("clear", {
+                        let mut h = history(&st);
+                        h.clear = Some(false);
+                        h
+                    }),
+                    ("card-menu", {
+                        let mut h = history(&st);
+                        h.menu = Some(Menu::Card(h.entries[0].id.clone()));
+                        h
+                    }),
+                    ("empty", History::new(Store::new(&empty.0), Config::default(), TODAY)),
+                    ("off", History::new(Store::new(&empty.0), Config { history: false, ..Config::default() }, TODAY)),
+                ];
+                for (name, mut h) in states {
+                    crate::ui::preview::begin_check((w as f32 * k).round() as u32);
+                    let mut focus = FocusState::default();
+                    let (img, _) = render_with(&mut h, &DARK, w, hh, k, &Input::default(), &mut focus);
+                    crate::ui::preview::assert_fits(&focus, w, hh, k, &format!("history {name} {lang} {k}x"));
+                    if k == 1.0 {
+                        crate::ui::preview::save(&format!("history-{name}-{lang}.png"), &img);
+                    }
+                }
+            }
+        });
+    }
 }
 
 /// The Microsoft Store screenshot (docs/store/screenshots): the grid at

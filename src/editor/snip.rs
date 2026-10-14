@@ -324,9 +324,8 @@ pub fn selection_hits(lines: &[Line], a: Pos, b: Pos) -> Vec<redact::Hit> {
 /// "Redacted 3 items" / "Redacted 1 item" / "Nothing sensitive found".
 pub fn redact_note(n: usize) -> (String, ToastKind) {
     match n {
-        0 => ("Nothing sensitive found".into(), ToastKind::Info),
-        1 => ("Redacted 1 item".into(), ToastKind::Success),
-        n => (format!("Redacted {n} items"), ToastKind::Success),
+        0 => (tr!("editor.redact.none").into(), ToastKind::Info),
+        n => (trn!("editor.redact.done", n), ToastKind::Success),
     }
 }
 
@@ -422,7 +421,7 @@ impl Edit {
         let origin = Pt::new(area.x.floor().max(0.0), area.y.floor().max(0.0));
         let mask = self.live_mask().map(<[Pt]>::to_vec);
         self.snip.ocr = Some(OcrRun { rx: ocr::spawn_lines(img), want, origin, area, sel: self.sel, mask });
-        let msg = if want == Want::Text { "Recognizing text\u{2026}" } else { "Looking for sensitive text\u{2026}" };
+        let msg = if want == Want::Text { tr!("editor.ocr.recognizing") } else { tr!("editor.ocr.looking") };
         self.notice = Some(Toast::new(msg, ToastKind::Info));
     }
 
@@ -433,7 +432,7 @@ impl Edit {
         let res = match run.rx.try_recv() {
             Ok(r) => r,
             Err(crate::chan::TryRecvError::Empty) => return false,
-            Err(crate::chan::TryRecvError::Disconnected) => Err(OcrError::Failed("the recognizer stopped".into())),
+            Err(crate::chan::TryRecvError::Disconnected) => Err(OcrError::Failed(tr!("ocr.stopped").into())),
         };
         let run = self.snip.ocr.take().expect("a run");
         // The selection (or its lasso) changed meanwhile: these words are
@@ -459,7 +458,7 @@ impl Edit {
             return false;
         }
         self.snip.queued = Some(q);
-        self.notice = Some(Toast::new("Redacting\u{2026} it goes on when done", ToastKind::Info));
+        self.notice = Some(Toast::new(tr!("editor.redact.queued"), ToastKind::Info));
         true
     }
 
@@ -480,12 +479,11 @@ impl Edit {
             }
         };
         match want {
-            Want::Text if lines.is_empty() => self.notice = Some(Toast::new("No text found", ToastKind::Info)),
+            Want::Text if lines.is_empty() => self.notice = Some(Toast::new(tr!("editor.ocr.no_text"), ToastKind::Info)),
             Want::Text => {
                 let n = lines.len();
                 self.snip.text = Some(TextMode { lines, area, sel: None, clicks: None });
-                let lines = if n == 1 { "1 line".to_string() } else { format!("{n} lines") };
-                self.notice = Some(Toast::new(format!("Select text to copy \u{b7} {lines}"), ToastKind::Info));
+                self.notice = Some(Toast::new(trn!("editor.ocr.select", n), ToastKind::Info));
             }
             Want::Redact => self.redact_lines(&lines, None, area),
         }
@@ -622,8 +620,8 @@ impl Edit {
         let sel = tm.sel;
         let btn_w = |label: &str| chrome::tw(&ui, 12.5, label) + 2.0 * BTN_PAD * s + 20.0 * s;
         let mut btns = Vec::new();
-        let redact_label = if sel.is_some() { "Redact selected" } else { "Redact" };
-        let defs = [(Act::CopyAll, "Copy all", "copy", true), (Act::Redact, redact_label, "redact", true)];
+        let redact_label = if sel.is_some() { tr!("editor.text.redact_selected") } else { tr!("editor.text.redact") };
+        let defs = [(Act::CopyAll, tr!("editor.text.copy_all"), "copy", true), (Act::Redact, redact_label, "redact", true)];
         let w: f32 = defs.iter().map(|d| btn_w(d.1)).sum::<f32>() + 2.0 * BAR_PAD * s + BAR_PAD * s;
         let h = BAR_H * s;
         let ta = tm.area;
@@ -642,11 +640,11 @@ impl Edit {
         let pill = sel.and_then(|(a, b)| {
             let hl = textsel::highlight(&tm.lines, a, b);
             let last = hl.last().copied()?;
-            let pw = chrome::tw(&ui, 12.5, "Copy") + 2.0 * BTN_PAD * s + 20.0 * s;
+            let pw = chrome::tw(&ui, 12.5, tr!("tip.copy")) + 2.0 * BTN_PAD * s + 20.0 * s;
             let ph = PILL_H * s;
             let px = (last.x1() - pw).max(area.x + 4.0 * s).min(area.x1() - pw - 4.0 * s);
             let py = if last.y1() + 6.0 * s + ph <= area.y1() { last.y1() + 6.0 * s } else { last.y - 6.0 * s - ph };
-            Some(BarBtn { act: Act::TextCopy, r: FRect { x: px, y: py, w: pw, h: ph }, label: "Copy", icon: "copy", on: true })
+            Some(BarBtn { act: Act::TextCopy, r: FRect { x: px, y: py, w: pw, h: ph }, label: tr!("tip.copy"), icon: "copy", on: true })
         });
         Some(TextBar { r: FRect { x, y, w, h }, btns, pill, hover: None })
     }
@@ -734,7 +732,7 @@ impl Edit {
             self.snip.crop_mode = None;
             self.obj.sel.clear();
         }
-        let msg = if self.snip.freeform { "Freeform: drag a lasso to select" } else { "Rectangle selection" };
+        let msg = if self.snip.freeform { tr!("editor.freeform.on") } else { tr!("editor.freeform.off") };
         self.notice = Some(Toast::new(msg, ToastKind::Info));
     }
 
@@ -815,7 +813,7 @@ impl Edit {
         self.obj.sel.clear();
         let r = self.snip.crop.filter(|_| self.host.is_some()).unwrap_or(bounds);
         self.snip.crop_mode = Some(CropMode { r, bounds, grab: None });
-        self.notice = Some(Toast::new("Drag the frame \u{b7} Enter crops \u{b7} Esc cancels", ToastKind::Info));
+        self.notice = Some(Toast::new(tr!("editor.crop.hint"), ToastKind::Info));
     }
 
     /// Enter: crop to the frame (the overlay: the selection becomes it;
@@ -978,7 +976,7 @@ impl Edit {
             if !self.copy_selected() {
                 self.copy_all();
                 if self.notice.as_ref().is_some_and(|n| n.kind == ToastKind::Success) {
-                    self.notice = Some(Toast::new("Copied all text", ToastKind::Success));
+                    self.notice = Some(Toast::new(tr!("editor.ocr.copied_all"), ToastKind::Success));
                 }
             }
             return true;

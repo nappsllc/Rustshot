@@ -66,9 +66,9 @@ impl Source {
 
     pub fn label(self) -> &'static str {
         match self {
-            Source::Region => "Region",
-            Source::Screen => "Screen",
-            Source::Window => "Window",
+            Source::Region => tr!("tip.region"),
+            Source::Screen => tr!("rec.panel.screen"),
+            Source::Window => tr!("tip.window"),
         }
     }
 
@@ -91,10 +91,10 @@ impl After {
 
     pub fn label(self) -> &'static str {
         match self {
-            After::Edit => "Edit",
-            After::Copy => "Copy",
-            After::Save => "Save",
-            After::Pin => "Pin",
+            After::Edit => tr!("history.edit"),
+            After::Copy => tr!("common.copy"),
+            After::Save => tr!("common.save"),
+            After::Pin => tr!("launcher.pin"),
         }
     }
 
@@ -201,7 +201,7 @@ impl Countdown {
 
 /// The pill's text.
 pub fn pill_text(left: u64) -> String {
-    format!("Capturing in {left} s")
+    tr!("launcher.pill", left)
 }
 
 /// The pill: "Capturing in 3 s" with Cancel, bottom-right (it stays a

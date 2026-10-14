@@ -93,7 +93,7 @@ fn shift_a_trims_and_undo_redo_restore_the_selection() {
     // Again on the trimmed selection: nothing more to cut, a toast.
     key_m(&mut a, 'A' as u32, SHIFT);
     assert_eq!(ed(&mut a).sel, Some(CARD));
-    assert_eq!(ed(&mut a).notice.as_ref().map(|t| t.text.as_str()), Some(trim_sel::NOTHING));
+    assert_eq!(ed(&mut a).notice.as_ref().map(|t| t.text.as_str()), Some(trim_sel::NOTHING.get()));
     // Plain A is still the arrow.
     key_m(&mut a, 'A' as u32, NONE);
     assert_eq!(ed(&mut a).tool, Some(Tool::Arrow));
@@ -328,6 +328,9 @@ fn save_at_one_x_halves_the_export_and_the_history_keeps_it_all() {
     let e = ed(&mut a);
     e.cfg.save_scale = "logical".into();
     e.cfg.border_width = 2;
+    // (The thumbnail card has a Pin too: with it on, its screen-size
+    // picture is kept as well.)
+    e.cfg.show_thumbnail = false;
     e.tasks = vec![Task::Copy];
     let State::Edit(e) = std::mem::replace(&mut a.st, State::Hidden) else { unreachable!() };
     let mut e = *e;

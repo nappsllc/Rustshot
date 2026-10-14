@@ -659,7 +659,7 @@ impl Edit {
                 }
                 let v = sel.first().and_then(|&i| oe::size(&self.objects[i]));
                 if let Some(v) = v {
-                    self.notice = Some(super::Toast::new(format!("Size {}", v as i32), super::ToastKind::Info));
+                    self.notice = Some(super::Toast::new(tr!("editor.size", n = v as i32), super::ToastKind::Info));
                 }
             }
             Act::ObjColor => {

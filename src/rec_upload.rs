@@ -158,7 +158,7 @@ pub fn copy_link(file: &Path, entry: Option<String>, done: impl FnOnce(Note) + S
 }
 
 fn uploading() -> Note {
-    Note { ttl: crate::notice::UPLOAD_TTL, ..Note::plain("Uploading\u{2026}", ToastKind::Info) }
+    Note { ttl: crate::notice::UPLOAD_TTL, ..Note::plain(tr!("history.uploading"), ToastKind::Info) }
 }
 
 #[cfg(test)]

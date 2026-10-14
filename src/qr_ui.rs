@@ -8,7 +8,6 @@
 use crate::editor::style::ToastKind;
 use crate::notice::{ACTION_TTL, Note, NoteAct};
 use crate::pixbuf::PixBuf;
-use crate::sharex_text as t;
 use crate::theme::Theme;
 use std::sync::Mutex;
 
@@ -74,7 +73,7 @@ pub fn link_of(texts: &[String]) -> Option<String> {
 /// act on them.
 pub fn note(texts: Vec<String>) -> Note {
     if texts.is_empty() {
-        return Note::plain(t::QR_NONE, ToastKind::Info);
+        return Note::plain(tr!("qr.none"), ToastKind::Info);
     }
     let link = link_of(&texts);
     // The link first (what Open link would open), then the rest.
@@ -90,7 +89,7 @@ pub fn note(texts: Vec<String>) -> Note {
         }
         parts.push(shown(s));
     }
-    let text = format!("{} \u{b7} {}", t::qr_found(texts.len()), parts.join(" \u{b7} "));
+    let text = format!("{} \u{b7} {}", trn!("qr.found", texts.len()), parts.join(" \u{b7} "));
     let mut actions = vec![NoteAct::QrCopy];
     if link.is_some() {
         actions.push(NoteAct::QrOpen);
@@ -121,14 +120,14 @@ fn texts_of(entry: Option<&str>) -> Vec<String> {
 pub fn copy_for(entry: Option<&str>) -> Note {
     let all = texts_of(entry).join("\n");
     if all.is_empty() {
-        return Note::plain(t::QR_NONE, ToastKind::Info);
+        return Note::plain(tr!("qr.none"), ToastKind::Info);
     }
     #[cfg(test)]
     let res: anyhow::Result<()> = Ok(());
     #[cfg(not(test))]
     let res = crate::export::copy_text_to_clipboard(&all);
     match res {
-        Ok(()) => Note::plain(t::QR_COPIED, ToastKind::Success),
+        Ok(()) => Note::plain(tr!("qr.copied"), ToastKind::Success),
         Err(e) => Note::plain(format!("Copy failed: {e:#}"), ToastKind::Error),
     }
 }
@@ -215,7 +214,7 @@ mod tests {
         // each toast acts on its own read, not the newest
         open_for(first.as_deref());
         assert_eq!(OPENED.with(|o| o.borrow().clone()), vec!["https://example.com/a".to_string()]);
-        assert_eq!(note(Vec::new()).text, t::QR_NONE);
+        assert_eq!(note(Vec::new()).text, tr!("qr.none"));
         assert!(note(vec!["x".repeat(500)]).text.chars().count() < 200);
     }
 

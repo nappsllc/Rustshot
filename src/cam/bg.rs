@@ -89,39 +89,37 @@ impl Bg {
 
 /// The Background row's note while downloads are off and the model is
 /// not here (Settings says where to put it).
-pub const UNAVAILABLE: &str = "Blur unavailable — downloads are off";
+pub const UNAVAILABLE: crate::i18n::Key = key!("cam.blur_unavailable");
 /// The model file there is not this version's.
-pub const DAMAGED: &str = "Blur unavailable: model file is damaged";
+pub const DAMAGED: crate::i18n::Key = key!("cam.blur_damaged");
 /// The capture panel's note after a failed download (the row retries).
-pub const FAILED_SHORT: &str = "Couldn't download the model · Retry";
-/// Settings' note after a failed download.
-pub const FAILED: &str = "Blur unavailable — couldn't download the model";
+pub const FAILED_SHORT: crate::i18n::Key = key!("cam.blur_failed_short");
 /// The record-start question's first line.
-pub const ASK_TITLE: &str = "Background blur isn't available";
+pub const ASK_TITLE: crate::i18n::Key = key!("cam.blur_ask_title");
 /// Its answers.
-pub const ASK_BLURRED: &str = "Record with the camera fully blurred";
-pub const ASK_CAM_OFF: &str = "Turn the camera off";
-pub const ASK_CANCEL: &str = "Cancel";
+pub const ASK_BLURRED: crate::i18n::Key = key!("cam.blur_ask_blurred");
+pub const ASK_CAM_OFF: crate::i18n::Key = key!("cam.blur_ask_cam_off");
+pub const ASK_CANCEL: crate::i18n::Key = key!("common.cancel");
 
 /// The bubble's badge while it is fully blurred until the model comes.
-pub const LOADING_BADGE: &str = "Blur model loading\u{2026}";
+pub const LOADING_BADGE: crate::i18n::Key = key!("cam.blur_loading_badge");
 /// The bubble's badge while it is fully blurred for want of the model.
-pub const UNAVAILABLE_BADGE: &str = "Blur unavailable";
+pub const UNAVAILABLE_BADGE: crate::i18n::Key = key!("cam.blur_unavailable_badge");
 
-/// The capture panel's progress notes, by tenth.
-const PROGRESS: [&str; 11] = [
-    "Downloading model… 0%",
-    "Downloading model… 10%",
-    "Downloading model… 20%",
-    "Downloading model… 30%",
-    "Downloading model… 40%",
-    "Downloading model… 50%",
-    "Downloading model… 60%",
-    "Downloading model… 70%",
-    "Downloading model… 80%",
-    "Downloading model… 90%",
-    "Downloading model… 100%",
-];
+/// The capture panel's progress note by tenth ("Downloading model… 40%"),
+/// made once per language.
+fn progress_note(tenth: usize) -> &'static str {
+    static NOTES: std::sync::Mutex<Vec<(u64, usize, &'static str)>> = std::sync::Mutex::new(Vec::new());
+    let g = crate::i18n::generation();
+    let mut v = NOTES.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(&(_, _, s)) = v.iter().find(|(vg, t, _)| *vg == g && *t == tenth) {
+        return s;
+    }
+    let s: &'static str = Box::leak(tr!("cam.model_progress", pct = tenth * 10).into_boxed_str());
+    v.retain(|(vg, _, _)| *vg == g);
+    v.push((g, tenth, s));
+    s
+}
 
 /// Whether the background can be blurred, and if not, why.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -146,12 +144,12 @@ impl Blur {
     pub fn ask_lines(&self) -> Option<(&'static str, &'static str)> {
         let why = match self {
             Blur::Ready => return None,
-            Blur::Fetchable | Blur::Downloading(_) => "(the blur model is still downloading)",
-            Blur::Failed(_) => "(couldn't download the blur model)",
-            Blur::Off { .. } => "(downloads are off)",
-            Blur::Damaged(_) => "(the blur model file is damaged)",
+            Blur::Fetchable | Blur::Downloading(_) => tr!("cam.blur_why_downloading"),
+            Blur::Failed(_) => tr!("cam.blur_why_failed"),
+            Blur::Off { .. } => tr!("cam.blur_why_off"),
+            Blur::Damaged(_) => tr!("cam.blur_why_damaged"),
         };
-        Some((ASK_TITLE, why))
+        Some((ASK_TITLE.get(), why))
     }
 
     /// The capture panel's Background row: its note when the choices are
@@ -159,22 +157,22 @@ impl Blur {
     pub fn panel_note(&self) -> Option<&'static str> {
         match self {
             Blur::Ready | Blur::Fetchable => None,
-            Blur::Downloading(p) => Some(PROGRESS[(*p as usize).min(100) / 10]),
-            Blur::Failed(_) => Some(FAILED_SHORT),
-            Blur::Off { .. } => Some(UNAVAILABLE),
-            Blur::Damaged(_) => Some(DAMAGED),
+            Blur::Downloading(p) => Some(progress_note((*p as usize).min(100) / 10)),
+            Blur::Failed(_) => Some(FAILED_SHORT.get()),
+            Blur::Off { .. } => Some(UNAVAILABLE.get()),
+            Blur::Damaged(_) => Some(DAMAGED.get()),
         }
     }
 
     /// Settings › Recording › Background's note.
     pub fn settings_note(&self) -> String {
         match self {
-            Blur::Ready => "Blurs what is behind you".into(),
-            Blur::Fetchable => format!("Blurs what is behind you (first use downloads a {} model from GitHub)", crate::fetch::size_label(crate::fetch::MODEL.size)),
-            Blur::Downloading(p) => format!("Downloading the blur model… {p}%"),
-            Blur::Failed(why) => format!("{FAILED}: {why}"),
-            Blur::Off { asset, url, path } => format!("{UNAVAILABLE}: download {asset} ({url}) and {}", save_as(path)),
-            Blur::Damaged(p) => format!("{DAMAGED} ({})", p.display()),
+            Blur::Ready => tr!("settings.camera.background.help").into(),
+            Blur::Fetchable => tr!("cam.blur_fetchable", size = crate::fetch::size_label(crate::fetch::MODEL.size)),
+            Blur::Downloading(p) => tr!("cam.blur_downloading", pct = p),
+            Blur::Failed(why) => tr!("cam.blur_failed", why),
+            Blur::Off { asset, url, path } => tr!("cam.blur_off_note", asset, url, save = save_as(path)),
+            Blur::Damaged(p) => tr!("cam.blur_damaged_note", path = p.display()),
         }
     }
 
@@ -184,8 +182,8 @@ impl Blur {
         let f = &crate::fetch::MODEL;
         let url = f.url(env!("CARGO_PKG_VERSION"));
         match self {
-            Blur::Off { asset, url, path } => Some(format!("To blur, download {asset} ({url}) and {}", save_as(path))),
-            Blur::Damaged(p) => Some(format!("{} is not this version's model: download {} ({url}) again and save it there", p.display(), f.asset)),
+            Blur::Off { asset, url, path } => Some(tr!("cam.blur_off_detail", asset, url, save = save_as(path))),
+            Blur::Damaged(p) => Some(tr!("cam.blur_damaged_detail", path = p.display(), asset = f.asset, url)),
             _ => None,
         }
     }
@@ -199,9 +197,9 @@ thread_local! {
 /// "save it as <path>" (no data folder at all: where it can go instead).
 fn save_as(path: &std::path::Path) -> String {
     if path.as_os_str().is_empty() {
-        format!("put it in a folder named by RUSTSHOT_DATA_DIR as {}", crate::fetch::MODEL.rel)
+        tr!("cam.save_in_data_dir", rel = crate::fetch::MODEL.rel)
     } else {
-        format!("save it as {}", path.display())
+        tr!("cam.save_as", path = path.display())
     }
 }
 
@@ -941,14 +939,14 @@ impl Effect {
                 if !std::mem::replace(&mut self.asked, true) {
                     request_model();
                 }
-                return self.fail_safe(pic, if now == Engine::Loading { LOADING_BADGE } else { UNAVAILABLE_BADGE });
+                return self.fail_safe(pic, if now == Engine::Loading { LOADING_BADGE.get() } else { UNAVAILABLE_BADGE.get() });
             }
             self.worker = Some(self.make.take().and_then(Worker::start));
         }
         if matches!(&self.worker, Some(Some(w)) if w.failed()) {
             self.worker = Some(None);
         }
-        let Some(Some(w)) = &self.worker else { return self.fail_safe(pic, UNAVAILABLE_BADGE) };
+        let Some(Some(w)) = &self.worker else { return self.fail_safe(pic, UNAVAILABLE_BADGE.get()) };
         if let Some((m, ms)) = w.take() {
             self.pacer.took(ms);
             if !std::mem::take(&mut self.stale) {

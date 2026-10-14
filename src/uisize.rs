@@ -17,7 +17,15 @@ use std::sync::atomic::{AtomicU16, Ordering};
 pub const STEPS: [u16; 6] = [75, 90, 100, 125, 150, 200];
 
 /// The Settings dropdown's choices: Auto, then every step.
-pub const LABELS: [&str; STEPS.len() + 1] = ["Auto", "75 %", "90 %", "100 %", "125 %", "150 %", "200 %"];
+pub const LABELS: [crate::i18n::Key; STEPS.len() + 1] = [
+    key!("uisize.auto"),
+    key!("uisize.p75"),
+    key!("uisize.p90"),
+    key!("uisize.p100"),
+    key!("uisize.p125"),
+    key!("uisize.p150"),
+    key!("uisize.p200"),
+];
 
 /// The UI size: the monitor's own scale, or a percentage of it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -97,8 +105,8 @@ impl UiSize {
     /// For a toast: "UI size 125 %", "UI size Auto".
     pub fn describe(self) -> String {
         match self {
-            UiSize::Auto => "UI size Auto".into(),
-            UiSize::Pct(n) => format!("UI size {n} %"),
+            UiSize::Auto => tr!("uisize.toast_auto").into(),
+            UiSize::Pct(n) => tr!("uisize.toast", n),
         }
     }
 }

@@ -872,6 +872,58 @@ fn effects_dialog_applies_and_previews() {
     }
 }
 
+/// The window at its smallest fits in English and the long
+/// pseudo-languages: the chrome, the save questions, the Image menu and
+/// its Resize and Canvas dialogs (previews per language).
+#[test]
+fn fits_in_long_languages() {
+    use super::image::ImgAct;
+    let (mw, mh) = MIN;
+    for lang in crate::ui::preview::LANGS {
+        crate::i18n::with_lang(lang, || {
+            for k in [1.0f32, 1.5] {
+                let (pw, ph) = ((mw as f32 * k).round() as u32, (mh as f32 * k).round() as u32);
+                let (_r, mut w) = window(&format!("fit-{lang}-{k}"), page(1180, 760), objects(), DARK, k);
+                w.event(Ev::Resize(pw, ph));
+                let shot = |w: &mut Window, name: &str| {
+                    crate::ui::preview::begin_check(pw);
+                    w.render();
+                    let problems = crate::ui::preview::take_problems();
+                    assert!(problems.is_empty(), "edit {name} {lang} {k}x: {problems:#?}");
+                    crate::ui::preview::assert_fits(w.dialog_focus(), mw, mh, k, &format!("edit {name} {lang} {k}x"));
+                    if k == 1.0 {
+                        crate::ui::preview::save(&format!("edit-{name}-{lang}.png"), w.pixels());
+                    }
+                };
+                w.e.canvas.select(3, false);
+                shot(&mut w, "callout");
+                w.e.flow.dialog = Some(Dialog::Unsaved);
+                shot(&mut w, "unsaved");
+                w.e.flow.dialog = Some(Dialog::Choose { choice: Choice::Overwrite, dont_ask: false, close: false });
+                shot(&mut w, "choose");
+                w.e.flow.dialog = None;
+                w.e.img_menu = true;
+                shot(&mut w, "image-menu");
+                w.e.img_menu = false;
+                w.image_act(ImgAct::Resize);
+                shot(&mut w, "resize");
+                key(&mut w, crate::wind::key::ESCAPE, Mods::default());
+                w.image_act(ImgAct::Canvas);
+                shot(&mut w, "canvas");
+                for tab in 0..4 {
+                    key(&mut w, crate::wind::key::ESCAPE, Mods::default());
+                    w.image_act(ImgAct::Effects);
+                    if let Some(super::image::ImgDialog::Effects(f)) = w.e.img_dialog.as_mut() {
+                        f.tab = tab;
+                        f.on = [true; 4];
+                    }
+                    shot(&mut w, &format!("effects-{tab}"));
+                }
+            }
+        });
+    }
+}
+
 /// The Microsoft Store screenshot (docs/store/screenshots): the Edit
 /// window at 125 % with the Canvas dialog on Presentation (gradient,
 /// padding, rounded corners and a shadow) and its preview.

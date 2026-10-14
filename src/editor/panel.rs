@@ -58,7 +58,14 @@ const DOT_GAP: f32 = 4.0;
 
 /// The mode switch's width (logical px).
 pub fn mode_w() -> f32 {
-    2.0 * SEG_IN + MODE_BTN[0] + SEG_GAP + MODE_BTN[1]
+    2.0 * SEG_IN + mode_btn_w(0) + SEG_GAP + mode_btn_w(1)
+}
+
+/// Mode button `i`'s width (0: Screenshot, 1: Video; logical px): the
+/// board's, or wider for a longer word (its icon, gap and 6 px spare).
+fn mode_btn_w(i: usize) -> f32 {
+    let label = if i == 1 { tr!("tip.video") } else { tr!("tip.screenshot") };
+    MODE_BTN[i].max((10.0 + 14.0 + 6.0 + crate::uifb::text_width(crate::fonts::ui_font(), 11.5, label) + 6.0).ceil())
 }
 
 /// Top-left of a `bw`x`bh` panel centred under `sel` (`above`: it went
@@ -95,7 +102,7 @@ pub fn place_top(sel: FRect, area: FRect, s: f32, video: bool, avoid: Option<FRe
     items.push(Item { kind: Kind::ModeTrack, r: track, disabled: false });
     let mut bx = x + SEG_IN * s;
     for (i, video_btn) in [false, true].into_iter().enumerate() {
-        let bw = MODE_BTN[i] * s;
+        let bw = mode_btn_w(i) * s;
         let r = FRect { x: bx, y: y + SEG_IN * s, w: bw, h: h - 2.0 * SEG_IN * s };
         items.push(Item { kind: Kind::Mode { video: video_btn, on: video_btn == video }, r, disabled: false });
         bx += bw + SEG_GAP * s;
@@ -113,9 +120,9 @@ pub fn place_top(sel: FRect, area: FRect, s: f32, video: bool, avoid: Option<FRe
 /// The value shown after the Max length label.
 fn max_len_text(n: u32) -> &'static str {
     match n {
-        15 => "15 s \u{b7} then auto-stop",
-        60 => "60 s \u{b7} then auto-stop",
-        _ => "30 s \u{b7} then auto-stop",
+        15 => tr!("rec.panel.max15"),
+        60 => tr!("rec.panel.max60"),
+        _ => tr!("rec.panel.max30"),
     }
 }
 
@@ -161,9 +168,9 @@ pub fn layout(inp: &Input, rv: &RecView) -> Toolbar {
     // Source: Screen | Window | Region (F / W / R).
     let src = |v: RecSource| v == rv.source;
     seg(&mut local, x0, y, inner, SEG_H, SEG_IN, &[
-        (Act::RecSource(RecSource::Screen), "Screen", "monitor", src(RecSource::Screen), false),
-        (Act::RecSource(RecSource::Window), "Window", "window", src(RecSource::Window), false),
-        (Act::RecSource(RecSource::Region), "Region", "region", src(RecSource::Region), false),
+        (Act::RecSource(RecSource::Screen), tr!("rec.panel.screen"), "monitor", src(RecSource::Screen), false),
+        (Act::RecSource(RecSource::Window), tr!("tip.window"), "window", src(RecSource::Window), false),
+        (Act::RecSource(RecSource::Region), tr!("tip.region"), "region", src(RecSource::Region), false),
     ]);
     y += SEG_H + GAP;
     let mp4 = rv.format == RecFormat::Mp4;
@@ -201,8 +208,8 @@ pub fn layout(inp: &Input, rv: &RecView) -> Toolbar {
     };
     // Camera: the device, on/off.
     let cam_on = rv.camera && rv.cams;
-    let cam_label = if rv.cams_looking { LOOKING_CAMS } else { "Camera" };
-    let cam_value = if rv.cams_looking { Some("") } else if rv.cams { None } else { Some(crate::cam::NO_CAMERA) };
+    let cam_label = if rv.cams_looking { LOOKING_CAMS.get() } else { tr!("tip.camera") };
+    let cam_value = if rv.cams_looking { Some("") } else if rv.cams { None } else { Some(crate::cam::NO_CAMERA.get()) };
     row(&mut local, y, Act::RecCamera, "video", cam_label, cam_value, rv.cams.then_some(Dev::Cam), cam_on, !rv.cams, false);
     let cam_row = row_r(y);
     y += ROW_H + GAP;
@@ -213,12 +220,17 @@ pub fn layout(inp: &Input, rv: &RecView) -> Toolbar {
     if cam_on {
         use crate::cam::bg::Bg;
         let r = FRect { x: x0, y, w: inner, h: SMALL_ROW_H };
-        local.push(Item { kind: Kind::Row { act: Act::RecBg(rv.bg), icon: "", label: "Background", value: None, dim: false }, r, disabled: true });
-        let segs = [(Bg::Off, "Off"), (Bg::Light, "Blur light"), (Bg::Strong, "Blur strong")].map(|(b, l)| (Act::RecBg(b), l, "", rv.bg == b, false));
-        seg(&mut local, r.x1() - 6.0 - BG_SEG_W, y + (SMALL_ROW_H - 26.0) / 2.0, BG_SEG_W, 26.0, 2.0, &segs);
+        local.push(Item { kind: Kind::Row { act: Act::RecBg(rv.bg), icon: "", label: tr!("rec.panel.background"), value: None, dim: false }, r, disabled: true });
+        let segs = [(Bg::Off, tr!("settings.camera.bg_off")), (Bg::Light, tr!("settings.camera.bg_light")), (Bg::Strong, tr!("settings.camera.bg_strong"))].map(|(b, l)| (Act::RecBg(b), l, "", rv.bg == b, false));
+        // Wider for longer words, up to the row's name.
+        let font = crate::fonts::ui_font();
+        let widest = segs.iter().map(|s| crate::uifb::text_width(font, 12.0, s.1)).fold(0.0f32, f32::max);
+        let room = r.w - 6.0 - 8.0 - crate::uifb::text_width(font, 12.0, tr!("rec.panel.background")) - 12.0;
+        let bw = BG_SEG_W.max((3.0 * (widest + 8.0) + 4.0 + 2.0 * SEG_GAP).ceil()).min(room.max(BG_SEG_W));
+        seg(&mut local, r.x1() - 6.0 - bw, y + (SMALL_ROW_H - 26.0) / 2.0, bw, 26.0, 2.0, &segs);
         y += SMALL_ROW_H + GAP;
         if !rv.blur && rv.bg != Bg::Off {
-            let note = rv.blur_note.unwrap_or(crate::cam::bg::UNAVAILABLE);
+            let note = rv.blur_note.unwrap_or(crate::cam::bg::UNAVAILABLE.get());
             let r = FRect { x: x0, y: y - GAP, w: inner, h: NOTE_H };
             local.push(Item { kind: Kind::Row { act: Act::RecBg(rv.bg), icon: "", label: "", value: Some(note), dim: !rv.blur_retry }, r, disabled: !rv.blur_retry });
             y += NOTE_H;
@@ -226,13 +238,13 @@ pub fn layout(inp: &Input, rv: &RecView) -> Toolbar {
     }
     // Microphone (MP4 only): the device and its level, on/off.
     let mic_on = mp4 && rv.mic;
-    let (mic_icon, mic_value) = if mp4 { ("mic", None) } else { ("mic-off", Some(crate::rec_ui::NOT_IN_GIF)) };
-    row(&mut local, y, Act::RecMic, mic_icon, "Microphone", mic_value, mp4.then_some(Dev::Mic), mic_on, !mp4, mic_on && rv.meter.is_some());
+    let (mic_icon, mic_value) = if mp4 { ("mic", None) } else { ("mic-off", Some(crate::rec_ui::NOT_IN_GIF.get())) };
+    row(&mut local, y, Act::RecMic, mic_icon, tr!("tip.microphone"), mic_value, mp4.then_some(Dev::Mic), mic_on, !mp4, mic_on && rv.meter.is_some());
     y += ROW_H + GAP;
     // System audio (MP4 only).
     let sys_on = mp4 && rv.system;
-    let sys_value = if !mp4 { crate::rec_ui::NOT_IN_GIF } else if sys_on { "On" } else { "Off" };
-    row(&mut local, y, Act::RecSystem, "volume", "System audio", Some(sys_value), None, sys_on, !mp4, false);
+    let sys_value = if !mp4 { crate::rec_ui::NOT_IN_GIF.get() } else if sys_on { tr!("rec.panel.on") } else { tr!("rec.panel.off") };
+    row(&mut local, y, Act::RecSystem, "volume", tr!("rec.panel.system_audio"), Some(sys_value), None, sys_on, !mp4, false);
     y += ROW_H + GAP;
     local.push(Item { kind: Kind::SepH, r: FRect { x: x0 + 4.0, y, w: inner - 8.0, h: 1.0 }, disabled: false });
     y += 1.0 + GAP;
@@ -240,7 +252,7 @@ pub fn layout(inp: &Input, rv: &RecView) -> Toolbar {
     let third = if mp4 { 92.0 } else { 112.0 };
     let col = (inner - third - 2.0 * GAP) / 2.0;
     let cols = [(x0, col), (x0 + col + GAP, col), (x0 + 2.0 * (col + GAP), third)];
-    let captions = ["Camera shape", "Output", if mp4 { "Countdown" } else { "Frame rate" }];
+    let captions = [tr!("tip.camera_shape"), tr!("rec.panel.output"), if mp4 { tr!("tip.countdown") } else { tr!("tip.frame_rate") }];
     for ((cx, cw), cap) in cols.iter().zip(captions) {
         local.push(Item { kind: Kind::Caption(cap), r: FRect { x: cx + 2.0, y, w: *cw, h: CAPTION_H }, disabled: false });
     }
@@ -253,7 +265,7 @@ pub fn layout(inp: &Input, rv: &RecView) -> Toolbar {
     let checking = rv.mp4 == crate::rec_ui::Mp4::Checking;
     let mp4_off = rv.mp4 != crate::rec_ui::Mp4::Yes;
     seg(&mut local, cols[1].0, sy, cols[1].1, SEG_H, SEG_IN, &[
-        (Act::RecFormat(RecFormat::Mp4), if checking { "checking\u{2026}" } else { "MP4" }, "film", mp4, mp4_off),
+        (Act::RecFormat(RecFormat::Mp4), if checking { tr!("rec.panel.checking") } else { "MP4" }, "film", mp4, mp4_off),
         (Act::RecFormat(RecFormat::Gif), "GIF", "gif", !mp4, false),
     ]);
     if mp4 {
@@ -270,8 +282,14 @@ pub fn layout(inp: &Input, rv: &RecView) -> Toolbar {
     // A GIF: Max length 15 / 30 / 60 s, then it stops by itself.
     if !mp4 {
         let r = FRect { x: x0, y, w: inner, h: SMALL_ROW_H };
-        local.push(Item { kind: Kind::Row { act: Act::RecGifMax(rv.gif_max), icon: "", label: "Max length", value: Some(max_len_text(rv.gif_max)), dim: false }, r, disabled: true });
         let sw = 96.0;
+        // The value ("30 s · then it stops") only when it fits before the
+        // choices (they say the same).
+        let font = crate::fonts::ui_font();
+        let value = max_len_text(rv.gif_max);
+        let end = r.x + 8.0 + crate::uifb::text_width(font, 12.0, tr!("tip.max_length")) + 10.0 + crate::uifb::text_width(font, 12.0, value);
+        let value = (end + 6.0 <= r.x1() - 6.0 - sw).then_some(value);
+        local.push(Item { kind: Kind::Row { act: Act::RecGifMax(rv.gif_max), icon: "", label: tr!("tip.max_length"), value, dim: false }, r, disabled: true });
         let segs: Vec<(Act, &'static str, &'static str, bool, bool)> =
             crate::rec_ui::GIF_MAX.iter().map(|&n| (Act::RecGifMax(n), len_label(n), "", rv.gif_max == n, false)).collect();
         seg(&mut local, r.x1() - 6.0 - sw, y + (SMALL_ROW_H - 26.0) / 2.0, sw, 26.0, 2.0, &segs);
@@ -293,15 +311,15 @@ pub fn layout(inp: &Input, rv: &RecView) -> Toolbar {
             y += CAPTION_H + 2.0;
         }
         y += CAPTION_GAP;
-        local.push(Item { kind: Kind::Primary { act: Act::RecStart, label: crate::cam::bg::ASK_BLURRED }, r: FRect { x: x0, y, w: inner, h: START_H }, disabled: false });
+        local.push(Item { kind: Kind::Primary { act: Act::RecStart, label: crate::cam::bg::ASK_BLURRED.get() }, r: FRect { x: x0, y, w: inner, h: START_H }, disabled: false });
         y += START_H + GAP;
         seg(&mut local, x0, y, inner, SEG_H, SEG_IN, &[
-            (Act::RecAskCamOff, crate::cam::bg::ASK_CAM_OFF, "", false, false),
-            (Act::RecAskCancel, crate::cam::bg::ASK_CANCEL, "", false, false),
+            (Act::RecAskCamOff, crate::cam::bg::ASK_CAM_OFF.get(), "", false, false),
+            (Act::RecAskCancel, crate::cam::bg::ASK_CANCEL.get(), "", false, false),
         ]);
         y += SEG_H + PAD;
     } else {
-        local.push(Item { kind: Kind::Primary { act: Act::RecStart, label: "Start recording" }, r: FRect { x: x0, y, w: inner, h: START_H }, disabled: false });
+        local.push(Item { kind: Kind::Primary { act: Act::RecStart, label: tr!("tip.start_recording") }, r: FRect { x: x0, y, w: inner, h: START_H }, disabled: false });
         y += START_H + PAD;
     }
     let mut h = y;
@@ -571,7 +589,7 @@ mod tests {
         assert!(inside_panel(&tb));
         for act in [Act::RecMic, Act::RecSystem] {
             let row = find(&tb, |k| matches!(k, Kind::Row { act: a, .. } if *a == act));
-            assert!(row.disabled && matches!(row.kind, Kind::Row { value: Some(crate::rec_ui::NOT_IN_GIF), dim: true, .. }));
+            assert!(row.disabled && matches!(row.kind, Kind::Row { value: Some(v), dim: true, .. } if v == crate::rec_ui::NOT_IN_GIF.get()));
             assert_eq!(tb.act_at(centre(row.r)), None);
         }
         assert!(!tb.items.iter().any(|i| matches!(i.kind, Kind::Meter { .. } | Kind::DevBox { dev: Dev::Mic, .. })));
@@ -654,9 +672,9 @@ mod tests {
         // Without a model: the choices stay (Off too), the note under
         // them, which takes no press.
         v.blur = false;
-        v.blur_note = Some(UNAVAILABLE);
+        v.blur_note = Some(UNAVAILABLE.get());
         let tb = panel(sel, &v);
-        let note = find(&tb, |k| matches!(k, Kind::Row { act: Act::RecBg(_), value: Some(UNAVAILABLE), dim: true, .. }));
+        let note = find(&tb, |k| matches!(k, Kind::Row { act: Act::RecBg(_), value: Some(v), dim: true, .. } if *v == UNAVAILABLE.get()));
         let segs: Vec<Item> = tb.items.iter().filter(|i| matches!(i.kind, Kind::Seg { act: Act::RecBg(_), .. })).copied().collect();
         assert_eq!(segs.len(), 3);
         assert_eq!(tb.act_at(centre(segs[0].r)), Some(Act::RecBg(Bg::Off)), "Off can be chosen");
@@ -664,10 +682,10 @@ mod tests {
         assert_eq!(tb.act_at(centre(note.r)), None);
         assert!(inside_panel(&tb));
         // A failed download: the note, and a press of it retries.
-        v.blur_note = Some(crate::cam::bg::FAILED_SHORT);
+        v.blur_note = Some(crate::cam::bg::FAILED_SHORT.get());
         v.blur_retry = true;
         let tb = panel(sel, &v);
-        let note = find(&tb, |k| matches!(k, Kind::Row { act: Act::RecBg(_), value: Some(crate::cam::bg::FAILED_SHORT), .. }));
+        let note = find(&tb, |k| matches!(k, Kind::Row { act: Act::RecBg(_), value: Some(v), .. } if *v == crate::cam::bg::FAILED_SHORT.get()));
         assert!(matches!(note.kind, Kind::Row { dim: false, .. }) && !note.disabled);
         assert_eq!(tb.act_at(centre(note.r)), Some(Act::RecBg(Bg::Light)));
         // Off chosen: no note (nothing is missing).
@@ -686,15 +704,15 @@ mod tests {
         v.camera = true;
         v.bg = Bg::Strong;
         v.blur = false;
-        v.blur_ask = Some((ASK_TITLE, "(downloads are off)"));
+        v.blur_ask = Some((ASK_TITLE.get(), "(downloads are off)"));
         let tb = panel(sel, &v);
-        assert!(tb.items.iter().any(|i| i.kind == Kind::Caption(ASK_TITLE)));
+        assert!(tb.items.iter().any(|i| i.kind == Kind::Caption(ASK_TITLE.get())));
         assert!(tb.items.iter().any(|i| i.kind == Kind::Caption("(downloads are off)")));
         let go = find(&tb, |k| matches!(k, Kind::Primary { .. }));
-        assert!(matches!(go.kind, Kind::Primary { act: Act::RecStart, label: ASK_BLURRED }));
+        assert!(matches!(go.kind, Kind::Primary { act: Act::RecStart, label } if label == ASK_BLURRED.get()));
         let off = find(&tb, |k| matches!(k, Kind::Seg { act: Act::RecAskCamOff, .. }));
         let cancel = find(&tb, |k| matches!(k, Kind::Seg { act: Act::RecAskCancel, .. }));
-        assert!(matches!(off.kind, Kind::Seg { label: ASK_CAM_OFF, .. }) && matches!(cancel.kind, Kind::Seg { label: ASK_CANCEL, .. }));
+        assert!(matches!(off.kind, Kind::Seg { label, .. } if label == ASK_CAM_OFF.get()) && matches!(cancel.kind, Kind::Seg { label, .. } if label == ASK_CANCEL.get()));
         assert_eq!(tb.act_at(centre(off.r)), Some(Act::RecAskCamOff));
         assert_eq!(tb.act_at(centre(cancel.r)), Some(Act::RecAskCancel));
         assert!(off.r.y >= go.r.y1());
@@ -714,5 +732,63 @@ mod tests {
         assert!(tb.extra.contains(&g));
         i.grip = None;
         assert!(!layout(&i).items.iter().any(|it| it.kind == Kind::Grip));
+    }
+
+    /// Every word of the recording panel fits its place in English and the
+    /// long pseudo-languages: segment labels in their segments, row names
+    /// before what follows them, values before the switch, captions in
+    /// their columns, the mode buttons and Start recording.
+    #[test]
+    fn panel_text_fits_in_long_languages() {
+        use super::super::chrome::{tw, Ui};
+        for lang in crate::ui::preview::LANGS {
+            crate::i18n::with_lang(lang, || {
+                let ui = Ui { th: &crate::theme::DARK, s: 1.0, font: Some(crate::fonts::ui_font()) };
+                for (fmt, cam) in [(RecFormat::Mp4, false), (RecFormat::Mp4, true), (RecFormat::Gif, false)] {
+                    let mut v = rv(fmt);
+                    v.camera = cam;
+                    v.cams = true;
+                    v.mic = false;
+                    let tb = panel(r(240.0, 110.0, 960.0, 420.0), &v);
+                    let what = |s: &str| format!("{lang} {fmt:?} camera {cam}: {s:?}");
+                    for it in &tb.items {
+                        let r = it.r;
+                        match it.kind {
+                            Kind::Seg { label, icon, .. } => {
+                                let size = super::super::chrome::seg_text_size(&ui, r, label, icon);
+                                let w = if icon.is_empty() { 0.0 } else { 16.0 + if label.is_empty() { 0.0 } else { 6.0 } } + tw(&ui, size, label);
+                                assert!(w <= r.w - 4.0, "{} in {:.0}", what(label), r.w);
+                            }
+                            Kind::Caption(s) => assert!(tw(&ui, 11.0, s) <= r.w, "{}", what(s)),
+                            Kind::Mode { video, .. } => {
+                                let label = if video { tr!("tip.video") } else { tr!("tip.screenshot") };
+                                assert!(10.0 + 14.0 + 6.0 + tw(&ui, 11.5, label) <= r.w - 6.0, "{} in {:.0}", what(label), r.w);
+                            }
+                            Kind::Primary { label, .. } => assert!(10.0 + 10.0 + tw(&ui, 13.0, label) + 10.0 + 22.0 <= r.w - 16.0, "{}", what(label)),
+                            Kind::Row { icon, label, value, .. } => {
+                                let x = r.x + if icon.is_empty() { 8.0 } else { 38.0 };
+                                let end = x + tw(&ui, super::super::chrome::row_name_size(&ui, label, !icon.is_empty()), label);
+                                // What follows the name on its row.
+                                let next = tb
+                                    .items
+                                    .iter()
+                                    .filter(|o| !matches!(o.kind, Kind::Row { .. }) && o.r.y < r.y1() && o.r.y1() > r.y && o.r.x > r.x + 20.0)
+                                    .map(|o| o.r.x)
+                                    .fold(r.x1() - 6.0 - 32.0, f32::min);
+                                let vx = if icon.is_empty() { end + 10.0 } else { r.x + 38.0 + 92.0 + 10.0 };
+                                if let Some(v) = value.filter(|v| !v.is_empty()) {
+                                    assert!(end + 6.0 <= vx, "{} runs into its value", what(label));
+                                    assert!(tw(&ui, 12.0, v) <= r.x1() - (6.0 + 32.0 + 10.0) - vx, "{} cut", what(v));
+                                    assert!(vx + tw(&ui, 12.0, v) <= next + 0.5, "{} runs into the next part", what(v));
+                                } else {
+                                    assert!(end + 6.0 <= next, "{} runs into the next part ({end:.0} > {next:.0})", what(label));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            });
+        }
     }
 }

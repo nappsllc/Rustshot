@@ -802,12 +802,12 @@ impl Edit {
                     toolbar::Kind::Switch { act: act @ toolbar::Act::RecCamera, .. } if it.disabled && !looking => {
                         let sw = 40.0 * s;
                         let anchor = FRect { x: it.r.x1() - sw, y: it.r.y, w: sw, h: it.r.h };
-                        tip = Some(TipUi { anchor, act, label: crate::cam::NO_CAMERA, keys: Vec::new(), area, below: true, k });
+                        tip = Some(TipUi { anchor, act, label: crate::cam::NO_CAMERA.get(), keys: Vec::new(), area, below: true, k });
                     }
                     // Why MP4 is off (Linux without ffmpeg, or still asking it).
                     toolbar::Kind::Seg { act: act @ toolbar::Act::RecFormat(crate::rec::RecFormat::Mp4), .. } if it.disabled => {
                         let label = if self.rec.mp4 == crate::rec_ui::Mp4::Checking { crate::rec_ui::CHECKING_MP4 } else { crate::rec_ui::NO_MP4 };
-                        tip = Some(TipUi { anchor: it.r, act, label, keys: Vec::new(), area, below: pop_below, k });
+                        tip = Some(TipUi { anchor: it.r, act, label: label.get(), keys: Vec::new(), area, below: pop_below, k });
                     }
                     _ => {}
                 }
@@ -844,7 +844,7 @@ impl Edit {
             if self.snip.freeform
                 && let Some(first) = parts.first_mut()
             {
-                *first = chrome::HintPart::T(if snap { "Click a window or drag a lasso" } else { "Drag a lasso to select" }.into());
+                *first = chrome::HintPart::T(if snap { tr!("editor.hint.snap_lasso") } else { tr!("editor.hint.lasso") }.into());
             }
             HintUi { area, k: kh, parts }
         });

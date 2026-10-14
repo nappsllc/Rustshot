@@ -35,11 +35,11 @@ use crate::capture::IRect;
 use std::time::{Duration, Instant};
 
 /// Shown when Screen Recording permission is off.
-pub const SCREEN_DENIED: &str = "Allow Rustshot in System Settings › Privacy & Security › Screen Recording, then try again";
+pub const SCREEN_DENIED: crate::i18n::Key = key!("rec.mac.screen_denied");
 /// Shown when microphone access is off.
-pub const MIC_DENIED: &str = "Allow Rustshot in System Settings › Privacy & Security › Microphone, then try again";
+pub const MIC_DENIED: crate::i18n::Key = key!("rec.mac.mic_denied");
 /// Shown when camera access is off.
-pub const CAMERA_DENIED: &str = "Allow Rustshot in System Settings › Privacy & Security › Camera, then try again";
+pub const CAMERA_DENIED: crate::i18n::Key = key!("rec.mac.camera_denied");
 
 /// `'BGRA'` (`kCVPixelFormatType_32BGRA`).
 pub const BGRA: u32 = fourcc(b"BGRA");

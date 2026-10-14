@@ -806,6 +806,7 @@ mod window {
             let prev = WINDOWED.with(|c| c.replace(WinSlot { win: hwnd.0, ..NO_SLOT }));
             let quit = || WINDOWED.with(|c| c.get().quit);
             let mut size = phys(content_size(win), s);
+            let mut lang = crate::i18n::generation();
             driver.on_create(hwnd);
             if !quit() {
                 driver.on_event(Ev::Resize(size.0, size.1));
@@ -885,6 +886,13 @@ mod window {
                 }
                 if !quit() && Instant::now() >= next_tick {
                     next_tick = Instant::now() + Duration::from_millis(tick_ms(hwnd));
+                    // The UI language switched: lay out again, retitle.
+                    if let Some(title) = crate::wind::relocalize(&mut lang, driver, size) {
+                        if let Some(t) = title {
+                            let _: () = msg1(win, objc_sel(c"setTitle:"), ns_string(&t));
+                        }
+                        repaint = true;
+                    }
                     repaint |= driver.on_event(Ev::Timer);
                 }
                 with_slot(hwnd, |v| repaint |= core::mem::take(&mut v.present));

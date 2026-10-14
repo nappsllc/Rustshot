@@ -258,8 +258,14 @@ pub fn blit(f: &mut Fb, img: &PixBuf, dst: FRect, clip: FRect, rad: f32) {
     let (sx, sy) = (iw as f32 / dst.w, ih as f32 / dst.h);
     let same = (dst.w.round() as usize == iw) && (dst.h.round() as usize == ih);
     let bgra = f.order == crate::raster::Order::Bgra;
+    // A mirrored frame: the picture pre-flipped in its box (it reads
+    // normally after the frame's flip).
+    let flip = (dst.x + dst.x1()).round() as i32 - 1;
+    let mirror = f.mirror;
     for y in y0..y1 {
         for x in x0..x1 {
+            let x_dst = x;
+            let x = if mirror { flip - x } else { x };
             let p = if same {
                 let (u, v) = (((x as f32 - dst.x).round() as usize).min(iw - 1), ((y as f32 - dst.y).round() as usize).min(ih - 1));
                 let i = (v * iw + u) * 4;
@@ -280,6 +286,7 @@ pub fn blit(f: &mut Fb, img: &PixBuf, dst: FRect, clip: FRect, rad: f32) {
                 }
                 o
             };
+            let x = x_dst;
             let cov = rounded_cov(clip, rad, x, y);
             let a = (p[3] as f32 * cov).round() as u8;
             if a == 0 {

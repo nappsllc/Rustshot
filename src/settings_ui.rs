@@ -36,6 +36,7 @@
 
 use crate::config::{self, Config};
 use crate::export;
+use crate::i18n::Key;
 use crate::hotkey::{self, HotEvent};
 use crate::keymap::{Action, Chord, Keymap};
 use crate::objects::FRect;
@@ -59,41 +60,41 @@ mod upload;
 
 /// The rail's sections (icon, name); About sits at the bottom. Each one
 /// fits the body without scrolling (`every_section_fits`).
-pub const SECTIONS: [(&str, &str); 15] = [
-    ("set-sliders", "General"),
-    ("set-camera", "Capture"),
-    ("region", "Overlay"),
-    ("set-folder", "Saving"),
-    ("text", "File names"),
-    ("history", "History"),
-    ("video", "Recording"),
-    ("round", "Camera"),
-    ("cloud", "Upload"),
-    ("layers", "S3 storage"),
-    ("set-keyboard", "Global"),
-    ("film", "Recording"),
-    ("pencil", "Overlay tools"),
-    ("copy", "Overlay actions"),
-    ("info", "About"),
+pub const SECTIONS: [(&str, Key); 15] = [
+    ("set-sliders", key!("settings.section.general")),
+    ("set-camera", key!("settings.section.capture")),
+    ("region", key!("settings.section.overlay")),
+    ("set-folder", key!("settings.section.saving")),
+    ("text", key!("settings.section.file_names")),
+    ("history", key!("settings.section.history")),
+    ("video", key!("settings.section.recording")),
+    ("round", key!("settings.section.camera")),
+    ("cloud", key!("settings.section.upload")),
+    ("layers", key!("settings.section.s3")),
+    ("set-keyboard", key!("settings.section.keys_global")),
+    ("film", key!("settings.section.keys_recording")),
+    ("pencil", key!("settings.section.keys_tools")),
+    ("copy", key!("settings.section.keys_actions")),
+    ("info", key!("settings.section.about")),
 ];
 /// The header's title of each section: the rail's name, with its group
 /// for the shortcut sections.
-pub const TITLES: [&str; SECTIONS.len()] = [
-    "General",
-    "Capture",
-    "Overlay",
-    "Saving",
-    "File names",
-    "History",
-    "Recording",
-    "Camera",
-    "Upload",
-    "S3 storage",
-    "Shortcuts \u{b7} Global",
-    "Shortcuts \u{b7} Recording",
-    "Shortcuts \u{b7} Overlay tools",
-    "Shortcuts \u{b7} Overlay actions",
-    "About",
+pub const TITLES: [Key; SECTIONS.len()] = [
+    key!("settings.section.general"),
+    key!("settings.section.capture"),
+    key!("settings.section.overlay"),
+    key!("settings.section.saving"),
+    key!("settings.section.file_names"),
+    key!("settings.section.history"),
+    key!("settings.section.recording"),
+    key!("settings.section.camera"),
+    key!("settings.section.upload"),
+    key!("settings.section.s3"),
+    key!("settings.title.keys_global"),
+    key!("settings.title.keys_recording"),
+    key!("settings.title.keys_tools"),
+    key!("settings.title.keys_actions"),
+    key!("settings.section.about"),
 ];
 /// Section indices.
 pub const GENERAL: usize = 0;
@@ -115,7 +116,7 @@ pub const KEYS_TOOLS: usize = 12;
 pub const KEYS_ACTIONS: usize = 13;
 pub const ABOUT: usize = 14;
 /// The rail's group labels: (first section, label).
-pub const RAIL_GROUPS: [(usize, &str); 1] = [(KEYS_GLOBAL, "Shortcuts")];
+pub const RAIL_GROUPS: [(usize, Key); 1] = [(KEYS_GLOBAL, key!("settings.rail.shortcuts"))];
 
 /// One of the shortcut sections (key rows, Reset to defaults).
 pub fn is_keys(section: usize) -> bool {
@@ -149,28 +150,28 @@ pub fn section_of_field(field: &str) -> usize {
 }
 
 /// (label, config value)
-const THEMES: [(&str, &str); 3] = [("System", "auto"), ("Dark", "dark"), ("Light", "light")];
-const RENDERERS: [(&str, &str); 2] = [("GDI", "gdi"), ("Software", "software")];
+const THEMES: [(Key, &str); 3] = [(key!("settings.theme.system"), "auto"), (key!("settings.theme.dark"), "dark"), (key!("settings.theme.light"), "light")];
+const RENDERERS: [(Key, &str); 2] = [(key!("settings.renderer.gdi"), "gdi"), (key!("settings.renderer.software"), "software")];
 const FORMATS: [(&str, &str); 3] = [("PNG", "png"), ("JPG", "jpg"), ("BMP", "bmp")];
 /// Capture › Accept on select (`accept_on_select`).
-pub const ACCEPTS: [(&str, &str); 3] = [("Off", "off"), ("Copy", "copy"), ("Save", "save")];
+pub const ACCEPTS: [(Key, &str); 3] = [(key!("settings.accept.off"), "off"), (key!("settings.accept.copy"), "copy"), (key!("settings.accept.save"), "save")];
 /// Capture › Copy text (copy_text_mode): the overlay's button copies all,
 /// or opens Text mode to pick words (the hotkey always copies all).
-pub const COPY_TEXT: [(&str, &str); 2] = [("Copy all at once", "all"), ("Let me select", "select")];
+pub const COPY_TEXT: [(Key, &str); 2] = [(key!("settings.copy_text.all"), "all"), (key!("settings.copy_text.select"), "select")];
 /// Capture › Redact style (`redact_style`): an opaque fill, or a mosaic
 /// under a blur.
-pub const REDACT_STYLES: [(&str, &str); 2] = [("Solid", "solid"), ("Blur", "blur")];
+pub const REDACT_STYLES: [(Key, &str); 2] = [(key!("settings.redact.solid"), "solid"), (key!("settings.redact.blur"), "blur")];
 /// Saving "Save at" (`save_scale`): the screen's pixels, 1× (the
 /// logical size of a high-DPI capture) or a custom percent.
-pub const SAVE_AT: [(&str, &str); 3] = [("Screen pixels", "screen"), ("1\u{d7}", "logical"), ("Custom", "custom")];
+pub const SAVE_AT: [(Key, &str); 3] = [(key!("settings.save_at.screen"), "screen"), (key!("settings.save_at.logical"), "logical"), (key!("settings.save_at.custom"), "custom")];
 /// Capture › HDR screenshots (`hdr_screenshots`; Windows).
-pub const HDR_MODES: [(&str, &str); 2] = [("Tone-map to SDR", "tonemap"), ("Keep as captured", "keep")];
+pub const HDR_MODES: [(Key, &str); 2] = [(key!("settings.hdr.tonemap"), "tonemap"), (key!("settings.hdr.keep"), "keep")];
 /// Capture › Add a border: the width a new border starts at (logical px).
 pub const BORDER_DEFAULT: u8 = 2;
 const DEFAULT_FILENAME: &str = "%F_%H-%M";
 /// Capture › History: how long and how much it keeps (value, label).
-pub const HISTORY_DAYS: [(u32, &str); 4] = [(7, "7 days"), (30, "30 days"), (90, "90 days"), (365, "1 year")];
-pub const HISTORY_MB: [(u32, &str); 4] = [(1024, "1 GB"), (2048, "2 GB"), (5120, "5 GB"), (10240, "10 GB")];
+pub const HISTORY_DAYS: [(u32, Key); 4] = [(7, key!("settings.history.days7")), (30, key!("settings.history.days30")), (90, key!("settings.history.days90")), (365, key!("settings.history.year1"))];
+pub const HISTORY_MB: [(u32, Key); 4] = [(1024, key!("settings.history.gb1")), (2048, key!("settings.history.gb2")), (5120, key!("settings.history.gb5")), (10240, key!("settings.history.gb10"))];
 
 /// The accent swatches: Periwinkle (the theme's, `ui_color` empty), then
 /// [`crate::theme::ACCENTS`], then the custom color.
@@ -179,70 +180,70 @@ pub const ACCENT_CUSTOM: usize = 3;
 /// The global hotkeys of Key bindings, in board order: (label, hotkey
 /// slot: 0 capture, 1 quit, 2 record, 3 full screen, 4 window, 5 repeat,
 /// 6 copy text, 7 History).
-pub const GLOBALS: [(&str, usize); 9] = [
-    ("Capture region", 0),
-    ("Capture full screen", 3),
-    ("Capture window", 4),
-    ("Record video", 2),
-    ("Repeat last capture", 5),
-    ("Copy text from area", 6),
-    ("Read QR code from area", 8),
-    ("Open History", 7),
-    ("Quit Rustshot", 1),
+pub const GLOBALS: [(Key, usize); 9] = [
+    (key!("hotkey.capture_region"), 0),
+    (key!("hotkey.capture_full"), 3),
+    (key!("hotkey.capture_window"), 4),
+    (key!("hotkey.record"), 2),
+    (key!("hotkey.repeat"), 5),
+    (key!("hotkey.copy_text"), 6),
+    (key!("hotkey.read_qr"), 8),
+    (key!("hotkey.history"), 7),
+    (key!("hotkey.quit"), 1),
 ];
 
 /// The question when "Show icon in tray" is turned off: the way back in.
 /// (Windows: off means no background process at all.)
 #[cfg(windows)]
-pub const HIDE_TRAY: &str = "Rustshot won't run in the background. Win+Shift+S and Print Screen still open it if Rustshot is set as your screenshot app (Settings > Capture); other global shortcuts stop working. To open Settings, start Rustshot from the Start menu.";
+pub const HIDE_TRAY: Key = key!("settings.tray.hide_win");
 #[cfg(not(windows))]
-pub const HIDE_TRAY: &str = "The tray icon will be hidden. To open Settings later, start Rustshot again from your applications menu (or run `rustshot settings`). Your shortcuts keep working.";
+pub const HIDE_TRAY: Key = key!("settings.tray.hide");
 /// [`HIDE_TRAY`]'s extra line while Win+Shift+S does not open Rustshot.
-pub const HIDE_TRAY_SETUP: &str = "Rustshot isn't set as your screenshot app yet \u{2014} Set up\u{2026}";
+pub const HIDE_TRAY_SETUP: Key = key!("settings.tray.hide_setup");
 /// The "Show icon in tray" row's help (Windows).
-pub const TRAY_HELP: &str = "Off: no background process; only Win+Shift+S / Print Screen (when set up)";
+pub const TRAY_HELP: Key = key!("settings.tray.help");
 /// Where the icon off keeps the daemon (the Store build, which cannot
 /// take Win+Shift+S): the question and the row's help.
-pub const HIDE_TRAY_KEEP: &str = "The tray icon will be hidden. Rustshot keeps running in the background and your shortcuts keep working. To open Settings, start Rustshot again from the Start menu.";
-pub const TRAY_HELP_KEEP: &str = "Off: no icon; Rustshot keeps running and its shortcuts work";
+pub const HIDE_TRAY_KEEP: Key = key!("settings.tray.hide_keep");
+pub const TRAY_HELP_KEEP: Key = key!("settings.tray.help_keep");
 /// The one-time notice for a file from before the icon off meant "no
 /// background process" (the first start of this version).
-pub const TRAY_OFF_NOTICE: &str = "Rustshot no longer runs in the background while the tray icon is off. Win+Shift+S and Print Screen can still open it.";
+pub const TRAY_OFF_NOTICE: Key = key!("settings.tray.off_notice");
 
 /// A global row's note while another app holds its key.
-pub const IN_USE: &str = "In use by another app";
+pub const IN_USE: Key = key!("settings.hotkey.in_use");
 
 /// The file-name editor's token buttons: (label, inserted text), shown in
 /// columns (top to bottom, then the next column).
-pub const TOKENS: [(&str, &str); 15] = [
-    ("Century (00-99)", "%C"),
-    ("Day (001-366)", "%j"),
-    ("Day (01-31)", "%d"),
-    ("Day of Month (1-31)", "%e"),
-    ("Full Date (%Y-%m-%d)", "%F"),
-    ("Full Date (%d-%m-%Y)", "%d-%m-%Y"),
-    ("Hour (00-23)", "%H"),
-    ("Hour (01-12)", "%I"),
-    ("Minute (00-59)", "%M"),
-    ("Month (01-12)", "%m"),
-    ("Second (00-59)", "%S"),
-    ("Week (01-53)", "%V"),
-    ("Week Day (1-7)", "%u"),
-    ("Year (00-99)", "%y"),
-    ("Year (2000)", "%Y"),
+pub const TOKENS: [(Key, &str); 15] = [
+    (key!("settings.token.century"), "%C"),
+    (key!("settings.token.day_of_year"), "%j"),
+    (key!("settings.token.day"), "%d"),
+    (key!("settings.token.day_of_month"), "%e"),
+    (key!("settings.token.date_ymd"), "%F"),
+    (key!("settings.token.date_dmy"), "%d-%m-%Y"),
+    (key!("settings.token.hour24"), "%H"),
+    (key!("settings.token.hour12"), "%I"),
+    (key!("settings.token.minute"), "%M"),
+    (key!("settings.token.month"), "%m"),
+    (key!("settings.token.second"), "%S"),
+    (key!("settings.token.week"), "%V"),
+    (key!("settings.token.weekday"), "%u"),
+    (key!("settings.token.year2"), "%y"),
+    (key!("settings.token.year4"), "%Y"),
 ];
 
 /// Asked once before the first save over a file rustshot would not write
 /// that way (comments, unknown keys).
-pub const REWRITE: &str = "Saving will rewrite config.toml and remove comments.";
+pub const REWRITE: Key = key!("settings.rewrite");
 
 /// The question before "Reset to defaults…" replaces a broken file.
-pub const RESET: &str = "Replace config.toml with default settings? Your current values will be lost.";
+pub const RESET: Key = key!("settings.reset_question");
 
 /// The error state's text for a `config.toml` that does not parse (`e`
 /// as [`config::read_at`] words it: "line 3: expected key = value").
 pub fn broken_text(e: &str) -> String {
-    format!("config.toml has an error ({e}). Fix it or reset it.")
+    tr!("settings.broken", e)
 }
 
 /// Where "Reset to defaults…" keeps the old file: `config.toml.bak`, or
@@ -263,6 +264,21 @@ pub fn backup_path(path: &Path) -> PathBuf {
         })
         .find(|p| !p.exists())
         .expect("a free name")
+}
+
+/// General › Language's choices: (`language` value, label): the system's
+/// first ("System default"), then every language in its own name.
+pub fn language_choices() -> Vec<(&'static str, &'static str)> {
+    std::iter::once(("", tr!("settings.general.language.system"))).chain(crate::i18n::languages().into_iter().map(|l| (l.code, l.name))).collect()
+}
+
+/// The choice `language = v` is ([`language_choices`]; unknown: the system's).
+fn language_index(v: &str) -> usize {
+    let v = v.trim();
+    if v.is_empty() || v.eq_ignore_ascii_case("system") {
+        return 0;
+    }
+    language_choices().iter().position(|(c, _)| c.eq_ignore_ascii_case(v)).unwrap_or(0)
 }
 
 fn theme_index(v: &str) -> usize {
@@ -311,6 +327,8 @@ fn accent_value(i: usize) -> Option<String> {
 #[derive(Clone, Debug)]
 pub struct Form {
     pub theme: usize,
+    /// General › Language ([`language_choices`] index).
+    pub language: usize,
     /// Accent swatch (`ui_color`), and the custom color's text.
     pub accent: usize,
     pub accent_hex: TextState,
@@ -396,6 +414,7 @@ impl Form {
         let accent = accent_index(&cfg.ui_color);
         Form {
             theme: theme_index(&cfg.theme),
+            language: language_index(&cfg.language),
             accent,
             accent_hex: TextState::new(if accent == ACCENT_CUSTOM { cfg.ui_color.trim() } else { "" }),
             ui_size: cfg.ui_scale.index(),
@@ -488,6 +507,9 @@ impl Form {
         let mut c = onto.clone();
         if self.theme != was.theme {
             c.theme = THEMES[self.theme].1.into();
+        }
+        if self.language != was.language {
+            c.language = language_choices().get(self.language).map_or("", |l| l.0).into();
         }
         if self.accent != was.accent || (self.accent == ACCENT_CUSTOM && self.accent_hex.text.trim() != was.accent_hex.text.trim()) {
             match accent_value(self.accent) {
@@ -687,7 +709,7 @@ impl Form {
             return None;
         }
         let c = *self.keys.chords(a).first()?;
-        GLOBALS.iter().find(|(_, s)| self.global(*s) == Some(c)).map(|(label, _)| *label)
+        GLOBALS.iter().find(|(_, s)| self.global(*s) == Some(c)).map(|(label, _)| label.get())
     }
 
     /// The message under an overlay action in a conflict: "Already used
@@ -695,15 +717,15 @@ impl Form {
     /// otherwise.
     pub fn conflict_note(&self, a: Action) -> Option<String> {
         if self.keys.plain_typing().contains(&a) {
-            return Some("Needs Ctrl or Alt: a plain key would type. Choose another.".into());
+            return Some(tr!("settings.key.needs_mod").into());
         }
         if let Some(label) = self.global_clash(a) {
-            return Some(format!("Already used by {label}. Choose another."));
+            return Some(tr!("settings.key.used_by", label));
         }
         let all = self.keys.conflicts();
         let (_, acts) = all.iter().find(|(c, acts)| acts.contains(&a) && self.keys.chords(a).first() == Some(c))?;
         let other = acts.iter().find(|x| **x != a)?;
-        Some(format!("Already used by {}. Choose another.", other.label()))
+        Some(tr!("settings.key.used_by", label = other.label()))
     }
 
     /// The problem with while-recording chord `a`, if any: the same chord
@@ -715,33 +737,45 @@ impl Form {
         }
         let c = *self.keys.chords(a).first()?;
         if let Some((label, _)) = GLOBALS.iter().find(|(_, s)| self.global(*s) == Some(c)) {
-            return Some(format!("Already used by {label}. Choose another."));
+            return Some(tr!("settings.key.used_by", label = label.get()));
         }
         let modded = c.ctrl || c.alt || c.shift || c.meta;
         let special = (0x70..=0x7B).contains(&c.vk) || c.vk == wind::key::PRINTSCREEN;
-        (!(modded || special)).then(|| BARE_NOTE.to_string())
+        (!(modded || special)).then(|| BARE_NOTE.get().to_string())
     }
 
     /// The problem with global hotkey `slot`, if any: the same chord as
     /// another global (the one listed first keeps it in the message), or a
     /// bare key that every app would lose.
+    /// While-recording chord `a` shows red: it clashes with another key
+    /// (not merely a bare or plain key).
+    pub fn rec_err(&self, a: Action) -> bool {
+        self.rec_note(a).is_some_and(|n| !self.keys.plain_typing().contains(&a) && n != BARE_NOTE.get())
+    }
+
+    /// Another global hotkey with `slot`'s chord.
+    pub fn global_clash_slot(&self, slot: usize) -> Option<&'static (Key, usize)> {
+        let c = self.global(slot)?;
+        GLOBALS.iter().find(|(_, s)| *s != slot && self.global(*s) == Some(c))
+    }
+
     pub fn global_note(&self, slot: usize) -> Option<String> {
         let c = self.global(slot)?;
-        if let Some((label, _)) = GLOBALS.iter().find(|(_, s)| *s != slot && self.global(*s) == Some(c)) {
-            return Some(format!("Already used by {label}. Choose another."));
+        if let Some((label, _)) = self.global_clash_slot(slot) {
+            return Some(tr!("settings.key.used_by", label = label.get()));
         }
         let modded = c.ctrl || c.alt || c.shift || c.meta;
         let special = (0x70..=0x7B).contains(&c.vk) || c.vk == wind::key::PRINTSCREEN; // F1-F12
-        (!(modded || special)).then(|| BARE_NOTE.to_string())
+        (!(modded || special)).then(|| BARE_NOTE.get().to_string())
     }
 }
 
 #[cfg(windows)]
-const BARE_NOTE: &str = "Without Ctrl, Alt, Shift or Win it takes that key from every app.";
+const BARE_NOTE: Key = key!("settings.key.bare_win");
 #[cfg(target_os = "macos")]
-const BARE_NOTE: &str = "Without Ctrl, Alt, Shift or Cmd it takes that key from every app.";
+const BARE_NOTE: Key = key!("settings.key.bare_mac");
 #[cfg(not(any(windows, target_os = "macos")))]
-const BARE_NOTE: &str = "Without Ctrl, Alt, Shift or Super it takes that key from every app.";
+const BARE_NOTE: Key = key!("settings.key.bare_linux");
 
 /// The folder text, looked at without touching the disk.
 #[derive(Clone, Debug, PartialEq)]
@@ -761,11 +795,11 @@ fn folder_kind(t: &str) -> FolderKind {
     }
     let p = Path::new(t);
     if !p.has_root() {
-        return FolderKind::Note("A relative folder is saved under the folder Rustshot was started in.".into());
+        return FolderKind::Note(tr!("settings.folder.relative").into());
     }
     if p.is_relative() {
         // Windows: "\shots" has a root but no drive.
-        return FolderKind::Note("A folder without a drive is saved relative to the root of the current drive.".into());
+        return FolderKind::Note(tr!("settings.folder.no_drive").into());
     }
     // The drive (Windows) or the top-level folder (elsewhere: /media, /mnt).
     let mut root = PathBuf::new();
@@ -792,7 +826,7 @@ fn probe_root(root: &Path) -> Option<String> {
     }
     (!root.exists()).then(|| {
         let name = root.display().to_string();
-        if cfg!(windows) { format!("Drive {} is not on this computer.", name.trim_end_matches('\\')) } else { format!("{name} does not exist.") }
+        if cfg!(windows) { tr!("settings.folder.no_such_drive", drive = name.trim_end_matches('\\')) } else { tr!("settings.folder.missing", name) }
     })
 }
 
@@ -1087,7 +1121,7 @@ impl Settings {
 
     /// The guide's text: its title and body.
     pub fn guide_texts(&self, broken: bool) -> (&'static str, String) {
-        (crate::screenclip_win::GUIDE_TITLE, crate::screenclip_win::guide_text(broken))
+        (crate::screenclip_win::GUIDE_TITLE.get(), crate::screenclip_win::guide_text(broken))
     }
 
     /// The registration as it is now (another flow may have turned it on:
@@ -1110,7 +1144,7 @@ impl Settings {
                     self.form.screenclip = Some(true);
                 }
                 Err(e) => {
-                    self.modal = Some(Modal::Error(format!("Could not change Win+Shift+S: {e}")));
+                    self.modal = Some(Modal::Error(tr!("settings.error.screenclip", e)));
                     return;
                 }
             }
@@ -1143,7 +1177,7 @@ impl Settings {
             match config::edit_top_keys_at(&self.path, &edit) {
                 Ok(()) => self.loaded.screenclip_hint = false,
                 Err(e) => {
-                    self.modal = Some(Modal::Error(format!("Could not save {}: {e}", self.path.display())));
+                    self.modal = Some(Modal::Error(tr!("settings.error.save", path = self.path.display(), e)));
                     return vec![];
                 }
             }
@@ -1317,11 +1351,11 @@ impl Settings {
     /// does not open Rustshot, [`HIDE_TRAY_SETUP`].
     pub fn hide_tray_text(&self) -> String {
         if !self.no_background {
-            return HIDE_TRAY_KEEP.to_string();
+            return HIDE_TRAY_KEEP.get().to_string();
         }
         match self.screenclip_ready() {
-            Some(false) => format!("{HIDE_TRAY}\n{HIDE_TRAY_SETUP}"),
-            _ => HIDE_TRAY.to_string(),
+            Some(false) => format!("{}\n{}", HIDE_TRAY.get(), HIDE_TRAY_SETUP.get()),
+            _ => HIDE_TRAY.get().to_string(),
         }
     }
 
@@ -1343,7 +1377,7 @@ impl Settings {
                     self.form.screenclip = Some(true);
                 }
                 Err(e) => {
-                    self.modal = Some(Modal::Error(format!("Could not change Win+Shift+S: {e}")));
+                    self.modal = Some(Modal::Error(tr!("settings.error.screenclip", e)));
                     return;
                 }
             }
@@ -1354,7 +1388,7 @@ impl Settings {
 
     /// The "Show icon in tray" row's help.
     pub fn tray_help(&self) -> &'static str {
-        if self.no_background { TRAY_HELP } else { TRAY_HELP_KEEP }
+        if self.no_background { TRAY_HELP.get() } else { TRAY_HELP_KEEP.get() }
     }
 
     /// The one-time tray-off notice ([`run_tray_off_notice`]).
@@ -1422,21 +1456,21 @@ impl Settings {
         let f = self.slot_failure(slot)?;
         let label = hotkey::chord_label;
         Some(match (&f.alt, &f.kept, f.cause) {
-            (Some(a), _, _) => format!("{IN_USE} \u{2014} using {} for now", label(a)),
-            (None, Some(k), hotkey::Cause::InUse) => format!("{IN_USE} \u{2014} using {}", label(k)),
-            (None, Some(k), _) => format!("Not registered \u{2014} using {}", label(k)),
+            (Some(a), _, _) => tr!("settings.hotkey.using_for_now", in_use = IN_USE.get(), chord = label(a)),
+            (None, Some(k), hotkey::Cause::InUse) => tr!("settings.hotkey.using", in_use = IN_USE.get(), chord = label(k)),
+            (None, Some(k), _) => tr!("settings.hotkey.not_registered_using", chord = label(k)),
             (None, None, hotkey::Cause::InUse) => match &f.free {
-                Some(free) => format!("{IN_USE}. {} is free.", label(free)),
-                None => format!("{IN_USE}. Choose another."),
+                Some(free) => tr!("settings.hotkey.free", in_use = IN_USE.get(), chord = label(free)),
+                None => tr!("settings.hotkey.choose", in_use = IN_USE.get()),
             },
-            (None, None, _) => "Not registered".into(),
+            (None, None, _) => tr!("settings.hotkey.not_registered").into(),
         })
     }
 
     /// Hotkey `slot`'s keys show red: another global has the chord, or
     /// another app holds it.
     pub fn global_err(&self, slot: usize) -> bool {
-        self.form.global_note(slot).is_some_and(|n| n.starts_with("Already"))
+        self.form.global_clash_slot(slot).is_some()
             || self.slot_failure(slot).is_some_and(|f| f.cause == hotkey::Cause::InUse)
     }
 
@@ -1445,7 +1479,7 @@ impl Settings {
     pub fn global_message(&self, slot: usize) -> Option<String> {
         let note = self.form.global_note(slot);
         match note {
-            Some(n) if n.starts_with("Already") => Some(n),
+            Some(n) if self.form.global_clash_slot(slot).is_some() => Some(n),
             n => self.hotkey_slot_note(slot).or(n),
         }
     }
@@ -1631,7 +1665,7 @@ impl Settings {
         });
         let Some((res, cfg)) = saved else { return vec![] };
         if let Err(e) = res {
-            self.modal = Some(Modal::Error(format!("Could not save {}: {e}", self.path.display())));
+            self.modal = Some(Modal::Error(tr!("settings.error.save", path = self.path.display(), e)));
             return vec![];
         }
         self.confirmed = true; // the file is ours now
@@ -1640,6 +1674,9 @@ impl Settings {
         // window of its own has no daemon to reload it).
         crate::fetch::set_allowed(cfg.download_data);
         self.loaded = cfg.clone();
+        // The new language shows at once: this window and the others of
+        // this process lay themselves out again (the daemon on its reload).
+        crate::i18n::set_language(&cfg.language);
         // The typed S3 secret goes to the OS credential store, never the file.
         let secret = std::mem::take(&mut self.form.up.secret.text);
         // The form shows what was saved (merged with the file, trimmed).
@@ -1660,7 +1697,7 @@ impl Settings {
                 None => {
                     // Kept typed, to try again.
                     self.form.up.secret.set(&secret);
-                    self.modal = Some(Modal::Error("Enter the bucket and the access key ID first: the secret access key is kept for them.".into()));
+                    self.modal = Some(Modal::Error(tr!("settings.error.secret_needs_bucket").into()));
                     return acts;
                 }
             }
@@ -1669,7 +1706,7 @@ impl Settings {
             match (self.set_autostart)(on) {
                 Ok(()) => self.autostart = Some(on),
                 Err(e) => {
-                    self.modal = Some(Modal::Error(format!("Could not change Launch at login: {e}")));
+                    self.modal = Some(Modal::Error(tr!("settings.error.autostart", e)));
                     return acts;
                 }
             }
@@ -1690,7 +1727,7 @@ impl Settings {
                     }
                 }
                 Err(e) => {
-                    self.modal = Some(Modal::Error(format!("Could not change Win+Shift+S: {e}")));
+                    self.modal = Some(Modal::Error(tr!("settings.error.screenclip", e)));
                     return acts;
                 }
             }
@@ -1741,7 +1778,7 @@ impl Settings {
                 vec![]
             }
             Err(e) => {
-                self.modal = Some(Modal::Error(format!("Could not reset the tools in {}: {e}", self.path.display())));
+                self.modal = Some(Modal::Error(tr!("settings.error.reset_tools", path = self.path.display(), e)));
                 vec![]
             }
         }
@@ -1768,9 +1805,9 @@ impl Settings {
             if path.exists()
                 && let Err(e) = std::fs::copy(&path, &bak)
             {
-                return Err(format!("Could not back up config.toml to {}: {e}", bak.display()));
+                return Err(tr!("settings.error.backup", path = bak.display(), e));
             }
-            config::save_at(&path, &cfg).map_err(|e| format!("Could not save {}: {e}", path.display()))
+            config::save_at(&path, &cfg).map_err(|e| tr!("settings.error.save", path = path.display(), e))
         });
         if let Err(e) = res {
             self.modal = Some(Modal::Error(e));
@@ -1781,6 +1818,9 @@ impl Settings {
         self.stale = false;
         self.form = self.form_for(&cfg);
         self.loaded = cfg.clone();
+        // The new language shows at once: this window and the others of
+        // this process lay themselves out again (the daemon on its reload).
+        crate::i18n::set_language(&cfg.language);
         self.show_pending();
         vec![Act::Saved(Box::new(cfg))]
     }
@@ -1992,7 +2032,7 @@ fn run(rx: Receiver<Msg>) {
         uisize::init(s.loaded.ui_scale);
     }
     let mut w = Window::new(s, th, rx);
-    let spec = WindowSpec { title: "Rustshot Settings".into(), w: W, h: H, resizable: false, min: (W, H), controls: wind::Controls::MinClose };
+    let spec = WindowSpec { title: tr!("settings.window_title").into(), w: W, h: H, resizable: false, min: (W, H), controls: wind::Controls::MinClose };
     if let Err(e) = wind::run_window(spec, &mut w) {
         eprintln!("rustshot: settings window: {e:#}");
     }
@@ -2215,11 +2255,17 @@ impl OwnerHandle {
 }
 
 impl Driver for Window {
+    fn title(&self) -> Option<String> {
+        Some(tr!("settings.window_title").into())
+    }
+
     fn on_create(&mut self, hwnd: Hwnd) {
         self.hwnd = hwnd;
     }
 
     fn on_event(&mut self, ev: Ev) -> bool {
+        // Right to left: the pointer mirrored, as the frame is.
+        let ev = crate::ui::rtl_ev(ev, self.canvas.width());
         match ev {
             Ev::Resize(w, h) => {
                 self.canvas = PixBuf::new(w.max(1), h.max(1));

@@ -273,26 +273,26 @@ pub fn wanted(cfg: &Config) -> [String; SLOTS] {
 }
 
 /// What each slot is called (as Settings › Key bindings lists it).
-pub const SLOT_NAMES: [&str; SLOTS] = [
-    "Capture region",
-    "Quit Rustshot",
-    "Record video",
-    "Capture full screen",
-    "Capture window",
-    "Repeat last capture",
-    "Copy text from area",
-    "Open History",
-    "Read QR code from area",
+pub const SLOT_NAMES: [crate::i18n::Key; SLOTS] = [
+    key!("hotkey.capture_region"),
+    key!("hotkey.quit"),
+    key!("hotkey.record"),
+    key!("hotkey.capture_full"),
+    key!("hotkey.capture_window"),
+    key!("hotkey.repeat"),
+    key!("hotkey.copy_text"),
+    key!("hotkey.history"),
+    key!("hotkey.read_qr"),
 ];
 
 /// What each while-recording chord is called (Settings › Key bindings).
-pub const REC_NAMES: [&str; REC_SLOTS] = ["Pause / resume recording", "Mute microphone", "Hide / show recording controls"];
+pub const REC_NAMES: [crate::i18n::Key; REC_SLOTS] = [key!("hotkey.rec_pause"), key!("hotkey.rec_mute"), key!("hotkey.rec_hide")];
 
 /// The name of slot `slot` (a config slot or a while-recording one).
 pub fn slot_name(slot: usize) -> &'static str {
     match slot {
-        s if s < SLOTS => SLOT_NAMES[s],
-        s => REC_NAMES.get(s - REC_SLOT_BASE).copied().unwrap_or("hotkey"),
+        s if s < SLOTS => SLOT_NAMES[s].get(),
+        s => REC_NAMES.get(s - REC_SLOT_BASE).map_or("hotkey", |k| k.get()),
     }
 }
 
@@ -349,32 +349,22 @@ impl Failure {
         let chord = chord_label(&self.wanted);
         let name = slot_name(self.slot);
         if let Some(a) = &self.alt {
-            return format!("{chord} is in use by another app \u{2014} {name} is on {} instead.", chord_label(a));
+            return tr!("hotkey.fail.alt", chord, name, alt = chord_label(a));
         }
-        let pick = || {
-            let mut s = format!("Pick another key: click Change shortcuts\u{2026}, click the {name} key and press a new one");
-            if let Some(f) = &self.free {
-                s.push_str(&format!(" ({} is free)", chord_label(f)));
-            }
-            s.push('.');
-            s
+        let pick = || match &self.free {
+            Some(f) => tr!("hotkey.fail.pick_free", name, free = chord_label(f)),
+            None => tr!("hotkey.fail.pick", name),
         };
-        let why = match self.cause {
-            Cause::Unknown => return format!("Couldn't confirm {chord} was registered."),
-            Cause::InUse if self.kept.is_none() => return format!("{chord} is used by another app. {}", pick()),
-            Cause::Invalid if self.kept.is_none() => {
-                return format!("Couldn't register {chord} \u{2014} it's not a hotkey Rustshot can register. {}", pick());
-            }
-            Cause::Invalid => "it's not a hotkey Rustshot can register",
-            Cause::NoDisplay => "no X display is available",
-            Cause::InUse => "it's in use by another app",
-        };
-        let mut s = format!("Couldn't register {chord} — {why}");
-        if let Some(k) = &self.kept {
-            s.push_str(&format!("; kept {}", chord_label(k)));
+        let kept = self.kept.as_deref().map(chord_label);
+        match (self.cause, kept) {
+            (Cause::Unknown, _) => tr!("hotkey.fail.unknown", chord),
+            (Cause::InUse, None) => tr!("hotkey.fail.in_use_pick", chord, pick = pick()),
+            (Cause::Invalid, None) => tr!("hotkey.fail.invalid_pick", chord, pick = pick()),
+            (Cause::NoDisplay, None) => tr!("hotkey.fail.no_display", chord),
+            (Cause::Invalid, Some(kept)) => tr!("hotkey.fail.invalid_kept", chord, kept),
+            (Cause::NoDisplay, Some(kept)) => tr!("hotkey.fail.no_display_kept", chord, kept),
+            (Cause::InUse, Some(kept)) => tr!("hotkey.fail.in_use_kept", chord, kept),
         }
-        s.push('.');
-        s
     }
 
     /// Nothing is registered for the slot and the user has to pick
@@ -1294,10 +1284,10 @@ mod tests {
     #[test]
     fn slot_names_are_the_settings_rows() {
         for (label, slot) in crate::settings_ui::GLOBALS {
-            assert_eq!(slot_name(slot), label);
+            assert_eq!(slot_name(slot), label.get());
         }
         for (i, (label, a)) in crate::settings_ui::draw::REC_ROWS.iter().enumerate() {
-            assert_eq!((slot_name(REC_SLOT_BASE + i), REC_ACTIONS[i]), (*label, *a));
+            assert_eq!((slot_name(REC_SLOT_BASE + i), REC_ACTIONS[i]), (label.get(), *a));
         }
         // Every alternate is a Win+Shift chord no default has.
         let def = defaults();

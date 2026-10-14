@@ -14,7 +14,7 @@ pub const BTN: f32 = 32.0;
 pub const PAD: f32 = 6.0;
 pub const MARGIN: f32 = 12.0;
 /// The Camera row's label while the cameras are being listed.
-pub const LOOKING_CAMS: &str = "Looking for cameras…";
+pub const LOOKING_CAMS: crate::i18n::Key = key!("rec.panel.looking_cams");
 const IN_GAP: f32 = 2.0;
 const GROUP_GAP: f32 = 6.0;
 const SEP_LEN: f32 = 16.0;
@@ -332,8 +332,12 @@ pub struct CopyMenu {
 }
 
 /// The Copy text menu's rows.
-pub const COPY_MENU: [(Act, &str); 4] =
-    [(Act::TextSelect, "Select text"), (Act::CopyAll, "Copy all text"), (Act::ReadQr, crate::sharex_text::READ_QR), (Act::Redact, "Redact sensitive text")];
+pub const COPY_MENU: [(Act, crate::i18n::Key); 4] = [
+    (Act::TextSelect, key!("tip.select_text")),
+    (Act::CopyAll, key!("tip.copy_all_text")),
+    (Act::ReadQr, key!("tip.read_qr")),
+    (Act::Redact, key!("editor.menu.redact_sensitive")),
+];
 
 /// The Copy text menu under (or over) its button: the three rows, a
 /// separator, the kinds' checkboxes.
@@ -347,7 +351,7 @@ fn place_copy_menu(cm: &CopyMenu, bar: FRect, above: bool, items: &mut Vec<Item>
     let row = |y: f32| FRect { x: px + PAD * s, y: py + y * s, w: pw - 2.0 * PAD * s, h: MENU_ROW * s };
     let mut y = PAD;
     for (i, (act, label)) in COPY_MENU.into_iter().enumerate() {
-        items.push(Item { kind: Kind::MenuItem { act, label, key: i }, r: row(y), disabled: false });
+        items.push(Item { kind: Kind::MenuItem { act, label: label.get(), key: i }, r: row(y), disabled: false });
         y += MENU_ROW;
     }
     y += ROW_GAP;
@@ -492,6 +496,17 @@ fn row_w(gs: &[Group]) -> f32 {
     gs.iter().map(group_w).sum::<f32>() + gs.len().saturating_sub(1) as f32 * (2.0 * GROUP_GAP + 1.0)
 }
 
+/// A right-to-left language runs the toolbar right to left: the items
+/// laid out so far mirrored within `0..w` (logical px), so the first
+/// group (the tools) starts at the right.
+fn mirror_row(items: &mut [Item], w: f32) {
+    if crate::i18n::is_rtl() {
+        for it in items {
+            it.r.x = w - it.r.x - it.r.w;
+        }
+    }
+}
+
 /// Lay `gs` out left to right from (x0, y) with separators between groups.
 fn place_row(gs: &[Group], x0: f32, y: f32, items: &mut Vec<Item>) {
     let mut x = x0;
@@ -538,6 +553,7 @@ pub fn layout(inp: &Input) -> Toolbar {
         place_row(&gs[2..], PAD + inner - w2, rule_y + 1.0 + ROW_GAP, &mut items);
         (inner + 2.0 * PAD, 2.0 * BTN + 2.0 * ROW_GAP + 1.0 + 2.0 * PAD)
     };
+    mirror_row(&mut items, w);
 
     let (bw, bh) = (w * s, h * s);
     let sel = inp.sel;
@@ -630,7 +646,11 @@ pub fn layout_docked(inp: &Input, bar: FRect) -> Toolbar {
     let gs = docked_groups(inp);
     let mut items = Vec::new();
     place_row(&gs, 0.0, 0.0, &mut items);
-    let (x, y) = (bar.x + DOCK_PAD * s, bar.y + ((bar.h - BTN * s) / 2.0).round());
+    let row = row_w(&gs);
+    mirror_row(&mut items, row);
+    // Right to left: from the strip's right end.
+    let x0 = if crate::i18n::is_rtl() { bar.x1() - (DOCK_PAD + row) * s } else { bar.x + DOCK_PAD * s };
+    let (x, y) = (x0, bar.y + ((bar.h - BTN * s) / 2.0).round());
     for it in &mut items {
         it.r = FRect { x: (x + it.r.x * s).round(), y: y + it.r.y * s, w: (it.r.w * s).round(), h: (it.r.h * s).round() };
     }
@@ -658,7 +678,7 @@ pub fn layout_docked(inp: &Input, bar: FRect) -> Toolbar {
 }
 
 /// The Blur / Invert button's menu (a long press on it): its two tools.
-pub const SLOT_MENU: [(Act, &str); 2] = [(Act::Tool(Tool::Blur), "Blur"), (Act::Tool(Tool::Invert), "Invert")];
+pub const SLOT_MENU: [(Act, crate::i18n::Key); 2] = [(Act::Tool(Tool::Blur), key!("tip.blur")), (Act::Tool(Tool::Invert), key!("tip.invert"))];
 
 /// The Blur / Invert menu under (or over) its button, as the save menu.
 fn place_slot_menu(bar: FRect, above: bool, items: &mut Vec<Item>, inp: &Input) -> FRect {
@@ -668,7 +688,7 @@ fn place_slot_menu(bar: FRect, above: bool, items: &mut Vec<Item>, inp: &Input) 
     let (px, py) = place_pop(pw, ph, anchor, bar, above, inp);
     for (i, (act, label)) in SLOT_MENU.into_iter().enumerate() {
         let r = FRect { x: px + PAD * s, y: py + (PAD + i as f32 * MENU_ROW) * s, w: pw - 2.0 * PAD * s, h: MENU_ROW * s };
-        items.push(Item { kind: Kind::MenuItem { act, label, key: i }, r, disabled: false });
+        items.push(Item { kind: Kind::MenuItem { act, label: label.get(), key: i }, r, disabled: false });
     }
     FRect { x: px, y: py, w: pw, h: ph }
 }
@@ -678,11 +698,11 @@ const SLOT_MENU_W: f32 = 160.0;
 
 /// The save menu's rows (Share last, where there is a share sheet: see
 /// [`save_menu`]).
-pub const SAVE_MENU: [(Act, &str); 4] =
-    [(Act::SaveAs, "Save as\u{2026}"), (Act::SaveDesktop, "Save to Desktop"), (Act::OpenWith, "Open with\u{2026}"), (Act::Share, "Share\u{2026}")];
+pub const SAVE_MENU: [(Act, crate::i18n::Key); 4] =
+    [(Act::SaveAs, key!("tip.save_as")), (Act::SaveDesktop, key!("tip.save_to_desktop")), (Act::OpenWith, key!("tip.open_with")), (Act::Share, key!("tip.share"))];
 
 /// The save menu's rows here: no Share on Linux (no standard sheet).
-pub fn save_menu() -> &'static [(Act, &'static str)] {
+pub fn save_menu() -> &'static [(Act, crate::i18n::Key)] {
     if crate::share::supported() { &SAVE_MENU } else { &SAVE_MENU[..3] }
 }
 
@@ -696,13 +716,13 @@ fn place_save_menu(bar: FRect, above: bool, items: &mut Vec<Item>, inp: &Input) 
     let (px, py) = place_pop(pw, ph, anchor, bar, above, inp);
     for (i, &(act, label)) in rows.iter().enumerate() {
         let r = FRect { x: px + PAD * s, y: py + (PAD + i as f32 * MENU_ROW) * s, w: pw - 2.0 * PAD * s, h: MENU_ROW * s };
-        items.push(Item { kind: Kind::MenuItem { act, label, key: i }, r, disabled: false });
+        items.push(Item { kind: Kind::MenuItem { act, label: label.get(), key: i }, r, disabled: false });
     }
     FRect { x: px, y: py, w: pw, h: ph }
 }
 
 /// The selection size label's menu (a click on the label).
-pub const SIZE_MENU: [(Act, &str); 1] = [(Act::Trim, "Trim to content")];
+pub const SIZE_MENU: [(Act, crate::i18n::Key); 1] = [(Act::Trim, key!("tip.trim_to_content"))];
 /// Its width (logical px).
 const SIZE_MENU_W: f32 = 200.0;
 
@@ -720,7 +740,7 @@ pub fn add_size_menu(tb: &mut Toolbar, label: FRect, key: String, area: FRect, s
     let py = if below + ph <= area.y1() - m { below } else { (label.y - POP_GAP * s - ph).max(area.y + m) };
     for (i, (act, text)) in SIZE_MENU.into_iter().enumerate() {
         let r = FRect { x: px + PAD * s, y: py + (PAD + i as f32 * MENU_ROW) * s, w: pw - 2.0 * PAD * s, h: MENU_ROW * s };
-        tb.items.push(Item { kind: Kind::MenuItem { act, label: text, key: tb.texts.len() }, r, disabled: false });
+        tb.items.push(Item { kind: Kind::MenuItem { act, label: text.get(), key: tb.texts.len() }, r, disabled: false });
     }
     tb.texts.push(key);
     tb.pop = Some(FRect { x: px, y: py, w: pw, h: ph });
@@ -835,12 +855,12 @@ pub(super) fn place_picker(pv: &PickView, bar: FRect, above: bool, items: &mut V
     push(Kind::Btn(Act::Eyedrop), FRect { x: x0 + inner - PICK_ROW, y, w: PICK_ROW, h: PICK_ROW });
     y += PICK_ROW + 12.0;
     if pv.alpha {
-        push(Kind::Label("Opacity"), FRect { x: x0, y, w: 60.0, h: ALPHA_H });
+        push(Kind::Label(tr!("editor.palette.opacity")), FRect { x: x0, y, w: 60.0, h: ALPHA_H });
         // The percentage sits right of the track.
         push(Kind::PickAlpha, FRect { x: x0 + 64.0, y, w: inner - 64.0 - 40.0, h: ALPHA_H });
         y += ALPHA_H + 10.0;
     }
-    push(Kind::Label(if pv.recents.is_empty() { "No recent colors yet" } else { "Recent" }), FRect { x: x0, y, w: inner, h: 16.0 });
+    push(Kind::Label(if pv.recents.is_empty() { tr!("editor.palette.no_recent") } else { tr!("editor.palette.recent") }), FRect { x: x0, y, w: inner, h: 16.0 });
     y += 16.0 + 6.0;
     if !pv.recents.is_empty() {
         for (i, c) in pv.recents.iter().take(crate::config::RECENT_MAX).enumerate() {
@@ -1333,5 +1353,56 @@ mod tests {
         assert_eq!(tb.act_at(centre(pin)), Some(Act::Pin));
         i.busy = true;
         assert!(!layout(&i).items.iter().any(|it| it.kind == Kind::Btn(Act::Pin)));
+    }
+
+    /// A right-to-left language runs the toolbar right to left: the same
+    /// buttons in the same bar, mirrored within it (the tools start at the
+    /// right), in the overlay and docked in the Edit window.
+    #[test]
+    fn right_to_left_runs_the_toolbar_backwards() {
+        let sel = r(600.0, 300.0, 700.0, 400.0);
+        let btns = |t: &Toolbar| t.items.iter().filter(|i| matches!(i.kind, Kind::Btn(_))).map(|i| (i.kind, i.r)).collect::<Vec<_>>();
+        let en = layout(&inp(sel));
+        let rtl = crate::i18n::with_lang("qps-rtl", || layout(&inp(sel)));
+        assert_eq!(en.bar, rtl.bar);
+        let (a, b) = (btns(&en), btns(&rtl));
+        assert_eq!(a.len(), b.len());
+        for ((ka, ra), (kb, rb)) in a.iter().zip(&b) {
+            assert_eq!(ka, kb);
+            assert!(((ra.x - en.bar.x) - (en.bar.x1() - rb.x1())).abs() < 0.01, "{ka:?}: {ra:?} vs {rb:?}");
+        }
+        assert!(b[0].1.x > b[b.len() - 1].1.x, "the first tool is rightmost");
+        let strip = r(0.0, 0.0, 1200.0, 44.0);
+        let d_en = layout_docked(&inp(sel), strip);
+        let d_rtl = crate::i18n::with_lang("qps-rtl", || layout_docked(&inp(sel), strip));
+        let (a, b) = (btns(&d_en), btns(&d_rtl));
+        assert!(((a[0].1.x - strip.x) - (strip.x1() - b[0].1.x1())).abs() < 1.0, "docked: from the right end");
+        assert!(b.iter().all(|(_, r)| r.x >= strip.x && r.x1() <= strip.x1()));
+    }
+
+    /// Every toolbar button's tooltip fits the monitor in the long
+    /// pseudo-languages (accented and right to left), on a small screen.
+    #[test]
+    fn tooltips_fit_in_long_languages() {
+        let small = FRect { x: 0.0, y: 0.0, w: 1280.0, h: 720.0 };
+        let km = crate::keymap::Keymap::defaults();
+        for lang in crate::ui::preview::LANGS {
+            crate::i18n::with_lang(lang, || {
+                for s in [1.0f32, 1.5] {
+                    let mut i = inp(r(100.0, 100.0, 1080.0, 500.0));
+                    i.area = small;
+                    i.s = s;
+                    let tb = layout(&i);
+                    let ui = crate::editor::chrome::Ui { th: &crate::theme::DARK, s, font: Some(crate::fonts::ui_font()) };
+                    for it in &tb.items {
+                        let Kind::Btn(a) = it.kind else { continue };
+                        let (label, keys) = crate::editor::chrome::act_tip(a, &km);
+                        let at = crate::editor::chrome::TipAt { anchor: it.r, area: small, below: false };
+                        let t = crate::editor::chrome::tooltip_rect(&ui, at, label, &keys);
+                        assert!(t.x >= small.x && t.x1() <= small.x1() + 0.5 && t.y >= small.y && t.y1() <= small.y1(), "{lang} {a:?} at {s}: {t:?}");
+                    }
+                }
+            });
+        }
     }
 }

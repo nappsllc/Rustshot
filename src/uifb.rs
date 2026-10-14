@@ -51,6 +51,11 @@ pub struct Fb<'a> {
     pub ox: i32,
     pub oy: i32,
     pub order: Order,
+    /// A right-to-left frame: the whole frame is flipped horizontally
+    /// once drawn ([`Fb::flip`]), so text and pictures are drawn
+    /// pre-flipped within their own boxes (they read normally after the
+    /// flip, while their places mirror).
+    pub mirror: bool,
 }
 
 impl<'a> Fb<'a> {
@@ -67,7 +72,31 @@ impl<'a> Fb<'a> {
             ox,
             oy,
             order,
+            mirror: false,
         }
+    }
+
+    /// Flip the pixels of `x0..x1` (image coordinates) horizontally in
+    /// every row of `y0..y1`, clipped to the window.
+    pub fn flip_rect(&mut self, x0: i32, y0: i32, x1: i32, y1: i32) {
+        let (bx0, by0, bx1, by1) = self.bounds();
+        let (x0, x1, y0, y1) = (x0.max(bx0), x1.min(bx1), y0.max(by0), y1.min(by1));
+        if x1 - x0 < 2 || y1 <= y0 {
+            return;
+        }
+        for y in y0..y1 {
+            let i = ((y - self.oy) as usize * self.stride + (x0 - self.ox) as usize) * 4;
+            if let Some(row) = self.d.get_mut(i..i + (x1 - x0) as usize * 4) {
+                row.as_chunks_mut::<4>().0.reverse();
+            }
+        }
+    }
+
+    /// Flip the whole buffer horizontally (a right-to-left frame, drawn
+    /// left to right, made to read right to left).
+    pub fn flip(&mut self) {
+        let (bx0, by0, bx1, by1) = self.bounds();
+        self.flip_rect(bx0, by0, bx1, by1);
     }
 
     /// Buffer height in pixels.
@@ -309,7 +338,11 @@ impl<'a> Fb<'a> {
         c: C4,
     ) -> f32 {
         let (bx0, by0, bx1, by1) = self.bounds();
+        // Mirrored frame: each glyph pixel goes to its mirror image within
+        // the text's own box (the frame's flip puts it back).
+        let flip = if self.mirror { (x.floor() as i32) + ((x + font.width(s, px)).ceil() as i32) - 1 } else { 0 };
         font.draw(s, px, x, y, |sx, sy, cov| {
+            let sx = if self.mirror { flip - sx } else { sx };
             if cov <= 0.0 || sx < bx0 || sy < by0 || sx >= bx1 || sy >= by1 {
                 return;
             }

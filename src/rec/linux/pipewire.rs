@@ -652,7 +652,7 @@ const SEED_AFTER: Duration = Duration::from_millis(1500);
 /// it the source waits for the cast's first picture as before.
 const SEED_WAIT: Duration = Duration::from_secs(3);
 /// The error when it sends none.
-pub const NO_PICTURE: &str = "The screen share sent no picture";
+pub const NO_PICTURE: crate::i18n::Key = key!("rec.no_picture");
 
 impl ScreenSource {
     /// Stream `cast` and crop what `crop` says from each picture (given the

@@ -8,7 +8,6 @@
 use crate::objects::FRect;
 use crate::pixbuf::PixBuf;
 use crate::qr::{self, Ecl, QrCode};
-use crate::sharex_text as t;
 use crate::ui::compact::Tok;
 use crate::ui::{TextState, Ui};
 use std::sync::Mutex;
@@ -87,7 +86,7 @@ pub fn paint(ui: &mut Ui, f: &mut Form) -> Option<Click> {
     let inner = w - 2.0 * PAD;
     let mut click = None;
     // The text.
-    ui.text_at(12.0, t::QR_TEXT_LABEL, ui.px(PAD + 1.0), ui.px(16.0 + LABEL_H / 2.0), tok.tx2, false);
+    ui.text_at(12.0, tr!("qr.text_label"), ui.px(PAD + 1.0), ui.px(16.0 + LABEL_H / 2.0), tok.tx2, false);
     let field = FRect { x: PAD, y: 16.0 + LABEL_H, w: inner, h: CTL };
     if ui.area(field, |ui| ui.text_field("qr.text", &mut f.text)) {
         f.status = None;
@@ -115,10 +114,10 @@ pub fn paint(ui: &mut Ui, f: &mut Form) -> Option<Click> {
                     }
                 }
             }
-            (format!("Version {} \u{b7} {} \u{d7} {} modules \u{b7} level M \u{b7} {} bytes", code.version, code.size(), code.size(), bytes), false)
+            (tr!("qr.info", v = code.version, s = code.size(), b = bytes), false)
         }
-        None if empty => (t::QR_EMPTY.to_string(), false),
-        None => (t::QR_TOO_LONG.to_string(), true),
+        None if empty => (tr!("qr.empty").to_string(), false),
+        None => (tr!("qr.too_long").to_string(), true),
     };
     if !ok {
         let tw = ui.text_w(12.0, &info.0);
@@ -140,27 +139,39 @@ pub fn paint(ui: &mut Ui, f: &mut Form) -> Option<Click> {
     let sep = phys(ui, FRect { x: 0.0, y: h - 60.0, w, h: 1.0 });
     ui.fb.fill_rect(sep.x as i32, sep.y as i32, sep.w as i32, ui.k.round().max(1.0) as i32, tok.sep);
     let bar = FRect { x: PAD, y: h - 60.0 + 16.0, w: inner, h: 28.0 };
+    // A long language: the icons go first, then Close (Esc and the title
+    // bar close too).
+    let labels = [tr!("qr.copy_image"), tr!("qr.save"), tr!("qr.pin")];
+    let gap = crate::ui::layout::GAP;
+    let need = |icons: bool| labels.iter().map(|l| ui.cbutton_width(l, icons) + gap).sum::<f32>();
+    let close_w = ui.cbutton_width(tr!("qr.close"), false) + 2.0 * gap;
+    let icons = need(true) + close_w <= inner;
+    let close = need(icons) + close_w <= inner;
+    let icon = |i: &'static str| icons.then_some(i);
     ui.area(bar, |ui| {
         ui.ctl_h = 28.0;
         ui.row_rtl(|ui| {
             let on = ui.enabled;
             ui.enabled = on && ok;
-            if ui.cbutton("qr.copy", t::QR_COPY_IMAGE, Some("copy"), true, &tok) {
+            if ui.cbutton("qr.copy", labels[0], icon("copy"), true, &tok) {
                 click = Some(Click::Copy);
             }
-            if ui.cbutton("qr.save", t::QR_SAVE, Some("save"), false, &tok) {
+            if ui.cbutton("qr.save", labels[1], icon("save"), false, &tok) {
                 click = Some(Click::Save);
             }
-            if ui.cbutton("qr.pin", t::QR_PIN, Some("pin"), false, &tok) {
+            if ui.cbutton("qr.pin", labels[2], icon("pin"), false, &tok) {
                 click = Some(Click::Pin);
             }
             ui.enabled = on;
         });
     });
-    ui.area(FRect { x: PAD, y: bar.y, w: 100.0, h: 28.0 }, |ui| {
+    if !close {
+        return click;
+    }
+    ui.area(FRect { x: PAD, y: bar.y, w: close_w, h: 28.0 }, |ui| {
         ui.ctl_h = 28.0;
         ui.row(|ui| {
-            if ui.cbutton("qr.close", t::QR_CLOSE, None, false, &tok) {
+            if ui.cbutton("qr.close", tr!("qr.close"), None, false, &tok) {
                 click = Some(Click::Close);
             }
         });
@@ -223,7 +234,7 @@ mod window {
             let Some(img) = self.f.image() else { return };
             self.f.status = Some(match c {
                 Click::Copy => match crate::export::copy_to_clipboard(&img) {
-                    Ok(()) => (t::QR_COPIED.to_string(), false),
+                    Ok(()) => (tr!("qr.copied").to_string(), false),
                     Err(e) => (format!("Copy failed: {e:#}"), true),
                 },
                 Click::Save => {
@@ -312,7 +323,7 @@ mod window {
         let th = crate::theme::resolve(&cfg);
         let pre = crate::ui::Clipboard::get(&mut crate::ui::SystemClipboard).unwrap_or_default();
         let mut w = Window::new(Form::new(&pre), th, rx);
-        let spec = WindowSpec { title: t::MAKE_QR_TITLE.into(), w: W, h: H, resizable: false, min: (W, H), controls: wind::Controls::MinClose };
+        let spec = WindowSpec { title: tr!("qr.make_title").into(), w: W, h: H, resizable: false, min: (W, H), controls: wind::Controls::MinClose };
         if let Err(e) = wind::run_window(spec, &mut w) {
             eprintln!("rustshot: QR code window: {e:#}");
         }
@@ -341,7 +352,7 @@ fn release() {
 /// Open the window (or raise the open one), on its own thread.
 pub fn show() {
     #[cfg(target_os = "macos")]
-    crate::tray::notify("Make QR code is not available on macOS yet");
+    crate::tray::notify(tr!("qr.unavailable_mac"));
     #[cfg(not(target_os = "macos"))]
     {
         let mut open = lock(&OPEN);
@@ -426,8 +437,7 @@ mod tests {
                         let r = focus.rect_of(id).unwrap_or_else(|| panic!("{id}"));
                         assert!(r.x >= 0.0 && r.y >= 0.0 && r.x1() <= W as f32 * k + 0.5 && r.y1() <= H as f32 * k + 0.5, "{id} {r:?} inside");
                     }
-                    // The close button stays left of the others.
-                    assert!(focus.rect_of("qr.close").unwrap().x1() < focus.rect_of("qr.pin").unwrap().x);
+
                     if what == "link" {
                         // What shows on screen reads back.
                         assert_eq!(qr::read(&img), vec!["https://github.com/rustshot/rustshot".to_string()], "{name} {k}");
@@ -435,6 +445,27 @@ mod tests {
                     preview::save(&format!("qr_make_{what}_{name}_{k}x.png"), &img);
                 }
             }
+        }
+    }
+
+    /// The window fits in English and the long pseudo-languages, at 1x and
+    /// 1.5x, in each state (previews per language).
+    #[test]
+    fn fits_in_long_languages() {
+        for lang in preview::LANGS {
+            crate::i18n::with_lang(lang, || {
+                for k in [1.0f32, 1.5] {
+                    for (what, text) in [("link", "https://github.com/rustshot/rustshot"), ("empty", ""), ("long", &*"y".repeat(2500))] {
+                        let mut f = Form::new(text);
+                        let mut focus = FocusState::default();
+                        let (img, _) = render(&mut f, &DARK, k, &Input::default(), &mut focus);
+                        preview::assert_fits(&focus, W, H, k, &format!("qr window {what} {lang} {k}x"));
+                        if k == 1.0 {
+                            preview::save(&format!("qr_make_{what}_{lang}.png"), &img);
+                        }
+                    }
+                }
+            });
         }
     }
 }

@@ -66,12 +66,44 @@ pub fn daemon_running() -> bool {
     false
 }
 
+/// The named mutex an open update dialog holds (fixed, never its window
+/// title: that is translated).
+#[cfg(windows)]
+const UPDATE_MUTEX: windows::core::PCWSTR = windows::core::w!("Local\\rustshot-update-dialog");
+
+/// Held while an update dialog is open (from before its first download
+/// until it closes); released on drop or when the process ends.
+pub struct UpdateDialogGuard(#[cfg(windows)] Option<windows::Win32::Foundation::HANDLE>);
+
+impl Drop for UpdateDialogGuard {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        if let Some(h) = self.0.take() {
+            let _ = unsafe { windows::Win32::Foundation::CloseHandle(h) };
+        }
+    }
+}
+
+/// Mark an update dialog open (see [`update_dialog_open`]).
+pub fn update_dialog_guard() -> UpdateDialogGuard {
+    #[cfg(windows)]
+    return UpdateDialogGuard(unsafe { windows::Win32::System::Threading::CreateMutexW(None, false, UPDATE_MUTEX) }.ok());
+    #[cfg(not(windows))]
+    UpdateDialogGuard()
+}
+
 /// An update dialog is open in some Rustshot process (it may be
 /// downloading into the update folder): Windows.
 #[cfg(windows)]
 pub fn update_dialog_open() -> bool {
-    use windows::core::w;
-    unsafe { windows::Win32::UI::WindowsAndMessaging::FindWindowW(w!("rustshot_window"), w!("Rustshot update")) }.is_ok()
+    use windows::Win32::System::Threading::{OpenMutexW, SYNCHRONIZATION_SYNCHRONIZE};
+    match unsafe { OpenMutexW(SYNCHRONIZATION_SYNCHRONIZE, false, UPDATE_MUTEX) } {
+        Ok(h) => {
+            let _ = unsafe { windows::Win32::Foundation::CloseHandle(h) };
+            true
+        }
+        Err(_) => false,
+    }
 }
 
 #[cfg(not(windows))]
@@ -754,6 +786,18 @@ mod tests {
     use std::process::{Command, Stdio};
     use crate::chan as mpsc;
     use std::time::{Duration, Instant};
+
+    /// An open update dialog is found whatever the UI language (its
+    /// window title is translated; the check never reads it).
+    #[cfg(windows)]
+    #[test]
+    fn update_dialog_found_in_any_language() {
+        crate::i18n::with_lang("qps", || {
+            let g = super::update_dialog_guard();
+            assert!(super::update_dialog_open());
+            drop(g);
+        });
+    }
 
     /// A fresh instance name (valid: at most 32 of `[A-Za-z0-9_-]`).
     fn unique(tag: &str) -> String {

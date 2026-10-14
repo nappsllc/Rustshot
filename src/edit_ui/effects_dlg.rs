@@ -8,13 +8,22 @@ use crate::config::Config;
 use crate::imgedit::effects::{self, Effects, Reflection, Shadow, Str, Torn, Watermark};
 use crate::imgedit::{Filter, Pad, frame};
 use crate::pixbuf::PixBuf;
-use crate::sharex_text as t;
 use crate::ui::compact::Tok;
 use crate::ui::{TextState, Ui};
 use crate::uifb::C4;
 
 /// The anchors' labels (the dropdown), in [`effects::ANCHORS`] order.
-pub const ANCHOR_LABELS: [&str; 9] = ["Top left", "Top", "Top right", "Left", "Center", "Right", "Bottom left", "Bottom", "Bottom right"];
+pub const ANCHOR_LABELS: [crate::i18n::Key; 9] = [
+    key!("fx.anchor.top_left"),
+    key!("fx.anchor.top"),
+    key!("fx.anchor.top_right"),
+    key!("fx.anchor.left"),
+    key!("fx.anchor.center"),
+    key!("fx.anchor.right"),
+    key!("fx.anchor.bottom_left"),
+    key!("fx.anchor.bottom"),
+    key!("fx.anchor.bottom_right"),
+];
 
 /// The dialog's fields.
 pub struct EffectsForm {
@@ -231,17 +240,17 @@ pub enum Extra {
 pub fn body(ui: &mut Ui, f: &mut EffectsForm, small: &(PixBuf, f32), tok: &Tok, out: &mut Option<super::image::DlgOut>, extra: &mut Option<Extra>) {
     use super::image::DlgOut;
     ui.row(|ui| {
-        ui.seg("fx_tab", &t::FX_TABS, &mut f.tab, tok);
+        ui.seg("fx_tab", &[tr!("fx.tab.watermark"), tr!("fx.tab.shadow"), tr!("fx.tab.torn"), tr!("fx.tab.reflection")], &mut f.tab, tok);
     });
     let on = ui.enabled;
     let tab = f.tab.min(3);
     ui.row(|ui| {
-        label(ui, t::FX_ON, tok);
+        label(ui, tr!("fx.on"), tok);
         ui.switch(&format!("fx_on{tab}"), &mut f.on[tab], tok);
         if tab == 0 {
             ui.space(14.0);
             ui.enabled = on && f.on[0];
-            ui.seg("fx_wm_kind", &[t::FX_TEXT, t::FX_IMAGE], &mut f.wm_kind, tok);
+            ui.seg("fx_wm_kind", &[tr!("fx.text"), tr!("fx.image")], &mut f.wm_kind, tok);
             ui.enabled = on;
         }
     });
@@ -249,42 +258,38 @@ pub fn body(ui: &mut Ui, f: &mut EffectsForm, small: &(PixBuf, f32), tok: &Tok, 
     match tab {
         0 => {
             ui.row(|ui| {
-                label(ui, if f.wm_kind == 1 { t::FX_IMAGE } else { t::FX_TEXT }, tok);
+                label(ui, if f.wm_kind == 1 { tr!("fx.image") } else { tr!("fx.text") }, tok);
                 let st = if f.wm_kind == 1 { &mut f.wm_path } else { &mut f.wm_text };
                 ui.width(320.0).text_field("fx_wm_text", st);
             });
             ui.row(|ui| {
-                label(ui, t::FX_POSITION, tok);
-                ui.width(150.0).dropdown("fx_anchor", &ANCHOR_LABELS, &mut f.anchor);
+                label(ui, tr!("fx.position"), tok);
+                ui.width(150.0).dropdown("fx_anchor", &ANCHOR_LABELS.map(|k| k.get()), &mut f.anchor);
                 ui.space(14.0);
-                ui.checkbox("fx_tiled", t::FX_TILED, &mut f.tiled, tok);
+                ui.checkbox("fx_tiled", tr!("fx.tiled"), &mut f.tiled, tok);
             });
             ui.row(|ui| {
-                label(ui, t::FX_SIZE, tok);
+                label(ui, tr!("fx.size"), tok);
                 ui.width(120.0).slider("fx_wm_size", &mut f.wm_size, 1, 100);
                 unit(ui, "%", tok);
                 ui.space(10.0);
-                unit(ui, t::FX_OPACITY, tok);
+                unit(ui, tr!("fx.opacity"), tok);
                 ui.space(6.0);
                 ui.width(100.0).slider("fx_wm_opacity", &mut f.wm_opacity, 0, 100);
             });
             ui.row(|ui| {
-                label(ui, t::FX_MARGIN, tok);
+                label(ui, tr!("fx.margin"), tok);
                 ui.width(56.0).text_field("fx_wm_margin", &mut f.wm_margin);
                 unit(ui, "px", tok);
                 ui.space(14.0);
-                unit(ui, t::FX_COLOR, tok);
+                unit(ui, tr!("fx.color"), tok);
                 ui.space(6.0);
                 ui.width(84.0).text_field("fx_wm_color", &mut f.wm_color);
-                ui.space(8.0);
-                if ui.cbutton("fx_for_exports", t::FX_FOR_EXPORTS, None, false, tok) {
-                    *extra = Some(Extra::ForExports);
-                }
             });
         }
         1 => {
             ui.row(|ui| {
-                label(ui, t::FX_OFFSET, tok);
+                label(ui, tr!("fx.offset"), tok);
                 unit(ui, "x", tok);
                 ui.space(4.0);
                 ui.width(56.0).text_field("fx_sh_dx", &mut f.sh_dx);
@@ -295,58 +300,58 @@ pub fn body(ui: &mut Ui, f: &mut EffectsForm, small: &(PixBuf, f32), tok: &Tok, 
                 unit(ui, "px", tok);
             });
             ui.row(|ui| {
-                label(ui, t::FX_BLUR, tok);
+                label(ui, tr!("fx.blur"), tok);
                 ui.width(200.0).slider("fx_sh_blur", &mut f.sh_blur, 0, 100);
                 unit(ui, "px", tok);
             });
             ui.row(|ui| {
-                label(ui, t::FX_OPACITY, tok);
+                label(ui, tr!("fx.opacity"), tok);
                 ui.width(200.0).slider("fx_sh_opacity", &mut f.sh_opacity, 0, 100);
                 unit(ui, "%", tok);
             });
             ui.row(|ui| {
-                label(ui, t::FX_COLOR, tok);
+                label(ui, tr!("fx.color"), tok);
                 ui.width(110.0).text_field("fx_sh_color", &mut f.sh_color);
             });
         }
         2 => {
             ui.row(|ui| {
-                label(ui, t::FX_SIDES, tok);
-                for (i, name) in t::FX_SIDE_NAMES.iter().enumerate() {
+                label(ui, tr!("fx.sides"), tok);
+                for (i, name) in [tr!("edit.img.top"), tr!("edit.img.right"), tr!("edit.img.bottom"), tr!("edit.img.left")].iter().enumerate() {
                     ui.checkbox(&format!("fx_side{i}"), name, &mut f.sides[i], tok);
                     ui.space(8.0);
                 }
             });
             ui.row(|ui| {
-                label(ui, t::FX_DEPTH, tok);
+                label(ui, tr!("fx.depth"), tok);
                 ui.width(200.0).slider("fx_depth", &mut f.depth, 1, 100);
                 unit(ui, "px", tok);
             });
             ui.row(|ui| {
-                label(ui, t::FX_TEETH, tok);
+                label(ui, tr!("fx.teeth"), tok);
                 ui.width(200.0).slider("fx_tooth", &mut f.tooth, 2, 100);
                 unit(ui, "px", tok);
             });
             ui.row(|ui| {
                 label(ui, "", tok);
-                if ui.cbutton("fx_seed", t::FX_NEW_PATTERN, Some("set-rotate"), false, tok) {
+                if ui.cbutton("fx_seed", tr!("fx.new_pattern"), Some("set-rotate"), false, tok) {
                     f.seed = f.seed.wrapping_mul(1_103_515_245).wrapping_add(12_345) % 16_777_216;
                 }
             });
         }
         _ => {
             ui.row(|ui| {
-                label(ui, t::FX_HEIGHT, tok);
+                label(ui, tr!("fx.height"), tok);
                 ui.width(200.0).slider("fx_rf_height", &mut f.rf_height, 1, 100);
                 unit(ui, "%", tok);
             });
             ui.row(|ui| {
-                label(ui, t::FX_OPACITY, tok);
+                label(ui, tr!("fx.opacity"), tok);
                 ui.width(200.0).slider("fx_rf_opacity", &mut f.rf_opacity, 0, 100);
                 unit(ui, "%", tok);
             });
             ui.row(|ui| {
-                label(ui, t::FX_GAP, tok);
+                label(ui, tr!("fx.gap"), tok);
                 ui.width(56.0).text_field("fx_rf_gap", &mut f.rf_gap);
                 unit(ui, "px", tok);
             });
@@ -375,27 +380,35 @@ pub fn body(ui: &mut Ui, f: &mut EffectsForm, small: &(PixBuf, f32), tok: &Tok, 
             }
         }
         None => {
-            ui.text_at(12.0, t::FX_BAD, pb.x + 12.0 * k, pb.y + pb.h / 2.0, tok.er, false);
+            ui.text_at(12.0, tr!("fx.bad"), pb.x + 12.0 * k, pb.y + pb.h / 2.0, tok.er, false);
         }
     }
     if f.saved {
         let r = ui.alloc(None, 18.0);
-        ui.text_at(11.5, crate::sharex_text::FX_SAVED, r.x, r.y + r.h / 2.0, tok.tx3, false);
+        ui.text_at(11.5, tr!("fx.saved"), r.x, r.y + r.h / 2.0, tok.tx3, false);
     } else {
         ui.space(18.0);
     }
     ui.row_rtl(|ui| {
         let ok = f.result().is_some();
         ui.enabled = on && ok;
-        if ui.cbutton("fx_apply", t::FX_APPLY, None, true, tok) {
+        if ui.cbutton("fx_apply", tr!("fx.apply"), None, true, tok) {
             *out = Some(DlgOut::Apply);
         }
         ui.enabled = on;
-        if ui.cbutton("fx_cancel", t::FX_CANCEL, None, false, tok) {
+        if ui.cbutton("fx_cancel", tr!("fx.cancel"), None, false, tok) {
             *out = Some(DlgOut::Cancel);
         }
-        if ui.cbutton("fx_remove", t::FX_REMOVE, None, false, tok) {
+        if ui.cbutton("fx_remove", tr!("fx.remove"), None, false, tok) {
             *out = Some(DlgOut::Remove);
+        }
+        // The watermark tab: keep it for every export.
+        if tab == 0 {
+            ui.enabled = on && f.on[0];
+            if ui.cbutton("fx_for_exports", tr!("fx.for_exports"), None, false, tok) {
+                *extra = Some(Extra::ForExports);
+            }
+            ui.enabled = on;
         }
     });
 }

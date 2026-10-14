@@ -63,6 +63,8 @@ pub enum NoteAct {
     /// The tray's "Delete upload?": delete it, or not.
     DeleteUpload,
     KeepUpload,
+    /// "Rustshot is now in …": back to English (`language = "en"`).
+    UseEnglish,
     /// Read QR code's toast: copy the codes' text; open the http(s) link
     /// it shows ([`crate::qr_ui`]).
     QrCopy,
@@ -72,19 +74,20 @@ pub enum NoteAct {
 impl NoteAct {
     pub fn label(self) -> &'static str {
         match self {
-            NoteAct::CopyLink => "Copy link",
-            NoteAct::Copy | NoteAct::ThumbCopy => "Copy",
-            NoteAct::Open => "Open",
-            NoteAct::ShowInFolder => "Show in folder",
-            NoteAct::ThumbSave => "Save",
-            NoteAct::Pin => "Pin to screen",
-            NoteAct::Edit => "Edit",
-            NoteAct::Dismiss => "Close",
+            NoteAct::CopyLink => tr!("notice.act.copy_link"),
+            NoteAct::Copy | NoteAct::ThumbCopy => tr!("notice.act.copy"),
+            NoteAct::Open => tr!("notice.act.open"),
+            NoteAct::ShowInFolder => tr!("notice.act.show_in_folder"),
+            NoteAct::ThumbSave => tr!("notice.act.save"),
+            NoteAct::Pin => tr!("notice.act.pin_to_screen"),
+            NoteAct::Edit => tr!("notice.act.edit"),
+            NoteAct::Dismiss => tr!("notice.act.close"),
             NoteAct::Card => "",
-            NoteAct::CancelDelay | NoteAct::KeepUpload => "Cancel",
-            NoteAct::DeleteUpload => "Delete upload",
-            NoteAct::QrCopy => crate::sharex_text::QR_COPY,
-            NoteAct::QrOpen => crate::sharex_text::QR_OPEN,
+            NoteAct::CancelDelay | NoteAct::KeepUpload => tr!("notice.act.cancel"),
+            NoteAct::DeleteUpload => tr!("notice.act.delete_upload"),
+            NoteAct::UseEnglish => tr!("notice.act.use_english"),
+            NoteAct::QrCopy => tr!("notice.act.qr_copy"),
+            NoteAct::QrOpen => tr!("notice.act.qr_open"),
         }
     }
 
@@ -173,11 +176,11 @@ fn clock(d: Duration) -> String {
 pub fn file_size(bytes: u64) -> String {
     let mb = bytes as f64 / 1_000_000.0;
     if mb < 1.0 {
-        format!("{} KB", (bytes as f64 / 1000.0).round().max(1.0) as u64)
+        tr!("size.kb", n = (bytes as f64 / 1000.0).round().max(1.0) as u64)
     } else if mb < 10.0 {
-        format!("{mb:.1} MB")
+        tr!("size.mb", n = format!("{mb:.1}"))
     } else {
-        format!("{mb:.0} MB")
+        tr!("size.mb", n = format!("{mb:.0}"))
     }
 }
 
@@ -186,7 +189,7 @@ pub fn file_size(bytes: u64) -> String {
 /// Copy (a GIF: the file itself), Open and Show in folder; it stays
 /// [`ACTION_TTL`].
 pub fn recording_saved(path: &std::path::Path, length: Duration, bytes: u64, warnings: &[String], upload: bool) -> Note {
-    let mut text = format!("Saved {} \u{b7} {} \u{b7} {}", file_name(path), clock(length), file_size(bytes));
+    let mut text = tr!("notice.rec_saved", name = file_name(path), length = clock(length), size = file_size(bytes));
     for w in warnings {
         text.push_str(" \u{2014} ");
         text.push_str(&reason(w));
@@ -227,20 +230,20 @@ pub fn compose(done: &[Done], uploading: bool) -> Option<Note> {
     let mut failed = false;
     for d in done {
         parts.push(match d {
-            Done::Copied if single => "Copied to clipboard".to_string(),
-            Done::Copied => "Copied".to_string(),
-            Done::Saved(p) if single => format!("Saved \u{b7} {}", file_name(p)),
-            Done::Saved(p) => format!("Saved {}", file_name(p)),
-            Done::SavedDesktop(p) if single => format!("Saved to Desktop \u{b7} {}", file_name(p)),
-            Done::SavedDesktop(p) => format!("Saved {} to Desktop", file_name(p)),
+            Done::Copied if single => tr!("history.copied").to_string(),
+            Done::Copied => tr!("notice.copied").to_string(),
+            Done::Saved(p) if single => tr!("notice.saved_one", name = file_name(p)),
+            Done::Saved(p) => tr!("notice.saved", name = file_name(p)),
+            Done::SavedDesktop(p) if single => tr!("notice.saved_desktop_one", name = file_name(p)),
+            Done::SavedDesktop(p) => tr!("notice.saved_desktop", name = file_name(p)),
             Done::Failed(what, e) => {
                 failed = true;
-                format!("{what} failed: {}", reason(e))
+                tr!("history.what_failed", what, e = reason(e))
             }
         });
     }
     if uploading {
-        parts.push("Uploading\u{2026}".to_string());
+        parts.push(tr!("history.uploading").to_string());
     }
     if parts.is_empty() {
         return None;
@@ -262,10 +265,10 @@ pub fn upload_note(res: &Result<String, String>, copied: bool) -> Note {
     match res {
         Ok(url) => {
             let short = url.trim_start_matches("https://").trim_start_matches("http://");
-            let head = if copied { "Link copied" } else { "Uploaded" };
-            Note::new(format!("{head} \u{b7} {short}"), ToastKind::Success)
+            let head = if copied { tr!("history.link_copied") } else { tr!("editor.uploaded") };
+            Note::new(tr!("notice.upload_done", head, link = short), ToastKind::Success)
         }
-        Err(e) => Note::new(format!("Upload failed: {}", reason(e)), ToastKind::Error),
+        Err(e) => Note::new(tr!("editor.upload_failed", e = reason(e)), ToastKind::Error),
     }
 }
 
@@ -391,6 +394,25 @@ pub fn render_note(note: &Note, th: &Theme, s: f32, k: f32, hover: Option<NoteAc
     (w, h, px)
 }
 
+/// The first run's note when the system's language has just been
+/// downloaded and shown: "Rustshot is now in Deutsch" with Use English.
+pub fn language_note(name: &str) -> Note {
+    let mut n = Note::plain(tr!("notice.language", name), ToastKind::Info);
+    n.actions = vec![NoteAct::UseEnglish, NoteAct::Dismiss];
+    n.ttl = ACTION_TTL;
+    n
+}
+
+/// Use English from now on: `language = "en"` in config.toml (that line
+/// only), at once in this process.
+fn use_english() {
+    let path = crate::config::config_path();
+    if let Err(e) = crate::config::edit_top_keys_at(&path, &[("language".to_string(), Some("\"en\"".to_string()))]) {
+        eprintln!("rustshot: could not save the language: {e}");
+    }
+    crate::i18n::set_language("en");
+}
+
 /// Whether uploading is set up (an Imgur client id; for S3 an endpoint,
 /// bucket and access key id): Copy link is offered.
 pub fn upload_configured(cfg: &crate::config::Config) -> bool {
@@ -405,7 +427,7 @@ pub fn upload_configured(cfg: &crate::config::Config) -> bool {
 pub fn run_action(a: NoteAct, file: &std::path::Path, entry: Option<String>, done: impl FnOnce(Note) + Send + 'static) -> Option<Note> {
     match a {
         // A thumbnail's buttons act on its picture (`run_note_action`).
-        NoteAct::ThumbCopy | NoteAct::ThumbSave | NoteAct::Pin | NoteAct::Edit | NoteAct::Dismiss | NoteAct::Card | NoteAct::CancelDelay | NoteAct::DeleteUpload | NoteAct::KeepUpload | NoteAct::QrCopy | NoteAct::QrOpen => None,
+        NoteAct::ThumbCopy | NoteAct::ThumbSave | NoteAct::Pin | NoteAct::Edit | NoteAct::Dismiss | NoteAct::Card | NoteAct::CancelDelay | NoteAct::DeleteUpload | NoteAct::KeepUpload | NoteAct::UseEnglish | NoteAct::QrCopy | NoteAct::QrOpen => None,
         NoteAct::Open => {
             crate::actions::open_path(file);
             None
@@ -415,8 +437,8 @@ pub fn run_action(a: NoteAct, file: &std::path::Path, entry: Option<String>, don
             None
         }
         NoteAct::Copy => Some(match copy_file(file) {
-            Ok(()) => Note::plain("Copied to clipboard", ToastKind::Success),
-            Err(e) => Note::plain(format!("Copy failed: {}", reason(&format!("{e:#}"))), ToastKind::Error),
+            Ok(()) => Note::plain(tr!("history.copied"), ToastKind::Success),
+            Err(e) => Note::plain(tr!("ocr.copy_failed", e = reason(&format!("{e:#}"))), ToastKind::Error),
         }),
         // The upload may be under way already (Upload recordings
         // automatically): see `rec_upload`.
@@ -883,6 +905,10 @@ pub fn run_note_action(note: &Note, a: NoteAct, th: Theme, done: impl FnOnce(Not
             Next::Hide
         }
         NoteAct::DeleteUpload | NoteAct::KeepUpload => crate::uploads::answer(a == NoteAct::DeleteUpload, done).map_or(Next::Hide, Next::Show),
+        NoteAct::UseEnglish => {
+            use_english();
+            Next::Hide
+        }
         NoteAct::Edit => {
             if let Some(id) = note.entry.as_ref().or(note.thumb.as_ref().and_then(|t| t.entry.as_ref())) {
                 crate::edit_ui::open(id);
@@ -896,7 +922,7 @@ pub fn run_note_action(note: &Note, a: NoteAct, th: Theme, done: impl FnOnce(Not
                     crate::pin::open(img, at, th)
                 }
             {
-                crate::tray::notify("Pin to screen is not available here");
+                crate::tray::notify(tr!("editor.pin_unavailable"));
             }
             Next::Hide
         }
@@ -1176,6 +1202,37 @@ mod tests {
                     std::fs::write(dir.join(format!("{tn}-notice-{name}@{s}x.png")), img.to_png().unwrap()).unwrap();
                 }
             }
+        }
+    }
+
+    /// Every notice fits a small monitor (1280 px at 100 %, 1920 at
+    /// 150 %) in English and the long pseudo-languages: they grow with
+    /// their words, so a long one must still leave room at the sides.
+    #[test]
+    fn notices_fit_in_long_languages() {
+        for lang in crate::ui::preview::LANGS {
+            crate::i18n::with_lang(lang, || {
+                let notes = [
+                    compose(&[Done::Copied], false),
+                    compose(&[Done::Copied, saved("2026-10-10_19-48.jpg")], false),
+                    compose(&[], true),
+                    Some(upload_note(&Ok("https://i.imgur.com/aB3xYz9.png".into()), true)),
+                    Some(upload_note(&Err("WinHttpSendRequest: The operation timed out".into()), true)),
+                    compose(&[Done::Failed("Save", "access denied (os error 5)".into())], false),
+                    compose(&[Done::SavedDesktop(PathBuf::from("/home/me/Desktop/2026-10-11_14-02.png"))], false),
+                    Some(recording_saved(&PathBuf::from("rustshot-2026-10-10-2131.mp4"), Duration::from_secs(42), 1_400_000, &[], true)),
+                    Some(language_note("Deutsch")),
+                    Some(crate::qr_ui::note(vec!["https://example.com/some/long/path?q=1".into(), "hello".into()])),
+                    Some(crate::qr_ui::note(Vec::new())),
+                    Some(Note::plain(tr!("qr.reading"), ToastKind::Info)),
+                ];
+                for note in notes.iter().flatten() {
+                    for (s, screen) in [(1.0f32, 1280u32), (1.5, 1920)] {
+                        let (w, _) = note_size(note, s);
+                        assert!(w + (48.0 * s) as u32 <= screen, "{lang} at {s}: {w} px for {:?}", note.text);
+                    }
+                }
+            });
         }
     }
 

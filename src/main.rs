@@ -1,5 +1,8 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
+// UI translations: tr!/trn!/key! (declared first: the macros are textual).
+#[macro_use]
+mod i18n;
 mod actions;
 mod anim;
 mod autostart;
@@ -70,8 +73,6 @@ mod screenclip_win;
 // S3-compatible uploads (Amazon S3, Cloudflare R2): SigV4 by hand.
 mod s3;
 mod settings_ui;
-#[allow(dead_code)] // filled in as the features land
-mod sharex_text;
 mod scale;
 mod sha256;
 // "Share…": the system's share sheet (Windows, macOS).
@@ -93,6 +94,8 @@ mod tray_macos;
 #[cfg(windows)]
 mod tray_win;
 mod ui;
+// UI strings the baked font lacks glyphs for, drawn by the OS text stack.
+mod uitext;
 mod uifb;
 mod uisize;
 mod update;

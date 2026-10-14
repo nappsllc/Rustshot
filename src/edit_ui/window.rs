@@ -97,6 +97,12 @@ impl Window {
         if cfg!(test) && self.hwnd == Hwnd::default() { 1.0 } else { wind::scale(self.hwnd) }
     }
 
+    /// The image dialog's controls (tests: where they are).
+    #[cfg(test)]
+    pub fn dialog_focus(&self) -> &FocusState {
+        &self.dlg_focus
+    }
+
     /// The frame as composed (tests).
     #[cfg(test)]
     pub fn pixels(&self) -> &PixBuf {
@@ -120,6 +126,38 @@ impl Window {
         let k = self.k();
         let (w, h) = (self.canvas.width() as f32 / k, self.canvas.height() as f32 / k);
         draw::layout(&self.e, w, h, self.e.canvas.bar_width())
+    }
+
+    /// Right to left: the toolbar and the canvas (the picture) keep
+    /// reading left to right, their region flipped back as a whole in the
+    /// mirrored frame: its span (physical px) while that is so.
+    fn ltr_span(&self) -> Option<(f32, f32)> {
+        if !crate::i18n::is_rtl() {
+            return None;
+        }
+        let (k, lay) = (self.k(), self.lay());
+        let x0 = lay.bar.x.min(lay.canvas.x) * k;
+        let x1 = lay.bar.x1().max(lay.canvas.x1()) * k;
+        Some((x0.round(), x1.round()))
+    }
+
+    /// A pointer event (already mirrored for the frame: `rtl_ev`) on the
+    /// toolbar or the canvas, mirrored back within their region; others
+    /// as they are (a question or a menu over it: the frame's).
+    fn ltr_ev(&self, ev: Ev) -> Ev {
+        let Some((x0, x1)) = self.ltr_span() else { return ev };
+        if self.e.flow.dialog.is_some() || self.e.img_menu || self.e.img_dialog.is_some() {
+            return ev;
+        }
+        let m = |x: i32| if (x as f32) >= x0 && (x as f32) < x1 { (x0 + x1) as i32 - 1 - x } else { x };
+        match ev {
+            Ev::Move { x, y } => Ev::Move { x: m(x), y },
+            Ev::Down { x, y } => Ev::Down { x: m(x), y },
+            Ev::Up { x, y } => Ev::Up { x: m(x), y },
+            Ev::Wheel { delta, x, y } => Ev::Wheel { delta, x: m(x), y },
+            Ev::Middle { down, x, y } => Ev::Middle { down, x: m(x), y },
+            e => e,
+        }
     }
 
     /// Tell the canvas where it is.
@@ -158,6 +196,7 @@ impl Window {
             let _dp = crate::perf::span(crate::perf::K::Damage);
             self.e.canvas.paint(&mut fb, tok.cv, edge, now);
         }
+        let span = self.ltr_span();
         let inp = Input::default();
         let mut focus = FocusState::default();
         let mut clip = crate::ui::SystemClipboard;
@@ -173,7 +212,16 @@ impl Window {
         draw::paint_status(&mut ui, &self.e, &lay, &tok, self.hover);
         draw::paint_zoom(&mut ui, &self.e, &lay, &tok, self.hover);
         drop(_lp);
+        // The toolbar and the canvas read left to right in a mirrored
+        // frame: drawn unmirrored, their region flipped back as a whole.
+        let mirror = ui.fb.mirror;
+        ui.fb.mirror = false;
         self.e.canvas.paint_bar(&mut ui.fb, now);
+        ui.fb.mirror = mirror;
+        if let Some((x0, x1)) = span {
+            let (y0, y1) = ((lay.bar.y.min(lay.canvas.y) * k).round() as i32, (lay.bar.y1().max(lay.canvas.y1()) * k).round() as i32);
+            ui.fb.flip_rect(x0 as i32, y0, x1 as i32, y1);
+        }
         draw::paint_toast(&mut ui, &self.e, &lay, now);
         draw::paint_img_menu(&mut ui, &self.e, &lay, &tok, self.hover);
         draw::paint_dialog(&mut ui, &self.e, &lay, &tok, self.hover);
@@ -265,7 +313,7 @@ impl Window {
             #[cfg(test)]
             let at = (0, 0);
             if !crate::pin::open(std::sync::Arc::new(img), at, *self.e.canvas.theme()) {
-                self.e.note("Pin to screen is not available here", ToastKind::Error);
+                self.e.note(tr!("editor.pin_unavailable"), ToastKind::Error);
             }
             return;
         }
@@ -278,7 +326,7 @@ impl Window {
             _ => Task::Copy,
         };
         if r == Request::Upload {
-            self.e.note("Uploading\u{2026}", ToastKind::Info);
+            self.e.note(tr!("history.uploading"), ToastKind::Info);
         }
         if r == Request::CopyText {
             let tx = self.done.0.clone();
@@ -296,8 +344,8 @@ impl Window {
             let owner = Some(self.hwnd.0 as usize);
             let (tx, cfg) = (self.done.0.clone(), self.e.cfg.clone());
             crate::busy::spawn(move || {
-                let what = if r == Request::Share { "Share" } else { "Open with" };
-                let res = crate::open_with::file_for(&img, None, &cfg).map_err(|e| format!("{what} failed: {e:#}"));
+                let what = if r == Request::Share { tr!("history.share") } else { tr!("history.open_with") };
+                let res = crate::open_with::file_for(&img, None, &cfg).map_err(|e| tr!("history.what_failed", what, e = format!("{e:#}")));
                 let hand = |p: std::path::PathBuf| if r == Request::Share { crate::share::share_now(&p, owner) } else { crate::open_with::open_now(&p, owner) };
                 let text = match res.and_then(hand) {
                     Ok(()) => String::new(),
@@ -329,7 +377,7 @@ impl Window {
         #[cfg(test)]
         let at = (0, 0);
         self.qr_busy = true;
-        self.e.note(crate::sharex_text::QR_READING, ToastKind::Info);
+        self.e.note(tr!("qr.reading"), ToastKind::Info);
         crate::qr_ui::spawn(img, at, *self.e.canvas.theme());
     }
 
@@ -636,10 +684,10 @@ fn export_done(res: crate::export::ExportResult, saves: bool, store: &crate::his
     match res.upload.map(|rx| rx.recv()) {
         Some(Ok(Ok(url))) => {
             let copied = cfg.copy_url_after_upload && crate::export::copy_text_to_clipboard(&url).is_ok();
-            Done { uploaded: Some(url), ..plain(if copied { "Uploaded \u{2014} link copied".into() } else { "Uploaded".into() }, ToastKind::Success) }
+            Done { uploaded: Some(url), ..plain(if copied { tr!("editor.uploaded_copied").into() } else { tr!("editor.uploaded").into() }, ToastKind::Success) }
         }
-        Some(Ok(Err(e))) => plain(format!("Upload failed: {e}"), ToastKind::Error),
-        Some(Err(_)) => plain("Upload failed".into(), ToastKind::Error),
+        Some(Ok(Err(e))) => plain(tr!("editor.upload_failed", e), ToastKind::Error),
+        Some(Err(_)) => plain(tr!("history.upload_failed").into(), ToastKind::Error),
         None => match crate::notice::compose(&res.done, false) {
             Some(n) => plain(n.text, n.kind),
             None => plain(String::new(), ToastKind::Info),
@@ -651,11 +699,18 @@ fn export_done(res: crate::export::ExportResult, saves: bool, store: &crate::his
 const C4_SHADOW: crate::uifb::C4 = crate::uifb::C4 { r: 0, g: 0, b: 0, a: 22 };
 
 impl Driver for Window {
+    fn title(&self) -> Option<String> {
+        Some(tr!("edit.window_title", name = crate::history::title(&self.e.entry.meta)))
+    }
+
     fn on_create(&mut self, hwnd: Hwnd) {
         self.hwnd = hwnd;
     }
 
     fn on_event(&mut self, ev: Ev) -> bool {
+        // Right to left: the pointer mirrored, as the frame is (and back
+        // on the toolbar and the canvas, which read left to right).
+        let ev = self.ltr_ev(crate::ui::rtl_ev(ev, self.canvas.width()));
         let timer = matches!(ev, Ev::Timer);
         let mv = matches!(ev, Ev::Move { .. });
         let due = self.event(ev);

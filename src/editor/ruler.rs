@@ -92,26 +92,24 @@ pub fn lines(r: &Ruler, scale: f32, rich: bool) -> Vec<String> {
     let scaled = (m.scale - 1.0).abs() > 0.01;
     if r.area {
         let (w, h) = (m.dx.round(), m.dy.round());
-        let mut first = format!("{} \u{d7} {} px", n(w), n(h));
-        if scaled {
-            first += &format!("  ({} \u{d7} {} logical)", n(w / m.scale), n(h / m.scale));
-        }
-        let sq = if rich { "px\u{b2}" } else { "sq px" };
-        vec![first, format!("Area {} {sq}", grouped((w * h) as u64))]
+        let first = if scaled {
+            tr!("ruler.size_logical", w = n(w), h = n(h), lw = n(w / m.scale), lh = n(h / m.scale))
+        } else {
+            tr!("ruler.size", w = n(w), h = n(h))
+        };
+        let unit = if rich { "px\u{b2}" } else { "sq px" };
+        vec![first, tr!("ruler.area", area = grouped((w * h) as u64), unit)]
     } else {
-        let mut first = format!("{} px", n(m.len));
-        if scaled {
-            first += &format!("  ({} logical)", n(m.len / m.scale));
-        }
+        let first = if scaled { tr!("ruler.length_logical", len = n(m.len), logical = n(m.len / m.scale)) } else { tr!("ruler.length", len = n(m.len)) };
         let (d, deg) = if rich { ("\u{394}", "\u{b0}") } else { ("d", " deg") };
-        vec![first, format!("{d}x {}  {d}y {}  {}{deg}", n(m.dx), n(m.dy), n(m.angle))]
+        vec![first, tr!("ruler.deltas", d, dx = n(m.dx), dy = n(m.dy), angle = n(m.angle), deg)]
     }
 }
 
 /// The kept annotation's label: the length, or the size.
 pub fn short_label(r: &Ruler, scale: f32) -> String {
     let m = r.reading(scale);
-    if r.area { format!("{} \u{d7} {} px", n(m.dx.round()), n(m.dy.round())) } else { format!("{} px", n(m.len)) }
+    if r.area { tr!("ruler.size", w = n(m.dx.round()), h = n(m.dy.round())) } else { tr!("ruler.length", len = n(m.len)) }
 }
 
 /// The measurement as objects: a dimension line (two arrows from the
@@ -174,7 +172,7 @@ pub fn scene(ui: &Ui, r: &Ruler, scale: f32, area: FRect) -> RulerUi {
     let rich = ui.font.is_some_and(|f| f.has_glyph('\u{394}') && f.has_glyph('\u{b0}') && f.has_glyph('\u{b2}'));
     let mut lines = lines(r, scale, rich);
     if r.done {
-        lines.push(crate::sharex_text::RULER_HINT.to_string());
+        lines.push(tr!("ruler.hint").to_string());
     }
     let pad = ui.px(8.0);
     let w = lines

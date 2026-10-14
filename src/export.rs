@@ -747,7 +747,7 @@ pub fn run_export(
                 }
                 Err(e) => {
                     messages.push(format!("error: clipboard: {e:#}"));
-                    done.push(Done::Failed("Copy", format!("{e:#}")));
+                    done.push(Done::Failed(tr!("export.copy"), format!("{e:#}")));
                     error = true;
                 }
             },
@@ -761,7 +761,7 @@ pub fn run_export(
                         }
                         Err(e) => {
                             messages.push(format!("error: save: {e:#}"));
-                            done.push(Done::Failed("Save", format!("{e:#}")));
+                            done.push(Done::Failed(tr!("export.save"), format!("{e:#}")));
                             error = true;
                         }
                     }
@@ -769,7 +769,7 @@ pub fn run_export(
                 Err(e) => {
                     messages.push(format!("error: save: {e:#}"));
                     if e.to_string() != SAVE_CANCELLED {
-                        done.push(Done::Failed("Save", format!("{e:#}")));
+                        done.push(Done::Failed(tr!("export.save"), format!("{e:#}")));
                     }
                     error = true;
                 }
@@ -784,14 +784,14 @@ pub fn run_export(
                         }
                         Err(e) => {
                             messages.push(format!("error: save: {e:#}"));
-                            done.push(Done::Failed("Save", format!("{e:#}")));
+                            done.push(Done::Failed(tr!("export.save"), format!("{e:#}")));
                             error = true;
                         }
                     }
                 }
                 None => {
                     messages.push("error: save: no Desktop folder".to_string());
-                    done.push(Done::Failed("Save", "no Desktop folder".into()));
+                    done.push(Done::Failed(tr!("export.save"), tr!("export.no_desktop").into()));
                     error = true;
                 }
             },
@@ -800,7 +800,7 @@ pub fn run_export(
                     Ok(b) => b,
                     Err(e) => {
                         messages.push(format!("error: encode for upload: {e:#}"));
-                        done.push(Done::Failed("Upload", format!("{e:#}")));
+                        done.push(Done::Failed(tr!("export.upload"), format!("{e:#}")));
                         error = true;
                         continue;
                     }
@@ -819,7 +819,7 @@ pub fn run_export(
                     }
                     Err(e) => {
                         messages.push(format!("error: open with: {e:#}"));
-                        done.push(Done::Failed("Open with", format!("{e:#}")));
+                        done.push(Done::Failed(tr!("history.open_with"), format!("{e:#}")));
                         error = true;
                     }
                 }
@@ -836,7 +836,7 @@ pub fn run_export(
                     }
                     Err(e) => {
                         messages.push(format!("error: share: {e:#}"));
-                        done.push(Done::Failed("Share", format!("{e:#}")));
+                        done.push(Done::Failed(tr!("history.share"), format!("{e:#}")));
                         error = true;
                     }
                 }

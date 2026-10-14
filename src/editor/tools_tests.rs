@@ -839,7 +839,7 @@ fn background_choice_reaches_the_bubble_and_is_remembered() {
     let strong = item(&mut a, |k| matches!(k, toolbar::Kind::Seg { act: Act::RecBg(Bg::Strong), .. }));
     click(&mut a, mid(strong));
     assert_eq!(look(&mut a).bg, Bg::Strong);
-    item(&mut a, |k| matches!(k, toolbar::Kind::Row { act: Act::RecBg(_), value: Some(crate::cam::bg::UNAVAILABLE), .. }));
+    item(&mut a, |k| matches!(k, toolbar::Kind::Row { act: Act::RecBg(_), value: Some(v), .. } if *v == crate::cam::bg::UNAVAILABLE.get()));
     let off = item(&mut a, |k| matches!(k, toolbar::Kind::Seg { act: Act::RecBg(Bg::Off), .. }));
     click(&mut a, mid(off));
     assert_eq!(look(&mut a).bg, Bg::Off);

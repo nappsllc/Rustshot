@@ -26,6 +26,7 @@ pub const MAX_SIDE: u32 = 256;
 /// rows, alpha ignored): straight-alpha RGBA. A pixel that inverts what
 /// is under it (the I-beam: lighter over black than over white) comes out
 /// black with a 1 px white outline, so it shows on any picture.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn from_black_white(w: u32, h: u32, black: &[u8], white: &[u8]) -> Option<PixBuf> {
     let n = (w as usize).checked_mul(h as usize)?;
     if black.len() < n * 4 || white.len() < n * 4 || w == 0 || h == 0 {
@@ -208,7 +209,7 @@ mod imp {
                     for i in 0..(w * h) as usize {
                         let v = *c.pixels.add(i) as u32;
                         let a = v >> 24;
-                        let un = |ch: u32| if a == 0 { 0 } else { ((ch * 255 + a / 2) / a).min(255) as u8 };
+                        let un = |ch: u32| (ch * 255 + a / 2).checked_div(a).map_or(0, |v| v.min(255) as u8);
                         px.extend_from_slice(&[un((v >> 16) & 255), un((v >> 8) & 255), un(v & 255), a as u8]);
                     }
                 }

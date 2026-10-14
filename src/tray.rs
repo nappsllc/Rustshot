@@ -58,45 +58,45 @@ impl MenuItem {
     /// The item's text ("History… · 4 today" counts today's captures).
     pub fn label(self) -> std::borrow::Cow<'static, str> {
         match self {
-            MenuItem::History(0) => "History\u{2026}".into(),
-            MenuItem::History(n) => format!("History\u{2026} \u{b7} {n} today").into(),
-            MenuItem::CaptureIn(n) => format!("Capture in {n} s").into(),
+            MenuItem::History(0) => tr!("tray.history").into(),
+            MenuItem::History(n) => tr!("tray.history_today", n).into(),
+            MenuItem::CaptureIn(n) => tr!("tray.capture_in_n", n).into(),
             MenuItem::CancelDelay => match DELAY_LEFT.load(Ordering::SeqCst) {
-                0 => "Cancel delayed capture".into(),
-                n => format!("Cancel capture ({n} s)").into(),
+                0 => tr!("tray.cancel_delay").into(),
+                n => tr!("tray.cancel_delay_n", n).into(),
             },
             MenuItem::Upload { tag, .. } => upload_label(tag).into(),
-            MenuItem::DeleteUpload { tag, .. } => format!("Delete upload {}\u{2026}", upload_label(tag)).into(),
+            MenuItem::DeleteUpload { tag, .. } => tr!("tray.delete_upload", link = upload_label(tag)).into(),
             m => m.fixed_label().into(),
         }
     }
 
     fn fixed_label(self) -> &'static str {
         match self {
-            MenuItem::CaptureFull => "Capture screen",
-            MenuItem::CaptureWindow => "Capture window",
-            MenuItem::Record => "Record video",
-            MenuItem::History(_) => "History\u{2026}",
-            MenuItem::StopRecording => "Stop recording",
-            MenuItem::Pause(false) => "Pause recording",
-            MenuItem::Pause(true) => "Resume recording",
-            MenuItem::MuteMic(_) => "Mute microphone",
-            MenuItem::HideCamera(_) => "Hide camera",
-            MenuItem::HidePill(_) => "Hide recording controls",
-            MenuItem::Discard => "Discard recording",
-            MenuItem::Capture => "Capture region",
-            MenuItem::ClosePins => "Close all pins",
-            MenuItem::Settings => "Settings…",
-            MenuItem::CheckUpdates => "Check for updates",
-            MenuItem::Autostart(_) => "Start at login",
-            MenuItem::Quit => "Quit Rustshot",
+            MenuItem::CaptureFull => tr!("tray.capture_screen"),
+            MenuItem::CaptureWindow => tr!("tray.capture_window"),
+            MenuItem::Record => tr!("tray.record_video"),
+            MenuItem::History(_) => tr!("tray.history"),
+            MenuItem::StopRecording => tr!("tray.stop_recording"),
+            MenuItem::Pause(false) => tr!("tray.pause_recording"),
+            MenuItem::Pause(true) => tr!("tray.resume_recording"),
+            MenuItem::MuteMic(_) => tr!("tray.mute_microphone"),
+            MenuItem::HideCamera(_) => tr!("tray.hide_camera"),
+            MenuItem::HidePill(_) => tr!("tray.hide_recording_controls"),
+            MenuItem::Discard => tr!("tray.discard_recording"),
+            MenuItem::Capture => tr!("tray.capture_region"),
+            MenuItem::ClosePins => tr!("tray.close_all_pins"),
+            MenuItem::Settings => tr!("tray.settings"),
+            MenuItem::CheckUpdates => tr!("tray.check_for_updates"),
+            MenuItem::Autostart(_) => tr!("tray.start_at_login"),
+            MenuItem::Quit => tr!("tray.quit_rustshot"),
             MenuItem::Separator => "",
-            MenuItem::Launcher => "Capture\u{2026}",
-            MenuItem::CaptureIn(_) => "Capture in\u{2026}",
-            MenuItem::CancelDelay => "Cancel delayed capture",
-            MenuItem::RecentUploads => "Recent uploads",
+            MenuItem::Launcher => tr!("tray.capture"),
+            MenuItem::CaptureIn(_) => tr!("tray.capture_in"),
+            MenuItem::CancelDelay => tr!("tray.cancel_delayed_capture"),
+            MenuItem::RecentUploads => tr!("tray.recent_uploads"),
             MenuItem::Upload { .. } | MenuItem::DeleteUpload { .. } => "",
-            MenuItem::MakeQr => crate::sharex_text::MAKE_QR,
+            MenuItem::MakeQr => tr!("qr.make"),
         }
     }
 
@@ -327,7 +327,7 @@ fn recent_link(tag: u32) -> Option<String> {
 
 /// An upload's menu text: "i.imgur.com/aB3x.png".
 fn upload_label(tag: u32) -> String {
-    recent_link(tag).map_or_else(|| "(gone)".into(), |l| crate::uploads::short_link(&l))
+    recent_link(tag).map_or_else(|| tr!("tray.gone").into(), |l| crate::uploads::short_link(&l))
 }
 
 /// An upload record was filed or forgotten: "Recent uploads" follows.
@@ -403,13 +403,13 @@ pub fn activate(item: MenuItem, tx: &Sender<HotEvent>) -> Result<(), String> {
         MenuItem::Launcher => crate::launcher::show(),
         MenuItem::MakeQr => crate::qr_make::show(),
         MenuItem::Upload { tag, .. } => {
-            let link = recent_link(tag).ok_or("That upload is no longer listed")?;
-            crate::export::copy_text_to_clipboard(&link).map_err(|e| format!("Could not copy the link: {e:#}"))?;
-            notify(&format!("Link copied \u{b7} {}", crate::uploads::short_link(&link)));
+            let link = recent_link(tag).ok_or(tr!("editor.upload_gone"))?;
+            crate::export::copy_text_to_clipboard(&link).map_err(|e| tr!("tray.copy_link_failed", e = format!("{e:#}")))?;
+            notify(&tr!("notice.upload_done", head = tr!("history.link_copied"), link = crate::uploads::short_link(&link)));
         }
         MenuItem::CheckUpdates => crate::actions::check_updates(),
         MenuItem::Autostart(_) => {
-            crate::actions::toggle_autostart().map_err(|e| format!("Could not change Start at login: {e}"))?;
+            crate::actions::toggle_autostart().map_err(|e| tr!("tray.autostart_failed", e))?;
             bump();
         }
         _ => {}
@@ -524,14 +524,14 @@ pub fn tip_text() -> String {
 
 /// The tip while a delayed capture counts down.
 fn delay_tip(n: u64) -> String {
-    format!("Rustshot \u{2014} capturing in {n} s")
+    tr!("tray.tip.delay", n)
 }
 
 fn tip_for(recording: bool, secs: u64) -> String {
     match (recording, secs) {
         (false, _) => "Rustshot".into(),
-        (true, NO_TIME) => "Rustshot — recording".into(),
-        (true, s) => format!("Rustshot — recording {}", crate::rec_ui::fmt_time(std::time::Duration::from_secs(s))),
+        (true, NO_TIME) => tr!("tray.tip.recording").into(),
+        (true, s) => tr!("tray.tip.recording_time", time = crate::rec_ui::fmt_time(std::time::Duration::from_secs(s))),
     }
 }
 
@@ -547,7 +547,7 @@ pub fn notify_saved(path: &std::path::Path, warnings: &[String]) {
 
 /// "Saved <path> — microphone not recorded: <reason>".
 pub fn saved_text(path: &std::path::Path, warnings: &[String]) -> String {
-    let mut t = format!("Saved {}", path.display());
+    let mut t = tr!("notice.saved", name = path.display());
     for w in warnings {
         t.push_str(" — ");
         t.push_str(w);

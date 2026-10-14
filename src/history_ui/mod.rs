@@ -343,9 +343,9 @@ impl History {
         let days = self.cfg.history_days;
         let n = self.entries.len();
         (
-            format!("Keeping {days} day{}", if days == 1 { "" } else { "s" }),
-            format!("{} of {}", history::size_text(self.usage), history::size_text(max).replace(".0 GB", " GB")),
-            format!("{n} capture{}", if n == 1 { "" } else { "s" }),
+            trn!("history.keeping", days),
+            tr!("history.usage", used = history::size_text(self.usage), max = history::size_text(max).replace(".0 GB", " GB")),
+            trn!("history.count", n),
             (self.usage as f32 / max as f32).clamp(0.0, 1.0),
         )
     }
@@ -356,10 +356,13 @@ impl History {
     pub fn clear_texts(&self) -> (String, String) {
         let n = self.entries.len();
         let (_, bytes, dir) = history::saved_files(&self.entries);
-        let where_ = dir.map(|d| format!(" in {}", history::tilde(&d))).unwrap_or_default();
+        let size = history::size_text(bytes);
         (
-            format!("Removes all {n} capture{} from History. This can't be undone.", if n == 1 { "" } else { "s" }),
-            format!("Also delete saved files ({}{where_}) and forget upload links", history::size_text(bytes)),
+            trn!("history.clear.text", n),
+            match dir {
+                Some(d) => tr!("history.clear.files_in", size, dir = history::tilde(&d)),
+                None => tr!("history.clear.files", size),
+            },
         )
     }
 
@@ -393,23 +396,23 @@ impl History {
         if let Some(id) = &self.ask_unupload {
             let link = self.entry(id).and_then(|e| e.meta.uploaded.clone()).unwrap_or_default();
             return (
-                "Delete upload?".into(),
-                format!("{} stops working for everyone. The capture stays in History. This can't be undone.", crate::uploads::short_link(&link)),
+                tr!("history.unupload.title").into(),
+                tr!("history.unupload.text", link = crate::uploads::short_link(&link)),
                 None,
-                "Delete upload",
+                tr!("history.unupload.button"),
             );
         }
         if let Some(ids) = &self.ask_delete {
             let n = ids.len();
             return (
-                format!("Delete {n} captures?"),
-                format!("Removes {n} captures from History. Saved files are kept. This can't be undone."),
+                trn!("history.delete.title", n),
+                trn!("history.delete.text", n),
                 None,
-                "Delete",
+                tr!("history.delete"),
             );
         }
         let (para, check) = self.clear_texts();
-        ("Clear history?".into(), para, Some(check), "Clear history")
+        (tr!("history.clear.title").into(), para, Some(check), tr!("history.clear.button"))
     }
 
     /// The question's button (or Enter).
@@ -513,13 +516,13 @@ pub(super) fn fail_done(text: impl Into<String>) -> Done {
 /// encoding and uploading take a while). Uploads wait for their link.
 pub fn run_export(store: &Store, id: &str, task: crate::export::Task, cfg: &Config) -> Done {
     use crate::export::Task;
-    let Some(e) = store.get(id) else { return fail("That capture is gone") };
+    let Some(e) = store.get(id) else { return fail(tr!("history.gone")) };
     if e.meta.kind.is_recording() {
-        let Some(f) = e.meta.file.clone().filter(|f| f.is_file()) else { return fail("The recording's file is gone") };
+        let Some(f) = e.meta.file.clone().filter(|f| f.is_file()) else { return fail(tr!("history.rec_file_gone")) };
         return match task {
             Task::Copy => match crate::notice::copy_file(&f) {
-                Ok(()) => ok("Copied to clipboard"),
-                Err(err) => fail(format!("Copy failed: {err:#}")),
+                Ok(()) => ok(tr!("history.copied")),
+                Err(err) => fail(tr!("ocr.copy_failed", e = format!("{err:#}"))),
             },
             _ => {
                 crate::notice::show_in_folder(&f);
@@ -536,7 +539,7 @@ pub fn run_export(store: &Store, id: &str, task: crate::export::Task, cfg: &Conf
             let (resized, marked) = doc.as_ref().map_or((false, false), |d| (d.edits.resize.is_some(), d.edits.effects.watermark.is_some()));
             crate::export::for_output_marked(i, cfg, e.meta.scale, resized, marked)
         }
-        Err(err) => return fail(format!("Could not read the capture: {err:#}")),
+        Err(err) => return fail(tr!("history.read_failed", e = format!("{err:#}"))),
     };
     if task == Task::Pin {
         let th = crate::theme::resolve(cfg);
@@ -544,7 +547,7 @@ pub fn run_export(store: &Store, id: &str, task: crate::export::Task, cfg: &Conf
         let at = crate::capture::cursor_pos();
         #[cfg(test)]
         let at = (0, 0);
-        return if crate::pin::open(std::sync::Arc::new(img), at, th) { ok("") } else { fail("Pin to screen is not available here") };
+        return if crate::pin::open(std::sync::Arc::new(img), at, th) { ok("") } else { fail(tr!("editor.pin_unavailable")) };
     }
     let res = crate::export::run_export(&img, (0, 0), std::slice::from_ref(&task), cfg);
     let mut changed = false;
@@ -564,10 +567,10 @@ pub fn run_export(store: &Store, id: &str, task: crate::export::Task, cfg: &Conf
             Ok(Ok(url)) => {
                 let copied = cfg.copy_url_after_upload && crate::export::copy_text_to_clipboard(&url).is_ok();
                 let _ = crate::uploads::finished_in(store, id, &url);
-                Done { changed: true, ..ok(if copied { "Uploaded \u{2014} link copied" } else { "Uploaded" }) }
+                Done { changed: true, ..ok(if copied { tr!("editor.uploaded_copied") } else { tr!("editor.uploaded") }) }
             }
-            Ok(Err(err)) => fail(format!("Upload failed: {err}")),
-            Err(_) => fail("Upload failed"),
+            Ok(Err(err)) => fail(tr!("editor.upload_failed", e = err)),
+            Err(_) => fail(tr!("history.upload_failed")),
         };
     }
     match crate::notice::compose(&res.done, false) {
@@ -579,7 +582,7 @@ pub fn run_export(store: &Store, id: &str, task: crate::export::Task, cfg: &Conf
 /// "Open with…" for entry `id`: its saved file (or the recording) when
 /// that is still what it looks like, else the picture as a temporary file.
 pub fn open_with(store: &Store, id: &str, cfg: &Config, owner: Option<usize>) -> Done {
-    match file_to_hand(store, id, cfg, "Open with") {
+    match file_to_hand(store, id, cfg, tr!("history.open_with")) {
         Ok(f) => crate::open_with::open_now(&f, owner).map_or_else(fail, |()| ok("")),
         Err(d) => d,
     }
@@ -589,7 +592,7 @@ pub fn open_with(store: &Store, id: &str, cfg: &Config, owner: Option<usize>) ->
 /// or the recording, else a temporary PNG), to the share sheet over
 /// window `owner`.
 pub fn share(store: &Store, id: &str, cfg: &Config, owner: Option<usize>) -> Done {
-    match file_to_hand(store, id, cfg, "Share") {
+    match file_to_hand(store, id, cfg, tr!("history.share")) {
         Ok(f) => crate::share::share_now(&f, owner).map_or_else(fail, |()| ok("")),
         Err(d) => d,
     }
@@ -599,24 +602,24 @@ pub fn share(store: &Store, id: &str, cfg: &Config, owner: Option<usize>) -> Don
 /// (or the recording) when that is still what it looks like, else the
 /// picture as a temporary file. `Err`: the failure to show.
 fn file_to_hand(store: &Store, id: &str, cfg: &Config, what: &str) -> Result<std::path::PathBuf, Done> {
-    let Some(e) = store.get(id) else { return Err(fail("That capture is gone")) };
+    let Some(e) = store.get(id) else { return Err(fail(tr!("history.gone"))) };
     let as_is = e.meta.kind.is_recording() || (!e.meta.edited && e.meta.saved.as_ref().is_some_and(|p| p.is_file()));
     if as_is {
-        let f = file_of(store, &e).map_err(|err| fail(format!("Could not read the capture: {err:#}")))?;
+        let f = file_of(store, &e).map_err(|err| fail(tr!("history.read_failed", e = format!("{err:#}"))))?;
         if !f.is_file() {
-            return Err(fail("The file is gone"));
+            return Err(fail(tr!("history.file_gone")));
         }
         return Ok(f);
     }
-    let img = picture(store, &e).map_err(|err| fail(format!("Could not read the capture: {err:#}")))?;
-    crate::open_with::file_for(&img, None, cfg).map_err(|err| fail(format!("{what} failed: {err:#}")))
+    let img = picture(store, &e).map_err(|err| fail(tr!("history.read_failed", e = format!("{err:#}"))))?;
+    crate::open_with::file_for(&img, None, cfg).map_err(|err| fail(tr!("history.what_failed", what, e = format!("{err:#}"))))
 }
 
 /// Delete entry `id`'s upload where it went (Imgur over `http`, S3
 /// through `s3`; fakes in tests), then forget its link and record.
 pub fn delete_upload(store: &Store, id: &str, client_id: &str, http: crate::uploads::DeleteFn, s3: crate::uploads::S3DeleteFn) -> Done {
-    let Some(e) = store.get(id) else { return fail("That capture is gone") };
-    let (Some(link), Some(info)) = (e.meta.uploaded.clone(), e.meta.upload.clone()) else { return fail("This capture has no upload to delete") };
+    let Some(e) = store.get(id) else { return fail(tr!("history.gone")) };
+    let (Some(link), Some(info)) = (e.meta.uploaded.clone(), e.meta.upload.clone()) else { return fail(tr!("history.no_upload")) };
     let rec = crate::uploads::Record { link, info, entry: Some(id.to_string()) };
     let (text, kind) = crate::uploads::delete_record(store, &rec, client_id, http, s3);
     Done { text, kind, changed: true }
@@ -656,9 +659,9 @@ pub fn save_to_folder(store: &Store, ids: &[String], dir: &std::path::Path) -> D
         }
     }
     match (n == ids.len(), why) {
-        (true, _) => ok(format!("Saved {n} to {}", dir.display())),
-        (false, Some(w)) => fail(format!("Saved {n} of {}: a capture could not be read: {w}", ids.len())),
-        (false, None) => fail(format!("Saved {n} of {}", ids.len())),
+        (true, _) => ok(tr!("history.saved_to", n, dir = dir.display())),
+            (false, Some(w)) => fail(tr!("history.saved_some_why", n, total = ids.len(), why = w)),
+            (false, None) => fail(tr!("history.saved_some", n, total = ids.len())),
     }
 }
 
@@ -755,7 +758,7 @@ fn run(rx: Receiver<Msg>) {
         h.clear = Some(false);
     }
     let mut w = window::Window::new(h, rx);
-    let spec = crate::wind::WindowSpec { title: "Rustshot History".into(), w: W, h: H, resizable: true, min: MIN, controls: crate::wind::Controls::MinMaxClose };
+    let spec = crate::wind::WindowSpec { title: tr!("history.window_title").into(), w: W, h: H, resizable: true, min: MIN, controls: crate::wind::Controls::MinMaxClose };
     if let Err(e) = crate::wind::run_window(spec, &mut w) {
         eprintln!("rustshot: history window: {e:#}");
     }

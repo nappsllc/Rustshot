@@ -46,17 +46,17 @@ pub fn s3_name(host: &str, bucket: &str, key_id: &str) -> String {
 
 /// What a person sees for it in the store's app.
 pub fn s3_label(bucket: &str) -> String {
-    format!("Rustshot S3 secret access key ({})", bucket.trim())
+    tr!("keystore.label", bucket = bucket.trim())
 }
 
 /// Where secrets go on this system, for Settings' helper line.
 pub fn place() -> &'static str {
     if cfg!(windows) {
-        "Windows Credential Manager"
+        tr!("keystore.windows")
     } else if cfg!(target_os = "macos") {
-        "the macOS Keychain"
+        tr!("keystore.macos")
     } else {
-        "the Secret Service keyring"
+        tr!("keystore.linux")
     }
 }
 

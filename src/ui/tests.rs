@@ -335,6 +335,129 @@ fn text_field_click_places_caret_and_drag_selects() {
     assert_eq!(st.selected(), "abcdefghij");
 }
 
+/// Right to left: the field (drawn left to right inside its mirrored box)
+/// puts the caret under the pointer: at its visual start, after a known
+/// character, at its end; a drag and a Shift+click select what they cover.
+#[test]
+fn text_field_caret_follows_the_pointer_right_to_left() {
+    crate::i18n::with_lang("qps-rtl", || {
+        let mut h = Harness::new();
+        let mut st = TextState::new("abcdefghij");
+        // Screen events, mirrored as a window does.
+        let ev = |h: &mut Harness, e: Ev| {
+            h.ev(rtl_ev(e, W));
+        };
+        let click = |h: &mut Harness, x: i32| {
+            for e in [Ev::Move { x, y: 36 }, Ev::Down { x, y: 36 }, Ev::Up { x, y: 36 }] {
+                h.ev(rtl_ev(e, W));
+            }
+        };
+        field(&mut h, &mut st);
+        // The field is at layout x 20..320, so on screen at W-320..W-20,
+        // its text from the box's visual left (+10 padding).
+        let start = (W as i32 - 320) + 10;
+        click(&mut h, start);
+        field(&mut h, &mut st);
+        assert!(h.focus.is_focused("f"));
+        assert_eq!(st.caret(), 0, "visual start");
+        let abc = crate::uifb::text_width(&crate::fonts::UI, 13.0, "abc").round() as i32;
+        click(&mut h, start + abc);
+        field(&mut h, &mut st);
+        assert_eq!(st.caret(), 3, "after c");
+        click(&mut h, W as i32 - 30);
+        field(&mut h, &mut st);
+        assert_eq!(st.caret(), 10, "visual end");
+        // Drag from the start to after "c".
+        ev(&mut h, Ev::Down { x: start, y: 36 });
+        field(&mut h, &mut st);
+        ev(&mut h, Ev::Move { x: start + abc, y: 36 });
+        field(&mut h, &mut st);
+        ev(&mut h, Ev::Up { x: start + abc, y: 36 });
+        field(&mut h, &mut st);
+        assert_eq!(st.selected(), "abc");
+        // Shift+click after "c" from the end extends towards the end.
+        click(&mut h, W as i32 - 30);
+        field(&mut h, &mut st);
+        h.input.mods.shift = true;
+        click(&mut h, start + abc);
+        field(&mut h, &mut st);
+        h.input.mods.shift = false;
+        assert_eq!(st.selected(), "defghij");
+    });
+}
+
+/// A heading that is not plain ASCII is drawn as one string (the OS
+/// shaper sees the word: Arabic joins), with no tracking; an ASCII one is
+/// still tracked letter by letter.
+#[test]
+fn headings_draw_whole_words_outside_ascii() {
+    let tok = compact::Tok::of(&DARK);
+    let shot = |s: &str, whole: bool| {
+        let mut h = Harness::new();
+        h.frame(|ui| {
+            if whole {
+                let up = crate::i18n::upper(s);
+                let c = tok.tx3;
+                ui.text_at(10.5, &up, 20.0, 20.0 + 20.5, c, true);
+            } else {
+                ui.place(r(20.0, 20.0, 300.0, 33.0)).sec(s, &tok);
+            }
+        });
+        h.img.clone()
+    };
+    crate::i18n::with_lang("qps-ar", || {
+        let s = "\u{628}\u{62a}\u{62b} \u{633}\u{62c}\u{644}";
+        assert!(shot(s, false) == shot(s, true), "drawn whole");
+    });
+    assert!(shot("Appearance", false) != shot("Appearance", true), "ASCII: tracked");
+}
+
+/// A mixed string (ASCII with one character the baked font lacks) is
+/// drawn whole by the OS face; its caret positions are measured by that
+/// face too, so a click after each character puts the caret there.
+#[test]
+fn text_field_caret_on_mixed_strings() {
+    let s = "Gr\u{f6}\u{df}e_%Y-%m-%d_screenshot";
+    let font = &crate::fonts::UI;
+    assert!(crate::uitext::needed(font, s));
+    for (end, _) in s.char_indices().skip(1).step_by(3) {
+        assert_eq!(font.prefix_width(s, end, 13.0), crate::uitext::width(font, &s[..end], 13.0), "{end}");
+        let mut h = Harness::new();
+        let mut st = TextState::new(s);
+        field(&mut h, &mut st);
+        let x = 30.0 + font.prefix_width(s, end, 13.0);
+        h.click(x.round() as i32, 36);
+        field(&mut h, &mut st);
+        assert_eq!(st.caret(), end, "click at {x} for {:?}", &s[..end]);
+    }
+}
+
+/// `fit_text` keeps the longest prefix that fits with its ellipsis, in
+/// the face that draws it (mixed and CJK strings too).
+#[test]
+fn fit_text_keeps_the_longest_prefix() {
+    let mut h = Harness::new();
+    h.frame(|ui| {
+        for s in ["Screenshot of a long browser window title", "Gr\u{f6}\u{df}e \u{e4}ndern und speichern unter", "\u{622a}\u{56fe}\u{4fdd}\u{5b58}\u{5230}\u{684c}\u{9762}\u{6587}\u{4ef6}\u{5939}\u{4e2d}"] {
+            for w in [20.0f32, 60.0, 90.0, 140.0] {
+                let out = ui.fit_text(12.0, s, w);
+                if out == s {
+                    assert!(ui.text_w(12.0, s) <= w);
+                    continue;
+                }
+                assert!(out.ends_with('\u{2026}'));
+                let kept = out.trim_end_matches('\u{2026}');
+                let n = kept.chars().count();
+                assert!(n == 0 || ui.text_w(12.0, &out) <= w, "{out:?} at {w}");
+                // One more character would not fit.
+                let more: String = s.chars().take(n + 1).collect();
+                let more = format!("{}\u{2026}", more.trim_end());
+                assert!(more.chars().count() > s.chars().count() || ui.text_w(12.0, &more) > w || more.trim_end_matches('\u{2026}').trim_end() == kept, "{more:?} fits {w}");
+            }
+        }
+    });
+}
+
 #[test]
 fn text_field_lets_enter_and_escape_through() {
     let mut h = Harness::new();

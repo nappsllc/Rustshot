@@ -209,7 +209,7 @@ impl Saved {
     /// gone, "(History entry gone)" after it.
     pub fn note(&self) -> String {
         let n = self.path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-        if self.recorded { format!("Saved {n}") } else { format!("Saved {n} (History entry gone)") }
+        if self.recorded { tr!("edit.saved", n) } else { tr!("edit.saved_gone", n) }
     }
 }
 
@@ -405,19 +405,19 @@ fn run(id: &str, rx: crate::chan::Receiver<Msg>, unsaved: Arc<AtomicBool>) {
     let cfg = crate::config::load();
     let done = |id: &str| lock(&OPEN.list).retain(|s| s.id != id);
     let Some(e) = load(&store, id) else {
-        crate::tray::notify("That capture is no longer in History");
+        crate::tray::notify(tr!("edit.not_in_history"));
         done(id);
         return;
     };
     if crate::history::mask_unreadable(&e.meta) {
-        crate::tray::notify("Could not open the capture: its lasso cannot be read");
+        crate::tray::notify(tr!("edit.bad_lasso"));
         done(id);
         return;
     }
     let (img, doc) = match (store.original(&e), store.doc(&e)) {
         (Ok(i), Ok(d)) => (i, d),
         (Err(err), _) | (_, Err(err)) => {
-            crate::tray::notify(&format!("Could not open the capture: {err:#}"));
+            crate::tray::notify(&tr!("history.open_failed", e = format!("{err:#}")));
             done(id);
             return;
         }
@@ -426,7 +426,7 @@ fn run(id: &str, rx: crate::chan::Receiver<Msg>, unsaved: Arc<AtomicBool>) {
     if let Some(c) = doc.crop
         && crate::objects::mask::crop_rect(c, img.dimensions()).is_none()
     {
-        crate::tray::notify("Could not open the capture: its crop lies outside the picture");
+        crate::tray::notify(tr!("edit.bad_crop"));
         done(id);
         return;
     }
@@ -434,7 +434,7 @@ fn run(id: &str, rx: crate::chan::Receiver<Msg>, unsaved: Arc<AtomicBool>) {
     // Its crop, a freeform capture's lasso and its image edits.
     canvas.set_doc(doc.crop, e.meta.mask.clone());
     canvas.set_edits(doc.edits);
-    let title = format!("Edit \u{2014} {}", crate::history::title(&e.meta));
+    let title = tr!("edit.window_title", name = crate::history::title(&e.meta));
     // Pruning leaves the entry alone while it is open.
     let held = crate::history::hold_open(&e.id, &e.dir);
     let mut ed = Edit::new(store, e, canvas, cfg);
@@ -680,7 +680,7 @@ impl Edit {
                             self.closing = true;
                         }
                     }
-                    Err(e) => self.note(format!("Save failed: {e}"), crate::editor::style::ToastKind::Error),
+                    Err(e) => self.note(tr!("edit.save_failed", e), crate::editor::style::ToastKind::Error),
                 }
             }
         }
