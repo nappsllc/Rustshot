@@ -513,6 +513,7 @@ impl Edit {
                 }
             } else if mods.ctrl
                 && self.tool != Some(Tool::Counter)
+                && self.tool != Some(Tool::Ruler)
                 && let Some(i) = self.obj_at(p)
             {
                 let draws = matches!(self.tool, Some(t) if t != Tool::Text && t != Tool::Callout);
@@ -542,6 +543,9 @@ impl Edit {
                 }
                 self.stroke_pts = vec![p];
                 self.draft = self.make_draft(tool, p, p);
+                if tool == Tool::Ruler {
+                    self.ruler = Some(super::ruler::Ruler { a: p, b: p, area: mods.ctrl, done: false });
+                }
                 self.interact = Interact::Drawing { start: p };
                 return;
             }
@@ -733,6 +737,7 @@ impl Edit {
                 }
             }
             Act::CopyAll => self.copy_all(),
+            Act::ReadQr => self.read_qr(),
             Act::TextCopy => {
                 self.copy_selected();
             }

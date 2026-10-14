@@ -48,6 +48,7 @@ mod pin;
 mod pixbuf;
 mod pngfile;
 mod qr;
+mod qr_ui;
 #[cfg(windows)]
 mod proc_win;
 mod raster;

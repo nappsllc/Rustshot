@@ -109,10 +109,19 @@ pub enum Action {
     ImageResize,
     ImageCanvas,
     ImageReset,
+    /// The ruler: measure a line (or, with Ctrl, a rect) in px; kept as a
+    /// dimension line or discarded. U: free, and next to the other tools.
+    ToolRuler,
+    /// Read the QR codes in the selection (also in the Copy text
+    /// long-press menu). Q for QR.
+    ReadQr,
+    /// The Edit window's Effects… dialog (watermark, shadow, torn edge,
+    /// reflection); no default chord.
+    ImageEffects,
 }
 
 impl Action {
-    pub const ALL: [Action; 62] = [
+    pub const ALL: [Action; 65] = [
         Action::ToolSelect,
         Action::ToolPencil,
         Action::ToolLine,
@@ -175,6 +184,9 @@ impl Action {
         Action::ImageResize,
         Action::ImageCanvas,
         Action::ImageReset,
+        Action::ToolRuler,
+        Action::ReadQr,
+        Action::ImageEffects,
     ];
 
     /// A while-recording chord: global (Meta allowed), not an overlay key.
@@ -204,6 +216,7 @@ impl Action {
                 | Action::ImageResize
                 | Action::ImageCanvas
                 | Action::ImageReset
+                | Action::ImageEffects
         )
     }
 
@@ -304,6 +317,9 @@ impl Action {
             Action::ImageResize => ("image_resize", "Resize\u{2026}", &["Ctrl+Shift+R"]),
             Action::ImageCanvas => ("image_canvas", "Canvas\u{2026}", &["Ctrl+Shift+K"]),
             Action::ImageReset => ("image_reset", "Reset image edits", &[]),
+            Action::ToolRuler => ("tool_ruler", crate::sharex_text::RULER, &["U"]),
+            Action::ReadQr => ("read_qr", crate::sharex_text::READ_QR, &["Q"]),
+            Action::ImageEffects => ("image_effects", crate::sharex_text::EFFECTS, &[]),
         }
     }
 
@@ -583,7 +599,7 @@ mod tests {
     #[test]
     fn defaults_match_spec_table() {
         let km = Keymap::defaults();
-        let want: [(Action, &[&str]); 59] = [
+        let want: [(Action, &[&str]); 62] = [
             (Action::ToolSelect, &["V"]),
             (Action::ToolPencil, &["P"]),
             (Action::ToolLine, &["L"]),
@@ -643,6 +659,9 @@ mod tests {
             (Action::ImageResize, &["Ctrl+Shift+R"]),
             (Action::ImageCanvas, &["Ctrl+Shift+K"]),
             (Action::ImageReset, &[]),
+            (Action::ToolRuler, &["U"]),
+            (Action::ReadQr, &["Q"]),
+            (Action::ImageEffects, &[]),
         ];
         for (a, keys) in want {
             assert_eq!(shown(&km, a), keys, "{a:?}");

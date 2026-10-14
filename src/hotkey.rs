@@ -36,6 +36,8 @@ pub enum HotEvent {
     RepeatLast,
     /// Pick an area and copy its text (OCR), no annotation step.
     CaptureText,
+    /// Pick an area and read its QR codes (the toast: Copy, Open link).
+    ReadQr,
     /// Open the History window.
     History,
     /// A global hotkey was pressed: slot `i` (0 capture, 1 quit, 2 record,
@@ -166,7 +168,7 @@ impl<W> RecKeys<W> {
 
 /// Global hotkey slots: capture, quit, record, full screen, window,
 /// repeat, copy text, History.
-pub const SLOTS: usize = 8;
+pub const SLOTS: usize = 9;
 
 /// Global hotkeys backed by Win32 `RegisterHotKey` (replaces the
 /// `global-hotkey` crate). Registration and the message loop run on a
@@ -244,6 +246,7 @@ pub fn slot_event(i: usize) -> HotEvent {
         5 => HotEvent::RepeatLast,
         6 => HotEvent::CaptureText,
         7 => HotEvent::History,
+        8 => HotEvent::ReadQr,
         i => rec_event(i - REC_SLOT_BASE),
     }
 }
@@ -264,6 +267,7 @@ pub fn wanted(cfg: &Config) -> [String; SLOTS] {
         &cfg.repeat_hotkey,
         &cfg.capture_text_hotkey,
         &cfg.history_hotkey,
+        &cfg.read_qr_hotkey,
     ]
     .map(|s| s.trim().to_string())
 }
@@ -278,6 +282,7 @@ pub const SLOT_NAMES: [&str; SLOTS] = [
     "Repeat last capture",
     "Copy text from area",
     "Open History",
+    "Read QR code from area",
 ];
 
 /// What each while-recording chord is called (Settings › Key bindings).
@@ -1103,7 +1108,7 @@ mod tests {
     fn new_global_actions_are_slots() {
         let cfg = Config { repeat_hotkey: "Ctrl+Alt+P".into(), ..Config::default() };
         let w = wanted(&cfg);
-        assert_eq!(w, ["Shift+Meta+X", "Ctrl+Alt+Shift+Q", "Shift+Meta+G", "Shift+Meta+F", "Shift+Meta+E", "Ctrl+Alt+P", "Shift+Meta+Z", "Shift+Meta+H"]);
+        assert_eq!(w, ["Shift+Meta+X", "Ctrl+Alt+Shift+Q", "Shift+Meta+G", "Shift+Meta+F", "Shift+Meta+E", "Ctrl+Alt+P", "Shift+Meta+Z", "Shift+Meta+H", ""]);
         let specs = specs_for(&w);
         for (i, (id, _, ev)) in specs.iter().enumerate() {
             assert!(*id == i as i32 + 1 && matches!(ev, HotEvent::Pressed(j) if *j == i));
@@ -1130,7 +1135,7 @@ mod tests {
         cfg.shortcuts.insert("rec_mute".into(), "".into());
         assert_eq!(rec_wanted(&cfg), ["Ctrl+Alt+P", "", "Ctrl+Alt+Shift+H"]);
         let specs = rec_specs_for(&rec_wanted(&cfg));
-        assert_eq!(specs.clone().map(|s| s.0), [9, 10, 11]);
+        assert_eq!(specs.clone().map(|s| s.0), [10, 11, 12]);
         assert!(matches!(specs[0].2, HotEvent::RecPause));
         assert!(matches!(specs[1].2, HotEvent::RecMute));
         assert!(matches!(specs[2].2, HotEvent::RecPill));

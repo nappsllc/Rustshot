@@ -63,6 +63,10 @@ pub enum NoteAct {
     /// The tray's "Delete upload?": delete it, or not.
     DeleteUpload,
     KeepUpload,
+    /// Read QR code's toast: copy the codes' text; open the http(s) link
+    /// it shows ([crate::qr_ui]).
+    QrCopy,
+    QrOpen,
 }
 
 impl NoteAct {
@@ -79,6 +83,8 @@ impl NoteAct {
             NoteAct::Card => "",
             NoteAct::CancelDelay | NoteAct::KeepUpload => "Cancel",
             NoteAct::DeleteUpload => "Delete upload",
+            NoteAct::QrCopy => crate::sharex_text::QR_COPY,
+            NoteAct::QrOpen => crate::sharex_text::QR_OPEN,
         }
     }
 
@@ -95,7 +101,7 @@ impl NoteAct {
 
     /// The first button is the accent one.
     fn primary(self) -> bool {
-        matches!(self, NoteAct::CopyLink | NoteAct::Copy | NoteAct::Edit | NoteAct::DeleteUpload)
+        matches!(self, NoteAct::CopyLink | NoteAct::Copy | NoteAct::Edit | NoteAct::DeleteUpload | NoteAct::QrCopy)
     }
 }
 
@@ -396,7 +402,7 @@ pub fn upload_configured(cfg: &crate::config::Config) -> bool {
 pub fn run_action(a: NoteAct, file: &std::path::Path, entry: Option<String>, done: impl FnOnce(Note) + Send + 'static) -> Option<Note> {
     match a {
         // A thumbnail's buttons act on its picture (`run_note_action`).
-        NoteAct::ThumbCopy | NoteAct::ThumbSave | NoteAct::Pin | NoteAct::Edit | NoteAct::Dismiss | NoteAct::Card | NoteAct::CancelDelay | NoteAct::DeleteUpload | NoteAct::KeepUpload => None,
+        NoteAct::ThumbCopy | NoteAct::ThumbSave | NoteAct::Pin | NoteAct::Edit | NoteAct::Dismiss | NoteAct::Card | NoteAct::CancelDelay | NoteAct::DeleteUpload | NoteAct::KeepUpload | NoteAct::QrCopy | NoteAct::QrOpen => None,
         NoteAct::Open => {
             crate::actions::open_path(file);
             None
@@ -864,6 +870,11 @@ pub fn run_note_action(note: &Note, a: NoteAct, th: Theme, done: impl FnOnce(Not
     match a {
         NoteAct::Card => Next::Keep,
         NoteAct::Dismiss => Next::Hide,
+        NoteAct::QrCopy => Next::Show(crate::qr_ui::copy_last()),
+        NoteAct::QrOpen => {
+            crate::qr_ui::open_last();
+            Next::Hide
+        }
         NoteAct::CancelDelay => {
             crate::launcher::cancel();
             Next::Hide

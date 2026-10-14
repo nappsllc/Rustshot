@@ -230,6 +230,7 @@ impl Window {
                     }
                 }
                 Request::SaveAs | Request::SaveDesktop | Request::OpenWith | Request::Share | Request::Copy | Request::Upload | Request::CopyText | Request::Pin => self.export(r),
+            Request::ReadQr => self.read_qr(),
             }
         }
     }
@@ -309,6 +310,22 @@ impl Window {
             let res = crate::export::run_export(&img, (0, 0), std::slice::from_ref(&task), &cfg);
             let _ = tx.send(export_done(res, saves, &store, &id, doc, objs, &cfg));
         });
+    }
+
+    /// Read QR code: the picture as it shows (before the resize and the
+    /// canvas), its codes in the notice with Copy and Open link (a toast
+    /// here where there is no notice window).
+    fn read_qr(&mut self) {
+        let img = self.e.canvas.export_picture();
+        let n = crate::qr_ui::note(crate::qr::read(&img));
+        #[cfg(not(test))]
+        let at = crate::capture::cursor_pos();
+        #[cfg(test)]
+        let at = (0, 0);
+        let (text, kind) = (n.text.clone(), n.kind);
+        if !crate::notice::show(n, at, *self.e.canvas.theme()) {
+            self.e.note(text, kind);
+        }
     }
 
     fn settle(&mut self) {

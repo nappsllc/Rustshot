@@ -352,8 +352,9 @@ impl Edit {
             && self.assist.ring.is_none()
             && !self.rec.open
             && match self.interact {
-                Interact::None => self.sel.is_none() && self.tool.is_none(),
+                Interact::None => (self.sel.is_none() && self.tool.is_none()) || self.tool == Some(Tool::Ruler),
                 Interact::NewSel { .. } | Interact::Resize { .. } => true,
+                Interact::Drawing { .. } => self.tool == Some(Tool::Ruler),
                 _ => false,
             }
     }

@@ -79,6 +79,8 @@ pub enum Request {
     Upload,
     Pin,
     CopyText,
+    /// Read the QR codes in the picture.
+    ReadQr,
     Close,
 }
 
@@ -635,6 +637,7 @@ impl Canvas {
                 Task::Upload => Request::Upload,
                 Task::Pin => Request::Pin,
                 Task::Text => Request::CopyText,
+                Task::Qr => Request::ReadQr,
                 _ => Request::Copy,
             })
         };

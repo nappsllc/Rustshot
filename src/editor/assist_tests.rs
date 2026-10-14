@@ -663,7 +663,7 @@ fn hint_shows_at_open_and_goes_on_move_key_or_time() {
     assert!(ed(&mut a).scene.as_ref().unwrap().hint.is_none(), "faded out");
     // A key.
     let mut a = app(None);
-    key_m(&mut a, 'Q' as u32, NONE);
+    key_m(&mut a, 'J' as u32, NONE);
     assert!(!ed(&mut a).assist.hint_live(Instant::now()));
     // Three seconds.
     let mut a = app(None);

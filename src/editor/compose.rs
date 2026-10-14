@@ -272,6 +272,8 @@ pub struct CaretUi {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum El {
     Draft,
+    /// The ruler's measurement and its label.
+    Ruler,
     Ghost,
     /// Text mode, the lasso, the crop frame (`snip`).
     Snip,
@@ -295,9 +297,10 @@ pub(super) enum El {
     Ring,
 }
 
-const N_EL: usize = 20;
+const N_EL: usize = 21;
 const ELS: [El; N_EL] = [
     El::Draft,
+    El::Ruler,
     El::Ghost,
     El::Snip,
     El::Cross,
@@ -334,6 +337,7 @@ pub struct Scene {
     pub sel: Option<FRect>,
     pub objects: Arc<Vec<Obj>>,
     pub draft: Option<Obj>,
+    pub ruler: Option<super::ruler::RulerUi>,
     pub sel_ui: Option<SelUi>,
     pub snap: Option<SnapUi>,
     pub label: Option<LabelUi>,
@@ -372,6 +376,7 @@ impl Scene {
     fn same(&self, o: &Scene, e: El) -> bool {
         match e {
             El::Draft => self.draft == o.draft,
+            El::Ruler => self.ruler == o.ruler,
             El::Ghost => self.ghost == o.ghost,
             El::Snip => self.snip == o.snip,
             El::ObjSel => self.osel == o.osel,
@@ -860,6 +865,10 @@ impl Edit {
 
         let (ghost, osel, marquee, caret, mini) = self.obj_scene(area, s);
         let snip = self.snip_scene(area, s, dim_a.round() as u8, Pt::new(mouse.0 as f32, mouse.1 as f32));
+        if self.tool != Some(Tool::Ruler) {
+            self.ruler = None;
+        }
+        let ruler = self.ruler.as_ref().map(|r| super::ruler::scene(&Ui { th: &self.th, s, font: self.ui_font }, r, self.shot.scale, area));
         let (guides, guides_k) = self.guides_now(now);
         // The save menu open: no tip over it from its own chevron.
         if self.save_menu {
@@ -894,6 +903,7 @@ impl Edit {
             sel: self.sel.or(snap_r),
             objects,
             draft: self.draft.clone(),
+            ruler,
             sel_ui,
             snap,
             label,
@@ -928,6 +938,7 @@ impl Edit {
         let one = |r: FRect| vec![px_bounds(r)];
         match e {
             El::Draft => sc.draft.as_ref().and_then(|d| d.bounds(self.font.as_ref())).map_or(Vec::new(), one),
+            El::Ruler => sc.ruler.as_ref().map_or(Vec::new(), |u| super::ruler::bounds(&ui, u).into_iter().map(px_bounds).collect()),
             El::Ghost => sc.ghost.iter().filter_map(|o| o.bounds(self.font.as_ref())).map(px_bounds).collect(),
             El::Snip => sc.snip.as_ref().map_or(Vec::new(), |u| super::snip::bounds(&ui, u).into_iter().map(px_bounds).collect()),
             El::ObjSel => sc.osel.as_ref().map_or(Vec::new(), |u| super::mini::osel_bounds(&ui, u).into_iter().map(px_bounds).collect()),
@@ -1046,6 +1057,11 @@ impl Edit {
             && hits(El::Snip)
         {
             super::snip::draw(&mut f, &ui, u);
+        }
+        if let Some(u) = &sc.ruler
+            && hits(El::Ruler)
+        {
+            super::ruler::draw(&mut f, &ui, u);
         }
         if let Some(c) = &sc.cross
             && hits(El::Cross)

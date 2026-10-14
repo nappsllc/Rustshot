@@ -35,6 +35,8 @@ mod select;
 mod input;
 mod assist;
 mod snip;
+mod ruler;
+mod qr_read;
 mod imgedit;
 mod trim_sel;
 pub use assist::AcceptOn;
@@ -117,6 +119,12 @@ impl Pending {
     /// `screen`, saved straight away.
     pub fn repeat(region: (i32, i32, u32, u32), screen: Option<u32>) -> Self {
         Self { region: Some(region), screen, accept_on_select: true, tasks: vec![Task::Save { path: None, ask: false }], ..Self::editor() }
+    }
+
+    /// The Read QR code hotkey: pick an area, then its QR codes are read
+    /// (the result's toast has Copy and Open link).
+    pub fn qr() -> Self {
+        Self { accept_on_select: true, tasks: vec![Task::Qr], ..Self::editor() }
     }
 
     /// The copy-text hotkey: pick an area, then its text is recognized
@@ -354,6 +362,7 @@ fn without_globals(cfg: &Config) -> Config {
         &mut c.repeat_hotkey,
         &mut c.capture_text_hotkey,
         &mut c.history_hotkey,
+        &mut c.read_qr_hotkey,
     ] {
         s.clear();
     }
@@ -638,6 +647,7 @@ impl App {
         }
         self.poll_upload();
         self.poll_ocr();
+        crate::qr_ui::show_done();
         // Text mode's words or Quick Redact's finds arrived.
         // (An export queued behind Redact may finish the capture.)
         let mut snipped = false;
@@ -886,13 +896,13 @@ impl App {
             HotEvent::Pressed(i) if i != 1 && i != 7 && matches!(self.st, State::Edit(_)) => self.forward_hotkey(i),
             HotEvent::Pressed(i) => return self.on_hot(crate::hotkey::slot_event(i)),
             // A capture would show the overlay in the recording.
-            HotEvent::Capture | HotEvent::Record | HotEvent::CaptureFull | HotEvent::CaptureWindow | HotEvent::RepeatLast | HotEvent::CaptureText
+            HotEvent::Capture | HotEvent::Record | HotEvent::CaptureFull | HotEvent::CaptureWindow | HotEvent::RepeatLast | HotEvent::CaptureText | HotEvent::ReadQr
                 if self.rec.is_some() =>
             {
                 eprintln!("rustshot: a recording is running; capture ignored");
             }
             // No new capture while an update installs or restarts us.
-            HotEvent::Capture | HotEvent::Record | HotEvent::CaptureFull | HotEvent::CaptureWindow | HotEvent::RepeatLast | HotEvent::CaptureText
+            HotEvent::Capture | HotEvent::Record | HotEvent::CaptureFull | HotEvent::CaptureWindow | HotEvent::RepeatLast | HotEvent::CaptureText | HotEvent::ReadQr
                 if self.updating || self.restart_pending =>
             {
                 eprintln!("rustshot: an update is installing; capture ignored");
@@ -903,6 +913,7 @@ impl App {
             HotEvent::CaptureWindow => self.pending = Some(Pending::window()),
             HotEvent::RepeatLast => self.pending = Some(self.repeat_pending()),
             HotEvent::CaptureText => self.pending = Some(Pending::text()),
+            HotEvent::ReadQr => self.pending = Some(Pending::qr()),
             HotEvent::Record if !rec_ui::supported() => eprintln!("rustshot: recording is not supported on this platform yet"),
             HotEvent::Record => self.pending = Some(Pending::record()),
         }
@@ -1581,7 +1592,7 @@ impl App {
             tasks = crate::actions::after_capture(tasks, &edit.cfg);
         }
         // Copying text is not a picture: no shutter.
-        if edit.cfg.shutter_sound && !tasks.is_empty() && tasks != [Task::Text] {
+        if edit.cfg.shutter_sound && !tasks.is_empty() && tasks != [Task::Text] && tasks != [Task::Qr] {
             crate::actions::shutter();
         }
         // History: the capture as it was, its objects, where it came from.
@@ -1603,7 +1614,7 @@ impl App {
         // (the history keeps the capture without it); the exported
         // image's top-left moves out by it (a pin stays in place).
         // Copy text (OCR) reads the capture alone.
-        let framed = tasks.iter().any(|t| !matches!(t, Task::Text | Task::Geometry));
+        let framed = tasks.iter().any(|t| !matches!(t, Task::Text | Task::Qr | Task::Geometry));
         // Settings › Saving "Save at" too (the history keeps the capture
         // at the screen's pixels, and a pin shows it at screen size).
         let b = if framed { export::output_border(&edit.cfg, edit.shot.scale) as i32 } else { 0 };
@@ -1687,6 +1698,21 @@ impl App {
             }
         }
         *self.upload_slot.lock().unwrap() = res.upload;
+        if job.tasks.contains(&Task::Qr) {
+            match self.kind {
+                RunKind::Daemon => crate::qr_ui::spawn(Arc::unwrap_or_clone(img.clone()), at, th),
+                RunKind::OneShot => {
+                    let texts = crate::qr::read(&img);
+                    for t in &texts {
+                        println!("{t}");
+                    }
+                    if texts.is_empty() {
+                        eprintln!("{}", crate::sharex_text::QR_NONE);
+                        self.exit_code.store(1, Ordering::SeqCst);
+                    }
+                }
+            }
+        }
         if job.tasks.contains(&Task::Text) {
             match self.kind {
                 // Off the UI thread; `poll_ocr` copies and says so.
@@ -2114,6 +2140,11 @@ fn video_key(edit: &Edit, vk: u32, mods: Mods) -> Option<Act> {
 /// Esc: close a device list or the ring's palette, drop the current
 /// tool / draft / palette, or cancel the capture (video mode's Close).
 fn cancel_key(edit: &mut Edit) {
+    // A measurement (or one being drawn): discarded, the tool kept.
+    if edit.ruler.take().is_some() {
+        edit.interact = Interact::None;
+        return;
+    }
     if edit.save_menu || edit.slot_menu || edit.size_menu {
         edit.save_menu = false;
         edit.slot_menu = false;
@@ -2156,6 +2187,10 @@ fn cancel_key(edit: &mut Edit) {
 /// Enter: select everything if nothing is selected, then run the given
 /// tasks (or save). The Edit window saves with its own Save.
 fn accept_key(edit: &mut Edit) {
+    // A measurement waiting: kept as an annotation.
+    if edit.keep_ruler() {
+        return;
+    }
     if edit.host.is_some() {
         edit.finish_callout_edit();
         return;
@@ -2194,6 +2229,8 @@ fn act_of(a: Action) -> Option<Act> {
         Action::ToolSpotlight => Act::Tool(Tool::Spotlight),
         Action::ToolMagnify => Act::Tool(Tool::Magnify),
         Action::ToolBlur => Act::Tool(Tool::Blur),
+        Action::ToolRuler => Act::Tool(Tool::Ruler),
+        Action::ReadQr => Act::ReadQr,
         Action::TextBold => Act::ObjBold,
         Action::TextItalic => Act::ObjItalic,
         Action::TextUnderline => Act::ObjUnderline,
@@ -2228,7 +2265,7 @@ fn act_of(a: Action) -> Option<Act> {
         Action::ZoomIn | Action::ZoomOut | Action::ZoomFit | Action::ZoomActual => return None,
         // The Edit window's own (its image menu).
         Action::RotateLeft | Action::RotateRight | Action::FlipHorizontal | Action::FlipVertical => return None,
-        Action::ImageResize | Action::ImageCanvas | Action::ImageReset => return None,
+        Action::ImageResize | Action::ImageCanvas | Action::ImageReset | Action::ImageEffects => return None,
     })
 }
 
@@ -2264,6 +2301,9 @@ enum Tool {
     Magnify,
     /// A Gaussian-like blur of a rect (B).
     Blur,
+    /// Measure a line or (Ctrl) a rect; kept as a dimension line or
+    /// discarded (U).
+    Ruler,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -2844,6 +2884,8 @@ struct Edit {
     assist: assist::Assist,
     /// Text mode, Quick Redact, the lasso and the crop frame.
     snip: snip::Snip,
+    /// The ruler's measurement (the Ruler tool).
+    ruler: Option<ruler::Ruler>,
 }
 
 /// More merged dirty rects than this invalidate the whole window (a
@@ -2927,6 +2969,7 @@ impl Edit {
             host: None,
             assist,
             snip,
+            ruler: None,
         }
     }
 
@@ -3232,7 +3275,7 @@ impl Edit {
                 let dst = if far { b } else { Pt::new(a.x + w * 1.8, a.y - w * 1.8) };
                 Obj::Magnify { src: a, dst, radius: w, zoom: 2.0, color: c, width: 3.0 }
             }
-            Tool::Text | Tool::Select => None?,
+            Tool::Text | Tool::Select | Tool::Ruler => None?,
         })
     }
 
@@ -3519,6 +3562,12 @@ fn end_interaction(edit: &mut Edit) {
             edit.draft = None;
             edit.stroke_pts.clear();
             edit.obj.sel = vec![i];
+        }
+        Interact::Drawing { .. } if edit.tool == Some(Tool::Ruler) => {
+            // The measurement stays until Enter keeps it or Esc drops it.
+            edit.ruler = edit.ruler.filter(|r| !r.trivial()).map(|r| ruler::Ruler { done: true, ..r });
+            edit.draft = None;
+            edit.stroke_pts.clear();
         }
         Interact::Drawing { .. } => {
             if edit.draft_is_valid() {
@@ -3958,6 +4007,8 @@ mod history_tests;
 mod snip_tests;
 #[cfg(test)]
 mod trim_tests;
+#[cfg(test)]
+mod ruler_tests;
 
 #[cfg(test)]
 mod tests {

@@ -101,12 +101,14 @@ pub fn act_icon(a: Act) -> &'static str {
             Tool::Spotlight => "spotlight",
             Tool::Magnify => "magnify",
             Tool::Blur => "blur",
+            Tool::Ruler => "ruler",
         },
         Act::SaveMenu => "chevron",
         Act::Crop => "crop",
         Act::Redact => "redact",
         Act::Freeform => "lasso",
         Act::TextSelect => "ocr",
+        Act::ReadQr => "qr",
         Act::CopyAll | Act::TextCopy => "copy",
         Act::RedactKind(_) => "",
         // A menu row (the size label's): no icon.
@@ -889,7 +891,7 @@ pub fn size_preview(f: &mut Fb, ui: &Ui, b: FRect, tool: Tool, size: f32, c: C4,
     let cap = b.h;
     let cy = b.y + b.h / 2.0;
     match tool {
-        Tool::Path | Tool::Line | Tool::Arrow | Tool::Rect | Tool::Ellipse | Tool::Marker => {
+        Tool::Path | Tool::Line | Tool::Arrow | Tool::Rect | Tool::Ellipse | Tool::Marker | Tool::Ruler => {
             let w = size.clamp(0.5, cap);
             let c = if tool == Tool::Marker { super::marker_color(c) } else { c };
             // Whole rows: an odd width centred on a pixel, an even one
@@ -1202,6 +1204,7 @@ pub fn act_tip(a: Act, km: &Keymap) -> (&'static str, Vec<String>) {
         Act::Tool(Tool::Spotlight) => "Spotlight",
         Act::Tool(Tool::Magnify) => "Magnify",
         Act::Tool(Tool::Blur) => "Blur",
+        Act::Tool(Tool::Ruler) => crate::sharex_text::RULER_TIP,
         Act::ObjColor => "Color",
         Act::ObjFill => "Fill",
         Act::ObjSize(d) if d < 0 => "Smaller",
@@ -1215,6 +1218,7 @@ pub fn act_tip(a: Act, km: &Keymap) -> (&'static str, Vec<String>) {
         Act::Freeform => "Freeform selection",
         Act::TextSelect => "Select text",
         Act::CopyAll => "Copy all text",
+        Act::ReadQr => crate::sharex_text::READ_QR,
         Act::TextCopy => "Copy",
         Act::RedactKind(k) => k.label(),
         Act::ObjFront => "Bring to front",

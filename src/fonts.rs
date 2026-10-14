@@ -81,7 +81,6 @@ impl UiFont {
     }
 
     /// Whether `ch` has its own glyph.
-    #[cfg(test)]
     pub fn has_glyph(&self, ch: char) -> bool {
         self.slot(ch) != 0
     }

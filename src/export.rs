@@ -22,6 +22,9 @@ pub enum Task {
     /// Recognize the text in the selection and copy it (OCR, [`crate::ocr`]):
     /// the editor runs it on a worker thread after the export.
     Text,
+    /// Read the QR codes in the selection ([crate::qr_ui]): the editor
+    /// runs it on a worker thread after the export.
+    Qr,
     /// Pin the image to the screen where it was captured (the editor opens
     /// the pin window; nothing to export).
     Pin,
@@ -831,6 +834,7 @@ pub fn run_export(
                 }
             }
             Task::Text => {} // the caller's (it runs off the UI thread)
+            Task::Qr => {}
             // The editor opens the pin (`App::run_finish`).
             Task::Pin => {}
         }

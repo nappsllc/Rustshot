@@ -878,14 +878,14 @@ pub const TOOL_ROWS: [(&str, &[Action]); 7] = [
         ],
     ),
     (
-        "Select \u{b7} Callout \u{b7} Spotlight \u{b7} Magnify",
-        &[Action::ToolSelect, Action::ToolCallout, Action::ToolSpotlight, Action::ToolMagnify],
+        "Select \u{b7} Callout \u{b7} Spotlight \u{b7} Magnify \u{b7} Ruler",
+        &[Action::ToolSelect, Action::ToolCallout, Action::ToolSpotlight, Action::ToolMagnify, Action::ToolRuler],
     ),
     (
         "Selected objects: delete \u{b7} duplicate \u{b7} front \u{b7} back",
         &[Action::DeleteObject, Action::Duplicate, Action::BringFront, Action::SendBack],
     ),
-    ("Crop \u{b7} Trim \u{b7} Quick Redact \u{b7} Freeform", &[Action::ToolCrop, Action::Trim, Action::Redact, Action::SelectFreeform]),
+    ("Crop \u{b7} Trim \u{b7} Redact \u{b7} Freeform \u{b7} Read QR", &[Action::ToolCrop, Action::Trim, Action::Redact, Action::SelectFreeform, Action::ReadQr]),
     ("Stroke size - / + \u{b7} Palette", &[Action::SizeDown, Action::SizeUp, Action::TogglePalette]),
     ("Typing: bold \u{b7} italic \u{b7} underline", &[Action::TextBold, Action::TextItalic, Action::TextUnderline]),
     ("Undo \u{b7} Redo \u{b7} Select all", &[Action::Undo, Action::Redo, Action::SelectAll]),
@@ -900,7 +900,7 @@ pub const ACTION_ROWS: [(&str, &[Action]); 7] = [
     ("UI size + \u{b7} - \u{b7} Auto", &[Action::UiBigger, Action::UiSmaller, Action::UiReset]),
     ("Edit window zoom + \u{b7} - \u{b7} Fit \u{b7} 1:1", &[Action::ZoomIn, Action::ZoomOut, Action::ZoomFit, Action::ZoomActual]),
     ("Rotate left \u{b7} right \u{b7} Flip H \u{b7} V", &[Action::RotateLeft, Action::RotateRight, Action::FlipHorizontal, Action::FlipVertical]),
-    ("Resize \u{b7} Canvas \u{b7} Reset image", &[Action::ImageResize, Action::ImageCanvas, Action::ImageReset]),
+    ("Resize \u{b7} Canvas \u{b7} Effects \u{b7} Reset image", &[Action::ImageResize, Action::ImageCanvas, Action::ImageEffects, Action::ImageReset]),
 ];
 
 /// Share (with a share sheet: not on Linux), Pin to screen, Record, and
@@ -922,6 +922,30 @@ pub const REC_ROWS: [(&str, Action); 3] = [
 fn global_rows(ui: &mut Ui, s: &mut Settings, tok: &Tok, slots: &[usize]) {
     ui.allow_meta = true;
     for (label, slot) in GLOBALS.iter().filter(|(_, slot)| slots.contains(slot)) {
+        // Read QR code shares Copy text's row (the section has no room
+        // for a ninth): two caps, one note.
+        if *slot == 8 && slots.contains(&6) {
+            continue;
+        }
+        if *slot == 6 && slots.contains(&8) {
+            let qr = crate::sharex_text::READ_QR;
+            let msg = match (s.global_message(6), s.global_message(8)) {
+                (Some(a), Some(b)) => Some(format!("{a} \u{b7} {qr}: {b}")),
+                (Some(a), None) => Some(a),
+                (None, Some(b)) => Some(format!("{qr}: {b}")),
+                (None, None) => None,
+            };
+            let (e6, e8) = (s.global_err(6), s.global_err(8));
+            let (mut c6, mut c8) = (*s.form.global_mut(6), *s.form.global_mut(8));
+            let mut pair = [Slot { id: "global6".into(), chord: &mut c6, err: e6 }, Slot { id: "global8".into(), chord: &mut c8, err: e8 }];
+            ui.key_row(crate::sharex_text::COPY_TEXT_QR_ROW, &["Copy text from area", "Read QR code from area"], &mut pair, true, 34.0, tok);
+            *s.form.global_mut(6) = c6;
+            *s.form.global_mut(8) = c8;
+            if let Some(m) = msg {
+                note_line(ui, tok, &m, true, Some(8.0));
+            }
+            continue;
+        }
         let msg = s.global_message(*slot);
         let err = s.global_err(*slot);
         let chord = s.form.global_mut(*slot);

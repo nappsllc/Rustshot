@@ -54,6 +54,8 @@ pub struct Config {
     /// Global hotkey that picks an area and copies its text (OCR; no
     /// annotation step).
     pub capture_text_hotkey: String,
+    /// Pick an area and read its QR codes (no default chord).
+    pub read_qr_hotkey: String,
     /// Show the notification-area (tray) icon; off, the daemon runs
     /// without one (hotkeys and a second launch still capture).
     pub show_tray: bool,
@@ -267,7 +269,7 @@ pub const BORDER_MAX: u32 = 8;
 
 /// The drawing tools whose size and color are remembered
 /// (`tool_<id>_size`, `tool_<id>_color`).
-pub const TOOL_IDS: [&str; 12] = ["pencil", "line", "arrow", "rect", "ellipse", "marker", "text", "counter", "pixelate", "callout", "magnify", "blur"];
+pub const TOOL_IDS: [&str; 13] = ["pencil", "line", "arrow", "rect", "ellipse", "marker", "text", "counter", "pixelate", "callout", "magnify", "blur", "ruler"];
 
 /// The tools that draw filled or outlined (`tool_<id>_fill`).
 pub const FILL_IDS: [&str; 3] = ["rect", "ellipse", "callout"];
@@ -374,6 +376,7 @@ impl Default for Config {
             capture_window_hotkey: "Shift+Meta+E".into(),
             repeat_hotkey: String::new(),
             capture_text_hotkey: "Shift+Meta+Z".into(),
+            read_qr_hotkey: String::new(),
             show_tray: true,
             copy_after_capture: false,
             shutter_sound: false,
@@ -981,6 +984,7 @@ pub fn hotkey_warnings(cfg: &Config) -> Vec<String> {
         ("repeat_hotkey", &cfg.repeat_hotkey),
         ("capture_text_hotkey", &cfg.capture_text_hotkey),
         ("history_hotkey", &cfg.history_hotkey),
+        ("read_qr_hotkey", &cfg.read_qr_hotkey),
     ]
     .into_iter()
         .filter(|(_, v)| !v.trim().is_empty() && crate::keymap::Chord::parse(v).is_none())
@@ -1158,6 +1162,7 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
             "capture_window_hotkey" => cfg.capture_window_hotkey = as_string(val).map_err(|e| bad("string", &e))?,
             "repeat_hotkey" => cfg.repeat_hotkey = as_string(val).map_err(|e| bad("string", &e))?,
             "capture_text_hotkey" => cfg.capture_text_hotkey = as_string(val).map_err(|e| bad("string", &e))?,
+            "read_qr_hotkey" => cfg.read_qr_hotkey = as_string(val).map_err(|e| bad("string", &e))?,
             "show_tray" => cfg.show_tray = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "copy_after_capture" => cfg.copy_after_capture = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "shutter_sound" => cfg.shutter_sound = as_bool(val).map_err(|e| bad("boolean", &e))?,
@@ -1503,6 +1508,7 @@ pub fn to_toml(c: &Config) -> String {
     ));
     out.push_str(&format!("save_scale = {}\nsave_scale_percent = {}\n", q(&c.save_scale), c.save_scale_percent));
     out.push_str(&format!("include_cursor = {}\n", c.include_cursor));
+    out.push_str(&format!("read_qr_hotkey = {}\n", q(&c.read_qr_hotkey)));
     out.push_str(&format!(
         "export_watermark = {}\nwatermark_text = {}\nwatermark_image = {}\nwatermark_anchor = {}\nwatermark_margin = {}\nwatermark_opacity = {}\nwatermark_size = {}\nwatermark_tiled = {}\nwatermark_color = {}\n",
         c.export_watermark,

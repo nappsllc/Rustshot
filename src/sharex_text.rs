@@ -9,6 +9,7 @@ pub const WATERMARK_HELP: &str = "This text on every export";
 
 // QR codes
 pub const READ_QR: &str = "Read QR code";
+pub const COPY_TEXT_QR_ROW: &str = "Copy text \u{b7} Read QR code from area";
 pub const MAKE_QR: &str = "Make QR code\u{2026}";
 pub const MAKE_QR_TITLE: &str = "Make QR code";
 pub const QR_NONE: &str = "No QR code found";
@@ -30,7 +31,8 @@ pub fn qr_found(n: usize) -> String {
 
 // Ruler
 pub const RULER: &str = "Ruler";
-pub const RULER_HINT: &str = "Enter keeps it \u{b7} Esc discards \u{b7} Shift 15\u{b0} \u{b7} Ctrl area";
+pub const RULER_HINT: &str = "Enter keeps it \u{b7} Esc discards";
+pub const RULER_TIP: &str = "Ruler (Shift snaps, Ctrl: area)";
 
 // Effects
 pub const EFFECTS: &str = "Effects\u{2026}";

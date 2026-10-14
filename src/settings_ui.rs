@@ -179,13 +179,14 @@ pub const ACCENT_CUSTOM: usize = 3;
 /// The global hotkeys of Key bindings, in board order: (label, hotkey
 /// slot: 0 capture, 1 quit, 2 record, 3 full screen, 4 window, 5 repeat,
 /// 6 copy text, 7 History).
-pub const GLOBALS: [(&str, usize); 8] = [
+pub const GLOBALS: [(&str, usize); 9] = [
     ("Capture region", 0),
     ("Capture full screen", 3),
     ("Capture window", 4),
     ("Record video", 2),
     ("Repeat last capture", 5),
     ("Copy text from area", 6),
+    ("Read QR code from area", 8),
     ("Open History", 7),
     ("Quit Rustshot", 1),
 ];
@@ -343,6 +344,8 @@ pub struct Form {
     pub history_key: Option<Chord>,
     /// Copy text from an area (OCR).
     pub text: Option<Chord>,
+    /// Read QR codes from an area.
+    pub read_qr: Option<Chord>,
     pub folder: TextState,
     pub subfolder: bool,
     pub subfolder_pattern: TextState,
@@ -411,6 +414,7 @@ impl Form {
             window: Chord::parse(&cfg.capture_window_hotkey),
             repeat: Chord::parse(&cfg.repeat_hotkey),
             text: Chord::parse(&cfg.capture_text_hotkey),
+            read_qr: Chord::parse(&cfg.read_qr_hotkey),
             history_key: Chord::parse(&cfg.history_hotkey),
             folder: TextState::new(&folder_text(cfg)),
             subfolder: cfg.save_subfolder,
@@ -451,6 +455,7 @@ impl Form {
             4 => self.window,
             6 => self.text,
             7 => self.history_key,
+            8 => self.read_qr,
             _ => self.repeat,
         }
     }
@@ -464,6 +469,7 @@ impl Form {
             4 => &mut self.window,
             6 => &mut self.text,
             7 => &mut self.history_key,
+            8 => &mut self.read_qr,
             _ => &mut self.repeat,
         }
     }
@@ -539,6 +545,9 @@ impl Form {
         }
         if self.text != was.text {
             c.capture_text_hotkey = chord_text(self.text);
+        }
+        if self.read_qr != was.read_qr {
+            c.read_qr_hotkey = chord_text(self.read_qr);
         }
         if self.folder.text.trim() != was.folder.text.trim() {
             c.save_path = self.folder.text.trim().to_string();
