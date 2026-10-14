@@ -25,7 +25,8 @@ use windows::core::Interface;
 use windows::Win32::Devices::Display::{
     DisplayConfigGetDeviceInfo, GetDisplayConfigBufferSizes, QueryDisplayConfig, DISPLAYCONFIG_DEVICE_INFO_GET_SDR_WHITE_LEVEL,
     DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_DEVICE_INFO_HEADER, DISPLAYCONFIG_MODE_INFO, DISPLAYCONFIG_PATH_INFO,
-    DISPLAYCONFIG_SDR_WHITE_LEVEL, DISPLAYCONFIG_SOURCE_DEVICE_NAME, QDC_ONLY_ACTIVE_PATHS,
+    DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME, DISPLAYCONFIG_SDR_WHITE_LEVEL, DISPLAYCONFIG_SOURCE_DEVICE_NAME, DISPLAYCONFIG_TARGET_DEVICE_NAME,
+    QDC_ONLY_ACTIVE_PATHS,
 };
 use windows::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, HMODULE, RECT};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_UNKNOWN;
@@ -87,13 +88,14 @@ fn display_paths() -> Option<Vec<DISPLAYCONFIG_PATH_INFO>> {
     None
 }
 
-/// The SDR white level of the display whose GDI name is `gdi` (nits;
-/// Windows' 80 when it cannot say).
-pub fn sdr_white_nits(gdi: &[u16; 32]) -> f32 {
-    let Some(paths) = display_paths() else { return super::DEFAULT_WHITE_NITS };
+/// The display paths whose source is the display with GDI name `gdi`
+/// ("\\.\DISPLAY1").
+fn paths_of(gdi: &[u16; 32]) -> Vec<DISPLAYCONFIG_PATH_INFO> {
+    let Some(paths) = display_paths() else { return Vec::new() };
     let name_len = gdi.iter().position(|&c| c == 0).unwrap_or(gdi.len());
-    for p in &paths {
-        unsafe {
+    paths
+        .into_iter()
+        .filter(|p| unsafe {
             let mut src = DISPLAYCONFIG_SOURCE_DEVICE_NAME {
                 header: DISPLAYCONFIG_DEVICE_INFO_HEADER {
                     r#type: DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME,
@@ -104,13 +106,49 @@ pub fn sdr_white_nits(gdi: &[u16; 32]) -> f32 {
                 ..Default::default()
             };
             if DisplayConfigGetDeviceInfo(&mut src.header) != 0 {
-                continue;
+                return false;
             }
             let n = &src.viewGdiDeviceName;
             let len = n.iter().position(|&c| c == 0).unwrap_or(n.len());
-            if n[..len] != gdi[..name_len] {
+            n[..len] == gdi[..name_len]
+        })
+        .collect()
+}
+
+/// The monitor's own name ("DELL U2720Q", from its EDID) of the display
+/// whose GDI name is `gdi`; empty when it has none (a built-in panel, a
+/// virtual display).
+pub fn monitor_friendly_name(gdi: &[u16; 32]) -> String {
+    for p in paths_of(gdi) {
+        unsafe {
+            let mut t = DISPLAYCONFIG_TARGET_DEVICE_NAME {
+                header: DISPLAYCONFIG_DEVICE_INFO_HEADER {
+                    r#type: DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
+                    size: std::mem::size_of::<DISPLAYCONFIG_TARGET_DEVICE_NAME>() as u32,
+                    adapterId: p.targetInfo.adapterId,
+                    id: p.targetInfo.id,
+                },
+                ..Default::default()
+            };
+            if DisplayConfigGetDeviceInfo(&mut t.header) != 0 {
                 continue;
             }
+            let n = &t.monitorFriendlyDeviceName;
+            let len = n.iter().position(|&c| c == 0).unwrap_or(n.len());
+            let name = String::from_utf16_lossy(&n[..len]).trim().to_string();
+            if !name.is_empty() {
+                return name;
+            }
+        }
+    }
+    String::new()
+}
+
+/// The SDR white level of the display whose GDI name is `gdi` (nits;
+/// Windows' 80 when it cannot say).
+pub fn sdr_white_nits(gdi: &[u16; 32]) -> f32 {
+    for p in paths_of(gdi) {
+        unsafe {
             let mut white = DISPLAYCONFIG_SDR_WHITE_LEVEL {
                 header: DISPLAYCONFIG_DEVICE_INFO_HEADER {
                     r#type: DISPLAYCONFIG_DEVICE_INFO_GET_SDR_WHITE_LEVEL,

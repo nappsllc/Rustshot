@@ -1760,7 +1760,7 @@ impl App {
                     objects: Vec::new(),
                     title: edit.source.0.clone(),
                     app: edit.source.1.clone(),
-                    monitor: crate::history::source::monitor_text(&name, edit.shot.scale),
+                    monitor: name,
                     scale: edit.shot.scale,
                     mask: None,
                 })
@@ -1836,7 +1836,7 @@ impl App {
                 objects,
                 title: edit.source.0.clone(),
                 app: edit.source.1.clone(),
-                monitor: crate::history::source::monitor_text(&name, edit.shot.scale),
+                monitor: name,
                 scale: edit.shot.scale,
                 mask: edit.mask_in(sel),
             })
