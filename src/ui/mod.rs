@@ -741,6 +741,15 @@ pub mod preview {
     #[cfg(target_os = "linux")]
     pub const LANGS: &[&str] = &["en", "qps", "qps-rtl"];
 
+    /// The fit tests' languages: [`LANGS`], then the real catalogs named
+    /// in `RUSTSHOT_FIT_LANGS` (`de,fi,ar`: the source tree's
+    /// `lang/<tag>.txt`; see docs/translating.md).
+    pub fn langs() -> Vec<&'static str> {
+        let mut v = LANGS.to_vec();
+        v.extend(crate::i18n::fit_langs());
+        v
+    }
+
     /// Note problems in the frames drawn on this thread from now on, in a
     /// window `pw` physical px wide ([`render`] does this itself).
     pub fn begin_check(pw: u32) {

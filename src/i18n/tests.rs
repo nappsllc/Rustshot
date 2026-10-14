@@ -426,3 +426,18 @@ fn plurals_pick_forms() {
     let p = with_lang("qps", || trn!("history.count", 1));
     assert!(p.contains('1') && p.starts_with('['), "{p}");
 }
+
+/// The fit tests' real catalogs (`RUSTSHOT_FIT_LANGS`): each tag named is
+/// read from the folder and used by `with_lang`; English, pseudo-languages
+/// and repeats are skipped.
+#[test]
+fn fit_languages_load_from_the_source_folder() {
+    let dir = std::env::temp_dir().join(format!("rustshot-fitlangs-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("zz-fit.txt"), "@name = Zet Fit\nsettings.general.language = Sprache wählen\n").unwrap();
+    assert_eq!(load_fit_langs(" en, qps , ZZ-fit,zz-fit,", &dir), ["zz-fit"]);
+    assert_eq!(with_lang("zz-fit", || tr!("settings.general.language")), "Sprache wählen");
+    assert_eq!(with_lang("zz-fit", || tr!("settings.general.theme")), "Theme", "missing keys: English");
+    assert!(load_fit_langs("", &dir).is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}

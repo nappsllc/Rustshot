@@ -844,7 +844,7 @@ fn edit_window_smoke() {
 fn fits_in_long_languages() {
     use super::image::ImgAct;
     let (mw, mh) = MIN;
-    for lang in crate::ui::preview::LANGS {
+    for lang in crate::ui::preview::langs() {
         crate::i18n::with_lang(lang, || {
             for k in [1.0f32, 1.5] {
                 let (pw, ph) = ((mw as f32 * k).round() as u32, (mh as f32 * k).round() as u32);

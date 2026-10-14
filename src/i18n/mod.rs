@@ -347,6 +347,8 @@ fn registry() -> &'static [Known] {
             Known::new("zz-test", "Zet", false),
             Known::new("zz-ui", "Zet UI", false),
             Known::new("zz-two", "Zet Two", false),
+            // A catalog the fit tests' loader reads (`load_fit_langs`).
+            Known::new("zz-fit", "Zet Fit", false),
         ]);
         v
     })
@@ -825,6 +827,46 @@ pub fn with_lang<R>(code: &str, f: impl FnOnce() -> R) -> R {
     }
     let _back = Back(old);
     f()
+}
+
+/// The variable naming real catalogs for the fit tests: comma-separated
+/// tags (`de,fi,ar`), each read from the source tree's `lang/<tag>.txt`
+/// (docs/translating.md).
+#[cfg(test)]
+pub const FIT_VAR: &str = "RUSTSHOT_FIT_LANGS";
+
+/// The real languages [`FIT_VAR`] names, loaded from the source tree's
+/// `lang/` once per test run (a tag this build does not list, or whose
+/// file is not there, fails the test that asked).
+#[cfg(test)]
+pub fn fit_langs() -> Vec<&'static str> {
+    static L: OnceLock<Vec<&'static str>> = OnceLock::new();
+    L.get_or_init(|| {
+        let list = std::env::var(FIT_VAR).unwrap_or_default();
+        load_fit_langs(&list, &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("lang"))
+    })
+    .clone()
+}
+
+/// Load the languages `list` names (comma-separated tags; English and the
+/// pseudo-languages skipped) from the catalogs in `dir`, for this run.
+#[cfg(test)]
+fn load_fit_langs(list: &str, dir: &std::path::Path) -> Vec<&'static str> {
+    let found = files::discover(&[dir.to_path_buf()]);
+    let mut out: Vec<&'static str> = Vec::new();
+    for t in list.split(',').map(str::trim).filter(|t| !t.is_empty() && !t.eq_ignore_ascii_case("en")) {
+        let i = index_of(t).unwrap_or_else(|| panic!("{FIT_VAR}: this build has no language {t} (add lang/{t}.txt, then build again)"));
+        let k = known(i);
+        if out.contains(&k.code) || k.code.starts_with("qps") {
+            continue;
+        }
+        let paths = found.iter().find(|(tag, _)| tag.eq_ignore_ascii_case(k.code)).map(|(_, p)| p.clone()).unwrap_or_default();
+        assert!(!paths.is_empty(), "{FIT_VAR}: no {}.txt in {}", k.code, dir.display());
+        let p = files::load(k.code, &paths);
+        k.live.store(Box::into_raw(Box::new(p)), Ordering::Release);
+        out.push(k.code);
+    }
+    out
 }
 
 #[cfg(test)]
