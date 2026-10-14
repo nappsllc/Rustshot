@@ -36,6 +36,7 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$bin" "$app/Contents/MacOS/rustshot"
 cp LICENSE "$app/Contents/Resources/LICENSE"
 cp THIRD_PARTY_NOTICES.md "$app/Contents/Resources/THIRD_PARTY_NOTICES.md"
+cp NOTICE "$app/Contents/Resources/NOTICE"
 iconset="dist/rustshot.iconset"
 rm -rf "$iconset"
 mkdir -p "$iconset"
@@ -63,7 +64,7 @@ cat > "$app/Contents/Info.plist" <<EOF
   <key>LSHighResolutionCapable</key><true/>
   <key>LSUIElement</key><true/>
   <key>NSPrincipalClass</key><string>NSApplication</string>
-  <key>NSHumanReadableCopyright</key><string>© 2026 PowerNapps (GPL-3.0-only)</string>
+  <key>NSHumanReadableCopyright</key><string>© 2026 PowerNapps (Apache-2.0)</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
   <key>ITSAppUsesNonExemptEncryption</key><false/>
   <key>NSMicrophoneUsageDescription</key><string>Rustshot records your microphone into a screen recording when you turn Microphone on.</string>

@@ -23,6 +23,7 @@ cp packaging/linux/io.github.nappsllc.rustshot.desktop "$stage/io.github.nappsll
 cp packaging/icons/rustshot-256.png "$stage/io.github.nappsllc.rustshot.png"
 cp LICENSE "$stage/LICENSE"
 cp THIRD_PARTY_NOTICES.md "$stage/"
+cp NOTICE "$stage/NOTICE"
 ln -sf io.github.nappsllc.rustshot.png "$stage/.DirIcon"
 ln -sf rustshot "$stage/AppRun"
 

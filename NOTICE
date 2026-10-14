@@ -1,0 +1,11 @@
+Rustshot — Copyright 2026 PowerNapps
+
+This product includes software developed at PowerNapps
+(https://github.com/nappsllc/rustshot), licensed under the Apache License,
+Version 2.0 (see LICENSE).
+
+It also includes third-party works (the Inter font, Lucide icons, Rust
+crates, and code derived from font-rs / ab_glyph_rasterizer) and may
+download others (the MediaPipe Selfie Segmentation model, OpenH264) under
+their own licenses; see THIRD_PARTY_NOTICES.md for their notices and
+license texts.

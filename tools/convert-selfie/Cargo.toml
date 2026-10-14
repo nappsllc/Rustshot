@@ -2,7 +2,7 @@
 name = "convert-selfie"
 version = "0.1.0"
 edition = "2024"
-license = "GPL-3.0-only"
+license = "Apache-2.0"
 publish = false
 description = "Converts MediaPipe's Selfie Segmentation .tflite into Rustshot's selfie.bin"
 

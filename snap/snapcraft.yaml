@@ -8,7 +8,7 @@ description: |
   Rustshot captures a region, a window or the whole screen, lets you annotate it (arrows, shapes, text, callouts, blur, numbered tags and more), and copies, saves, pins or uploads it. It also records the screen to MP4 or GIF with sound, microphone and a camera bubble, keeps a history of captures you can re-edit, and recognises text (OCR). One small native binary, no runtime.
 grade: stable
 confinement: strict
-license: GPL-3.0-only
+license: Apache-2.0
 icon: packaging/icons/rustshot-256.png
 platforms:
   amd64:
@@ -69,3 +69,4 @@ parts:
         "$CRAFT_PART_INSTALL/usr/share/icons/hicolor/256x256/apps/io.github.nappsllc.rustshot.png"
       install -Dm644 LICENSE "$CRAFT_PART_INSTALL/usr/share/doc/rustshot/LICENSE"
       install -Dm644 THIRD_PARTY_NOTICES.md "$CRAFT_PART_INSTALL/usr/share/doc/rustshot/THIRD_PARTY_NOTICES.md"
+      install -Dm644 NOTICE "$CRAFT_PART_INSTALL/usr/share/doc/rustshot/NOTICE"

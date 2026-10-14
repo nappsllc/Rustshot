@@ -163,7 +163,7 @@ Check 'nsis: silent install exits 0' ($p.ExitCode -eq 0) "exit=$($p.ExitCode) ($
 $inst = "$env:LOCALAPPDATA\rustshot"
 $exe = "$inst\rustshot.exe"
 Check 'nsis: rustshot.exe installed' (Test-Path $exe) $exe
-Check 'nsis: LICENSE + THIRD_PARTY_NOTICES.md installed' ((Test-Path "$inst\LICENSE") -and (Test-Path "$inst\THIRD_PARTY_NOTICES.md"))
+Check 'nsis: LICENSE + NOTICE + THIRD_PARTY_NOTICES.md installed' ((Test-Path "$inst\LICENSE") -and (Test-Path "$inst\NOTICE") -and (Test-Path "$inst\THIRD_PARTY_NOTICES.md"))
 NoDataFolders $inst 'nsis'
 $lnk = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Rustshot\Rustshot.lnk"
 Check 'nsis: Start menu shortcut' (Test-Path $lnk)

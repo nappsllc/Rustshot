@@ -34,6 +34,7 @@ modules:
       - for s in 128 256 512; do install -Dm644 packaging/icons/rustshot-$s.png /app/share/icons/hicolor/${s}x${s}/apps/io.github.nappsllc.rustshot.png; done
       - install -Dm644 LICENSE /app/share/licenses/io.github.nappsllc.rustshot/LICENSE
       - install -Dm644 THIRD_PARTY_NOTICES.md /app/share/licenses/io.github.nappsllc.rustshot/THIRD_PARTY_NOTICES.md
+      - install -Dm644 NOTICE /app/share/licenses/io.github.nappsllc.rustshot/NOTICE
     sources:
       - type: dir
         path: ../..

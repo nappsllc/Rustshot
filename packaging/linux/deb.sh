@@ -28,6 +28,7 @@ for s in 128 256 512; do
 done
 install -m644 LICENSE "$stage/usr/share/doc/rustshot/copyright"
 install -m644 THIRD_PARTY_NOTICES.md "$stage/usr/share/doc/rustshot/THIRD_PARTY_NOTICES.md"
+install -m644 NOTICE "$stage/usr/share/doc/rustshot/NOTICE"
 
 cat > "$stage/DEBIAN/control" <<EOF
 Package: rustshot

@@ -5,7 +5,7 @@ pkgrel=1
 pkgdesc="Screenshot capture with annotation, upload and global hotkeys (X11)"
 arch=('x86_64')
 url="https://github.com/nappsllc/rustshot"
-license=('GPL-3.0-only')
+license=('Apache-2.0')
 depends=('libx11' 'libxrandr' 'libxext' 'libxfixes')
 optdepends=('ffmpeg: record MP4 (with sound)' 'opus: sound in MP4s recorded with OpenH264 (without ffmpeg)' 'libpulse: record sound and list sound devices (pactl)' 'bzip2: unpack the OpenH264 download' 'libpipewire: record on Wayland and use the camera through the portal (with xdg-desktop-portal)')
 provides=('rustshot')
@@ -19,4 +19,5 @@ package() {
   install -Dm644 io.github.nappsllc.rustshot.png "$pkgdir/usr/share/icons/hicolor/256x256/apps/io.github.nappsllc.rustshot.png"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
   install -Dm644 THIRD_PARTY_NOTICES.md "$pkgdir/usr/share/licenses/$pkgname/THIRD_PARTY_NOTICES.md"
+  install -Dm644 NOTICE "$pkgdir/usr/share/licenses/$pkgname/NOTICE"
 }
