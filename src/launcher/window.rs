@@ -140,11 +140,19 @@ pub fn paint(ui: &mut Ui, f: &mut Form) -> Option<Click> {
         });
     });
     // Make QR code, bottom-left (not on macOS: no window there).
-    if cfg!(not(target_os = "macos")) {
-        ui.area(FRect { x: PAD, y: bar.y, w: 130.0, h: 28.0 }, |ui| {
+    // The room left of Cancel and Capture decides its icon (and, in a very
+    // long language, whether it shows: the tray has it too).
+    let gap = crate::ui::layout::GAP;
+    let right = ui.cbutton_width(tr!("launcher.capture"), true) + ui.cbutton_width(tr!("common.cancel"), false) + 3.0 * gap;
+    let room = inner - right;
+    let qr = tr!("qr.launcher");
+    let icon = ui.cbutton_width(qr, true) <= room;
+    if cfg!(not(target_os = "macos")) && ui.cbutton_width(qr, icon) <= room {
+        let qw = ui.cbutton_width(qr, icon);
+        ui.area(FRect { x: PAD, y: bar.y, w: qw, h: 28.0 }, |ui| {
             ui.ctl_h = 28.0;
             ui.row(|ui| {
-                if ui.cbutton("launcher.qr", tr!("qr.launcher"), Some("qr"), false, &tok) {
+                if ui.cbutton("launcher.qr", qr, icon.then_some("qr"), false, &tok) {
                     click = Some(Click::MakeQr);
                 }
             });
