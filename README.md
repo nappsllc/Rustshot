@@ -1,4 +1,18 @@
-# Rustshot
+<p align="center">
+  <img src="packaging/icons/rustshot-128.png" alt="Rustshot" width="128" height="128">
+</p>
+
+<h1 align="center">Rustshot</h1>
+
+[![Rust](https://img.shields.io/badge/Rust-2024%20edition-000000?style=flat-square&logo=rust&logoColor=white)](https://www.rust-lang.org)
+[![release](https://img.shields.io/github/v/release/nappsllc/rustshot?sort=semver&style=flat-square&color=007ec6&label=release)](https://github.com/nappsllc/rustshot/releases/latest)
+[![downloads](https://img.shields.io/github/downloads/nappsllc/rustshot/total?style=flat-square&color=44cc11&logo=github&label=Downloads)](https://github.com/nappsllc/rustshot/releases)
+[![CI](https://img.shields.io/github/actions/workflow/status/nappsllc/rustshot/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/nappsllc/rustshot/actions/workflows/ci.yml)
+[![tests](https://img.shields.io/badge/tests-1500%2B-brightgreen?style=flat-square)](https://github.com/nappsllc/rustshot/actions/workflows/ci.yml)
+[![coverage](https://img.shields.io/codecov/c/github/nappsllc/rustshot?style=flat-square&logo=codecov&logoColor=white)](https://codecov.io/gh/nappsllc/rustshot)
+[![languages](https://img.shields.io/badge/languages-35-blueviolet?style=flat-square)](i18n/languages.md)
+[![license](https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square)](LICENSE)
+[![Buy me a coffee](https://raw.githubusercontent.com/pachadotdev/buymeacoffee-badges/main/bmc-yellow.svg)](https://buymeacoffee.com/denis.platonov)
 
 **Tiny yet powerful, beautiful, open-source and cross-platform tool for
 screenshots, editing and video capture.** Windows, Linux and macOS.

@@ -236,6 +236,16 @@ jobs:
             sed -n '/^Filename/,$p' "$RUNNER_TEMP/coverage.txt"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Coverage report (lcov)
+        if: runner.os == 'Linux'
+        run: cargo llvm-cov report --lcov --output-path lcov.info
+      - name: Upload to Codecov
+        if: runner.os == 'Linux'
+        uses: codecov/codecov-action@v5
+        with:
+          files: lcov.info
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
 
   flatpak:
     runs-on: ubuntu-latest
