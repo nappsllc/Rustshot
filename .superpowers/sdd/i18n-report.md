@@ -171,3 +171,56 @@ local overrides `<data dir>/lang/<tag>.txt` (`i18n::data_dirs()`); my
   `src/i18n/plural.rs` — one/other, zero_one_other, east_slavic, polish,
   czech_slovak, bcs, slovenian, romanian, latvian, lithuanian, arabic,
   hebrew, none).
+
+## Review fixes (i18n-review.md)
+
+- I-1: the update dialog holds a named mutex (`Local\rustshot-update-dialog`)
+  while open; `update_dialog_open()` checks it, never a window title. No
+  other window was looked up by title. Test in qps.
+- I-2: RTL text fields map the pointer back into the field (`ui::ltr_x`);
+  tests: click at start / after a character / end, drag, Shift+click in qps-rtl.
+- I-3: headings tracked letter by letter only when ASCII; otherwise drawn
+  whole (OS shaper); `i18n::upper` (Turkish/Azerbaijani i). New `qps-ar`
+  (Arabic letters) in every fit test; a joining test on Windows/macOS.
+- I-4: text cache: LRU by use tick, 4096 entries / 8 MB (strings + rasters),
+  hash index; `fit_text` binary search; carets, selections and History
+  highlights measured with the face that draws the whole string
+  (`UiFont::prefix_width`); tests on mixed strings.
+- I-5: the `Fetch` contract says publish atomically; a loaded language is
+  read again when its files' size/mtime change (looked at most once a
+  second), a read during a write is dropped; `set_fetcher` retries the
+  language in force; one download at a time (check+insert under one lock).
+  After the merge the default fetcher is `fetch::ensure` / `datadir::cached`
+  (one datadir, handroll's); `RUSTSHOT_DATA_DIR/lang/<tag>.txt` on top.
+- I-6: the remaining sentences through tr! (Imgur, S3, OCR, update restart,
+  Media Foundation, private folders) and, after the merge, the blur
+  model's notes, the record-start question, `fetch::friendly` and the
+  download setting.
+- I-7: fit tests (en, qps, qps-rtl, qps-ar; 1x and 1.5x/2x) for History,
+  Edit + image dialogs, launcher, update and encoder dialogs, notices,
+  the recording panel: controls inside and not overlapping, no text past
+  the window, no cut button labels (test hooks in `ui::preview`). Fixes
+  found: update title shrinks to fit, mode buttons and camera Background
+  choices widen for long words, segment text shrinks to fit (down to 10),
+  the GIF length value drops when it would run into its choices.
+- I-8 (Linux): fallback fonts on a worker thread, prefetched when a
+  language loads; a gap until found, then cached text is drawn again
+  (font generation); asked with `:lang=` so a CJK collection gives the
+  zh-cn / zh-tw / ja / ko face (face index read from fc-match).
+- Minors done: system languages cached 10 s, file checks throttled, files
+  capped at 2 MB, UTF-16 / non-UTF-8 refused, lone CR, U+001F/NUL rejected
+  (build.rs rejects control chars in English), problems capped at 20,
+  `plural` without a Vec, init re-entrancy guard, notices keep their Key,
+  Left/Right follow the mirrored layout in segmented controls and sliders.
+- Not done (stated limits): M-3 native caption not mirrored (no
+  WS_EX_LAYOUTRTL); M-4 macOS paragraph base direction for RTL strings that
+  start with Latin/digits; M-14 direction not latched per frame (one frame
+  around a switch); M-16 openh264.rs line endings normalized in the diff;
+  M-17 GDI px rounding; M-1/M-2 await the font decision (full Inter for
+  Latin/Greek/Cyrillic, U+203A).
+
+## Phase 2 (not done now)
+
+Glossary, CONTRIBUTING section for translators, localized Store/AppStream
+texts, the final list of 35 languages; number formatting (decimal comma),
+genitive month names in dates; key cap names (de: Strg).
