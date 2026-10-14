@@ -143,6 +143,9 @@ impl Default for Pace {
 
 /// The most notches one step takes.
 const MAX_NOTCHES: u32 = 24;
+/// Before the first grab of a run (the overlay leaves the screen).
+#[cfg_attr(test, allow(dead_code))]
+const SETTLE_FIRST: Duration = Duration::from_millis(250);
 
 /// The next step's notches: aim for a step of about half the frame `h`.
 pub fn adapt(notches: u32, dy: u32, h: u32) -> u32 {
@@ -322,6 +325,9 @@ impl Job {
         std::thread::Builder::new().name("scroll-capture".into()).spawn(move || {
             #[cfg(windows)]
             crate::rec::win::com_init();
+            // The overlay was just taken down: let the screen repaint
+            // without it before the first grab.
+            std::thread::sleep(SETTLE_FIRST);
             let mut wheel = wheel;
             let mut grab = || grab_area(area);
             let r = run(&mut grab, wheel.as_mut(), &c2, Pace::default(), &esc_down).map_err(|e| format!("{e:#}"));
