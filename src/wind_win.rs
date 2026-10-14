@@ -1989,7 +1989,7 @@ mod tests {
         assert!(!moves.is_empty() && moves.len() < 200, "{} moves handled for 2000 messages", moves.len());
         assert_eq!(moves.last(), Some(&(1999 % 300, 1999 % 200)), "the newest position");
         let down = seen.evs.iter().position(|e| matches!(e, Ev::Down { .. })).expect("a press");
-        assert!(matches!(seen.evs[down - 1], Ev::Move { x: 199, y: 199 }), "the move before the press: {:?}", &seen.evs[down - 1]);
+        assert!(matches!(seen.evs[down - 1], Ev::Move { x: 199, y: 199 }), "the move before the press: {:?}", seen.evs[down - 1]);
         assert!(matches!(seen.evs[down..], [Ev::Down { x: 7, y: 9 }, Ev::Up { x: 7, y: 9 }, ..]), "{:?}", &seen.evs[down..]);
         assert!(seen.paints >= 1, "frames painted");
     }
