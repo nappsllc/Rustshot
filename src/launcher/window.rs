@@ -30,6 +30,8 @@ pub struct Form {
 pub enum Click {
     Capture,
     Cancel,
+    /// The Make QR code window instead (this one closes).
+    MakeQr,
 }
 
 impl Form {
@@ -137,6 +139,17 @@ pub fn paint(ui: &mut Ui, f: &mut Form) -> Option<Click> {
             }
         });
     });
+    // Make QR code, bottom-left (not on macOS: no window there).
+    if cfg!(not(target_os = "macos")) {
+        ui.area(FRect { x: PAD, y: bar.y, w: 130.0, h: 28.0 }, |ui| {
+            ui.ctl_h = 28.0;
+            ui.row(|ui| {
+                if ui.cbutton("launcher.qr", crate::sharex_text::LAUNCHER_QR, Some("qr"), false, &tok) {
+                    click = Some(Click::MakeQr);
+                }
+            });
+        });
+    }
     click
 }
 
@@ -200,6 +213,10 @@ impl Window {
         self.closing = true;
         if c == Click::Capture {
             self.chosen = Some(self.f.plan);
+        }
+        if c == Click::MakeQr {
+            #[cfg(not(test))]
+            crate::qr_make::show();
         }
     }
 

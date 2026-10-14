@@ -789,6 +789,7 @@ impl App {
             || crate::settings_ui::is_open()
             || crate::history_ui::is_open()
             || crate::launcher::is_open()
+            || crate::qr_make::is_open()
             || crate::update_ui::is_open()
     }
 

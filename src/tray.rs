@@ -50,6 +50,8 @@ pub enum MenuItem {
     Upload { i: u8, tag: u32 },
     /// "Delete upload ……" for upload `i` (its question first).
     DeleteUpload { i: u8, tag: u32 },
+    /// The Make QR code window (with the launcher items; not on macOS).
+    MakeQr,
 }
 
 impl MenuItem {
@@ -94,6 +96,7 @@ impl MenuItem {
             MenuItem::CancelDelay => "Cancel delayed capture",
             MenuItem::RecentUploads => "Recent uploads",
             MenuItem::Upload { .. } | MenuItem::DeleteUpload { .. } => "",
+            MenuItem::MakeQr => crate::sharex_text::MAKE_QR,
         }
     }
 
@@ -133,6 +136,7 @@ impl MenuItem {
             MenuItem::CaptureIn(_) => 23,
             MenuItem::CancelDelay => 24,
             MenuItem::RecentUploads => 25,
+            MenuItem::MakeQr => 26,
             MenuItem::Upload { i, .. } => 30 + 2 * i as i32,
             MenuItem::DeleteUpload { i, .. } => 31 + 2 * i as i32,
             MenuItem::Separator => SEPARATOR_IDS,
@@ -250,6 +254,10 @@ pub fn menu_more(autostart: Option<bool>, rec: Option<RecMenu>, pins: bool, hist
     if x.launcher && rec.is_none() {
         let last = [MenuItem::Record, MenuItem::CaptureWindow].iter().find_map(|l| v.iter().position(|m| m == l)).map_or(0, |i| i + 1);
         v.splice(last..last, [MenuItem::Launcher, MenuItem::CaptureIn(3), MenuItem::CaptureIn(10)]);
+        if cfg!(not(target_os = "macos")) {
+            let at = last + 3;
+            v.insert(at, MenuItem::MakeQr);
+        }
     }
     if !x.uploads.is_empty() {
         let at = v.iter().position(|m| *m == MenuItem::Settings).unwrap_or(v.len());
@@ -377,6 +385,7 @@ pub fn item_event(item: MenuItem) -> Option<HotEvent> {
         | MenuItem::Autostart(_)
         | MenuItem::Separator
         | MenuItem::Launcher
+        | MenuItem::MakeQr
         | MenuItem::RecentUploads
         | MenuItem::Upload { .. } => return None,
     })
@@ -392,6 +401,7 @@ pub fn activate(item: MenuItem, tx: &Sender<HotEvent>) -> Result<(), String> {
     match item {
         MenuItem::Settings => crate::settings_ui::show(),
         MenuItem::Launcher => crate::launcher::show(),
+        MenuItem::MakeQr => crate::qr_make::show(),
         MenuItem::Upload { tag, .. } => {
             let link = recent_link(tag).ok_or("That upload is no longer listed")?;
             crate::export::copy_text_to_clipboard(&link).map_err(|e| format!("Could not copy the link: {e:#}"))?;
@@ -840,6 +850,9 @@ mod tests {
     fn menu_with_launcher_uploads_and_a_countdown() {
         let x = Extras { launcher: true, delay: false, uploads: vec![tag_of("a"), tag_of("b")], deletable: vec![false, true] };
         let m = menu_more(Some(true), None, false, Some(2), true, &x);
+        // Make QR code… after the launcher's items (not on macOS).
+        assert_eq!(m.iter().position(|i| *i == MenuItem::MakeQr), cfg!(not(target_os = "macos")).then_some(7));
+        let m: Vec<MenuItem> = m.into_iter().filter(|i| *i != MenuItem::MakeQr).collect();
         assert_eq!(
             m[..11],
             [

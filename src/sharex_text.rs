@@ -12,6 +12,7 @@ pub const READ_QR: &str = "Read QR code";
 pub const COPY_TEXT_QR_ROW: &str = "Copy text \u{b7} Read QR code from area";
 pub const MAKE_QR: &str = "Make QR code\u{2026}";
 pub const MAKE_QR_TITLE: &str = "Make QR code";
+pub const LAUNCHER_QR: &str = "QR code\u{2026}";
 pub const QR_NONE: &str = "No QR code found";
 pub const QR_COPY: &str = "Copy";
 pub const QR_OPEN: &str = "Open link";

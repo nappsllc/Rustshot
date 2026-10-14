@@ -426,6 +426,10 @@ pub fn run_here() -> Option<Plan> {
     let plan = {
         let rx = claim()?;
         window::run(rx);
+        // Its QR code… button opened that window: this process waits for it.
+        while crate::qr_make::is_open() {
+            std::thread::sleep(Duration::from_millis(100));
+        }
         lock(&CHOSEN).take()
     };
     if let Some(p) = plan

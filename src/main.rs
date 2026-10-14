@@ -49,6 +49,7 @@ mod pixbuf;
 mod pngfile;
 mod qr;
 mod qr_ui;
+mod qr_make;
 #[cfg(windows)]
 mod proc_win;
 mod raster;
