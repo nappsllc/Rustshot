@@ -6,6 +6,13 @@
 //! press would pick up (the move cursor), then the tool's own cursor and
 //! the capture selection's handles.
 //!
+//! While the magnifier's crosshair is drawn under the pointer the system
+//! pointer is hidden ([`Edit::pointer_at`]): the hardware cursor leads the
+//! composited frame by a refresh, so the two would drift apart. It shows
+//! again over everything that has a cursor of its own (the chrome, an
+//! object to pick up, a handle, text), with the magnifier off, off the
+//! capture and while the overlay does not have the keyboard focus.
+//!
 //! Objects are picked up with the select tool, with no tool and with every
 //! drawing tool that makes objects of its own; Ctrl held draws over them
 //! instead. The tools that act on what is under them (Pixelate, Blur,
@@ -131,6 +138,23 @@ impl Edit {
             Under::Cursor(c) => c,
             Under::Grab(_) => Cursor::Move,
         }
+    }
+
+    /// The magnifier's crosshair is drawn through the pointer at `p` (see
+    /// [`Edit::assist_scene`]).
+    pub(super) fn crosshair_at(&self, p: Pt) -> bool {
+        self.mag_on() && self.mouse_px(p).is_some()
+    }
+
+    /// The pointer to show at `p`, the overlay's one cursor resolver: the
+    /// cursor of what is under it ([`Edit::cursor_at`]), or none where the
+    /// crosshair stands in for it (the cross there, and the drags that
+    /// draw it: a new region, a resize, the ruler), while the overlay
+    /// has the keyboard focus (`focused`).
+    pub(super) fn pointer_at(&self, p: Pt, mods: Mods, focused: bool) -> Cursor {
+        let c = self.cursor_at(p, mods);
+        let drag = !matches!(self.interact, Interact::None);
+        if focused && (c == Cursor::Cross || drag) && self.crosshair_at(p) { Cursor::Hidden } else { c }
     }
 
     /// The object outlined under the pointer at `p`: one a press would

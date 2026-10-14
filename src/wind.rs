@@ -100,8 +100,8 @@ pub enum Ev {
     /// once right after `on_create`, so the driver always knows its size.
     #[cfg_attr(target_os = "macos", allow(dead_code))] // macOS: no decorated windows yet (main thread only)
     Resize(u32, u32),
-    /// `run_window` only: the window gained (true) or lost keyboard focus.
-    #[cfg_attr(target_os = "macos", allow(dead_code))] // macOS: no decorated windows yet (main thread only)
+    /// The window gained (true) or lost keyboard focus (a `run_window`
+    /// window, and the overlay: its pointer shows again when it loses it).
     Focus(bool),
 }
 
@@ -263,6 +263,10 @@ pub enum Cursor {
     SizeNWSE,
     SizeNESW,
     Move,
+    /// No pointer over the window (the overlay's crosshair stands in for
+    /// it): Windows `SetCursor(NULL)` on the client area, X11 a blank
+    /// cursor on our window, macOS `[NSCursor hide]` balanced by `unhide`.
+    Hidden,
 }
 
 #[cfg(windows)]

@@ -314,3 +314,141 @@ fn edit_window_cursor_per_region() {
     c.key('V' as u32, false, false, NONE);
     assert_eq!(c.cursor(on), Cursor::Move);
 }
+
+// ---- the pointer hidden under the crosshair ---------------------------------
+
+fn ptr(e: &Edit, x: f32, y: f32) -> Cursor {
+    e.pointer_at(Pt::new(x, y), NONE, true)
+}
+
+/// The system pointer is hidden exactly where the magnifier's crosshair
+/// is drawn through it, and nowhere else.
+#[test]
+fn pointer_hidden_only_where_the_crosshair_is() {
+    // Nothing selected, no tool: the crosshair, no pointer.
+    let mut a = with(None, Vec::new(), None);
+    let e = ed(&mut a);
+    e.assist.dismiss_hint(Instant::now());
+    e.prepare(None, (700, 500), Instant::now());
+    assert!(e.crosshair_at(Pt::new(700.0, 500.0)));
+    assert!(e.scene.as_ref().unwrap().cross.is_some(), "the crosshair is drawn");
+    assert_eq!(ptr(e, 700.0, 500.0), Cursor::Hidden);
+    // Not focused: the pointer stays.
+    assert_eq!(e.pointer_at(Pt::new(700.0, 500.0), NONE, false), Cursor::Cross);
+    // Off the capture: no crosshair, the pointer.
+    assert!(!e.crosshair_at(Pt::new(-1.0, 500.0)));
+    assert_eq!(ptr(e, -1.0, 500.0), Cursor::Cross);
+    let (w, h) = (e.shot.size.0 as f32, e.shot.size.1 as f32);
+    assert_eq!(ptr(e, w, h - 1.0), Cursor::Cross);
+    // The magnifier off: the pointer.
+    e.cfg.magnifier = false;
+    assert!(!e.crosshair_at(Pt::new(700.0, 500.0)));
+    assert_eq!(ptr(e, 700.0, 500.0), Cursor::Cross);
+    // The hint card is chrome: the arrow over it, even with the crosshair.
+    let mut a = with(None, Vec::new(), None);
+    let e = ed(&mut a);
+    e.prepare(None, (0, 0), Instant::now() + std::time::Duration::from_millis(300));
+    let h = e.scene.as_ref().unwrap().rects(compose::El::Hint)[0];
+    let c = Pt::new((h.x0 + h.x1) as f32 / 2.0, (h.y0 + h.y1) as f32 / 2.0);
+    assert!(e.crosshair_at(c));
+    assert_eq!(e.pointer_at(c, NONE, true), Cursor::Arrow);
+    // A selection made, no tool: no crosshair (the toolbar instead).
+    let mut a = with(Some(SEL), vec![rect(300.0, 300.0, 200.0, 100.0)], None);
+    let e = ed(&mut a);
+    for (x, y, want) in [(1000.0, 600.0, Cursor::Move), (1500.0, 900.0, Cursor::Cross), (SEL.x, SEL.y, Cursor::SizeNWSE), (350.0, 301.0, Cursor::Move)] {
+        assert_eq!(ptr(e, x, y), want, "({x}, {y})");
+    }
+    // Drawing tools: no crosshair either.
+    e.tool = Some(Tool::Rect);
+    assert_eq!(ptr(e, 1000.0, 600.0), Cursor::Cross);
+}
+
+/// The Ruler keeps the crosshair over the canvas: hidden there (over an
+/// object too, it draws over it), the arrow over the toolbar, a selected
+/// object's handles their own cursor.
+#[test]
+fn pointer_with_the_ruler() {
+    let mut a = with(Some(SEL), vec![rect(300.0, 300.0, 200.0, 100.0)], Some(Tool::Ruler));
+    let e = ed(&mut a);
+    assert_eq!(ptr(e, 1000.0, 600.0), Cursor::Hidden);
+    assert_eq!(ptr(e, 350.0, 301.0), Cursor::Hidden, "the ruler draws over objects");
+    let tb = e.toolbar.clone().expect("toolbar");
+    assert!(e.crosshair_at(mid(tb.bar)));
+    assert_eq!(e.pointer_at(mid(tb.bar), NONE, true), Cursor::Arrow);
+    for it in &tb.items {
+        assert_eq!(e.pointer_at(mid(it.r), NONE, true), Cursor::Arrow, "{:?}", it.kind);
+    }
+    // A selected object's handle: the resize cursor.
+    e.obj.sel = vec![0];
+    e.prepare(None, (506, 406), Instant::now());
+    assert_eq!(ptr(e, 506.0, 406.0), Cursor::SizeNWSE);
+    assert_eq!(ptr(e, 1000.0, 600.0), Cursor::Hidden);
+    // A drag with the ruler: hidden while it draws.
+    e.obj.sel.clear();
+    down(&mut a, 900, 500);
+    mv(&mut a, 1000, 560);
+    assert!(matches!(ed(&mut a).interact, Interact::Drawing { .. }));
+    assert_eq!(ptr(ed(&mut a), 1000.0, 560.0), Cursor::Hidden);
+    up(&mut a, 1000, 560);
+}
+
+/// Drawing a new region and resizing it keep the crosshair (and no
+/// pointer) through the drag; the region drawn: the pointer is back.
+#[test]
+fn pointer_while_a_region_is_drawn_and_resized() {
+    let mut a = with(None, Vec::new(), None);
+    down(&mut a, 200, 150);
+    mv(&mut a, 600, 400);
+    assert!(matches!(ed(&mut a).interact, Interact::NewSel { .. }));
+    assert_eq!(ptr(ed(&mut a), 600.0, 400.0), Cursor::Hidden);
+    up(&mut a, 600, 400);
+    ed(&mut a).prepare(None, (600, 400), Instant::now());
+    assert!(!ed(&mut a).crosshair_at(Pt::new(600.0, 400.0)), "a region: the toolbar, no crosshair");
+    assert_eq!(ptr(ed(&mut a), 600.0, 400.0), Cursor::SizeNWSE, "its corner handle, at once");
+    // Hovering a handle: its cursor; dragging it: the crosshair stands in.
+    assert_eq!(ptr(ed(&mut a), 200.0, 150.0), Cursor::SizeNWSE);
+    down(&mut a, 200, 150);
+    mv(&mut a, 180, 130);
+    assert!(matches!(ed(&mut a).interact, Interact::Resize { .. }));
+    assert_eq!(ptr(ed(&mut a), 180.0, 130.0), Cursor::Hidden);
+    up(&mut a, 180, 130);
+    assert_eq!(ptr(ed(&mut a), 180.0, 130.0), Cursor::SizeNWSE);
+}
+
+/// The color ring and text suppress the crosshair: the pointer is theirs.
+#[test]
+fn pointer_where_the_crosshair_is_suppressed() {
+    let mut a = with(Some(SEL), Vec::new(), Some(Tool::Ruler));
+    a.on_event(Ev::Right { down: true, x: 700, y: 400 });
+    assert!(ed(&mut a).assist.ring.is_some());
+    assert!(!ed(&mut a).crosshair_at(Pt::new(1000.0, 600.0)));
+    assert_eq!(ptr(ed(&mut a), 1000.0, 600.0), Cursor::Arrow);
+    let mut a = with(Some(SEL), Vec::new(), Some(Tool::Text));
+    click(&mut a, 600, 400);
+    assert!(ed(&mut a).text.is_some());
+    ed(&mut a).tool = Some(Tool::Ruler);
+    assert!(!ed(&mut a).crosshair_at(Pt::new(600.0, 400.0)));
+    assert_eq!(ptr(ed(&mut a), 600.0, 400.0), Cursor::IBeam);
+}
+
+/// The overlay's one resolver through the driver: hidden over the
+/// crosshair while focused; focus lost, then Esc, bring the pointer back.
+#[test]
+fn pointer_restored_on_focus_loss_and_close() {
+    use crate::wind::Driver;
+    let mut a = with(None, Vec::new(), None);
+    ed(&mut a).assist.dismiss_hint(Instant::now());
+    mv(&mut a, 700, 500);
+    assert_eq!(a.cursor(), Cursor::Hidden);
+    a.on_event(Ev::Focus(false));
+    assert_eq!(a.cursor(), Cursor::Cross, "another window has the focus");
+    a.on_event(Ev::Focus(true));
+    assert_eq!(a.cursor(), Cursor::Hidden);
+    // The magnifier turned off: the pointer.
+    ed(&mut a).cfg.magnifier = false;
+    assert_eq!(a.cursor(), Cursor::Cross);
+    ed(&mut a).cfg.magnifier = true;
+    a.on_event(Ev::Key { vk: crate::wind::key::ESCAPE, up: false, repeat: false, mods: NONE });
+    assert!(!matches!(a.st, State::Edit(_)), "Esc closes the overlay");
+    assert_eq!(a.cursor(), Cursor::Arrow, "closed: the pointer");
+}

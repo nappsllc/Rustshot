@@ -162,7 +162,10 @@ impl Assist {
 
 /// The crosshair: 1 px lines through the pointer's pixel across the
 /// whole overlay (accent at 60 %), left out under the toolbar (`skip`:
-/// its bounds), so a drag never redraws the bar for it.
+/// its bounds), so a drag never redraws the bar for it. The crossing
+/// itself is left out: the system pointer is hidden while the crosshair
+/// shows, and the pointer's own pixel stays in sight between the four
+/// arms, its true color, in either theme.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct CrossUi {
     pub x: i32,
@@ -172,14 +175,16 @@ pub struct CrossUi {
 }
 
 impl CrossUi {
-    /// The two lines (horizontal, vertical; the vertical without the
-    /// crossing), each minus `skip`.
-    fn parts(&self, size: (u32, u32)) -> Vec<PxRect> {
+    /// The four arms (left, right, above, below the crossing, which is
+    /// left out), each minus `skip`.
+    pub(super) fn parts(&self, size: (u32, u32)) -> Vec<PxRect> {
         let (w, h) = (size.0 as i32, size.1 as i32);
+        let (x1, y1) = (self.x + self.lw, self.y + self.lw);
         let lines = [
-            PxRect::new(0, self.y, w, self.y + self.lw),
-            PxRect::new(self.x, 0, self.x + self.lw, self.y),
-            PxRect::new(self.x, self.y + self.lw, self.x + self.lw, h),
+            PxRect::new(0, self.y, self.x, y1),
+            PxRect::new(x1, self.y, w, y1),
+            PxRect::new(self.x, 0, x1, self.y),
+            PxRect::new(self.x, y1, x1, h),
         ];
         cut(lines.into_iter().filter(|r| !r.is_empty()).collect(), &self.skip)
     }
@@ -367,7 +372,7 @@ impl Edit {
     }
 
     /// The pointer's pixel, if it is on the capture.
-    fn mouse_px(&self, m: Pt) -> Option<(i32, i32)> {
+    pub(super) fn mouse_px(&self, m: Pt) -> Option<(i32, i32)> {
         let (x, y) = (m.x.floor() as i32, m.y.floor() as i32);
         (x >= 0 && y >= 0 && x < self.shot.size.0 as i32 && y < self.shot.size.1 as i32).then_some((x, y))
     }

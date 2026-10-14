@@ -705,6 +705,47 @@ fn helpers_are_never_in_the_capture() {
     assert_eq!(ed(&mut a).export(area).as_raw(), plain.as_raw());
 }
 
+// ---- the crosshair's centre ----------------------------------------------------
+
+/// The frame at pointer `p` with the magnifier on or off (hint gone).
+fn cross_frame(th: Theme, p: (i32, i32), on: bool) -> PixBuf {
+    let mut a = preview_app(th, None);
+    ed(&mut a).cfg.magnifier = on;
+    ed(&mut a).assist.dismiss_hint(Instant::now());
+    mv(&mut a, p.0, p.1);
+    settled(&mut a)
+}
+
+/// The system pointer is hidden under the crosshair, so the pointer's
+/// own pixel must stay in sight: the crossing is left out (the pixel as
+/// it is without the crosshair), the four arms start right next to it.
+#[test]
+fn crosshair_leaves_the_pointers_pixel_in_sight() {
+    let p = (702, 548);
+    for th in [theme::DARK, theme::LIGHT] {
+        let (on, off) = (cross_frame(th, p, true), cross_frame(th, p, false));
+        let px = |f: &PixBuf, x: i32, y: i32| f.get_pixel(x as u32, y as u32);
+        assert_eq!(px(&on, p.0, p.1), px(&off, p.0, p.1), "the pointer's pixel, untouched");
+        for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1), (-40, 0), (40, 0), (0, -40), (0, 40)] {
+            assert_ne!(px(&on, p.0 + dx, p.1 + dy), px(&off, p.0 + dx, p.1 + dy), "an arm at ({dx}, {dy})");
+        }
+        // The diagonal neighbours: no line there.
+        assert_eq!(px(&on, p.0 + 1, p.1 + 1), px(&off, p.0 + 1, p.1 + 1));
+    }
+    // The parts: four arms, none over the crossing, at any line width.
+    for lw in [1, 2, 3] {
+        let c = CrossUi { x: 100, y: 80, lw, skip: Vec::new() };
+        let parts = c.parts((400, 300));
+        assert_eq!(parts.len(), 4);
+        let hole = PxRect::new(100, 80, 100 + lw, 80 + lw);
+        assert!(parts.iter().all(|r| !r.intersects(&hole)), "lw {lw}");
+        let area: i32 = parts.iter().map(|r| r.w() * r.h()).sum();
+        assert_eq!(area, lw * 400 + lw * 300 - 2 * lw * lw, "lw {lw}: both lines but the crossing");
+    }
+    // At the image's edge: the arms that fit.
+    assert_eq!(CrossUi { x: 0, y: 0, lw: 1, skip: Vec::new() }.parts((400, 300)).len(), 2);
+}
+
 // ---- preview PNGs -------------------------------------------------------------
 
 /// `RUSTSHOT_PREVIEW_DIR=<dir> cargo test assist_previews`: the round and
@@ -740,6 +781,19 @@ fn assist_previews() {
         let f = settled(&mut a);
         assert!(ed(&mut a).scene.as_ref().unwrap().hint.is_some());
         shots.push((format!("assist_hint_{name}.png"), f));
+        // The crosshair's centre, 12x (the system pointer is hidden there):
+        // the pointer's pixel between the four arms.
+        let f = cross_frame(th, (702, 548), true);
+        let (n, k) = (33u32, 12u32);
+        let mut z = PixBuf::new(n * k, n * k);
+        for y in 0..n * k {
+            for x in 0..n * k {
+                let c = f.get_pixel(702 - n / 2 + x / k, 548 - n / 2 + y / k);
+                let i = ((y * n * k + x) * 4) as usize;
+                z.as_raw_mut()[i..i + 4].copy_from_slice(&c);
+            }
+        }
+        shots.push((format!("assist_cross_center_{name}.png"), z));
         if let Some(dir) = std::env::var_os("RUSTSHOT_PREVIEW_DIR") {
             let dir = std::path::PathBuf::from(dir);
             std::fs::create_dir_all(&dir).unwrap();
