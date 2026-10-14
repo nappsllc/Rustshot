@@ -154,6 +154,17 @@ impl UiFont {
         self.baked_width(s, px)
     }
 
+    /// The width of `full[..end]` as part of `full` (a caret's x, a
+    /// selection's edge): measured with the face that draws all of `full`,
+    /// so an ASCII prefix of a string the OS draws is measured by the OS.
+    pub fn prefix_width(&self, full: &str, end: usize, px: f32) -> f32 {
+        let p = &full[..end];
+        if crate::uitext::needed(self, full) {
+            return crate::uitext::width(self, p, px);
+        }
+        self.baked_width(p, px)
+    }
+
     /// [`UiFont::width`] with the baked glyphs only (.notdef for others).
     pub fn baked_width(&self, s: &str, px: f32) -> f32 {
         self.layout(s, px, 0.0, |_, _| {})

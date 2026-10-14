@@ -412,6 +412,52 @@ fn headings_draw_whole_words_outside_ascii() {
     assert!(shot("Appearance", false) != shot("Appearance", true), "ASCII: tracked");
 }
 
+/// A mixed string (ASCII with one character the baked font lacks) is
+/// drawn whole by the OS face; its caret positions are measured by that
+/// face too, so a click after each character puts the caret there.
+#[test]
+fn text_field_caret_on_mixed_strings() {
+    let s = "Gr\u{f6}\u{df}e_%Y-%m-%d_screenshot";
+    let font = &crate::fonts::UI;
+    assert!(crate::uitext::needed(font, s));
+    for (end, _) in s.char_indices().skip(1).step_by(3) {
+        assert_eq!(font.prefix_width(s, end, 13.0), crate::uitext::width(font, &s[..end], 13.0), "{end}");
+        let mut h = Harness::new();
+        let mut st = TextState::new(s);
+        field(&mut h, &mut st);
+        let x = 30.0 + font.prefix_width(s, end, 13.0);
+        h.click(x.round() as i32, 36);
+        field(&mut h, &mut st);
+        assert_eq!(st.caret(), end, "click at {x} for {:?}", &s[..end]);
+    }
+}
+
+/// `fit_text` keeps the longest prefix that fits with its ellipsis, in
+/// the face that draws it (mixed and CJK strings too).
+#[test]
+fn fit_text_keeps_the_longest_prefix() {
+    let mut h = Harness::new();
+    h.frame(|ui| {
+        for s in ["Screenshot of a long browser window title", "Gr\u{f6}\u{df}e \u{e4}ndern und speichern unter", "\u{622a}\u{56fe}\u{4fdd}\u{5b58}\u{5230}\u{684c}\u{9762}\u{6587}\u{4ef6}\u{5939}\u{4e2d}"] {
+            for w in [20.0f32, 60.0, 90.0, 140.0] {
+                let out = ui.fit_text(12.0, s, w);
+                if out == s {
+                    assert!(ui.text_w(12.0, s) <= w);
+                    continue;
+                }
+                assert!(out.ends_with('\u{2026}'));
+                let kept = out.trim_end_matches('\u{2026}');
+                let n = kept.chars().count();
+                assert!(n == 0 || ui.text_w(12.0, &out) <= w, "{out:?} at {w}");
+                // One more character would not fit.
+                let more: String = s.chars().take(n + 1).collect();
+                let more = format!("{}\u{2026}", more.trim_end());
+                assert!(more.chars().count() > s.chars().count() || ui.text_w(12.0, &more) > w || more.trim_end_matches('\u{2026}').trim_end() == kept, "{more:?} fits {w}");
+            }
+        }
+    });
+}
+
 #[test]
 fn text_field_lets_enter_and_escape_through() {
     let mut h = Harness::new();

@@ -24,44 +24,116 @@ pub fn needed(font: &UiFont, s: &str) -> bool {
     !s.is_ascii() && s.chars().any(|c| !c.is_control() && !font.has_glyph(c))
 }
 
-/// One cached raster: coverage `a` (`w`×`h`, 0..=255) with its top-left
+/// One cached raster: coverage `a` (`w` wide, 0..=255) with its top-left
 /// at (`x0`, `y0`) from the string's rounded top-left.
 struct Run {
     x0: i32,
     y0: i32,
     w: usize,
     a: Vec<u8>,
-    /// Last use (eviction order).
-    used: u64,
 }
 
 /// One cached string at one size and direction: its width, and its
-/// raster once drawn. (A list searched by a hash: one small cache, no map.)
+/// raster once drawn.
 struct Entry {
-    hash: u64,
+    s: String,
     px: u32,
     rtl: bool,
-    s: String,
     w: f32,
     run: Option<Run>,
+    /// Last use (measured or drawn): eviction keeps the recent ones.
+    used: u64,
 }
 
+impl Entry {
+    /// What it holds, roughly (the byte bound).
+    fn bytes(&self) -> usize {
+        64 + self.s.len() + self.run.as_ref().map_or(0, |r| r.a.len())
+    }
+}
+
+/// Least recently used out: a hash of (string, size, direction) → its
+/// entry; a hash shared by two keys keeps the latest.
 #[derive(Default)]
 struct Cache {
     entries: Vec<Entry>,
+    index: std::collections::HashMap<u64, usize>,
     bytes: usize,
     tick: u64,
 }
 
+fn key_hash(s: &str, px: f32, rtl: bool) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (s, px.to_bits(), rtl).hash(&mut h);
+    h.finish()
+}
+
 impl Cache {
+    /// The entry for the key, marked used now.
     fn find(&mut self, s: &str, px: f32, rtl: bool) -> Option<&mut Entry> {
-        let h = crate::ui::id_of(s);
-        self.entries.iter_mut().find(|e| e.hash == h && e.px == px.to_bits() && e.rtl == rtl && e.s == s)
+        self.tick += 1;
+        let tick = self.tick;
+        let &i = self.index.get(&key_hash(s, px, rtl))?;
+        let e = &mut self.entries[i];
+        if e.s != s || e.px != px.to_bits() || e.rtl != rtl {
+            return None;
+        }
+        e.used = tick;
+        Some(e)
+    }
+
+    fn insert(&mut self, mut e: Entry) {
+        self.tick += 1;
+        e.used = self.tick;
+        let h = key_hash(&e.s, f32::from_bits(e.px), e.rtl);
+        self.bytes += e.bytes();
+        match self.index.get(&h) {
+            Some(&i) => {
+                self.bytes -= self.entries[i].bytes();
+                self.entries[i] = e;
+            }
+            None => {
+                self.index.insert(h, self.entries.len());
+                self.entries.push(e);
+            }
+        }
+        if self.entries.len() > MAX_ENTRIES || self.bytes > MAX_BYTES {
+            self.evict();
+        }
+    }
+
+    /// Keep the more recently used half.
+    fn evict(&mut self) {
+        let mut v = std::mem::take(&mut self.entries);
+        v.sort_unstable_by_key(|e| std::cmp::Reverse(e.used));
+        let mut bytes = 0;
+        let keep = v.iter().take(v.len() / 2).take_while(|e| {
+            bytes += e.bytes();
+            bytes <= MAX_BYTES / 2
+        }).count();
+        v.truncate(keep);
+        self.index = v.iter().enumerate().map(|(i, e)| (key_hash(&e.s, f32::from_bits(e.px), e.rtl), i)).collect();
+        self.bytes = v.iter().map(Entry::bytes).sum();
+        self.entries = v;
+    }
+
+    /// The raster to set for an entry that has its width.
+    fn set_run(&mut self, s: &str, px: f32, rtl: bool, r: Run) {
+        let n = r.a.len();
+        if let Some(e) = self.find(s, px, rtl) {
+            e.run = Some(r);
+            self.bytes += n;
+            if self.bytes > MAX_BYTES {
+                self.evict();
+            }
+        }
     }
 }
 
-/// Kept entries: at most this many, rasters at most this many bytes.
-const MAX_ENTRIES: usize = 1024;
+/// Kept entries: at most this many, holding at most this many bytes
+/// (strings and rasters).
+const MAX_ENTRIES: usize = 4096;
 const MAX_BYTES: usize = 8 << 20;
 
 fn cache() -> std::sync::MutexGuard<'static, Cache> {
@@ -86,14 +158,7 @@ pub fn width(font: &UiFont, s: &str, px: f32) -> f32 {
         return e.w;
     }
     let w = face(rtl).width(s, os_px(font, px));
-    let mut c = cache();
-    if c.entries.len() >= MAX_ENTRIES {
-        // Drop the older half (entries are added at the end, used ones
-        // keep their raster's tick).
-        c.entries.drain(..MAX_ENTRIES / 2);
-        c.bytes = c.entries.iter().filter_map(|e| e.run.as_ref()).map(|r| r.a.len()).sum();
-    }
-    c.entries.push(Entry { hash: crate::ui::id_of(s), px: px.to_bits(), rtl, s: s.to_string(), w, run: None });
+    cache().insert(Entry { s: s.to_string(), px: px.to_bits(), rtl, w, run: None, used: 0 });
     w
 }
 
@@ -105,34 +170,14 @@ pub fn draw(font: &UiFont, s: &str, px: f32, x: f32, y: f32, f: &mut dyn FnMut(i
     let (ox, oy) = (x.round() as i32, y.round() as i32);
     {
         let mut c = cache();
-        c.tick += 1;
-        let tick = c.tick;
-        if let Some(r) = c.find(s, px, rtl).and_then(|e| e.run.as_mut()) {
-            r.used = tick;
+        if let Some(r) = c.find(s, px, rtl).and_then(|e| e.run.as_ref()) {
             blit(r, ox, oy, f);
             return w;
         }
     }
     let r = raster(font, s, px, rtl, w);
     blit(&r, ox, oy, f);
-    let mut c = cache();
-    let n = r.a.len();
-    if let Some(e) = c.find(s, px, rtl) {
-        e.run = Some(r);
-        c.bytes += n;
-    }
-    if c.bytes > MAX_BYTES {
-        // Drop the older half of the rasters (the widths stay).
-        let mut ticks: Vec<u64> = c.entries.iter().filter_map(|e| e.run.as_ref()).map(|r| r.used).collect();
-        ticks.sort_unstable();
-        let cut = ticks[ticks.len() / 2];
-        for e in c.entries.iter_mut() {
-            if e.run.as_ref().is_some_and(|r| r.used <= cut) {
-                e.run = None;
-            }
-        }
-        c.bytes = c.entries.iter().filter_map(|e| e.run.as_ref()).map(|r| r.a.len()).sum();
-    }
+    cache().set_run(s, px, rtl, r);
     w
 }
 
@@ -166,14 +211,14 @@ fn raster(font: &UiFont, s: &str, px: f32, rtl: bool, w: f32) -> Run {
     let rows: Vec<usize> = (0..ch).filter(|&r| a[r * cw..(r + 1) * cw].iter().any(|&v| v > 0)).collect();
     let cols: Vec<usize> = (0..cw).filter(|&c| (0..ch).any(|r| a[r * cw + c] > 0)).collect();
     let (Some(&r0), Some(&r1), Some(&c0), Some(&c1)) = (rows.first(), rows.last(), cols.first(), cols.last()) else {
-        return Run { x0: 0, y0: 0, w: 1, a: Vec::new(), used: 0 };
+        return Run { x0: 0, y0: 0, w: 1, a: Vec::new() };
     };
     let (tw, th) = (c1 - c0 + 1, r1 - r0 + 1);
     let mut t = Vec::with_capacity(tw * th);
     for r in r0..=r1 {
         t.extend_from_slice(&a[r * cw + c0..r * cw + c1 + 1]);
     }
-    Run { x0: x0 + c0 as i32, y0: y0 + r0 as i32, w: tw, a: t, used: 0 }
+    Run { x0: x0 + c0 as i32, y0: y0 + r0 as i32, w: tw, a: t }
 }
 
 #[cfg(test)]
@@ -243,6 +288,30 @@ mod tests {
         let one = width(&UI, "\u{628}", 20.0);
         let w = width(&UI, word, 20.0);
         assert!(w < one * 4.0 - 2.0, "joined {w} vs isolated {}", one * 4.0);
+    }
+
+    /// Eviction keeps what is in use: strings measured every "frame" stay
+    /// while more than the cache holds stream past; and the bytes stay
+    /// bounded.
+    #[test]
+    fn cache_keeps_recently_used() {
+        let mut c = Cache::default();
+        let e = |s: String| Entry { s, px: 1.0f32.to_bits(), rtl: false, w: 1.0, run: None, used: 0 };
+        for i in 0..20 {
+            c.insert(e(format!("hot {i}")));
+        }
+        for n in 0..3 * MAX_ENTRIES {
+            for i in 0..20 {
+                assert!(c.find(&format!("hot {i}"), 1.0, false).is_some(), "hot {i} kept after {n}");
+            }
+            c.insert(e(format!("cold {n}")));
+            assert!(c.entries.len() <= MAX_ENTRIES && c.bytes <= MAX_BYTES);
+        }
+        let big = Entry { run: Some(Run { x0: 0, y0: 0, w: 1, a: vec![0; MAX_BYTES / 3] }), ..e("big".into()) };
+        c.insert(big);
+        c.insert(Entry { run: Some(Run { x0: 0, y0: 0, w: 1, a: vec![0; MAX_BYTES / 3] }), ..e("big2".into()) });
+        c.insert(Entry { run: Some(Run { x0: 0, y0: 0, w: 1, a: vec![0; MAX_BYTES / 3] }), ..e("big3".into()) });
+        assert!(c.bytes <= MAX_BYTES, "{}", c.bytes);
     }
 
     /// A preview of the scripts beside baked text (RUSTSHOT_PREVIEW_DIR).

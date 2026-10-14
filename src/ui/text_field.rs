@@ -4,7 +4,6 @@
 use super::controls::field_frame;
 use super::{id_of, Clipboard, KeyIn, Ui};
 use crate::objects::FRect;
-use crate::uifb::text_width;
 use crate::wind::{key, Mods};
 
 /// Text plus caret/selection (byte offsets on char boundaries) and scroll.
@@ -182,11 +181,11 @@ fn copy(st: &TextState, clip: &mut dyn Clipboard) {
 
 /// Byte offset in `s` nearest to `x` px from the text origin (`width`
 /// measures a prefix).
-fn hit(s: &str, x: f32, width: impl Fn(&str) -> f32) -> usize {
+fn hit(s: &str, x: f32, width: impl Fn(&str, usize) -> f32) -> usize {
     let mut best = (0, x.abs());
     for (i, c) in s.char_indices() {
         let end = i + c.len_utf8();
-        let d = (width(&s[..end]) - x).abs();
+        let d = (width(s, end) - x).abs();
         if d < best.1 {
             best = (end, d);
         }
@@ -227,7 +226,8 @@ impl Ui<'_> {
         let font = &crate::fonts::UI;
         let dot = mask_dot(px);
         // A masked field measures dots, one per character.
-        let wof = |s: &str| if masked { s.chars().count() as f32 * dot } else { text_width(font, px, s) };
+        // `s[..end]`'s width as part of `s` (the face that draws all of `s`).
+        let wof = |s: &str, end: usize| if masked { s[..end].chars().count() as f32 * dot } else { font.prefix_width(s, end, px) };
         let mut changed = false;
 
         // Mouse: press places the caret (Shift extends), drag selects.
@@ -277,7 +277,7 @@ impl Ui<'_> {
         }
 
         // Keep the caret in view while editing; show the start otherwise.
-        let cx = wof(&st.text[..st.caret]);
+        let cx = wof(&st.text, st.caret);
         if self.focus.focused != Some(id) {
             st.scroll = 0.0;
         } else if cx - st.scroll > inner.w {
@@ -285,7 +285,7 @@ impl Ui<'_> {
         } else if cx < st.scroll {
             st.scroll = cx;
         }
-        let full = wof(&st.text);
+        let full = wof(&st.text, st.text.len());
         st.scroll = st.scroll.min((full - inner.w + 1.0).max(0.0)).max(0.0);
 
         let focused = self.focus.focused == Some(id) && self.enabled;
@@ -309,10 +309,10 @@ impl Ui<'_> {
             let cy = inner.y + inner.h / 2.0;
             let lh = (16.0 * k).round();
             let lw = k.round().max(1.0);
-            let cx = (ox + wof(&text[..caret])).round().min(inner.x1() - lw);
+            let cx = (ox + wof(text, caret)).round().min(inner.x1() - lw);
             if focused && !sel.is_empty() {
-                let mut x0 = (ox + wof(&text[..sel.start])).round();
-                let mut x1 = (ox + wof(&text[..sel.end])).round();
+                let mut x0 = (ox + wof(text, sel.start)).round();
+                let mut x1 = (ox + wof(text, sel.end)).round();
                 // Keep a 1 px gap between the caret and the selection.
                 if caret == sel.end {
                     x1 = x1.min(cx - lw);

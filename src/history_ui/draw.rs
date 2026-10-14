@@ -1078,8 +1078,8 @@ fn highlighted(ui: &mut Ui, s: &str, hl: &[std::ops::Range<usize>], x: f32, cy: 
         if r.end > s.len() || !s.is_char_boundary(r.start) || !s.is_char_boundary(r.end) {
             continue;
         }
-        let x0 = x + ui.text_w(size, &s[..r.start]);
-        let w = ui.text_w(size, &s[r.start..r.end]);
+        let x0 = x + ui.prefix_w(size, s, r.start);
+        let w = ui.prefix_w(size, s, r.end) - (x0 - x);
         fill(ui, FRect { x: x0 - 1.0, y: cy - 8.0, w: w + 2.0, h: 16.0 }, 3.0, t.mark);
     }
     text(ui, size, s, x, cy, t.tx, false);

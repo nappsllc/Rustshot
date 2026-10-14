@@ -186,16 +186,32 @@ impl Ui<'_> {
         tw(self, size * CSS, s)
     }
 
-    /// `s` cut with an ellipsis to `w` logical px at `size`.
+    /// The width of `full[..end]` at `size` as part of `full` (logical
+    /// px): see [`crate::fonts::UiFont::prefix_width`].
+    pub fn prefix_w(&self, size: f32, full: &str, end: usize) -> f32 {
+        crate::fonts::UI.prefix_width(full, end, self.px(size * CSS)) / self.k
+    }
+
+    /// `s` cut with an ellipsis to `w` logical px at `size`: the longest
+    /// prefix (a binary search over its character boundaries, each
+    /// candidate measured as it will be drawn) that fits with the "…".
     pub fn fit_text(&self, size: f32, s: &str, w: f32) -> String {
         if self.text_w(size, s) <= w {
             return s.to_string();
         }
-        let mut out = s.to_string();
-        while !out.is_empty() && self.text_w(size, &format!("{out}\u{2026}")) > w {
-            out.pop();
+        let ends: Vec<usize> = s.char_indices().map(|(i, _)| i).collect();
+        let cut = |n: usize| format!("{}\u{2026}", s[..ends.get(n).copied().unwrap_or(s.len())].trim_end());
+        // ends[n] is the end of the first n characters; 0 always "fits".
+        let (mut lo, mut hi) = (0usize, ends.len());
+        while lo < hi {
+            let mid = (lo + hi).div_ceil(2);
+            if self.text_w(size, &cut(mid)) <= w {
+                lo = mid;
+            } else {
+                hi = mid - 1;
+            }
         }
-        format!("{}\u{2026}", out.trim_end())
+        cut(lo)
     }
 
     /// A section heading ("APPEARANCE"): 10.5/600, uppercase, tracked
