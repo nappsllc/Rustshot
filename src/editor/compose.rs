@@ -752,9 +752,11 @@ impl Edit {
                 .filter(|t| t.above && t.bar.y1() <= sr.y)
                 .map(|t| t.pop.map_or(t.bar, |p| toolbar::union(t.bar, p)));
             let lead = self.toolbar.as_ref().and_then(|t| t.mode);
-            // Following the mode switch it keeps off the Close button.
+            // Following the mode switch it keeps off the Close button (with
+            // none, off the toolbar above: no Record button, so the freeform
+            // toggle alone leads).
             let close = self.toolbar.as_ref().and_then(|t| t.items.iter().find(|i| i.kind == toolbar::Kind::Close)).map(|i| i.r);
-            let avoid = if lead.is_some() { close } else { avoid };
+            let avoid = if lead.is_some() { close.or(avoid) } else { avoid };
             LabelUi { sr, show_pos: !interacting, area, avoid, lead }
         });
         // The label's menu (Trim to content) hangs off it, part of the
