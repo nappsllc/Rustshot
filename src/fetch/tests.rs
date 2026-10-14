@@ -36,7 +36,7 @@ impl Mock {
 }
 
 impl Transport for Arc<Mock> {
-    fn get(&self, url: &str, dest: &Path, progress: &dyn Fn(u64, Option<u64>) -> bool) -> Result<(), String> {
+    fn get(&self, url: &str, dest: &Path, _max: u64, progress: &dyn Fn(u64, Option<u64>) -> bool) -> Result<(), String> {
         *lock(&self.calls).entry(url.into()).or_default() += 1;
         if !url.ends_with(crate::update::SUMS_NAME) {
             self.waiting.fetch_add(1, Ordering::SeqCst);
@@ -101,7 +101,9 @@ fn sums_for(files: &[(&DataFile, &[u8])]) -> Vec<u8> {
 
 fn fetcher(cache: &Path, over: Option<PathBuf>) -> (Arc<Fetcher>, Arc<Mock>) {
     let m = Arc::new(Mock::default());
-    (Arc::new(Fetcher::new(Some(cache.to_path_buf()), over, V, Box::new(Arc::clone(&m)))), m)
+    let fe = Fetcher::new(Some(cache.to_path_buf()), over, V, Box::new(Arc::clone(&m)));
+    fe.set_allowed(true);
+    (Arc::new(fe), m)
 }
 
 fn ensure_wait(fe: &Arc<Fetcher>, f: &'static DataFile) -> Result<PathBuf, String> {
@@ -363,5 +365,124 @@ fn errors_in_words() {
     assert_eq!(friendly("SHA256SUMS: WinHttpSendRequest: 0x80072EE7"), "no connection to github.com (SHA256SUMS: WinHttpSendRequest: 0x80072EE7)");
     assert!(friendly("curl: (28) Operation timed out").starts_with("github.com did not answer in time"));
     assert!(friendly("HTTP 404").starts_with("this version's release does not have the file"));
+    assert!(friendly("selfie-f11cb3ec.bin is not listed in SHA256SUMS").starts_with("this version's release does not have the file"));
     assert_eq!(friendly("lang-de.txt failed its SHA-256 check"), "lang-de.txt failed its SHA-256 check");
+}
+
+/// Downloads start off (fail closed) until the config says otherwise:
+/// a new fetcher refuses, the config's switch decides, a broken file is
+/// off.
+#[test]
+fn downloads_start_off_until_the_config_says() {
+    let d = tmp("off-first");
+    let m = Arc::new(Mock::default());
+    let fe = Arc::new(Fetcher::new(Some(d.clone()), None, V, Box::new(Arc::clone(&m))));
+    let f = entry("first-off.bin", "models/first-off.bin", b"abc", true);
+    assert!(!fe.allowed());
+    assert!(matches!(fe.state(f), State::Off(_)));
+    assert_eq!(ensure_wait(&fe, f), Err(DISABLED.into()));
+    assert_eq!(m.calls(&sums_url()), 0, "nothing was asked of the network");
+    use crate::config::Config;
+    assert!(initial_allowed(Ok(None)), "no config yet: the default (on)");
+    assert!(initial_allowed(Ok(Some(Config::default()))));
+    assert!(!initial_allowed(Ok(Some(Config { download_data: false, ..Config::default() }))));
+    assert!(!initial_allowed(Err("line 3: expected key = value".into())), "a broken file: off");
+}
+
+/// This version's release lacks the file (not released yet; released
+/// without it): the newest release's, when it lists the same SHA-256.
+#[test]
+fn falls_back_to_the_newest_release_with_the_same_file() {
+    let d = tmp("fallback");
+    let data = b"the same model bytes";
+    let f = entry("fb-11223344.bin", "models/fb.bin", data, true);
+    let m = Arc::new(Mock::default());
+    let fe = Fetcher::new(Some(d.clone()), None, V, Box::new(Arc::clone(&m))).with_fallback(|| Ok("1.2.3".into()));
+    fe.set_allowed(true);
+    let fe = Arc::new(fe);
+    let old = |name: &str| format!("{}v1.2.3/{name}", crate::update::DOWNLOAD_PREFIX);
+    // This version: no release (404); the newest: has it.
+    m.set(&old("SHA256SUMS"), Resp::Body(sums_for(&[(f, data)])));
+    m.set(&old(f.asset), Resp::Body(data.to_vec()));
+    let p = ensure_wait(&fe, f).expect("from v1.2.3");
+    assert_eq!(std::fs::read(&p).unwrap(), data);
+    assert_eq!(m.calls(&sums_url()), 1);
+    // Released without it (not listed): the newest again.
+    let d2 = tmp("fallback2");
+    let m2 = Arc::new(Mock::default());
+    let fe2 = Fetcher::new(Some(d2.clone()), None, V, Box::new(Arc::clone(&m2))).with_fallback(|| Ok("1.2.3".into()));
+    fe2.set_allowed(true);
+    let fe2 = Arc::new(fe2);
+    m2.set(&sums_url(), Resp::Body(b"0000000000000000000000000000000000000000000000000000000000000000  other.bin\n".to_vec()));
+    m2.set(&old("SHA256SUMS"), Resp::Body(sums_for(&[(f, data)])));
+    m2.set(&old(f.asset), Resp::Body(data.to_vec()));
+    assert!(ensure_wait(&fe2, f).is_ok());
+    // The newest has another file under that name: refused (the built-in
+    // SHA-256 decides), and the error is this version's.
+    let d3 = tmp("fallback3");
+    let m3 = Arc::new(Mock::default());
+    let fe3 = Fetcher::new(Some(d3.clone()), None, V, Box::new(Arc::clone(&m3))).with_fallback(|| Ok("1.2.3".into()));
+    fe3.set_allowed(true);
+    let fe3 = Arc::new(fe3);
+    m3.set(&old("SHA256SUMS"), Resp::Body(sums_for(&[(f, b"other bytes")])));
+    let e = ensure_wait(&fe3, f).unwrap_err();
+    assert!(e.contains("not the one this version expects"), "{e}");
+    assert_eq!(m3.calls(&old(f.asset)), 0, "never downloaded");
+    // No newer answer, or a nonsense version: this version's error, in words.
+    for latest in [Err("offline".to_string()), Ok(V.to_string()), Ok("1.2/../x".to_string())] {
+        let d4 = tmp("fallback4");
+        let m4 = Arc::new(Mock::default());
+        let l = latest.clone();
+        let fe4 = Fetcher::new(Some(d4.clone()), None, V, Box::new(Arc::clone(&m4))).with_fallback(move || l.clone());
+        fe4.set_allowed(true);
+        let e = ensure_wait(&Arc::new(fe4), f).unwrap_err();
+        assert!(e.starts_with("this version's release does not have the file"), "{e}");
+    }
+}
+
+/// A transport that gives up (a stall, a timeout) ends the job as Failed
+/// with Retry: never stuck "downloading".
+#[test]
+fn a_stalled_download_ends_failed() {
+    let d = tmp("stall");
+    let (fe, m) = fetcher(&d, None);
+    let f = entry("stall.bin", "models/stall.bin", b"xyz", true);
+    m.set(&sums_url(), Resp::Body(sums_for(&[(f, b"xyz")])));
+    m.set(&f.url(V), Resp::Fail("download stalled (timed out)".into()));
+    let e = ensure_wait(&fe, f).unwrap_err();
+    assert!(e.starts_with("github.com did not answer in time"), "{e}");
+    assert!(matches!(fe.state(f), State::Failed(_)));
+    assert!(lock(&fe.jobs).is_empty());
+}
+
+/// Temporary files of a download killed midway are swept when the next
+/// one starts (an hour old), fresh ones (another process's) are kept.
+#[test]
+fn stale_part_files_are_swept() {
+    let d = tmp("sweep");
+    let dir = d.join("models");
+    std::fs::create_dir_all(&dir).unwrap();
+    let old = dir.join(".sweep.bin.1.0.part");
+    let fresh = dir.join(".sweep.bin.2.0.part");
+    let mine = dir.join("keep.bin");
+    for p in [&old, &fresh, &mine] {
+        std::fs::write(p, b"x").unwrap();
+    }
+    let t = std::time::SystemTime::now() - Duration::from_secs(7200);
+    std::fs::File::options().write(true).open(&old).unwrap().set_modified(t).unwrap();
+    let (fe, m) = fetcher(&d, None);
+    let f = entry("sweep.bin", "models/sweep.bin", b"abc", true);
+    m.set(&sums_url(), Resp::Body(sums_for(&[(f, b"abc")])));
+    m.set(&f.url(V), Resp::Body(b"abc".to_vec()));
+    ensure_wait(&fe, f).unwrap();
+    assert!(!old.exists() && fresh.exists() && mine.exists());
+}
+
+#[test]
+fn time_limits_scale_with_the_size() {
+    use crate::update::download_time_limit as t;
+    assert_eq!(t(None).as_secs(), 600);
+    assert_eq!(t(Some(219_338)).as_secs(), 60 + 219_338 / 4096);
+    assert_eq!(t(Some(64 * 1024)).as_secs(), 76);
+    assert_eq!(t(Some(1 << 40)).as_secs(), 600);
 }

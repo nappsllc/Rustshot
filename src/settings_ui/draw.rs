@@ -568,9 +568,8 @@ fn general(ui: &mut Ui, s: &mut Settings, tok: &Tok) {
         ui.switch("check_updates", &mut f.check_updates, tok);
     });
     srow(ui, tok, "Download language and blur files", Some("When first needed, from this version's GitHub release"), |ui| {
-        if ui.switch("download_data", &mut f.download_data, tok) {
-            crate::fetch::set_allowed(f.download_data);
-        }
+        // Applied when saved (Cancel leaves downloads as they were).
+        ui.switch("download_data", &mut f.download_data, tok);
     });
     // Turned off: say how to get back before it goes.
     if hid {

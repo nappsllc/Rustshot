@@ -569,7 +569,7 @@ fn a_mobile_graph_matches_the_reference() {
 fn run_all(n: &mut Net) {
     n.run();
     let (w, h) = n.input_size();
-    let f = CamFrame { w: 64, h: 36, bgra: (0..64 * 36 * 4).map(|i| (i * 7 % 251) as u8).collect() };
+    let f = CamFrame { w: 64, h: 36, bgra: (0..64 * 36 * 4).map(|i| (i * 7 % 251) as u8).collect(), note: None };
     let mut inp = SegInput::default();
     inp.prepare(&f, w, h);
     let mut sq = SqMask::default();
@@ -685,7 +685,7 @@ fn bad_models_are_refused() {
 fn input_is_the_bubble_square_filling_the_height() {
     // A 16:9 frame: left half red, right half blue, a green band at the top.
     let (fw, fh) = (320u32, 180u32);
-    let mut f = CamFrame { w: fw, h: fh, bgra: vec![0; (fw * fh * 4) as usize] };
+    let mut f = CamFrame { w: fw, h: fh, bgra: vec![0; (fw * fh * 4) as usize], note: None };
     for y in 0..fh {
         for x in 0..fw {
             let p = &mut f.bgra[((y * fw + x) * 4) as usize..][..4];
@@ -701,7 +701,7 @@ fn input_is_the_bubble_square_filling_the_height() {
     assert_eq!(px(&inp, 250, 100), [0, 0, 255, 255]);
     assert_eq!(px(&inp, 128, 5), [0, 255, 0, 255]);
     // 4:3: the square fills the height, black at the sides.
-    let f43 = CamFrame { w: 240, h: 180, bgra: [200u8, 100, 50, 255].repeat(240 * 180) };
+    let f43 = CamFrame { w: 240, h: 180, bgra: [200u8, 100, 50, 255].repeat(240 * 180), note: None };
     inp.prepare(&f43, 256, 144);
     assert_eq!(px(&inp, 5, 70), [0, 0, 0, 255], "letterboxed");
     assert_eq!(px(&inp, 128, 70), [50, 100, 200, 255]);
@@ -732,7 +732,7 @@ fn net_segments_the_square() {
     let m = mobile_model(144, 256, 2, 11);
     let mut net = Net::from_model(m).unwrap();
     assert_eq!(net.input_size(), (256, 144));
-    let f = CamFrame { w: 1280, h: 720, bgra: (0..1280 * 720 * 4).map(|i| (i * 31 % 251) as u8).collect() };
+    let f = CamFrame { w: 1280, h: 720, bgra: (0..1280 * 720 * 4).map(|i| (i * 31 % 251) as u8).collect(), note: None };
     let mut inp = SegInput::default();
     inp.prepare(&f, 256, 144);
     let mut sq = SqMask::default();
@@ -754,7 +754,7 @@ fn seg_bench() {
     let weights: usize = m.tensors.iter().filter_map(|t| t.data.as_ref()).map(Vec::len).sum();
     let bytes = m.to_bytes();
     let mut net = Net::load(&bytes).unwrap();
-    let f = CamFrame { w: 1280, h: 720, bgra: (0..1280 * 720 * 4).map(|i| (i * 31 % 251) as u8).collect() };
+    let f = CamFrame { w: 1280, h: 720, bgra: (0..1280 * 720 * 4).map(|i| (i * 31 % 251) as u8).collect(), note: None };
     let mut inp = SegInput::default();
     let t = std::time::Instant::now();
     for _ in 0..20 {
@@ -894,7 +894,7 @@ fn model_manifest_matches_the_file() {
     // The engine takes it: 144x256 in, a probability per pixel out.
     let mut net = Net::selfie(&bytes).expect("models/selfie.bin loads");
     assert_eq!(net.input_size(), (256, 144));
-    let fr = CamFrame { w: 1280, h: 720, bgra: (0..1280 * 720 * 4).map(|i| (i * 31 % 251) as u8).collect() };
+    let fr = CamFrame { w: 1280, h: 720, bgra: (0..1280 * 720 * 4).map(|i| (i * 31 % 251) as u8).collect(), note: None };
     let mut inp = SegInput::default();
     inp.prepare(&fr, 256, 144);
     let mut sq = SqMask::default();

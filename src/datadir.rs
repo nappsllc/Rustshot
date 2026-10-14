@@ -51,9 +51,15 @@ pub fn data_dirs() -> Vec<PathBuf> {
 }
 
 /// `rel` is a plain relative path of our own: `folder/name`, ASCII, no
-/// traversal.
+/// traversal, no Windows device name (`CON`, `nul.txt`, `COM1`…) and no
+/// trailing dot (Win32 drops it: `de.txt.` is `de.txt`).
 pub fn safe_rel(rel: &str) -> bool {
-    let ok = |s: &str| !s.is_empty() && !s.starts_with('.') && s.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b));
+    let device = |s: &str| {
+        let stem = s.split('.').next().unwrap_or("").to_ascii_uppercase();
+        matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$")
+            || ((stem.starts_with("COM") || stem.starts_with("LPT")) && stem.len() == 4 && stem.as_bytes()[3].is_ascii_digit())
+    };
+    let ok = |s: &str| !s.is_empty() && !s.starts_with('.') && !s.ends_with('.') && !device(s) && s.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b));
     rel.split('/').count() <= 2 && rel.split('/').all(ok)
 }
 
@@ -104,7 +110,8 @@ mod tests {
         assert!(safe_rel("lang/de.txt"));
         assert!(safe_rel("models/selfie.bin"));
         assert!(safe_rel("lang/pt-BR.txt"));
-        for bad in ["", "../x", "lang/../x", "/etc/passwd", r"lang\de.txt", "a/b/c", "lang/.hidden", "lang/", "C:/x"] {
+        assert!(safe_rel("lang/console.txt") && safe_rel("lang/com10.txt"));
+        for bad in ["", "../x", "lang/../x", "/etc/passwd", r"lang\de.txt", "a/b/c", "lang/.hidden", "lang/", "C:/x", "lang/CON.txt", "lang/nul", "lang/com1.txt", "LPT9/x", "lang/aux.tar.gz", "lang/de.txt.", "lang./de.txt"] {
             assert!(!safe_rel(bad), "{bad}");
         }
     }

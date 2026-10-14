@@ -435,7 +435,7 @@ fn winhttp_send(
     let err = |step: &str| format!("{step}: {}", std::io::Error::last_os_error());
 
     unsafe {
-        let agent = wide("rustshot/0.1");
+        let agent = wide(crate::update::USER_AGENT);
         let session = Handle(WinHttpOpen(
             PCWSTR(agent.as_ptr()),
             WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
@@ -595,10 +595,14 @@ const MAX_REDIRECTS: usize = 5;
 /// `update::is_safe_download_url`; redirects are followed by hand and each
 /// hop must pass `update::is_allowed_download_hop`. `progress(got, total)`
 /// returning false cancels (error `update::CANCELLED`). A partial file is
-/// deleted on any failure.
+/// deleted on any failure. `max`: at most this many bytes (checked at
+/// every chunk). Each read times out after 30 s; a download slower than
+/// `update::STALL_BYTES` per `STALL_SECS`, or past
+/// `update::download_time_limit`, fails.
 pub fn download_to(
     url: &str,
     dest: &Path,
+    max: Option<u64>,
     progress: &dyn Fn(u64, Option<u64>) -> bool,
 ) -> Result<(), String> {
     use crate::update::{is_allowed_download_hop, is_safe_download_url, split_https_url};
@@ -618,7 +622,7 @@ pub fn download_to(
                 current = next;
             }
             200 => {
-                let r = write_body(&resp, dest, progress);
+                let r = write_body(&resp, dest, max, progress);
                 if r.is_err() {
                     let _ = std::fs::remove_file(dest);
                 }
@@ -633,10 +637,21 @@ pub fn download_to(
 fn write_body(
     resp: &Response,
     dest: &Path,
+    max: Option<u64>,
     progress: &dyn Fn(u64, Option<u64>) -> bool,
 ) -> Result<(), String> {
+    use crate::update::{STALL_BYTES, STALL_SECS, download_time_limit};
     use std::io::Write;
+    use std::time::{Duration, Instant};
     let total = content_length(resp);
+    if let (Some(t), Some(m)) = (total, max)
+        && t > m
+    {
+        return Err("download is larger than expected".into());
+    }
+    let start = Instant::now();
+    let limit = download_time_limit(max);
+    let mut window = (start, 0u64);
     let wr = |e: std::io::Error| format!("write {}: {e}", dest.display());
     let mut file =
         std::fs::OpenOptions::new().write(true).create_new(true).open(dest).map_err(wr)?;
@@ -650,10 +665,23 @@ fn write_body(
         if n == 0 {
             break;
         }
-        file.write_all(&buf[..n]).map_err(wr)?;
         got += n as u64;
+        if max.is_some_and(|m| got > m) {
+            return Err("download is larger than expected".into());
+        }
+        file.write_all(&buf[..n]).map_err(wr)?;
         if total.is_some_and(|t| got > t) {
             return Err("download is larger than announced".into());
+        }
+        let now = Instant::now();
+        if now.duration_since(start) > limit {
+            return Err("download timed out".into());
+        }
+        if now.duration_since(window.0) >= Duration::from_secs(STALL_SECS) {
+            if got - window.1 < STALL_BYTES {
+                return Err("download stalled (timed out)".into());
+            }
+            window = (now, got);
         }
         if !progress(got, total) {
             return Err(crate::update::CANCELLED.into());

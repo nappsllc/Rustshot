@@ -1604,6 +1604,9 @@ impl Settings {
         }
         self.confirmed = true; // the file is ours now
         let tray_on = cfg.show_tray && !self.loaded.show_tray;
+        // Downloads follow what was saved, in this process too (a Settings
+        // window of its own has no daemon to reload it).
+        crate::fetch::set_allowed(cfg.download_data);
         self.loaded = cfg.clone();
         // The typed S3 secret goes to the OS credential store, never the file.
         let secret = std::mem::take(&mut self.form.up.secret.text);
@@ -1938,6 +1941,9 @@ fn run(rx: Receiver<Msg>) {
     let mut s = Settings::open(config::config_path(), autostart)
         .with_screenclip(crate::screenclip_win::state(), crate::screenclip_win::handler());
     s.hotkey_failures = hotkey::outstanding();
+    // Downloads as the file says (a broken file: off), before anything
+    // here can ask for one.
+    crate::fetch::set_allowed(!s.stale && s.loaded.download_data);
     s.section = START_SECTION.swap(GENERAL, std::sync::atomic::Ordering::SeqCst).min(SECTIONS.len() - 1);
     if START_TRAY_NOTICE.swap(false, std::sync::atomic::Ordering::SeqCst) {
         s.show_tray_off_notice();

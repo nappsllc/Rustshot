@@ -2130,6 +2130,10 @@ fn cancel_key(edit: &mut Edit) {
         edit.obj.sel.clear();
         return;
     }
+    if edit.rec.blur_ask.is_some() {
+        edit.rec.blur_ask = None;
+        return;
+    }
     if edit.rec.dev_open.is_some() {
         edit.rec.dev_open = None;
         return;
@@ -2359,6 +2363,9 @@ struct RecPop {
     dev_open: Option<Dev>,
     /// The camera ring's palette is open.
     ring_pal: bool,
+    /// Start pressed with a blur chosen that cannot be had: the question
+    /// shown in place of Start ([`crate::cam::bg::Blur::ask_lines`]).
+    blur_ask: Option<(&'static str, &'static str)>,
     /// "Start recording" pressed: `finish` records instead of exporting.
     start: bool,
     /// The camera bubble while the popover shows the camera.
@@ -2406,6 +2413,7 @@ impl RecPop {
             cams_rx: None,
             dev_open: None,
             ring_pal: false,
+            blur_ask: None,
             start: false,
             cam: CamSlot::default(),
             source: rec_ui::RecSource::Region,
@@ -4708,6 +4716,13 @@ mod tests {
                 edit_of(&mut app).rec.opts.cam_bg = crate::cam::bg::Bg::Light;
                 save(&mut app, &format!("{tn}-video-camera-{name}.png"));
             }
+            // Start with a blur that cannot be had: the question.
+            crate::cam::bg::set_available(Some(false));
+            let mut app = video(th, vsel);
+            let e = edit_of(&mut app);
+            e.rec.opts.cam_bg = crate::cam::bg::Bg::Strong;
+            e.rec.blur_ask = crate::cam::bg::state().ask_lines();
+            save(&mut app, &format!("{tn}-video-blur-question.png"));
             crate::cam::bg::set_available(None);
             // No room below: above the selection; none above either: inside.
             save(&mut video(th, FRect { x: 240.0, y: 520.0, w: 960.0, h: 340.0 }), &format!("{tn}-video-above.png"));

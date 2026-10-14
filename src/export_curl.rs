@@ -11,17 +11,34 @@ use std::time::Duration;
 /// URL must pass `update::is_allowed_download_hop`. Progress is the growing
 /// size of `dest`, polled while curl runs (total unknown); `progress`
 /// returning false kills curl (error `update::CANCELLED`). A partial file is
-/// deleted on any failure.
+/// deleted on any failure. `max`: at most this many bytes (curl stops
+/// itself past it, and the size is checked at every poll and at the end).
+/// A stalled download (under `update::STALL_BYTES` in `STALL_SECS`) or
+/// one past `update::download_time_limit` fails.
 pub fn download_to(
     url: &str,
     dest: &Path,
+    max: Option<u64>,
     progress: &dyn Fn(u64, Option<u64>) -> bool,
 ) -> Result<(), String> {
+    use crate::update::{STALL_BYTES, STALL_SECS, USER_AGENT, download_time_limit};
     if !is_safe_download_url(url) {
         return Err("refusing to download from an unexpected URL".into());
     }
-    let https = ["-fsSL", "--proto", "=https", "--proto-redir", "=https", "--max-redirs", "5"];
-    let r = run_curl(url, dest, &https, progress, &is_allowed_download_hop);
+    let (speed, stall, limit) = (STALL_BYTES.to_string(), STALL_SECS.to_string(), download_time_limit(max).as_secs().to_string());
+    let mut https = vec![
+        "-fsSL", "--proto", "=https", "--proto-redir", "=https", "--max-redirs", "5", "-A", USER_AGENT, "--speed-limit", &speed, "--speed-time", &stall, "--max-time", &limit,
+    ];
+    let cap = max.map(|m| m.to_string());
+    if let Some(c) = &cap {
+        https.extend(["--max-filesize", c.as_str()]);
+    }
+    let capped = |got: u64, t: Option<u64>| max.is_none_or(|m| got <= m) && progress(got, t);
+    let r = run_curl(url, dest, &https, &capped, &is_allowed_download_hop);
+    let r = match r {
+        Err(e) if e == CANCELLED && max.is_some_and(|m| std::fs::metadata(dest).map_or(0, |d| d.len()) > m) => Err("download is larger than expected".into()),
+        r => r,
+    };
     if r.is_err() {
         let _ = std::fs::remove_file(dest);
     }

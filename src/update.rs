@@ -33,6 +33,22 @@ pub const DOWNLOAD_PREFIX: &str = "https://github.com/nappsllc/rustshot/releases
 const REDIRECT_HOSTS: &[&str] = &["objects.githubusercontent.com", "release-assets.githubusercontent.com"];
 /// Name of the checksum asset the release workflow publishes.
 pub const SUMS_NAME: &str = "SHA256SUMS";
+
+/// A release download slower than [`STALL_BYTES`] over [`STALL_SECS`] is
+/// given up (a dead connection never hangs it).
+pub const STALL_BYTES: u64 = 1024;
+pub const STALL_SECS: u64 = 30;
+
+/// A release download's whole-time limit: 60 s plus 4 KB/s of `max`
+/// bytes (an unknown size: the most), at most 600 s.
+pub fn download_time_limit(max: Option<u64>) -> std::time::Duration {
+    const MOST: u64 = 600;
+    let s = max.map_or(MOST, |m| (60 + m / 4096).min(MOST));
+    std::time::Duration::from_secs(s)
+}
+
+/// The User-Agent of every request (`rustshot/<version>`).
+pub const USER_AGENT: &str = concat!("rustshot/", env!("CARGO_PKG_VERSION"));
 /// Error text of a download the progress callback cancelled.
 pub const CANCELLED: &str = "cancelled";
 
@@ -684,7 +700,7 @@ pub fn fetch_verified(
     let result = (|| -> Result<[u8; 32], String> {
         // Abort the SHA256SUMS download once it passes the cap.
         let too_big = std::cell::Cell::new(false);
-        let r = crate::export::download_to(&sums_asset.url, &sums_path, &|got, _| {
+        let r = crate::export::download_to(&sums_asset.url, &sums_path, Some(SUMS_MAX), &|got, _| {
             if got > SUMS_MAX {
                 too_big.set(true);
                 return false;
@@ -707,7 +723,7 @@ pub fn fetch_verified(
         let want = *sums
             .get(&asset.name)
             .ok_or_else(|| format!("{} is not listed in SHA256SUMS; refusing to install", asset.name))?;
-        crate::export::download_to(&asset.url, &dest, &|got, t| progress(got, t.or(total)))?;
+        crate::export::download_to(&asset.url, &dest, total, &|got, t| progress(got, t.or(total)))?;
         let got = crate::sha256::file_digest(&dest).map_err(|e| format!("read download: {e}"))?;
         if got != want {
             return Err(format!("{} failed its SHA-256 check; refusing to install", asset.name));
@@ -967,6 +983,16 @@ pub fn check_now() -> Result<Option<Release>, String> {
     let body = latest_json()?;
     let release = parse_latest(&body);
     Ok(release.filter(|r| is_newer(&r.version, env!("CARGO_PKG_VERSION"))))
+}
+
+/// The latest published release's version (`x.y.z`, rebuilt from its
+/// numbers), whatever this build's: the data files' fallback for a build
+/// whose own version has no release yet.
+#[cfg_attr(test, allow(dead_code))] // tests never go to the network
+pub fn latest_version() -> Result<String, String> {
+    let r = parse_latest(&latest_json()?).ok_or("no published release")?;
+    let (a, b, c) = parse_version(&r.version).ok_or("unexpected release version")?;
+    Ok(format!("{a}.{b}.{c}"))
 }
 
 /// Debug builds and tests only: a local JSON file used instead of the
@@ -1668,7 +1694,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let dest = dir.join("rustshot-0.1.1-windows-x86_64.exe");
         let calls = std::cell::Cell::new(0u32);
-        crate::export::download_to(&url, &dest, &|got, total| {
+        crate::export::download_to(&url, &dest, None, &|got, total| {
             calls.set(calls.get() + 1);
             assert!(total.is_none_or(|t| got <= t));
             true
@@ -1680,7 +1706,7 @@ mod tests {
         println!("kept at {}", dest.display());
         // Cancel deletes the partial file.
         let dest2 = dir.join("cancelled.exe");
-        let err = crate::export::download_to(&url, &dest2, &|got, _| got < 100_000).unwrap_err();
+        let err = crate::export::download_to(&url, &dest2, None, &|got, _| got < 100_000).unwrap_err();
         assert_eq!(err, CANCELLED);
         assert!(!dest2.exists());
     }

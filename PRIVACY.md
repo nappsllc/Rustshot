@@ -83,8 +83,15 @@ Rustshot does not collect, store or transmit personal data or telemetry.
   asset servers as above), checked against the SHA-256 built into
   Rustshot, and kept in `%LOCALAPPDATA%\rustshot-data\{models,lang}`
   (Linux: `$XDG_DATA_HOME/rustshot/…`, macOS: `~/Library/Application
-  Support/rustshot/…`). The requests carry nothing but the file's name; no
-  camera picture, screenshot or setting is ever sent.
+  Support/rustshot/…`). When this version's release does not have the
+  file (a build not released yet), one anonymous request to the GitHub
+  Releases API (`api.github.com`) asks for the newest release, and the
+  file is taken from there only if it has the same SHA-256. The requests
+  carry nothing but the file's name and a `rustshot/<version>` user agent;
+  no camera picture, screenshot or setting is ever sent. Downloads stay
+  off until the config file is read (a broken config file: off).
+  Uninstalling keeps these files with the history unless you tick *Also
+  remove capture history and downloaded files*.
 - Screen recording: the screen, system sound, microphone and camera are
   captured only while a recording runs, and the camera also while its
   bubble is shown before one (Record popover with Camera on). Sound, the

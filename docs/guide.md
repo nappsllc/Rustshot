@@ -266,7 +266,8 @@ the oldest until the history fits in 2 GB (`history_days`,
 captures* off (`history = false`) keeps nothing new. Saved and uploaded
 files are never touched (only **Clear history…** with *Also delete saved
 files* removes them). Uninstalling keeps the history unless you tick *Also
-remove capture history* in the uninstaller.
+remove capture history and downloaded files* in the uninstaller (the
+same folder keeps the downloaded blur model and language files).
 
 **History** (<kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd>, or the tray's
 **History…**) lists captures by day as cards or rows. Search matches the

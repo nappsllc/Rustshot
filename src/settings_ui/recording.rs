@@ -397,6 +397,8 @@ pub fn section(ui: &mut Ui, s: &mut super::Settings, tok: &Tok) {
 pub fn camera(ui: &mut Ui, s: &mut super::Settings, tok: &Tok) {
     s.rec_lists.start();
     let found = s.rec_lists.found.as_ref();
+    // Downloads as the form has them (Settings › General, not saved yet).
+    let downloads = s.form.download_data;
     let f = &mut s.form.rec;
     let cams = device_items(DEFAULT_CAM, found.map(|f| f.cams.as_slice()), &f.cam_dev);
     let no_cams = found.is_some_and(|f| f.cams.is_empty());
@@ -420,35 +422,41 @@ pub fn camera(ui: &mut Ui, s: &mut super::Settings, tok: &Tok) {
     srow(ui, tok, "Mirror", Some("Like a mirror, as most video calls show you"), |ui| {
         ui.switch("rec_camera_mirror", &mut f.mirror, tok);
     });
-    use crate::cam::bg::Blur;
+    use crate::cam::bg::{Blur, DAMAGED, UNAVAILABLE};
     let state = crate::cam::bg::state();
     let note = state.settings_note();
-    // Off or damaged: no choices; the note (which file goes where) takes
-    // the row's width and the lines it needs, in the error color.
-    if matches!(state, Blur::Off { .. } | Blur::Damaged(_)) {
-        ui.enabled = on && !no_cams;
-        let w = ui.bounds().w - 14.0;
-        let n = super::draw::wrap_at_breaks(&note, w, |s| ui.text_w(11.0, s)).len();
-        let h = (16.0 + 13.0 * n as f32 + 6.0).max(super::draw::ROW_H);
-        srow_ex(ui, tok, "Background", Some(&note), true, h, |_| {});
-        ui.enabled = on;
-        return ring_row(ui, f, tok, on, no_cams);
-    }
-    ui.enabled = on && !no_cams && state.choosable();
+    // The choices are always there (Off too, whatever the model's state);
+    // the note says what a blur needs. Downloads off or a damaged file:
+    // a short note on the row, then which file goes where (the row's
+    // width, the lines it needs, in the error color).
+    let long = matches!(state, Blur::Off { .. } | Blur::Damaged(_));
     let failed = matches!(state, Blur::Failed(_));
+    let short = match &state {
+        Blur::Off { .. } => UNAVAILABLE.to_string(),
+        Blur::Damaged(_) => DAMAGED.to_string(),
+        _ => note.clone(),
+    };
+    ui.enabled = on && !no_cams;
     let h = if failed { 16.0 + 13.0 * 3.0 + 6.0 } else { super::draw::ROW_H };
-    srow_ex(ui, tok, "Background", Some(&note), failed, h, |ui| {
-        // A blur chosen: the model comes (if it is not here) while the
-        // window stays responsive; a failed download is retried.
+    srow_ex(ui, tok, "Background", Some(&short), failed || long, h, |ui| {
+        // A blur chosen: the model comes (if it is not here, and the
+        // form has downloads on) while the window stays responsive; a
+        // failed download is retried.
         let was = f.bg;
-        if failed && ui.clink("rec_camera_bg_retry", "Retry", 12.0, false, tok) {
+        if failed && downloads && ui.clink("rec_camera_bg_retry", "Retry", 12.0, false, tok) {
             crate::cam::bg::request_model();
         }
         ui.seg("rec_camera_bg", &labels(&BACKGROUNDS), &mut f.bg, tok);
-        if f.bg != was && BACKGROUNDS[f.bg].1 != "off" {
+        if f.bg != was && BACKGROUNDS[f.bg].1 != "off" && downloads {
             crate::cam::bg::request_model();
         }
     });
+    if let Some(detail) = state.settings_detail() {
+        let w = ui.bounds().w - 14.0;
+        let n = super::draw::wrap_at_breaks(&detail, w, |s| ui.text_w(11.0, s)).len();
+        let h = (16.0 + 13.0 * n as f32 + 6.0).max(super::draw::ROW_H);
+        srow_ex(ui, tok, "", Some(&detail), true, h, |_| {});
+    }
     ring_row(ui, f, tok, on, no_cams);
 }
 

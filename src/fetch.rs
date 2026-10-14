@@ -14,6 +14,14 @@
 //! then: a partial download is never seen. One download per file at a
 //! time; later callers wait for it. A file kept from another version is
 //! used as long as it has this version's SHA-256 (no download).
+//!
+//! A build whose own version has no release yet (a development build, a
+//! pre-release) or whose release lacks the file: the newest published
+//! release is asked for (the updater's API request) and, when it lists an
+//! asset of the same name and SHA-256, the file comes from there. The
+//! SHA-256 built into this version is what decides, wherever it comes
+//! from. Downloads stay off until the config says otherwise
+//! ([`set_allowed`]; [`global`] reads it once).
 
 use crate::datadir;
 use std::collections::HashMap;
@@ -81,15 +89,13 @@ impl DataFile {
     /// `p` has this file's size and SHA-256 (remembered by path, length
     /// and modification time: asking again costs a `stat`).
     pub fn matches(&self, p: &Path) -> bool {
-        type Seen = HashMap<(PathBuf, &'static str), (u64, Option<std::time::SystemTime>, bool)>;
-        static SEEN: OnceLock<Mutex<Seen>> = OnceLock::new();
         let Ok(md) = std::fs::metadata(p) else { return false };
         if !md.is_file() || md.len() != self.size {
             return false;
         }
         let stamp = (md.len(), md.modified().ok());
         let key = (p.to_path_buf(), self.sha256);
-        let seen = SEEN.get_or_init(Default::default);
+        let seen = seen();
         if let Some(&(len, t, ok)) = lock(seen).get(&key)
             && (len, t) == stamp
         {
@@ -100,12 +106,27 @@ impl DataFile {
         ok
     }
 
+    /// Forget what [`DataFile::matches`] remembered of this file (its
+    /// bytes turned out not to load: the next look hashes it again).
+    pub fn forget(&self) {
+        lock(seen()).retain(|(_, sha), _| *sha != self.sha256);
+        global().bump();
+    }
+
     /// Hash `p` now (no memo).
     pub fn check(&self, p: &Path) -> Result<(), String> {
         let d = crate::sha256::file_digest(p).map_err(|e| format!("read {}: {e}", p.display()))?;
         let len = std::fs::metadata(p).map_err(|e| e.to_string())?.len();
         if len == self.size && crate::sha256::hex(&d) == self.sha256 { Ok(()) } else { Err(format!("{} failed its SHA-256 check", self.asset)) }
     }
+}
+
+type Seen = HashMap<(PathBuf, &'static str), (u64, Option<std::time::SystemTime>, bool)>;
+
+/// [`DataFile::matches`]' memo.
+fn seen() -> &'static Mutex<Seen> {
+    static SEEN: OnceLock<Mutex<Seen>> = OnceLock::new();
+    SEEN.get_or_init(Default::default)
 }
 
 /// `rel` (`lang/de.txt`) under `d`, with this OS's separators.
@@ -123,15 +144,17 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 /// ([`crate::export::download_to`]), or a test's stand-in.
 pub trait Transport: Send + Sync {
     /// Download `url` to `dest` (created; a partial file deleted on
-    /// failure); `progress(got, total)` returning false stops it.
-    fn get(&self, url: &str, dest: &Path, progress: &dyn Fn(u64, Option<u64>) -> bool) -> Result<(), String>;
+    /// failure), at most `max` bytes; `progress(got, total)` returning
+    /// false stops it. It always ends: a stalled or slow download fails
+    /// (the release transport's time limits).
+    fn get(&self, url: &str, dest: &Path, max: u64, progress: &dyn Fn(u64, Option<u64>) -> bool) -> Result<(), String>;
 }
 
 struct Web;
 
 impl Transport for Web {
-    fn get(&self, url: &str, dest: &Path, progress: &dyn Fn(u64, Option<u64>) -> bool) -> Result<(), String> {
-        crate::export::download_to(url, dest, progress)
+    fn get(&self, url: &str, dest: &Path, max: u64, progress: &dyn Fn(u64, Option<u64>) -> bool) -> Result<(), String> {
+        crate::export::download_to(url, dest, Some(max), progress)
     }
 }
 
@@ -170,6 +193,9 @@ pub struct Fetcher {
     failed: Mutex<HashMap<&'static str, String>>,
     generation: AtomicU64,
     seq: AtomicU64,
+    /// The newest published release's version, for a file this version's
+    /// own release does not have (`None`: no fallback).
+    fallback: Option<Box<dyn Fn() -> Result<String, String> + Send + Sync>>,
 }
 
 impl Fetcher {
@@ -179,12 +205,21 @@ impl Fetcher {
             over,
             version: version.to_string(),
             net,
-            allowed: AtomicBool::new(true),
+            // Off until the config is read (fail closed).
+            allowed: AtomicBool::new(false),
             jobs: Mutex::default(),
             failed: Mutex::default(),
             generation: AtomicU64::new(0),
             seq: AtomicU64::new(0),
+            fallback: None,
         }
+    }
+
+    /// With `latest` (the newest release's version) for files this
+    /// version's own release does not have.
+    pub fn with_fallback(mut self, latest: impl Fn() -> Result<String, String> + Send + Sync + 'static) -> Fetcher {
+        self.fallback = Some(Box::new(latest));
+        self
     }
 
     fn bump(&self) {
@@ -243,8 +278,9 @@ impl Fetcher {
             return State::Failed(e.clone());
         }
         if !self.allowed() {
-            let p = self.cache_path(f).unwrap_or_else(|| PathBuf::from(f.rel));
-            return if p.is_file() { State::Damaged(p) } else { State::Off(p) };
+            // (No cache folder at all: an empty path; nothing to check.)
+            let p = self.cache_path(f).unwrap_or_default();
+            return if !p.as_os_str().is_empty() && p.is_file() { State::Damaged(p) } else { State::Off(p) };
         }
         State::Missing
     }
@@ -267,6 +303,9 @@ impl Fetcher {
 
     /// `f` here: `done` gets its path, now when it already is, else once a
     /// download (on its own thread; one per file) ends. Never blocks.
+    /// `done` runs on the caller's thread when the answer is immediate
+    /// (the file is here, downloads are off), else on the download's
+    /// thread: a caller must not hold a lock that `done` takes.
     pub fn ensure(self: &Arc<Self>, f: &'static DataFile, done: Done) {
         if let Some(p) = self.find(f) {
             return done(Ok(p));
@@ -274,13 +313,24 @@ impl Fetcher {
         if !self.allowed() {
             return done(Err(DISABLED.into()));
         }
-        {
+        let here = {
             let mut jobs = lock(&self.jobs);
             if let Some(j) = jobs.get_mut(f.asset) {
                 j.waiters.push(done);
                 return;
             }
-            jobs.insert(f.asset, Job { got: 0, waiters: vec![done] });
+            // A download that ended (renamed, gone from `jobs`) between
+            // the look above and this lock: no second one.
+            match self.find(f) {
+                Some(p) => Err((p, done)),
+                None => {
+                    jobs.insert(f.asset, Job { got: 0, waiters: vec![done] });
+                    Ok(())
+                }
+            }
+        };
+        if let Err((p, done)) = here {
+            return done(Ok(p));
         }
         lock(&self.failed).remove(f.asset);
         self.bump();
@@ -303,6 +353,7 @@ impl Fetcher {
             let waiters = lock(&self.jobs).remove(f.asset).map(|j| j.waiters).unwrap_or_default();
             let e = format!("start the download: {e}");
             lock(&self.failed).insert(f.asset, e.clone());
+            self.bump();
             for w in waiters {
                 w(Err(e.clone()));
             }
@@ -315,33 +366,60 @@ impl Fetcher {
         let dest = self.cache_path(f).ok_or("there is no folder to keep downloads in")?;
         let dir = dest.parent().ok_or("unexpected download path")?;
         std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
+        sweep(dir);
+        match self.download_from(f, &self.version, &dest, dir) {
+            Err(Fetch::NotThere(why)) => {
+                // This version's release lacks it: the newest release, if
+                // it has the very same file.
+                let Some(latest) = &self.fallback else { return Err(why) };
+                let v = match latest() {
+                    Ok(v) if v != self.version && crate::update::parse_version(&v).is_some() => v,
+                    _ => return Err(why),
+                };
+                eprintln!("rustshot: {}: {why}; trying release v{v}", f.asset);
+                self.download_from(f, &v, &dest, dir).map_err(|e| match e {
+                    Fetch::NotThere(_) => why,
+                    Fetch::Err(e) => e,
+                })
+            }
+            r => r.map_err(|e| match e {
+                Fetch::NotThere(e) | Fetch::Err(e) => e,
+            }),
+        }
+    }
+
+    /// [`Fetcher::download`] from release `version`.
+    fn download_from(&self, f: &'static DataFile, version: &str, dest: &Path, dir: &Path) -> Result<PathBuf, Fetch> {
         let n = self.seq.fetch_add(1, Ordering::Relaxed);
         let tag = format!("{}.{}", std::process::id(), n);
         let sums_tmp = dir.join(format!(".{}.sums.{tag}.part", f.asset));
         let tmp = dir.join(format!(".{}.{tag}.part", f.asset));
-        let r = (|| -> Result<(), String> {
-            let sums_url = format!("{}v{}/{}", crate::update::DOWNLOAD_PREFIX, self.version, crate::update::SUMS_NAME);
+        let r = (|| -> Result<(), Fetch> {
+            let sums_url = format!("{}v{version}/{}", crate::update::DOWNLOAD_PREFIX, crate::update::SUMS_NAME);
             let too_big = AtomicBool::new(false);
-            let r = self.net.get(&sums_url, &sums_tmp, &|got, _| {
+            let r = self.net.get(&sums_url, &sums_tmp, crate::update::SUMS_MAX, &|got, _| {
                 let big = got > crate::update::SUMS_MAX;
                 too_big.fetch_or(big, Ordering::Relaxed);
                 !big
             });
             if too_big.load(Ordering::Relaxed) {
-                return Err("SHA256SUMS is unexpectedly large".into());
+                return Err(Fetch::Err("SHA256SUMS is unexpectedly large".into()));
             }
-            r.map_err(|e| format!("SHA256SUMS: {e}"))?;
-            let text = std::fs::read(&sums_tmp).map_err(|e| e.to_string())?;
+            r.map_err(|e| {
+                let e = format!("SHA256SUMS: {e}");
+                if is_404(&e) { Fetch::NotThere(e) } else { Fetch::Err(e) }
+            })?;
+            let text = std::fs::read(&sums_tmp).map_err(|e| Fetch::Err(e.to_string()))?;
             let (sums, poisoned) = crate::update::parse_sums_checked(&String::from_utf8_lossy(&text));
             if poisoned.iter().any(|p| p == f.asset) {
-                return Err(format!("SHA256SUMS lists {} twice", f.asset));
+                return Err(Fetch::Err(format!("SHA256SUMS lists {} twice", f.asset)));
             }
-            let want = sums.get(f.asset).ok_or_else(|| format!("{} is not listed in SHA256SUMS", f.asset))?;
+            let want = sums.get(f.asset).ok_or_else(|| Fetch::NotThere(format!("{} is not listed in SHA256SUMS", f.asset)))?;
             if crate::sha256::hex(want) != f.sha256 {
-                return Err(format!("the release's {} is not the one this version expects", f.asset));
+                return Err(Fetch::Err(format!("the release's {} is not the one this version expects", f.asset)));
             }
             let too_big = AtomicBool::new(false);
-            let r = self.net.get(&f.url(&self.version), &tmp, &|got, _| {
+            let r = self.net.get(&f.url(version), &tmp, f.size, &|got, _| {
                 let big = got > f.size;
                 too_big.fetch_or(big, Ordering::Relaxed);
                 if let Some(j) = lock(&self.jobs).get_mut(f.asset) {
@@ -351,17 +429,45 @@ impl Fetcher {
                 !big
             });
             if too_big.load(Ordering::Relaxed) {
-                return Err(format!("{} is larger than expected", f.asset));
+                return Err(Fetch::Err(format!("{} is larger than expected", f.asset)));
             }
-            r?;
-            f.check(&tmp)?;
-            std::fs::rename(&tmp, &dest).map_err(|e| format!("keep {}: {e}", dest.display()))
+            r.map_err(Fetch::Err)?;
+            f.check(&tmp).map_err(Fetch::Err)?;
+            std::fs::rename(&tmp, dest).map_err(|e| Fetch::Err(format!("keep {}: {e}", dest.display())))
         })();
         let _ = std::fs::remove_file(&sums_tmp);
         if r.is_err() {
             let _ = std::fs::remove_file(&tmp);
         }
-        r.map(|()| dest)
+        r.map(|()| dest.to_path_buf())
+    }
+}
+
+/// A download's failure: the release does not have the file (another
+/// release may), or anything else.
+enum Fetch {
+    NotThere(String),
+    Err(String),
+}
+
+fn is_404(e: &str) -> bool {
+    e.contains("HTTP 404") || e.contains("error: 404") || e.contains("returned error: 404")
+}
+
+/// Temporary files (`.<asset>….part`) a download killed midway left in
+/// `dir`, an hour old or more, are deleted.
+fn sweep(dir: &Path) {
+    let old = std::time::Duration::from_secs(3600);
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let name = e.file_name();
+        let name = name.to_string_lossy();
+        if !(name.starts_with('.') && name.ends_with(".part")) {
+            continue;
+        }
+        let aged = e.metadata().ok().and_then(|m| m.modified().ok()).and_then(|t| t.elapsed().ok()).is_some_and(|a| a >= old);
+        if aged {
+            let _ = std::fs::remove_file(e.path());
+        }
     }
 }
 
@@ -377,7 +483,7 @@ fn friendly(e: &str) -> String {
         "no connection to github.com"
     } else if timeout.iter().any(|k| low.contains(k)) {
         "github.com did not answer in time"
-    } else if e.contains("HTTP 404") || e.contains("error: 404") || e.contains("returned error: 404") {
+    } else if is_404(e) || e.contains("is not listed in SHA256SUMS") {
         "this version's release does not have the file"
     } else {
         return e.to_string();
@@ -386,15 +492,41 @@ fn friendly(e: &str) -> String {
 }
 
 /// The app's fetcher: the real cache and transport, this version.
+/// Downloads start as the config file says (`download_data`), read once
+/// here: every process (the daemon, a one-shot capture, a Settings
+/// window of its own, the CLI) begins from it, never from "on"; a reload
+/// or a save sets it again ([`set_allowed`]). Tests: no cache, no
+/// override folder, downloads off.
 pub fn global() -> &'static Arc<Fetcher> {
     static G: OnceLock<Arc<Fetcher>> = OnceLock::new();
-    G.get_or_init(|| Arc::new(Fetcher::new(datadir::cache_dir(), datadir::override_dir(), env!("CARGO_PKG_VERSION"), Box::new(Web))))
+    G.get_or_init(|| {
+        #[cfg(test)]
+        return Arc::new(Fetcher::new(None, None, env!("CARGO_PKG_VERSION"), Box::new(Web)));
+        #[cfg(not(test))]
+        {
+            let f = Fetcher::new(datadir::cache_dir(), datadir::override_dir(), env!("CARGO_PKG_VERSION"), Box::new(Web)).with_fallback(crate::update::latest_version);
+            f.allowed.store(initial_allowed(crate::config::read_at(&crate::config::config_path())), Ordering::Relaxed);
+            Arc::new(f)
+        }
+    })
+}
+
+/// Whether downloads start allowed, from the config file as read: its
+/// `download_data`; no file yet, the default (on); a broken one, off
+/// (fail closed).
+pub fn initial_allowed(read: Result<Option<crate::config::Config>, String>) -> bool {
+    match read {
+        Ok(c) => c.unwrap_or_default().download_data,
+        Err(_) => false,
+    }
 }
 
 /// `rel` (e.g. `lang/de.txt`) here, as the release asset `asset`: `on_done`
 /// gets its path (at once when it is already here), or why it could not
 /// be had. An asset not in this version's manifest, or not at `rel`, is
-/// refused. Never blocks; `on_done` may run on the download's thread.
+/// refused. Never blocks. `on_done` runs at once on the caller's thread
+/// when the answer is immediate, else on the download's thread: do not
+/// hold a lock `on_done` takes while calling this.
 pub fn ensure(asset: &str, rel: &str, on_done: impl FnOnce(Result<PathBuf, String>) + Send + 'static) {
     match by_asset(asset).filter(|f| f.rel == rel) {
         Some(f) => global().ensure(f, Box::new(on_done)),
@@ -409,7 +541,20 @@ pub fn state(f: &'static DataFile) -> State {
 
 /// `download_data` (Settings › General).
 pub fn set_allowed(on: bool) {
+    #[cfg(test)]
+    LAST_SET.with(|l| l.set(Some(on)));
     global().set_allowed(on);
+}
+
+#[cfg(test)]
+thread_local! {
+    static LAST_SET: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// Tests: the last [`set_allowed`] on this thread (and forget it).
+#[cfg(test)]
+pub fn take_last_set() -> Option<bool> {
+    LAST_SET.with(|l| l.take())
 }
 
 pub fn generation() -> u64 {
@@ -437,7 +582,7 @@ pub fn cli(fetch: bool) -> i32 {
                 eprintln!("{}: not downloaded: {DISABLED} (download_data = false)", f.asset);
             }
         }
-        let to = g.cache_path(f).map_or_else(|| f.rel.to_string(), |p| p.display().to_string());
+        let to = g.cache_path(f).map_or_else(|| format!("{} in the folder RUSTSHOT_DATA_DIR names", f.rel), |p| p.display().to_string());
         match st {
             State::Ready(p) => println!("{}: {} (SHA-256 verified)", f.asset, p.display()),
             State::Failed(e) => {

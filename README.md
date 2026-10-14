@@ -341,8 +341,15 @@ downloaded when first needed into `%LOCALAPPDATA%\rustshot-data` (Linux
 checked against the SHA-256 the build expects (`src/fetch.rs`; macOS 12+
 blurs with Vision and needs no model). Settings › General › *Download
 language and blur files* (`download_data`) turns this off; Settings then
-says which file to put where. For a local build, point `RUSTSHOT_DATA_DIR`
-at the source tree to use its `models/` and `lang/`. To convert the model
+says which file to put where. A build whose version has no release yet
+(a development build, a pre-release) takes a file from the newest
+published release when that lists the very same SHA-256 (one request to
+the GitHub Releases API first); a changed model or a new language file
+is only in the source tree until it is released, so for those point
+`RUSTSHOT_DATA_DIR` at the source tree to use its `models/` and `lang/`.
+While a blur is chosen and the model is not there (downloading, off,
+damaged), the camera bubble is blurred whole with a badge, and Start
+recording asks first. To convert the model
 again (then update `fetch::MODEL`: the test `model_manifest_matches_the_file`
 shows the new size and hash):
 
