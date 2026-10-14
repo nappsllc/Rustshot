@@ -1,6 +1,6 @@
 # Microsoft Store listing (Partner Center, en-US)
 
-Text to paste into Partner Center for Rustshot 0.4.1. Each field's block is
+Text to paste into Partner Center for Rustshot 0.5.0. Each field's block is
 the exact text. The limits are Partner Center's current Store listing
 limits for MSIX desktop apps; recheck them in the form, which counts for
 you. Everything here describes the **Store (MSIX) build**, which differs
@@ -129,23 +129,20 @@ annotate image
 GIF recorder
 ```
 
-## What's new in this version (0.4.1)
+## What's new in this version (0.5.0)
 
-Limit: 1,500 characters. This text is about 340.
-
-```text
-• Smaller: the app is about 320 KB smaller, with Rustshot's own PNG encoder and decoder and compressed built-in data.
-• Selection handles on annotations now have an even border at every display scale.
-• Very large images (up to 200 megapixels) open safely, and a picture that is too big is refused cleanly instead of running out of memory.
-```
-
-If translations or the separate data files (language files, blur model)
-ship in 0.4.1, add a line for each before submitting (still within 1,500
-characters), for example:
+Limit: 1,500 characters. This text is about 890 characters.
 
 ```text
-• Rustshot now speaks your language: choose it in Settings › General › Language, or follow Windows.
-• Translations and the camera's background-blur model download only when you first need them.
+• Rustshot now speaks 35 languages. Choose one in Settings › General › Language, or follow Windows. The translations are machine-made, so corrections are welcome on GitHub. Arabic and Hebrew use a right-to-left layout.
+• Language files and the camera's background-blur model are downloaded only when first needed, and each is checked against a SHA-256 built into the app.
+• Scrolling capture (Shift+S): Rustshot scrolls the window under your selection and stitches it into one tall picture.
+• Recordings can show your clicks and keystrokes, and you can trim a recording before saving it.
+• Read QR codes in a capture (Q), or make one from any text.
+• Include the mouse pointer in screenshots.
+• A screen ruler (U) measures distances in pixels.
+• New effects in the Edit window: watermark, torn edges, reflection and shadow.
+• The full Inter font for Latin, Greek, Cyrillic and Vietnamese text.
 ```
 
 ## Category
@@ -254,25 +251,25 @@ review), but certification reads this too: see the notes below.
 ## Notes for certification
 
 Partner Center › Submission options › *Notes for certification*. Keep it
-under about 2,000 characters. This text is about 1,990.
+under 2,000 characters. This text is about 1,900.
 
 ```text
 No sign-in, account or test credentials are needed. Rustshot is a screenshot and screen recording tool that runs in the background.
 
 HOW TO TEST
-1. Launch Rustshot from Start. It starts in the background with an icon in the notification area. The tray menu has Capture…, History… and Settings…. "Rustshot Settings" in Start opens Settings directly.
-2. Press Win+Shift+X. The capture overlay covers the screen: drag a region (or click a window), draw with the toolbar (R rectangle, A arrow, T text), then Ctrl+C copies, Enter or Ctrl+S saves to Pictures\rustshot, Esc cancels.
-3. Other default hotkeys: Win+Shift+F full screen (saved at once), Win+Shift+E window, Win+Shift+Z copy text from an area (Windows OCR), Win+Shift+G start/stop recording, Win+Shift+H History, Ctrl+Alt+Shift+Q quit. If another app already holds a key, Rustshot moves it to a spare key and says which in a notification; all keys can be changed in Settings › Shortcuts.
-4. Recording: in the overlay press 2 (Video), choose Region/Window/Screen and Start recording; stop with Win+Shift+G or the pill. The file is saved next to the screenshots.
+1. Launch Rustshot from Start. It runs in the background with a notification-area icon whose menu has Capture…, History… and Settings…. "Rustshot Settings" in Start opens Settings directly.
+2. Press Win+Shift+X. The capture overlay covers the screen: drag a region (or click a window), draw with the toolbar (R rectangle, A arrow, T text), then Ctrl+C copies, Ctrl+S saves to Pictures\rustshot, Esc cancels.
+3. Other hotkeys: Win+Shift+F full screen, Win+Shift+E window, Win+Shift+Z copy text (Windows OCR), Win+Shift+G start/stop recording, Win+Shift+H History. A key another app holds moves to a spare one (a notification says which); all keys can be changed in Settings › Shortcuts.
+4. Recording: in the overlay press 2 (Video), pick Region/Window/Screen and Start recording; stop with Win+Shift+G or the pill.
 
 PERMISSIONS
-• Microphone and camera are off by default. They are used only when the user turns on Microphone or Camera in the recording panel (the camera also while its bubble is shown before recording); Windows asks for permission the first time.
-• The startup task "Rustshot hotkeys" starts the background process at sign-in so the hotkeys work; it can be turned off in Windows Settings › Apps › Startup.
+• Microphone and camera are off by default and used only when turned on in the recording panel; Windows asks the first time.
+• The startup task "Rustshot hotkeys" starts the background process at sign-in; it can be turned off in Windows Settings › Apps › Startup.
 
 NETWORK (internetClient)
-• No telemetry and no update check in the Store build (the Store updates it).
-• Uploads go to Imgur or the user's own S3-compatible storage only when the user chooses Upload (Ctrl+U) or Copy link on a recording.
-• Language files and the camera background-blur model are downloaded on demand from github.com (the project's releases) when the user first needs them. Each file is checked against a SHA-256 built into the app; Settings › General › "Download language and blur files" turns this off. Nothing else is downloaded except an upload the user starts.
+• No telemetry and no update check (the Store updates it).
+• Uploads go to Imgur or the user's own S3-compatible storage only when the user chooses Upload (Ctrl+U) or Copy link.
+• Language files and the camera blur model are downloaded on demand from this version's GitHub release (github.com/nappsllc/rustshot): a language when chosen, or at first start if Windows uses one of the 34 other languages; the model when blur is turned on. Each file is checked against a SHA-256 built into the app; Settings › General › "Download language and blur files" turns this off.
 
 Privacy policy: https://github.com/nappsllc/rustshot/blob/main/PRIVACY.md
 ```
