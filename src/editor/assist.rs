@@ -714,9 +714,10 @@ fn circle_line(f: &mut Fb, cx: f32, cy: f32, rad: f32, w: f32, c: C4) {
     }
 }
 
-/// What a crosshair move repaints: the band between the old and new
-/// horizontal lines and the one between the vertical lines (each line
-/// alone when they are far apart).
+/// What a crosshair move repaints: the old and the new lines, each alone
+/// (one band only where they touch: a move draws a frame per refresh, many
+/// pixels apart at speed, and a band between full-width lines 60 px apart
+/// would repaint 60 rows of the whole overlay).
 pub fn cross_dirty(a: &CrossUi, b: &CrossUi, size: (u32, u32)) -> Vec<PxRect> {
     // Left out only where both frames leave the line out.
     let both: Vec<PxRect> = a.skip.iter().flat_map(|p| b.skip.iter().map(move |q| p.intersect(q))).filter(|r| !r.is_empty()).collect();
@@ -726,12 +727,14 @@ pub fn cross_dirty(a: &CrossUi, b: &CrossUi, size: (u32, u32)) -> Vec<PxRect> {
 fn cross_bands(a: &CrossUi, b: &CrossUi, size: (u32, u32)) -> Vec<PxRect> {
     let (w, h) = (size.0 as i32, size.1 as i32);
     let mut v = Vec::with_capacity(4);
-    if (a.y - b.y).abs() <= 64 {
+    // Touching or overlapping lines: one band.
+    let near = |p: i32, q: i32| (p - q).abs() <= a.lw.max(b.lw);
+    if near(a.y, b.y) {
         v.push(PxRect::new(0, a.y.min(b.y), w, (a.y + a.lw).max(b.y + b.lw)));
     } else {
         v.extend([PxRect::new(0, a.y, w, a.y + a.lw), PxRect::new(0, b.y, w, b.y + b.lw)]);
     }
-    if (a.x - b.x).abs() <= 64 {
+    if near(a.x, b.x) {
         v.push(PxRect::new(a.x.min(b.x), 0, (a.x + a.lw).max(b.x + b.lw), h));
     } else {
         v.extend([PxRect::new(a.x, 0, a.x + a.lw, h), PxRect::new(b.x, 0, b.x + b.lw, h)]);
