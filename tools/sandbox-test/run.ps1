@@ -17,8 +17,8 @@ param(
     [string]$Old,
     # Work folder (mapped into the sandbox as Desktop\test). Results: <Work>\out\results.txt.
     [string]$Work = (Join-Path $env:TEMP 'rustshot-sandbox'),
-    # Just one group: probe (hotkey probe), rec (recording), v030 / v040 (0.3.0 / 0.4.0 checks).
-    [ValidateSet('', 'probe', 'rec', 'v030', 'v040')] [string]$Only = '',
+    # Just one group: probe (hotkey probe), rec (recording), v030 / v040 / v041 (0.3.0 / 0.4.0 / 0.4.1 checks), data (data files).
+    [ValidateSet('', 'probe', 'rec', 'v030', 'v040', 'v041', 'data')] [string]$Only = '',
     # Skip signing the MSIX (the MSIX checks then FAIL with "inputs present").
     [switch]$NoSign,
     # Prepare <Work> and the .wsb only.
@@ -38,6 +38,10 @@ if ($RunId) {
     Copy-Item (Join-Path $Artifacts '*') $in -Recurse
 } else { throw 'pass -Artifacts or -RunId' }
 if ($Old) { Copy-Item $Old $oldDir }
+# The blur model, for the data checks' "put there by hand" case (packages carry none).
+$dataDir = Join-Path $Work 'data'
+New-Item -ItemType Directory -Force $dataDir | Out-Null
+Copy-Item (Join-Path $here '..\..\models\selfie.bin') $dataDir
 if (-not $NoSign) { & (Join-Path $here 'sign-sideload.ps1') -In $in }
 if ($Only) { New-Item -ItemType File (Join-Path $Work "$Only-only") | Out-Null }
 

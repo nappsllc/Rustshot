@@ -26,13 +26,15 @@ pub trait Fetch: Send + Sync {
     fn cached(&self, rel: &str) -> Option<PathBuf>;
 }
 
-/// Until the data-files layer is wired in: the cache is read, nothing is
-/// downloaded.
-struct NoDownloads;
+/// The data-files layer ([`crate::fetch`]): downloads from this
+/// version's release (when the config allows them), the cache checked.
+struct DataFiles;
 
-impl Fetch for NoDownloads {
-    fn ensure(&self, _asset: &str, _rel: &str, done: Box<dyn FnOnce(Result<PathBuf, String>) + Send>) {
-        done(Err(crate::tr!("i18n.download_unavailable").into()));
+impl Fetch for DataFiles {
+    fn ensure(&self, asset: &str, rel: &str, done: Box<dyn FnOnce(Result<PathBuf, String>) + Send>) {
+        crate::fetch::ensure(asset, rel, move |r| {
+            done(r.map_err(|e| if e == crate::fetch::DISABLED { crate::tr!("i18n.downloads_off").to_string() } else { e }))
+        });
     }
     fn cached(&self, rel: &str) -> Option<PathBuf> {
         crate::datadir::cached(rel)
@@ -46,7 +48,7 @@ fn fetcher() -> Arc<dyn Fetch> {
 
 fn slot() -> &'static Mutex<Arc<dyn Fetch>> {
     static F: OnceLock<Mutex<Arc<dyn Fetch>>> = OnceLock::new();
-    F.get_or_init(|| Mutex::new(Arc::new(NoDownloads)))
+    F.get_or_init(|| Mutex::new(Arc::new(DataFiles)))
 }
 
 /// Use `f` for downloads (the data-files layer at startup; tests a fake).

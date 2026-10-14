@@ -1752,6 +1752,37 @@ mod tests {
         }
     }
 
+    /// Send the caption command `cmd` (WM_SYSCOMMAND, as the buttons,
+    /// Win+Down/Up and the system menu do) to a window of another thread
+    /// until `done` holds; false if it never does. The window manager can
+    /// drop a command silently: an SC_MAXIMIZE sent while the restore from
+    /// minimized is still being composed returns having done nothing
+    /// (seen on a busy desktop, about 1 run in 20; the same command sent
+    /// again a moment later maximizes). So each try waits a while for the
+    /// state and then sends the command again, a few times.
+    unsafe fn sys_until(hwnd: HWND, cmd: u32, done: &dyn Fn() -> bool) -> bool {
+        unsafe {
+            for attempt in 1..=4 {
+                SendMessageW(hwnd, WM_SYSCOMMAND, Some(WPARAM(cmd as usize)), Some(LPARAM(0)));
+                let until = std::time::Instant::now() + std::time::Duration::from_millis(300);
+                loop {
+                    if done() {
+                        if attempt > 1 {
+                            eprintln!("WM_SYSCOMMAND {cmd:#x} took effect on try {attempt}");
+                        }
+                        return true;
+                    }
+                    if std::time::Instant::now() >= until {
+                        break;
+                    }
+                    let _ = windows::Win32::Graphics::Dwm::DwmFlush();
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            }
+            false
+        }
+    }
+
     unsafe extern "system" fn reference_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
         unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
     }
@@ -1847,17 +1878,12 @@ mod tests {
                 if DwmGetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, (&raw mut dark).cast(), 4).is_ok() {
                     s.dark_mode = Some(dark);
                 }
-                let sys = |c: u32| {
-                    SendMessageW(hwnd, WM_SYSCOMMAND, Some(WPARAM(c as usize)), Some(LPARAM(0)));
-                };
-                sys(SC_MINIMIZE);
-                s.minimized = IsIconic(hwnd).as_bool();
-                sys(SC_RESTORE);
-                s.restored = !IsIconic(hwnd).as_bool();
-                sys(SC_MAXIMIZE);
-                s.maximized = IsZoomed(hwnd).as_bool();
-                sys(SC_RESTORE);
-                s.unmaximized = !IsZoomed(hwnd).as_bool();
+                let iconic = || IsIconic(hwnd).as_bool();
+                let zoomed = || IsZoomed(hwnd).as_bool();
+                s.minimized = sys_until(hwnd, SC_MINIMIZE, &iconic);
+                s.restored = sys_until(hwnd, SC_RESTORE, &|| !iconic());
+                s.maximized = sys_until(hwnd, SC_MAXIMIZE, &zoomed);
+                s.unmaximized = sys_until(hwnd, SC_RESTORE, &|| !zoomed());
                 *seen.lock().unwrap() = s;
                 // The close button / Alt+F4.
                 let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));

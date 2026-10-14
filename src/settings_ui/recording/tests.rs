@@ -339,24 +339,59 @@ fn background_row() {
         let (img, _) = render(&mut s, &DARK, 1.0);
         img
     };
-    // Unavailable: the click changes nothing, and the row reads otherwise.
+    // Downloads off and no model: the choices stay (Off can always be
+    // chosen), the rows say what to do, and choosing a blur asks for no
+    // download.
     crate::cam::bg::set_available(Some(false));
-    let mut s = sample(Config { rec_camera: true, ..Config::default() });
-    click_at(&mut s, "rec_camera_bg", 0.85);
-    assert_eq!(s.form.rec.bg, 0, "disabled");
-    s.form.rec.bg = 2;
+    let mut s = sample(Config { rec_camera: true, rec_camera_bg: "strong".into(), download_data: false, ..Config::default() });
+    let asked = crate::cam::bg::requests();
+    click_at(&mut s, "rec_camera_bg", 0.15);
+    assert_eq!(s.form.rec.bg, 0, "Off chosen while the model cannot be had");
+    click_at(&mut s, "rec_camera_bg", 0.5);
+    assert_eq!(s.form.rec.bg, 1);
+    assert_eq!(crate::cam::bg::requests(), asked, "downloads off in the form: nothing is asked for");
     let (off, _) = render(&mut s, &DARK, 1.0);
     assert!(on.as_raw() != off.as_raw(), "\"{}\" shows", crate::cam::bg::UNAVAILABLE);
+    // Downloads on in the form: choosing a blur asks for the model.
+    crate::cam::bg::set_state(Some(crate::cam::bg::Blur::Fetchable));
+    let mut s = sample(Config { rec_camera: true, ..Config::default() });
+    let asked = crate::cam::bg::requests();
+    click_at(&mut s, "rec_camera_bg", 0.85);
+    assert_eq!(crate::cam::bg::requests(), asked + 1);
+    // A failed download: the choices stay (choosing retries) and Retry is
+    // there.
+    crate::cam::bg::set_state(Some(crate::cam::bg::Blur::Failed("HTTP 404".into())));
+    let mut s = sample(Config { rec_camera: true, ..Config::default() });
+    s.section = CAMERA;
+    let _ = render(&mut s, &DARK, 1.0);
+    click_at(&mut s, "rec_camera_bg", 0.85);
+    assert_eq!(s.form.rec.bg, 2, "still choosable");
+    assert!(crate::cam::bg::state().settings_note().starts_with("Blur unavailable — couldn't download the model"));
     crate::cam::bg::set_available(None);
 }
 
-/// Preview PNGs of the camera rows with the Background row, available
-/// and not, dark and light.
+/// Preview PNGs of the camera rows with the Background row in each of the
+/// model's states (here, not yet downloaded, downloading, failed with
+/// Retry, downloads off with where to put it, damaged), dark and light.
 #[test]
 fn preview_background_row_pngs() {
+    use crate::cam::bg::Blur;
+    let off = Blur::Off {
+        asset: crate::fetch::MODEL.asset,
+        url: crate::fetch::MODEL.url(env!("CARGO_PKG_VERSION")),
+        path: r"C:\Users\you\AppData\Local\rustshot-data\models\selfie.bin".into(),
+    };
+    let states = [
+        ("blur", Blur::Ready),
+        ("fetchable", Blur::Fetchable),
+        ("downloading", Blur::Downloading(40)),
+        ("failed", Blur::Failed("HTTP 404".into())),
+        ("noblur", off),
+        ("damaged", Blur::Damaged(r"C:\Users\you\AppData\Local\rustshot-data\models\selfie.bin".into())),
+    ];
     for (tname, th) in [("dark", &DARK), ("light", &LIGHT)] {
-        for (name, avail) in [("blur", true), ("noblur", false)] {
-            crate::cam::bg::set_available(Some(avail));
+        for (name, state) in &states {
+            crate::cam::bg::set_state(Some(state.clone()));
             let mut s = sample(Config { rec_camera: true, rec_camera_bg: "light".into(), ..Config::default() });
             s.section = CAMERA;
             let (img, _) = render(&mut s, th, 1.0);

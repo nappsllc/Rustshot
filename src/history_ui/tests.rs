@@ -759,3 +759,28 @@ fn fits_in_long_languages() {
         });
     }
 }
+
+/// The Microsoft Store screenshot (docs/store/screenshots): the grid at
+/// 125 %, a capture selected and another hovered, with Windows paths.
+#[test]
+#[ignore = "writes preview PNGs; set RUSTSHOT_PREVIEW_DIR"]
+fn store_screenshot_history() {
+    let k = 1.25;
+    for (tn, th) in [("dark", DARK), ("light", LIGHT)] {
+        let (_r, st) = fixture(&format!("store-{tn}"));
+        for e in st.list() {
+            st.update(&e.id, |m| {
+                m.monitor = "Display 1 (125%)".into();
+                m.saved = m.saved.as_ref().and_then(|p| p.file_name()).map(|n| PathBuf::from(format!("C:\\Users\\you\\Pictures\\rustshot\\{}", n.to_string_lossy())));
+                m.file = m.file.as_ref().map(|_| PathBuf::from("C:\\Users\\you\\Videos\\rustshot\\rec.mp4"));
+            })
+            .unwrap();
+        }
+        let mut h = history(&st);
+        h.sel = vec![h.entries[3].id.clone()];
+        let l = layout_of(&h, 1280.0, 720.0);
+        let (hx, hy) = centre(l.on_screen(l.items[2].thumb, 0.0));
+        let (img, _) = render(&mut h, &th, 1280, 720, k, &at(hx, hy + 50.0, k));
+        crate::ui::preview::save(&format!("store-history-{tn}.png"), &img);
+    }
+}

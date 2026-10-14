@@ -594,6 +594,10 @@ fn general(ui: &mut Ui, s: &mut Settings, tok: &Tok) {
     srow(ui, tok, tr!("settings.general.check_for_updates_automatically"), Some(tr!("settings.general.check_for_updates_automatically.help")), |ui| {
         ui.switch("check_updates", &mut f.check_updates, tok);
     });
+    srow(ui, tok, tr!("settings.general.download_data"), Some(tr!("settings.general.download_data.help")), |ui| {
+        // Applied when saved (Cancel leaves downloads as they were).
+        ui.switch("download_data", &mut f.download_data, tok);
+    });
     // Turned off: say how to get back before it goes.
     if hid {
         s.ask_hide_tray();

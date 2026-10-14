@@ -3,8 +3,7 @@
 //! max length, the 3-2-1 countdown, on Linux the MP4 encoder with a line
 //! saying what is installed, then system sound and the microphone with its
 //! device; Camera: the bubble's device, shape, size, mirror, background
-//! (blurred or not; "Blur unavailable in this build" without a
-//! segmentation model) and ring). The record hotkey is in Shortcuts ›
+//! (blurred or not; the model's download, or why it cannot be had) and ring). The record hotkey is in Shortcuts ›
 //! Recording.
 //!
 //! [`RecForm`] is the part of the settings form this tab edits (every
@@ -12,7 +11,7 @@
 //! cameras, listed on a worker thread when the tab is first shown (Media
 //! Foundation and PulseAudio can take a moment), and the encoder status.
 
-use super::draw::srow;
+use super::draw::{srow, srow_ex};
 use crate::config::{self, Config};
 use crate::keymap::Chord;
 use crate::ui::compact::Tok;
@@ -401,6 +400,8 @@ pub fn section(ui: &mut Ui, s: &mut super::Settings, tok: &Tok) {
 pub fn camera(ui: &mut Ui, s: &mut super::Settings, tok: &Tok) {
     s.rec_lists.start();
     let found = s.rec_lists.found.as_ref();
+    // Downloads as the form has them (Settings › General, not saved yet).
+    let downloads = s.form.download_data;
     let f = &mut s.form.rec;
     let cams = device_items(&DEFAULT_CAM, found.map(|f| f.cams.as_slice()), &f.cam_dev);
     let no_cams = found.is_some_and(|f| f.cams.is_empty());
@@ -424,12 +425,46 @@ pub fn camera(ui: &mut Ui, s: &mut super::Settings, tok: &Tok) {
     srow(ui, tok, tr!("settings.camera.mirror"), Some(tr!("settings.camera.mirror.help")), |ui| {
         ui.switch("rec_camera_mirror", &mut f.mirror, tok);
     });
-    let blur = crate::cam::bg::available();
-    ui.enabled = on && !no_cams && blur;
-    let note = if blur { tr!("settings.camera.background.help") } else { crate::cam::bg::UNAVAILABLE.get() };
-    srow(ui, tok, tr!("settings.camera.background"), Some(note), |ui| {
+    use crate::cam::bg::{Blur, DAMAGED, UNAVAILABLE};
+    let state = crate::cam::bg::state();
+    let note = state.settings_note();
+    // The choices are always there (Off too, whatever the model's state);
+    // the note says what a blur needs. Downloads off or a damaged file:
+    // a short note on the row, then which file goes where (the row's
+    // width, the lines it needs, in the error color).
+    let long = matches!(state, Blur::Off { .. } | Blur::Damaged(_));
+    let failed = matches!(state, Blur::Failed(_));
+    let short = match &state {
+        Blur::Off { .. } => UNAVAILABLE.get().to_string(),
+        Blur::Damaged(_) => DAMAGED.get().to_string(),
+        _ => note.clone(),
+    };
+    ui.enabled = on && !no_cams;
+    let h = if failed { 16.0 + 13.0 * 3.0 + 6.0 } else { super::draw::ROW_H };
+    srow_ex(ui, tok, tr!("settings.camera.background"), Some(&short), failed || long, h, |ui| {
+        // A blur chosen: the model comes (if it is not here, and the
+        // form has downloads on) while the window stays responsive; a
+        // failed download is retried.
+        let was = f.bg;
+        if failed && downloads && ui.clink("rec_camera_bg_retry", tr!("settings.general.language.retry"), 12.0, false, tok) {
+            crate::cam::bg::request_model();
+        }
         ui.seg("rec_camera_bg", &labels(&BACKGROUNDS), &mut f.bg, tok);
+        if f.bg != was && BACKGROUNDS[f.bg].1 != "off" && downloads {
+            crate::cam::bg::request_model();
+        }
     });
+    if let Some(detail) = state.settings_detail() {
+        let w = ui.bounds().w - 14.0;
+        let n = super::draw::wrap_at_breaks(&detail, w, |s| ui.text_w(11.0, s)).len();
+        let h = (16.0 + 13.0 * n as f32 + 6.0).max(super::draw::ROW_H);
+        srow_ex(ui, tok, "", Some(&detail), true, h, |_| {});
+    }
+    ring_row(ui, f, tok, on, no_cams);
+}
+
+/// The camera's Ring row (after Background).
+fn ring_row(ui: &mut Ui, f: &mut RecForm, tok: &Tok, on: bool, no_cams: bool) {
     ui.enabled = on && !no_cams;
     srow(ui, tok, tr!("settings.camera.ring"), Some(tr!("settings.camera.ring.help")), |ui| {
         ui.width(120.0).slider("rec_camera_ring_width", &mut f.ring_w, 0, config::RING_WIDTH_MAX as u8);

@@ -34,7 +34,9 @@ manual first submission where noted.
    pushing the first tag: the release's .msix is built with them, and the
    `msstore` job fails if they are empty.
 3. First submission by hand: upload `rustshot-<v>-x64.msix` from the release,
-   listing text, screenshots, age rating, privacy policy URL
+   listing text, screenshots, age rating (all ready to paste in
+   [docs/store/msstore-listing.md](store/msstore-listing.md), screenshots in
+   `docs/store/screenshots/`), privacy policy URL
    `https://github.com/nappsllc/rustshot/blob/main/PRIVACY.md`, and the
    `runFullTrust` justification ("desktop screenshot and screen recording
    tool: global hotkeys, screen capture") and the microphone/webcam

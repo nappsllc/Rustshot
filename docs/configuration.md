@@ -124,6 +124,7 @@ upload_recordings = false         # upload a recording when it is saved (Copy li
 
 # Updates
 check_updates = true              # the daemon checks GitHub once a day
+download_data = true              # fetch the blur model / language files from this version's GitHub release when needed
 skip_version = ""                 # a version the daily check ignores ("Skip this version")
 
 # Recording (video mode's defaults)

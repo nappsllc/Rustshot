@@ -221,7 +221,7 @@ fn halves(d: u32) -> CamFrame {
             bgra.extend_from_slice(if x < d / 2 { &[0, 0, 255, 255] } else { &[255, 0, 0, 255] });
         }
     }
-    CamFrame { w: d, h: d, bgra }
+    CamFrame { w: d, h: d, bgra, note: None }
 }
 
 #[test]
@@ -253,6 +253,27 @@ fn compose_masks_mirrors_and_premultiplies() {
     compose(&t, Some(&small), false, &mut out);
     assert_eq!(at(&out, lx, cy)[3], 255);
     assert_ne!(at(&out, lx, cy), [0, 0, 255, 255]);
+}
+
+/// A badge ([`CamFrame::note`]) is drawn over the picture in the lower
+/// middle, and reads the same mirrored or not (the picture under it is
+/// mirrored, the badge is not).
+#[test]
+fn compose_draws_the_badge_unmirrored() {
+    let t = template(LOOK, 1.0, &LIGHT);
+    let gray = CamFrame { w: t.d, h: t.d, bgra: [128u8, 128, 128, 255].repeat((t.d * t.d) as usize), note: None };
+    let (mut plain, mut a, mut b) = (Vec::new(), Vec::new(), Vec::new());
+    compose(&t, Some(&gray), false, &mut plain);
+    let badged = CamFrame { note: Some(crate::cam::bg::LOADING_BADGE.get()), ..gray.clone() };
+    compose(&t, Some(&badged), false, &mut a);
+    compose(&t, Some(&badged), true, &mut b);
+    assert_ne!(plain, a, "the badge shows");
+    assert_eq!(a, b, "a uniform picture: the badge alone decides, and it is not mirrored");
+    // Only the lower part changed.
+    let (w, pad, d) = (t.w as usize, t.pad as usize, t.d as usize);
+    let row_changed = |y: usize| (0..w).any(|x| plain[(y * w + x) * 4..][..4] != a[(y * w + x) * 4..][..4]);
+    assert!(!(pad..pad + d / 2).any(row_changed), "the upper half is untouched");
+    assert!((pad + d / 2..pad + d).any(row_changed));
 }
 
 #[test]
@@ -479,7 +500,7 @@ fn no_picture_fringe_at_the_edge() {
             }
             // Pictures that differ only in color give the same pixels
             // wherever the picture has no coverage.
-            let solid = |c: [u8; 4]| CamFrame { w: t.d, h: t.d, bgra: c.repeat(d * d) };
+            let solid = |c: [u8; 4]| CamFrame { w: t.d, h: t.d, bgra: c.repeat(d * d), note: None };
             let (mut a, mut b) = (Vec::new(), Vec::new());
             compose(&t, Some(&solid([255, 255, 255, 255])), false, &mut a);
             compose(&t, Some(&solid([0, 0, 0, 255])), false, &mut b);
@@ -555,7 +576,7 @@ fn fit_square_crops_the_centre_and_averages() {
     // 4x2: columns 1..3 are the centre square; averaged down to 1x1.
     let px = |v: u8| [v, v, v, 255];
     let row: Vec<u8> = [10u8, 20, 40, 90].iter().flat_map(|&v| px(v)).collect();
-    let f = CamFrame { w: 4, h: 2, bgra: [row.clone(), row].concat() };
+    let f = CamFrame { w: 4, h: 2, bgra: [row.clone(), row].concat(), note: None };
     let s = fit_square(&f, 1);
     assert_eq!((s.w, s.h), (1, 1));
     assert_eq!(s.bgra, px(30));
@@ -587,7 +608,7 @@ pub(crate) fn sample_picture(w: u32, h: u32) -> CamFrame {
             bgra.extend_from_slice(&[p[0], p[1], p[2], 255]);
         }
     }
-    CamFrame { w, h, bgra }
+    CamFrame { w, h, bgra, note: None }
 }
 
 /// Preview PNGs: every shape at S/M/L, mirrored and not, the placeholder,

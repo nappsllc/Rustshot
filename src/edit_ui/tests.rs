@@ -879,3 +879,18 @@ fn fits_in_long_languages() {
         });
     }
 }
+
+/// The Microsoft Store screenshot (docs/store/screenshots): the Edit
+/// window at 125 % with the Canvas dialog on Presentation (gradient,
+/// padding, rounded corners and a shadow) and its preview.
+#[test]
+#[ignore = "writes preview PNGs; set RUSTSHOT_PREVIEW_DIR"]
+fn store_screenshot_edit() {
+    use super::image::ImgAct;
+    for (tn, th) in [("dark", DARK), ("light", LIGHT)] {
+        let (_r, mut w) = window(&format!("store-edit-{tn}"), page(1180, 760), objects(), th, 1.25);
+        w.image_act(ImgAct::Canvas);
+        w.render();
+        crate::ui::preview::save(&format!("store-edit-presentation-{tn}.png"), w.pixels());
+    }
+}

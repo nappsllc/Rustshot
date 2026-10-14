@@ -11,7 +11,6 @@ mod cam;
 mod capture;
 mod chan;
 mod config;
-// Data folders (translations, models): where they are looked for.
 mod datadir;
 mod desktop;
 mod deflate;
@@ -20,6 +19,7 @@ mod deflate;
 mod dbus;
 mod editor;
 mod export;
+mod fetch;
 mod fonts;
 mod history;
 // The History window (board 10).
@@ -127,6 +127,9 @@ enum Cmd {
     Daemon { after_update: bool, force: bool, plain: bool },
     /// Check for a newer release and open its download page.
     Update,
+    /// List the data files and where each is (`--fetch`: download the
+    /// missing ones now).
+    Data { fetch: bool },
     /// Open the History window (in this process); `list`: print the
     /// entries instead (`--list`).
     History { list: bool },
@@ -193,6 +196,8 @@ Commands:
             tray icon off: nothing runs in the background (a plain launch opens
             Settings); --force runs it anyway
   update    Check for a newer release and open its download page
+  data      List the data files (blur model, languages): where each is, or which file
+            to download from where (--fetch: download what is missing now)
   settings  Open the Settings window
   history   Open the History window (captures kept, Edit); --list prints them:
             captured, kind, WxH, bytes, file (tab-separated, newest first)
@@ -294,6 +299,13 @@ fn parse_from(args: &[String]) -> Result<Parsed, String> {
                 return Err(unexpected(a));
             }
             Some(Cmd::Update)
+        }
+        Some("data") => {
+            let fetch = rest.first().is_some_and(|a| a == "--fetch");
+            if let Some(a) = rest.get(fetch as usize) {
+                return Err(unexpected(a));
+            }
+            Some(Cmd::Data { fetch })
         }
         Some("history") => {
             let list = rest.first().is_some_and(|a| a == "--list");
@@ -856,6 +868,11 @@ fn run() -> Result<()> {
             let pending = (plan.delay == 0).then(|| plan.pending());
             exit(editor_run(config::load(), RunKind::OneShot, pending))
         }
+        Cmd::Data { fetch } => {
+            let cfg = config::load();
+            fetch::set_allowed(cfg.download_data);
+            exit(fetch::cli(fetch))
+        }
         Cmd::Update => {
             if let Some(channel) = update::update_channel() {
                 println!("Rustshot is managed by {channel}; update it there.");
@@ -1205,6 +1222,9 @@ mod cli_tests {
     fn update_command() {
         assert!(matches!(cmd(&["update"]), Cmd::Update));
         assert!(p(&["update", "x"]).is_err());
+        assert!(matches!(cmd(&["data"]), Cmd::Data { fetch: false }));
+        assert!(matches!(cmd(&["data", "--fetch"]), Cmd::Data { fetch: true }));
+        assert!(p(&["data", "x"]).is_err());
     }
 
     #[test]

@@ -704,6 +704,16 @@ impl Edit {
         });
     }
 
+    /// Start would record a camera whose chosen blur cannot be had (the
+    /// model downloading, not to be had): the question's lines.
+    pub(super) fn blur_question(&self) -> Option<(&'static str, &'static str)> {
+        let o = &self.rec.opts;
+        if !(o.camera && self.rec.has_cams()) || o.cam_bg == crate::cam::bg::Bg::Off {
+            return None;
+        }
+        crate::cam::bg::state().ask_lines()
+    }
+
     pub(super) fn apply_act(&mut self, act: Act, mouse: Pt) {
         if act != Act::SaveMenu {
             self.save_menu = false;
@@ -871,12 +881,17 @@ impl Edit {
             }
             Act::RecShape(sh) => self.rec.opts.cam_shape = sh,
             // Remembered (`rec_camera_bg`); the bubble follows (`sync_bubble`).
-            Act::RecBg(b) if crate::cam::bg::available() => {
+            // A blur chosen (or the failed download's note pressed): the
+            // model is fetched if it is not here; the bubble is blurred
+            // whole until it is. Off is always a choice.
+            Act::RecBg(b) => {
+                if b != crate::cam::bg::Bg::Off {
+                    crate::cam::bg::request_model();
+                }
                 self.rec.opts.cam_bg = b;
                 self.pending.set("rec_camera_bg".into(), Some(config::toml_str(b.key())), Instant::now());
                 self.cfg.rec_camera_bg = b.key().into();
             }
-            Act::RecBg(_) => {}
             Act::RecDevMenu(dev) => {
                 self.rec.ring_pal = false;
                 match dev {
@@ -886,7 +901,22 @@ impl Edit {
                 self.rec.dev_open = if self.rec.dev_open == Some(dev) { None } else { Some(dev) };
             }
             Act::RecDev(dev, i) => self.rec.pick(dev, i),
+            Act::RecStart if self.rec.blur_ask.is_none() && self.blur_question().is_some() => {
+                // A blur chosen that cannot be had: ask first (the
+                // recording would show the camera fully blurred).
+                self.rec.blur_ask = self.blur_question();
+                self.rec.dev_open = None;
+            }
+            Act::RecAskCamOff => {
+                self.rec.blur_ask = None;
+                if self.rec.opts.camera {
+                    self.apply_act(Act::RecCamera, mouse);
+                }
+                self.apply_act(Act::RecStart, mouse);
+            }
+            Act::RecAskCancel => self.rec.blur_ask = None,
             Act::RecStart => {
+                self.rec.blur_ask = None;
                 // Nothing selected: the monitor under the pointer.
                 if self.sel.is_none() {
                     let p = mouse;

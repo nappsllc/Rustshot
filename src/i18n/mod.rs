@@ -438,10 +438,15 @@ fn loaded(i: usize) -> Option<&'static files::Parsed> {
 /// package's or the user's fixes) over it.
 fn files_of(i: usize) -> Vec<std::path::PathBuf> {
     let k = known(i);
+    // The usable copy (the override folder's, else the cache's when it is
+    // this version's: [`crate::datadir::cached`]); the override folder's
+    // own file on top when the cache has one too (a translator's fixes).
     let mut paths: Vec<std::path::PathBuf> = fetch::cached(k.code).into_iter().collect();
-    // (Highest priority first: they go on top, so last.)
-    let local: Vec<_> = files::lang_dirs().into_iter().map(|d| d.join(format!("{}.txt", k.code))).filter(|p| p.is_file()).collect();
-    paths.extend(local.into_iter().rev());
+    if let Some(p) = files::override_lang_dir().map(|d| d.join(format!("{}.txt", k.code))).filter(|p| p.is_file())
+        && !paths.contains(&p)
+    {
+        paths.push(p);
+    }
     paths
 }
 

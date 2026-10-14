@@ -3,9 +3,9 @@
 //! pixel), the same request reused from one picture to the next (Vision
 //! keeps it steady across frames). It takes the camera thread's small
 //! RGBA picture ([`SegInput`]) as a `CGImage`; the mask's square is cut
-//! out as for the embedded model ([`super::seg::crop_square`]). Older
-//! systems have no such request: the embedded model is used if the build
-//! has one.
+//! out as for the MediaPipe model ([`super::seg::crop_square`]). Older
+//! systems have no such request: the MediaPipe model is used (downloaded
+//! on first use).
 
 use super::seg::{crop_square, SegInput, Segment, SqMask};
 use crate::macos_objc::{array, dict, items, load, new_obj, Id, Pool};

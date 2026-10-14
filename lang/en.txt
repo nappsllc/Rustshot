@@ -320,6 +320,8 @@ settings.general.language.system_is = Now {name}
 settings.general.language.downloading = Downloading…
 settings.general.language.failed = Could not download it: {e}
 settings.general.language.retry = Retry
+settings.general.download_data = Download language and blur files
+settings.general.download_data.help = When first needed, from this version's GitHub release
 
 # Global hotkeys
 hotkey.capture_region = Capture region
@@ -517,7 +519,28 @@ rec.bar.stop = Stop
 rec.what.microphone = microphone
 
 # Camera
-cam.blur_unavailable = Blur unavailable in this build
+cam.blur_unavailable = Blur unavailable — downloads are off
+cam.blur_damaged = Blur unavailable: model file is damaged
+cam.blur_failed_short = Couldn't download the model · Retry
+cam.blur_failed = Blur unavailable — couldn't download the model: {why}
+cam.blur_ask_title = Background blur isn't available
+cam.blur_ask_blurred = Record with the camera fully blurred
+cam.blur_ask_cam_off = Turn the camera off
+cam.blur_loading_badge = Blur model loading…
+cam.blur_unavailable_badge = Blur unavailable
+cam.model_progress = Downloading model… {pct}%
+cam.blur_why_downloading = (the blur model is still downloading)
+cam.blur_why_failed = (couldn't download the blur model)
+cam.blur_why_off = (downloads are off)
+cam.blur_why_damaged = (the blur model file is damaged)
+cam.blur_fetchable = Blurs what is behind you (first use downloads a {size} model from GitHub)
+cam.blur_downloading = Downloading the blur model… {pct}%
+cam.blur_off_note = Blur unavailable — downloads are off: download {asset} ({url}) and {save}
+cam.blur_damaged_note = Blur unavailable: model file is damaged ({path})
+cam.blur_off_detail = To blur, download {asset} ({url}) and {save}
+cam.blur_damaged_detail = {path} is not this version's model: download {asset} ({url}) again and save it there
+cam.save_in_data_dir = put it in a folder named by RUSTSHOT_DATA_DIR as {rel}
+cam.save_as = save it as {path}
 cam.mjpg_only = This camera only offers MJPG, which Rustshot doesn't support yet
 cam.access_off = Camera access is off in Windows Settings › Privacy › Camera
 cam.no_format = This camera offers no picture format Rustshot supports
@@ -1046,10 +1069,14 @@ err.ocr_too_large = the area is larger than {px} px
 err.update_no_restart = the update is installed but Rustshot could not restart: {error}
 err.media_foundation = Media Foundation is not available (on Windows N, install the Media Feature Pack)
 err.media_foundation_dll = Media Foundation is not available ({dll} is missing; on Windows N, install the Media Feature Pack)
+err.offline = no connection to github.com
+err.github_timeout = github.com did not answer in time
+err.not_in_release = this version's release does not have the file
 err.not_a_folder = it is not a folder
 err.other_owner = it belongs to another user
 err.others_can_open = others can open it (mode {mode})
 
 # Languages
 i18n.download_unavailable = Downloading languages is not available in this build
+i18n.downloads_off = downloads are off (Settings › General)
 i18n.unreadable = The language file {path} could not be read

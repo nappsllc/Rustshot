@@ -226,3 +226,9 @@ pub fn parse_into(text: &str, file: &str, forms: &mut [[Option<String>; 6]], p: 
 pub fn lang_dirs() -> Vec<PathBuf> {
     crate::datadir::data_dirs().into_iter().map(|d: PathBuf| Path::new(&d).join("lang")).collect()
 }
+
+/// The user's own language folder (`RUSTSHOT_DATA_DIR`'s `lang/`), if set:
+/// its files are taken as they are, over the downloaded copy.
+pub fn override_lang_dir() -> Option<PathBuf> {
+    crate::datadir::override_dir().map(|d| d.join("lang"))
+}
