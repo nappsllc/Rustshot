@@ -1697,7 +1697,7 @@ fn dialogs_fit_in_long_languages() {
     }
 }
 
-//// The cost of a frame in each language (General, warm caches):
+/// The cost of a frame in each language (General, warm caches):
 /// `cargo test --release language_frame_cost -- --ignored --nocapture`.
 #[test]
 #[ignore = "a benchmark"]

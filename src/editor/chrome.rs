@@ -599,9 +599,6 @@ fn within(a: FRect, b: FRect) -> bool {
     a.x >= b.x - 0.5 && a.y >= b.y - 0.5 && a.x1() <= b.x1() + 0.5 && a.y1() <= b.y1() + 0.5
 }
 
-/// One segment of a segmented control: the accent tint when chosen; an
-/// icon (16 px) and / or a label (12 px), centred, 6 px apart.
-#[allow(clippy::too_many_arguments)]
 /// A segment's text size: 12 (11 in a short one), smaller (down to 10)
 /// when a long word needs it to fit with 2 px to spare each side.
 pub(super) fn seg_text_size(ui: &Ui, r: FRect, label: &str, icon: &str) -> f32 {
@@ -614,6 +611,9 @@ pub(super) fn seg_text_size(ui: &Ui, r: FRect, label: &str, icon: &str) -> f32 {
     size
 }
 
+/// One segment of a segmented control: the accent tint when chosen; an
+/// icon (16 px) and / or a label (12 px), centred, 6 px apart.
+#[allow(clippy::too_many_arguments)]
 fn segment(f: &mut Fb, ui: &Ui, r: FRect, label: &str, icon: &str, on: bool, hovered: bool, k: f32) {
     let th = ui.th;
     let r = round(r);

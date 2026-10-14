@@ -43,6 +43,9 @@ struct Entry {
     run: Option<Run>,
     /// Last use (measured or drawn): eviction keeps the recent ones.
     used: u64,
+    /// [`crate::text::font_generation`] when made: older is stale (a font
+    /// it lacked has been found since).
+    fonts: u64,
 }
 
 impl Entry {
@@ -76,7 +79,7 @@ impl Cache {
         let tick = self.tick;
         let &i = self.index.get(&key_hash(s, px, rtl))?;
         let e = &mut self.entries[i];
-        if e.s != s || e.px != px.to_bits() || e.rtl != rtl {
+        if e.s != s || e.px != px.to_bits() || e.rtl != rtl || e.fonts != crate::text::font_generation() {
             return None;
         }
         e.used = tick;
@@ -86,6 +89,7 @@ impl Cache {
     fn insert(&mut self, mut e: Entry) {
         self.tick += 1;
         e.used = self.tick;
+        e.fonts = crate::text::font_generation();
         let h = key_hash(&e.s, f32::from_bits(e.px), e.rtl);
         self.bytes += e.bytes();
         match self.index.get(&h) {
@@ -158,7 +162,7 @@ pub fn width(font: &UiFont, s: &str, px: f32) -> f32 {
         return e.w;
     }
     let w = face(rtl).width(s, os_px(font, px));
-    cache().insert(Entry { s: s.to_string(), px: px.to_bits(), rtl, w, run: None, used: 0 });
+    cache().insert(Entry { s: s.to_string(), px: px.to_bits(), rtl, w, run: None, used: 0, fonts: 0 });
     w
 }
 
@@ -264,6 +268,9 @@ mod tests {
             (0, 0.0, b)
         };
         for s in ["Größe ändern", "Сохранить", "Αποθήκευση", "שמור", "حفظ الصورة", "保存截图", "スクリーンショット", "저장", "บันทึก", "सहेजें"] {
+            // (Linux finds the fonts in the background.)
+            crate::text::prefetch_fonts(s);
+            crate::text::wait_fonts();
             let (n, w, b) = lit(s, 20.0);
             if n == 0 && cfg!(target_os = "linux") {
                 eprintln!("no font for {s} here");
@@ -296,7 +303,7 @@ mod tests {
     #[test]
     fn cache_keeps_recently_used() {
         let mut c = Cache::default();
-        let e = |s: String| Entry { s, px: 1.0f32.to_bits(), rtl: false, w: 1.0, run: None, used: 0 };
+        let e = |s: String| Entry { s, px: 1.0f32.to_bits(), rtl: false, w: 1.0, run: None, used: 0, fonts: 0 };
         for i in 0..20 {
             c.insert(e(format!("hot {i}")));
         }

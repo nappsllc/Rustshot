@@ -850,7 +850,7 @@ fn fits_in_long_languages() {
                 let (pw, ph) = ((mw as f32 * k).round() as u32, (mh as f32 * k).round() as u32);
                 let (_r, mut w) = window(&format!("fit-{lang}-{k}"), page(1180, 760), objects(), DARK, k);
                 w.event(Ev::Resize(pw, ph));
-                let mut shot = |w: &mut Window, name: &str| {
+                let shot = |w: &mut Window, name: &str| {
                     crate::ui::preview::begin_check(pw);
                     w.render();
                     let problems = crate::ui::preview::take_problems();

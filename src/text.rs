@@ -380,6 +380,29 @@ impl TextCov {
 /// The OS face for UI strings the baked font cannot draw (`uitext.rs`):
 /// the Sans family at medium weight, laying lines out right to left when
 /// the UI language is.
+/// Bumped when a font UI text lacked has been found (Linux looks them up
+/// in the background): text cached before it is drawn again.
+pub fn font_generation() -> u64 {
+    #[cfg(target_os = "linux")]
+    return imp::font_generation();
+    #[cfg(not(target_os = "linux"))]
+    0
+}
+
+/// Start looking up the fonts `s`'s characters need (Linux: in the
+/// background; elsewhere the OS links fonts itself).
+pub fn prefetch_fonts(_s: &str) {
+    #[cfg(target_os = "linux")]
+    imp::prefetch(_s);
+}
+
+/// Wait for the lookups [`prefetch_fonts`] started (tests).
+#[cfg(test)]
+pub fn wait_fonts() {
+    #[cfg(target_os = "linux")]
+    imp::wait_fallbacks();
+}
+
 pub struct UiFace(imp::Face);
 
 /// The OS font's line height per em (UI text asks for the baked font's em).

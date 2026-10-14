@@ -93,14 +93,14 @@ impl Window {
         if cfg!(test) && self.hwnd == Hwnd::default() { 1.0 } else { wind::scale(self.hwnd) }
     }
 
-    /// The frame as composed (tests).
-    #[cfg(test)]
     /// The image dialog's controls (tests: where they are).
     #[cfg(test)]
     pub fn dialog_focus(&self) -> &FocusState {
         &self.dlg_focus
     }
 
+    /// The frame as composed (tests).
+    #[cfg(test)]
     pub fn pixels(&self) -> &PixBuf {
         &self.canvas
     }

@@ -482,6 +482,8 @@ fn refresh(i: usize, force: bool) -> bool {
         return have;
     }
     *seen = Some((after, std::time::Instant::now()));
+    // The fonts its scripts need, found in the background (Linux).
+    crate::text::prefetch_fonts(&p.values.concat());
     k.live.store(Box::into_raw(Box::new(p)), Ordering::Release);
     if have {
         bump();
