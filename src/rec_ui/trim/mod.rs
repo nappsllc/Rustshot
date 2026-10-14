@@ -273,14 +273,15 @@ pub enum Outcome {
 pub fn apply(path: &Path, c: Choice) -> Outcome {
     let Choice::Trimmed { start, end } = c else { return Outcome::Full };
     match crate::rec::cut::trim_file(path, start, end) {
-        Ok(tmp) => {
-            // The trimmed file replaces the recording (the name stays).
-            if std::fs::remove_file(path).is_ok() && std::fs::rename(&tmp, path).is_ok() {
-                Outcome::Trimmed(path.to_path_buf(), end - start)
-            } else {
+        // The trimmed file (synced, read back) replaces the recording in
+        // one rename: the name stays, and the original is whole until then.
+        Ok(tmp) => match crate::rec::cut::replace_with(path, &tmp) {
+            Ok(()) => Outcome::Trimmed(path.to_path_buf(), end - start),
+            Err(e) => {
+                eprintln!("rustshot: {e:#}; the trimmed recording is {}", tmp.display());
                 Outcome::Trimmed(tmp, end - start)
             }
-        }
+        },
         Err(e) => Outcome::Failed(format!("{}: {e:#}", text::FAILED)),
     }
 }

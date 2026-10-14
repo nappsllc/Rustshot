@@ -80,8 +80,11 @@ screenshots, editing and video capture.** Windows, Linux and macOS.
   click (left and right in their own colors) and the last shortcuts show
   at the bottom ("Ctrl + Shift + S"), in the video only. Only chords with
   <kbd>Ctrl</kbd>, <kbd>Alt</kbd> or <kbd>Win</kbd> by default (typed text
-  never shows); *All keys* shows every key, but on Windows never while a
-  password field has the focus. Windows and X11.
+  never shows, and AltGr characters are no chords); *All keys* shows every
+  key, but on Windows never while a password field has (or may have) the
+  focus. It can still show passwords typed into terminals, remote desktops,
+  games and some apps, and on Linux none are detected. Nothing shows while
+  paused or on the lock screen. Windows and X11.
 - *Trim after recording* (Settings › Recording › Ask): after Stop, cut the
   start and end on a timeline of thumbnails with a preview, then **Save
   trimmed**. MP4s are cut without re-encoding (on Windows the few frames

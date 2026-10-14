@@ -82,10 +82,13 @@ fn a_trim_copies_from_the_key_frame_and_edits_the_start() {
     assert_eq!(elst.u32(4), 1);
     assert_eq!((elst.u32(8), elst.u32(12)), (1700, 45_000));
     assert_eq!(m.get(&[b"mvhd"]).u32(16), 1700, "the movie lasts 1.7 s");
-    // Sound: from 80 ms before the start, past its pre-skip.
+    // Sound: from as early as the video (its key frame at 1 s, half a
+    // second before the start): the two start together in players that
+    // ignore edit lists, and both skip 0.5 s in the ones that do not.
     let a = tr[1];
     let ms = 312 + 72_000; // the start in the media (48 kHz)
-    let first = (ms - 3840) / 960; // packet 71
+    let first = (ms - 24_000) / 960; // packet 50, at 0.994 s
+    assert!((first * 960) as i64 - 312 - 48_000 > -960, "within a packet of the video's start");
     let s0 = sample(&out, a, 0);
     assert_eq!(u32::from_be_bytes(s0[1..5].try_into().unwrap()), first as u32);
     let ae = a.get(&[b"edts", b"elst"]);
@@ -115,6 +118,7 @@ fn key_times_and_duration() {
     let src = recording(3);
     let k = key_times(&mut Cursor::new(src.clone())).unwrap();
     assert_eq!(k, vec![Duration::ZERO, Duration::from_secs(1), Duration::from_secs(2)]);
+    assert_eq!(video_size(&mut Cursor::new(src.clone())).unwrap(), Some((64, 64)), "from moov only");
     let d = duration(&mut Cursor::new(src)).unwrap();
     assert!((d.as_secs_f64() - 3.0).abs() < 0.05, "{d:?}");
 }

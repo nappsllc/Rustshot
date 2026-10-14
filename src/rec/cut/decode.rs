@@ -259,14 +259,10 @@ mod linux {
     }
 
     /// The picture size from the first video track's `tkhd` (16.16 fixed).
+    /// Only `moov` is read, never the whole file.
     fn mp4_size(path: &Path) -> Option<(u32, u32)> {
-        let b = std::fs::read(path).ok()?;
-        let at = b.windows(4).position(|w| w == b"tkhd")?;
-        let v = *b.get(at + 4)?;
-        let off = at + 4 + if v == 1 { 88 } else { 76 };
-        let w = u32::from_be_bytes(b.get(off..off + 4)?.try_into().ok()?) >> 16;
-        let h = u32::from_be_bytes(b.get(off + 4..off + 8)?.try_into().ok()?) >> 16;
-        (w > 0 && h > 0).then_some((w, h))
+        let mut f = std::io::BufReader::new(std::fs::File::open(path).ok()?);
+        crate::rec::cut::mp4::video_size(&mut f).ok().flatten()
     }
 
     impl Decoder for FfDecoder {

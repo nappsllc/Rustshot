@@ -5,7 +5,7 @@
 //! lines. No input is synthesised (no `SendInput`): only the target
 //! window gets the messages.
 
-use super::{text, Wheel};
+use super::{text, Interrupted, Wheel};
 use anyhow::{bail, Result};
 use windows::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
@@ -76,6 +76,16 @@ impl Wheel for WinWheel {
         if !unsafe { IsWindow(Some(self.hwnd())) }.as_bool() {
             bail!("the window under the selection closed");
         }
+        // Each step: the same window is still on top there (another one
+        // coming over would be stitched in).
+        // SAFETY: plain window queries.
+        let same = unsafe {
+            let now = WindowFromPoint(POINT { x: self.at.0, y: self.at.1 });
+            !now.is_invalid() && GetAncestor(now, GA_ROOT) == GetAncestor(self.hwnd(), GA_ROOT)
+        };
+        if !same {
+            return Err(Interrupted(text::CHANGED).into());
+        }
         if let Some(p) = &self.pattern {
             for _ in 0..notches {
                 unsafe { p.0.Scroll(ScrollAmount_NoAmount, ScrollAmount_SmallIncrement)? };
@@ -84,7 +94,13 @@ impl Wheel for WinWheel {
         }
         let (wp, lp) = wheel_params(-NOTCH, self.at);
         for _ in 0..notches {
-            unsafe { PostMessageW(Some(self.hwnd()), WM_MOUSEWHEEL, wp, lp)? };
+            if let Err(e) = unsafe { PostMessageW(Some(self.hwnd()), WM_MOUSEWHEEL, wp, lp) } {
+                // UIPI: a window of an elevated app takes no messages from us.
+                if e.code() == windows::Win32::Foundation::E_ACCESSDENIED {
+                    bail!(text::ELEVATED);
+                }
+                return Err(e.into());
+            }
         }
         Ok(())
     }

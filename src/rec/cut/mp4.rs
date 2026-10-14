@@ -4,9 +4,9 @@
 //! loses no reference), and an edit list makes it start and end exactly
 //! where asked (players show the presentation the edit list describes;
 //! the frames before the start are decoded but not shown).
-//! Sound (every sample a sync sample) is cut a little before the start
-//! ([`AUDIO_PREROLL`], so the decoder has settled by then) and its own
-//! edit list skips that.
+//! Sound (every sample a sync sample) starts as early as the kept video
+//! does (to within a packet), and its edit list skips as much: players
+//! that ignore edit lists (Windows' own) keep picture and sound in step.
 //!
 //! The file must be a plain (not fragmented) ISO BMFF: `ftyp`, `moov`,
 //! `mdat` in any order, as Media Foundation, our muxer, ffmpeg and
@@ -21,8 +21,8 @@ use anyhow::{anyhow, bail, ensure, Context, Result};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::time::Duration;
 
-/// Sound kept before the start for the decoder to settle (80 ms, as Opus
-/// asks; plenty for AAC's one frame).
+/// A file with sound only: sound kept before the start for the decoder to
+/// settle (80 ms, as Opus asks; plenty for AAC's one frame).
 pub const AUDIO_PREROLL: Duration = Duration::from_millis(80);
 
 // --- reading ------------------------------------------------------------------
@@ -457,7 +457,7 @@ pub(crate) struct OutTrack<'t, 'a> {
 
 impl<'t, 'a> OutTrack<'t, 'a> {
     /// The samples `k` keeps of `t` (from source 0).
-    fn kept(t: &'t Track<'a>, k: Keep) -> OutTrack<'t, 'a> {
+    pub(crate) fn kept(t: &'t Track<'a>, k: Keep) -> OutTrack<'t, 'a> {
         let s = &t.s;
         let samples = (k.first..k.last)
             .map(|i| OutSample {
@@ -689,8 +689,17 @@ pub fn trim<R: Read + Seek, W: Write>(src: &mut R, dst: &mut W, start: Duration,
     ensure!(end > start, "the trim is empty");
     let m = Movie::read(src)?;
     let (movie, tracks) = m.tracks()?;
+    // The video starts at the key frame before the start, `lead` early.
+    // The sound starts as early (to within a packet): players that ignore
+    // edit lists (Windows' own) then keep picture and sound in step, and
+    // the ones that honour them skip the same time in both.
+    let lead = tracks.iter().find(|t| t.video).and_then(|t| {
+        let k = plan(&t.s, t.edit, t.timescale, movie, true, start, end, Duration::ZERO)?;
+        Some(Duration::from_nanos((k.media_time as u128 * 1_000_000_000 / t.timescale.max(1) as u128) as u64))
+    });
+    let preroll = lead.unwrap_or(AUDIO_PREROLL);
     let keeps: Vec<Option<Keep>> =
-        tracks.iter().map(|t| plan(&t.s, t.edit, t.timescale, movie, t.video, start, end, if t.video { Duration::ZERO } else { AUDIO_PREROLL })).collect();
+        tracks.iter().map(|t| plan(&t.s, t.edit, t.timescale, movie, t.video, start, end, if t.video { Duration::ZERO } else { preroll })).collect();
     ensure!(keeps.iter().any(Option::is_some), "nothing to keep in that range");
     let outs: Vec<OutTrack> = tracks.iter().zip(&keeps).filter_map(|(t, k)| k.map(|k| OutTrack::kept(t, k))).collect();
     let bytes = write_movie(&m, &outs, &mut [src], dst)?;
@@ -706,6 +715,20 @@ pub fn trim<R: Read + Seek, W: Write>(src: &mut R, dst: &mut W, start: Duration,
         })
         .unwrap_or((0, 0));
     Ok(Trimmed { video_samples, lead_in, bytes })
+}
+
+/// The picture size of the first video track (its `tkhd`, 16.16 fixed);
+/// only `moov` is read.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))] // the Linux preview
+pub fn video_size<R: Read + Seek>(src: &mut R) -> Result<Option<(u32, u32)>> {
+    let m = Movie::read(src)?;
+    let (_, tracks) = m.tracks()?;
+    Ok(tracks.iter().find(|t| t.video).and_then(|t| {
+        let b = t.tkhd.body;
+        let off = if b.first() == Some(&1) { 88 } else { 76 };
+        let (w, h) = (be32(b, off).ok()? >> 16, be32(b, off + 4).ok()? >> 16);
+        (w > 0 && h > 0).then_some((w, h))
+    }))
 }
 
 /// The presentation length of an MP4 (`mvhd`'s duration).

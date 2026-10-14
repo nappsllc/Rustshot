@@ -17,7 +17,7 @@ mod exact_win;
 pub mod gif;
 pub mod mp4;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -56,49 +56,85 @@ pub fn length(path: &Path) -> Result<Duration> {
     }
 }
 
-/// Write `path`'s `start..end` to a new file beside it; its path.
+/// Write `path`'s `start..end` to a new file beside it; its path. The new
+/// file is on disk (synced) and read back before it is returned: its index
+/// parses and it lasts `end - start` (within a frame or two).
 pub fn trim_file(path: &Path, start: Duration, end: Duration) -> Result<PathBuf> {
     let kind = Kind::of(path).with_context(|| format!("cannot trim {}", path.display()))?;
     let dst = trimmed_path(path);
     let mut part = dst.as_os_str().to_os_string();
     part.push(".part");
     let part = PathBuf::from(part);
-    // Windows' own player ignores edit lists: the start is made exact in
-    // the samples there (the edit-list trim when that cannot be done).
-    #[cfg(windows)]
-    if kind == Kind::Mp4 {
-        match exact_win::trim(path, &part, start, end) {
-            Ok(()) => {
-                std::fs::rename(&part, &dst).with_context(|| format!("move the trimmed recording to {}", dst.display()))?;
-                return Ok(dst);
-            }
-            Err(e) => {
-                eprintln!("rustshot: trimming with an edit list ({e:#})");
-                let _ = std::fs::remove_file(&part);
-            }
-        }
-    }
-    let r = (|| -> Result<()> {
-        let mut src = std::io::BufReader::new(std::fs::File::open(path).with_context(|| format!("open {}", path.display()))?);
-        let mut out = std::io::BufWriter::new(std::fs::File::create(&part).with_context(|| format!("create {}", part.display()))?);
-        match kind {
-            Kind::Mp4 => {
-                mp4::trim(&mut src, &mut out, start, end)?;
-            }
-            Kind::Gif => {
-                gif::trim(&mut src, &mut out, start, end)?;
-            }
-        }
-        use std::io::Write;
-        out.flush()?;
-        Ok(())
-    })();
+    let r = write_part(kind, path, &part, start, end).and_then(|()| validate(kind, &part, end - start));
     if let Err(e) = r {
         let _ = std::fs::remove_file(&part);
         return Err(e);
     }
     std::fs::rename(&part, &dst).with_context(|| format!("move the trimmed recording to {}", dst.display()))?;
     Ok(dst)
+}
+
+fn write_part(kind: Kind, path: &Path, part: &Path, start: Duration, end: Duration) -> Result<()> {
+    // Windows' own player ignores edit lists: the start is made exact in
+    // the samples there (the edit-list trim when that cannot be done).
+    #[cfg(windows)]
+    if kind == Kind::Mp4 {
+        match exact_win::trim(path, part, start, end).and_then(|()| sync(part)) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                eprintln!("rustshot: trimming with an edit list ({e:#})");
+                let _ = std::fs::remove_file(part);
+            }
+        }
+    }
+    let mut src = std::io::BufReader::new(std::fs::File::open(path).with_context(|| format!("open {}", path.display()))?);
+    let mut out = std::io::BufWriter::new(std::fs::File::create(part).with_context(|| format!("create {}", part.display()))?);
+    match kind {
+        Kind::Mp4 => {
+            mp4::trim(&mut src, &mut out, start, end)?;
+        }
+        Kind::Gif => {
+            gif::trim(&mut src, &mut out, start, end)?;
+        }
+    }
+    use std::io::Write;
+    out.flush()?;
+    out.get_ref().sync_all().context("write the trimmed recording to disk")?;
+    Ok(())
+}
+
+fn sync(p: &Path) -> Result<()> {
+    std::fs::OpenOptions::new().write(true).open(p)?.sync_all().context("write the trimmed recording to disk")
+}
+
+/// `p` reads back as a recording of about `want`: every track's sample
+/// tables parse (MP4), every frame (GIF).
+fn validate(kind: Kind, p: &Path, want: Duration) -> Result<()> {
+    let mut f = std::io::BufReader::new(std::fs::File::open(p)?);
+    let got = match kind {
+        Kind::Mp4 => {
+            let m = mp4::Movie::read(&mut f)?;
+            let (_, tracks) = m.tracks()?;
+            ensure!(tracks.iter().all(|t| t.s.len() > 0), "the trimmed recording has an empty track");
+            mp4::duration(&mut f)?
+        }
+        Kind::Gif => gif::Index::read(&mut f)?.length(),
+    };
+    let slack = Duration::from_millis(120);
+    ensure!(got + slack >= want && got <= want + slack, "the trimmed recording lasts {got:?}, not {want:?}");
+    Ok(())
+}
+
+/// Put `trimmed` in place of `path` in one step (the old file stays whole
+/// until then; a failed rename leaves both).
+pub fn replace_with(path: &Path, trimmed: &Path) -> Result<()> {
+    std::fs::rename(trimmed, path).with_context(|| format!("replace {}", path.display()))?;
+    // The rename itself on disk (a directory entry).
+    #[cfg(unix)]
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::File::open(dir).and_then(|d| d.sync_all());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -116,6 +152,35 @@ mod tests {
         assert_eq!(trimmed_path(&p), dir.join("rec-trimmed.mp4"));
         std::fs::write(dir.join("rec-trimmed.mp4"), b"x").unwrap();
         assert_ne!(trimmed_path(&p), dir.join("rec-trimmed.mp4"), "a free name");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A trimmed file is read back before it replaces anything: one that
+    /// does not parse, or lasts the wrong time, is refused (and the
+    /// original is left as it was).
+    #[test]
+    fn a_bad_result_never_replaces_the_original() {
+        let dir = std::env::temp_dir().join(format!("rustshot-cut-validate-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut enc = crate::rec::gif::GifEncoder::new(std::io::Cursor::new(Vec::new()), 8, 8, 10).unwrap();
+        for k in 0..10u64 {
+            use crate::rec::VideoEncoder;
+            enc.push_video(&crate::rec::Frame::bgra(8, 8, [k as u8 * 20, 0, 0, 255].repeat(64), Duration::from_millis(k * 100))).unwrap();
+        }
+        let gif = dir.join("a.gif");
+        std::fs::write(&gif, enc.into_inner().unwrap().into_inner()).unwrap();
+        assert!(validate(Kind::Gif, &gif, Duration::from_secs(1)).is_ok());
+        assert!(validate(Kind::Gif, &gif, Duration::from_secs(3)).is_err(), "the wrong length");
+        let bad = dir.join("b.mp4");
+        std::fs::write(&bad, b"\0\0\0\x08free").unwrap();
+        assert!(validate(Kind::Mp4, &bad, Duration::from_secs(1)).is_err(), "no index");
+        // The trim itself: the original is untouched until the rename.
+        let before = std::fs::read(&gif).unwrap();
+        let t = trim_file(&gif, Duration::from_millis(200), Duration::from_millis(500)).unwrap();
+        assert_eq!(std::fs::read(&gif).unwrap(), before);
+        replace_with(&gif, &t).unwrap();
+        assert_eq!(length(&gif).unwrap(), Duration::from_millis(300));
+        assert!(!t.exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

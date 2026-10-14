@@ -182,6 +182,9 @@ pub trait FrameSource: Send {
     fn ended(&self) -> Option<String> {
         None
     }
+    /// The recording was paused (`true`) or resumed: a source that draws
+    /// input into its frames forgets what came in between.
+    fn paused(&mut self, _on: bool) {}
 }
 
 /// Produces PCM samples as they arrive.
@@ -749,10 +752,16 @@ fn capture_loop(
             };
             match msg {
                 Ok(Ctl::Stop) | Err(RecvTimeoutError::Disconnected) => break 'run,
-                Ok(Ctl::Pause) => paused = true,
+                Ok(Ctl::Pause) => {
+                    if !paused {
+                        source.paused(true);
+                    }
+                    paused = true;
+                }
                 Ok(Ctl::Resume) => {
                     if paused {
                         paused = false;
+                        source.paused(false);
                         tick = Instant::now();
                     }
                 }

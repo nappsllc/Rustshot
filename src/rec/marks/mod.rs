@@ -33,11 +33,28 @@ use std::time::{Duration, Instant};
 pub mod text {
     /// Settings › Recording: one row of three checkboxes.
     pub const SHOW: &str = "Show clicks & keys";
-    pub const SHOW_NOTE: &str = "In the video only, never saved";
+    pub const SHOW_NOTE: &str = "Shown in the video; nothing else is saved";
     pub const CLICKS: &str = "Clicks";
     pub const KEYS: &str = "Keystrokes";
     pub const ALL_KEYS: &str = "All keys";
     pub const UNAVAILABLE: &str = "clicks and keystrokes not shown";
+    /// Said as All keys is turned on, and once when a recording starts.
+    pub const ALL_KEYS_WARNING: &str = "All keys can show passwords typed into terminals, remote desktops, games and some apps.";
+    pub const NO_DETECTION_LINUX: &str = "Rustshot can't detect password fields on Linux.";
+    /// Under the row while All keys is on.
+    pub const ALL_KEYS_SHORT: &str = "All keys can show passwords";
+
+    /// The warning for this platform.
+    pub fn all_keys_warning() -> String {
+        if cfg!(target_os = "linux") { format!("{ALL_KEYS_WARNING} {NO_DETECTION_LINUX}") } else { ALL_KEYS_WARNING.to_string() }
+    }
+}
+
+/// True the first time it is asked in this run (the All keys warning).
+#[cfg_attr(test, allow(dead_code))] // the app warns outside tests
+pub fn warn_once() -> bool {
+    static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    !SAID.swap(true, std::sync::atomic::Ordering::SeqCst)
 }
 
 /// How long a click's ring pulses.
@@ -104,7 +121,9 @@ pub enum Button {
     Right,
 }
 
-/// Modifiers held (tracked from the key events themselves).
+/// The modifiers that make a chord, read when the key went down. `ctrl`
+/// and `alt` are real ones: the Ctrl + Alt that AltGr reports (Windows)
+/// is neither, so typed @, €, ą never reads as a shortcut.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Held {
     pub ctrl: bool,
@@ -113,23 +132,9 @@ pub struct Held {
     pub win: bool,
 }
 
-/// Which modifier `vk` is (Win32 numbering, either side).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Modifier {
-    Ctrl,
-    Alt,
-    Shift,
-    Win,
-}
-
-fn modifier(vk: u32) -> Option<Modifier> {
-    match vk {
-        0x10 | 0xA0 | 0xA1 => Some(Modifier::Shift),
-        0x11 | 0xA2 | 0xA3 => Some(Modifier::Ctrl),
-        0x12 | 0xA4 | 0xA5 => Some(Modifier::Alt),
-        0x5B | 0x5C => Some(Modifier::Win),
-        _ => None,
-    }
+/// `vk` is a modifier (Win32 numbering, either side; AltGr is RMenu).
+pub fn is_modifier(vk: u32) -> bool {
+    matches!(vk, 0x10..=0x12 | 0xA0..=0xA5 | 0x5B | 0x5C)
 }
 
 /// A key's name on the pill (Win32 numbering): the shortcut table's
@@ -166,7 +171,7 @@ pub fn key_label(vk: u32) -> Option<String> {
 /// a modifier alone, an unnamed key, or (without `all`) a key without
 /// Ctrl, Alt or Win.
 pub fn chord_text(held: Held, vk: u32, all: bool) -> Option<String> {
-    if modifier(vk).is_some() {
+    if is_modifier(vk) {
         return None;
     }
     if !(all || held.ctrl || held.alt || held.win) {
@@ -210,7 +215,8 @@ struct State {
     /// The chords on the pill (with a repeat count), and when the last came.
     chords: Vec<(String, u32)>,
     last_chord: Option<Instant>,
-    held: Held,
+    /// Paused, or the secure desktop is up: nothing is taken or shown.
+    suspended: bool,
 }
 
 /// The events of a recording, shared between the hooks and the source.
@@ -234,42 +240,55 @@ impl Scene {
     }
 }
 
+/// A key event older than this when it is filed is dropped, not drawn
+/// late (its moment, and the focus it was typed into, are gone).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub const STALE: Duration = Duration::from_millis(400);
+
 impl Marks {
     pub fn new(opts: MarkOpts) -> Marks {
         Marks { opts, st: Mutex::new(State::default()) }
     }
 
-    /// A button went down at (x, y) (screen px).
-    pub fn click(&self, x: i32, y: i32, button: Button, now: Instant) {
+    /// Forget everything shown; while `on`, take nothing and show nothing
+    /// (a pause, the secure desktop). Both edges clear.
+    pub fn suspend(&self, on: bool) {
+        let mut st = lock(&self.st);
+        st.clicks.clear();
+        st.chords.clear();
+        st.last_chord = None;
+        st.suspended = on;
+    }
+
+    /// A button went down at (x, y) (screen px) at `at`.
+    pub fn click(&self, x: i32, y: i32, button: Button, at: Instant) {
         if !self.opts.clicks {
             return;
         }
         let mut st = lock(&self.st);
-        st.clicks.retain(|c| now.saturating_duration_since(c.at) < RING_LIFE);
+        if st.suspended {
+            return;
+        }
+        st.clicks.retain(|c| at.saturating_duration_since(c.at) < RING_LIFE);
         if st.clicks.len() < 16 {
-            st.clicks.push_back(Click { x, y, button, at: now });
+            st.clicks.push_back(Click { x, y, button, at });
         }
     }
 
-    /// A key went down or up (Win32 numbering). `secret`: a password
-    /// field has the focus (the key is never shown then).
-    pub fn key(&self, vk: u32, down: bool, secret: bool, now: Instant) {
+    /// A key went down (Win32 numbering) at `at`, with the modifiers
+    /// `held` read at that moment (never derived from earlier events: a
+    /// key-up lost to the lock screen must not leave one stuck). `secret`:
+    /// a password field has (or may have) the focus: never shown.
+    pub fn key(&self, vk: u32, held: Held, secret: bool, at: Instant) {
+        if !self.opts.keys || secret {
+            return;
+        }
+        let Some(text) = chord_text(held, vk, self.opts.all_keys) else { return };
         let mut st = lock(&self.st);
-        if let Some(m) = modifier(vk) {
-            let h = &mut st.held;
-            match m {
-                Modifier::Ctrl => h.ctrl = down,
-                Modifier::Alt => h.alt = down,
-                Modifier::Shift => h.shift = down,
-                Modifier::Win => h.win = down,
-            }
+        if st.suspended {
             return;
         }
-        if !down || !self.opts.keys || secret {
-            return;
-        }
-        let Some(text) = chord_text(st.held, vk, self.opts.all_keys) else { return };
-        let fresh = st.last_chord.is_none_or(|t| now.saturating_duration_since(t) >= KEY_FADE_AFTER);
+        let fresh = st.last_chord.is_none_or(|t| at.saturating_duration_since(t) >= KEY_FADE_AFTER);
         if fresh {
             st.chords.clear();
         }
@@ -282,13 +301,7 @@ impl Marks {
                 }
             }
         }
-        st.last_chord = Some(now);
-    }
-
-    /// The modifiers held now (tests).
-    #[cfg(test)]
-    pub fn held(&self) -> Held {
-        lock(&self.st).held
+        st.last_chord = Some(at);
     }
 
     /// What shows at `now`.
@@ -623,11 +636,26 @@ pub struct Marked {
     tried: bool,
     /// Why the hooks did not start.
     failed: Arc<Mutex<Option<String>>>,
+    paused: bool,
+    /// The secure desktop is up, and when that was last checked.
+    secure: bool,
+    checked: Option<Instant>,
 }
 
 impl Marked {
     pub fn new(inner: Box<dyn FrameSource>, marks: Arc<Marks>, area: IRect, scale: f32) -> Marked {
-        Marked { inner, marks, area, painter: Painter::new(scale), hooks: None, tried: false, failed: Arc::default() }
+        Marked {
+            inner,
+            marks,
+            area,
+            painter: Painter::new(scale),
+            hooks: None,
+            tried: false,
+            failed: Arc::default(),
+            paused: false,
+            secure: false,
+            checked: None,
+        }
     }
 }
 
@@ -643,6 +671,17 @@ impl FrameSource for Marked {
                 }
             }
         }
+        // The lock screen, UAC, Ctrl+Alt+Del: nothing is shown or taken
+        // while they are up, and what came before is forgotten both ways.
+        let now = Instant::now();
+        if self.hooks.is_some() && self.checked.is_none_or(|t| now.saturating_duration_since(t) >= SECURE_POLL) {
+            self.checked = Some(now);
+            let secure = secure_desktop();
+            if secure != self.secure {
+                self.secure = secure;
+                self.sync_suspend();
+            }
+        }
         let mut f = self.inner.next(deadline)?;
         let scene = self.marks.scene(Instant::now());
         self.painter.draw(&mut f, self.area, &scene);
@@ -655,6 +694,33 @@ impl FrameSource for Marked {
 
     fn ended(&self) -> Option<String> {
         self.inner.ended()
+    }
+
+    fn paused(&mut self, on: bool) {
+        self.paused = on;
+        self.sync_suspend();
+        self.inner.paused(on);
+    }
+}
+
+impl Marked {
+    fn sync_suspend(&self) {
+        self.marks.suspend(self.paused || self.secure);
+    }
+}
+
+/// How often the input desktop is checked.
+const SECURE_POLL: Duration = Duration::from_millis(200);
+
+/// The input desktop is not the user's (Windows: Winlogon, a UAC prompt).
+fn secure_desktop() -> bool {
+    #[cfg(windows)]
+    {
+        win::secure_desktop()
+    }
+    #[cfg(not(windows))]
+    {
+        false
     }
 }
 

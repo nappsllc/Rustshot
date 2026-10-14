@@ -108,23 +108,37 @@ Rustshot does not collect, store or transmit personal data or telemetry.
   macOS: a listen-only event tap, which needs the Input Monitoring
   permission) to draw a ring where you click and the last shortcuts into
   the video's frames. The listening starts with the recording's first frame
-  and stops with the recording. Keys are never written to a file, a log,
-  the console or anywhere else, and never sent: each one is kept in memory
-  for the 1.8 s it is shown, then dropped. By default only chords with Ctrl,
-  Alt or Win (Super, Cmd) are drawn, so typed text never is; with *All
-  keys* every key is drawn, except (Windows) while the focused element is a
-  password field, which Rustshot asks UI Automation about (the element's
-  *IsPassword*; nothing else about it is read). On Wayland other apps'
-  input cannot be seen, so nothing is drawn.
-- Trim after recording: the trimmed copy replaces the recording in its
-  folder; nothing leaves your computer. On Windows the frames from the new
-  start to the next key frame are decoded and encoded again locally.
+  and stops with the recording (also when it fails to start). Keys are never
+  written to a file, a log, the console or anywhere else, and never sent:
+  each one is kept in memory for the 1.8 s it is shown, then dropped.
+  Nothing is taken or shown while the recording is paused, nor while the
+  lock screen, Ctrl+Alt+Del or a UAC prompt is up (Windows), and what came
+  before is forgotten. By default only chords with Ctrl, Alt or Win (Super,
+  Cmd) are drawn, so typed text never is: the modifiers are read when each
+  key goes down (a release lost to the lock screen cannot leave one held),
+  and AltGr (which Windows reports as Ctrl + Alt) and macOS's Option alone
+  type characters, not chords. With *All keys* every key is drawn, except
+  on Windows while the focus is, or may be, a password field: each focus
+  change (and Tab, Enter or a click) makes the focus unknown until UI
+  Automation says what has it (the element's *IsPassword*, or a classic
+  password box; nothing else about it is read), and keys typed meanwhile are
+  not drawn. Without All keys nothing is asked. All keys can still show
+  passwords typed into terminals, remote desktops, games and some apps,
+  which Windows cannot tell apart, and on Linux password fields are not
+  detected at all: Settings and the start of a recording say so. On Wayland
+  other apps' input cannot be seen, so nothing is drawn.
+- Trim after recording: the trimmed copy is written beside the recording,
+  synced to disk and read back, and only then replaces it in one rename
+  (the original is kept whole if anything fails); nothing leaves your
+  computer. On Windows the frames from the new start to the next key frame
+  are decoded and encoded again locally.
 - Scrolling capture: Rustshot scrolls only the window under the selection
   (Windows: wheel messages to that window, or UI Automation's scroll
   pattern of the element there; X11: wheel button presses while the pointer
-  is over that window, put back where it was at the end) and grabs the
-  selected region after each step. The stitched picture is kept like any
-  capture (History, or your save folder).
+  is over that window: it is moved there once, the run stops if you move it
+  away, and it goes back at the end) and grabs the selected region after
+  each step. The stitched picture is kept like any capture (History, or
+  your save folder).
 - OpenH264 (Linux without ffmpeg, only if you choose **Download OpenH264**
   when you first record MP4): Rustshot downloads Cisco's OpenH264 library
   once from Cisco (`http://ciscobinary.openh264.org/`, plain HTTP as Cisco

@@ -115,8 +115,9 @@ longer matches (said in a toast; what was stitched is kept). The picture
 opens in the Edit window (with History off it is saved where a capture
 would be). Only the window under the selection is scrolled: on Windows
 with wheel messages to it (or UI Automation's scroll pattern when those
-do nothing), on X11 with wheel presses while the pointer is over it (the
-pointer goes back afterwards). Not on Wayland, where an app cannot scroll
+do nothing), on X11 with wheel presses while the pointer is over it (it is
+moved there once; moving it away stops the run, and it goes back at the
+end). Not on Wayland, where an app cannot scroll
 another's window, nor on macOS yet.
 
 ## Annotating
@@ -537,7 +538,13 @@ centre ("Ctrl + Shift + S", repeats as "×2"), which fades 1.5 s after the
 last one. Both are drawn into the video's frames only, never on the
 screen. By default only chords with <kbd>Ctrl</kbd>, <kbd>Alt</kbd> or
 <kbd>Win</kbd> show, so what you type does not; **All keys** shows every
-key, except (Windows) while a password field has the focus. Rustshot
+key, except (Windows) while a password field has, or may have, the focus
+(after each focus change keys are hidden until Windows says what has it).
+All keys can still show passwords typed into terminals, remote desktops,
+games and some apps, and Linux has no password detection: Settings and
+the start of a recording say so. Nothing shows while the recording is
+paused or the lock screen is up, and AltGr characters (@, €, ą) are never
+shown as Ctrl + Alt chords. Rustshot
 listens to the input only while the recording runs and keeps nothing (see
 [PRIVACY.md](../PRIVACY.md)). Windows and X11; on Wayland no app sees
 another's input, and macOS needs the Input Monitoring permission.

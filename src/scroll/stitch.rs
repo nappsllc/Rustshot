@@ -31,6 +31,13 @@ use crate::pixbuf::PixBuf;
 
 /// The tallest stitched picture (px).
 pub const MAX_H: u32 = 20_000;
+/// Nor past this many bytes (a wide region stops sooner).
+pub const MAX_BYTES: usize = 400 << 20;
+
+/// The most rows a `w` px wide picture may have.
+pub fn max_h(w: u32) -> u32 {
+    (MAX_BYTES / (w.max(1) as usize * 4)).min(MAX_H as usize) as u32
+}
 /// Column bins of a row's profile (fewer in a narrower frame).
 pub const BINS: usize = 64;
 /// Per-channel difference two pixels may have and still be the same.
@@ -280,6 +287,8 @@ pub struct Stitcher {
     /// The latest offset (the next one is expected to be alike).
     last_dy: Option<u32>,
     height: u32,
+    /// [`max_h`] of its width.
+    max_h: u32,
 }
 
 impl Stitcher {
@@ -295,17 +304,18 @@ impl Stitcher {
             foot: None,
             last_dy: None,
             height: first.h,
+            max_h: max_h(first.w),
         }
     }
 
     /// The stitched height so far.
     pub fn height(&self) -> u32 {
-        self.height.min(MAX_H)
+        self.height.min(self.max_h)
     }
 
     /// The picture reached [`MAX_H`].
     pub fn full(&self) -> bool {
-        self.height >= MAX_H
+        self.height >= self.max_h
     }
 
     /// The last offset found.
@@ -340,7 +350,7 @@ impl Stitcher {
         let (w, h) = (self.w, self.h);
         let n = w as usize * 4;
         let foot = self.foot.unwrap_or(0);
-        let mut out = Vec::with_capacity(self.height.min(MAX_H) as usize * n);
+        let mut out = Vec::with_capacity(self.height.min(self.max_h) as usize * n);
         out.extend_from_slice(&self.first[..(h - foot) as usize * n]);
         for (strip, dy, f) in &self.strips {
             // The strip starts `f - foot` rows above the rows wanted.
@@ -352,7 +362,7 @@ impl Stitcher {
             None => &self.first[(h - foot) as usize * n..],
         };
         out.extend_from_slice(tail);
-        out.truncate(MAX_H as usize * n);
+        out.truncate(self.max_h as usize * n);
         let rows = (out.len() / n.max(1)) as u32;
         PixBuf::from_raw(w, rows, out).unwrap_or_else(|| PixBuf::new(w.max(1), 1))
     }

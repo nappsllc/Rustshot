@@ -4,13 +4,32 @@ use crate::rec::Nv12 as Nv12Pic;
 const ALL: MarkOpts = MarkOpts { clicks: true, keys: true, all_keys: true };
 const CHORDS: MarkOpts = MarkOpts { clicks: true, keys: true, all_keys: false };
 
+/// The keys `vks` pressed together: the modifiers among them held while
+/// the others go down.
 fn press(m: &Marks, vks: &[u32], t: Instant) {
-    for &v in vks {
-        m.key(v, true, false, t);
+    let has = |a: &[u32]| vks.iter().any(|v| a.contains(v));
+    let held = Held { ctrl: has(&[0x11, 0xA2, 0xA3]), alt: has(&[0x12, 0xA4, 0xA5]), shift: has(&[0x10, 0xA0, 0xA1]), win: has(&[0x5B, 0x5C]) };
+    for &v in vks.iter().filter(|v| !is_modifier(**v)) {
+        m.key(v, held, false, t);
     }
-    for &v in vks.iter().rev() {
-        m.key(v, false, false, t);
-    }
+}
+
+/// Pausing (and the secure desktop) forgets what was shown and takes
+/// nothing until resumed: a password typed while paused never shows.
+#[test]
+fn a_pause_forgets_and_ignores() {
+    let t = Instant::now();
+    let m = Marks::new(ALL);
+    press(&m, &[0xA2, 0x53], t);
+    m.click(1, 1, Button::Left, t);
+    m.suspend(true);
+    assert!(m.scene(t).is_empty(), "nothing while paused");
+    press(&m, &[0x50], t);
+    m.click(2, 2, Button::Left, t);
+    m.suspend(false);
+    assert!(m.scene(t).is_empty(), "what came while paused is gone");
+    press(&m, &[0x51], t);
+    assert_eq!(m.scene(t).pill.map(|p| p.0).as_deref(), Some("Q"));
 }
 
 #[test]
@@ -41,7 +60,6 @@ fn keys_build_the_pill_and_fade() {
     press(&m, &[0xA0, 0x49], t0);
     assert_eq!(m.scene(t0).pill, None);
     press(&m, &[0xA2, 0xA0, 0x53], t0);
-    assert_eq!(m.held(), Held::default(), "every modifier was let go");
     let s = m.scene(t0 + Duration::from_millis(100));
     assert_eq!(s.pill, Some(("Ctrl + Shift + S".to_string(), 1.0)));
     // Still at 1.5 s, half gone 150 ms later, gone after the fade.
@@ -72,9 +90,9 @@ fn the_pill_keeps_the_last_chords_and_counts_repeats() {
 fn password_fields_and_options_hide_keys() {
     let t = Instant::now();
     let m = Marks::new(ALL);
-    m.key(0x41, true, true, t);
+    m.key(0x41, Held::default(), true, t);
     assert_eq!(m.scene(t).pill, None, "never in a password field");
-    m.key(0x41, true, false, t);
+    m.key(0x41, Held::default(), false, t);
     assert_eq!(m.scene(t).pill.unwrap().0, "A", "every key, asked for");
     let off = Marks::new(MarkOpts { clicks: true, keys: false, all_keys: true });
     press(&off, &[0xA2, 0x53], t);

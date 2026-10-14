@@ -1360,8 +1360,20 @@ impl App {
         #[cfg(not(test))]
         {
             // Show clicks / keystrokes: the recording's worker takes them.
-            crate::rec::marks::arm(crate::rec::marks::MarkOpts::from_config(cfg));
+            let marks = crate::rec::marks::MarkOpts::from_config(cfg);
+            crate::rec::marks::arm(marks);
+            if marks.keys && marks.all_keys && crate::rec::marks::warn_once() {
+                // Once per run: All keys shows what password detection misses.
+                let msg = crate::rec::marks::text::all_keys_warning();
+                eprintln!("rustshot: {msg}");
+                let a = geom.area;
+                crate::notice::show(crate::notice::Note::plain(msg, ToastKind::Info), (a.0 + a.2 as i32 / 2, a.1 + a.3 as i32 / 2), th);
+            }
             let run = rec_ui::Run::start(spec, geom, th, countdown, self.hwnd, bubble).map(|r| r.with_max(opts.max_len()));
+            if run.is_err() {
+                // Not taken by this recording: not left for the next one.
+                crate::rec::marks::arm(Default::default());
+            }
             self.recording_started(run);
         }
     }

@@ -46,6 +46,8 @@ windows = { version = "0.62", features = [
     # Scrolling capture (ScrollPattern) and Show keystrokes (a focused
     # password field is never shown): UI Automation.
     "Win32_UI_Accessibility",
+    # Show keystrokes: the input desktop (nothing shown on the secure one).
+    "Win32_System_StationsAndDesktops",
     "Win32_Graphics_Gdi",
     # Uniscribe (ScriptStringCPtoX): the text caret in right-to-left text.
     "Win32_Globalization",

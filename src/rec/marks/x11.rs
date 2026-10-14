@@ -72,6 +72,7 @@ unsafe extern "C" {
     fn XConnectionNumber(dpy: *mut c_void) -> c_int;
     fn XFlush(dpy: *mut c_void) -> c_int;
     fn XkbKeycodeToKeysym(dpy: *mut c_void, keycode: u8, group: c_uint, level: c_uint) -> c_ulong;
+    fn XQueryKeymap(dpy: *mut c_void, keys: *mut c_char) -> c_int;
     fn XQueryPointer(
         dpy: *mut c_void,
         w: c_ulong,
@@ -98,11 +99,12 @@ unsafe extern "C" {
 
 /// `XISelectEvents(dpy, win, masks, n)`.
 type SelectEvents = unsafe extern "C" fn(*mut c_void, c_ulong, *mut XIEventMask, c_int) -> c_int;
+/// `XIQueryVersion(dpy, &major, &minor)`.
+type QueryVersion = unsafe extern "C" fn(*mut c_void, *mut c_int, *mut c_int) -> c_int;
 
 const GENERIC_EVENT: c_int = 35;
 const XI_ALL_MASTER_DEVICES: c_int = 1;
 const XI_RAW_KEY_PRESS: c_int = 13;
-const XI_RAW_KEY_RELEASE: c_int = 14;
 const XI_RAW_BUTTON_PRESS: c_int = 15;
 
 /// An unshifted keysym → Win32-numbered key (0: not one we name).
@@ -196,6 +198,8 @@ fn open(opts: super::MarkOpts) -> Result<Conn> {
     let xi = Lib::open("libXi.so.6")?;
     // SAFETY: XISelectEvents' C type.
     let select: SelectEvents = unsafe { xi.sym("XISelectEvents")? };
+    // SAFETY: XIQueryVersion's C type.
+    let version: QueryVersion = unsafe { xi.sym("XIQueryVersion")? };
     crate::wind::init_x11();
     // SAFETY: a fresh connection of ours.
     unsafe {
@@ -209,11 +213,17 @@ fn open(opts: super::MarkOpts) -> Result<Conn> {
             XCloseDisplay(dpy);
             bail!("the X server has no XInput extension");
         }
+        // XI 2.0 semantics: no raw events while another client grabs the
+        // keyboard (a screen locker's password prompt is never seen).
+        let (mut major, mut minor) = (2, 0);
+        if version(dpy, &mut major, &mut minor) != 0 || major < 2 {
+            XCloseDisplay(dpy);
+            bail!("the X server has no XInput 2");
+        }
         let mut bits = [0u8; 4];
         let mut set = |e: c_int| bits[(e >> 3) as usize] |= 1 << (e & 7);
         if opts.keys {
             set(XI_RAW_KEY_PRESS);
-            set(XI_RAW_KEY_RELEASE);
         }
         if opts.clicks {
             set(XI_RAW_BUTTON_PRESS);
@@ -236,9 +246,44 @@ pub fn start(marks: Arc<Marks>) -> Result<Box<dyn Hooks>> {
     Ok(Box::new(XHooks { stop, join: Some(join) }))
 }
 
+/// The key codes of each chord modifier (by their unshifted keysym; the
+/// AltGr key is ISO_Level3_Shift, no modifier here).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct ModCodes {
+    ctrl: Vec<u8>,
+    alt: Vec<u8>,
+    shift: Vec<u8>,
+    win: Vec<u8>,
+}
+
+impl ModCodes {
+    pub(super) fn of(keysym: &dyn Fn(u8) -> c_ulong) -> ModCodes {
+        let mut m = ModCodes::default();
+        for code in 8..=255u8 {
+            match keysym(code) {
+                0xffe3 | 0xffe4 => m.ctrl.push(code),
+                0xffe7..=0xffea => m.alt.push(code),
+                0xffe1 | 0xffe2 => m.shift.push(code),
+                0xffeb | 0xffec => m.win.push(code),
+                _ => {}
+            }
+        }
+        m
+    }
+
+    /// The modifiers down in `keys` (an `XQueryKeymap` bit field), read
+    /// at the key: never derived from earlier events, so a release lost
+    /// to another client's grab cannot leave one stuck.
+    pub(super) fn held(&self, keys: &[u8; 32]) -> super::Held {
+        let down = |codes: &[u8]| codes.iter().any(|&c| keys[c as usize / 8] & (1 << (c % 8)) != 0);
+        super::Held { ctrl: down(&self.ctrl), alt: down(&self.alt), shift: down(&self.shift), win: down(&self.win) }
+    }
+}
+
 fn listen(c: Conn, marks: &Marks, stop: &AtomicBool) {
     // SAFETY: the connection is this thread's alone.
     unsafe {
+        let mods = ModCodes::of(&|code| XkbKeycodeToKeysym(c.dpy, code, 0, 0));
         let fd = XConnectionNumber(c.dpy);
         while !stop.load(Ordering::SeqCst) {
             if XPending(c.dpy) == 0 {
@@ -258,13 +303,15 @@ fn listen(c: Conn, marks: &Marks, stop: &AtomicBool) {
             let raw = &*(ck.data as *const RawHead);
             let now = Instant::now();
             match ck.evtype {
-                XI_RAW_KEY_PRESS | XI_RAW_KEY_RELEASE => {
+                XI_RAW_KEY_PRESS => {
                     let ks = XkbKeycodeToKeysym(c.dpy, raw.detail as u8, 0, 0);
                     let vk = vk_of_keysym(ks);
-                    if vk != 0 {
+                    if vk != 0 && !super::is_modifier(vk) {
+                        let mut keys = [0u8; 32];
+                        XQueryKeymap(c.dpy, keys.as_mut_ptr().cast());
                         // No password field is known on X11: only chords
                         // show unless the user asked for every key.
-                        marks.key(vk, ck.evtype == XI_RAW_KEY_PRESS, false, now);
+                        marks.key(vk, mods.held(&keys), false, now);
                     }
                 }
                 XI_RAW_BUTTON_PRESS if raw.detail == 1 || raw.detail == 3 => {
@@ -291,6 +338,34 @@ mod tests {
         assert_eq!(v(0x2f), 0xBF, "slash");
         assert_eq!(v(0x1234), 0);
         assert_eq!(super::super::key_label(v(0x2f)).as_deref(), Some("/"));
+    }
+
+    /// Modifiers come from the key map at the key; AltGr
+    /// (ISO_Level3_Shift) is none.
+    #[test]
+    fn modifiers_are_read_from_the_keymap() {
+        // A German-like map: 37 Control_L, 64 Alt_L, 108 ISO_Level3_Shift,
+        // 50 Shift_L, 133 Super_L.
+        let m = super::ModCodes::of(&|c| match c {
+            37 => 0xffe3,
+            64 => 0xffe9,
+            108 => 0xfe03,
+            50 => 0xffe1,
+            133 => 0xffeb,
+            _ => 0x61,
+        });
+        let keys = |codes: &[u8]| {
+            let mut k = [0u8; 32];
+            for &c in codes {
+                k[c as usize / 8] |= 1 << (c % 8);
+            }
+            k
+        };
+        let h = m.held(&keys(&[108]));
+        assert_eq!(h, super::super::Held::default(), "AltGr is no chord");
+        let h = m.held(&keys(&[37, 50]));
+        assert!(h.ctrl && h.shift && !h.alt && !h.win);
+        assert!(m.held(&keys(&[133])).win);
     }
 
     /// Live (X11, the Docker harness's Xvfb only: it fakes input): XTest
@@ -323,9 +398,15 @@ mod tests {
             let dpy = super::XOpenDisplay(core::ptr::null());
             assert!(!dpy.is_null());
             let (ctrl, s) = (XKeysymToKeycode(dpy, 0xffe3) as c_uint, XKeysymToKeycode(dpy, 0x73) as c_uint);
-            for (k, down) in [(ctrl, 1), (s, 1), (s, 0), (ctrl, 0)] {
+            // Ctrl is held while the listener reads the key map.
+            for (k, down) in [(ctrl, 1), (s, 1), (s, 0)] {
                 key(dpy, k, down, 0);
             }
+            super::XFlush(dpy);
+            std::thread::sleep(Duration::from_millis(300));
+            key(dpy, ctrl, 0, 0);
+            super::XFlush(dpy);
+            std::thread::sleep(Duration::from_millis(100));
             // A typed letter: not shown (no Ctrl, Alt or Win).
             key(dpy, s, 1, 0);
             key(dpy, s, 0, 0);

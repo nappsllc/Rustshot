@@ -407,7 +407,7 @@ pub fn section(ui: &mut Ui, s: &mut super::Settings, tok: &Tok) {
             ui.width(120.0).dropdown("rec_linux_encoder", &labels(&ENCODERS), &mut f.encoder);
         });
     }
-    extras(ui, f, tok);
+    let warn = extras(ui, f, tok);
 
     ui.sec("Sound", tok);
     ui.enabled = on && !gif;
@@ -420,6 +420,9 @@ pub fn section(ui: &mut Ui, s: &mut super::Settings, tok: &Tok) {
         device_dropdown(ui, "rec_mic_device", DEVICE_W, mics, &mut f.mic_dev);
     });
     ui.enabled = on;
+    if warn {
+        s.toast = Some((crate::rec::marks::text::all_keys_warning(), std::time::Instant::now()));
+    }
 }
 
 /// The rows' height: a little under the others' (the section fits the
@@ -427,13 +430,18 @@ pub fn section(ui: &mut Ui, s: &mut super::Settings, tok: &Tok) {
 const EXTRA_H: f32 = 32.0;
 
 /// The Recording section's clicks & keys and trim rows (with the video's).
-fn extras(ui: &mut Ui, f: &mut RecForm, tok: &Tok) {
+/// True when All keys was just turned on (its warning is said then, in
+/// full, and stays short under the row).
+fn extras(ui: &mut Ui, f: &mut RecForm, tok: &Tok) -> bool {
     use crate::rec::marks::text as mt;
     let on = ui.enabled;
-    srow_ex(ui, tok, mt::SHOW, Some(mt::SHOW_NOTE), false, EXTRA_H, |ui| {
+    let warn = f.show_keys && f.all_keys;
+    let note = if warn { mt::ALL_KEYS_SHORT } else { mt::SHOW_NOTE };
+    let mut turned_on = false;
+    srow_ex(ui, tok, mt::SHOW, Some(note), warn, EXTRA_H, |ui| {
         // Right to left: All keys, Keystrokes, Clicks.
         ui.enabled = on && f.show_keys;
-        ui.checkbox("rec_show_all_keys", mt::ALL_KEYS, &mut f.all_keys, tok);
+        turned_on = ui.checkbox("rec_show_all_keys", mt::ALL_KEYS, &mut f.all_keys, tok) && f.all_keys;
         ui.enabled = on;
         ui.checkbox("rec_show_keys", mt::KEYS, &mut f.show_keys, tok);
         ui.checkbox("rec_show_clicks", mt::CLICKS, &mut f.show_clicks, tok);
@@ -442,6 +450,7 @@ fn extras(ui: &mut Ui, f: &mut RecForm, tok: &Tok) {
     srow_ex(ui, tok, TRIM_LABEL, Some(TRIM_NOTE), false, EXTRA_H, |ui| {
         ui.seg("rec_trim", &labels(&TRIMS), &mut f.trim, tok);
     });
+    turned_on
 }
 
 /// The Camera section: the bubble a recording shows.

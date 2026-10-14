@@ -45,13 +45,33 @@ pub mod text {
     pub const STOP: &str = "Stop";
     /// Why it ended, said in a toast when that is not the end of the page.
     pub const LOST: &str = "Scrolling capture stopped: the next part did not match";
-    pub const CAP: &str = "Scrolling capture stopped at 20 000 px";
+    pub const CAP: &str = "Scrolling capture stopped at its size limit (20 000 px, 400 MB)";
     #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub const NO_TARGET: &str = "Nothing to scroll under the selection";
     pub const UNSUPPORTED: &str = "Scrolling capture is not available here";
     /// Nothing moved at all: the capture is the selection as it was.
     pub const NOTHING: &str = "Nothing scrolled under the selection";
+    /// Ended early, what was stitched kept.
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
+    pub const CHANGED: &str = "Scrolling capture stopped: another window came over the selection";
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub const POINTER_LEFT: &str = "Scrolling capture stopped: the pointer left the selection";
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub const ELEVATED: &str = "Cannot scroll a window running as administrator";
 }
+
+/// The run cannot go on (the window under the selection changed, the
+/// pointer left it): it ends there, with what was stitched, and says why.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Interrupted(pub &'static str);
+
+impl std::fmt::Display for Interrupted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
+impl std::error::Error for Interrupted {}
 
 /// Scrolls the target window.
 pub trait Wheel: Send {
@@ -73,6 +93,9 @@ pub enum End {
     Cap,
     /// Stop or Esc.
     Stopped,
+    /// The window under the selection changed, the pointer left it (kept
+    /// up to there).
+    Interrupted(&'static str),
     /// The frames stopped matching (kept up to there).
     Lost,
 }
@@ -83,6 +106,7 @@ impl End {
         match self {
             End::Lost => Some(text::LOST),
             End::Cap => Some(text::CAP),
+            End::Interrupted(why) => Some(why),
             End::Bottom | End::Stopped => None,
         }
     }
@@ -184,7 +208,12 @@ pub fn run(
             break End::Stopped;
         }
         let t0 = Instant::now();
-        wheel.scroll(notches)?;
+        if let Err(e) = wheel.scroll(notches) {
+            match e.downcast_ref::<Interrupted>() {
+                Some(i) => break End::Interrupted(i.0),
+                None => return Err(e),
+            }
+        }
         // Wait for the picture to settle (smooth scrolling, repaints).
         let deadline = t0 + pace.settle;
         let mut cur = grab()?;

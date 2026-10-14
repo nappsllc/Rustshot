@@ -3,7 +3,7 @@
 //! the recording ends. Needs the Input Monitoring permission; without it
 //! the tap is not made and the recording says so.
 
-use super::{Button, Hooks, Marks};
+use super::{Button, Held, Hooks, Marks};
 use anyhow::{anyhow, Result};
 use core::ffi::c_void;
 use std::sync::Arc;
@@ -43,8 +43,6 @@ const LISTEN_ONLY: u32 = 1;
 const LEFT_DOWN: u32 = 1;
 const RIGHT_DOWN: u32 = 3;
 const KEY_DOWN: u32 = 10;
-const KEY_UP: u32 = 11;
-const FLAGS_CHANGED: u32 = 12;
 const KEYCODE_FIELD: u32 = 9;
 
 /// macOS virtual key codes (ANSI) → Win32-numbered keys.
@@ -76,9 +74,16 @@ fn vk_of(code: i64) -> u32 {
     }
 }
 
+/// The chord modifiers of a key event's flags (Shift 1<<17, Control
+/// 1<<18, Option 1<<19, Command 1<<20). Option alone types characters
+/// (Option+2 is € on some layouts): it counts only with Control or Command.
+fn held_of(f: u64) -> Held {
+    let (ctrl, cmd) = (f >> 18 & 1 == 1, f >> 20 & 1 == 1);
+    Held { ctrl, alt: f >> 19 & 1 == 1 && (ctrl || cmd), shift: f >> 17 & 1 == 1, win: cmd }
+}
+
 struct Tap {
     marks: Arc<Marks>,
-    flags: u64,
 }
 
 unsafe extern "C" fn callback(_proxy: *mut c_void, ty: u32, event: *mut c_void, user: *mut c_void) -> *mut c_void {
@@ -93,22 +98,11 @@ unsafe extern "C" fn callback(_proxy: *mut c_void, ty: u32, event: *mut c_void, 
                 let b = if ty == LEFT_DOWN { Button::Left } else { Button::Right };
                 tap.marks.click((p.x * k) as i32, (p.y * k) as i32, b, now);
             }
-            KEY_DOWN | KEY_UP => {
+            KEY_DOWN => {
                 let vk = vk_of(CGEventGetIntegerValueField(event, KEYCODE_FIELD));
                 if vk != 0 {
-                    tap.marks.key(vk, ty == KEY_DOWN, false, now);
+                    tap.marks.key(vk, held_of(CGEventGetFlags(event)), false, now);
                 }
-            }
-            FLAGS_CHANGED => {
-                // Shift 1<<17, Control 1<<18, Option 1<<19, Command 1<<20.
-                let f = CGEventGetFlags(event);
-                for (bit, vk) in [(17, 0xA0), (18, 0xA2), (19, 0xA4), (20, 0x5B)] {
-                    let (was, is) = (tap.flags >> bit & 1, f >> bit & 1);
-                    if was != is {
-                        tap.marks.key(vk, is == 1, false, now);
-                    }
-                }
-                tap.flags = f;
             }
             _ => {}
         }
@@ -150,8 +144,8 @@ impl Drop for MacHooks {
 pub fn start(marks: Arc<Marks>) -> Result<Box<dyn Hooks>> {
     let (tx, rx) = crate::chan::channel::<Option<Loop>>();
     let join = std::thread::Builder::new().name("rec-marks".into()).spawn(move || {
-        let mut tap = Box::new(Tap { marks, flags: 0 });
-        let mask: u64 = (1 << LEFT_DOWN) | (1 << RIGHT_DOWN) | (1 << KEY_DOWN) | (1 << KEY_UP) | (1 << FLAGS_CHANGED);
+        let mut tap = Box::new(Tap { marks });
+        let mask: u64 = (1 << LEFT_DOWN) | (1 << RIGHT_DOWN) | (1 << KEY_DOWN);
         // SAFETY: the tap's user pointer outlives the run loop below.
         unsafe {
             let port = CGEventTapCreate(SESSION_TAP, HEAD_INSERT, LISTEN_ONLY, mask, callback, &mut *tap as *mut Tap as *mut c_void);
