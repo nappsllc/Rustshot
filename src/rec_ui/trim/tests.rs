@@ -183,6 +183,76 @@ fn trim_window_fits() {
     }
 }
 
+/// Right to left the window is mirrored (Play and the times on the
+/// right, the buttons on the left) but its media is not: the preview, the
+/// filmstrip with its selection and playhead, and the Play glyph are the
+/// left-to-right pixels at their mirrored places, and a press lands at
+/// the time it shows over.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn right_to_left_mirrors_the_window_not_its_media() {
+    use crate::pixbuf::PixBuf;
+    use crate::ui::{FocusState, Input};
+    use crate::wind::Ev;
+    // Pictures that read one way: a left-to-right ramp, each thumbnail
+    // its own colour.
+    let ramp = |w: u32, h: u32, g: u8| {
+        let d = (0..h).flat_map(|y| (0..w).flat_map(move |x| [(x * 255 / w) as u8, g, (y * 255 / h) as u8, 255])).collect();
+        PixBuf::from_raw(w, h, d).unwrap()
+    };
+    let pics = window::Pics {
+        ready: Some(true),
+        thumbs: (0..THUMBS).map(|i| Some(ramp(72, 56, (i * 30) as u8))).collect(),
+        frame: Some((ms(4_200), ramp(600, 320, 90))),
+    };
+    let trim = || {
+        let mut t = Trim::new(ms(12_000), 30);
+        t.set_start(ms(1_500));
+        t.set_end(ms(9_000));
+        t.seek(ms(4_200));
+        t
+    };
+    let frame = |rtl: bool, input: &Input| {
+        let run = || {
+            let mut t = trim();
+            let mut focus = FocusState::default();
+            let img = crate::ui::preview::render(W, H, 1.0, &crate::theme::DARK, input, &mut focus, |ui| {
+                window::paint(ui, &mut t, &pics, Instant::now());
+            });
+            (img, t)
+        };
+        if rtl { crate::i18n::with_rtl(run) } else { run() }
+    };
+    let (ltr, _) = frame(false, &Input::default());
+    let (rtl, _) = frame(true, &Input::default());
+    crate::ui::preview::save("trim_window_rtl_forced.png", &rtl);
+    let crop = |img: &PixBuf, (x0, y0, x1, y1): (u32, u32, u32, u32)| -> Vec<[u8; 4]> {
+        (y0..y1).flat_map(|y| (x0..x1).map(move |x| (x, y))).map(|(x, y)| img.get_pixel(x, y)).collect()
+    };
+    let at = |r: FRect, grow: f32| (((r.x - grow).max(0.0)) as u32, ((r.y - grow).max(0.0)) as u32, ((r.x1() + grow).min(W as f32)) as u32, ((r.y1() + grow).min(H as f32)) as u32);
+    let mirror = |(x0, y0, x1, y1): (u32, u32, u32, u32)| (W - x1, y0, W - x0, y1);
+    let l = layout();
+    for (what, r, grow) in [("the preview", l.preview, -4.0), ("the filmstrip", l.strip, 0.0), ("Play", l.play, 0.0)] {
+        let b = at(r, grow);
+        let a = crop(&ltr, b);
+        let row: Vec<[u8; 4]> = a.iter().rev().copied().collect();
+        assert_ne!(a, row, "{what}: something that reads one way");
+        assert!(a == crop(&rtl, mirror(b)), "{what} at {b:?} reads left to right, at its mirrored place");
+    }
+    // The frame is mirrored: Play is not on the left any more.
+    let play = at(l.play, 0.0);
+    assert!(crop(&ltr, play) != crop(&rtl, play), "Play moved to the right");
+    // A press where 6 s shows (on screen, the strip reads left to right)
+    // takes the playhead there.
+    let x = x_of(&l, ms(12_000), ms(6_000)).round() as i32;
+    let y = (l.strip.y + l.strip.h / 2.0) as i32;
+    let mut inp = Input::default();
+    crate::i18n::with_rtl(|| inp.feed(&crate::ui::rtl_ev(Ev::Down { x, y }, W)));
+    let (_, t) = frame(true, &inp);
+    assert_eq!(t.grab, Some(Grab::Head));
+    assert!((t.head.as_millis() as i64 - 6_000).abs() < 60, "the head at {:?}", t.head);
+}
+
 #[test]
 fn applying_a_choice() {
     let dir = std::env::temp_dir().join(format!("rustshot-trim-apply-{}", std::process::id()));

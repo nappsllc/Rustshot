@@ -344,8 +344,19 @@ const LABEL_W: f32 = 96.0;
 
 /// A row's label in the label column.
 fn label(ui: &mut Ui, s: &str, tok: &Tok) {
+    label_in(ui, s, LABEL_W, tok);
+}
+
+/// The label column for `labels`: [`LABEL_W`], wider for a long
+/// translation ("Uudelleennäytteistys").
+fn label_col(ui: &Ui, labels: &[&str]) -> f32 {
+    labels.iter().map(|s| (ui.text_w(12.0, s) + 8.0).ceil()).fold(LABEL_W, f32::max)
+}
+
+/// A row's label in a label column `w` wide.
+fn label_in(ui: &mut Ui, s: &str, w: f32, tok: &Tok) {
     let h = ui.ctl_h;
-    let r = ui.alloc(Some(LABEL_W), h);
+    let r = ui.alloc(Some(w), h);
     let size = 12.0;
     ui.text_at(size, s, r.x, r.y + r.h / 2.0, tok.tx2, false);
 }
@@ -417,8 +428,9 @@ thread_local! {
 }
 
 fn resize_body(ui: &mut Ui, f: &mut ResizeForm, pic: &PixBuf, cfg: &crate::config::Config, tok: &Tok, out: &mut Option<DlgOut>) {
+    let lw = label_col(ui, &[tr!("edit.img.width"), tr!("edit.img.scale"), tr!("edit.img.resampling")]);
     ui.row(|ui| {
-        label(ui, tr!("edit.img.width"), tok);
+        label_in(ui, tr!("edit.img.width"), lw, tok);
         ui.width(84.0).text_field("rs_w", &mut f.w);
         unit(ui, "px", tok);
         ui.space(14.0);
@@ -429,7 +441,7 @@ fn resize_body(ui: &mut Ui, f: &mut ResizeForm, pic: &PixBuf, cfg: &crate::confi
         unit(ui, "px", tok);
     });
     ui.row(|ui| {
-        label(ui, tr!("edit.img.scale"), tok);
+        label_in(ui, tr!("edit.img.scale"), lw, tok);
         ui.width(84.0).text_field("rs_pct", &mut f.pct);
         unit(ui, "%", tok);
         ui.space(14.0);
@@ -439,7 +451,7 @@ fn resize_body(ui: &mut Ui, f: &mut ResizeForm, pic: &PixBuf, cfg: &crate::confi
     });
     f.sync();
     ui.row(|ui| {
-        label(ui, tr!("edit.img.resampling"), tok);
+        label_in(ui, tr!("edit.img.resampling"), lw, tok);
         ui.seg("rs_filter", &[tr!("edit.img.lanczos"), tr!("edit.img.area")], &mut f.filter, tok);
     });
     // "3840 × 2160 → 1920 × 1080 · about 1.2 MB as PNG"

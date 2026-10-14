@@ -1169,10 +1169,10 @@ fn paint_row(ui: &mut Ui, h: &mut History, lay: &Lay, it: &ItemLay, e: &Entry, t
     let ty_x = dim_x - 14.0 - 92.0;
     let title = history::title(&e.meta);
     // The name and its Edited tag end before the cloud (or the type),
-    // a gap between: the tag takes at most 40 % of the room, cut first.
+    // a gap between: the tag takes at most half the room, cut first.
     let end = if e.meta.uploaded.is_some() { ty_x - 19.0 - 8.0 } else { ty_x - 14.0 };
     let room = (end - x).max(20.0);
-    let tag = if e.meta.edited { fit_tag(ui, 10.5, tr!("history.edited"), room * 0.4) } else { None };
+    let tag = if e.meta.edited { fit_tag(ui, 10.5, tr!("history.edited"), room * 0.5) } else { None };
     let edited_w = tag.as_ref().map_or(0.0, |s| ui.text_w(10.5, s) + 6.0);
     let name = ui.fit_text(12.5, &title, (room - edited_w).max(20.0));
     highlighted(ui, &name, &it.hl, x, cy, 12.5, t);
@@ -1206,6 +1206,16 @@ fn paint_row(ui: &mut Ui, h: &mut History, lay: &Lay, it: &ItemLay, e: &Entry, t
     }
 }
 
+/// The details panel's Monitor value: the kept name and scale, an
+/// unknown monitor named in the current language; a dash when nothing
+/// is known.
+pub fn monitor_row(m: &history::Meta) -> String {
+    if m.monitor.trim().is_empty() && (m.scale.is_nan() || m.scale <= 0.0) {
+        return "\u{2014}".into();
+    }
+    crate::history::source::monitor_text(&m.monitor, m.scale)
+}
+
 fn paint_panel(ui: &mut Ui, h: &mut History, pr: FRect, t: &WTok, hover: Option<&Target>) {
     fill(ui, pr, 0.0, t.rail);
     line_v(ui, pr.x, pr.y, pr.h, t.sep);
@@ -1229,7 +1239,7 @@ fn paint_panel(ui: &mut Ui, h: &mut History, pr: FRect, t: &WTok, hover: Option<
     let mut rows: Vec<(&str, String)> = vec![
         (tr!("history.row.captured"), history::captured_text(&e.meta.captured, today)),
         (tr!("history.row.size"), size),
-        (tr!("history.row.monitor"), if e.meta.monitor.is_empty() { "\u{2014}".into() } else { e.meta.monitor.clone() }),
+        (tr!("history.row.monitor"), monitor_row(&e.meta)),
         (tr!("history.row.source"), src),
         (tr!("history.row.saved_to"), saved),
     ];

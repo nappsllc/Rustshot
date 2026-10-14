@@ -60,7 +60,7 @@ pub(crate) fn fixture(tag: &str) -> (TempRoot, Store) {
             kind,
             title: title.into(),
             app: app.into(),
-            monitor: "Built-in Display (2\u{d7})".into(),
+            monitor: "Built-in Display".into(),
             scale: 2.0,
             edited,
             duration_ms: if kind == Kind::Shot { 0 } else { 42_000 },
@@ -771,7 +771,7 @@ fn store_screenshot_history() {
         let (_r, st) = fixture(&format!("store-{tn}"));
         for e in st.list() {
             st.update(&e.id, |m| {
-                m.monitor = "Display 1 (125%)".into();
+                m.monitor = "Display 1".into();
                 m.saved = m.saved.as_ref().and_then(|p| p.file_name()).map(|n| PathBuf::from(format!("C:\\Users\\you\\Pictures\\rustshot\\{}", n.to_string_lossy())));
                 m.file = m.file.as_ref().map(|_| PathBuf::from("C:\\Users\\you\\Videos\\rustshot\\rec.mp4"));
             })
@@ -783,5 +783,20 @@ fn store_screenshot_history() {
         let (hx, hy) = centre(l.on_screen(l.items[2].thumb, 0.0));
         let (img, _) = render(&mut h, &th, 1280, 720, k, &at(hx, hy + 50.0, k));
         crate::ui::preview::save(&format!("store-history-{tn}.png"), &img);
+    }
+}
+
+/// The Monitor row: the kept name with its scale, an unknown monitor
+/// (nothing kept) named in the language shown, a dash with nothing known.
+#[test]
+fn monitor_row_names_an_unknown_monitor_when_shown() {
+    let m = |monitor: &str, scale: f32| Meta { monitor: monitor.into(), scale, ..Meta::default() };
+    assert_eq!(draw::monitor_row(&m("DELL U2720Q", 1.5)), "DELL U2720Q (1.5\u{d7})");
+    assert_eq!(draw::monitor_row(&m("", 0.0)), "\u{2014}");
+    assert_eq!(draw::monitor_row(&m("", 1.0)), "Display");
+    for lang in crate::ui::preview::langs() {
+        crate::i18n::with_lang(lang, || {
+            assert_eq!(draw::monitor_row(&m("", 2.0)), format!("{} (2\u{d7})", tr!("history.display")), "{lang}");
+        });
     }
 }
