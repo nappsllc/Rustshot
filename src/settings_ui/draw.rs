@@ -735,11 +735,27 @@ fn image_rows(ui: &mut Ui, f: &mut crate::settings_ui::Form, tok: &Tok) {
         }
         ui.enabled = on;
     });
-    srow(ui, tok, crate::sharex_text::WATERMARK_ON_EXPORT, Some(crate::sharex_text::WATERMARK_HELP), |ui| {
+    // A PNG chosen in Edit › Effects wins over the text: say so, with a
+    // way back to the text.
+    let image = f.watermark_image.trim().to_string();
+    let help = if image.is_empty() {
+        crate::sharex_text::WATERMARK_HELP.to_string()
+    } else {
+        let name = std::path::Path::new(&image).file_name().map_or(image.clone(), |n| n.to_string_lossy().into_owned());
+        match crate::imgedit::effects::image_problem(&image) {
+            Some(p) => p,
+            None => format!("{} {name}", crate::sharex_text::WATERMARK_IMAGE),
+        }
+    };
+    srow(ui, tok, crate::sharex_text::WATERMARK_ON_EXPORT, Some(&help), |ui| {
         ui.switch("export_watermark", &mut f.watermark, tok);
         let on = ui.enabled;
         ui.enabled = on && f.watermark;
-        ui.width(150.0).text_field("watermark_text", &mut f.watermark_text);
+        if image.is_empty() {
+            ui.width(150.0).text_field("watermark_text", &mut f.watermark_text);
+        } else if ui.cbutton("watermark_clear", crate::sharex_text::WATERMARK_CLEAR, None, false, tok) {
+            f.watermark_image.clear();
+        }
         ui.enabled = on;
     });
     if cfg!(windows) {

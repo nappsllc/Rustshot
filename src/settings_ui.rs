@@ -379,6 +379,8 @@ pub struct Form {
     /// Saving "Watermark on export" (`export_watermark`) and its text.
     pub watermark: bool,
     pub watermark_text: TextState,
+    /// The watermark image (Edit › Effects sets it; here it can be cleared).
+    pub watermark_image: String,
     pub border: bool,
     pub border_w: u8,
     pub border_hex: TextState,
@@ -438,6 +440,7 @@ impl Form {
             cursor: cfg.include_cursor,
             watermark: cfg.export_watermark,
             watermark_text: TextState::new(&cfg.watermark_text),
+            watermark_image: cfg.watermark_image.clone(),
             border: cfg.border_width > 0,
             border_w: if cfg.border_width > 0 { cfg.border_width.min(config::BORDER_MAX) as u8 } else { BORDER_DEFAULT },
             border_hex: TextState::new(cfg.border_color.trim()),
@@ -606,6 +609,9 @@ impl Form {
         }
         if self.watermark_text.text != was.watermark_text.text {
             c.watermark_text = self.watermark_text.text.clone();
+        }
+        if self.watermark_image != was.watermark_image {
+            c.watermark_image = self.watermark_image.clone();
         }
         if self.save_at != was.save_at && let Some(m) = SAVE_AT.get(self.save_at) {
             c.save_scale = m.1.into();

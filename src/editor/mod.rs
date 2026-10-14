@@ -1631,7 +1631,11 @@ impl App {
         // at the screen's pixels, and a pin shows it at screen size).
         let b = if framed { export::output_border(&edit.cfg, edit.shot.scale) as i32 } else { 0 };
         let scaled = framed && export::save_factor(&edit.cfg, edit.shot.scale) < 0.999;
-        let pin = (scaled && tasks.contains(&Task::Pin)).then(|| {
+        // A pin (and the thumbnail card's Pin) shows the screen's pixels:
+        // no Save at, no export watermark (it is not a file).
+        let wm = framed && export::export_watermark(&edit.cfg).is_some();
+        let pins = tasks.contains(&Task::Pin) || edit.cfg.show_thumbnail;
+        let pin = ((scaled || wm) && pins).then(|| {
             let pb = export::border(&edit.cfg, edit.shot.scale).map_or(0, |(b, _)| b as i32);
             (export::with_border(img.clone(), &edit.cfg, edit.shot.scale), (g.0 - pb, g.1 - pb))
         });
@@ -1684,10 +1688,12 @@ impl App {
         let img = Arc::new(job.img);
         // Pin to screen: the image where it was captured (at the screen's
         // pixels whatever Save at says).
+        let own_pin = job.pin.is_some();
         let (pin_img, pin_at) = match job.pin {
             Some((p, at)) => (Arc::new(p), at),
             None => (img.clone(), job.sel_global),
         };
+        let thumb_pin = own_pin.then(|| (pin_img.clone(), pin_at));
         if job.tasks.contains(&Task::Pin) && !crate::pin::open(pin_img, pin_at, th) {
             eprintln!("rustshot: pin to screen is not available here");
             if self.kind == RunKind::Daemon {
@@ -1702,7 +1708,13 @@ impl App {
             let note = job
                 .cfg
                 .show_thumbnail
-                .then(|| crate::notice::thumbnail(&res.done, up, img.clone(), job.sel_global, entry.clone()))
+                .then(|| crate::notice::thumbnail(&res.done, up, img.clone(), job.sel_global, entry.clone())
+                .map(|mut n| {
+                    if let Some(t) = n.thumb.as_mut() {
+                        t.pin = thumb_pin.clone();
+                    }
+                    n
+                }))
                 .flatten()
                 .or_else(|| crate::notice::compose(&res.done, up).map(|n| crate::notice::with_edit(n, entry.clone())));
             if let Some(note) = note {
@@ -1716,7 +1728,7 @@ impl App {
                 RunKind::OneShot => {
                     let texts = crate::qr::read(&img);
                     for t in &texts {
-                        println!("{t}");
+                        println!("{}", crate::qr_ui::printable(t));
                     }
                     if texts.is_empty() {
                         eprintln!("{}", crate::sharex_text::QR_NONE);

@@ -6,6 +6,8 @@ pub const INCLUDE_POINTER: &str = "Include mouse pointer";
 pub const INCLUDE_POINTER_HELP: &str = "Added as an object you can move or delete";
 pub const WATERMARK_ON_EXPORT: &str = "Watermark on export";
 pub const WATERMARK_HELP: &str = "This text on every export";
+pub const WATERMARK_IMAGE: &str = "Image:";
+pub const WATERMARK_CLEAR: &str = "Use text";
 
 // QR codes
 pub const READ_QR: &str = "Read QR code";
@@ -14,6 +16,7 @@ pub const MAKE_QR: &str = "Make QR code\u{2026}";
 pub const MAKE_QR_TITLE: &str = "Make QR code";
 pub const LAUNCHER_QR: &str = "QR code\u{2026}";
 pub const QR_NONE: &str = "No QR code found";
+pub const QR_READING: &str = "Reading QR code\u{2026}";
 pub const QR_COPY: &str = "Copy";
 pub const QR_OPEN: &str = "Open link";
 pub const QR_COPIED: &str = "Copied";
@@ -61,6 +64,7 @@ pub const FX_APPLY: &str = "Apply";
 pub const FX_CANCEL: &str = "Cancel";
 pub const FX_REMOVE: &str = "No effects";
 pub const FX_FOR_EXPORTS: &str = "For all exports";
+pub const FX_SAVED: &str = "Saved: every export gets it now (Settings \u{b7} Saving), so this picture's own is off";
 pub const FX_BAD: &str = "Check the fields: numbers, and colors such as #ffffff";
 
 // The pointer object

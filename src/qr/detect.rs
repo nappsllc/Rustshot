@@ -3,11 +3,54 @@
 //! threes, locate the bottom-right alignment pattern, map the modules
 //! through a perspective transform and sample the grid.
 //!
-//! Hostile pictures are bounded: candidates are capped and every lookup is
-//! range-checked.
+//! Hostile pictures are bounded: candidates are capped, every lookup is
+//! range-checked, searches are bounded in modules, a big picture is read
+//! at no more than 2 MP first (full size only when that finds nothing and
+//! it is at most 40 MP), and the whole read has a time budget
+//! ([`decode_rgba_within`]): past it, what was found so far is returned.
 
 use super::matrix::{self, Content};
 use super::tables::{self, Matrix};
+use std::time::{Duration, Instant};
+
+thread_local! {
+    /// The current read's deadline (none: no limit).
+    static DEADLINE: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
+}
+
+/// The read is past its time budget.
+fn late() -> bool {
+    DEADLINE.with(|d| d.get()).is_some_and(|t| Instant::now() >= t)
+}
+
+/// The most pixels the first pass reads (the picture is box-averaged to it).
+pub const FIRST_PASS_PX: usize = 2_000_000;
+/// The most pixels a full-size second pass reads.
+pub const FULL_PASS_PX: usize = 40_000_000;
+
+/// The luminance of `rgba` box-averaged by `f` (each output pixel the
+/// mean of an `f`×`f` block; alpha over white).
+pub fn luminance_scaled(w: usize, h: usize, rgba: &[u8], f: usize) -> (usize, usize, Vec<u8>) {
+    let f = f.max(1);
+    let (sw, sh) = (w.div_ceil(f), h.div_ceil(f));
+    let mut sum = vec![0u32; sw * sh];
+    let mut cnt = vec![0u32; sw * sh];
+    let px = rgba.as_chunks::<4>().0;
+    for y in 0..h {
+        if y % 64 == 0 && late() {
+            break;
+        }
+        let row = (y / f) * sw;
+        for x in 0..w {
+            let p = px[y * w + x];
+            let l = (p[0] as u32 * 77 + p[1] as u32 * 150 + p[2] as u32 * 29) >> 8;
+            let a = p[3] as u32;
+            sum[row + x / f] += (l * a + 255 * (255 - a)) / 255;
+            cnt[row + x / f] += 1;
+        }
+    }
+    (sw, sh, sum.iter().zip(&cnt).map(|(s, c)| if *c == 0 { 255 } else { (s / c) as u8 }).collect())
+}
 
 /// A binarized picture (`true` = dark).
 pub struct Bin {
@@ -73,7 +116,11 @@ pub fn adaptive(w: usize, h: usize, lum: &[u8]) -> Bin {
     }
     let (bw, bh) = (w.div_ceil(B), h.div_ceil(B));
     let mut bp = vec![0u32; bw * bh];
+    let blank = || Bin { w, h, px: vec![false; w * h] };
     for by in 0..bh {
+        if by % 32 == 0 && late() {
+            return blank();
+        }
         let y0 = (by * B).min(h - B);
         for bx in 0..bw {
             let x0 = (bx * B).min(w - B);
@@ -100,6 +147,9 @@ pub fn adaptive(w: usize, h: usize, lum: &[u8]) -> Bin {
     }
     let mut px = vec![false; w * h];
     for by in 0..bh {
+        if by % 32 == 0 && late() {
+            return blank();
+        }
         let y0 = (by * B).min(h - B);
         let cy = by.clamp(2, bh.saturating_sub(3).max(2));
         for bx in 0..bw {
@@ -128,6 +178,9 @@ pub fn adaptive(w: usize, h: usize, lum: &[u8]) -> Bin {
 pub fn majority(b: &Bin) -> Bin {
     let mut px = b.px.clone();
     for y in 1..b.h.saturating_sub(1) {
+        if y % 64 == 0 && late() {
+            return Bin { w: b.w, h: b.h, px: vec![false; b.w * b.h] };
+        }
         for x in 1..b.w.saturating_sub(1) {
             let mut n = 0;
             for yy in y - 1..=y + 1 {
@@ -209,6 +262,9 @@ pub fn finders(b: &Bin) -> Vec<Finder> {
     let step = if b.h > 1600 { 2 } else { 1 };
     let mut runs: Vec<(bool, usize, usize)> = Vec::new();
     for y in (0..b.h).step_by(step) {
+        if y % 16 == 0 && late() {
+            break;
+        }
         runs.clear();
         let row = &b.px[y * b.w..(y + 1) * b.w];
         let mut start = 0;
@@ -365,9 +421,10 @@ fn alignment_near(b: &Bin, ex: f64, ey: f64, m: f64, r: f64) -> Vec<(f64, f64)> 
         let mm = (r[0] + r[1] + r[2]) / 3.0;
         (mm - m).abs() < m * 0.6 && r.iter().all(|&v| (v - mm).abs() < mm * 0.7)
     };
-    // light, dark (center), light runs along an axis through (x, y)
+    // light, dark (center), light runs along an axis through (x, y); each
+    // is about a module, so a run past 1.5 modules is no alignment pattern
     let runs = |x: i64, y: i64, dx: i64, dy: i64| -> Option<([f64; 3], f64)> {
-        let lim = (m * 3.0) as i64 + 2;
+        let lim = (m * 1.5) as i64 + 2;
         let mut c0 = 0;
         while c0 < lim && b.get(x - dx * (c0 + 1), y - dy * (c0 + 1)) {
             c0 += 1;
@@ -404,8 +461,13 @@ fn alignment_near(b: &Bin, ex: f64, ey: f64, m: f64, r: f64) -> Vec<(f64, f64)> 
     let r = r.min(2000.0);
     let (x0, x1) = ((ex - r).floor() as i64, (ex + r).ceil() as i64);
     let (y0, y1) = ((ey - r).floor() as i64, (ey + r).ceil() as i64);
-    for y in y0..=y1 {
-        for x in x0..=x1 {
+    // The center is a module wide: a third of a module apart still hits it.
+    let stride = ((m / 3.0) as usize).max(1);
+    for y in (y0..=y1).step_by(stride) {
+        if late() {
+            break;
+        }
+        for x in (x0..=x1).step_by(stride) {
             if !b.get(x, y) {
                 continue;
             }
@@ -496,6 +558,9 @@ fn try_triple(b: &Bin, tl: &Finder, tr: &Finder, bl: &Finder) -> Option<Found> {
     let mut tried = Vec::new();
     while let Some(d) = dims.first().copied() {
         dims.remove(0);
+        if late() {
+            break;
+        }
         if !(21..=177).contains(&d) || tried.contains(&d) {
             continue;
         }
@@ -508,9 +573,11 @@ fn try_triple(b: &Bin, tl: &Finder, tr: &Finder, bl: &Finder) -> Option<Found> {
             let k = 1.0 - 3.0 / (dimf - 7.0);
             let ex = tl.x + k * (brx - tl.x);
             let ey = tl.y + k * (bry - tl.y);
-            brs = alignment_near(b, ex, ey, m, m * 4.0);
+            // Within a few modules of where it should be (a strong skew
+            // falls back to the affine guess below).
+            brs = alignment_near(b, ex, ey, m, m * 3.0);
             if brs.is_empty() {
-                brs = alignment_near(b, ex, ey, m, m * 12.0);
+                brs = alignment_near(b, ex, ey, m, m * 7.0);
             }
             brs.truncate(3);
         }
@@ -548,6 +615,9 @@ pub fn scan(b: &Bin) -> Vec<Found> {
     for i in 0..n {
         for j in i + 1..n {
             for k in j + 1..n {
+                if late() {
+                    return out;
+                }
                 if used[i] || used[j] || used[k] {
                     continue;
                 }
@@ -592,16 +662,56 @@ pub fn scan(b: &Bin) -> Vec<Found> {
     out
 }
 
-/// Every code in an RGBA picture (each found once, in reading order).
+/// The time a read gets by default (debug builds are several times slower).
+pub fn default_budget() -> Duration {
+    if cfg!(debug_assertions) { Duration::from_secs(4) } else { Duration::from_millis(300) }
+}
+
+/// Every code in an RGBA picture (each found once, in reading order),
+/// within [`default_budget`].
 pub fn decode_rgba(w: usize, h: usize, rgba: &[u8]) -> Vec<Found> {
-    if w == 0 || h == 0 || rgba.len() < w * h * 4 || w.saturating_mul(h) > 200_000_000 {
+    decode_rgba_within(w, h, rgba, default_budget())
+}
+
+/// [`decode_rgba`] within `budget`: a picture past [`FIRST_PASS_PX`] is
+/// read box-averaged to it first (half the budget); at full size only
+/// when that finds nothing and it is at most [`FULL_PASS_PX`].
+pub fn decode_rgba_within(w: usize, h: usize, rgba: &[u8], budget: Duration) -> Vec<Found> {
+    if w == 0 || h == 0 || rgba.len() < w.saturating_mul(h).saturating_mul(4) || w.saturating_mul(h) > 200_000_000 {
         return Vec::new();
     }
-    let lum = luminance(w, h, rgba);
-    let global = otsu(w, h, &lum);
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            DEADLINE.with(|d| d.set(None));
+        }
+    }
+    let _reset = Reset;
+    let start = Instant::now();
+    let px = w * h;
+    let mut out = Vec::new();
+    if px > FIRST_PASS_PX {
+        let f = (px as f64 / FIRST_PASS_PX as f64).sqrt().ceil() as usize;
+        DEADLINE.with(|d| d.set(Some(start + budget / 2)));
+        let (sw, sh, lum) = luminance_scaled(w, h, rgba, f);
+        out = decode_lum(sw, sh, &lum);
+        let k = f as f64;
+        for o in &mut out {
+            o.corners = o.corners.map(|(x, y)| (x * k, y * k));
+        }
+    }
+    DEADLINE.with(|d| d.set(Some(start + budget)));
+    if out.is_empty() && px <= FULL_PASS_PX && !late() {
+        out = decode_lum(w, h, &luminance(w, h, rgba));
+    }
+    out
+}
+
+fn decode_lum(w: usize, h: usize, lum: &[u8]) -> Vec<Found> {
+    let global = otsu(w, h, lum);
     let mut out = scan(&global);
-    let mut more = scan(&adaptive(w, h, &lum));
-    if out.is_empty() && more.is_empty() {
+    let mut more = if late() { Vec::new() } else { scan(&adaptive(w, h, lum)) };
+    if out.is_empty() && more.is_empty() && !late() {
         more = scan(&majority(&global));
     }
     for f in more {

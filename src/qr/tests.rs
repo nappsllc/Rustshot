@@ -386,6 +386,21 @@ fn only_http_links_are_openable() {
     for bad in ["javascript:alert(1)", "file:///C:/x", "https://", "http:///x", "ftp://x", "https://a b", "https://a\u{7}", "mailto:a@b", "www.example.com", "ms-settings:"] {
         assert_eq!(openable_link(bad), None, "{bad}");
     }
+    // user info hides the real host: refused; ports are shown
+    for bad in ["https://www.paypal.com-login@evil.example/", "https://a@b", "https://x:99999/", "https://x:/", "https://ex%61mple.com/", "https://a..b/", "https://a\u{202e}b/"] {
+        assert_eq!(link_parts(bad), None, "{bad}");
+    }
+    let p = link_parts("https://Example.COM:8443/a/b?c#d").unwrap();
+    assert_eq!((p.head.as_str(), p.unicode, p.rest), ("https://example.com:8443", None, "/a/b?c#d"));
+    let p = link_parts("http://[::1]:80/").unwrap();
+    assert_eq!(p.head, "http://[::1]:80");
+    // an IDN host: punycode first, the Unicode form beside it
+    assert_eq!(punycode("bücher").as_deref(), Some("bcher-kva"));
+    assert_eq!(punycode("münchen").as_deref(), Some("mnchen-3ya"));
+    assert_eq!(punycode("例え").as_deref(), Some("r8jz45g"));
+    let p = link_parts("https://\u{430}pple.com/login").unwrap();
+    assert_eq!(p.head, "https://xn--pple-43d.com");
+    assert_eq!(p.unicode.as_deref(), Some("https://\u{430}pple.com"));
 }
 
 #[test]
@@ -407,4 +422,101 @@ fn decode_is_fast_on_4k() {
     if !cfg!(debug_assertions) {
         assert!(ms < 1000, "{ms} ms");
     }
+}
+
+// ---- bounded time on adversarial pictures ----
+
+fn gray(w: u32, h: u32, v: u8) -> PixBuf {
+    PixBuf::from_raw(w, h, vec![v; (w * h * 4) as usize].chunks(4).flat_map(|_| [v, v, v, 255]).collect()).unwrap()
+}
+
+fn fill(img: &mut PixBuf, x0: i64, y0: i64, s: i64, v: u8) {
+    let (w, h) = (img.width() as i64, img.height() as i64);
+    let d = img.as_raw_mut();
+    for y in y0.max(0)..(y0 + s).min(h) {
+        for x in x0.max(0)..(x0 + s).min(w) {
+            let i = ((y * w + x) * 4) as usize;
+            d[i..i + 3].copy_from_slice(&[v, v, v]);
+        }
+    }
+}
+
+/// A finder pattern of module `m` with its top-left at (x, y), with a
+/// light separator ring round it.
+fn finder_at(img: &mut PixBuf, x: i64, y: i64, m: i64) {
+    fill(img, x - m, y - m, 9 * m, 255);
+    fill(img, x, y, 7 * m, 0);
+    fill(img, x + m, y + m, 5 * m, 255);
+    fill(img, x + 2 * m, y + 2 * m, 3 * m, 0);
+}
+
+/// The review's adversarial pictures (4K, and two monitors wide) are read
+/// within the budget; a legitimate full-screen code still reads.
+fn adversarial(limit_ms: u128) {
+    let mut cases: Vec<(&str, PixBuf)> = Vec::new();
+    // noise
+    let mut rng = Rng(5);
+    let mut noise = PixBuf::new(3840, 2160);
+    for p in noise.as_raw_mut().as_chunks_mut::<4>().0 {
+        let v = if rng.next() & 1 == 0 { 0 } else { 255 };
+        *p = [v, v, v, 255];
+    }
+    cases.push(("noise", noise));
+    // a grid of tiny finder patterns
+    let mut grid = gray(3840, 2160, 255);
+    for gy in 0..2160 / 10 {
+        for gx in 0..3840 / 10 {
+            finder_at(&mut grid, gx * 10 + 1, gy * 10 + 1, 1);
+        }
+    }
+    cases.push(("tiny finders", grid));
+    // three huge finders at a right angle over a dark field, no alignment
+    let mut dark = gray(3840, 2160, 0);
+    for (x, y) in [(100, 100), (1900, 100), (100, 1500)] {
+        finder_at(&mut dark, x, y, 90);
+    }
+    cases.push(("huge finders on dark", dark.clone()));
+    // the same twice, two monitors wide
+    let mut wide = gray(7680, 2160, 0);
+    for ox in [0, 3840] {
+        for (x, y) in [(100, 100), (1900, 100), (100, 1500)] {
+            finder_at(&mut wide, ox + x, y, 90);
+        }
+    }
+    cases.push(("two monitors", wide));
+    for (name, img) in &cases {
+        let t = std::time::Instant::now();
+        let got = read(img);
+        let ms = t.elapsed().as_millis();
+        eprintln!("{name}: {ms} ms, {} found", got.len());
+        assert!(ms < limit_ms, "{name}: {ms} ms (limit {limit_ms})");
+    }
+    // a legitimate full-screen v3 code at 54 px a module
+    let code = encode_text("https://example.com/full-screen", Ecl::M).unwrap();
+    let big = render(&code, 54, 4);
+    let mut screen = gray(3840, 2160, 255);
+    let (bw, bh) = (big.width() as usize, big.height() as usize);
+    for y in 0..bh.min(2160) {
+        let s = y * bw * 4;
+        let o = (y * 3840 + 600) * 4;
+        let n = bw.min(3840 - 600) * 4;
+        screen.as_raw_mut()[o..o + n].copy_from_slice(&big.as_raw()[s..s + n]);
+    }
+    let t = std::time::Instant::now();
+    assert_eq!(read(&screen), vec!["https://example.com/full-screen".to_string()]);
+    eprintln!("full-screen v{}: {} ms", code.version, t.elapsed().as_millis());
+}
+
+#[test]
+fn adversarial_pictures_are_bounded() {
+    // the budget (4 s in debug, 300 ms in release) and some slack
+    adversarial(if cfg!(debug_assertions) { 9000 } else { 900 });
+}
+
+/// The release numbers: `cargo test --release qr_adversarial_bench --
+/// --ignored --nocapture --test-threads=1`.
+#[test]
+#[ignore = "benchmark; run in release, alone"]
+fn qr_adversarial_bench() {
+    adversarial(450);
 }

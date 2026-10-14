@@ -177,9 +177,17 @@ pub fn scaled(img: PixBuf, f: f32) -> PixBuf {
 /// on purpose already, the Edit window's Resize) with the border round it
 /// ([`with_border`], its width at the new size). The history keeps the
 /// capture as it was.
+/// `has_mark`: the picture has its own watermark already (Edit ›
+/// Effects): the export watermark is not added again.
 pub fn for_output(img: PixBuf, cfg: &Config, scale: f32, keep_size: bool) -> PixBuf {
+    for_output_marked(img, cfg, scale, keep_size, false)
+}
+
+/// [`for_output`] for a picture that may carry its own watermark.
+pub fn for_output_marked(img: PixBuf, cfg: &Config, scale: f32, keep_size: bool, has_mark: bool) -> PixBuf {
     let f = if keep_size { 1.0 } else { save_factor(cfg, scale) };
-    with_watermark(with_border(scaled(img, f), cfg, scale * f), cfg, scale * f)
+    let img = with_border(scaled(img, f), cfg, scale * f);
+    if has_mark { img } else { with_watermark(img, cfg, scale * f) }
 }
 
 /// Settings › Saving "Watermark on export" as an effect (`None`: off, or

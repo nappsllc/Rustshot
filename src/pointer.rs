@@ -24,15 +24,22 @@ pub const MAX_SIDE: u32 = 256;
 
 /// The picture from one drawn over black and one over white (`BGRA`
 /// rows, alpha ignored): straight-alpha RGBA. A pixel that inverts what
-/// is under it (the I-beam) comes out opaque.
+/// is under it (the I-beam: lighter over black than over white) comes out
+/// black with a 1 px white outline, so it shows on any picture.
 pub fn from_black_white(w: u32, h: u32, black: &[u8], white: &[u8]) -> Option<PixBuf> {
     let n = (w as usize).checked_mul(h as usize)?;
     if black.len() < n * 4 || white.len() < n * 4 || w == 0 || h == 0 {
         return None;
     }
     let mut out = vec![0u8; n * 4];
+    let mut inverts = vec![false; n];
     for i in 0..n {
         let (b, wt) = (&black[i * 4..i * 4 + 3], &white[i * 4..i * 4 + 3]);
+        if (0..3).map(|c| b[c] as i32 - wt[c] as i32).sum::<i32>() > 3 * 64 {
+            inverts[i] = true;
+            out[i * 4..i * 4 + 4].copy_from_slice(&[0, 0, 0, 255]);
+            continue;
+        }
         // alpha = 1 - (white - black), per channel, averaged
         let diff: i32 = (0..3).map(|c| (wt[c] as i32 - b[c] as i32).max(0)).sum::<i32>() / 3;
         let a = (255 - diff).clamp(0, 255);
@@ -44,6 +51,19 @@ pub fn from_black_white(w: u32, h: u32, black: &[u8], white: &[u8]) -> Option<Pi
             o[c] = ((b[ch] as i32 * 255 + a / 2) / a).clamp(0, 255) as u8;
         }
         o[3] = a as u8;
+    }
+    let (wu, hu) = (w as usize, h as usize);
+    for y in 0..hu {
+        for x in 0..wu {
+            let i = y * wu + x;
+            if inverts[i] || out[i * 4 + 3] != 0 {
+                continue;
+            }
+            let near = (y.saturating_sub(1)..(y + 2).min(hu)).any(|yy| (x.saturating_sub(1)..(x + 2).min(wu)).any(|xx| inverts[yy * wu + xx]));
+            if near {
+                out[i * 4..i * 4 + 4].copy_from_slice(&[255, 255, 255, 255]);
+            }
+        }
     }
     PixBuf::from_raw(w, h, out)
 }
@@ -181,8 +201,9 @@ mod imp {
             } else {
                 let c = &*ci;
                 let (w, h) = (c.width as u32, c.height as u32);
-                let mut px = Vec::with_capacity((w * h * 4) as usize);
-                if w > 0 && h > 0 && w <= MAX_SIDE && h <= MAX_SIDE && !c.pixels.is_null() {
+                let fits = w > 0 && h > 0 && w <= MAX_SIDE && h <= MAX_SIDE && !c.pixels.is_null();
+                let mut px = Vec::with_capacity(if fits { w as usize * h as usize * 4 } else { 0 });
+                if fits {
                     // Premultiplied ARGB in the low 32 bits of each long.
                     for i in 0..(w * h) as usize {
                         let v = *c.pixels.add(i) as u32;
@@ -256,8 +277,9 @@ mod tests {
         assert_eq!(p.get_pixel(0, 0), [255, 0, 0, 255]);
         let q = p.get_pixel(1, 0);
         assert!(q[3].abs_diff(128) <= 1 && q[0] >= 250, "{q:?}");
-        assert_eq!(p.get_pixel(2, 0)[3], 0);
-        assert_eq!(p.get_pixel(3, 0)[3], 255, "inverting: opaque");
+        let _ = p.get_pixel(2, 0);
+        assert_eq!(p.get_pixel(3, 0), [0, 0, 0, 255], "inverting: black");
+        assert_eq!(p.get_pixel(2, 0), [255, 255, 255, 255], "with a white outline");
         assert!(from_black_white(0, 1, &[], &[]).is_none());
         assert!(from_black_white(3, 2, &black, &white).is_none(), "short buffers");
     }

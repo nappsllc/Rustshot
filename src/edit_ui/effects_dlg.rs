@@ -380,7 +380,7 @@ pub fn body(ui: &mut Ui, f: &mut EffectsForm, small: &(PixBuf, f32), tok: &Tok, 
     }
     if f.saved {
         let r = ui.alloc(None, 18.0);
-        ui.text_at(11.5, "Saved: every export gets this watermark (Settings \u{b7} Saving)", r.x, r.y + r.h / 2.0, tok.tx3, false);
+        ui.text_at(11.5, crate::sharex_text::FX_SAVED, r.x, r.y + r.h / 2.0, tok.tx3, false);
     } else {
         ui.space(18.0);
     }

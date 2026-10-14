@@ -133,6 +133,9 @@ pub struct Thumb {
     pub at: (i32, i32),
     /// Its History entry: the card's Edit opens it.
     pub entry: Option<String>,
+    /// What Pin shows instead of `img` (and where), when the export differs
+    /// from the screen's pixels (Save at, the export watermark).
+    pub pin: Option<(Arc<PixBuf>, (i32, i32))>,
 }
 
 impl PartialEq for Thumb {
@@ -624,7 +627,7 @@ pub fn thumbnail(done: &[Done], uploading: bool, img: Arc<PixBuf>, at: (i32, i32
         actions.push(NoteAct::Edit);
     }
     actions.extend([NoteAct::ThumbCopy, NoteAct::ThumbSave, NoteAct::Pin]);
-    Some(Note { text, kind: ToastKind::Success, ttl: ACTION_TTL, actions, file: saved_file(done), thumb: Some(Thumb { img, at, entry: entry.clone() }), entry, corner: false })
+    Some(Note { text, kind: ToastKind::Success, ttl: ACTION_TTL, actions, file: saved_file(done), thumb: Some(Thumb { img, at, entry: entry.clone(), pin: None }), entry, corner: false })
 }
 
 /// The last file `done` saved.
@@ -870,9 +873,9 @@ pub fn run_note_action(note: &Note, a: NoteAct, th: Theme, done: impl FnOnce(Not
     match a {
         NoteAct::Card => Next::Keep,
         NoteAct::Dismiss => Next::Hide,
-        NoteAct::QrCopy => Next::Show(crate::qr_ui::copy_last()),
+        NoteAct::QrCopy => Next::Show(crate::qr_ui::copy_for(note.entry.as_deref())),
         NoteAct::QrOpen => {
-            crate::qr_ui::open_last();
+            crate::qr_ui::open_for(note.entry.as_deref());
             Next::Hide
         }
         NoteAct::CancelDelay => {
@@ -888,7 +891,10 @@ pub fn run_note_action(note: &Note, a: NoteAct, th: Theme, done: impl FnOnce(Not
         }
         NoteAct::Pin => {
             if let Some(t) = &note.thumb
-                && !crate::pin::open(t.img.clone(), t.at, th)
+                && !{
+                    let (img, at) = t.pin.clone().unwrap_or((t.img.clone(), t.at));
+                    crate::pin::open(img, at, th)
+                }
             {
                 crate::tray::notify("Pin to screen is not available here");
             }
@@ -1294,7 +1300,7 @@ mod tests {
     fn thumbnail_layout() {
         for s in [1.0f32, 1.5, 2.0] {
             for (w, h) in [(1600u32, 900u32), (300, 2000), (2000, 100), (40, 30)] {
-                let t = Thumb { img: shot(w, h), at: (0, 0), entry: None };
+                let t = Thumb { img: shot(w, h), at: (0, 0), entry: None, pin: None };
                 let l = thumb_layout(&t, s);
                 let card = l.act.panel;
                 assert_eq!(card.w, (200.0 * s).round(), "{w}x{h}@{s}");

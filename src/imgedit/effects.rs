@@ -321,36 +321,68 @@ fn trim(m: Mask) -> Mask {
     Mask { w, h, a }
 }
 
-/// A PNG file decoded once (the last one asked for is kept).
-fn load_png(path: &str) -> Option<Arc<PixBuf>> {
+/// The most pixels a watermark image may have (16 MP).
+pub const MAX_WM_PX: u64 = 16_000_000;
+/// The largest watermark file read (bytes).
+const MAX_WM_FILE: u64 = 64 << 20;
+
+/// Why the watermark image at `path` cannot be used (`None`: it can).
+pub fn image_problem(path: &str) -> Option<String> {
+    load_png(path).err()
+}
+
+/// A PNG file decoded once (the last one asked for is kept): a regular
+/// local file of at most 64 MB whose header says at most 16 MP.
+fn load_png(path: &str) -> Result<Arc<PixBuf>, String> {
     static CACHE: Mutex<Option<(String, std::time::SystemTime, Arc<PixBuf>)>> = Mutex::new(None);
-    let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok()?;
+    let path = path.trim();
+    if path.starts_with("\\\\") || path.starts_with("//") {
+        return Err("The watermark image must be a local file".into());
+    }
+    let meta = std::fs::metadata(path).map_err(|_| format!("Watermark image not found: {path}"))?;
+    if !meta.is_file() {
+        return Err("The watermark image is not a file".into());
+    }
+    if meta.len() > MAX_WM_FILE {
+        return Err("The watermark image is larger than 64 MB".into());
+    }
+    let modified = meta.modified().map_err(|e| e.to_string())?;
     let mut c = CACHE.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((p, t, img)) = c.as_ref()
         && p == path
         && *t == modified
     {
-        return Some(img.clone());
+        return Ok(img.clone());
     }
-    let bytes = std::fs::read(path).ok()?;
-    if bytes.len() > 256 << 20 {
-        return None;
+    let bytes = std::fs::read(path).map_err(|e| format!("Could not read the watermark image: {e}"))?;
+    // The size from the header, before anything is decoded.
+    if bytes.len() < 24 || &bytes[..8] != b"\x89PNG\r\n\x1a\n" || &bytes[12..16] != b"IHDR" {
+        return Err("The watermark image is not a PNG".into());
     }
-    let img = Arc::new(PixBuf::from_png(&bytes).ok()?);
-    if !super::within_cap(img.dimensions()) {
-        return None;
+    let dim = |o: usize| u32::from_be_bytes([bytes[o], bytes[o + 1], bytes[o + 2], bytes[o + 3]]) as u64;
+    if dim(16) * dim(20) > MAX_WM_PX {
+        return Err(format!("The watermark image is larger than {} megapixels", MAX_WM_PX / 1_000_000));
     }
+    let img = Arc::new(PixBuf::from_png(&bytes).map_err(|_| "The watermark image is not a readable PNG".to_string())?);
     *c = Some((path.to_string(), modified, img.clone()));
-    Some(img)
+    Ok(img)
 }
 
+/// `(w, h)` scaled to `target_w` wide, then shrunk to fit `(iw, ih)`;
+/// each side 1 or more.
+pub fn fit_mark((sw, sh): (u32, u32), target_w: u32, (iw, ih): (u32, u32)) -> (u32, u32) {
+    let (sw, sh) = (sw.max(1) as f64, sh.max(1) as f64);
+    let mut k = target_w.max(1) as f64 / sw;
+    k = k.min(iw.max(1) as f64 / sw).min(ih.max(1) as f64 / sh);
+    (((sw * k).round() as u32).clamp(1, iw.max(1)), ((sh * k).round() as u32).clamp(1, ih.max(1)))
+}
 /// The mark as straight-alpha RGBA, already at its size and opacity.
-fn mark(w: &Watermark, target_w: u32) -> Option<PixBuf> {
-    let target_w = target_w.max(1);
+fn mark(w: &Watermark, target_w: u32, bounds: (u32, u32)) -> Option<PixBuf> {
+    let target_w = target_w.clamp(1, bounds.0.max(1));
     if w.image {
-        let src = load_png(w.text.as_str())?;
+        let src = load_png(w.text.as_str()).ok()?;
         let (sw, sh) = src.dimensions();
-        let th = ((sh as f64 * target_w as f64 / sw.max(1) as f64).round() as u32).max(1);
+        let (target_w, th) = fit_mark((sw, sh), target_w, bounds);
         let mut m = if (target_w, th) == (sw, sh) { (*src).clone() } else { super::resample::resize(&src, target_w, th, super::Filter::Area) };
         for p in m.as_raw_mut().as_chunks_mut::<4>().0 {
             p[3] = (p[3] as f32 * w.opacity).round() as u8;
@@ -366,7 +398,9 @@ fn mark(w: &Watermark, target_w: u32) -> Option<PixBuf> {
     if probe.w == 0 {
         return None;
     }
-    let px = (100.0 * target_w as f32 / probe.w as f32).clamp(4.0, 2000.0);
+    // ...and no taller than the picture.
+    let tall = 100.0 * bounds.1.max(1) as f32 / probe.h.max(1) as f32;
+    let px = (100.0 * target_w as f32 / probe.w as f32).min(tall).clamp(4.0, 2000.0);
     let t = text_mask(text, px);
     if t.w == 0 {
         return None;
@@ -437,7 +471,7 @@ pub fn anchor_pos(anchor: u8, (w, h): (u32, u32), (mw, mh): (u32, u32), margin: 
 fn watermark(img: &mut PixBuf, w: &Watermark, k: f32) {
     let (iw, ih) = img.dimensions();
     let target = ((iw as f32 * w.size / 100.0).round() as u32).max(1);
-    let Some(m) = mark(w, target) else { return };
+    let Some(m) = mark(w, target, (iw, ih)) else { return };
     let margin = (w.margin as f32 * k).round() as u32;
     let (mw, mh) = m.dimensions();
     if w.tiled {

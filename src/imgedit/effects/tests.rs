@@ -248,3 +248,39 @@ fn preview_pngs() {
         }
     }
 }
+
+/// A watermark never outgrows the picture (a thin, tall PNG at 20 % of a
+/// 4K width would be 768 000 px high), and an oversized or odd file is
+/// refused with a reason, never decoded.
+#[test]
+fn watermark_images_are_bounded() {
+    assert_eq!(fit_mark((2, 2000), 768, (3840, 2160)), (2, 2160));
+    assert_eq!(fit_mark((2000, 2), 768, (3840, 2160)), (768, 1));
+    assert_eq!(fit_mark((100, 50), 4000, (300, 200)), (300, 150));
+    let (w, h) = fit_mark((1, u32::MAX), u32::MAX, (10, 10));
+    assert!((1..=10).contains(&w) && (1..=10).contains(&h));
+    let dir = std::env::temp_dir().join(format!("rustshot-wm-cap-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    // a thin, tall mark on a picture: drawn, inside it
+    let tall = dir.join("tall.png");
+    std::fs::write(&tall, PixBuf::from_pixel(2, 2000, [255, 0, 0, 255]).to_png().unwrap()).unwrap();
+    let img = PixBuf::from_pixel(400, 300, [0, 0, 255, 255]);
+    let wm = Watermark { image: true, text: Str::new(tall.to_str().unwrap()), size: 50.0, opacity: 1.0, anchor: 0, margin: 0, ..Default::default() };
+    let out = apply(img.clone(), &Effects { watermark: Some(wm), ..Default::default() }, 1.0);
+    assert_eq!(out.dimensions(), (400, 300));
+    // a header claiming 20 000 × 20 000: refused before decoding
+    let mut big = PixBuf::from_pixel(1, 1, [0, 0, 0, 255]).to_png().unwrap();
+    big[16..20].copy_from_slice(&20_000u32.to_be_bytes());
+    big[20..24].copy_from_slice(&20_000u32.to_be_bytes());
+    let bigp = dir.join("big.png");
+    std::fs::write(&bigp, &big).unwrap();
+    assert!(image_problem(bigp.to_str().unwrap()).unwrap().contains("megapixels"));
+    assert_eq!(apply(img.clone(), &Effects { watermark: Some(Watermark { text: Str::new(bigp.to_str().unwrap()), ..wm }), ..Default::default() }, 1.0), img);
+    assert!(image_problem(dir.to_str().unwrap()).is_some(), "a folder");
+    assert!(image_problem("\\\\server\\share\\logo.png").is_some(), "not local");
+    let txt = dir.join("x.png");
+    std::fs::write(&txt, b"hello").unwrap();
+    assert!(image_problem(txt.to_str().unwrap()).unwrap().contains("not a PNG"));
+    assert!(image_problem(tall.to_str().unwrap()).is_none());
+    let _ = std::fs::remove_dir_all(&dir);
+}

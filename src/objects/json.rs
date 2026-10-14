@@ -955,6 +955,8 @@ fn objects_of(top: &[(String, V)]) -> Result<Vec<Obj>> {
                 let img = (png.len() <= MAX_CURSOR_B64)
                     .then(|| crate::uploads::b64_decode(png))
                     .flatten()
+                    // the size from the header first: never a big decode
+                    .filter(|b| b.len() >= 24 && (16..24).step_by(4).all(|o| u32::from_be_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]) <= MAX_CURSOR_SIDE))
                     .and_then(|b| crate::pixbuf::PixBuf::from_png(&b).ok())
                     .filter(|i| i.width() <= MAX_CURSOR_SIDE && i.height() <= MAX_CURSOR_SIDE)
                     .ok_or_else(|| anyhow!("annotations.json: cursor: not a small PNG"))?;

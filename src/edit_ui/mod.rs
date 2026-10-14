@@ -565,6 +565,8 @@ impl Edit {
                     crate::config::queue_key_edits(&crate::config::config_path(), edits, false);
                 }
                 f.apply_export(&mut self.cfg);
+                // Every export gets it now: not this picture a second time.
+                f.on[0] = false;
                 f.saved = true;
             }
             return;
@@ -666,7 +668,7 @@ impl Edit {
                 self.canvas.commit_drafts();
                 // Save at (unless resized on purpose) and the border.
                 let resized = self.canvas.edits().resize.is_some();
-                let img = crate::export::for_output(self.canvas.export(), &self.cfg, self.entry.meta.scale, resized);
+                let img = crate::export::for_output_marked(self.canvas.export(), &self.cfg, self.entry.meta.scale, resized, self.canvas.edits().effects.watermark.is_some());
                 let objs = self.canvas.objects().to_vec();
                 let doc = self.canvas.doc();
                 match write(&self.store, &self.entry.id, &img, &doc, &path, &self.cfg) {
