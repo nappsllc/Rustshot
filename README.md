@@ -449,6 +449,6 @@ mixed-DPI setups.
 ## License
 
 Rustshot is free software under the **GNU General Public License v3.0
-only** ([LICENSE](LICENSE)). Its behavior and UI are modeled on Flameshot
-(also GPL-3.0). It bundles the Inter font (SIL OFL 1.1) and Lucide icons
-(ISC); see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+only** ([LICENSE](LICENSE)). It bundles the Inter font (SIL OFL 1.1) and
+Lucide icons (ISC), and downloads Google's MediaPipe selfie segmentation
+model (Apache-2.0) on demand; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
