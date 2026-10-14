@@ -127,11 +127,10 @@ impl Key {
             if v.is_empty() {
                 return "";
             }
-            let forms: Vec<&'static str> = v.split('\u{1f}').collect();
             let c = plural::Rule::from_name(plural_name(lang)).category(n.unsigned_abs()) as usize;
-            match forms.get(c) {
+            match v.split('\u{1f}').nth(c) {
                 Some(f) if !f.is_empty() => f,
-                _ => forms.get(5).copied().unwrap_or(""),
+                _ => v.split('\u{1f}').nth(5).unwrap_or(""),
             }
         };
         let s = pick(lang);
@@ -312,9 +311,24 @@ struct Known {
     code: &'static str,
     name: &'static str,
     rtl: bool,
-    /// Set once its file is read (English and the test languages at first
-    /// use; a downloaded language when its file is there).
+    /// English and the test languages: made at first use.
     parsed: OnceLock<files::Parsed>,
+    /// A language's file once read (null until then); replaced (the old
+    /// one leaked: a reload is rare) when its files change.
+    live: std::sync::atomic::AtomicPtr<files::Parsed>,
+    /// Its files as last read or looked at, and when (a check at most
+    /// once a second).
+    seen: std::sync::Mutex<Option<(Vec<Sig>, std::time::Instant)>>,
+}
+
+/// A file's identity for reloading: its path, size and modification time
+/// (none: missing).
+type Sig = (std::path::PathBuf, Option<(u64, std::time::SystemTime)>);
+
+impl Known {
+    const fn new(code: &'static str, name: &'static str, rtl: bool) -> Known {
+        Known { code, name, rtl, parsed: OnceLock::new(), live: std::sync::atomic::AtomicPtr::new(std::ptr::null_mut()), seen: std::sync::Mutex::new(None) }
+    }
 }
 
 /// The languages: English, then every language of lang/ (whether its file
@@ -322,16 +336,17 @@ struct Known {
 fn registry() -> &'static [Known] {
     static R: OnceLock<Vec<Known>> = OnceLock::new();
     R.get_or_init(|| {
-        let mut v = vec![Known { code: "en", name: "English", rtl: false, parsed: OnceLock::new() }];
-        v.extend(table::AVAILABLE.iter().map(|&(code, name, rtl)| Known { code, name, rtl, parsed: OnceLock::new() }));
+        let mut v = vec![Known::new("en", "English", false)];
+        v.extend(table::AVAILABLE.iter().map(|&(code, name, rtl)| Known::new(code, name, rtl)));
         #[cfg(test)]
         v.extend([
-            Known { code: "qps", name: "Pseudo (accented, long)", rtl: false, parsed: OnceLock::new() },
-            Known { code: "qps-rtl", name: "Pseudo (right to left)", rtl: true, parsed: OnceLock::new() },
-            Known { code: "qps-ar", name: "Pseudo (Arabic letters)", rtl: true, parsed: OnceLock::new() },
+            Known::new("qps", "Pseudo (accented, long)", false),
+            Known::new("qps-rtl", "Pseudo (right to left)", true),
+            Known::new("qps-ar", "Pseudo (Arabic letters)", true),
             // A downloadable language (the download tests).
-            Known { code: "zz-test", name: "Zet", rtl: false, parsed: OnceLock::new() },
-            Known { code: "zz-ui", name: "Zet UI", rtl: false, parsed: OnceLock::new() },
+            Known::new("zz-test", "Zet", false),
+            Known::new("zz-ui", "Zet UI", false),
+            Known::new("zz-two", "Zet Two", false),
         ]);
         v
     })
@@ -413,27 +428,78 @@ fn loaded(i: usize) -> Option<&'static files::Parsed> {
             files::Parsed { name: k.name.into(), rtl, plural: "one_other".into(), values, problems: Vec::new() }
         }));
     }
-    k.parsed.get()
+    let p = k.live.load(Ordering::Acquire);
+    // SAFETY: set only from a leaked Box (never freed).
+    (!p.is_null()).then(|| unsafe { &*p })
 }
 
-/// Read language `i`'s file if one is here and it is not read yet: the
-/// downloaded copy ([`fetch::cached`]), with the data folders' own
-/// `lang/<tag>.txt` (a package's or the user's fixes) over it. True when
-/// the language is loaded now.
-fn try_load(i: usize) -> bool {
-    if loaded(i).is_some() {
-        return true;
-    }
+/// Language `i`'s files, lowest priority first: the downloaded copy
+/// ([`fetch::cached`]), then the data folders' own `lang/<tag>.txt` (a
+/// package's or the user's fixes) over it.
+fn files_of(i: usize) -> Vec<std::path::PathBuf> {
     let k = known(i);
     let mut paths: Vec<std::path::PathBuf> = fetch::cached(k.code).into_iter().collect();
     // (Highest priority first: they go on top, so last.)
     let local: Vec<_> = files::lang_dirs().into_iter().map(|d| d.join(format!("{}.txt", k.code))).filter(|p| p.is_file()).collect();
     paths.extend(local.into_iter().rev());
-    if paths.is_empty() {
-        return false;
+    paths
+}
+
+fn sigs(paths: &[std::path::PathBuf]) -> Vec<Sig> {
+    paths.iter().map(|p| (p.clone(), std::fs::metadata(p).ok().map(|m| (m.len(), m.modified().unwrap_or(std::time::UNIX_EPOCH))))).collect()
+}
+
+/// Read language `i`'s files when they are new or changed (size or
+/// modification time), looking at most once a second unless `force` (a
+/// download just landed). A read whose files changed while it ran (one
+/// being written) is not used: the next look reads it again. (The cache
+/// is published whole, written then renamed: see [`fetch::Fetch`].)
+/// True when the language is loaded.
+fn refresh(i: usize, force: bool) -> bool {
+    let k = known(i);
+    let mut seen = lock(&k.seen);
+    let have = !k.live.load(Ordering::Acquire).is_null();
+    if !force && let Some((_, at)) = &*seen
+        && at.elapsed() < std::time::Duration::from_secs(1)
+    {
+        return have;
     }
-    let _ = k.parsed.set(files::load(k.code, &paths));
+    let paths = files_of(i);
+    let before = sigs(&paths);
+    if have && !force && seen.as_ref().is_some_and(|(s, _)| *s == before) {
+        *seen = Some((before, std::time::Instant::now()));
+        return true;
+    }
+    if paths.is_empty() {
+        *seen = Some((before, std::time::Instant::now()));
+        return have;
+    }
+    let p = files::load(k.code, &paths);
+    let after = sigs(&paths);
+    if after != before {
+        // Being written: look again next time.
+        *seen = None;
+        return have;
+    }
+    *seen = Some((after, std::time::Instant::now()));
+    k.live.store(Box::into_raw(Box::new(p)), Ordering::Release);
+    if have {
+        bump();
+    }
     true
+}
+
+/// Language `i` is loaded (its files read, or read now if they are here
+/// or changed: a look at most once a second).
+fn try_load(i: usize) -> bool {
+    if i == 0 {
+        return true;
+    }
+    #[cfg(test)]
+    if known(i).code.starts_with("qps") {
+        return true;
+    }
+    refresh(i, false)
 }
 
 /// The values of language `lang` in key order ("": English's); English's
@@ -471,7 +537,22 @@ pub fn languages() -> Vec<Lang> {
 /// The language the system's settings pick ([`best_match`]; English in
 /// tests).
 pub fn system_language() -> &'static str {
-    known(if cfg!(test) { 0 } else { best_match(&sys::preferred()) }).code
+    known(if cfg!(test) { 0 } else { best_match(&preferred()) }).code
+}
+
+/// The system's preferred languages, asked at most every 10 s (Settings
+/// shows it every frame).
+fn preferred() -> Vec<String> {
+    static P: std::sync::Mutex<Option<(Vec<String>, std::time::Instant)>> = std::sync::Mutex::new(None);
+    let mut p = lock(&P);
+    match &*p {
+        Some((v, at)) if at.elapsed() < std::time::Duration::from_secs(10) => v.clone(),
+        _ => {
+            let v = sys::preferred();
+            *p = Some((v.clone(), std::time::Instant::now()));
+            v
+        }
+    }
 }
 
 /// Language `code`'s own name (the tag when it is not known).
@@ -557,6 +638,20 @@ fn current_index() -> usize {
 /// in English unless they set one).
 fn init() {
     static ONCE: OnceLock<()> = OnceLock::new();
+    thread_local!(static IN_INIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) });
+    // A `tr!` while reading the config (on this thread) is English: the
+    // OnceLock below would wait for itself.
+    if IN_INIT.with(|f| f.replace(true)) {
+        let _ = CUR.compare_exchange(usize::MAX, 0, Ordering::SeqCst, Ordering::SeqCst);
+        return;
+    }
+    struct Done;
+    impl Drop for Done {
+        fn drop(&mut self) {
+            IN_INIT.with(|f| f.set(false));
+        }
+    }
+    let _done = Done;
     ONCE.get_or_init(|| {
         let setting = if cfg!(test) {
             "en".to_string()
@@ -592,6 +687,11 @@ pub(crate) fn bump() {
 /// Language `tag`'s file landed (and is loaded): if it is the language in
 /// force, every window shows it now; if the system's setting chose it,
 /// [`take_auto_switch`] reports it once.
+/// Read language `tag`'s files again now (its download just landed).
+pub(crate) fn reload(tag: &str) -> bool {
+    index_of(tag).is_some_and(|i| i != 0 && refresh(i, true))
+}
+
 pub(crate) fn downloaded(tag: &str) {
     let Some(i) = index_of(tag) else { return };
     if CUR.load(Ordering::SeqCst) == i {
@@ -624,7 +724,7 @@ fn resolve(setting: &str) -> usize {
     if cfg!(test) {
         return 0;
     }
-    best_match(&sys::preferred())
+    best_match(&preferred())
 }
 
 /// Switch to the `language` setting (empty: the system's); returns
@@ -671,6 +771,13 @@ pub fn upper_in(tag: &str, s: &str) -> String {
 /// OS shaper sees the word (Arabic joining, Indic marks).
 pub fn tracks(up: &str) -> bool {
     up.is_ascii()
+}
+
+/// The language the setting asks for (by code), whether its file is here
+/// or not.
+pub(crate) fn wanted() -> &'static str {
+    let i = CUR.load(Ordering::Relaxed);
+    if i == usize::MAX { "en" } else { known(i).code }
 }
 
 /// The current language's code (the one in force: English shows until

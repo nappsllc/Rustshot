@@ -304,7 +304,7 @@ impl Ui<'_> {
                 if m.ctrl || m.alt {
                     continue;
                 }
-                match vk {
+                match super::visual_key(&self.fb, vk) {
                     key::LEFT => *sel = (*sel).min(n).saturating_sub(1),
                     key::RIGHT => *sel = if *sel >= n { 0 } else { (*sel + 1).min(n - 1) },
                     _ => continue,

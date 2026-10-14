@@ -1046,7 +1046,7 @@ pub struct Run {
     silent_since: Option<Instant>,
     /// "No mic input" was said (once per recording) / waits to be taken.
     mic_noted: bool,
-    notice: Option<&'static str>,
+    notice: Option<crate::i18n::Key>,
     /// Effects carried out (tests run without windows or a worker).
     #[cfg(test)]
     pub(crate) log: Vec<Effect>,
@@ -1334,7 +1334,7 @@ impl Run {
     /// A toast for the user (the microphone has been silent for 5 s:
     /// "No mic input"), once.
     pub fn take_notice(&mut self) -> Option<&'static str> {
-        self.notice.take()
+        self.notice.take().map(crate::i18n::Key::get)
     }
 
     /// The control bar's state now.
@@ -1365,7 +1365,7 @@ impl Run {
         let since = *self.silent_since.get_or_insert(now);
         if !self.mic_noted && now.saturating_duration_since(since) >= SILENCE {
             self.mic_noted = true;
-            self.notice = Some(NO_MIC_INPUT.get());
+            self.notice = Some(NO_MIC_INPUT);
         }
     }
 

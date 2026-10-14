@@ -394,7 +394,7 @@ impl Ui<'_> {
                     continue;
                 }
                 let n = *v as i32;
-                let to = match vk {
+                let to = match super::visual_key(&self.fb, vk) {
                     key::LEFT | key::DOWN => n - 1,
                     key::RIGHT | key::UP => n + 1,
                     key::PAGEDOWN => n - 10,
@@ -469,7 +469,7 @@ impl Ui<'_> {
                 if m.ctrl || m.alt {
                     continue;
                 }
-                match vk {
+                match super::visual_key(&self.fb, vk) {
                     key::LEFT => *sel = sel.saturating_sub(1),
                     key::RIGHT => *sel = (*sel + 1).min(n - 1),
                     key::HOME => *sel = 0,

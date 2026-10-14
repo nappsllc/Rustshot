@@ -612,6 +612,17 @@ pub fn rtl_ev(ev: Ev, width: u32) -> Ev {
     }
 }
 
+/// Left and Right as seen on screen: swapped in a mirrored frame (a
+/// segmented control or slider runs right to left there; text fields,
+/// drawn left to right, take the keys as they are).
+pub fn visual_key(fb: &Fb, vk: u32) -> u32 {
+    match vk {
+        crate::wind::key::LEFT if fb.mirror => crate::wind::key::RIGHT,
+        crate::wind::key::RIGHT if fb.mirror => crate::wind::key::LEFT,
+        v => v,
+    }
+}
+
 pub fn contains(r: FRect, p: Pt) -> bool {
     p.x >= r.x && p.y >= r.y && p.x < r.x1() && p.y < r.y1()
 }

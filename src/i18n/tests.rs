@@ -52,6 +52,34 @@ fn headings_upper_case_by_language() {
     assert!(!tracks("GRÖSSE") && !tracks("عام"));
 }
 
+/// Odd files read as problems, not as junk: too large, UTF-16, not
+/// UTF-8, separators in a value; lone CRs are line breaks.
+#[test]
+fn odd_language_files() {
+    let dir = std::env::temp_dir().join(format!("rustshot-oddlang-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let w = |n: &str, b: &[u8]| {
+        let p = dir.join(n);
+        std::fs::write(&p, b).unwrap();
+        p
+    };
+    let big = w("big.txt", &vec![b'#'; (files::MAX_FILE + 1) as usize]);
+    assert!(files::read_text(&big).unwrap_err().contains("MB"));
+    let u16 = w("u16.txt", &[0xFF, 0xFE, b'a', 0]);
+    assert!(files::read_text(&u16).unwrap_err().contains("UTF-16"));
+    let bad = w("bad.txt", &[b'a', 0xC3, b'(']);
+    assert!(files::read_text(&bad).unwrap_err().contains("UTF-8"));
+    let cr = w("cr.txt", b"@name = Zet\rsettings.general.language = Taal\rsettings.general.theme = a\x1fb\r");
+    let p = files::load("zz", &[cr]);
+    assert_eq!(p.name, "Zet");
+    let i = lookup("settings.general.language").unwrap().0 as usize;
+    assert_eq!(p.values[i], "Taal");
+    let j = lookup("settings.general.theme").unwrap().0 as usize;
+    assert_eq!(p.values[j], "", "a separator in a value: English");
+    assert!(p.problems.iter().any(|s| s.contains("control")));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn system_tags_match_languages() {
     let tags = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
@@ -181,6 +209,18 @@ fn a_picked_language_is_downloaded() {
     assert_eq!(with_lang("zz-test", || tr!("settings.general.theme")), "Theme", "missing keys: English");
     fetch::request("zz-test");
     assert_eq!(fake.asked.lock().unwrap().len(), 2, "here: not asked again");
+    // A newer file (another size) is read again when it lands.
+    std::fs::write(dir.join(fetch::rel("zz-test")), "@name = Zet\nsettings.general.language = Taal kiezen\n").unwrap();
+    assert!(reload("zz-test"));
+    assert_eq!(with_lang("zz-test", || tr!("settings.general.language")), "Taal kiezen");
+    // A failure with one fetcher is asked again when another is set (the
+    // first tr! may run before the real one is wired in: set_fetcher
+    // retries the language in force).
+    fake.fail.store(true, std::sync::atomic::Ordering::SeqCst);
+    fetch::request("zz-two");
+    assert!(matches!(fetch::status("zz-two"), fetch::Status::Failed(_)));
+    fetch::retry("zz-two");
+    assert_eq!(fetch::status("zz-two"), fetch::Status::Here, "asked again");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

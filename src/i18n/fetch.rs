@@ -12,11 +12,17 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
 /// The data-files layer as this module needs it.
+///
+/// Contract: `ensure` publishes the cache file whole: written to a
+/// temporary file, checked (SHA256SUMS), then renamed over `rel`, so
+/// `cached` never returns a file being written. (The loader also drops a
+/// read whose files changed while it ran, and reads a file again when its
+/// size or time changes.)
 pub trait Fetch: Send + Sync {
     /// Make release asset `asset` the cache file `rel`, then call `done`
     /// (on any thread) with its path or why it could not.
     fn ensure(&self, asset: &str, rel: &str, done: Box<dyn FnOnce(Result<PathBuf, String>) + Send>);
-    /// The cached copy of `rel`, if it is there.
+    /// The cached copy of `rel`, if it is there (finished files only).
     fn cached(&self, rel: &str) -> Option<PathBuf>;
 }
 
@@ -44,9 +50,22 @@ fn slot() -> &'static Mutex<Arc<dyn Fetch>> {
 }
 
 /// Use `f` for downloads (the data-files layer at startup; tests a fake).
+/// The language in force is asked for again if it is not here: the first
+/// `tr!` may have asked for it (the system's, on a first run) before the
+/// real fetcher was set, and that failure must not stick.
 #[allow(dead_code)]
 pub fn set_fetcher(f: Arc<dyn Fetch>) {
     *slot().lock().unwrap_or_else(|e| e.into_inner()) = f;
+    retry(super::wanted());
+}
+
+/// Ask for language `tag` again unless it is here or on its way (a
+/// failure is forgotten).
+pub(crate) fn retry(tag: &str) {
+    if tag.eq_ignore_ascii_case("en") || super::is_loaded(tag) {
+        return;
+    }
+    request(tag);
 }
 
 /// The release asset of language `tag`.
@@ -115,15 +134,22 @@ pub fn status(tag: &str) -> Status {
 /// lays itself out again ([`super::generation`]).
 pub fn request(tag: &str) {
     let key = tag.to_ascii_lowercase();
-    if super::is_loaded(tag) || matches!(states().get(&key), Some(Status::Downloading)) {
+    if super::is_loaded(tag) {
         return;
     }
-    states().insert(key.clone(), Status::Downloading);
+    {
+        // Checked and marked under one lock: one download at a time.
+        let mut st = states();
+        if matches!(st.get(&key), Some(Status::Downloading)) {
+            return;
+        }
+        st.insert(key.clone(), Status::Downloading);
+    }
     super::bump();
     let t = tag.to_string();
     let done: Box<dyn FnOnce(Result<PathBuf, String>) + Send> = Box::new(move |r| {
         let st = match r {
-            Ok(_) if super::is_loaded(&t) => Status::Here,
+            Ok(_) if super::reload(&t) => Status::Here,
             Ok(p) => Status::Failed(crate::tr!("i18n.unreadable", path = p.display())),
             Err(e) => Status::Failed(e),
         };

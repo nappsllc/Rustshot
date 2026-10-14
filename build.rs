@@ -345,6 +345,10 @@ fn read_catalog(path: &Path) -> Catalog {
         }
         let (k, v) = line.split_once('=').unwrap_or_else(|| panic!("{at}: expected `key = value`"));
         let (k, v) = (k.trim(), unescape(v.trim(), &at));
+        // NUL and 0x1F separate the packed table's values and plural forms.
+        if let Some(c) = v.chars().find(|&c| c.is_control() && c != '\n' && c != '\t') {
+            panic!("{at}: control character U+{:04X} in a value", c as u32);
+        }
         if let Some(m) = k.strip_prefix('@') {
             cat.meta.insert(m.to_string(), v);
             continue;

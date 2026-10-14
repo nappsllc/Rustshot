@@ -98,16 +98,44 @@ fn placeholders(s: &str) -> Vec<&str> {
 }
 
 /// Read the files of one language (lowest priority first) into its table.
+/// A language file larger than this is not read (a real one is ~100 KB).
+pub const MAX_FILE: u64 = 2 << 20;
+/// Problems kept per language (the rest counted).
+const MAX_PROBLEMS: usize = 20;
+
+/// A language file's text: UTF-8 (a BOM is fine), at most [`MAX_FILE`];
+/// UTF-16 (Notepad's "Unicode") and other encodings are refused, lone CRs
+/// are line breaks.
+pub fn read_text(f: &Path) -> Result<String, String> {
+    use std::io::Read;
+    let file = std::fs::File::open(f).map_err(|e| e.to_string())?;
+    let mut b = Vec::new();
+    file.take(MAX_FILE + 1).read_to_end(&mut b).map_err(|e| e.to_string())?;
+    if b.len() as u64 > MAX_FILE {
+        return Err(format!("larger than {} MB: not read", MAX_FILE >> 20));
+    }
+    if b.starts_with(&[0xFF, 0xFE]) || b.starts_with(&[0xFE, 0xFF]) {
+        return Err("UTF-16: save it as UTF-8".into());
+    }
+    let s = String::from_utf8(b).map_err(|e| format!("not UTF-8 (byte {})", e.utf8_error().valid_up_to()))?;
+    Ok(if s.contains('\r') { s.replace("\r\n", "\n").replace('\r', "\n") } else { s })
+}
+
 pub fn load(tag: &str, files: &[PathBuf]) -> Parsed {
     let mut forms: Vec<[Option<String>; 6]> = vec![Default::default(); table::N];
     let mut p = Parsed { name: tag.to_string(), rtl: false, plural: "one_other".into(), values: Vec::new(), problems: Vec::new() };
     for f in files {
-        match std::fs::read(f) {
-            Ok(b) => parse_into(&String::from_utf8_lossy(&b), &f.display().to_string(), &mut forms, &mut p),
+        match read_text(f) {
+            Ok(t) => parse_into(&t, &f.display().to_string(), &mut forms, &mut p),
             Err(e) => p.problems.push(format!("{}: {e}", f.display())),
         }
     }
-    for w in p.problems.iter().take(20) {
+    if p.problems.len() > MAX_PROBLEMS {
+        let more = p.problems.len() - MAX_PROBLEMS;
+        p.problems.truncate(MAX_PROBLEMS);
+        p.problems.push(format!("and {more} more"));
+    }
+    for w in &p.problems {
         eprintln!("rustshot: language file {w}");
     }
     // One leaked buffer per language: values in key order, plural forms
@@ -143,6 +171,11 @@ pub fn parse_into(text: &str, file: &str, forms: &mut [[Option<String>; 6]], p: 
             continue;
         };
         let (k, v) = (k.trim(), unescape(v.trim()));
+        // NUL and 0x1F separate the table's values and plural forms.
+        if v.contains(['\0', '\u{1f}']) {
+            p.problems.push(format!("{}: a control character in {k}", at()));
+            continue;
+        }
         if let Some(m) = k.strip_prefix('@') {
             match m {
                 "name" if !v.is_empty() => p.name = v,
