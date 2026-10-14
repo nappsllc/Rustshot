@@ -605,6 +605,14 @@ fn render_object_previews() {
         mv(&mut a, 482, 361);
         save(&mut a, &format!("{tn}-object-drag.png"));
         up(&mut a, 482, 361);
+        // A drawing tool over an object: its pick-up outline.
+        ed(&mut a).obj.sel = vec![];
+        ed(&mut a).tool = Some(Tool::Rect);
+        mv(&mut a, 600, 362);
+        assert_eq!(ed(&mut a).obj.hover, Some(0));
+        save(&mut a, &format!("{tn}-object-hover.png"));
+        mv(&mut a, 630, 586);
+        save(&mut a, &format!("{tn}-object-arrow-hover.png"));
 
         // Callout shapes, filled and outlined, and one being typed in.
         let mut a = base(th);

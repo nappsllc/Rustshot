@@ -1357,7 +1357,6 @@ fn map_osel(u: &ObjSelUi, v: &View) -> ObjSelUi {
         round: u.round.iter().map(|p| v.to_win(*p)).collect(),
         hot: u.hot,
         hover: u.hover.iter().map(|b| v.rect(*b)).collect(),
-        hover_line: u.hover_line.map(|(a, b)| (v.to_win(a), v.to_win(b))),
     }
 }
 

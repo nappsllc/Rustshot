@@ -327,9 +327,6 @@ pub fn osel(f: &mut Fb, ui: &Ui, u: &ObjSelUi) {
         let r = FRect { x: b.x.round() - lw / 2.0, y: b.y.round() - lw / 2.0, w: b.w.round() + lw, h: b.h.round() + lw };
         f.stroke_dashed_rect(r, DASH.0 * s, DASH.1 * s, lw, th.accent.fade(HOVER_K));
     }
-    if let Some((a, b)) = u.hover_line {
-        dashed_line(f, a, b, s, th.accent.fade(0.7 * HOVER_K));
-    }
     for b in &u.boxes {
         // On the pixel grid, half a line out (the board's x.5 rect).
         let r = FRect { x: b.x.round() - lw / 2.0, y: b.y.round() - lw / 2.0, w: b.w.round() + lw, h: b.h.round() + lw };
@@ -371,7 +368,7 @@ pub fn osel_bounds(ui: &Ui, u: &ObjSelUi) -> Vec<FRect> {
         v.push(FRect { x: x0, y: y0, w: t, h: y1 - y0 });
         v.push(FRect { x: x1 - t, y: y0, w: t, h: y1 - y0 });
     }
-    for (a, b) in u.line.into_iter().chain(u.hover_line) {
+    if let Some((a, b)) = u.line {
         let (x0, y0) = (a.x.min(b.x) - m, a.y.min(b.y) - m);
         v.push(FRect { x: x0, y: y0, w: (a.x - b.x).abs() + 2.0 * m, h: (a.y - b.y).abs() + 2.0 * m });
     }

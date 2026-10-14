@@ -1023,11 +1023,9 @@ impl Edit {
         let hover = self.obj.hover.filter(|i| idle && !self.obj.sel.contains(i)).and_then(|i| self.objects.get(i));
         let osel = match hover {
             Some(o) => {
+                // A frame for lines too (a line along one is hidden by it).
                 let mut u = osel.unwrap_or_default();
-                match o {
-                    Obj::Line { a, b, .. } | Obj::Arrow { a, b, .. } | Obj::Marker { a, b, .. } => u.hover_line = Some((*a, *b)),
-                    o => u.hover.extend(self.frame_of(o)),
-                }
+                u.hover.extend(self.frame_of(o));
                 Some(u)
             }
             None => osel,

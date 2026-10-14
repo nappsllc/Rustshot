@@ -259,9 +259,8 @@ pub struct ObjSelUi {
     pub round: Vec<Pt>,
     /// The handle under the pointer: (round?, index).
     pub hot: Option<(bool, usize)>,
-    /// The object a press would pick up: its frame or its line, faint.
+    /// The object a press would pick up: its frame, faint.
     pub hover: Vec<FRect>,
-    pub hover_line: Option<(Pt, Pt)>,
 }
 
 /// The callout caret: its rect and color.
