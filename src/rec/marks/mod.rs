@@ -323,11 +323,25 @@ pub fn pill_text(chords: &[(String, u32)]) -> String {
 // Drawing into a frame
 // ---------------------------------------------------------------------------
 
+/// A color to blend: RGB (unpremultiplied) and the same in BT.709
+/// limited-range YUV (worked out once, not per pixel).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Paint {
+    rgb: [u8; 3],
+    yuv: [u8; 3],
+}
+
+impl Paint {
+    fn of(rgb: [u8; 3]) -> Paint {
+        Paint { rgb, yuv: yuv(rgb[0], rgb[1], rgb[2]) }
+    }
+}
+
 /// A picture to draw into: BGRA, or NV12 (BT.709, limited range).
 trait Target {
     fn size(&self) -> (u32, u32);
-    /// Blend premultiplied BGRA `p` over pixel (x, y) (inside).
-    fn blend(&mut self, x: u32, y: u32, p: [u8; 4]);
+    /// Blend `c` at opacity `a` over pixel (x, y) (inside).
+    fn blend(&mut self, x: u32, y: u32, c: Paint, a: u8);
 }
 
 struct Bgra<'a> {
@@ -336,17 +350,24 @@ struct Bgra<'a> {
     h: u32,
 }
 
+#[inline]
+fn mix(d: u8, s: u8, a: u32) -> u8 {
+    ((d as u32 * (255 - a) + s as u32 * a + 127) / 255) as u8
+}
+
 impl Target for Bgra<'_> {
     fn size(&self) -> (u32, u32) {
         (self.w, self.h)
     }
     #[inline]
-    fn blend(&mut self, x: u32, y: u32, p: [u8; 4]) {
+    fn blend(&mut self, x: u32, y: u32, c: Paint, a: u8) {
         let i = (y as usize * self.w as usize + x as usize) * 4;
-        let inv = 255 - p[3] as u32;
-        for (d, s) in self.px[i..i + 3].iter_mut().zip(p) {
-            *d = (s as u32 + (*d as u32 * inv + 127) / 255).min(255) as u8;
-        }
+        let a = a as u32;
+        let [r, g, b] = c.rgb;
+        let d = &mut self.px[i..i + 3];
+        d[0] = mix(d[0], b, a);
+        d[1] = mix(d[1], g, a);
+        d[2] = mix(d[2], r, a);
     }
 }
 
@@ -356,13 +377,13 @@ struct Nv12<'a> {
     h: u32,
 }
 
-/// BT.709 limited range of an RGB color: (Y, U, V).
-fn yuv(r: u8, g: u8, b: u8) -> (u8, u8, u8) {
+/// BT.709 limited range of an RGB color: [Y, U, V].
+fn yuv(r: u8, g: u8, b: u8) -> [u8; 3] {
     let (r, g, b) = (r as f32, g as f32, b as f32);
     let y = 16.0 + 0.1826 * r + 0.6142 * g + 0.0620 * b;
     let u = 128.0 - 0.1006 * r - 0.3386 * g + 0.4392 * b;
     let v = 128.0 + 0.4392 * r - 0.3989 * g - 0.0403 * b;
-    (y.round() as u8, u.round() as u8, v.round() as u8)
+    [y.round() as u8, u.round() as u8, v.round() as u8]
 }
 
 impl Target for Nv12<'_> {
@@ -370,34 +391,42 @@ impl Target for Nv12<'_> {
         (self.w, self.h)
     }
     #[inline]
-    fn blend(&mut self, x: u32, y: u32, p: [u8; 4]) {
-        let a = p[3] as u32;
-        if a == 0 {
-            return;
-        }
-        // Unpremultiplied color.
-        let un = |c: u8| ((c as u32 * 255 + a / 2) / a).min(255) as u8;
-        let (yc, uc, vc) = yuv(un(p[2]), un(p[1]), un(p[0]));
+    fn blend(&mut self, x: u32, y: u32, c: Paint, a: u8) {
+        let a = a as u32;
         let w = self.w as usize;
         let yi = y as usize * w + x as usize;
-        let d = &mut self.px[yi];
-        *d = ((*d as u32 * (255 - a) + yc as u32 * a + 127) / 255) as u8;
+        self.px[yi] = mix(self.px[yi], c.yuv[0], a);
         // Its 2x2 block's chroma takes a quarter of the blend.
         let ci = w * self.h as usize + (y as usize / 2) * w + (x as usize / 2) * 2;
         let q = a / 4;
-        for (o, c) in [(0, uc), (1, vc)] {
-            let d = &mut self.px[ci + o];
-            *d = ((*d as u32 * (255 - q) + c as u32 * q + 127) / 255) as u8;
-        }
+        self.px[ci] = mix(self.px[ci], c.yuv[1], q);
+        self.px[ci + 1] = mix(self.px[ci + 1], c.yuv[2], q);
     }
 }
 
-/// A premultiplied BGRA sprite.
+/// A sprite: each pixel's color and opacity (unpremultiplied).
 #[derive(Clone, Debug)]
 struct Patch {
     w: u32,
     h: u32,
-    px: Vec<u8>,
+    px: Vec<(Paint, u8)>,
+}
+
+impl Patch {
+    /// From premultiplied BGRA (what `render_layer` draws).
+    fn of_layer(w: u32, h: u32, bgra: &[u8]) -> Patch {
+        let px = bgra
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| {
+                let a = p[3] as u32;
+                let un = |c: u8| if a == 0 { 0 } else { ((c as u32 * 255 + a / 2) / a).min(255) as u8 };
+                (Paint::of([un(p[2]), un(p[1]), un(p[0])]), p[3])
+            })
+            .collect();
+        Patch { w, h, px }
+    }
 }
 
 /// Draws scenes; keeps the pill's picture while its text is the same.
@@ -405,11 +434,30 @@ pub struct Painter {
     /// Logical px → frame px.
     scale: f32,
     pill: Option<(String, u32, Patch)>,
+    /// NV12 pictures drawn into before, reused once the encoder let go of
+    /// them (no allocation, so no page faults, a frame).
+    pool: Vec<Arc<Vec<u8>>>,
 }
+
+/// Pictures kept for reuse.
+const POOL: usize = 3;
 
 impl Painter {
     pub fn new(scale: f32) -> Painter {
-        Painter { scale: scale.max(0.5), pill: None }
+        Painter { scale: scale.max(0.5), pill: None, pool: Vec::new() }
+    }
+
+    /// A picture of ours holding a copy of `src`.
+    fn copy_of(&mut self, src: &[u8]) -> Arc<Vec<u8>> {
+        let mut buf = match self.pool.iter().position(|b| Arc::strong_count(b) == 1) {
+            Some(i) => self.pool.remove(i),
+            None => Arc::new(Vec::with_capacity(src.len())),
+        };
+        if let Some(v) = Arc::get_mut(&mut buf) {
+            v.clear();
+            v.extend_from_slice(src);
+        }
+        buf
     }
 
     /// Draw `scene` into `f`, whose picture shows `area` (screen px).
@@ -418,14 +466,31 @@ impl Painter {
             return;
         }
         if let Some(nv) = f.nv12.as_mut() {
-            // Shared with the source (it hands the same picture out when
-            // nothing changed): drawn into a copy.
             let (w, h) = (nv.w, nv.h);
             let k = w as f32 / f.w.max(1) as f32;
-            let data = Arc::make_mut(&mut nv.data);
-            if data.len() >= super::yuv::size(w, h) {
+            // Shared with the source (it hands the same picture out when
+            // nothing changed): drawn into a copy of ours.
+            let mut buf = std::mem::take(&mut nv.data);
+            let shared = Arc::get_mut(&mut buf).is_none();
+            if shared {
+                let src = buf;
+                buf = self.copy_of(&src);
+            }
+            if let Some(data) = Arc::get_mut(&mut buf)
+                && data.len() >= super::yuv::size(w, h)
+            {
                 self.paint(&mut Nv12 { px: data, w, h }, area, k, scene);
             }
+            nv.data = if shared {
+                let out = buf.clone();
+                self.pool.push(buf);
+                if self.pool.len() > POOL {
+                    self.pool.remove(0);
+                }
+                out
+            } else {
+                buf
+            };
         } else if f.bgra.len() >= f.w as usize * f.h as usize * 4 {
             let (w, h) = (f.w, f.h);
             self.paint(&mut Bgra { px: &mut f.bgra, w, h }, area, 1.0, scene);
@@ -462,7 +527,7 @@ fn ring<T: Target>(t: &mut T, x: f32, y: f32, age: f32, b: Button, s: f32) {
     let r = (RING_R0 + (RING_R1 - RING_R0) * e) * s;
     let hw = RING_W * s / 2.0;
     let fade = 1.0 - age;
-    let [cr, cg, cb] = if b == Button::Left { LEFT } else { RIGHT };
+    let color = Paint::of(if b == Button::Left { LEFT } else { RIGHT });
     let (tw, th) = t.size();
     let reach = r + hw + 1.0;
     let (x0, x1) = ((x - reach).floor().max(0.0) as u32, ((x + reach).ceil().max(0.0) as u32).min(tw));
@@ -476,11 +541,9 @@ fn ring<T: Target>(t: &mut T, x: f32, y: f32, age: f32, b: Button, s: f32) {
             let ring = (hw + 0.5 - (d - r).abs()).clamp(0.0, 1.0);
             let disc = if d < r { 0.22 } else { 0.0 };
             let a = (ring.max(disc) * fade * 255.0).round() as u32;
-            if a == 0 {
-                continue;
+            if a > 0 {
+                t.blend(px, py, color, a.min(255) as u8);
             }
-            let pm = |c: u8| ((c as u32 * a + 127) / 255) as u8;
-            t.blend(px, py, [pm(cb), pm(cg), pm(cr), a as u8]);
         }
     }
 }
@@ -496,33 +559,30 @@ fn pill_patch(text: &str, s: f32) -> Patch {
         let ty = (h as f32 - crate::uifb::text_height(font, px)) / 2.0;
         f.draw_text(font, px, text, PILL_PAD * s, ty, crate::uifb::C4::rgb(255, 255, 255));
     });
-    Patch { w, h, px: bgra }
+    Patch::of_layer(w, h, &bgra)
 }
 
 /// Blend `p` at (x, y) (may hang off the edges) with opacity `alpha`.
 fn blit<T: Target>(t: &mut T, p: &Patch, x: i32, y: i32, alpha: f32) {
     let k = (alpha.clamp(0.0, 1.0) * 256.0) as u32;
     let (tw, th) = t.size();
+    let (cx0, cx1) = ((-x).max(0), (tw as i32 - x).min(p.w as i32));
     for py in 0..p.h as i32 {
         let ty = y + py;
         if ty < 0 || ty >= th as i32 {
             continue;
         }
-        for px in 0..p.w as i32 {
-            let tx = x + px;
-            if tx < 0 || tx >= tw as i32 {
-                continue;
+        let row = &p.px[py as usize * p.w as usize..(py as usize + 1) * p.w as usize];
+        for px in cx0..cx1 {
+            let (c, a) = row[px as usize];
+            let a = (a as u32 * k) >> 8;
+            if a > 0 {
+                t.blend((x + px) as u32, ty as u32, c, a as u8);
             }
-            let i = (py as usize * p.w as usize + px as usize) * 4;
-            let q = &p.px[i..i + 4];
-            if q[3] == 0 {
-                continue;
-            }
-            let m = |c: u8| ((c as u32 * k) >> 8) as u8;
-            t.blend(tx as u32, ty as u32, [m(q[0]), m(q[1]), m(q[2]), m(q[3])]);
         }
     }
 }
+
 
 // ---------------------------------------------------------------------------
 // The frame source

@@ -156,9 +156,9 @@ fn nv12_frames_get_a_drawn_copy() {
 
 #[test]
 fn yuv_matches_the_encoders_conversion() {
-    assert_eq!(yuv(0, 0, 0), (16, 128, 128));
-    assert_eq!(yuv(255, 255, 255), (235, 128, 128));
-    let (y, u, v) = yuv(255, 0, 0);
+    assert_eq!(yuv(0, 0, 0), [16, 128, 128]);
+    assert_eq!(yuv(255, 255, 255), [235, 128, 128]);
+    let [y, u, v] = yuv(255, 0, 0);
     assert!((y as i32 - 63).abs() <= 1 && (u as i32 - 102).abs() <= 1 && (v as i32 - 240).abs() <= 1, "{y} {u} {v}");
 }
 
