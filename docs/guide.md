@@ -159,7 +159,8 @@ start, so undo does not take it away. On Windows it is read with
 `GetCursorInfo` and drawn with `DrawIconEx`; on Linux it needs X11 and
 libXfixes (Wayland: no pointer). Not on macOS yet. Captures without an
 editing step (`rustshot full`) get it drawn in. Older builds skip the
-object (it hides nothing).
+object (it hides nothing). Annotations you add later draw over it, so a
+blur or a box over the pointer covers it.
 
 Save As, Save to Desktop, Open with… and Share… are in the menu of the
 Save button's chevron. Object actions (<kbd>Del</kbd>, <kbd>Ctrl</kbd>+<kbd>D</kbd>,
@@ -199,7 +200,13 @@ the text in the row (`watermark_text`), or a PNG image when
 `watermark_size` percent of the width wide, at `watermark_opacity`
 percent, or `watermark_tiled` over the whole picture. The Edit window's
 **Effects…** dialog sets all of these with a preview (*For all exports*).
-The History keeps the capture without it.
+The History keeps the capture without it, and a pin (from the overlay, the
+thumbnail card, History or the Edit window) never gets it: a pin is a view
+of the screen, not a file. A picture with its own watermark (Edit ›
+Effects) does not get the export one on top; *For all exports* turns the
+picture's own off. The image is a regular local PNG file of at most 64 MB
+and 16 megapixels (anything else is refused, and Settings says why); the
+mark never grows past the picture.
 
 **Save at** (Settings › Saving, `save_scale`): *Screen pixels*
 (the default: the capture as the screen has it), *1×* (a capture from a
@@ -390,7 +397,8 @@ of the status bar for the **Image** menu, or use the keys.
   places with a margin, or tiled; its size as a percent of the width, its
   opacity and the text's color, with a soft halo so it reads on any
   picture), **torn edges** (any of the four sides, depth and tooth width;
-  *New pattern* tears them differently, the same pattern every time), a
+  *New pattern* tears them differently, the same pattern every time; a
+  look, not a redaction: older builds show the full edges), a
   **reflection** (height as a percent of the picture, the opacity it
   starts at, fading out, and a gap) and a **drop shadow** round it all
   (offset, blur, color and opacity; the presentation shadow's look by
@@ -497,7 +505,15 @@ bytes are not UTF-8); Kanji segments are skipped. Several codes are read
 in reading order. The toast shows what they say with **Copy** (every
 code's text, one per line) and, when one is an `http://` or `https://`
 link, **Open link**: the toast shows that link first, and nothing opens
-until you click it (any other scheme gets no button).
+until you click it (any other scheme gets no button). The toast shows the
+scheme, host and port in full (an international host as punycode, e.g.
+`https://xn--pple-43d.com`, with the form as written beside it), then the
+path cut short; a link with user info (`user@host`) gets no Open link. A
+read takes at most about 300 ms whatever the picture: a picture over 2
+megapixels is read at that size first, at full size (up to 40 MP) only
+when that finds nothing. The Edit window shows *Reading QR code…* and
+stays responsive meanwhile. A one-shot run prints each code on its own
+line with control characters escaped.
 
 **Make QR code…** (the tray menu, and *QR code…* in the launcher) opens a
 small window: the text field starts with the clipboard's text, the code
