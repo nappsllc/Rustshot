@@ -61,7 +61,8 @@ thread_local! {
     pub static FAKE: std::cell::RefCell<Option<Pointer>> = const { std::cell::RefCell::new(None) };
 }
 
-#[cfg(all(windows, not(test)))]
+#[cfg(windows)]
+#[cfg_attr(test, allow(dead_code))]
 mod imp {
     use super::*;
     use std::mem::size_of;
@@ -230,6 +231,21 @@ pub fn bake_into(img: &mut PixBuf, origin: (i32, i32)) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The real pointer (Windows): a picture with opaque pixels, its
+    /// top-left within a picture's size of where the pointer is.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "live display access"]
+    fn live_pointer_grab() {
+        let p = super::imp::grab().expect("a pointer showing");
+        let (w, h) = p.img.dimensions();
+        assert!((8..=MAX_SIDE).contains(&w) && (8..=MAX_SIDE).contains(&h), "{w}x{h}");
+        assert!(p.img.as_raw().as_chunks::<4>().0.iter().any(|q| q[3] == 255), "opaque pixels");
+        let (cx, cy) = crate::capture::cursor_pos();
+        assert!((cx - p.at.0).abs() <= w as i32 && (cy - p.at.1).abs() <= h as i32, "{:?} vs {:?}", p.at, (cx, cy));
+        eprintln!("pointer {w}x{h} at {:?}", p.at);
+    }
 
     #[test]
     fn alpha_from_black_and_white() {
