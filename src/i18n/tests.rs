@@ -469,3 +469,35 @@ fn fit_languages_load_from_the_source_folder() {
     assert!(load_fit_langs("", &dir).is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Right to left, number pairs, signed and grouped numbers are wrapped in
+/// a left-to-right isolate; single numbers, numbers in words and text
+/// without digits are left alone.
+#[test]
+fn isolates_number_runs() {
+    let iso = |s: &str| isolate_numbers(s).replace('\u{2066}', "<").replace('\u{2069}', ">");
+    assert_eq!(iso("1180 × 760"), "<1180 × 760>");
+    assert_eq!(iso("שמור 320 × 92 · 724, 120"), "שמור <320 × 92> · <724, 120>");
+    assert_eq!(iso("{x}: 12:30, 3/4, 10–20"), "{x}: <12:30, 3/4, 10–20>");
+    assert_eq!(iso("1\u{2009}234 px² · -5° · +3"), "<1\u{2009}234> px² · <-5>° · <+3>");
+    assert_eq!(iso("50% · 1,234 · 2.5 · 7"), "50% · 1,234 · 2.5 · 7");
+    assert_eq!(iso("H264 v2 x-1 3x"), "H264 v2 x-1 3x");
+    assert_eq!(iso("1280 × 720 → 640 × 360"), "<1280 × 720> → <640 × 360>");
+    assert_eq!(iso("no digits"), "no digits");
+    let done = "\u{2066}1 × 2\u{2069}";
+    assert_eq!(isolate_numbers(done), done, "already isolated");
+}
+
+/// `tr!` keeps a pair in order right to left (`{w} × {h}`, `{x}, {y}`,
+/// the ruler), and leaves left-to-right strings as they were.
+#[test]
+fn filled_strings_isolate_pairs_right_to_left() {
+    let size = || tr!("ruler.size", w = 1180, h = 760);
+    assert_eq!(size(), "1180 × 760 px");
+    let rtl = with_lang("qps-rtl", size);
+    assert!(rtl.contains("\u{2066}1180 × 760\u{2069}"), "{rtl:?}");
+    let geo = with_lang("qps-ar", || tr!("edit.geometry", what = "x", w = 320, h = 92, x = 724, y = 120));
+    assert!(geo.contains("\u{2066}320 × 92\u{2069}") && geo.contains("\u{2066}724, 120\u{2069}"), "{geo:?}");
+    assert!(!with_lang("qps", || tr!("edit.geometry", what = "x", w = 320, h = 92, x = 724, y = 120)).contains('\u{2066}'));
+    assert!(with_rtl(|| tr!("ruler.size", w = 3, h = 4)).contains('\u{2066}'));
+}

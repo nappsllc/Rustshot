@@ -108,6 +108,9 @@ impl FontDc {
         // Right to left: DT_RTLREADING, and the line inside a right-to-left
         // embedding (RLE ... PDF), which Uniscribe honors whatever the
         // font's charset (DT_RTLREADING alone needs a Hebrew/Arabic one).
+        // Isolates (number pairs) as embeddings: Uniscribe draws isolates
+        // as boxes.
+        let line = crate::text::as_embeddings(line);
         let mut wide: Vec<u16> = if rtl {
             std::iter::once(0x202B).chain(line.encode_utf16()).chain(std::iter::once(0x202C)).collect()
         } else {
@@ -203,7 +206,7 @@ impl Face {
         if line.is_empty() || idx == 0 && !line.chars().any(is_rtl) {
             return Some(0.0);
         }
-        let wide: Vec<u16> = line.encode_utf16().collect();
+        let wide: Vec<u16> = crate::text::as_embeddings(line).encode_utf16().collect();
         let cp = line.get(..idx)?.encode_utf16().count();
         let n = wide.len() as i32;
         with_dc(px, self, |fd| unsafe {

@@ -232,7 +232,99 @@ pub fn t(k: &str) -> &'static str {
     }
 }
 
-/// `s` with each `{name}` replaced by its argument (unknown ones kept).
+/// Right to left, a run of numbers joined by separators (`1180 × 760`,
+/// `724, 120`, `3/4`, `10–20`), a signed number (`-5`) or one grouped by
+/// thin spaces (`1 234`) is wrapped in a left-to-right isolate (LRI …
+/// PDI), so it keeps its order inside right-to-left text instead of
+/// reading backwards (`760 × 1180`). Strings that already hold an isolate
+/// are left as they are. [`fmt`] does this for every filled-in string
+/// while the UI runs right to left; the text renderers draw the isolates
+/// as nothing (crate::text::is_bidi_control).
+pub fn isolate_numbers(s: &str) -> String {
+    const LRI: char = '\u{2066}';
+    const PDI: char = '\u{2069}';
+    if !s.bytes().any(|b| b.is_ascii_digit()) || s.contains([LRI, '\u{2067}', '\u{2068}', PDI]) {
+        return s.to_string();
+    }
+    let c: Vec<char> = s.chars().collect();
+    let digit = |i: usize| c.get(i).is_some_and(|c| c.is_ascii_digit());
+    let space = |i: usize| c.get(i).is_some_and(|&c| matches!(c, ' ' | '\u{a0}' | '\u{2009}' | '\u{202f}'));
+    // A number from `i` (digits, inner `.`/`,`/thin-space groups, a `%`):
+    // its end and whether it holds a group space.
+    let number = |i: usize| -> Option<(usize, bool)> {
+        if !digit(i) {
+            return None;
+        }
+        let (mut j, mut grouped) = (i, false);
+        loop {
+            while digit(j) {
+                j += 1;
+            }
+            match c.get(j) {
+                Some('.' | ',') if digit(j + 1) => j += 1,
+                Some('\u{2009}' | '\u{202f}') if digit(j + 1) => {
+                    grouped = true;
+                    j += 1;
+                }
+                _ => break,
+            }
+        }
+        if c.get(j) == Some(&'%') {
+            j += 1;
+        }
+        Some((j, grouped))
+    };
+    // A separator from `i` and the number after it: that number's end.
+    let joined = |i: usize| -> Option<(usize, bool)> {
+        let mut j = i;
+        while space(j) && j < i + 2 {
+            j += 1;
+        }
+        if !c.get(j).is_some_and(|&c| matches!(c, '×' | 'x' | ',' | ':' | '/' | '–' | '-')) {
+            return None;
+        }
+        j += 1;
+        while space(j) && j < i + 4 {
+            j += 1;
+        }
+        number(j)
+    };
+    let mut out = String::with_capacity(s.len() + 8);
+    let mut i = 0;
+    while i < c.len() {
+        let word = i > 0 && (c[i - 1].is_alphanumeric() || c[i - 1] == '_');
+        let sign = matches!(c[i], '-' | '+' | '\u{2212}') && digit(i + 1) && !word;
+        let start = if sign { i + 1 } else { i };
+        let Some((mut end, mut grouped)) = (!word || sign).then(|| number(start)).flatten() else {
+            // Not a number's start: the character, or a word's whole digit run.
+            let alnum = c[i].is_alphanumeric();
+            out.push(c[i]);
+            i += 1;
+            while alnum && digit(i) {
+                out.push(c[i]);
+                i += 1;
+            }
+            continue;
+        };
+        let mut n = 1;
+        while let Some((e, g)) = joined(end) {
+            (end, grouped, n) = (e, grouped || g, n + 1);
+        }
+        let wrap = sign || grouped || n > 1;
+        if wrap {
+            out.push(LRI);
+        }
+        out.extend(&c[i..end]);
+        if wrap {
+            out.push(PDI);
+        }
+        i = end;
+    }
+    out
+}
+
+/// `s` with each `{name}` replaced by its argument (unknown ones kept);
+/// right to left, number pairs kept in order ([`isolate_numbers`]).
 #[inline(never)]
 pub fn fmt(s: &str, args: &[(&str, &dyn std::fmt::Display)]) -> String {
     use std::fmt::Write as _;
@@ -253,7 +345,7 @@ pub fn fmt(s: &str, args: &[(&str, &dyn std::fmt::Display)]) -> String {
         }
     }
     out.push_str(rest);
-    out
+    if is_rtl() { isolate_numbers(&out) } else { out }
 }
 
 /// The key `$k` as a [`Key`] constant (for tables of strings).
