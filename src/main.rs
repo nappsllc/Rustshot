@@ -47,9 +47,11 @@ mod osrand;
 mod pin;
 mod pixbuf;
 mod pngfile;
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 mod pointer;
 mod qr;
 mod qr_ui;
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 mod qr_make;
 #[cfg(windows)]
 mod proc_win;

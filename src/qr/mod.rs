@@ -4,6 +4,9 @@
 //! rotated or perspective-skewed; numeric, alphanumeric, byte and ECI
 //! segments; Kanji segments are skipped).
 
+// macOS has no Make QR code window (yet): the encoder is the tests' there.
+#![cfg_attr(target_os = "macos", allow(dead_code))]
+
 pub mod detect;
 pub mod encode;
 pub mod gf;
