@@ -45,7 +45,7 @@ Limit: 10,000 characters, plain text (no Markdown, HTML or links). This text
 is about 3,450 characters.
 
 ```text
-Rustshot is a fast, good-looking tool for screenshots, annotation and screen recording. Press Win+Shift+X, drag across what you want, mark it up and copy, save or share it. Rustshot is a single small native app with no web view and no account, and it is open source under the GPL.
+Rustshot is a fast, good-looking tool for screenshots, annotation and screen recording. Press Win+Shift+X, drag across what you want, mark it up and copy, save or share it. Rustshot is a single small native app with no web view and no account, and it is open source under the Apache License 2.0.
 
 CAPTURE
 • A region, a window, a whole monitor or every screen. Hover a window to outline it, then click to take exactly that window, menu or tooltip.
@@ -88,7 +88,7 @@ MADE TO STAY OUT OF THE WAY
 PRIVACY
 No account, no telemetry, no ads. Captures and recordings stay on your PC unless you choose Upload. The microphone and camera are used only while you record with them turned on.
 
-Rustshot is free software under the GNU General Public License v3.0. Source code, issues and the user guide: github.com/nappsllc/rustshot
+Rustshot is open source under the Apache License 2.0. Source code, issues and the user guide: github.com/nappsllc/rustshot
 ```
 
 ## Product features
@@ -224,9 +224,9 @@ architecture itself; Arm64 PCs run it under Windows 11's x64 emulation.
 Additional license terms (limit 10,000 characters):
 
 ```text
-Rustshot is free software, licensed under the GNU General Public License, version 3 only (GPL-3.0-only): https://www.gnu.org/licenses/gpl-3.0.html
+Rustshot is open source, licensed under the Apache License, Version 2.0 (Apache-2.0): https://www.apache.org/licenses/LICENSE-2.0
 
-The source code, the license text and the third-party notices (Inter font, SIL Open Font License 1.1; Lucide icons, ISC; MediaPipe Selfie Segmentation model, Apache-2.0) are at https://github.com/nappsllc/rustshot (LICENSE and THIRD_PARTY_NOTICES.md).
+The source code, the license text and the third-party notices (Inter font, SIL Open Font License 1.1; Lucide icons, ISC; MediaPipe Selfie Segmentation model, Apache-2.0) are at https://github.com/nappsllc/rustshot (LICENSE, NOTICE and THIRD_PARTY_NOTICES.md).
 ```
 
 ## Screenshots

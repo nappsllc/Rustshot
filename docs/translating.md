@@ -207,5 +207,5 @@ Notes:
    languages" list) to `$storeLang` in `packaging/windows/msix.ps1`, or
    the MSIX build stops.
 
-Files are published under the project's license (GPL-3.0); by sending a
-translation you agree to that.
+Files are published under the project's license (Apache-2.0); by sending
+a translation you agree to that.
