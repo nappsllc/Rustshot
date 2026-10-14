@@ -152,7 +152,7 @@ fn modes_and_masks_round_trip() {
         let seg = Segment::auto(s);
         assert_eq!(seg.mode, m);
         for mask in 0..8 {
-            let code = encode::encode_segments(&[seg.clone()], Ecl::Q, 1, Some(mask)).unwrap();
+            let code = encode::encode_segments(std::slice::from_ref(&seg), Ecl::Q, 1, Some(mask)).unwrap();
             assert_eq!(code.mask, mask);
             assert_eq!(roundtrip(&code).text, s);
         }
@@ -173,7 +173,7 @@ fn eci_and_latin1_are_read() {
     bits += "00000001";
     bits += "11101001";
     bits += "0000";
-    while bits.len() % 8 != 0 {
+    while !bits.len().is_multiple_of(8) {
         bits.push('0');
     }
     let data: Vec<u8> = bits.as_bytes().chunks(8).map(|c| c.iter().fold(0, |a, &b| (a << 1) | (b - b'0'))).collect();
@@ -258,7 +258,8 @@ fn reads_rotated_codes() {
 
 #[test]
 fn reads_perspective_skewed_and_noisy_codes() {
-    let cases: [(&str, [(f64, f64); 4], f64); 4] = [
+    type Case<'a> = (&'a str, [(f64, f64); 4], f64);
+    let cases: [Case; 4] = [
         ("skew a", [(60.0, 40.0), (330.0, 70.0), (350.0, 360.0), (40.0, 330.0)], 0.0),
         ("skew b", [(80.0, 80.0), (320.0, 50.0), (330.0, 350.0), (70.0, 310.0)], 0.0),
         ("noise", [(50.0, 50.0), (350.0, 50.0), (350.0, 350.0), (50.0, 350.0)], 0.01),

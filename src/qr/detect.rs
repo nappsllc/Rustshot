@@ -270,7 +270,7 @@ pub fn finders(b: &Bin) -> Vec<Finder> {
     if found.iter().any(|f| f.hits >= 2) {
         found.retain(|f| f.hits >= 2);
     }
-    found.sort_by(|a, b| b.hits.cmp(&a.hits));
+    found.sort_by_key(|f| std::cmp::Reverse(f.hits));
     found.truncate(30);
     found
 }

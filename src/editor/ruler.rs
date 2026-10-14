@@ -77,7 +77,7 @@ fn grouped(v: u64) -> String {
     let s = v.to_string();
     let mut out = String::new();
     for (i, c) in s.chars().enumerate() {
-        if i > 0 && (s.len() - i) % 3 == 0 {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
             out.push('\u{2009}');
         }
         out.push(c);
@@ -261,6 +261,20 @@ pub fn draw(f: &mut Fb, ui: &Ui, u: &RulerUi) {
     }
 }
 
+impl super::Edit {
+    /// Enter with a measurement up: it becomes objects (one undo step).
+    pub(super) fn keep_ruler(&mut self) -> bool {
+        let Some(r) = self.ruler.filter(|r| r.done) else { return false };
+        self.ruler = None;
+        let t = super::Tool::Ruler;
+        let objs = objects(&r, self.mem.color(t), self.mem.size(t), self.shot.scale, self.font.as_ref());
+        self.objects.extend(objs);
+        self.push_history();
+        self.dirty = true;
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,19 +324,5 @@ mod tests {
         let rect = objects(&r((10.0, 50.0), (110.0, 100.0), true), c, 2.0, 1.0, None);
         assert!(matches!(&rect[0], Obj::Rect { r, .. } if *r == FRect { x: 10.0, y: 50.0, w: 100.0, h: 50.0 }));
         assert!(matches!(&rect[1], Obj::Text { text, .. } if text == "100 \u{d7} 50 px"));
-    }
-}
-
-impl super::Edit {
-    /// Enter with a measurement up: it becomes objects (one undo step).
-    pub(super) fn keep_ruler(&mut self) -> bool {
-        let Some(r) = self.ruler.filter(|r| r.done) else { return false };
-        self.ruler = None;
-        let t = super::Tool::Ruler;
-        let objs = objects(&r, self.mem.color(t), self.mem.size(t), self.shot.scale, self.font.as_ref());
-        self.objects.extend(objs);
-        self.push_history();
-        self.dirty = true;
-        true
     }
 }

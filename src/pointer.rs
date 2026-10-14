@@ -19,6 +19,7 @@ pub struct Pointer {
 }
 
 /// The largest pointer picture taken (px a side).
+#[cfg_attr(test, allow(dead_code))]
 pub const MAX_SIDE: u32 = 256;
 
 /// The picture from one drawn over black and one over white (`BGRA`
@@ -210,6 +211,22 @@ mod imp {
     }
 }
 
+/// The pointer as the object a capture at `origin` (global physical px)
+/// gets.
+pub fn object(origin: (i32, i32)) -> Option<crate::objects::Obj> {
+    let p = grab()?;
+    let at = crate::objects::Pt::new((p.at.0 - origin.0) as f32, (p.at.1 - origin.1) as f32);
+    Some(crate::objects::Obj::Cursor { at, img: std::sync::Arc::new(p.img) })
+}
+
+/// A capture with no editing step (full screen, `--raw`): the pointer
+/// drawn into it.
+pub fn bake_into(img: &mut PixBuf, origin: (i32, i32)) {
+    if let Some(o) = object(origin) {
+        o.render(img, None);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,21 +244,5 @@ mod tests {
         assert_eq!(p.get_pixel(3, 0)[3], 255, "inverting: opaque");
         assert!(from_black_white(0, 1, &[], &[]).is_none());
         assert!(from_black_white(3, 2, &black, &white).is_none(), "short buffers");
-    }
-}
-
-/// The pointer as the object a capture at `origin` (global physical px)
-/// gets.
-pub fn object(origin: (i32, i32)) -> Option<crate::objects::Obj> {
-    let p = grab()?;
-    let at = crate::objects::Pt::new((p.at.0 - origin.0) as f32, (p.at.1 - origin.1) as f32);
-    Some(crate::objects::Obj::Cursor { at, img: std::sync::Arc::new(p.img) })
-}
-
-/// A capture with no editing step (full screen, `--raw`): the pointer
-/// drawn into it.
-pub fn bake_into(img: &mut PixBuf, origin: (i32, i32)) {
-    if let Some(o) = object(origin) {
-        o.render(img, None);
     }
 }

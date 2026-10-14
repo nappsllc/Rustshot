@@ -570,7 +570,7 @@ fn box_line(src: &[f32], dst: &mut [f32], o: usize, n: usize, stride: usize, r: 
 
 /// Three box blurs approximating a Gaussian of sigma `s` over a `w`×`h`
 /// field (rows then columns, in parallel).
-fn gauss(field: &mut Vec<f32>, w: usize, h: usize, s: f32) {
+fn gauss(field: &mut [f32], w: usize, h: usize, s: f32) {
     if s < 0.3 || w == 0 || h == 0 {
         return;
     }
@@ -584,7 +584,7 @@ fn gauss(field: &mut Vec<f32>, w: usize, h: usize, s: f32) {
     let threads = if w * h < 200_000 { 1 } else { std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(1, 16) };
     for &r in &radii {
         // rows
-        let src = field.clone();
+        let src = field.to_vec();
         let per = h.div_ceil(threads).max(1);
         std::thread::scope(|sc| {
             for (ci, chunk) in field.chunks_mut(per * w).enumerate() {

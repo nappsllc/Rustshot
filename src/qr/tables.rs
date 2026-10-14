@@ -131,14 +131,14 @@ pub fn version_positions(size: usize, i: usize) -> [(usize, usize); 2] {
 /// Whether mask `m` flips module `(x, y)`.
 pub fn mask_bit(m: u8, x: usize, y: usize) -> bool {
     match m {
-        0 => (x + y) % 2 == 0,
-        1 => y % 2 == 0,
-        2 => x % 3 == 0,
-        3 => (x + y) % 3 == 0,
-        4 => (x / 3 + y / 2) % 2 == 0,
+        0 => (x + y).is_multiple_of(2),
+        1 => y.is_multiple_of(2),
+        2 => x.is_multiple_of(3),
+        3 => (x + y).is_multiple_of(3),
+        4 => (x / 3 + y / 2).is_multiple_of(2),
         5 => x * y % 2 + x * y % 3 == 0,
-        6 => (x * y % 2 + x * y % 3) % 2 == 0,
-        _ => ((x + y) % 2 + x * y % 3) % 2 == 0,
+        6 => (x * y % 2 + x * y % 3).is_multiple_of(2),
+        _ => ((x + y) % 2 + x * y % 3).is_multiple_of(2),
     }
 }
 
@@ -203,7 +203,8 @@ pub fn function_patterns(ver: usize) -> (Matrix, Matrix) {
     let n = al.len();
     for i in 0..n {
         for j in 0..n {
-            if (i == 0 && j == 0) || (i == 0 && j == n - 1) || (i == n - 1 && j == 0) {
+            let corner = (i == 0 && (j == 0 || j == n - 1)) || (i == n - 1 && j == 0);
+            if corner {
                 continue;
             }
             for dy in -2i32..=2 {

@@ -16,7 +16,8 @@ use std::sync::Mutex;
 static LAST: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 /// Results waiting for the daemon's loop: the note, where, the theme.
-static DONE: Mutex<Vec<(Note, (i32, i32), Theme)>> = Mutex::new(Vec::new());
+type Done = (Note, (i32, i32), Theme);
+static DONE: Mutex<Vec<Done>> = Mutex::new(Vec::new());
 
 /// The longest text a toast shows of a code.
 const SHOW_MAX: usize = 140;
@@ -123,7 +124,7 @@ pub fn spawn(img: PixBuf, at: (i32, i32), th: Theme) {
 }
 
 /// The notes of the reads that finished.
-pub fn poll() -> Vec<(Note, (i32, i32), Theme)> {
+pub fn poll() -> Vec<Done> {
     std::mem::take(&mut *DONE.lock().unwrap_or_else(|e| e.into_inner()))
 }
 

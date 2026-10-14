@@ -5,6 +5,7 @@ use super::gf;
 use super::tables::{self, Ecl, Matrix};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(test), allow(dead_code))] // numeric and alphanumeric: the decoder's tests
 pub enum Mode {
     Numeric,
     Alphanumeric,
@@ -56,6 +57,7 @@ impl Segment {
     }
 
     /// Digits only (`None` otherwise).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn numeric(s: &str) -> Option<Segment> {
         let d = s.as_bytes();
         if !d.iter().all(u8::is_ascii_digit) {
@@ -70,6 +72,7 @@ impl Segment {
     }
 
     /// The 45-character alphanumeric set only (`None` otherwise).
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn alphanumeric(s: &str) -> Option<Segment> {
         let idx: Option<Vec<u32>> =
             s.bytes().map(|b| ALNUM.iter().position(|&a| a == b).map(|p| p as u32)).collect();
@@ -86,6 +89,7 @@ impl Segment {
     }
 
     /// The most compact single segment for `s`.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn auto(s: &str) -> Segment {
         Segment::numeric(s)
             .or_else(|| Segment::alphanumeric(s))
