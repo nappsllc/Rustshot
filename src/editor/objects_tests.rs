@@ -1,4 +1,5 @@
-//! Editable objects in the overlay: the select tool and Ctrl+click,
+//! Editable objects in the overlay: the select tool (picking up with the
+//! drawing tools: `cursor_tests`),
 //! moving with snapping and the ghost, handles, the marquee, Del / Ctrl+D /
 //! front / back / nudges, color and size on the selection, undo; the
 //! callout (typing, wrapping, growing, the tail), the spotlight and the
@@ -240,36 +241,6 @@ fn delete_duplicate_restack_and_nudge() {
     let mut e = *e;
     b.handle_key(&mut e, 'D' as u32, false, CTRL);
     assert!(matches!(e.tasks[..], [Task::SaveDesktop]));
-}
-
-#[test]
-fn ctrl_click_selects_with_any_tool_and_ctrl_drag_still_draws() {
-    let mut a = with(vec![rect(300.0, 300.0, 200.0, 100.0)]);
-    key(&mut a, 'A' as u32);
-    {
-        let _m = hold(CTRL);
-        click(&mut a, 350, 301);
-    }
-    let e = ed(&mut a);
-    assert_eq!(e.obj.sel, vec![0], "Ctrl+click picks");
-    assert_eq!(e.objects.len(), 1, "nothing drawn");
-    assert_eq!(e.tool, Some(Tool::Arrow));
-    // Ctrl+drag on the selected one moves it.
-    {
-        let _m = hold(Mods { ctrl: true, alt: true, shift: false });
-        drag(&mut a, (350, 301), (360, 311));
-    }
-    assert_eq!(r_of(&ed(&mut a).objects[0]).x, 310.0);
-    // A plain press draws (and drops the selection).
-    drag(&mut a, (600, 600), (700, 650));
-    assert_eq!(ed(&mut a).objects.len(), 2);
-    assert!(ed(&mut a).obj.sel.is_empty());
-    // Ctrl+drag starting on an object not selected draws a snapped arrow.
-    {
-        let _m = hold(CTRL);
-        drag(&mut a, (400, 301), (500, 395));
-    }
-    assert_eq!(ed(&mut a).objects.len(), 3);
 }
 
 #[test]

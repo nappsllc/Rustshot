@@ -92,7 +92,6 @@ impl App {
             return false;
         }
         let State::Edit(edit) = &mut self.st else { return false };
-        let Interact::Drawing { start } = edit.interact else { return false };
         let mut m = mods;
         if vk == VK_SHIFT {
             m.shift = !up;
@@ -100,6 +99,14 @@ impl App {
             m.ctrl = !up;
         }
         let p = Pt::new(self.mouse.0 as f32, self.mouse.1 as f32);
+        let Interact::Drawing { start } = edit.interact else {
+            // Ctrl draws over an object: the pick-up outline goes (and
+            // comes back on release).
+            let h = edit.hover_obj(p, m);
+            let changed = h != edit.obj.hover;
+            edit.obj.hover = h;
+            return changed;
+        };
         edit.drag_draft(start, p, m);
         true
     }

@@ -70,7 +70,9 @@ screenshots, editing and video capture.** Windows, Linux and macOS.
 - Text styles: sans, serif or mono font, bold, italic, underline,
   strikethrough and alignment.
 - Annotations stay editable objects. Select, move, resize, restyle,
-  restack and duplicate them, with snapping and unlimited undo.
+  restack and duplicate them, with snapping and unlimited undo. With any
+  drawing tool, point at an object and drag it to move it or click it to
+  select it; hold <kbd>Ctrl</kbd> to draw over it instead.
 - Image edits in the Edit window, all undoable and non-destructive:
   rotate, flip, resize (Lanczos-3 or area average, with a file size
   estimate) and a canvas (padding, a solid color or a soft "presentation"
@@ -274,6 +276,7 @@ off in Rustshot, and Windows uses the Snipping Tool again. More detail:
 | Read QR code | <kbd>Q</kbd> |
 | Text mode: copy the words / select all / leave | <kbd>Ctrl</kbd>+<kbd>C</kbd> (or <kbd>Enter</kbd>) / <kbd>Ctrl</kbd>+<kbd>A</kbd> / <kbd>Esc</kbd> |
 | Undo / Redo | <kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> (or <kbd>Ctrl</kbd>+<kbd>Y</kbd>) |
+| Move an object / draw over it (drawing tools) | drag it / <kbd>Ctrl</kbd>+drag |
 | Delete / Duplicate selected objects | <kbd>Del</kbd> / <kbd>Ctrl</kbd>+<kbd>D</kbd> |
 | Bring to front / Send to back | <kbd>Ctrl</kbd>+<kbd>]</kbd> / <kbd>Ctrl</kbd>+<kbd>[</kbd> |
 | Select the whole screen / Toggle the palette | <kbd>Ctrl</kbd>+<kbd>A</kbd> / <kbd>Space</kbd> |
