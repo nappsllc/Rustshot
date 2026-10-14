@@ -84,6 +84,8 @@ function KillAll { Get-Process rustshot -ErrorAction SilentlyContinue | Stop-Pro
 # 0.5.0 (languages offline and from hand-placed files, Settings' Language
 # list, ruler, Read QR code, Scrolling capture): Checks050.
 . "$T\v050.ps1"
+# The sideload-signed MSIX (and an update over the older release's): MsixChecks.
+. "$T\msix.ps1"
 HotkeyProbe $log
 if (Test-Path "$T\probe-only") { Add-Content $log 'DONE'; return }
 function PortableExe {
@@ -133,6 +135,12 @@ if (Test-Path "$T\data-only") {
     Copy-Item $portable.FullName "$env:TEMP\rustshot.exe"
     Add-Content $log "      portable exe: $($portable.FullName) $((Get-Item $portable.FullName).Length) B"
     ChecksData "$env:TEMP\rustshot.exe"
+    Add-Content $log 'DONE'
+    return
+}
+# <T>\msix-only: just the MSIX checks.
+if (Test-Path "$T\msix-only") {
+    MsixChecks
     Add-Content $log 'DONE'
     return
 }
@@ -322,41 +330,7 @@ if ($old) {
 }
 
 # ---------------------------------------------------------------- MSIX (sideload-signed copy)
-$cer = Get-ChildItem "$T\in" -Recurse -Filter 'sideload.cer' | Select-Object -First 1
-$msix = Get-ChildItem "$T\in" -Recurse -Filter '*-sideload.msix' | Select-Object -First 1
-if ($cer -and $msix) {
-    Import-Certificate -FilePath $cer.FullName -CertStoreLocation Cert:\LocalMachine\TrustedPeople | Out-Null
-    $err = $null
-    try { Add-AppxPackage -Path $msix.FullName -ErrorAction Stop } catch { $err = $_.Exception.Message }
-    $pkg = Get-AppxPackage *rustshot*
-    Check 'msix: signed package installs' ([bool]$pkg -and -not $err) "$err"
-    if ($pkg) {
-        $pfn = $pkg.PackageFamilyName
-        Start-Process explorer.exe "shell:AppsFolder\$pfn!Rustshot"
-        $trayUp = WaitFor { [W]::TrayWindow() } 10
-        Check 'msix: Start entry launches daemon (tray window)' $trayUp
-        Start-Sleep 1
-        Check 'msix: Start entry does NOT capture' (-not [W]::OverlayVisible())
-        $cmd = (Get-CimInstance Win32_Process -Filter "Name='rustshot.exe'" | Select-Object -First 1).CommandLine
-        Add-Content $log "      msix daemon command line: $cmd"
-        $alias = "$env:LOCALAPPDATA\Microsoft\WindowsApps\rustshot.exe"
-        Check 'msix: rustshot.exe execution alias exists' (Test-Path $alias)
-        $v = & $alias --version 2>&1
-        Check 'msix: alias runs (--version)' ("$v" -match '\d+\.\d+\.\d+') "$v"
-        Start-Process explorer.exe "shell:AppsFolder\$pfn!Rustshot"
-        $ov = WaitFor { [W]::OverlayVisible() } 6
-        Check 'msix: launching again captures' $ov
-        Shot 'msix-overlay'
-        $man = Get-AppxPackageManifest $pkg
-        $st = $man.Package.Applications.Application | ForEach-Object { $_.Extensions.Extension } | Where-Object { $_.Category -eq 'windows.startupTask' }
-        Check 'msix: startup task declared' ([bool]$st)
-        KillAll
-        Remove-AppxPackage $pkg.PackageFullName
-        Check 'msix: removed' (-not (Get-AppxPackage *rustshot*))
-    }
-} else {
-    Check 'msix: inputs present' $false 'sideload.cer / *-sideload.msix missing'
-}
+MsixChecks
 
 # ---------------------------------------------------------------- portable exe: tray stays up for a visual check
 $portable = Get-ChildItem "$T\in" -Recurse -Filter '*-windows-x86_64.exe' | Select-Object -First 1

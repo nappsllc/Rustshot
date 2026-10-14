@@ -17,8 +17,10 @@
   <Dependencies>
     <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0" />
   </Dependencies>
+  <!-- One <Resource> per lang/<tag>.txt, en-us first (the default); msix.ps1
+       fills them in. The Store lists these as the app's languages. -->
   <Resources>
-    <Resource Language="en-us" />
+@RESOURCES@
   </Resources>
   <Applications>
     <Application Id="Rustshot" Executable="rustshot.exe" EntryPoint="Windows.FullTrustApplication">

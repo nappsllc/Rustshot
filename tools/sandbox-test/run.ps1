@@ -15,10 +15,13 @@ param(
     [string]$Repo = 'nappsllc/rustshot',
     # An older *-setup.exe for the upgrade checks (e.g. the last release's).
     [string]$Old,
+    # An older release's *-x64.msix (same identity) for the MSIX update check;
+    # signed with the same throwaway certificate as the new one.
+    [string]$OldMsix,
     # Work folder (mapped into the sandbox as Desktop\test). Results: <Work>\out\results.txt.
     [string]$Work = (Join-Path $env:TEMP 'rustshot-sandbox'),
-    # Just one group: probe (hotkey probe), rec (recording), v030 / v040 / v041 / v050 (0.3.0 / 0.4.0 / 0.4.1 / 0.5.0 checks), data (data files).
-    [ValidateSet('', 'probe', 'rec', 'v030', 'v040', 'v041', 'v050', 'data')] [string]$Only = '',
+    # Just one group: probe (hotkey probe), rec (recording), v030 / v040 / v041 / v050 (0.3.0 / 0.4.0 / 0.4.1 / 0.5.0 checks), data (data files), msix (the MSIX).
+    [ValidateSet('', 'probe', 'rec', 'v030', 'v040', 'v041', 'v050', 'data', 'msix')] [string]$Only = '',
     # A picture with a QR code of an https link for the 0.5.0 Read QR check
     # (e.g. the qr_make_link_light_1x.png preview; without it that check SKIPs).
     [string]$QrPng,
@@ -41,6 +44,13 @@ if ($RunId) {
     Copy-Item (Join-Path $Artifacts '*') $in -Recurse
 } else { throw 'pass -Artifacts or -RunId' }
 if ($Old) { Copy-Item $Old $oldDir }
+$signDirs = @($in)
+if ($OldMsix) {
+    $oldMsixDir = Join-Path $Work 'oldmsix'
+    New-Item -ItemType Directory -Force $oldMsixDir | Out-Null
+    Copy-Item $OldMsix $oldMsixDir
+    $signDirs += $oldMsixDir
+}
 # The blur model, for the data checks' "put there by hand" case (packages carry none).
 $dataDir = Join-Path $Work 'data'
 New-Item -ItemType Directory -Force $dataDir | Out-Null
@@ -48,7 +58,7 @@ Copy-Item (Join-Path $here '..\..\models\selfie.bin') $dataDir
 # The language files, for the 0.5.0 checks' "put there by hand" cases.
 Copy-Item (Join-Path $here '..\..\lang') $dataDir -Recurse
 if ($QrPng) { Copy-Item $QrPng (Join-Path $dataDir 'qr.png') }
-if (-not $NoSign) { & (Join-Path $here 'sign-sideload.ps1') -In $in }
+if (-not $NoSign) { & (Join-Path $here 'sign-sideload.ps1') -In $signDirs }
 if ($Only) { New-Item -ItemType File (Join-Path $Work "$Only-only") | Out-Null }
 
 $wsb = Join-Path $Work 'rustshot-test.wsb'
@@ -69,7 +79,7 @@ Set-Content $wsb @"
   </LogonCommand>
 </Configuration>
 "@
-Get-ChildItem $in, $oldDir -Recurse -File | ForEach-Object { "{0,10}  {1}" -f $_.Length, $_.FullName.Substring($Work.Length + 1) }
+Get-ChildItem (@($signDirs) + $oldDir) -Recurse -File | ForEach-Object { "{0,10}  {1}" -f $_.Length, $_.FullName.Substring($Work.Length + 1) }
 if (-not $NoLaunch) {
     Start-Process $wsb
     "sandbox started; results appear in $(Join-Path $Work 'out\results.txt') (ends with DONE)"

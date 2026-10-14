@@ -16,6 +16,10 @@ gh release download v0.3.0 -R nappsllc/rustshot -p 'rustshot-0.3.0-setup.exe' -D
 #   $env:RUSTSHOT_PREVIEW_DIR = "$env:TEMP\rs-previews"; cargo test qr_make::tests::previews
 .\tools\sandbox-test\run.ps1 -RunId <ci run id> -Old <old setup> -QrPng $env:TEMP\rs-previews\qr_make_link_light_1x.png
 
+# Plus the last release's .msix for the MSIX update check (signed with the same throwaway certificate):
+gh release download v0.5.0 -R nappsllc/rustshot -p 'rustshot-0.5.0-x64.msix' -D $env:TEMP\rs-old
+.\tools\sandbox-test\run.ps1 -RunId <ci run id> -Old <old setup> -OldMsix $env:TEMP\rs-old\rustshot-0.5.0-x64.msix
+
 # Already downloaded artifacts; only one group of checks:
 .\tools\sandbox-test\run.ps1 -Artifacts D:\ci -Old D:\rustshot-0.3.0-setup.exe -Only v040
 ```
@@ -32,7 +36,7 @@ discards everything inside it).
 
 | script        | what it checks |
 |---------------|----------------|
-| `test.ps1`    | NSIS silent install over 0.1.0's lowercase `rustshot\rustshot.lnk` + desktop shortcut (`shortcuts.ps1`: the folder and shortcuts come back as `Rustshot`, `Rustshot.lnk`, `Rustshot Settings.lnk` (`settings`), icons pointing at the exe, all gone after the uninstall), files, Start menu, Run value, version resource and icon; the first launch is a daemon (tray, no overlay) holding the default Win+Shift hotkeys, which open the overlay as real key presses; a second launch captures; Settings in the daemon; saving into `Pictures\rustshot\<date>` (CLI and Ctrl+S); uninstall (History kept); upgrade from `old\` through `setup /S /RELAUNCH` (relaunch, config and History kept); the sideload-signed MSIX (Start entry, alias, startup task); the portable exe's own Settings window; then the groups below. |
+| `test.ps1`    | NSIS silent install over 0.1.0's lowercase `rustshot\rustshot.lnk` + desktop shortcut (`shortcuts.ps1`: the folder and shortcuts come back as `Rustshot`, `Rustshot.lnk`, `Rustshot Settings.lnk` (`settings`), icons pointing at the exe, all gone after the uninstall), files, Start menu, Run value, version resource and icon; the first launch is a daemon (tray, no overlay) holding the default Win+Shift hotkeys, which open the overlay as real key presses; a second launch captures; Settings in the daemon; saving into `Pictures\rustshot\<date>` (CLI and Ctrl+S); uninstall (History kept); upgrade from `old\` through `setup /S /RELAUNCH` (relaunch, config and History kept); the sideload-signed MSIX (`msix.ps1`: with `-OldMsix`, installed over the older release's package as an in-place update; one manifest language per `lang\<tag>.txt` with `en-us` first; Start entry, alias, startup task); the portable exe's own Settings window; then the groups below. |
 | `probe.ps1`   | Which Win+Shift+<key> chords are free on a clean system. |
 | `uninst.ps1`  | The Apps & features (Uninstall) entry: name, publisher PowerNapps, version, icon with DIB images, size, links. |
 | `history.ps1` | History in an isolated instance: entries from direct and daemon captures, `rustshot history` and its hotkey, `history = false`, `history --list`. |
@@ -44,5 +48,5 @@ discards everything inside it).
 | `v050.ps1`    | 0.5.0: `rustshot data` lists every `lang-<tag>.txt` of this version's release; with no language set Settings opens in English; Settings › General's Language list is reached by Tab (`RUSTSHOT_TEST_FOCUS_FILE`) and opens with Enter; picking a language with no network says it couldn't download it (red, Retry) and stays in English, leaving no file; `language = "de"` offline starts in English and `data --fetch` says lang-de.txt couldn't download; the repo's `de.txt` put in the cache by hand is SHA-256 verified and opens Settings in German, `ar.txt` in Arabic (screenshot for the mirrored layout); the ruler (U and a drag) in the overlay; Read QR code (Q) in a one-shot capture of a window showing `-QrPng` prints its link and, with no code, "No QR code found"; Scrolling capture (Shift+S) on a long text box scrolls it and saves a stitched PNG taller than the selection. |
 
 The checks of the portable exe use their own `RUSTSHOT_INSTANCE`, `APPDATA`
-and `LOCALAPPDATA` and unusual hotkeys. `-Only probe|rec|v030|v040|v041|v050|data`
+and `LOCALAPPDATA` and unusual hotkeys. `-Only probe|rec|v030|v040|v041|v050|data|msix`
 runs one group.

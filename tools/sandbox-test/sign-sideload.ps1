@@ -6,11 +6,14 @@
   the manifest's Publisher, e.g. the Store's CN=<GUID> or CN=nappsllc-dev; 2 days, a random PFX password that is never written down), signs
   <In>\*-x64.msix as <In>\rustshot-<ver>-x64-sideload.msix, exports the
   public certificate as <In>\sideload.cer (test.ps1 trusts it inside the
-  sandbox only), then deletes the certificate and the PFX again.
+  sandbox only), then deletes the certificate and the PFX again. With
+  more than one -In folder, the package in each is signed with the same
+  certificate (an older release's, for the update check; same Publisher)
+  and sideload.cer goes into the first.
   Needs signtool.exe from the Windows SDK.
 #>
 param(
-    [Parameter(Mandatory)] [string]$In,
+    [Parameter(Mandatory)] [string[]]$In,
     [string]$SignTool
 )
 $ErrorActionPreference = 'Stop'
@@ -19,18 +22,29 @@ if (-not $SignTool) {
         Sort-Object FullName | Select-Object -Last 1 -ExpandProperty FullName
 }
 if (-not $SignTool -or -not (Test-Path $SignTool)) { throw 'signtool.exe not found (Windows SDK); pass -SignTool' }
-$msix = Get-ChildItem $In -Recurse -Filter '*-x64.msix' | Where-Object Name -notmatch 'sideload' | Select-Object -First 1
-if (-not $msix) { throw "no *-x64.msix under $In" }
-$signed = Join-Path $In ($msix.BaseName + '-sideload.msix')
+$pkgs = @(foreach ($dir in $In) {
+    $m = Get-ChildItem $dir -Recurse -Filter '*-x64.msix' | Where-Object Name -notmatch 'sideload' | Select-Object -First 1
+    if (-not $m) { throw "no *-x64.msix under $dir" }
+    # The signed copy goes into the -In folder itself, as before.
+    [pscustomobject]@{ File = $m; Signed = Join-Path $dir ($m.BaseName + '-sideload.msix') }
+})
 # The certificate's subject must be the manifest's Publisher.
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-$zip = [IO.Compression.ZipFile]::OpenRead($msix.FullName)
-try {
-    $rd = New-Object IO.StreamReader(($zip.Entries | Where-Object FullName -eq 'AppxManifest.xml').Open())
-    $publisher = ([xml]$rd.ReadToEnd()).Package.Identity.Publisher
-    $rd.Close()
-} finally { $zip.Dispose() }
-if (-not $publisher) { throw "no Publisher in $($msix.Name)'s AppxManifest.xml" }
+function Publisher($file) {
+    $zip = [IO.Compression.ZipFile]::OpenRead($file)
+    try {
+        $rd = New-Object IO.StreamReader(($zip.Entries | Where-Object FullName -eq 'AppxManifest.xml').Open())
+        $p = ([xml]$rd.ReadToEnd()).Package.Identity.Publisher
+        $rd.Close()
+        $p
+    } finally { $zip.Dispose() }
+}
+$publisher = Publisher $pkgs[0].File.FullName
+if (-not $publisher) { throw "no Publisher in $($pkgs[0].File.Name)'s AppxManifest.xml" }
+foreach ($m in $pkgs) {
+    $p = Publisher $m.File.FullName
+    if ($p -cne $publisher) { throw "$($m.File.Name)'s Publisher '$p' is not '$publisher'" }
+}
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ("rustshot-sign-" + [guid]::NewGuid())
 New-Item -ItemType Directory -Force $tmp | Out-Null
 $cert = $null
@@ -39,13 +53,15 @@ try {
     $plain = [guid]::NewGuid().ToString()
     $pw = ConvertTo-SecureString -String $plain -Force -AsPlainText
     Export-PfxCertificate -Cert $cert -FilePath "$tmp\s.pfx" -Password $pw | Out-Null
-    Export-Certificate -Cert $cert -FilePath (Join-Path $In 'sideload.cer') | Out-Null
-    Copy-Item $msix.FullName $signed -Force
-    & $SignTool sign /fd SHA256 /f "$tmp\s.pfx" /p $plain $signed 2>&1 | Select-Object -Last 2
-    if ($LASTEXITCODE -ne 0) { throw "signtool exit=$LASTEXITCODE" }
+    Export-Certificate -Cert $cert -FilePath (Join-Path $In[0] 'sideload.cer') | Out-Null
+    foreach ($m in $pkgs) {
+        Copy-Item $m.File.FullName $m.Signed -Force
+        & $SignTool sign /fd SHA256 /f "$tmp\s.pfx" /p $plain $m.Signed 2>&1 | Select-Object -Last 2
+        if ($LASTEXITCODE -ne 0) { throw "signtool exit=$LASTEXITCODE" }
+        "signed: $($m.Signed)"
+    }
 } finally {
     if ($cert) { Get-ChildItem Cert:\CurrentUser\My | Where-Object Thumbprint -eq $cert.Thumbprint | Remove-Item }
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 }
-"signed: $signed"
 "certs left: " + @(Get-ChildItem Cert:\CurrentUser\My | Where-Object FriendlyName -eq 'rustshot sandbox sideload').Count
