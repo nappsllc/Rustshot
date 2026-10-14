@@ -467,40 +467,93 @@ pub fn open(path: &Path, th: Theme) -> Option<Receiver<Outcome>> {
 
 /// Run the window on this thread until it closes; the choice.
 fn run(path: &Path, th: Theme) -> Choice {
-    let len = crate::rec::cut::length(path).unwrap_or(Duration::from_secs(1));
-    let (tx, rx) = chan::channel();
-    let want: Shared = Arc::default();
-    let w2 = want.clone();
-    let p2 = path.to_path_buf();
-    let worker_join = std::thread::Builder::new().name("trim-decode".into()).spawn(move || worker(p2, w2, tx)).ok();
-    let fps = if crate::rec::cut::Kind::of(path) == Some(crate::rec::cut::Kind::Gif) { 24 } else { 30 };
-    let mut w = Window {
-        hwnd: Hwnd::default(),
-        t: Trim::new(len, fps),
-        th,
-        input: Input::default(),
-        focus: FocusState::default(),
-        canvas: PixBuf::default(),
-        out: PixBuf::default(),
-        pics: Pics::default(),
-        rx,
-        want: want.clone(),
-        choice: None,
-        sized_for: 0.0,
-        asked: None,
-        fast: false,
-    };
+    let (mut w, join) = Window::open(path, th);
     let spec = WindowSpec { title: text::TITLE.into(), w: W, h: H, resizable: false, min: (W, H), controls: wind::Controls::MinClose };
     if let Err(e) = wind::run_window(spec, &mut w) {
         eprintln!("rustshot: trim window: {e:#}");
     }
-    {
-        let (m, cv) = &*want;
+    w.stop_worker(join);
+    w.choice.unwrap_or(Choice::Full)
+}
+
+impl Window {
+    /// The window for `path`, and its decoding worker (started).
+    fn open(path: &Path, th: Theme) -> (Window, Option<std::thread::JoinHandle<()>>) {
+        let len = crate::rec::cut::length(path).unwrap_or(Duration::from_secs(1));
+        let (tx, rx) = chan::channel();
+        let want: Shared = Arc::default();
+        let w2 = want.clone();
+        let p2 = path.to_path_buf();
+        let join = std::thread::Builder::new().name("trim-decode".into()).spawn(move || worker(p2, w2, tx)).ok();
+        let fps = if crate::rec::cut::Kind::of(path) == Some(crate::rec::cut::Kind::Gif) { 24 } else { 30 };
+        let w = Window {
+            hwnd: Hwnd::default(),
+            t: Trim::new(len, fps),
+            th,
+            input: Input::default(),
+            focus: FocusState::default(),
+            canvas: PixBuf::default(),
+            out: PixBuf::default(),
+            pics: Pics::default(),
+            rx,
+            want,
+            choice: None,
+            sized_for: 0.0,
+            asked: None,
+            fast: false,
+        };
+        (w, join)
+    }
+
+    /// The window is gone: the worker stops.
+    fn stop_worker(&self, join: Option<std::thread::JoinHandle<()>>) {
+        let (m, cv) = &*self.want;
         m.lock().unwrap_or_else(|e| e.into_inner()).quit = true;
         cv.notify_all();
+        if let Some(j) = join {
+            let _ = j.join();
+        }
     }
-    if let Some(j) = worker_join {
-        let _ = j.join();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Live: the real window on a GIF: it draws, the thumbnails and the
+    /// preview arrive from the worker, closing keeps the full length.
+    /// `cargo test live_trim_window -- --ignored --nocapture`
+    #[test]
+    #[ignore = "live: opens the trim window"]
+    fn live_trim_window_shows_pictures() {
+        if !wind::has_display() {
+            return;
+        }
+        let _g = wind::test_window_lock();
+        let dir = std::env::temp_dir().join(format!("rustshot-trim-live-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("clip.gif");
+        let mut enc = crate::rec::gif::GifEncoder::new(std::io::Cursor::new(Vec::new()), 160, 90, 10).unwrap();
+        for k in 0..30u64 {
+            use crate::rec::VideoEncoder;
+            let px = [(k * 8) as u8, 120, 200 - (k * 5) as u8, 255].repeat(160 * 90);
+            enc.push_video(&crate::rec::Frame::bgra(160, 90, px, Duration::from_millis(k * 100))).unwrap();
+        }
+        std::fs::write(&p, enc.into_inner().unwrap().into_inner()).unwrap();
+        let (mut w, join) = Window::open(&p, crate::theme::DARK);
+        let spec = WindowSpec { title: text::TITLE.into(), w: W, h: H, resizable: false, min: (W, H), controls: wind::Controls::MinClose };
+        let frames = {
+            let mut ac = wind::AutoClose::new(&mut w, 2000);
+            wind::run_window(spec, &mut ac).expect("trim window");
+            ac.frames
+        };
+        w.stop_worker(join);
+        println!("{frames} frames, {} thumbnails, preview {}", w.pics.thumbs.iter().flatten().count(), w.pics.frame.is_some());
+        assert!(frames > 0, "it drew");
+        assert_eq!(w.pics.ready, Some(true));
+        assert!(w.pics.thumbs.iter().flatten().count() == THUMBS, "every thumbnail");
+        assert!(w.pics.frame.is_some(), "the preview");
+        assert_eq!(w.t.len, Duration::from_secs(3));
+        let _ = std::fs::remove_dir_all(&dir);
     }
-    w.choice.unwrap_or(Choice::Full)
 }
