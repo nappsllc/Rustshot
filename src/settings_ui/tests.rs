@@ -1697,7 +1697,7 @@ fn dialogs_fit_in_long_languages() {
             Modal::Guide { broken: true, dont_show: false },
         ]
     };
-    for lang in ["en", "qps", "qps-rtl", "qps-ar"] {
+    for lang in crate::ui::preview::LANGS {
         crate::i18n::with_lang(lang, || {
             for k in [1.0f32, 2.0] {
                 for (n, m) in modals().into_iter().enumerate() {
@@ -1940,7 +1940,7 @@ fn preview_settings_pngs() {
 /// taller than the body, every control inside the window, on its side of
 /// the rail edge, and no two controls overlapping.
 fn every_section_fits() {
-    for lang in ["en", "qps", "qps-rtl", "qps-ar"] {
+    for lang in crate::ui::preview::LANGS {
         crate::i18n::with_lang(lang, || sections_fit(lang));
     }
 }

@@ -216,7 +216,9 @@ local overrides `<data dir>/lang/<tag>.txt` (`i18n::data_dirs()`); my
   WS_EX_LAYOUTRTL); M-4 macOS paragraph base direction for RTL strings that
   start with Latin/digits; M-14 direction not latched per frame (one frame
   around a switch); M-16 openh264.rs line endings normalized in the diff;
-  M-17 GDI px rounding; M-1/M-2 await the font decision (full Inter for
+  M-17 GDI px rounding; Linux fit tests leave qps-ar out (no shaper: isolated
+  Arabic letters are much wider; the layouts they caught were made tighter,
+  the rest is the stated Linux limit); M-1/M-2 await the font decision (full Inter for
   Latin/Greek/Cyrillic, U+203A).
 
 ## Phase 2 (not done now)
