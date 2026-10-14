@@ -124,7 +124,7 @@ pub fn parse_reply(status: u32, body: &str) -> Result<Reply, String> {
 /// the link to share.
 pub fn upload_video(data: &[u8], name: &str, client_id: &str, seed: u64, http: &Http) -> Result<String, String> {
     if data.len() as u64 > MAX_VIDEO_BYTES {
-        return Err(format!("Imgur takes videos up to {} MB", MAX_VIDEO_BYTES / (1024 * 1024)));
+        return Err(crate::tr!("err.imgur_video_size", mb = MAX_VIDEO_BYTES / (1024 * 1024)));
     }
     let b = boundary_for(data, seed);
     let body = multipart(&b, &[("type", "file"), ("title", "rustshot"), ("description", "rustshot recording")], "video", name, "video/mp4", data);

@@ -1038,6 +1038,18 @@ color.black = Black
 color.light_gray = Light gray
 color.transparent = Transparent
 
+# Error details (shown inside the messages above; the OS or server text
+# stays as it is, in {error})
+err.imgur_video_size = Imgur takes videos up to {mb} MB
+err.s3_too_large = the file is larger than S3 takes (5 TB)
+err.ocr_too_large = the area is larger than {px} px
+err.update_no_restart = the update is installed but Rustshot could not restart: {error}
+err.media_foundation = Media Foundation is not available (on Windows N, install the Media Feature Pack)
+err.media_foundation_dll = Media Foundation is not available ({dll} is missing; on Windows N, install the Media Feature Pack)
+err.not_a_folder = it is not a folder
+err.other_owner = it belongs to another user
+err.others_can_open = others can open it (mode {mode})
+
 # Languages
 i18n.download_unavailable = Downloading languages is not available in this build
 i18n.unreadable = The language file {path} could not be read

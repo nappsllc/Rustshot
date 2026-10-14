@@ -581,7 +581,7 @@ impl<'a> Client<'a> {
     /// try, one that will not (refused, 4xx) aborts the upload.
     pub fn upload_file(&self, path: &Path, size: u64, key: &str, ctype: &str, partial: &mut Option<Partial>) -> Result<(), String> {
         if size > MAX_OBJECT {
-            return Err("the file is larger than S3 takes (5 TB)".into());
+            return Err(crate::tr!("err.s3_too_large").into());
         }
         let parts = plan(size);
         if parts.is_empty() {

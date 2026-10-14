@@ -41,13 +41,13 @@ pub fn temp_dir() -> PathBuf {
 #[cfg_attr(not(unix), allow(dead_code))] // Unix folders (tests everywhere)
 pub fn private_ok(is_dir: bool, is_link: bool, owner: u32, me: u32, mode: u32) -> Result<(), String> {
     if is_link || !is_dir {
-        return Err("it is not a folder".into());
+        return Err(crate::tr!("err.not_a_folder").into());
     }
     if owner != me {
-        return Err("it belongs to another user".into());
+        return Err(crate::tr!("err.other_owner").into());
     }
     if mode & 0o077 != 0 {
-        return Err(format!("others can open it (mode {:o})", mode & 0o777));
+        return Err(crate::tr!("err.others_can_open", mode = format!("{:o}", mode & 0o777)));
     }
     Ok(())
 }

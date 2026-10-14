@@ -38,7 +38,7 @@ fn api() -> Result<&'static Api> {
 unsafe fn load() -> std::result::Result<Api, String> {
     // Loads mfplat / mfreadwrite and calls MFStartup.
     if !mf::available() {
-        return Err("Media Foundation is not available (on Windows N install the Media Feature Pack)".into());
+        return Err(crate::tr!("err.media_foundation").into());
     }
     unsafe {
         let lib = |name: windows::core::PCWSTR| LoadLibraryExW(name, None, LOAD_LIBRARY_SEARCH_SYSTEM32);

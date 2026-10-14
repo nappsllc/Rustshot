@@ -454,7 +454,7 @@ fn prepare(spec: &RecSpec, mic: MicFlags) -> Result<Parts> {
     let enc: Box<dyn VideoEncoder> = match spec.format {
         RecFormat::Mp4 => {
             if !mf::available() {
-                bail!("Media Foundation is not available (Windows N editions: install the Media Feature Pack)");
+                bail!("{}", crate::tr!("err.media_foundation"));
             }
             if !mf::encoders_available().0 {
                 bail!("no H.264 encoder is installed");
