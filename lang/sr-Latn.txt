@@ -640,6 +640,7 @@ history.still_kept[one] = Još se čuva {n} snimak ·
 history.still_kept[few] = Još se čuvaju {n} snimka ·
 history.still_kept[other] = Još se čuva {n} snimaka ·
 history.search = Pretraži…
+history.search_short = Pretraga…
 history.nothing_yet = Ovde još nema ničega
 history.no_match = Nijedan snimak se ne podudara
 history.search_note = Pretražuje naslov prozora, naziv aplikacije, naziv datoteke i datum.

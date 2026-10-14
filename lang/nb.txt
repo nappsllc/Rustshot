@@ -635,6 +635,7 @@ history.off_caption = Opptak beholdes ikke etter at du lukker dem. Lagrede og op
 history.still_kept[one] = {n} opptak beholdes fortsatt ·
 history.still_kept[other] = {n} opptak beholdes fortsatt ·
 history.search = Søk etter vindu eller dato…
+history.search_short = Søk…
 history.nothing_yet = Ingenting her ennå
 history.no_match = Ingen opptak passer
 history.search_note = Søker i vindustittel, appnavn, filnavn og dato.

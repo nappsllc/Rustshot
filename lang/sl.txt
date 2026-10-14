@@ -645,6 +645,7 @@ history.still_kept[two] = {n} posnetka sta še shranjena ·
 history.still_kept[few] = {n} posnetki so še shranjeni ·
 history.still_kept[other] = {n} posnetkov je še shranjenih ·
 history.search = Iskanje…
+history.search_short = Iskanje…
 history.nothing_yet = Tu še ni ničesar
 history.no_match = Noben posnetek se ne ujema
 history.search_note = Išče po naslovu okna, imenu aplikacije, imenu datoteke in datumu.

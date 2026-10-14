@@ -635,6 +635,7 @@ history.off_caption = As capturas não são mantidas depois de as fechar. Os fic
 history.still_kept[one] = {n} captura ainda mantida ·
 history.still_kept[other] = {n} capturas ainda mantidas ·
 history.search = Pesquisar por janela ou data…
+history.search_short = Pesquisar…
 history.nothing_yet = Ainda não há nada aqui
 history.no_match = Nenhuma captura corresponde
 history.search_note = Pesquisa o título da janela, o nome da aplicação, o nome do ficheiro e a data.

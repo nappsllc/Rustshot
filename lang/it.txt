@@ -635,6 +635,7 @@ history.off_caption = Le acquisizioni non vengono conservate dopo la chiusura. I
 history.still_kept[one] = {n} acquisizione ancora conservata ·
 history.still_kept[other] = {n} acquisizioni ancora conservate ·
 history.search = Cerca per finestra o data…
+history.search_short = Cerca…
 history.nothing_yet = Ancora niente qui
 history.no_match = Nessuna acquisizione corrispondente
 history.search_note = Cerca in titolo della finestra, nome dell'app, nome del file e data.

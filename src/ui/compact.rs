@@ -409,7 +409,8 @@ impl Ui<'_> {
         }
         let cy = b.y + b.h / 2.0;
         let room = b.w / self.k - 16.0 - if icon.is_some() { 22.0 } else { 0.0 };
-        let shown = self.fit_text(size, label, room);
+        // (No label: an icon button.)
+        let shown = if label.is_empty() { String::new() } else { self.fit_text(size, label, room) };
         #[cfg(test)]
         if shown != label {
             super::preview::note_cut(label);
@@ -576,6 +577,35 @@ impl Ui<'_> {
 
     /// Key caps right-aligned in `r` (physical px): 22 px tall, 4 apart;
     /// returns each cap's rect. `rec` replaces them with the recording cap.
+    /// A key row's label in lines: whole when it fits left of the caps,
+    /// else wrapped to the room there; above the caps (false: beside)
+    /// when less than 80 px is left. (While one of several slots records,
+    /// the label names it on one line, cut to the room its caps leave.)
+    fn key_row_label(&self, label: &str, slots: &[Slot], split: bool, size: f32) -> (Vec<String>, bool) {
+        let row_w = self.lay.width() - 16.0;
+        let caps_w: f32 = (slots.iter())
+            .map(|s| {
+                let caps = caps_of(s.chord.as_ref(), split);
+                let w: f32 = caps.iter().map(|t| (self.text_w(11.0, t) + 14.0).max(22.0)).sum::<f32>() + 4.0 * caps.len().saturating_sub(1) as f32;
+                w + 4.0
+            })
+            .sum::<f32>()
+            - 4.0;
+        // (4 px clear of the first cap.)
+        let room = row_w - caps_w - 4.0;
+        if self.text_w(size, label) <= room {
+            return (vec![label.to_string()], false);
+        }
+        let measure = |s: &str| self.text_w(size, s);
+        if room >= 80.0 {
+            let lines = super::controls::wrap(label, room, measure);
+            if lines.iter().all(|l| measure(l) <= room) {
+                return (lines, false);
+            }
+        }
+        (super::controls::wrap(label, row_w, measure), true)
+    }
+
     fn draw_caps(&mut self, r: FRect, caps: &[Cap], rec: bool, tok: &Tok) -> Vec<FRect> {
         let k = fade(self);
         let h = self.px(22.0).round();
@@ -650,9 +680,18 @@ impl Ui<'_> {
     /// the slots' caps right. One slot: a click anywhere on the row
     /// records; several: a click on a cap records that one (the label
     /// then names it: `names[i]`). `split` draws one cap per key. Returns
-    /// the slot whose chord changed.
+    /// the slot whose chord changed. A label longer than the room left of
+    /// the caps wraps there (the row grows), or, with less than 80 px
+    /// left, goes on lines of its own above the caps.
     pub fn key_row(&mut self, label: &str, names: &[&str], slots: &mut [Slot], split: bool, h: f32, tok: &Tok) -> Option<usize> {
-        let r = self.alloc(None, h);
+        let size = if h < 32.0 { 12.0 } else { 12.5 };
+        let (lines, above) = self.key_row_label(label, slots, split, size);
+        const LINE: f32 = 14.0;
+        let n = lines.len() as f32;
+        let rh = if above { h + n * LINE } else { h.max(n * LINE + 4.0) };
+        let r = self.alloc(None, rh);
+        // The caps' band: the row, or its bottom `h` under the label.
+        let band = if above { FRect { x: r.x, y: r.y + self.px(n * LINE), w: r.w, h: r.h - self.px(n * LINE) } } else { r };
         let ids: Vec<u64> = slots.iter().map(|s| id_of(&s.id)).collect();
         let k = fade(self);
         let rec = ids.iter().position(|i| self.focus.recording == Some(*i));
@@ -675,7 +714,7 @@ impl Ui<'_> {
         for i in (0..slots.len()).rev() {
             // While one slot records, it alone shows (its name is in the label).
             if rec.is_some_and(|r| r != i) {
-                areas[i] = FRect { x: inner.x1(), y: r.y, w: 0.0, h: r.h };
+                areas[i] = FRect { x: inner.x1(), y: band.y, w: 0.0, h: band.h };
                 continue;
             }
             let width = if rec == Some(i) {
@@ -684,7 +723,7 @@ impl Ui<'_> {
                 let ws: f32 = caps[i].iter().map(|c| self.px((self.text_w(11.0, &c.text) + 14.0).max(22.0)).round()).sum();
                 ws + gap * (caps[i].len().saturating_sub(1)) as f32
             };
-            areas[i] = FRect { x: right - width, y: r.y, w: width, h: r.h };
+            areas[i] = FRect { x: right - width, y: band.y, w: width, h: band.h };
             right -= width + gap;
         }
         let mut changed = None;
@@ -703,13 +742,24 @@ impl Ui<'_> {
             }
         }
         let rec = ids.iter().position(|i| self.focus.recording == Some(*i));
-        let cy = r.y + r.h / 2.0;
-        let name = match (rec, slots.len()) {
-            (Some(i), n) if n > 1 => tr!("ui.key.row_slot", label, name = names.get(i).copied().unwrap_or("")),
-            _ => label.to_string(),
-        };
-        let size = if h < 32.0 { 12.0 } else { 12.5 };
-        self.text_at(size, &name, inner.x, cy, tok.tx.fade(k), false);
+        let cy = band.y + band.h / 2.0;
+        match (rec, slots.len()) {
+            (Some(i), n) if n > 1 => {
+                // Recording one of several: which, on the first line.
+                let name = tr!("ui.key.row_slot", label, name = names.get(i).copied().unwrap_or(""));
+                let room = if above { inner.w / self.k } else { (areas[i].x - inner.x) / self.k - 12.0 };
+                let name = self.fit_text(size, &name, room.max(20.0));
+                let ly = if above || lines.len() > 1 { r.y + self.px(5.0 + LINE / 2.0) } else { cy };
+                self.text_at(size, &name, inner.x, ly, tok.tx.fade(k), false);
+            }
+            _ => {
+                // The lines centred on the row, or from its top above the caps.
+                let top = if above { r.y + self.px(5.0) } else { r.y + (r.h - self.px(n * LINE)) / 2.0 };
+                for (j, l) in lines.iter().enumerate() {
+                    self.text_at(size, l, inner.x, top + self.px(LINE / 2.0 + j as f32 * LINE), tok.tx.fade(k), false);
+                }
+            }
+        }
         for i in 0..slots.len() {
             let a = areas[i];
             if a.w <= 0.0 {

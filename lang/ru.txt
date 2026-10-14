@@ -645,6 +645,7 @@ history.still_kept[few] = Ещё хранится {n} снимка ·
 history.still_kept[many] = Ещё хранится {n} снимков ·
 history.still_kept[other] = Ещё хранится {n} снимка ·
 history.search = Поиск по окну или дате…
+history.search_short = Поиск…
 history.nothing_yet = Здесь пока пусто
 history.no_match = Подходящих снимков нет
 history.search_note = Ищет по заголовку окна, имени приложения, имени файла и дате.

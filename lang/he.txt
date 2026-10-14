@@ -640,6 +640,7 @@ history.still_kept[one] = לכידה אחת עדיין שמורה ·
 history.still_kept[two] = שתי לכידות עדיין שמורות ·
 history.still_kept[other] = {n} לכידות עדיין שמורות ·
 history.search = חיפוש לפי חלון או תאריך…
+history.search_short = חיפוש…
 history.nothing_yet = עדיין אין כאן כלום
 history.no_match = אין לכידות מתאימות
 history.search_note = מחפש בכותרת החלון, בשם האפליקציה, בשם הקובץ ובתאריך.

@@ -635,6 +635,7 @@ history.off_caption = As capturas não são mantidas depois que você as fecha. 
 history.still_kept[one] = {n} captura ainda mantida ·
 history.still_kept[other] = {n} capturas ainda mantidas ·
 history.search = Pesquisar por janela ou data…
+history.search_short = Pesquisar…
 history.nothing_yet = Nada aqui ainda
 history.no_match = Nenhuma captura corresponde
 history.search_note = Pesquisa título da janela, nome do aplicativo, nome do arquivo e data.

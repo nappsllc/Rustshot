@@ -31,10 +31,10 @@ pub(super) fn tw(ui: &Ui, size: f32, s: &str) -> f32 {
 pub(super) fn text(ui: &mut Ui, size: f32, s: &str, x: f32, cy: f32, c: C4) -> f32 {
     let font = &crate::fonts::UI;
     let px = ui.px(size);
-    let (y, h) = ((cy - text_height(font, px) / 2.0).round(), text_height(font, px));
+    let y = (cy - text_height(font, px) / 2.0).round();
     let w = ui.fb.draw_text(font, px, s, x.round(), y, c);
     #[cfg(test)]
-    super::preview::note_text(s, FRect { x: x.round(), y, w, h });
+    super::preview::note_text(s, FRect { x: x.round(), y, w, h: text_height(font, px) });
     w
 }
 

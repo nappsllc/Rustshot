@@ -645,6 +645,7 @@ history.still_kept[few] = Nadal zachowane: {n} ·
 history.still_kept[many] = Nadal zachowane: {n} ·
 history.still_kept[other] = Nadal zachowane: {n} ·
 history.search = Szukaj…
+history.search_short = Szukaj…
 history.nothing_yet = Na razie nic tu nie ma
 history.no_match = Brak pasujących przechwyceń
 history.search_note = Przeszukuje tytuł okna, nazwę aplikacji, nazwę pliku i datę.

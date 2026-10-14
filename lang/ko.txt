@@ -630,6 +630,7 @@ history.settings = 기록 설정
 history.off_caption = 캡처를 닫으면 보관되지 않습니다. 저장 및 업로드된 파일에는 영향이 없습니다.
 history.still_kept[other] = 캡처 {n}개가 아직 보관됨 ·
 history.search = 창 또는 날짜로 검색…
+history.search_short = 검색…
 history.nothing_yet = 아직 아무것도 없습니다
 history.no_match = 일치하는 캡처가 없습니다
 history.search_note = 창 제목, 앱 이름, 파일 이름, 날짜를 검색합니다.

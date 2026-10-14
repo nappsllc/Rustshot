@@ -640,6 +640,7 @@ history.still_kept[one] = Stále uchováván {n} záznam ·
 history.still_kept[few] = Stále uchovávány {n} záznamy ·
 history.still_kept[other] = Stále uchováváno {n} záznamů ·
 history.search = Hledat…
+history.search_short = Hledat…
 history.nothing_yet = Zatím tu nic není
 history.no_match = Žádné odpovídající záznamy
 history.search_note = Prohledává název okna, název aplikace, název souboru a datum.

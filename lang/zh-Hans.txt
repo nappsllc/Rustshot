@@ -630,6 +630,7 @@ history.settings = 历史记录设置
 history.off_caption = 关闭后不保留捕获。不影响已保存和已上传的文件。
 history.still_kept[other] = 仍保留 {n} 项捕获 ·
 history.search = 按窗口或日期搜索…
+history.search_short = 搜索…
 history.nothing_yet = 这里还没有内容
 history.no_match = 没有匹配的捕获
 history.search_note = 搜索窗口标题、应用名称、文件名和日期。

@@ -713,6 +713,8 @@ pub mod preview {
         /// This frame's text so far (physical px), less what a surface
         /// drawn later covers.
         texts: Vec<(String, FRect)>,
+        /// All of this frame's text, covered or not.
+        drawn: Vec<(String, FRect)>,
     }
 
     thread_local!(static CHECK: std::cell::RefCell<Option<Check>> = const { std::cell::RefCell::new(None) });
@@ -722,6 +724,7 @@ pub mod preview {
         CHECK.with(|c| {
             if let Some(c) = c.borrow_mut().as_mut() {
                 c.texts.clear();
+                c.drawn.clear();
             }
         });
     }
@@ -752,8 +755,17 @@ pub mod preview {
                     }
                 }
                 c.texts.push((s.to_string(), r));
+                if !s.starts_with("icon ") {
+                    c.drawn.push((s.to_string(), r));
+                }
             }
         });
+    }
+
+    /// The text of the last frame drawn since [`begin_check`] (physical
+    /// px: each string's advance and line height).
+    pub fn drawn_texts() -> Vec<(String, FRect)> {
+        CHECK.with(|c| c.borrow().as_ref().map(|c| c.drawn.clone()).unwrap_or_default())
     }
 
     /// A surface was drawn over `r` (physical px; None: all of the frame,

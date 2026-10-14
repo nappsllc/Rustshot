@@ -635,6 +635,7 @@ history.off_caption = Kaappauksia ei säilytetä sulkemisen jälkeen. Tallennett
 history.still_kept[one] = {n} kaappaus säilytetään yhä ·
 history.still_kept[other] = {n} kaappausta säilytetään yhä ·
 history.search = Hae ikkunan tai päivän mukaan…
+history.search_short = Hae…
 history.nothing_yet = Täällä ei ole vielä mitään
 history.no_match = Ei vastaavia kaappauksia
 history.search_note = Hakee ikkunan otsikosta, sovelluksen nimestä, tiedostonimestä ja päivämäärästä.

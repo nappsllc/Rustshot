@@ -635,6 +635,7 @@ history.off_caption = Заснеманията не се пазят, след к
 history.still_kept[one] = {n} заснемане все още се пази ·
 history.still_kept[other] = {n} заснемания все още се пазят ·
 history.search = Търсене…
+history.search_short = Търсене…
 history.nothing_yet = Тук още няма нищо
 history.no_match = Няма съвпадащи заснемания
 history.search_note = Търси в заглавието на прозореца, името на приложението, името на файла и датата.

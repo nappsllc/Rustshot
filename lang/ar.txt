@@ -655,6 +655,7 @@ history.still_kept[few] = لا تزال {n} لقطات محفوظة ·
 history.still_kept[many] = لا تزال {n} لقطة محفوظة ·
 history.still_kept[other] = لا تزال {n} لقطة محفوظة ·
 history.search = البحث حسب النافذة أو التاريخ…
+history.search_short = بحث…
 history.nothing_yet = لا شيء هنا بعد
 history.no_match = لا توجد لقطات مطابقة
 history.search_note = يبحث في عنوان النافذة واسم التطبيق واسم الملف والتاريخ.

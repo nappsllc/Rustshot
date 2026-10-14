@@ -630,6 +630,7 @@ history.settings = 歷程記錄設定
 history.off_caption = 關閉後不會保留擷取。不影響已儲存和已上傳的檔案。
 history.still_kept[other] = 仍保留 {n} 項擷取 ·
 history.search = 依視窗或日期搜尋…
+history.search_short = 搜尋…
 history.nothing_yet = 這裡還沒有內容
 history.no_match = 沒有符合的擷取
 history.search_note = 搜尋視窗標題、應用程式名稱、檔案名稱和日期。

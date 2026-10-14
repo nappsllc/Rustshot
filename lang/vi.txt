@@ -630,6 +630,7 @@ history.settings = Cài đặt Lịch sử
 history.off_caption = Bản chụp không được giữ sau khi bạn đóng. Không ảnh hưởng tệp đã lưu và đã tải lên.
 history.still_kept[other] = Vẫn giữ {n} bản chụp ·
 history.search = Tìm theo cửa sổ hoặc ngày…
+history.search_short = Tìm kiếm…
 history.nothing_yet = Chưa có gì ở đây
 history.no_match = Không có bản chụp phù hợp
 history.search_note = Tìm trong tiêu đề cửa sổ, tên ứng dụng, tên tệp và ngày.

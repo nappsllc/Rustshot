@@ -640,6 +640,7 @@ history.still_kept[one] = {n} captură încă păstrată ·
 history.still_kept[few] = {n} capturi încă păstrate ·
 history.still_kept[other] = {n} de capturi încă păstrate ·
 history.search = Căutare după fereastră sau dată…
+history.search_short = Căutare…
 history.nothing_yet = Nimic aici încă
 history.no_match = Nicio captură potrivită
 history.search_note = Caută în titlul ferestrei, numele aplicației, numele fișierului și dată.

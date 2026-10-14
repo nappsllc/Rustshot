@@ -635,6 +635,7 @@ history.off_caption = Upptagningar sparas inte efter att du stänger dem. Sparad
 history.still_kept[one] = {n} upptagning finns kvar ·
 history.still_kept[other] = {n} upptagningar finns kvar ·
 history.search = Sök på fönster eller datum…
+history.search_short = Sök…
 history.nothing_yet = Inget här än
 history.no_match = Inga upptagningar matchar
 history.search_note = Söker i fönsterrubrik, appnamn, filnamn och datum.

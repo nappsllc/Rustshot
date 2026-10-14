@@ -635,6 +635,7 @@ history.off_caption = Optagelser gemmes ikke, når du har lukket dem. Gemte og u
 history.still_kept[one] = {n} optagelse gemmes stadig ·
 history.still_kept[other] = {n} optagelser gemmes stadig ·
 history.search = Søg efter vindue eller dato…
+history.search_short = Søg…
 history.nothing_yet = Intet her endnu
 history.no_match = Ingen optagelser passer
 history.search_note = Søger i vinduestitel, appnavn, filnavn og dato.

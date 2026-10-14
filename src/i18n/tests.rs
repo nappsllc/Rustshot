@@ -117,7 +117,7 @@ fn catalogs_agree_with_english() {
         let p = files::load(&tag, &files);
         assert!(p.problems.is_empty(), "{tag}: {:#?}", p.problems);
         assert!(p.name != tag, "{tag}: @name");
-        assert!(table::AVAILABLE.iter().any(|a| a.0 == tag), "{tag} is listed");
+        assert!(table::AVAILABLE.iter().any(|a| a.0 == tag), "{tag} is not in this build's language list: rebuild (build.rs lists lang/*.txt; cargo test again once the file is in place)");
     }
 }
 

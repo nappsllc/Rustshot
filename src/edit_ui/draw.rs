@@ -32,6 +32,17 @@ pub(super) fn note_h() -> f32 {
 }
 const DLG_W: f32 = 420.0;
 
+/// The question's width: the board's 420, wider when its buttons need it
+/// (Discard on the left, 16 clear of the rest), within the window.
+fn dialog_w(ui: &Ui, e: &Edit, lay: &Lay) -> f32 {
+    let bw = |l: &str| (ui.text_w(12.0, l) + 24.0).ceil();
+    let need = match e.flow.dialog {
+        Some(Dialog::Unsaved) => 20.0 + bw(tr!("edit.discard")) + 16.0 + bw(tr!("common.cancel")) + 8.0 + bw(tr!("edit.save_copy")) + 8.0 + bw(tr!("common.save")) + 20.0,
+        _ => DLG_W,
+    };
+    need.max(DLG_W).min((lay.w - 32.0).max(DLG_W))
+}
+
 /// The zoom control: −, the value, +, Fit, 1:1.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ZoomLay {
@@ -485,14 +496,15 @@ pub fn dialog_lay(ui: &Ui, e: &Edit, lay: &Lay) -> (FRect, Vec<(FRect, Btn)>) {
     let Some(d) = e.flow.dialog else { return (FRect { x: 0.0, y: 0.0, w: 0.0, h: 0.0 }, Vec::new()) };
     let bw = |l: &str| (ui.text_w(12.0, l) + 24.0).ceil();
     let mut bs = Vec::new();
+    let dw = dialog_w(ui, e, lay);
     let h = match d {
         Dialog::Unsaved => {
-            let lines = crate::ui::controls::wrap(&unsaved_text(e), DLG_W - 40.0, |s| ui.text_w(12.0, s)).len().max(1) as f32;
+            let lines = crate::ui::controls::wrap(&unsaved_text(e), dw - 40.0, |s| ui.text_w(12.0, s)).len().max(1) as f32;
             20.0 + 18.0 + 10.0 + lines * 18.0 + 16.0 + 28.0 + 20.0
         }
         Dialog::Choose { .. } => 20.0 + 18.0 + 10.0 + 2.0 * 50.0 + 10.0 + 10.0 + 18.0 + 16.0 + 28.0 + 20.0,
     };
-    let r = FRect { x: ((lay.w - DLG_W) / 2.0).round(), y: ((lay.h - h) / 2.0).round(), w: DLG_W, h };
+    let r = FRect { x: ((lay.w - dw) / 2.0).round(), y: ((lay.h - h) / 2.0).round(), w: dw, h };
     let by = r.y1() - 20.0 - 28.0;
     let mut x = r.x1() - 20.0;
     let mut right = |l: &str, b: Btn, bs: &mut Vec<(FRect, Btn)>| {
@@ -512,8 +524,8 @@ pub fn dialog_lay(ui: &Ui, e: &Edit, lay: &Lay) -> (FRect, Vec<(FRect, Btn)>) {
             right(tr!("common.save"), Btn::Save, &mut bs);
             right(tr!("common.cancel"), Btn::Cancel, &mut bs);
             let oy = r.y + 20.0 + 18.0 + 10.0;
-            bs.push((FRect { x: r.x + 20.0, y: oy, w: DLG_W - 40.0, h: 50.0 }, Btn::Pick(Choice::Overwrite)));
-            bs.push((FRect { x: r.x + 20.0, y: oy + 60.0, w: DLG_W - 40.0, h: 50.0 }, Btn::Pick(Choice::New)));
+            bs.push((FRect { x: r.x + 20.0, y: oy, w: dw - 40.0, h: 50.0 }, Btn::Pick(Choice::Overwrite)));
+            bs.push((FRect { x: r.x + 20.0, y: oy + 60.0, w: dw - 40.0, h: 50.0 }, Btn::Pick(Choice::New)));
             let w = ui.text_w(12.0, tr!("edit.dont_ask")) + 24.0;
             bs.push((FRect { x: r.x + 20.0, y: oy + 120.0, w, h: 18.0 }, Btn::DontAsk));
         }
@@ -558,7 +570,7 @@ pub fn paint_dialog(ui: &mut Ui, e: &Edit, lay: &Lay, t: &WTok, hover: Option<Hi
     match d {
         Dialog::Unsaved => {
             text(ui, 14.0, tr!("edit.save_question"), r.x + 20.0, r.y + 29.0, t.tx, true);
-            let lines = crate::ui::controls::wrap(&unsaved_text(e), DLG_W - 40.0, |s| ui.text_w(12.0, s));
+            let lines = crate::ui::controls::wrap(&unsaved_text(e), dialog_w(ui, e, lay) - 40.0, |s| ui.text_w(12.0, s));
             for (n, l) in lines.iter().enumerate() {
                 text(ui, 12.0, l, r.x + 20.0, r.y + 48.0 + 9.0 + n as f32 * 18.0, t.tx2, false);
             }

@@ -635,6 +635,7 @@ history.off_caption = Οι λήψεις δεν διατηρούνται αφού
 history.still_kept[one] = {n} λήψη διατηρείται ακόμη ·
 history.still_kept[other] = {n} λήψεις διατηρούνται ακόμη ·
 history.search = Αναζήτηση κατά παράθυρο ή ημερομηνία…
+history.search_short = Αναζήτηση…
 history.nothing_yet = Τίποτα ακόμη εδώ
 history.no_match = Καμία λήψη δεν ταιριάζει
 history.search_note = Αναζητά σε τίτλο παραθύρου, όνομα εφαρμογής, όνομα αρχείου και ημερομηνία.
