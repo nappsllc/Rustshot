@@ -340,8 +340,10 @@ pub fn fmt(s: &str, args: &[(&str, &dyn std::fmt::Display)]) -> String {
     while let Some(i) = rest.find('{') {
         out.push_str(&rest[..i]);
         let after = &rest[i + 1..];
-        match after.find('}').map(|j| (&after[..j], j)) {
-            Some((name, j)) if let Some((_, v)) = args.iter().find(|(n, _)| *n == name) => {
+        // (No `if let` guard: the Flatpak SDK's rustc predates them.)
+        let hit = after.find('}').and_then(|j| args.iter().find(|(n, _)| *n == &after[..j]).map(|(_, v)| (v, j)));
+        match hit {
+            Some((v, j)) => {
                 let _ = write!(out, "{v}");
                 rest = &after[j + 1..];
             }

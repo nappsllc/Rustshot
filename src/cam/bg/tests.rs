@@ -323,10 +323,10 @@ fn bad_mask_values_do_not_stick() {
 /// Every pixel of `p` is close to the mean of `orig` (a noise picture
 /// blurred whole: nothing of it can be made out), and `p` is not `orig`.
 fn fully_blurred(p: &CamFrame, orig: &CamFrame) -> bool {
-    let mean = |f: &CamFrame, c: usize| f.bgra.chunks_exact(4).map(|q| q[c] as f64).sum::<f64>() / (f.bgra.len() / 4) as f64;
+    let mean = |f: &CamFrame, c: usize| f.bgra.as_chunks::<4>().0.iter().map(|q| q[c] as f64).sum::<f64>() / (f.bgra.len() / 4) as f64;
     p != orig && (0..3).all(|c| {
         let m = mean(orig, c);
-        p.bgra.chunks_exact(4).all(|q| (q[c] as f64 - m).abs() < 40.0)
+        p.bgra.as_chunks::<4>().0.iter().all(|q| (q[c] as f64 - m).abs() < 40.0)
     })
 }
 
@@ -384,6 +384,10 @@ fn unavailable_model_fully_blurred() {
     fx.apply(Bg::Strong, &raw, &mut p);
     assert!(fully_blurred(&p, &was));
     assert_eq!(p.note, Some(super::UNAVAILABLE_BADGE.get()));
+    // (macOS: Vision blurs without the model, so the default effect works.)
+    if cfg!(target_os = "macos") {
+        return;
+    }
     let mut fx = Effect::default();
     for bg in [Bg::Light, Bg::Strong] {
         let mut p = was.clone();
@@ -404,7 +408,7 @@ fn blur_state_notes() {
     assert_eq!(Blur::Downloading(100).panel_note(), Some("Downloading model… 100%"));
     assert_eq!(Blur::Failed("x".into()).panel_note(), Some(FAILED_SHORT.get()));
     assert!(Blur::Fetchable.settings_note().contains("215 KB"));
-    assert_eq!(Blur::Failed("HTTP 404".into()).settings_note(), format!("Blur unavailable — couldn't download the model: HTTP 404"));
+    assert_eq!(Blur::Failed("HTTP 404".into()).settings_note(), "Blur unavailable — couldn't download the model: HTTP 404");
     let off = Blur::Off { asset: "selfie-f11cb3ec.bin", url: "https://github.com/x".into(), path: "/d/models/selfie.bin".into() };
     assert_eq!(off.panel_note(), Some(UNAVAILABLE.get()));
     let n = off.settings_note();

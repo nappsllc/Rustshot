@@ -849,7 +849,9 @@ fn background_choice_reaches_the_bubble_and_is_remembered() {
 /// Start with a blur chosen that cannot be had: the question, never a
 /// recording straight away; Cancel goes back, Esc too; "fully blurred"
 /// records with the blur kept (the bubble blurs whole); "camera off"
-/// records without the camera.
+/// records without the camera. (Windows and Linux, as the test above:
+/// the macOS build blurs with Vision.)
+#[cfg(any(windows, target_os = "linux"))]
 #[test]
 fn blur_question_at_record_start() {
     use crate::cam::bg::Bg;

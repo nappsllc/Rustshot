@@ -37,6 +37,12 @@ fn click(a: &mut App, x: i32, y: i32) {
 fn shift_s_scrolls_the_selection() {
     let mut a = app_with(Some(fr(100.0, 120.0, 640.0, 480.0)));
     key_m(&mut a, 'S' as u32, SHIFT);
+    // Where it can't scroll (no X display, macOS): Shift+S does nothing.
+    if !crate::scroll::supported() {
+        assert!(matches!(a.st, State::Edit(_)), "still open");
+        assert_eq!(a.scroll_asked, None);
+        return;
+    }
     assert!(matches!(a.st, State::Hidden), "the overlay is gone");
     assert_eq!(a.scroll_asked, Some((1920 + 100, 120, 640, 480)), "the selection, in screen px");
     // S alone is still the spotlight.
