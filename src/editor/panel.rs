@@ -32,6 +32,8 @@ const SMALL_ROW_H: f32 = 32.0;
 /// The camera's Background choices (three segments).
 const BG_SEG_W: f32 = 216.0;
 const START_H: f32 = 40.0;
+/// The Background row's note under its choices.
+const NOTE_H: f32 = 24.0;
 const DEV_ITEM_H: f32 = 26.0;
 /// At most this many devices are listed.
 pub const DEV_MAX: usize = 8;
@@ -204,18 +206,23 @@ pub fn layout(inp: &Input, rv: &RecView) -> Toolbar {
     row(&mut local, y, Act::RecCamera, "video", cam_label, cam_value, rv.cams.then_some(Dev::Cam), cam_on, !rv.cams, false);
     let cam_row = row_r(y);
     y += ROW_H + GAP;
-    // The camera on: its background, Off / Blur light / Blur strong (a
-    // build without a segmentation model says it cannot).
+    // The camera on: its background, Off / Blur light / Blur strong
+    // (always choosable: Off too while the model cannot be had). A blur
+    // chosen that does not work yet: a note under it (the download's
+    // progress, why not; a failed download's note retries).
     if cam_on {
+        use crate::cam::bg::Bg;
         let r = FRect { x: x0, y, w: inner, h: SMALL_ROW_H };
-        let value = (!rv.blur).then_some(crate::cam::bg::UNAVAILABLE);
-        local.push(Item { kind: Kind::Row { act: Act::RecBg(rv.bg), icon: "", label: "Background", value, dim: !rv.blur }, r, disabled: true });
-        if rv.blur {
-            use crate::cam::bg::Bg;
-            let segs = [(Bg::Off, "Off"), (Bg::Light, "Blur light"), (Bg::Strong, "Blur strong")].map(|(b, l)| (Act::RecBg(b), l, "", rv.bg == b, false));
-            seg(&mut local, r.x1() - 6.0 - BG_SEG_W, y + (SMALL_ROW_H - 26.0) / 2.0, BG_SEG_W, 26.0, 2.0, &segs);
-        }
+        local.push(Item { kind: Kind::Row { act: Act::RecBg(rv.bg), icon: "", label: "Background", value: None, dim: false }, r, disabled: true });
+        let segs = [(Bg::Off, "Off"), (Bg::Light, "Blur light"), (Bg::Strong, "Blur strong")].map(|(b, l)| (Act::RecBg(b), l, "", rv.bg == b, false));
+        seg(&mut local, r.x1() - 6.0 - BG_SEG_W, y + (SMALL_ROW_H - 26.0) / 2.0, BG_SEG_W, 26.0, 2.0, &segs);
         y += SMALL_ROW_H + GAP;
+        if !rv.blur && rv.bg != Bg::Off {
+            let note = rv.blur_note.unwrap_or(crate::cam::bg::UNAVAILABLE);
+            let r = FRect { x: x0, y: y - GAP, w: inner, h: NOTE_H };
+            local.push(Item { kind: Kind::Row { act: Act::RecBg(rv.bg), icon: "", label: "", value: Some(note), dim: !rv.blur_retry }, r, disabled: !rv.blur_retry });
+            y += NOTE_H;
+        }
     }
     // Microphone (MP4 only): the device and its level, on/off.
     let mic_on = mp4 && rv.mic;
@@ -279,8 +286,24 @@ pub fn layout(inp: &Input, rv: &RecView) -> Toolbar {
         let ph = RING_BTN + 8.0 + rows as f32 * DOT_BTN + (rows - 1) as f32 * DOT_GAP + 12.0;
         FRect { x: cam_row.x1() - 6.0 - pw, y: cam_row.y1() + 2.0, w: pw, h: ph }
     });
-    local.push(Item { kind: Kind::Primary { act: Act::RecStart, label: "Start recording" }, r: FRect { x: x0, y, w: inner, h: START_H }, disabled: false });
-    y += START_H + PAD;
+    if let Some((l1, l2)) = rv.blur_ask {
+        // Start pressed with a blur chosen that cannot be had: ask.
+        for l in [l1, l2] {
+            local.push(Item { kind: Kind::Caption(l), r: FRect { x: x0 + 2.0, y, w: inner, h: CAPTION_H }, disabled: false });
+            y += CAPTION_H + 2.0;
+        }
+        y += CAPTION_GAP;
+        local.push(Item { kind: Kind::Primary { act: Act::RecStart, label: crate::cam::bg::ASK_BLURRED }, r: FRect { x: x0, y, w: inner, h: START_H }, disabled: false });
+        y += START_H + GAP;
+        seg(&mut local, x0, y, inner, SEG_H, SEG_IN, &[
+            (Act::RecAskCamOff, crate::cam::bg::ASK_CAM_OFF, "", false, false),
+            (Act::RecAskCancel, crate::cam::bg::ASK_CANCEL, "", false, false),
+        ]);
+        y += SEG_H + PAD;
+    } else {
+        local.push(Item { kind: Kind::Primary { act: Act::RecStart, label: "Start recording" }, r: FRect { x: x0, y, w: inner, h: START_H }, disabled: false });
+        y += START_H + PAD;
+    }
     let mut h = y;
     // The open list floats over the rows below its row: drawn (and hit) last.
     if let Some((dev, rr)) = list
@@ -384,6 +407,9 @@ mod tests {
             shape: crate::cam::Shape::Circle,
             bg: crate::cam::bg::Bg::Off,
             blur: true,
+            blur_note: None,
+            blur_retry: false,
+            blur_ask: None,
             mic_label: "Default microphone",
             cam_label: "Default camera",
             devs: None,
@@ -625,13 +651,55 @@ mod tests {
             assert_eq!(tb.act_at(centre(s.r)), Some(Act::RecBg(b)));
         }
         assert!(inside_panel(&tb));
-        // Without a model: the note, no choices.
+        // Without a model: the choices stay (Off too), the note under
+        // them, which takes no press.
         v.blur = false;
+        v.blur_note = Some(UNAVAILABLE);
         let tb = panel(sel, &v);
-        let row = find(&tb, |k| matches!(k, Kind::Row { act: Act::RecBg(_), .. }));
-        assert!(matches!(row.kind, Kind::Row { value: Some(UNAVAILABLE), dim: true, .. }));
-        assert!(!tb.items.iter().any(|i| matches!(i.kind, Kind::Seg { act: Act::RecBg(_), .. })));
-        assert_eq!(tb.act_at(centre(row.r)), None);
+        let note = find(&tb, |k| matches!(k, Kind::Row { act: Act::RecBg(_), value: Some(UNAVAILABLE), dim: true, .. }));
+        let segs: Vec<Item> = tb.items.iter().filter(|i| matches!(i.kind, Kind::Seg { act: Act::RecBg(_), .. })).copied().collect();
+        assert_eq!(segs.len(), 3);
+        assert_eq!(tb.act_at(centre(segs[0].r)), Some(Act::RecBg(Bg::Off)), "Off can be chosen");
+        assert!(note.r.y >= segs[0].r.y1() && note.r.y1() <= find(&tb, |k| matches!(k, Kind::Row { act: Act::RecMic, .. })).r.y);
+        assert_eq!(tb.act_at(centre(note.r)), None);
+        assert!(inside_panel(&tb));
+        // A failed download: the note, and a press of it retries.
+        v.blur_note = Some(crate::cam::bg::FAILED_SHORT);
+        v.blur_retry = true;
+        let tb = panel(sel, &v);
+        let note = find(&tb, |k| matches!(k, Kind::Row { act: Act::RecBg(_), value: Some(crate::cam::bg::FAILED_SHORT), .. }));
+        assert!(matches!(note.kind, Kind::Row { dim: false, .. }) && !note.disabled);
+        assert_eq!(tb.act_at(centre(note.r)), Some(Act::RecBg(Bg::Light)));
+        // Off chosen: no note (nothing is missing).
+        v.bg = Bg::Off;
+        let tb = panel(sel, &v);
+        assert!(!tb.items.iter().any(|i| matches!(i.kind, Kind::Row { act: Act::RecBg(_), value: Some(_), .. })));
+    }
+
+    /// Start pressed with a blur that cannot be had: the question in
+    /// place of Start recording (fully blurred / camera off / cancel).
+    #[test]
+    fn blur_question_replaces_start() {
+        use crate::cam::bg::{Bg, ASK_BLURRED, ASK_CAM_OFF, ASK_CANCEL, ASK_TITLE};
+        let mut v = rv(RecFormat::Mp4);
+        let sel = r(240.0, 110.0, 960.0, 420.0);
+        v.camera = true;
+        v.bg = Bg::Strong;
+        v.blur = false;
+        v.blur_ask = Some((ASK_TITLE, "(downloads are off)"));
+        let tb = panel(sel, &v);
+        assert!(tb.items.iter().any(|i| i.kind == Kind::Caption(ASK_TITLE)));
+        assert!(tb.items.iter().any(|i| i.kind == Kind::Caption("(downloads are off)")));
+        let go = find(&tb, |k| matches!(k, Kind::Primary { .. }));
+        assert!(matches!(go.kind, Kind::Primary { act: Act::RecStart, label: ASK_BLURRED }));
+        let off = find(&tb, |k| matches!(k, Kind::Seg { act: Act::RecAskCamOff, .. }));
+        let cancel = find(&tb, |k| matches!(k, Kind::Seg { act: Act::RecAskCancel, .. }));
+        assert!(matches!(off.kind, Kind::Seg { label: ASK_CAM_OFF, .. }) && matches!(cancel.kind, Kind::Seg { label: ASK_CANCEL, .. }));
+        assert_eq!(tb.act_at(centre(off.r)), Some(Act::RecAskCamOff));
+        assert_eq!(tb.act_at(centre(cancel.r)), Some(Act::RecAskCancel));
+        assert!(off.r.y >= go.r.y1());
+        assert!(!tb.items.iter().any(|i| matches!(i.kind, Kind::Primary { label: "Start recording", .. })));
+        assert!(inside_panel(&tb));
     }
 
     /// The grip hint: centred under the bubble, 12 px below it.

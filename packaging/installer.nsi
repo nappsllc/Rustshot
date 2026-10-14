@@ -4,7 +4,7 @@
 ; In-app updates run it as "setup.exe /S /RELAUNCH" (see .onInit and
 ; .onInstSuccess); interactive installs are unaffected by that path.
 !ifndef PRODUCT_VERSION
-  !define PRODUCT_VERSION "0.4.0"
+  !define PRODUCT_VERSION "0.4.1"
 !endif
 !define PRODUCT_NAME "rustshot"
 !define PRODUCT_DISPLAY "Rustshot"
@@ -203,8 +203,12 @@ Section "-un.Main"
 SectionEnd
 
 ; Off unless ticked, so never in a silent uninstall: the capture history
-; (history::find_root) is the user's data. Saved files are not touched.
-Section /o "un.Also remove capture history" SecUnHistory
+; (history::find_root) is the user's data; the same folder keeps the
+; downloaded blur model and language files (src/datadir.rs), kept with it
+; (a reinstall uses them again). Saved files are not touched.
+Section /o "un.Also remove capture history and downloaded files" SecUnHistory
   RMDir /r "$LOCALAPPDATA\${PRODUCT_NAME}-data\history"
+  RMDir /r "$LOCALAPPDATA\${PRODUCT_NAME}-data\models"
+  RMDir /r "$LOCALAPPDATA\${PRODUCT_NAME}-data\lang"
   RMDir "$LOCALAPPDATA\${PRODUCT_NAME}-data"
 SectionEnd

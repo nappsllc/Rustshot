@@ -567,6 +567,10 @@ fn general(ui: &mut Ui, s: &mut Settings, tok: &Tok) {
     srow(ui, tok, "Check for updates automatically", Some("Once a day, from GitHub"), |ui| {
         ui.switch("check_updates", &mut f.check_updates, tok);
     });
+    srow(ui, tok, "Download language and blur files", Some("When first needed, from this version's GitHub release"), |ui| {
+        // Applied when saved (Cancel leaves downloads as they were).
+        ui.switch("download_data", &mut f.download_data, tok);
+    });
     // Turned off: say how to get back before it goes.
     if hid {
         s.ask_hide_tray();

@@ -289,6 +289,33 @@ fn screenclip_toggle_applies_on_save() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The download switch: Settings starts from the file's value (a broken
+/// file: off), the switch itself changes nothing until saved, Cancel
+/// leaves downloads as they were, Apply sets them.
+#[test]
+fn download_switch_applies_on_save() {
+    let dir = scratch("download-switch");
+    let p = dir.join("config.toml");
+    config::save_at(&p, &Config { download_data: false, ..Config::default() }).unwrap();
+    let mut s = settings_at(&p);
+    s.section = GENERAL;
+    let _ = crate::fetch::take_last_set();
+    let mut focus = FocusState::default();
+    click(&mut s, &mut focus, "download_data", 1.0);
+    assert!(s.form.download_data, "the switch moved");
+    assert_eq!(crate::fetch::take_last_set(), None, "not applied before a save");
+    assert_eq!(s.on(Click::Escape), vec![Act::Close]);
+    assert_eq!(crate::fetch::take_last_set(), None, "Cancel: as it was");
+    let mut s = settings_at(&p);
+    s.form.download_data = true;
+    assert!(matches!(&s.on(Click::Apply)[..], [Act::Saved(c)] if c.download_data));
+    assert_eq!(crate::fetch::take_last_set(), Some(true), "applied on save");
+    s.form.download_data = false;
+    s.on(Click::Apply);
+    assert_eq!(crate::fetch::take_last_set(), Some(false));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The fake handler the guide tests read: 0 none, 1 the Snipping Tool,
 /// 2 a missing app, 3 Rustshot. One test at a time sets it.
 static FAKE_HANDLER: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);

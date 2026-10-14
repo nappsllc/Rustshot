@@ -96,10 +96,11 @@ Butler), Apache-2.0.
 
 ## MediaPipe Selfie Segmentation model — Apache License 2.0
 
-Builds with the `selfie_model` feature embed the weights of MediaPipe's
-Selfie Segmentation model (landscape, 144×256), converted from
+Rustshot downloads, when the camera blur is first turned on, the weights
+of MediaPipe's Selfie Segmentation model (published with each release as
+`selfie-<hash>.bin`; not in the binary) (landscape, 144×256), converted from
 `selfie_segmentation_landscape.tflite` to Rustshot's own format
-(`assets/selfie.bin`, by `tools/convert-selfie`: the same weights stored
+(`models/selfie.bin`, by `tools/convert-selfie`: the same weights stored
 as 16-bit floats, the graph as a list of operators). The camera bubble's
 background blur runs it (Rustshot's own inference code; no MediaPipe or
 TensorFlow code is included).
@@ -111,7 +112,7 @@ below). Source: https://github.com/google-ai-edge/mediapipe; the file is
 `4aafe6223bb8dac6fac8ca8ed56852870a33051ef3f6238822d282a109962894`,
 MediaPipe's pinned hash), from
 https://storage.googleapis.com/mediapipe-assets/modules/selfie_segmentation/selfie_segmentation_landscape.tflite?generation=1782183688568628
-(see `assets/selfie.bin.txt`). Modification: converted to another file
+(see `models/selfie.bin.txt`). Modification: converted to another file
 format (no retraining; the float16 weights are kept as they are).
 
 ## Optional libraries loaded at run time (Linux, not shipped)

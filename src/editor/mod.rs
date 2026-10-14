@@ -372,6 +372,7 @@ pub fn run(
 ) -> i32 {
     // Settings, the update dialog and the notice follow the UI size too.
     publish_ui_size(cfg.ui_scale);
+    crate::fetch::set_allowed(cfg.download_data);
     if cfg.snap_windows && !cfg!(test) {
         crate::snap::warm_up();
     }
@@ -1438,6 +1439,7 @@ impl App {
             crate::tray::set_visible(cfg.show_tray);
         }
         publish_ui_size(cfg.ui_scale);
+        crate::fetch::set_allowed(cfg.download_data);
         self.cfg = cfg;
         // New limits apply at once.
         self.keep_pruned();
@@ -2326,6 +2328,10 @@ fn cancel_key(edit: &mut Edit) {
         edit.obj.sel.clear();
         return;
     }
+    if edit.rec.blur_ask.is_some() {
+        edit.rec.blur_ask = None;
+        return;
+    }
     if edit.rec.dev_open.is_some() {
         edit.rec.dev_open = None;
         return;
@@ -2556,6 +2562,9 @@ struct RecPop {
     dev_open: Option<Dev>,
     /// The camera ring's palette is open.
     ring_pal: bool,
+    /// Start pressed with a blur chosen that cannot be had: the question
+    /// shown in place of Start ([`crate::cam::bg::Blur::ask_lines`]).
+    blur_ask: Option<(&'static str, &'static str)>,
     /// "Start recording" pressed: `finish` records instead of exporting.
     start: bool,
     /// The camera bubble while the popover shows the camera.
@@ -2603,6 +2612,7 @@ impl RecPop {
             cams_rx: None,
             dev_open: None,
             ring_pal: false,
+            blur_ask: None,
             start: false,
             cam: CamSlot::default(),
             source: rec_ui::RecSource::Region,
@@ -3953,7 +3963,7 @@ fn animating(edit: &Edit, app_notice: Option<&Toast>, now: Instant) -> bool {
     let tip_pending = edit.hover.is_some() && now.saturating_duration_since(edit.hover_at) < Duration::from_millis(500);
     let toast_moving = edit.notice.as_ref().or(app_notice).is_some_and(|t| t.animating(now));
     // The Camera row says "Looking for cameras…" until the list comes.
-    edit.mo.active(now) || tip_pending || toast_moving || edit.rec.cams_looking() || edit.guides_fading(now) || edit.assist.hint_due(now) || edit.slot_hold.is_some() || edit.snip_busy()
+    edit.mo.active(now) || tip_pending || toast_moving || edit.rec.cams_looking() || (edit.rec.opts.camera && crate::cam::bg::downloading()) || edit.guides_fading(now) || edit.assist.hint_due(now) || edit.slot_hold.is_some() || edit.snip_busy()
 }
 
 /// The last frame no longer matches: something animates (or did when it
@@ -4159,6 +4169,8 @@ mod pin_tests;
 mod history_tests;
 #[cfg(test)]
 mod snip_tests;
+#[cfg(test)]
+mod store_tests;
 #[cfg(test)]
 mod trim_tests;
 #[cfg(test)]
@@ -4903,13 +4915,24 @@ mod tests {
             e.rec.load_cams();
             e.rec.ring_pal = true;
             save(&mut app, &format!("{tn}-video-ring-palette.png"));
-            // The camera's Background row: Blur light; a build without a model.
-            for (name, avail) in [("blur", true), ("noblur", false)] {
-                crate::cam::bg::set_available(Some(avail));
+            // The camera's Background row: Blur light; the model downloading,
+            // its download failed (a press retries), downloads off, damaged.
+            use crate::cam::bg::Blur;
+            let off = Blur::Off { asset: crate::fetch::MODEL.asset, url: String::new(), path: "selfie.bin".into() };
+            let states = [("blur", Blur::Ready), ("downloading", Blur::Downloading(40)), ("failed", Blur::Failed("HTTP 404".into())), ("noblur", off), ("damaged", Blur::Damaged("selfie.bin".into()))];
+            for (name, state) in states {
+                crate::cam::bg::set_state(Some(state));
                 let mut app = video(th, vsel);
                 edit_of(&mut app).rec.opts.cam_bg = crate::cam::bg::Bg::Light;
                 save(&mut app, &format!("{tn}-video-camera-{name}.png"));
             }
+            // Start with a blur that cannot be had: the question.
+            crate::cam::bg::set_available(Some(false));
+            let mut app = video(th, vsel);
+            let e = edit_of(&mut app);
+            e.rec.opts.cam_bg = crate::cam::bg::Bg::Strong;
+            e.rec.blur_ask = crate::cam::bg::state().ask_lines();
+            save(&mut app, &format!("{tn}-video-blur-question.png"));
             crate::cam::bg::set_available(None);
             // No room below: above the selection; none above either: inside.
             save(&mut video(th, FRect { x: 240.0, y: 520.0, w: 960.0, h: 340.0 }), &format!("{tn}-video-above.png"));

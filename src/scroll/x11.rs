@@ -257,6 +257,9 @@ mod tests {
         println!("X11 scrolling capture: {end:?} {}x{} in {:?}", pic.width(), pic.height(), t0.elapsed());
         assert_eq!(end, End::Bottom);
         assert_eq!(pic.height(), CONTENT, "the whole content");
-        assert_eq!(pic.as_raw()[..], page[..], "exactly the page");
+        // The window shows BGRA; the capture is RGBA.
+        let shown: Vec<u8> = page.as_chunks::<4>().0.iter().flat_map(|p| [p[2], p[1], p[0], p[3]]).collect();
+        let same = pic.as_raw() == &shown;
+        assert!(same, "exactly the page");
     }
 }
