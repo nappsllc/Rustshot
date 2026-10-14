@@ -83,6 +83,29 @@ Rustshot does not collect, store or transmit personal data or telemetry.
   are uploaded only as described above (**Copy link**, or *Upload
   recordings automatically*), and Rustshot keeps no other copy. Settings › Recording lists the names of your microphones
   and cameras to choose from; it does not open them.
+- Show clicks & keys (off by default; Settings › Recording): only while a
+  recording runs, Rustshot listens to the mouse buttons and keys system-wide
+  (Windows: low-level mouse and keyboard hooks; X11: XInput2 raw events;
+  macOS: a listen-only event tap, which needs the Input Monitoring
+  permission) to draw a ring where you click and the last shortcuts into
+  the video's frames. The listening starts with the recording's first frame
+  and stops with the recording. Keys are never written to a file, a log,
+  the console or anywhere else, and never sent: each one is kept in memory
+  for the 1.8 s it is shown, then dropped. By default only chords with Ctrl,
+  Alt or Win (Super, Cmd) are drawn, so typed text never is; with *All
+  keys* every key is drawn, except (Windows) while the focused element is a
+  password field, which Rustshot asks UI Automation about (the element's
+  *IsPassword*; nothing else about it is read). On Wayland other apps'
+  input cannot be seen, so nothing is drawn.
+- Trim after recording: the trimmed copy replaces the recording in its
+  folder; nothing leaves your computer. On Windows the frames from the new
+  start to the next key frame are decoded and encoded again locally.
+- Scrolling capture: Rustshot scrolls only the window under the selection
+  (Windows: wheel messages to that window, or UI Automation's scroll
+  pattern of the element there; X11: wheel button presses while the pointer
+  is over that window, put back where it was at the end) and grabs the
+  selected region after each step. The stitched picture is kept like any
+  capture (History, or your save folder).
 - OpenH264 (Linux without ffmpeg, only if you choose **Download OpenH264**
   when you first record MP4): Rustshot downloads Cisco's OpenH264 library
   once from Cisco (`http://ciscobinary.openh264.org/`, plain HTTP as Cisco
