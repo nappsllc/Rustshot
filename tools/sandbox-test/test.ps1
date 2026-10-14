@@ -84,6 +84,8 @@ function KillAll { Get-Process rustshot -ErrorAction SilentlyContinue | Stop-Pro
 # 0.5.0 (languages offline and from hand-placed files, Settings' Language
 # list, ruler, Read QR code, Scrolling capture): Checks050.
 . "$T\v050.ps1"
+# 0.6.0 (Settings > About opens the powernapps.net short link; Apache-2.0): Checks060.
+. "$T\v060.ps1"
 # The sideload-signed MSIX (and an update over the older release's): MsixChecks.
 . "$T\msix.ps1"
 HotkeyProbe $log
@@ -129,6 +131,15 @@ if (Test-Path "$T\v050-only") {
     Add-Content $log 'DONE'
     return
 }
+# <T>\v060-only: just the 0.6.0 checks.
+if (Test-Path "$T\v060-only") {
+    $portable = PortableExe
+    Copy-Item $portable.FullName "$env:TEMP\rustshot.exe"
+    Add-Content $log "      portable exe: $($portable.FullName) $((Get-Item $portable.FullName).Length) B"
+    Checks060 "$env:TEMP\rustshot.exe"
+    Add-Content $log 'DONE'
+    return
+}
 # <T>\data-only: just the data-file checks.
 if (Test-Path "$T\data-only") {
     $portable = PortableExe
@@ -164,6 +175,7 @@ $inst = "$env:LOCALAPPDATA\rustshot"
 $exe = "$inst\rustshot.exe"
 Check 'nsis: rustshot.exe installed' (Test-Path $exe) $exe
 Check 'nsis: LICENSE + NOTICE + THIRD_PARTY_NOTICES.md installed' ((Test-Path "$inst\LICENSE") -and (Test-Path "$inst\NOTICE") -and (Test-Path "$inst\THIRD_PARTY_NOTICES.md"))
+Check 'nsis: LICENSE is the Apache License 2.0, NOTICE names Rustshot' (((Get-Content "$inst\LICENSE" -Raw -ErrorAction SilentlyContinue) -match 'Apache License') -and ((Get-Content "$inst\NOTICE" -Raw -ErrorAction SilentlyContinue) -match 'Rustshot'))
 NoDataFolders $inst 'nsis'
 $lnk = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Rustshot\Rustshot.lnk"
 Check 'nsis: Start menu shortcut' (Test-Path $lnk)
@@ -351,6 +363,7 @@ if ($portable) {
     Checks041 "$env:TEMP\rustshot.exe"
     ChecksData "$env:TEMP\rustshot.exe"
     Checks050 "$env:TEMP\rustshot.exe"
+    Checks060 "$env:TEMP\rustshot.exe"
     RecordingChecks "$env:TEMP\rustshot.exe"
     Start-Process "$env:TEMP\rustshot.exe"
     Check 'portable: daemon started for visual tray check' (WaitFor { [W]::TrayWindow() })

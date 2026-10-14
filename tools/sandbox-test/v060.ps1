@@ -1,0 +1,66 @@
+# 0.6.0 checks, dot-sourced by test.ps1 and run on the portable exe:
+# Settings › About (the rail's last section, reached with Tab and End):
+# its Website and powernapps.net links open https://powernapps.net/r/rustshot
+# (Enter on the focused link; the browser this sandbox starts for it is
+# found by its command line, the sandbox has no network) and the footer
+# names Apache-2.0 (the exe's English catalog; screenshot for the eye).
+# Isolated instance: own RUSTSHOT_INSTANCE, APPDATA and LOCALAPPDATA, no
+# hotkeys. Only the PIDs started here are stopped. Settings gets posted
+# keys. Uses v050.ps1's helpers (WinShot, TabTo, OpenSettings, CloseSettings).
+
+$PowerNapps = 'https://powernapps.net/r/rustshot'
+
+# Processes (other than rustshot) whose command line names `url`.
+function UrlProcs($url) {
+    @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne 'rustshot.exe' -and "$($_.CommandLine)" -like "*$url*" })
+}
+
+function Checks060($exe) {
+    $root = "$env:TEMP\v060-test"
+    Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
+    $appdata = "$root\appdata"; $local = "$root\localappdata"; $save = "$root\shots"
+    New-Item -ItemType Directory -Force "$appdata\rustshot", $local, $save | Out-Null
+    $focus = "$root\focus.txt"
+    $vars = @{ APPDATA = $appdata; LOCALAPPDATA = $local; RUSTSHOT_INSTANCE = 'sbx-060'; RUSTSHOT_TEST_FOCUS_FILE = $focus }
+    $base = "history = false`noverlay_hints = false`nmagnifier = false`nrecord_hotkey = `"`"`ncapture_full_hotkey = `"`"`ncapture_window_hotkey = `"`"`nrepeat_hotkey = `"`"`ncapture_text_hotkey = `"`"`n"
+    V4Config $appdata $save $base
+
+    # ------------------------------------------------ the exe: the short link and the license words
+    $bytes = [System.IO.File]::ReadAllBytes($exe)
+    $txt = [System.Text.Encoding]::UTF8.GetString($bytes)
+    Check 'v060 about: the exe opens https://powernapps.net/r/rustshot (the short link)' ($txt.Contains($PowerNapps) ) ''
+    Check 'v060 about: the footer says Apache-2.0 (English catalog in the exe), not GPL' ($txt.Contains('Apache-2.0 License') -and -not $txt.Contains('GPL-3.0 License')) ''
+
+    # ------------------------------------------------ Settings › About: the links
+    $s = OpenSettings $exe $vars '060-about'
+    $onRail = $s.h -ne [IntPtr]::Zero -and (TabTo $s.h $focus 'rail')
+    Check 'v060 about: Tab reaches the section rail' $onRail "focus=$(FocusId $focus) want=$([V50]::Id('rail'))"
+    if ($onRail) {
+        [V3]::PostKey($s.h, 0x23); Start-Sleep 1   # End: the last section, About
+        $null = WinShot $s.h 'v060-settings-about'
+        $site = TabTo $s.h $focus 'link_0'
+        Check 'v060 about: About has the Website link (Tab reaches "link_0"; out\v060-settings-about.png)' $site "focus=$(FocusId $focus)"
+        if ($site) {
+            $before = @(UrlProcs $PowerNapps | ForEach-Object ProcessId)
+            [V3]::PostKey($s.h, 0x0D)   # Enter: open it
+            $opened = WaitFor { @(UrlProcs $PowerNapps | Where-Object { $before -notcontains $_.ProcessId }).Count -gt 0 } 20
+            $cmd = (UrlProcs $PowerNapps | Select-Object -First 1).CommandLine
+            Check 'v060 about: Website opens https://powernapps.net/r/rustshot (the browser started for it)' $opened "$cmd"
+            Start-Sleep 2
+            # The browser was started by this click, inside the sandbox: its processes go.
+            Get-Process msedge -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Start-Sleep 2
+        }
+        $pn = TabTo $s.h $focus 'link_powernapps'
+        Check 'v060 about: More from PowerNapps has its powernapps.net link (Tab reaches "link_powernapps")' $pn "focus=$(FocusId $focus)"
+        if ($pn) {
+            $null = WinShot $s.h 'v060-settings-about-powernapps'
+            [V3]::PostKey($s.h, 0x0D)
+            $opened = WaitFor { (UrlProcs $PowerNapps).Count -gt 0 } 20
+            Check 'v060 about: powernapps.net opens https://powernapps.net/r/rustshot' $opened "$((UrlProcs $PowerNapps | Select-Object -First 1).CommandLine)"
+            Start-Sleep 2
+            Get-Process msedge -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        }
+    }
+    CloseSettings $s
+}

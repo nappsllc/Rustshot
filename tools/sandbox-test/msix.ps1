@@ -44,6 +44,10 @@ function MsixChecks {
     $got = @($declared | ForEach-Object { $_.ToLowerInvariant() } | Sort-Object)
     Check 'msix: manifest declares a language per lang\<tag>.txt' ($files.Count -ge 35 -and (@(Compare-Object $want $got).Count -eq 0)) "files=$($files.Count) declared=$($declared.Count) diff=$((Compare-Object $want $got | ForEach-Object { "$($_.SideIndicator)$($_.InputObject)" }) -join ',')"
     Check 'msix: en-us is the first (default) language' ($declared.Count -gt 0 -and $declared[0] -eq 'en-us') "$($declared | Select-Object -First 1)"
+    $loc = $pkg.InstallLocation
+    $lic = @('LICENSE.txt', 'NOTICE.txt', 'THIRD_PARTY_NOTICES.md') | Where-Object { -not (Test-Path (Join-Path $loc $_)) }
+    $apache = (Get-Content (Join-Path $loc 'LICENSE.txt') -Raw -ErrorAction SilentlyContinue) -match 'Apache License'
+    Check 'msix: LICENSE.txt (Apache-2.0) + NOTICE.txt + THIRD_PARTY_NOTICES.md installed' (@($lic).Count -eq 0 -and $apache) "missing=$($lic -join ',') apache=$apache"
     $pfn = $pkg.PackageFamilyName
     Start-Process explorer.exe "shell:AppsFolder\$pfn!Rustshot"
     $trayUp = WaitFor { [W]::TrayWindow() } 10
