@@ -17,8 +17,11 @@ param(
     [string]$Old,
     # Work folder (mapped into the sandbox as Desktop\test). Results: <Work>\out\results.txt.
     [string]$Work = (Join-Path $env:TEMP 'rustshot-sandbox'),
-    # Just one group: probe (hotkey probe), rec (recording), v030 / v040 / v041 (0.3.0 / 0.4.0 / 0.4.1 checks), data (data files).
-    [ValidateSet('', 'probe', 'rec', 'v030', 'v040', 'v041', 'data')] [string]$Only = '',
+    # Just one group: probe (hotkey probe), rec (recording), v030 / v040 / v041 / v050 (0.3.0 / 0.4.0 / 0.4.1 / 0.5.0 checks), data (data files).
+    [ValidateSet('', 'probe', 'rec', 'v030', 'v040', 'v041', 'v050', 'data')] [string]$Only = '',
+    # A picture with a QR code of an https link for the 0.5.0 Read QR check
+    # (e.g. the qr_make_link_light_1x.png preview; without it that check SKIPs).
+    [string]$QrPng,
     # Skip signing the MSIX (the MSIX checks then FAIL with "inputs present").
     [switch]$NoSign,
     # Prepare <Work> and the .wsb only.
@@ -42,6 +45,9 @@ if ($Old) { Copy-Item $Old $oldDir }
 $dataDir = Join-Path $Work 'data'
 New-Item -ItemType Directory -Force $dataDir | Out-Null
 Copy-Item (Join-Path $here '..\..\models\selfie.bin') $dataDir
+# The language files, for the 0.5.0 checks' "put there by hand" cases.
+Copy-Item (Join-Path $here '..\..\lang') $dataDir -Recurse
+if ($QrPng) { Copy-Item $QrPng (Join-Path $dataDir 'qr.png') }
 if (-not $NoSign) { & (Join-Path $here 'sign-sideload.ps1') -In $in }
 if ($Only) { New-Item -ItemType File (Join-Path $Work "$Only-only") | Out-Null }
 

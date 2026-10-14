@@ -12,6 +12,10 @@ Needs Windows 11 Pro/Enterprise with the *Windows Sandbox* feature, `gh`
 gh release download v0.3.0 -R nappsllc/rustshot -p 'rustshot-0.3.0-setup.exe' -D $env:TEMP\rs-old
 .\tools\sandbox-test\run.ps1 -RunId <ci run id> -Old $env:TEMP\rs-old\rustshot-0.3.0-setup.exe
 
+# The QR picture for the 0.5.0 Read QR check, from the preview tests:
+#   $env:RUSTSHOT_PREVIEW_DIR = "$env:TEMP\rs-previews"; cargo test qr_make::tests::previews
+.\tools\sandbox-test\run.ps1 -RunId <ci run id> -Old <old setup> -QrPng $env:TEMP\rs-previews\qr_make_link_light_1x.png
+
 # Already downloaded artifacts; only one group of checks:
 .\tools\sandbox-test\run.ps1 -Artifacts D:\ci -Old D:\rustshot-0.3.0-setup.exe -Only v040
 ```
@@ -37,7 +41,8 @@ discards everything inside it).
 | `data.ps1`    | Data files (downloaded on demand, in no package): no `models\` or `lang\` beside the installed exe; `rustshot data` names the model's release URL and where it goes; offline `data --fetch` says it couldn't download (exit 1) and leaves no partial file; the repo's model put into the isolated cache by hand is "SHA-256 verified"; a damaged one with `download_data = false` is reported as damaged. |
 | `v040.ps1`    | 0.4.0: the tray icon off (a 0.3.0 config with `show_tray = false` gets the one-time notice and `tray_off_mode_seen`; then `rustshot daemon` exits, a plain launch opens Settings, `daemon --force` runs), `rustshot screenclip "ms-screenclip:?source=HotKey"` with no daemon (an on-demand capture holding no global hotkeys, ended by an Esc posted to its overlay), `register-screenclip on` / `off` (inside the sandbox only: the ProgID, Capabilities and RegisteredApplications values, gone again), the export border, image edits (crop, flip, rotate, canvas) from an `annotations.json` fixture rendered by History's Open with, a freeform lasso snip saved with a transparent outside, Text mode (O, Ctrl+A, Ctrl+C) and Quick Redact (Shift+R, solid) on a window showing an e-mail address and an IP. |
 | `v041.ps1`    | 0.4.1: the exe's 16 and 32 px icons as `ExtractIconEx` returns them (what Task Manager and Explorer show; the small entries are DIBs) are not blank (saved as `out041-icon-*.png`), and a `full --region` PNG from the in-repo encoder decodes in GDI+ and WIC at its size, with the same pixels in both and as a BMP of the same region (sizes against GDI+'s own PNG in the log). |
+| `v050.ps1`    | 0.5.0: `rustshot data` lists every `lang-<tag>.txt` of this version's release; with no language set Settings opens in English; Settings › General's Language list is reached by Tab (`RUSTSHOT_TEST_FOCUS_FILE`) and opens with Enter; picking a language with no network says it couldn't download it (red, Retry) and stays in English, leaving no file; `language = "de"` offline starts in English and `data --fetch` says lang-de.txt couldn't download; the repo's `de.txt` put in the cache by hand is SHA-256 verified and opens Settings in German, `ar.txt` in Arabic (screenshot for the mirrored layout); the ruler (U and a drag) in the overlay; Read QR code (Q) on a window showing `-QrPng` gives a toast with buttons and, with no code, a plain one; Scrolling capture (Shift+S) on a long text box scrolls it and saves a stitched PNG taller than the selection. |
 
 The checks of the portable exe use their own `RUSTSHOT_INSTANCE`, `APPDATA`
-and `LOCALAPPDATA` and unusual hotkeys. `-Only probe|rec|v030|v040|v041|data`
+and `LOCALAPPDATA` and unusual hotkeys. `-Only probe|rec|v030|v040|v041|v050|data`
 runs one group.

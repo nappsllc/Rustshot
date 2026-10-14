@@ -81,6 +81,9 @@ function KillAll { Get-Process rustshot -ErrorAction SilentlyContinue | Stop-Pro
 . "$T\shortcuts.ps1"
 # Data files downloaded on demand (0.5.0): ChecksData, NoDataFolders.
 . "$T\data.ps1"
+# 0.5.0 (languages offline and from hand-placed files, Settings' Language
+# list, ruler, Read QR code, Scrolling capture): Checks050.
+. "$T\v050.ps1"
 HotkeyProbe $log
 if (Test-Path "$T\probe-only") { Add-Content $log 'DONE'; return }
 function PortableExe {
@@ -112,6 +115,15 @@ if (Test-Path "$T\v041-only") {
     Copy-Item $portable.FullName "$env:TEMP\rustshot.exe"
     Add-Content $log "      portable exe: $($portable.FullName) $((Get-Item $portable.FullName).Length) B"
     Checks041 "$env:TEMP\rustshot.exe"
+    Add-Content $log 'DONE'
+    return
+}
+# <T>\v050-only: just the 0.5.0 checks.
+if (Test-Path "$T\v050-only") {
+    $portable = PortableExe
+    Copy-Item $portable.FullName "$env:TEMP\rustshot.exe"
+    Add-Content $log "      portable exe: $($portable.FullName) $((Get-Item $portable.FullName).Length) B"
+    Checks050 "$env:TEMP\rustshot.exe"
     Add-Content $log 'DONE'
     return
 }
@@ -364,6 +376,7 @@ if ($portable) {
     Checks040 "$env:TEMP\rustshot.exe"
     Checks041 "$env:TEMP\rustshot.exe"
     ChecksData "$env:TEMP\rustshot.exe"
+    Checks050 "$env:TEMP\rustshot.exe"
     RecordingChecks "$env:TEMP\rustshot.exe"
     Start-Process "$env:TEMP\rustshot.exe"
     Check 'portable: daemon started for visual tray check' (WaitFor { [W]::TrayWindow() })
