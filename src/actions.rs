@@ -64,14 +64,18 @@ pub fn toggle_autostart() -> Result<bool, String> {
     Ok(on)
 }
 
+/// PowerNapps' short link: a 302 on powernapps.net that adds the UTM
+/// parameters, so they can change without an app update.
+pub const POWERNAPPS: &str = "https://powernapps.net/r/rustshot";
+
 /// The links of Settings → About: the only URLs [`open_link`] opens.
 pub const LINKS: [(crate::i18n::Key, &str); 6] = [
-    (key!("settings.about.link.website"), "https://powernapps.net"),
+    (key!("settings.about.link.website"), POWERNAPPS),
     (key!("settings.about.link.source"), "https://github.com/nappsllc/rustshot"),
     (key!("settings.about.link.issue"), "https://github.com/nappsllc/rustshot/issues"),
     (key!("settings.about.link.whats_new"), "https://github.com/nappsllc/rustshot/releases"),
     (key!("settings.about.link.licenses"), "https://github.com/nappsllc/rustshot/blob/main/THIRD_PARTY_NOTICES.md"),
-    (key!("settings.about.link.powernapps"), "https://powernapps.net"),
+    (key!("settings.about.link.powernapps"), POWERNAPPS),
 ];
 
 /// Open one of [`LINKS`] in the default browser; any other URL is refused.

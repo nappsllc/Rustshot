@@ -46,7 +46,7 @@ function UninstKeyChecks($label, $inst, $version) {
         DisplayName = 'Rustshot'; Publisher = 'PowerNapps'; DisplayVersion = $version
         DisplayIcon = "$exe,0"; InstallLocation = $inst
         UninstallString = "`"$inst\uninstall.exe`""; QuietUninstallString = "`"$inst\uninstall.exe`" /S"
-        URLInfoAbout = 'https://powernapps.net'; HelpLink = 'https://github.com/nappsllc/rustshot/issues'
+        URLInfoAbout = 'https://powernapps.net/r/rustshot'; HelpLink = 'https://github.com/nappsllc/rustshot/issues'
         URLUpdateInfo = 'https://github.com/nappsllc/rustshot/releases'; NoModify = 1; NoRepair = 1
     }
     $bad = @()

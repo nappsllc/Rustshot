@@ -1485,7 +1485,7 @@ fn restore_clear_reset_and_links() {
     assert_eq!(s.on(Click::Browse), vec![Act::Browse]);
     assert_eq!(s.on(Click::OpenConfig), vec![Act::OpenConfig]);
     assert_eq!(s.on(Click::CheckUpdates), vec![Act::CheckUpdates]);
-    assert_eq!(s.on(Click::Link("https://powernapps.net")), vec![Act::Link("https://powernapps.net")]);
+    assert_eq!(s.on(Click::Link(crate::actions::POWERNAPPS)), vec![Act::Link(crate::actions::POWERNAPPS)]);
 }
 
 /// Capture › History and the History hotkey row write their keys; a
@@ -2433,7 +2433,7 @@ fn about_links() {
     for (i, (label, url)) in crate::actions::LINKS.iter().take(5).enumerate() {
         assert_eq!(click(&mut s, &mut focus, &format!("link_{i}"), 1.0), Some(Click::Link(url)), "{}", label.get());
     }
-    assert_eq!(click(&mut s, &mut focus, "link_powernapps", 1.0), Some(Click::Link("https://powernapps.net")));
+    assert_eq!(click(&mut s, &mut focus, "link_powernapps", 1.0), Some(Click::Link(crate::actions::POWERNAPPS)));
 }
 
 /// Smoke (needs a display; CI runs it under `xvfb-run` on Linux): the real

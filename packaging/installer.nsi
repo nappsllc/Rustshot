@@ -99,7 +99,7 @@ Section "${PRODUCT_DISPLAY} (required)" SecMain
   WriteRegStr HKCU "${UNINST_KEY}" "QuietUninstallString" '"$INSTDIR\uninstall.exe" /S'
   WriteRegStr HKCU "${UNINST_KEY}" "DisplayIcon" "$INSTDIR\${PRODUCT_EXE},0"
   WriteRegStr HKCU "${UNINST_KEY}" "InstallLocation" "$INSTDIR"
-  WriteRegStr HKCU "${UNINST_KEY}" "URLInfoAbout" "https://powernapps.net"
+  WriteRegStr HKCU "${UNINST_KEY}" "URLInfoAbout" "https://powernapps.net/r/rustshot"
   WriteRegStr HKCU "${UNINST_KEY}" "HelpLink" "https://github.com/nappsllc/rustshot/issues"
   WriteRegStr HKCU "${UNINST_KEY}" "URLUpdateInfo" "https://github.com/nappsllc/rustshot/releases"
   WriteRegDWORD HKCU "${UNINST_KEY}" "NoModify" 1

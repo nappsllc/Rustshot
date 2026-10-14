@@ -1156,7 +1156,7 @@ fn about(ui: &mut Ui, tok: &Tok, click: &mut Option<Click>) {
     let saved = ui.ctl_h;
     ui.ctl_h = 16.0;
     if ui.place(r).clink("link_powernapps", "powernapps.net", 11.5, true, tok) {
-        *click = Some(Click::Link("https://powernapps.net"));
+        *click = Some(Click::Link(crate::actions::POWERNAPPS));
     }
     ui.ctl_h = saved;
     // (The tiles row: hidden while MORE_APPS is empty.)
