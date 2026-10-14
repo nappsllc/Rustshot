@@ -48,8 +48,13 @@ While picking a region (before anything is selected, and while a selection
 is drawn or resized) a **magnifier** follows the pointer: 17 × 17 pixels at
 8× with a pixel grid, the pointer's pixel outlined, and under it the
 position and color (`640, 360 · #1e2027`); a thin accent crosshair runs
-through the pointer across the whole overlay. <kbd>H</kbd> copies that
-color as `#rrggbb`. Settings › Overlay *Show magnifier* turns it off,
+through the pointer across the whole overlay. The crosshair stands in for
+the system pointer, which is hidden meanwhile (the two would otherwise drift
+apart by a frame); its crossing is left open, so the exact pixel under the
+pointer shows between the four arms. The pointer comes back at once over the
+toolbar and the hint, over an object or a handle, over text, with the
+magnifier off, when another window takes the focus and when the overlay
+closes. <kbd>H</kbd> copies that color as `#rrggbb`. Settings › Overlay *Show magnifier* turns it off,
 *Square magnifier* makes it square.
 
 **Right-click** anywhere (but on an object with the select tool) opens a

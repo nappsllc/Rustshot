@@ -373,6 +373,7 @@ fn pump_loop(driver: &mut dyn Driver) -> i32 {
 
         let mut hook: Option<HotkeyHook> = None;
         let mut cursor: Option<Cursor> = None;
+        let mut key: Option<bool> = None;
         let me = Hwnd(window as usize);
         let mut next_tick = Instant::now() + Duration::from_millis(tick_ms(me));
         loop {
@@ -447,6 +448,13 @@ fn pump_loop(driver: &mut dyn Driver) -> i32 {
             {
                 present(window, &*fb);
             }
+            // Focus lost (another app or window is key) or back: the
+            // pointer shows again, or may hide.
+            let is_key: i8 = msg0(window, objc_sel(c"isKeyWindow"));
+            if !QUIT.load(Ordering::SeqCst) && key != Some(is_key != 0) {
+                key = Some(is_key != 0);
+                driver.on_event(Ev::Focus(is_key != 0));
+            }
             let want = driver.cursor();
             if cursor != Some(want) {
                 set_cursor(want);
@@ -457,6 +465,8 @@ fn pump_loop(driver: &mut dyn Driver) -> i32 {
         if let Some(h) = hook {
             (h.shutdown)();
         }
+        // A hidden pointer is app-wide on macOS: never leave it hidden.
+        set_cursor(Cursor::Arrow);
         driver.on_quit();
         forget_tick(me);
         let _: () = msg1(
@@ -1378,14 +1388,34 @@ unsafe extern "C" fn release_pixels(info: *mut c_void, data: *const c_void, size
 
 // --- cursor ---------------------------------------------------------------
 
+std::thread_local! {
+    /// `[NSCursor hide]` is in effect (from us): hide and unhide nest
+    /// app-wide, so each hide is balanced by exactly one unhide.
+    static POINTER_HIDDEN: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+}
+
 /// Cache `Cursor` → an `NSCursor` class selector; the cache lives one run.
+/// `Cursor::Hidden` hides the pointer (once); any other shows it again.
 fn set_cursor(c: Cursor) {
     unsafe {
         let cls = objc_cls(c"NSCursor");
         if cls.is_null() {
             return;
         }
+        let hidden = POINTER_HIDDEN.with(|h| h.get());
+        if c == Cursor::Hidden {
+            if !hidden {
+                let _: () = msg0(cls, objc_sel(c"hide"));
+                POINTER_HIDDEN.with(|h| h.set(true));
+            }
+            return;
+        }
+        if hidden {
+            let _: () = msg0(cls, objc_sel(c"unhide"));
+            POINTER_HIDDEN.with(|h| h.set(false));
+        }
         let (want, alt): (&CStr, &CStr) = match c {
+            Cursor::Hidden => return,
             Cursor::Arrow => (c"arrowCursor", c"arrowCursor"),
             Cursor::Cross => (c"crosshairCursor", c"crosshairCursor"),
             Cursor::IBeam => (c"IBeamCursor", c"IBeamCursor"),

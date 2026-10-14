@@ -70,7 +70,9 @@ screenshots, editing and video capture.** Windows, Linux and macOS.
   countdown pill shows the delay and is never in the capture.
 - *Accept on select*: copy or save the moment you release the mouse.
 - A pixel magnifier shows the position and color under the pointer.
-  <kbd>H</kbd> copies the color as `#rrggbb`.
+  <kbd>H</kbd> copies the color as `#rrggbb`. Its crosshair replaces the
+  system pointer while it shows (no lag between the two), with the exact
+  pixel left open at its center.
 - *Include mouse pointer* (Settings › Capture): the pointer is captured
   too, as an object you can move or delete (Windows and X11).
 - *Trim to content*: <kbd>Shift</kbd>+<kbd>A</kbd> (or the `W × H`

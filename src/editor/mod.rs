@@ -448,6 +448,7 @@ pub fn run(
         hwnd: Hwnd::default(),
         mouse: (0, 0),
         focus_tries: 0,
+        focused: true,
         rec: None,
         rec_opts: None,
         last_region: None,
@@ -594,6 +595,9 @@ struct App {
     /// Last known mouse position (client == image coordinates).
     mouse: (i32, i32),
     focus_tries: u8,
+    /// The overlay has the keyboard focus (its last `Ev::Focus`; true
+    /// until one comes): without it the system pointer always shows.
+    focused: bool,
     /// The recording in progress (the overlay is hidden meanwhile).
     rec: Option<rec_ui::Run>,
     /// The Record panel's last choices (until the config is reloaded).
@@ -2166,8 +2170,14 @@ impl Driver for App {
             }
             Ev::Char(c) => self.char_input(c),
             Ev::Timer => return self.tick(),
+            // The pointer shows again while another window has the focus
+            // (the platform layer asks for the cursor after this).
+            Ev::Focus(f) => {
+                self.focused = f;
+                return false;
+            }
             // Decorated-window events (`run_window`); the overlay never gets them.
-            Ev::Close | Ev::Resize(..) | Ev::Focus(_) => return false,
+            Ev::Close | Ev::Resize(..) => return false,
             // The middle button does nothing in the overlay.
             Ev::Middle { .. } => return false,
         }
@@ -2236,7 +2246,7 @@ impl Driver for App {
 
     fn cursor(&self) -> Cursor {
         let State::Edit(edit) = &self.st else { return Cursor::Arrow };
-        edit.cursor_at(Pt::new(self.mouse.0 as f32, self.mouse.1 as f32), drag_mods())
+        edit.pointer_at(Pt::new(self.mouse.0 as f32, self.mouse.1 as f32), drag_mods(), self.focused)
     }
 }
 
@@ -4578,6 +4588,7 @@ mod tests {
             hwnd: Hwnd::default(),
             mouse: (0, 0),
             focus_tries: 0,
+            focused: true,
             rec: None,
             rec_opts: None,
             last_region: None,

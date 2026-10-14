@@ -329,8 +329,10 @@ fn select_all_and_a_second_press_while_dragging() {
 
 #[test]
 fn cursor_follows_handles_selection_and_tool() {
-    let a = app(None);
-    assert_eq!(a.cursor(), Cursor::Cross, "no selection");
+    let mut a = app(None);
+    assert_eq!(a.cursor(), Cursor::Hidden, "no selection: the magnifier's crosshair instead");
+    ed(&mut a).cfg.magnifier = false;
+    assert_eq!(a.cursor(), Cursor::Cross, "no selection, no magnifier");
     let mut a = app(Some(r(400.0, 300.0, 200.0, 100.0)));
     for ((x, y), want) in [
         ((400, 300), Cursor::SizeNWSE),

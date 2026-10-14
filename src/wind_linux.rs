@@ -111,6 +111,17 @@ unsafe extern "C" {
     fn XDestroyImage(image: *mut c_void) -> c_int;
     fn XCreateFontCursor(dpy: *mut c_void, shape: c_uint) -> c_ulong;
     fn XDefineCursor(dpy: *mut c_void, w: c_ulong, cursor: c_ulong) -> c_int;
+    fn XCreateBitmapFromData(dpy: *mut c_void, d: c_ulong, data: *const c_char, width: c_uint, height: c_uint) -> c_ulong;
+    fn XCreatePixmapCursor(
+        dpy: *mut c_void,
+        source: c_ulong,
+        mask: c_ulong,
+        fg: *const XColor,
+        bg: *const XColor,
+        x: c_uint,
+        y: c_uint,
+    ) -> c_ulong;
+    fn XFreePixmap(dpy: *mut c_void, pixmap: c_ulong) -> c_int;
     fn XGrabPointer(
         dpy: *mut c_void,
         w: c_ulong,
@@ -175,6 +186,17 @@ const POLLERR: i16 = 8;
 const POLLHUP: i16 = 16;
 const POLLNVAL: i16 = 32;
 
+const FOCUS_IN: c_int = 9;
+const FOCUS_OUT: c_int = 10;
+const NOTIFY_GRAB: c_int = 1;
+const NOTIFY_UNGRAB: c_int = 2;
+const NOTIFY_POINTER: c_int = 5;
+
+/// A focus change that is one (not a grab's, not the pointer's own).
+fn real_focus(f: &XFocusChangeEvent) -> bool {
+    f.mode != NOTIFY_GRAB && f.mode != NOTIFY_UNGRAB && f.detail != NOTIFY_POINTER
+}
+
 const EVENT_MASK: c_ulong = KEY_PRESS_MASK
     | KEY_RELEASE_MASK
     | BUTTON_PRESS_MASK
@@ -186,6 +208,17 @@ const EVENT_MASK: c_ulong = KEY_PRESS_MASK
     | FOCUS_CHANGE_MASK;
 
 // --- Xlib structures ------------------------------------------------------
+
+/// Xlib's XColor (the blank cursor's colors).
+#[repr(C)]
+struct XColor {
+    pixel: c_ulong,
+    red: u16,
+    green: u16,
+    blue: u16,
+    flags: c_char,
+    pad: c_char,
+}
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -520,7 +553,7 @@ pub fn run(driver: &mut dyn Driver) -> i32 {
 
         let mut down: HashSet<u32> = HashSet::new();
         let mut cursor: Option<Cursor> = None;
-        let mut cursors: [c_ulong; 8] = [0; 8];
+        let mut cursors: [c_ulong; CURSOR_SLOTS] = [0; CURSOR_SLOTS];
         let me = Hwnd(win);
         let mut next_tick = Instant::now() + Duration::from_millis(tick_ms(me));
         loop {
@@ -654,8 +687,6 @@ mod window {
         ) -> c_int;
     }
 
-    const FOCUS_IN: c_int = 9;
-    const FOCUS_OUT: c_int = 10;
     const CONFIGURE_NOTIFY: c_int = 22;
     const CLIENT_MESSAGE: c_int = 33;
 
@@ -759,9 +790,6 @@ mod window {
     const PROP_MODE_REPLACE: c_int = 0;
     const CW_BIT_GRAVITY: c_ulong = 1 << 4;
     const NORTH_WEST_GRAVITY: c_int = 1;
-    const NOTIFY_GRAB: c_int = 1;
-    const NOTIFY_UNGRAB: c_int = 2;
-    const NOTIFY_POINTER: c_int = 5;
 
     /// 48 px app icon for `_NET_WM_ICON` (decoded once per window).
     const ICON_PNG: &[u8] = include_bytes!("../packaging/icons/rustshot-48.png");
@@ -932,7 +960,7 @@ mod window {
             let mut lost = false;
             let mut down: HashSet<u32> = HashSet::new();
             let mut cursor: Option<Cursor> = None;
-            let mut cursors: [c_ulong; 8] = [0; 8];
+            let mut cursors: [c_ulong; CURSOR_SLOTS] = [0; CURSOR_SLOTS];
             let me = Hwnd(win);
             let mut next_tick = Instant::now() + Duration::from_millis(tick_ms(me));
             while !quit() {
@@ -980,7 +1008,7 @@ mod window {
                         }
                         FOCUS_IN | FOCUS_OUT => {
                             let f = ev.focus;
-                            if f.mode != NOTIFY_GRAB && f.mode != NOTIFY_UNGRAB && f.detail != NOTIFY_POINTER {
+                            if real_focus(&f) {
                                 driver.on_event(Ev::Focus(ev.type_ == FOCUS_IN));
                                 repaint = true;
                             }
@@ -1179,6 +1207,14 @@ fn dispatch(
             }
             // Expose arrives in batches; paint once the last of them is read.
             EXPOSE => ev.expose.count == 0,
+            // The overlay (`run_window` handles its own first): the pointer
+            // shows again while another window has the focus.
+            FOCUS_IN | FOCUS_OUT => {
+                if real_focus(&ev.focus) {
+                    driver.on_event(Ev::Focus(ev.type_ == FOCUS_IN));
+                }
+                false
+            }
             _ => false,
         }
     }
@@ -1296,9 +1332,14 @@ fn present(dpy: *mut c_void, win: c_ulong, gc: *mut c_void, fb: &mut PixBuf) {
     }
 }
 
-/// Map `Cursor` to an XC_* shape from cursorfont.h (cached per run).
+/// The cursors cached per run: the eight shapes and the blank one.
+const CURSOR_SLOTS: usize = 9;
+
+/// Map `Cursor` to an XC_* shape from cursorfont.h (cached per run);
+/// `Cursor::Hidden` is the last slot, no shape (a blank cursor).
 fn cursor_shape(c: Cursor) -> (usize, c_uint) {
     match c {
+        Cursor::Hidden => (8, 0),
         Cursor::Arrow => (0, 68),     // XC_left_ptr
         Cursor::Cross => (1, 34),     // XC_crosshair
         Cursor::IBeam => (2, 152),    // XC_xterm
@@ -1310,13 +1351,31 @@ fn cursor_shape(c: Cursor) -> (usize, c_uint) {
     }
 }
 
-fn set_cursor(dpy: *mut c_void, win: c_ulong, c: Cursor, cache: &mut [c_ulong; 8]) {
+/// Define cursor `c` on `win` (it applies over that window only: gone
+/// with it, unmapped or destroyed, the pointer is the one beneath's).
+fn set_cursor(dpy: *mut c_void, win: c_ulong, c: Cursor, cache: &mut [c_ulong; CURSOR_SLOTS]) {
     let (slot, shape) = cursor_shape(c);
     unsafe {
         if cache[slot] == 0 {
-            cache[slot] = XCreateFontCursor(dpy, shape);
+            cache[slot] = if c == Cursor::Hidden { blank_cursor(dpy, win) } else { XCreateFontCursor(dpy, shape) };
         }
         XDefineCursor(dpy, win, cache[slot]);
+    }
+}
+
+/// A 1x1 cursor with an empty mask: no pointer over the window (core
+/// Xlib, no XFixes needed).
+unsafe fn blank_cursor(dpy: *mut c_void, win: c_ulong) -> c_ulong {
+    unsafe {
+        let bits: [c_char; 1] = [0];
+        let pix = XCreateBitmapFromData(dpy, win, bits.as_ptr(), 1, 1);
+        if pix == 0 {
+            return XCreateFontCursor(dpy, 34); // XC_crosshair: at least a pointer
+        }
+        let black = XColor { pixel: 0, red: 0, green: 0, blue: 0, flags: 0, pad: 0 };
+        let c = XCreatePixmapCursor(dpy, pix, pix, &black, &black, 0, 0);
+        XFreePixmap(dpy, pix);
+        c
     }
 }
 

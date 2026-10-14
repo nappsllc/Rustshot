@@ -22,8 +22,9 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-fn cursor_id(c: Cursor) -> PCWSTR {
-    match c {
+/// The system cursor for `c`; `None`: no pointer (`Cursor::Hidden`).
+fn cursor_id(c: Cursor) -> Option<PCWSTR> {
+    Some(match c {
         Cursor::Arrow => IDC_ARROW,
         Cursor::Cross => IDC_CROSS,
         Cursor::IBeam => IDC_IBEAM,
@@ -32,6 +33,35 @@ fn cursor_id(c: Cursor) -> PCWSTR {
         Cursor::SizeNWSE => IDC_SIZENWSE,
         Cursor::SizeNESW => IDC_SIZENESW,
         Cursor::Move => IDC_SIZEALL,
+        Cursor::Hidden => return None,
+    })
+}
+
+/// Show cursor `c` (the pointer is over our window or we capture it):
+/// `SetCursor(NULL)` hides it until a window sets one again.
+unsafe fn apply_cursor(c: Cursor) {
+    unsafe {
+        match cursor_id(c) {
+            None => {
+                let _ = SetCursor(None);
+            }
+            Some(id) => {
+                if let Ok(h) = LoadCursorW(None, id) {
+                    let _ = SetCursor(Some(h));
+                }
+            }
+        }
+    }
+}
+
+/// The pointer is hidden (ours, see `Cursor::Hidden`): the arrow again,
+/// before our window goes (hiding or destroying it does not ask the one
+/// under the pointer for its cursor until the pointer moves).
+fn show_pointer() {
+    unsafe {
+        if GetCursor().is_invalid() {
+            apply_cursor(Cursor::Arrow);
+        }
     }
 }
 
@@ -305,8 +335,8 @@ unsafe fn refresh_cursor(hwnd: HWND, drv: &dyn Driver) {
         let mut p = POINT::default();
         let over = windows::Win32::UI::Input::KeyboardAndMouse::GetCapture() == hwnd
             || (GetCursorPos(&mut p).is_ok() && WindowFromPoint(p) == hwnd);
-        if over && let Ok(c) = LoadCursorW(None, cursor_id(drv.cursor())) {
-            let _ = SetCursor(Some(c));
+        if over {
+            apply_cursor(drv.cursor());
         }
     }
 }
@@ -472,7 +502,14 @@ unsafe extern "system" fn wndproc(
         if takes_move_first(msg) {
             take_move(hwnd, drv);
         }
+        // Focus lost (another window activated) or back: the pointer shows
+        // again, or hides, at once (the pointer may not move meanwhile).
+        if msg == WM_ACTIVATE {
+            drv.on_event(Ev::Focus((wp.0 & 0xffff) as u32 != WA_INACTIVE));
+            refresh_cursor(hwnd, drv);
+        }
         if msg == WM_DESTROY {
+            show_pointer();
             NOTED.set(None);
             unpin(hwnd);
             drv.on_quit();
@@ -482,8 +519,9 @@ unsafe extern "system" fn wndproc(
         }
         let r = common(hwnd, msg, wp, lp, drv).unwrap_or_else(|| DefWindowProcW(hwnd, msg, wp, lp));
         // A key can change the cursor without a move (Ctrl over an object
-        // draws over it: the cross, not the move cursor).
-        if matches!(msg, WM_KEYDOWN | WM_KEYUP) {
+        // draws over it: the cross, not the move cursor), and so can a
+        // button (a region drawn: its move cursor, the pointer back).
+        if matches!(msg, WM_KEYDOWN | WM_KEYUP | WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_RBUTTONUP) {
             refresh_cursor(hwnd, drv);
         }
         r
@@ -613,9 +651,12 @@ unsafe fn common(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM, drv: &mut dyn Dri
                 LRESULT(0)
             }
             WM_SETCURSOR => {
-                if let Ok(c) = LoadCursorW(None, cursor_id(drv.cursor())) {
-                    let _ = SetCursor(Some(c));
-                }
+                // Hidden only over the client area (an edge keeps a pointer).
+                let c = match drv.cursor() {
+                    Cursor::Hidden if (lp.0 & 0xffff) as u32 != HTCLIENT => Cursor::Arrow,
+                    c => c,
+                };
+                apply_cursor(c);
                 LRESULT(1)
             }
             WM_ERASEBKGND => LRESULT(1),
@@ -746,12 +787,14 @@ pub fn show_at(hwnd: HWND, x: i32, y: i32, w: i32, h: i32) {
 }
 
 pub fn hide(hwnd: HWND) {
+    show_pointer();
     unsafe {
         let _ = ShowWindow(hwnd, SW_HIDE);
     }
 }
 
 pub fn close(hwnd: HWND) {
+    show_pointer();
     unsafe {
         let _ = DestroyWindow(hwnd);
     }
