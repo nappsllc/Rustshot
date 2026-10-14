@@ -2440,3 +2440,21 @@ fn settings_window_smoke() {
     assert!(d.frames > 0, "drew a frame");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Saving › Watermark on export: a PNG chosen in Edit › Effects shows
+/// with "Use text", which clears it.
+#[test]
+fn the_watermark_image_shows_and_clears() {
+    let cfg = Config { export_watermark: true, watermark_image: "C:\\nope\\logo.png".into(), ..Config::default() };
+    let mut s = Settings::new(cfg.clone(), Some(true), PathBuf::from("config.toml"));
+    s.section = SAVING;
+    let mut focus = FocusState::default();
+    reveal(&mut s, &mut focus, "watermark_clear");
+    assert!(focus.rect_of("watermark_text").is_none());
+    click(&mut s, &mut focus, "watermark_clear", 0.5);
+    assert!(s.form.watermark_image.is_empty());
+    let out = s.form.apply(&s.loaded, &s.loaded);
+    assert!(out.watermark_image.is_empty() && out.export_watermark);
+    render(&mut s, &DARK, 1.0, &Input::default(), &mut focus);
+    assert!(focus.rect_of("watermark_text").is_some(), "back to the text");
+}

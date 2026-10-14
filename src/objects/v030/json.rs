@@ -165,7 +165,8 @@ impl W<'_> {
 pub fn to_json(objs: &[Obj]) -> String {
     let mut out = String::new();
     let _ = write!(out, "{{\"version\":{WRITTEN},\"objects\":[");
-    for (i, o) in objs.iter().enumerate() {
+    // (This build's pointer is no kind v0.3.0 had: never written here.)
+    for (i, o) in objs.iter().filter(|o| !matches!(o, Obj::Cursor { .. })).enumerate() {
         out.push_str(if i == 0 { "\n " } else { ",\n " });
         if let Obj::Blur { r, sigma } = o {
             // The stand-in an older build draws (this one drops it).
@@ -191,6 +192,7 @@ pub fn to_json(objs: &[Obj]) -> String {
             Obj::Spotlight { .. } => "spotlight",
             Obj::Magnify { .. } => "magnify",
             Obj::Blur { .. } => "blur",
+            Obj::Cursor { .. } => unreachable!("filtered out"),
         };
         out.push_str("{\"type\":");
         string(&mut out, ty);
@@ -262,6 +264,7 @@ pub fn to_json(objs: &[Obj]) -> String {
                 w.color("color", *color);
                 w.num("width", *width);
             }
+            Obj::Cursor { .. } => {}
         }
         out.push('}');
     }

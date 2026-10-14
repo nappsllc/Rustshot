@@ -78,7 +78,7 @@ impl Pad {
 }
 
 /// `src` over `dst` with coverage `cov` (0-255), straight alpha.
-fn over(dst: &mut [u8; 4], src: [u8; 4], cov: u32) {
+pub(super) fn over(dst: &mut [u8; 4], src: [u8; 4], cov: u32) {
     let sa = src[3] as u32 * cov / 255;
     if sa == 0 {
         return;
@@ -205,7 +205,7 @@ fn erf(x: f32) -> f32 {
 
 /// The share of a Gaussian (sigma `s`) blur of the span `[a, b)` that
 /// lands on the pixel centered at `x`.
-fn blurred_span(x: f32, a: f32, b: f32, s: f32) -> f32 {
+pub(super) fn blurred_span(x: f32, a: f32, b: f32, s: f32) -> f32 {
     let k = std::f32::consts::SQRT_2 * s;
     0.5 * (erf((x - a) / k) - erf((x - b) / k))
 }

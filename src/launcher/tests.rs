@@ -197,6 +197,11 @@ mod window_tests {
         assert_eq!(f.plan.delay, 0);
         assert_eq!(click(&mut f, &mut focus, "launcher.capture", 0.5), Some(Click::Capture));
         assert_eq!(click(&mut f, &mut focus, "launcher.cancel", 0.5), Some(Click::Cancel));
+        if cfg!(not(target_os = "macos")) {
+            assert_eq!(click(&mut f, &mut focus, "launcher.qr", 0.5), Some(Click::MakeQr));
+            let (qr, cancel) = (focus.rect_of("launcher.qr").unwrap(), focus.rect_of("launcher.cancel").unwrap());
+            assert!(qr.x1() + 8.0 <= cancel.x, "{qr:?} {cancel:?}");
+        }
     }
 
     /// Capture only closes the window: the plan goes out after the window

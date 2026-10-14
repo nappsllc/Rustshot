@@ -33,6 +33,10 @@ impl Edit {
             _ => p,
         };
         match tool {
+            Tool::Ruler => {
+                let b = if mods.shift && !mods.ctrl { super::ruler::snap15(start, p) } else { p };
+                self.ruler = Some(super::ruler::Ruler { a: start, b, area: mods.ctrl, done: false });
+            }
             Tool::Path | Tool::Marker => {
                 if self.stroke_pts.last().is_none_or(|l| (p.x - l.x).hypot(p.y - l.y) >= 2.0) {
                     self.stroke_pts.push(p);

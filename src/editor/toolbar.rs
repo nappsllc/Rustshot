@@ -185,6 +185,8 @@ pub enum Act {
     RedactKind(crate::ocr::redact::Kind),
     /// Tighten the selection to its content (the size label's menu).
     Trim,
+    /// Read the QR codes in the selection (Q; the Copy text menu).
+    ReadQr,
     /// Scrolling capture of the selection (the size label's menu, Shift+S).
     Scroll,
 }
@@ -327,12 +329,17 @@ pub struct Input<'a> {
 /// text, Redact sensitive text (their keys), then the kinds to redact.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CopyMenu {
-    pub keys: [String; 3],
+    pub keys: [String; 4],
     pub kinds: Vec<crate::ocr::redact::Kind>,
 }
 
 /// The Copy text menu's rows.
-pub const COPY_MENU: [(Act, crate::i18n::Key); 3] = [(Act::TextSelect, key!("tip.select_text")), (Act::CopyAll, key!("tip.copy_all_text")), (Act::Redact, key!("editor.menu.redact_sensitive"))];
+pub const COPY_MENU: [(Act, crate::i18n::Key); 4] = [
+    (Act::TextSelect, key!("tip.select_text")),
+    (Act::CopyAll, key!("tip.copy_all_text")),
+    (Act::ReadQr, key!("tip.read_qr")),
+    (Act::Redact, key!("editor.menu.redact_sensitive")),
+];
 
 /// The Copy text menu under (or over) its button: the three rows, a
 /// separator, the kinds' checkboxes.

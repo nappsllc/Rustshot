@@ -52,6 +52,12 @@ mod osrand;
 mod pin;
 mod pixbuf;
 mod pngfile;
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+mod pointer;
+mod qr;
+mod qr_ui;
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+mod qr_make;
 #[cfg(windows)]
 mod proc_win;
 mod raster;
@@ -995,11 +1001,14 @@ fn run() -> Result<()> {
                 Plan::Editor(pending) => exit(editor_main(cfg, RunKind::OneShot, pending)),
                 Plan::Direct { screen, region } => {
                     hdr::configure(&cfg);
-                    let shot = match screen {
+                    let mut shot = match screen {
                         Some(n) => capture::grab_monitor(n as usize),
                         None => capture::grab_edit(None, cfg.capture_active_monitor),
                     }
                     .map_err(|e| anyhow!("{e:#}"))?;
+                    if cfg.include_cursor {
+                        pointer::bake_into(&mut shot.image, shot.origin);
+                    }
                     exit(run_direct(&cfg, args, shot, region));
                 }
             }

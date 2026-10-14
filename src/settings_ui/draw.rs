@@ -663,6 +663,9 @@ fn capture(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) 
     srow(ui, tok, tr!("settings.capture.trim_margins_automatically"), Some(&help), |ui| {
         ui.switch("trim_margins", &mut f.trim, tok);
     });
+    srow(ui, tok, tr!("settings.capture.include_pointer"), Some(tr!("settings.capture.include_pointer_help")), |ui| {
+        ui.switch("include_cursor", &mut f.cursor, tok);
+    });
 }
 
 /// Overlay: what shows while selecting, and how the toolbar draws.
@@ -761,6 +764,29 @@ fn image_rows(ui: &mut Ui, f: &mut crate::settings_ui::Form, tok: &Tok) {
         let c = config::parse_color(f.border_hex.text.trim()).map(|(r, g, b, _)| C4::rgb(r, g, b));
         if ui.swatch("border_swatch", c, false, tok) {
             ui.focus.focus("border_color");
+        }
+        ui.enabled = on;
+    });
+    // A PNG chosen in Edit › Effects wins over the text: say so, with a
+    // way back to the text.
+    let image = f.watermark_image.trim().to_string();
+    let help = if image.is_empty() {
+        tr!("settings.saving.watermark_help").to_string()
+    } else {
+        let name = std::path::Path::new(&image).file_name().map_or(image.clone(), |n| n.to_string_lossy().into_owned());
+        match crate::imgedit::effects::image_problem(&image) {
+            Some(p) => p,
+            None => tr!("settings.saving.watermark_image", name),
+        }
+    };
+    srow(ui, tok, tr!("settings.saving.watermark"), Some(&help), |ui| {
+        ui.switch("export_watermark", &mut f.watermark, tok);
+        let on = ui.enabled;
+        ui.enabled = on && f.watermark;
+        if image.is_empty() {
+            ui.width(150.0).text_field("watermark_text", &mut f.watermark_text);
+        } else if ui.cbutton("watermark_clear", tr!("settings.saving.watermark_clear"), None, false, tok) {
+            f.watermark_image.clear();
         }
         ui.enabled = on;
     });
@@ -905,13 +931,13 @@ pub const TOOL_ROWS: [(Key, &[Action]); 7] = [
     ),
     (
         key!("settings.keys.row.select"),
-        &[Action::ToolSelect, Action::ToolCallout, Action::ToolSpotlight, Action::ToolMagnify],
+        &[Action::ToolSelect, Action::ToolCallout, Action::ToolSpotlight, Action::ToolMagnify, Action::ToolRuler],
     ),
     (
         key!("settings.keys.row.objects"),
         &[Action::DeleteObject, Action::Duplicate, Action::BringFront, Action::SendBack],
     ),
-    (key!("settings.keys.row.crop"), &[Action::ToolCrop, Action::Trim, Action::Redact, Action::SelectFreeform]),
+    (key!("settings.keys.row.crop"), &[Action::ToolCrop, Action::Trim, Action::Redact, Action::SelectFreeform, Action::ReadQr]),
     (key!("settings.keys.row.size"), &[Action::SizeDown, Action::SizeUp, Action::TogglePalette]),
     (key!("settings.keys.row.typing"), &[Action::TextBold, Action::TextItalic, Action::TextUnderline]),
     (key!("settings.keys.row.undo"), &[Action::Undo, Action::Redo, Action::SelectAll]),
@@ -926,7 +952,7 @@ pub const ACTION_ROWS: [(Key, &[Action]); 7] = [
     (key!("settings.keys.row.ui_size"), &[Action::UiBigger, Action::UiSmaller, Action::UiReset]),
     (key!("settings.keys.row.zoom"), &[Action::ZoomIn, Action::ZoomOut, Action::ZoomFit, Action::ZoomActual]),
     (key!("settings.keys.row.rotate"), &[Action::RotateLeft, Action::RotateRight, Action::FlipHorizontal, Action::FlipVertical]),
-    (key!("settings.keys.row.image"), &[Action::ImageResize, Action::ImageCanvas, Action::ImageReset]),
+    (key!("settings.keys.row.image"), &[Action::ImageResize, Action::ImageCanvas, Action::ImageEffects, Action::ImageReset]),
 ];
 
 /// Share (with a share sheet: not on Linux), Pin to screen, Record, and
@@ -948,6 +974,30 @@ pub const REC_ROWS: [(Key, Action); 3] = [
 fn global_rows(ui: &mut Ui, s: &mut Settings, tok: &Tok, slots: &[usize]) {
     ui.allow_meta = true;
     for (label, slot) in GLOBALS.iter().filter(|(_, slot)| slots.contains(slot)) {
+        // Read QR code shares Copy text's row (the section has no room
+        // for a ninth): two caps, one note.
+        if *slot == 8 && slots.contains(&6) {
+            continue;
+        }
+        if *slot == 6 && slots.contains(&8) {
+            let qr = tr!("action.read_qr");
+            let msg = match (s.global_message(6), s.global_message(8)) {
+                (Some(a), Some(b)) => Some(format!("{a} \u{b7} {qr}: {b}")),
+                (Some(a), None) => Some(a),
+                (None, Some(b)) => Some(format!("{qr}: {b}")),
+                (None, None) => None,
+            };
+            let (e6, e8) = (s.global_err(6), s.global_err(8));
+            let (mut c6, mut c8) = (*s.form.global_mut(6), *s.form.global_mut(8));
+            let mut pair = [Slot { id: "global6".into(), chord: &mut c6, err: e6 }, Slot { id: "global8".into(), chord: &mut c8, err: e8 }];
+            ui.key_row(tr!("settings.keys.row.copy_text_qr"), &["Copy text from area", "Read QR code from area"], &mut pair, true, 34.0, tok);
+            *s.form.global_mut(6) = c6;
+            *s.form.global_mut(8) = c8;
+            if let Some(m) = msg {
+                note_line(ui, tok, &m, true, Some(8.0));
+            }
+            continue;
+        }
         let msg = s.global_message(*slot);
         let err = s.global_err(*slot);
         let chord = s.form.global_mut(*slot);

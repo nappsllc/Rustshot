@@ -157,6 +157,30 @@ size apply to the selection too. Every edit is one undo step.
   strength. It shares a toolbar button with **invert**: a click picks blur,
   holding the button down opens a menu with both.
 
+**The ruler** (<kbd>U</kbd>; a key only, like invert: the toolbar keeps
+its width) measures what is on screen: drag a line and its label shows the
+length in px (and in logical px when the display is scaled, e.g. `400 px
+(200 logical)` at 200 %), Δx, Δy and the angle (counterclockwise from the
+right). <kbd>Shift</kbd> snaps the angle to 15° steps; with <kbd>Ctrl</kbd>
+it measures a rectangle instead: width × height and the area. The magnifier
+shows while you measure, for pixel accuracy. When you let go the
+measurement stays: <kbd>Enter</kbd> keeps it as an annotation (a dimension
+line with arrowheads at both ends and its length beside it, or the
+rectangle with its size, in the ruler's color and size), <kbd>Esc</kbd>
+discards it; another drag measures again. A kept measurement is ordinary
+arrows, a rectangle and a text, so older builds show it too.
+
+**Include mouse pointer** (Settings › Capture, `include_cursor`, off by
+default): the pointer is captured with the screen and added as an object
+(*Mouse pointer* in the Edit window's list) where it was. Move it or
+delete it like any annotation; it is never resized. It is there from the
+start, so undo does not take it away. On Windows it is read with
+`GetCursorInfo` and drawn with `DrawIconEx`; on Linux it needs X11 and
+libXfixes (Wayland: no pointer). Not on macOS yet. Captures without an
+editing step (`rustshot full`) get it drawn in. Older builds skip the
+object (it hides nothing). Annotations you add later draw over it, so a
+blur or a box over the pointer covers it.
+
 Save As, Save to Desktop, Open with… and Share… are in the menu of the
 Save button's chevron. Object actions (<kbd>Del</kbd>, <kbd>Ctrl</kbd>+<kbd>D</kbd>,
 …) win over the other keys while objects are selected.
@@ -185,6 +209,23 @@ window), outside the capture so nothing is covered; the overlay previews it
 as a band around the selection. The History keeps the capture without it
 (the direct captures, `rustshot full` and the others, too: before this
 version they recorded the bordered picture).
+
+**Watermark on export** (Settings › Saving, `export_watermark`, off by
+default): every exported image (copy, save, upload, pin, from the
+overlay, History and the Edit window) gets a watermark after its border:
+the text in the row (`watermark_text`), or a PNG image when
+`watermark_image` is set, at `watermark_anchor` (`top-left` …
+`bottom-right`, `center`) `watermark_margin` px from the edges,
+`watermark_size` percent of the width wide, at `watermark_opacity`
+percent, or `watermark_tiled` over the whole picture. The Edit window's
+**Effects…** dialog sets all of these with a preview (*For all exports*).
+The History keeps the capture without it, and a pin (from the overlay, the
+thumbnail card, History or the Edit window) never gets it: a pin is a view
+of the screen, not a file. A picture with its own watermark (Edit ›
+Effects) does not get the export one on top; *For all exports* turns the
+picture's own off. The image is a regular local PNG file of at most 64 MB
+and 16 megapixels (anything else is refused, and Settings says why); the
+mark never grows past the picture.
 
 **Save at** (Settings › Saving, `save_scale`): *Screen pixels*
 (the default: the capture as the screen has it), *1×* (a capture from a
@@ -347,6 +388,7 @@ of the status bar for the **Image** menu, or use the keys.
 | Flip horizontal / vertical | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> |
 | Resize… | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> |
 | Canvas… | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>K</kbd> |
+| Effects… | the menu (no key; bind `image_effects`) |
 | Reset image edits | the menu (no key; bind `image_reset`) |
 
 - **Rotate** and **Flip** turn the picture and every object with it.
@@ -369,12 +411,29 @@ of the status bar for the **Image** menu, or use the keys.
   rounded corners and a drop shadow (24 px blur, 25 %). The corner radius
   and the shadow can be changed for either, and the dialog shows a
   preview.
+- **Effects…** come after the canvas, each on its tab with an *On* switch
+  and a live preview: a **watermark** (text, or a PNG file, at one of nine
+  places with a margin, or tiled; its size as a percent of the width, its
+  opacity and the text's color, with a soft halo so it reads on any
+  picture), **torn edges** (any of the four sides, depth and tooth width;
+  *New pattern* tears them differently, the same pattern every time; a
+  look, not a redaction: older builds show the full edges), a
+  **reflection** (height as a percent of the picture, the opacity it
+  starts at, fading out, and a gap) and a **drop shadow** round it all
+  (offset, blur, color and opacity; the presentation shadow's look by
+  default, and it follows the picture's shape: torn edges, rounded
+  corners). They apply in that order; each takes under 30 ms on a 4K
+  picture. *For all exports* keeps the watermark for Settings › Saving
+  *Watermark on export*.
 
 Every one of them is an undo step, and none touches `original.png`: they
 are saved in `annotations.json` as an ordered `"transforms"` list after the
 crop (flip, rotate, resize, canvas) and applied on export: the cropped
 picture is turned, the objects are drawn on it, then it is resized (the
-objects scale with it) and put on its canvas.
+objects scale with it), put on its canvas and given its effects. The
+effects are a separate `"effects"` list (`watermark`, `torn`, `shadow`,
+`reflection`), which every older build ignores (they add to the picture
+and hide nothing); an effect this build does not know is skipped.
 The objects stay in the original's pixels, so an older build (0.2, 0.3),
 which ignores the list, shows the picture unturned with every redaction
 where it belongs; this build refuses a list it does not know rather than
@@ -406,7 +465,8 @@ what the capture keeps (inside a lasso, inside the Edit window's crop);
 text in columns is read column by column.
 
 A **long press** on Copy text opens its menu: *Select text*, *Copy all
-text*, *Redact sensitive text*, and the kinds Quick Redact looks for.
+text*, *Read QR code*, *Redact sensitive text*, and the kinds Quick Redact
+looks for.
 
 **Quick Redact** (<kbd>Shift</kbd>+<kbd>R</kbd>, or the menu) recognizes
 the selection and covers what looks sensitive: e-mail addresses (Unicode
@@ -449,6 +509,38 @@ Nothing is bundled or downloaded, and the image never leaves your machine:
 - **Linux** runs `tesseract` when it is on `PATH` (e.g. `apt install
   tesseract-ocr`); Text mode and Redact read its `tsv` output for the
   words' boxes.
+
+## QR codes
+
+**Read QR code** (<kbd>Q</kbd> in the overlay, the Copy text menu, the
+same key in the Edit window, or the *Read QR code from area* hotkey: no
+default, `read_qr_hotkey`) reads every QR code in the selection (all of the
+capture when there is none) and closes the overlay; nothing is kept in
+History. The decoder is Rustshot's own: it finds the three finder patterns
+of each code (at any rotation, also skewed in perspective or noisy),
+corrects errors with the code's Reed-Solomon bytes, and reads numeric,
+alphanumeric and byte segments (UTF-8, or ISO-8859-1 by ECI or when the
+bytes are not UTF-8); Kanji segments are skipped. Several codes are read
+in reading order. The toast shows what they say with **Copy** (every
+code's text, one per line) and, when one is an `http://` or `https://`
+link, **Open link**: the toast shows that link first, and nothing opens
+until you click it (any other scheme gets no button). The toast shows the
+scheme, host and port in full (an international host as punycode, e.g.
+`https://xn--pple-43d.com`, with the form as written beside it), then the
+path cut short; a link with user info (`user@host`) gets no Open link. A
+read takes at most about 300 ms whatever the picture: a picture over 2
+megapixels is read at that size first, at full size (up to 40 MP) only
+when that finds nothing. The Edit window shows *Reading QR code…* and
+stays responsive meanwhile. A one-shot run prints each code on its own
+line with control characters escaped.
+
+**Make QR code…** (the tray menu, and *QR code…* in the launcher) opens a
+small window: the text field starts with the clipboard's text, the code
+updates as you type (byte mode, error correction level M, the smallest of
+versions 1-40 that fits, up to 2331 bytes, and the mask with the lowest
+penalty), and **Copy image**, **Save…** and **Pin** hand it out at 10 px a
+module with a 4-module quiet zone (no border or watermark). Not on macOS
+yet.
 
 ## Recording
 
@@ -640,6 +732,7 @@ link after upload*).
 | Capture window (a click selects it) | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd> | `capture_window_hotkey` |
 | Record video (again: stop) | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>G</kbd> | `record_hotkey` |
 | Copy text from an area (OCR) | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> | `capture_text_hotkey` |
+| Read QR code from an area | none | `read_qr_hotkey` |
 | Open History | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd> | `history_hotkey` |
 | Repeat last capture (same region, saved at once) | none | `repeat_hotkey` |
 | Quit Rustshot | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>Q</kbd> | `quit_hotkey` |

@@ -180,13 +180,14 @@ pub const ACCENT_CUSTOM: usize = 3;
 /// The global hotkeys of Key bindings, in board order: (label, hotkey
 /// slot: 0 capture, 1 quit, 2 record, 3 full screen, 4 window, 5 repeat,
 /// 6 copy text, 7 History).
-pub const GLOBALS: [(Key, usize); 8] = [
+pub const GLOBALS: [(Key, usize); 9] = [
     (key!("hotkey.capture_region"), 0),
     (key!("hotkey.capture_full"), 3),
     (key!("hotkey.capture_window"), 4),
     (key!("hotkey.record"), 2),
     (key!("hotkey.repeat"), 5),
     (key!("hotkey.copy_text"), 6),
+    (key!("hotkey.read_qr"), 8),
     (key!("hotkey.history"), 7),
     (key!("hotkey.quit"), 1),
 ];
@@ -362,6 +363,8 @@ pub struct Form {
     pub history_key: Option<Chord>,
     /// Copy text from an area (OCR).
     pub text: Option<Chord>,
+    /// Read QR codes from an area.
+    pub read_qr: Option<Chord>,
     pub folder: TextState,
     pub subfolder: bool,
     pub subfolder_pattern: TextState,
@@ -389,6 +392,13 @@ pub struct Form {
     /// the export border (on, its width 1-8 and color: `border_width`,
     /// `border_color`), HDR screenshots ([`HDR_MODES`] index).
     pub trim: bool,
+    /// Capture "Include mouse pointer" (`include_cursor`).
+    pub cursor: bool,
+    /// Saving "Watermark on export" (`export_watermark`) and its text.
+    pub watermark: bool,
+    pub watermark_text: TextState,
+    /// The watermark image (Edit › Effects sets it; here it can be cleared).
+    pub watermark_image: String,
     pub border: bool,
     pub border_w: u8,
     pub border_hex: TextState,
@@ -427,6 +437,7 @@ impl Form {
             window: Chord::parse(&cfg.capture_window_hotkey),
             repeat: Chord::parse(&cfg.repeat_hotkey),
             text: Chord::parse(&cfg.capture_text_hotkey),
+            read_qr: Chord::parse(&cfg.read_qr_hotkey),
             history_key: Chord::parse(&cfg.history_hotkey),
             folder: TextState::new(&folder_text(cfg)),
             subfolder: cfg.save_subfolder,
@@ -445,6 +456,10 @@ impl Form {
             copy_text: COPY_TEXT.iter().position(|a| cfg.copy_text_mode.trim() == a.1).unwrap_or(1),
             redact_style: REDACT_STYLES.iter().position(|a| cfg.redact_style.trim() == a.1).unwrap_or(0),
             trim: cfg.trim_margins,
+            cursor: cfg.include_cursor,
+            watermark: cfg.export_watermark,
+            watermark_text: TextState::new(&cfg.watermark_text),
+            watermark_image: cfg.watermark_image.clone(),
             border: cfg.border_width > 0,
             border_w: if cfg.border_width > 0 { cfg.border_width.min(config::BORDER_MAX) as u8 } else { BORDER_DEFAULT },
             border_hex: TextState::new(cfg.border_color.trim()),
@@ -464,6 +479,7 @@ impl Form {
             4 => self.window,
             6 => self.text,
             7 => self.history_key,
+            8 => self.read_qr,
             _ => self.repeat,
         }
     }
@@ -477,6 +493,7 @@ impl Form {
             4 => &mut self.window,
             6 => &mut self.text,
             7 => &mut self.history_key,
+            8 => &mut self.read_qr,
             _ => &mut self.repeat,
         }
     }
@@ -559,6 +576,9 @@ impl Form {
         if self.text != was.text {
             c.capture_text_hotkey = chord_text(self.text);
         }
+        if self.read_qr != was.read_qr {
+            c.read_qr_hotkey = chord_text(self.read_qr);
+        }
         if self.folder.text.trim() != was.folder.text.trim() {
             c.save_path = self.folder.text.trim().to_string();
         }
@@ -602,6 +622,18 @@ impl Form {
         }
         if self.trim != was.trim {
             c.trim_margins = self.trim;
+        }
+        if self.cursor != was.cursor {
+            c.include_cursor = self.cursor;
+        }
+        if self.watermark != was.watermark {
+            c.export_watermark = self.watermark;
+        }
+        if self.watermark_text.text != was.watermark_text.text {
+            c.watermark_text = self.watermark_text.text.clone();
+        }
+        if self.watermark_image != was.watermark_image {
+            c.watermark_image = self.watermark_image.clone();
         }
         if self.save_at != was.save_at && let Some(m) = SAVE_AT.get(self.save_at) {
             c.save_scale = m.1.into();

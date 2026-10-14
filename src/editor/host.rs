@@ -79,6 +79,8 @@ pub enum Request {
     Upload,
     Pin,
     CopyText,
+    /// Read the QR codes in the picture.
+    ReadQr,
     Close,
 }
 
@@ -233,6 +235,13 @@ impl Canvas {
     pub fn set_resize(&mut self, r: Option<crate::imgedit::Resize>) {
         let e = self.e.image_edits();
         self.e.set_image_edits(crate::imgedit::Edits { resize: r, ..e });
+        self.after_input();
+    }
+
+    /// Effects… answered (one undo step).
+    pub fn set_effects(&mut self, fx: crate::imgedit::effects::Effects) {
+        let e = self.e.image_edits();
+        self.e.set_image_edits(crate::imgedit::Edits { effects: fx, ..e });
         self.after_input();
     }
 
@@ -635,6 +644,7 @@ impl Canvas {
                 Task::Upload => Request::Upload,
                 Task::Pin => Request::Pin,
                 Task::Text => Request::CopyText,
+                Task::Qr => Request::ReadQr,
                 _ => Request::Copy,
             })
         };
@@ -1351,6 +1361,12 @@ pub fn view_obj(o: &Obj, v: &View) -> Obj {
         }
         Obj::Magnify { src, dst, radius, zoom, color, width } => {
             Obj::Magnify { src: p(src), dst: p(dst), radius: radius * z, zoom: *zoom, color: *color, width: width * z }
+        }
+        // The pointer's picture at the zoom (it is small: resampled each time).
+        Obj::Cursor { at, img } => {
+            let (w, h) = (((img.width() as f32 * z).round() as u32).max(1), ((img.height() as f32 * z).round() as u32).max(1));
+            let img = if (w, h) == img.dimensions() { img.clone() } else { std::sync::Arc::new(crate::imgedit::resample::resize(img, w, h, crate::imgedit::Filter::Area)) };
+            Obj::Cursor { at: p(at), img }
         }
     }
 }

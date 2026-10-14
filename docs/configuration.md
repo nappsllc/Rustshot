@@ -70,6 +70,7 @@ record_hotkey = "Shift+Meta+G"          # starts (video mode) and stops a record
 capture_text_hotkey = "Shift+Meta+Z"    # pick an area, copy its text (OCR)
 history_hotkey = "Shift+Meta+H"         # the History window
 repeat_hotkey = ""                      # the last region again
+read_qr_hotkey = ""                     # pick an area, read its QR codes
 quit_hotkey = "Ctrl+Alt+Shift+Q"
 
 # Capture behavior
@@ -83,6 +84,16 @@ overlay_hints = true              # the key card when the overlay opens
 trim_margins = false              # trim each new region or window to its content (Shift+A by hand)
 border_width = 0                  # a border around every export, 1-8 logical px (0 = none)
 border_color = "#000000"          # its color
+include_cursor = false            # the mouse pointer as an object in each capture
+export_watermark = false          # a watermark on every export:
+watermark_text = ""               #   this text,
+watermark_image = ""              #   or this PNG (wins over the text)
+watermark_anchor = "bottom-right" #   top-left, top, top-right, left, center, right, bottom-left, bottom
+watermark_margin = 24             #   px from the edges (0-2000)
+watermark_opacity = 60            #   percent (0-100)
+watermark_size = 20               #   percent of the picture's width (1-100)
+watermark_tiled = false           #   repeated over the whole picture
+watermark_color = "#ffffff"       #   the text's color
 save_scale = "screen"             # Save at: "screen" (pixels as captured), "logical" (1x) or "custom"
 save_scale_percent = 50           # the custom percent, 10-100
 hdr_screenshots = "tonemap"       # Windows HDR displays (screenshots and recordings): "tonemap" to SDR or "keep" as captured
@@ -203,14 +214,14 @@ The action ids:
 
 | Group | Actions |
 |---|---|
-| Tools | `tool_select`, `tool_pencil`, `tool_line`, `tool_arrow`, `tool_rectangle`, `tool_circle`, `tool_marker`, `tool_text`, `tool_callout`, `tool_counter`, `tool_pixelate`, `tool_invert`, `tool_spotlight`, `tool_magnify`, `tool_blur`, `tool_crop`, `size_down`, `size_up` |
-| Output | `copy`, `copy_text`, `redact`, `copy_color`, `save`, `save_as`, `save_desktop`, `open_with`, `share`, `upload`, `pin` |
+| Tools | `tool_select`, `tool_pencil`, `tool_line`, `tool_arrow`, `tool_rectangle`, `tool_circle`, `tool_marker`, `tool_text`, `tool_callout`, `tool_counter`, `tool_pixelate`, `tool_invert`, `tool_spotlight`, `tool_magnify`, `tool_blur`, `tool_ruler`, `tool_crop`, `size_down`, `size_up` |
+| Output | `copy`, `copy_text`, `read_qr`, `redact`, `copy_color`, `save`, `save_as`, `save_desktop`, `open_with`, `share`, `upload`, `pin` |
 | Selection | `trim` (Trim to content, <kbd>Shift</kbd>+<kbd>A</kbd>), `select_freeform`, `scroll_capture` (Scrolling capture, <kbd>Shift</kbd>+<kbd>S</kbd>) |
 | Editing | `undo`, `redo`, `select_all`, `toggle_palette`, `accept`, `cancel`, `record` |
 | UI size | `ui_bigger`, `ui_smaller`, `ui_reset` |
 | Selected objects | `delete_object`, `duplicate`, `bring_front`, `send_back` |
 | While typing | `text_bold`, `text_italic`, `text_underline` |
-| Edit window | `zoom_in`, `zoom_out`, `zoom_fit`, `zoom_actual`, `rotate_left`, `rotate_right`, `flip_horizontal`, `flip_vertical`, `image_resize`, `image_canvas`, `image_reset` |
+| Edit window | `zoom_in`, `zoom_out`, `zoom_fit`, `zoom_actual`, `rotate_left`, `rotate_right`, `flip_horizontal`, `flip_vertical`, `image_resize`, `image_canvas`, `image_effects`, `image_reset` |
 | While recording (global) | `rec_pause`, `rec_mute`, `rec_hide_pill` |
 
 On layouts where `=`, `-` or `0` need a modifier or sit elsewhere (AZERTY,
