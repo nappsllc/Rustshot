@@ -638,7 +638,7 @@ Per platform:
 Settings › Recording › **Show clicks & keys**: **Clicks** draws a ring
 that pulses where you press a mouse button (yellow for the left, blue for
 the right); **Keystrokes** shows the last shortcuts in a pill at the bottom
-centre ("Ctrl + Shift + S", repeats as "×2"), which fades 1.5 s after the
+center ("Ctrl + Shift + S", repeats as "×2"), which fades 1.5 s after the
 last one. Both are drawn into the video's frames only, never on the
 screen. By default only chords with <kbd>Ctrl</kbd>, <kbd>Alt</kbd> or
 <kbd>Win</kbd> show, so what you type does not; **All keys** shows every
