@@ -622,6 +622,18 @@ pub fn clipped(fb: &mut Fb, r: FRect, draw: impl FnOnce(&mut Fb)) {
     clipped_as(fb, r, false, draw)
 }
 
+/// The x (window layout space) inside region `r` drawn by
+/// [`clipped_ltr`] that the pointer at layout `x` is over: in a mirrored
+/// frame the region is pre-flipped, so a pointer x maps back within it.
+pub fn ltr_x(fb: &Fb, r: FRect, x: f32) -> f32 {
+    if !fb.mirror {
+        return x;
+    }
+    let x0 = (r.x.floor() as i32).max(fb.ox);
+    let x1 = (r.x1().ceil() as i32).min(fb.ox + fb.stride as i32);
+    (x0 + x1 - 1) as f32 - x
+}
+
 /// [`clipped`], and in a mirrored frame the region reads left to right
 /// as a whole (a text field: its text, selection and caret together).
 pub fn clipped_ltr(fb: &mut Fb, r: FRect, draw: impl FnOnce(&mut Fb)) {

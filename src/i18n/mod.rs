@@ -328,6 +328,7 @@ fn registry() -> &'static [Known] {
         v.extend([
             Known { code: "qps", name: "Pseudo (accented, long)", rtl: false, parsed: OnceLock::new() },
             Known { code: "qps-rtl", name: "Pseudo (right to left)", rtl: true, parsed: OnceLock::new() },
+            Known { code: "qps-ar", name: "Pseudo (Arabic letters)", rtl: true, parsed: OnceLock::new() },
             // A downloadable language (the download tests).
             Known { code: "zz-test", name: "Zet", rtl: false, parsed: OnceLock::new() },
             Known { code: "zz-ui", name: "Zet UI", rtl: false, parsed: OnceLock::new() },
@@ -399,12 +400,13 @@ fn loaded(i: usize) -> Option<&'static files::Parsed> {
     #[cfg(test)]
     if k.code.starts_with("qps") {
         let rtl = k.rtl;
+        let sc = pseudo::Script::of(k.code);
         return Some(k.parsed.get_or_init(|| {
             let values = english()
                 .values
                 .iter()
                 .map(|v| -> &'static str {
-                    let forms: Vec<String> = v.split('\u{1f}').map(|f| if f.is_empty() { String::new() } else { pseudo::pseudo(f, rtl) }).collect();
+                    let forms: Vec<String> = v.split('\u{1f}').map(|f| if f.is_empty() { String::new() } else { pseudo::pseudo(f, sc) }).collect();
                     Box::leak(forms.join("\u{1f}").into_boxed_str())
                 })
                 .collect();
@@ -644,9 +646,35 @@ pub fn set_language(setting: &str) -> bool {
     }
 }
 
+/// `s` in capitals for the current language (headings): Turkish and
+/// Azerbaijani map i to İ and ı to I; scripts without case are unchanged.
+pub fn upper(s: &str) -> String {
+    upper_in(current(), s)
+}
+
+/// [`upper`] for language `tag`.
+pub fn upper_in(tag: &str, s: &str) -> String {
+    let p = tag.split('-').next().unwrap_or("");
+    if p.eq_ignore_ascii_case("tr") || p.eq_ignore_ascii_case("az") {
+        s.chars().map(|c| match c {
+            'i' => "\u{130}".to_string(),
+            'ı' => "I".to_string(),
+            c => c.to_uppercase().collect(),
+        }).collect()
+    } else {
+        s.to_uppercase()
+    }
+}
+
+/// A heading's capitals are tracked letter by letter only when they are
+/// plain ASCII (the baked font); any other string is drawn whole, so the
+/// OS shaper sees the word (Arabic joining, Indic marks).
+pub fn tracks(up: &str) -> bool {
+    up.is_ascii()
+}
+
 /// The current language's code (the one in force: English shows until
 /// its file is here).
-#[allow(dead_code)]
 pub fn current() -> &'static str {
     lang_at(current_index()).code
 }

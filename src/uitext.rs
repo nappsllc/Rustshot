@@ -233,6 +233,18 @@ mod tests {
         }
     }
 
+    /// Arabic joins when drawn whole: a word is narrower than its letters
+    /// drawn one by one (isolated forms). Windows and macOS shape; Linux
+    /// has no shaper (see the module notes).
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn arabic_joins_when_drawn_whole() {
+        let word = "\u{628}\u{628}\u{628}\u{628}";
+        let one = width(&UI, "\u{628}", 20.0);
+        let w = width(&UI, word, 20.0);
+        assert!(w < one * 4.0 - 2.0, "joined {w} vs isolated {}", one * 4.0);
+    }
+
     /// A preview of the scripts beside baked text (RUSTSHOT_PREVIEW_DIR).
     #[test]
     fn preview_scripts() {

@@ -648,6 +648,7 @@ fn request(req: Request) {
 }
 
 fn run_dialog(req: Request, tx: Sender<In>, rx: Receiver<In>) {
+    let _open = crate::instance::update_dialog_guard();
     let th = crate::theme::resolve(&crate::config::load());
     let (m, acts) = Machine::start(req);
     let mut d = Dialog::new(m, th, tx, rx);

@@ -203,11 +203,15 @@ impl Ui<'_> {
     pub fn sec(&mut self, s: &str, tok: &Tok) {
         let r = self.alloc(None, 33.0);
         let size = 10.5;
-        let up = s.to_uppercase();
+        let up = crate::i18n::upper(s);
         let track = self.px(size * 0.07);
         let cy = r.y + self.px(14.0 + 6.5);
         let mut x = r.x;
         let c = tok.tx3.fade(fade(self));
+        if !crate::i18n::tracks(&up) {
+            self.text_at(size, &up, x, cy, c, true);
+            return;
+        }
         for ch in up.chars() {
             let t = ch.to_string();
             self.text_at(size, &t, x, cy, c, true);
@@ -508,12 +512,16 @@ impl Ui<'_> {
         let f = fade(self);
         for (y, gi) in labels {
             // Like the board's `.sec` (uppercase, tracked), a size smaller.
-            let up = style.groups[gi].1.to_uppercase();
+            let up = crate::i18n::upper(&style.groups[gi].1);
             let size = 10.0;
             let track = self.px(size * 0.07);
             let cy = px(y + RAIL_LABEL_H - 9.0);
             let mut x = px(area.x + 10.0);
             let c = tok.tx3.fade(f);
+            if !crate::i18n::tracks(&up) {
+                self.text_at(size, &up, x, cy, c, true);
+                continue;
+            }
             for ch in up.chars() {
                 let t = ch.to_string();
                 self.text_at(size, &t, x, cy, c, true);

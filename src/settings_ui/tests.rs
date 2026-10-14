@@ -1670,7 +1670,7 @@ fn dialogs_fit_in_long_languages() {
             Modal::Guide { broken: true, dont_show: false },
         ]
     };
-    for lang in ["en", "qps", "qps-rtl"] {
+    for lang in ["en", "qps", "qps-rtl", "qps-ar"] {
         crate::i18n::with_lang(lang, || {
             for k in [1.0f32, 2.0] {
                 for (n, m) in modals().into_iter().enumerate() {
@@ -1702,7 +1702,7 @@ fn dialogs_fit_in_long_languages() {
 #[test]
 #[ignore = "a benchmark"]
 fn language_frame_cost() {
-    for lang in ["en", "qps", "qps-rtl"] {
+    for lang in ["en", "qps", "qps-rtl", "qps-ar"] {
         crate::i18n::with_lang(lang, || {
             let mut s = sample();
             s.section = GENERAL;
@@ -1913,7 +1913,7 @@ fn preview_settings_pngs() {
 /// taller than the body, every control inside the window, on its side of
 /// the rail edge, and no two controls overlapping.
 fn every_section_fits() {
-    for lang in ["en", "qps", "qps-rtl"] {
+    for lang in ["en", "qps", "qps-rtl", "qps-ar"] {
         crate::i18n::with_lang(lang, || sections_fit(lang));
     }
 }

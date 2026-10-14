@@ -31,10 +31,25 @@ fn placeholders_are_filled() {
 fn pseudo_languages_derive_from_english() {
     let en = tr!("settings.general.language");
     let qps = with_lang("qps", || tr!("settings.general.language"));
-    assert_eq!(qps, pseudo::pseudo(en, false));
+    assert_eq!(qps, pseudo::pseudo(en, pseudo::Script::Accented));
+    assert!(with_lang("qps-ar", is_rtl));
+    assert!(with_lang("qps-ar", || tr!("settings.general.language")).contains('ب') || with_lang("qps-ar", || tr!("settings.general.language")).chars().any(|c| ('\u{600}'..='\u{6ff}').contains(&c)));
     assert!(with_lang("qps-rtl", is_rtl));
     assert!(!with_lang("qps", is_rtl));
     assert_eq!(tr!("settings.general.language"), en, "back to English after with_lang");
+}
+
+/// Headings' capitals: Turkish dotted and dotless i, other scripts as
+/// they are; only ASCII capitals are tracked letter by letter.
+#[test]
+fn headings_upper_case_by_language() {
+    assert_eq!(upper_in("en", "file names"), "FILE NAMES");
+    assert_eq!(upper_in("tr", "dil ayarı"), "D\u{130}L AYARI");
+    assert_eq!(upper_in("az-Latn", "i"), "\u{130}");
+    assert_eq!(upper_in("de", "größe"), "GRÖSSE");
+    assert_eq!(upper_in("ar", "عام"), "عام");
+    assert!(tracks("APPEARANCE"));
+    assert!(!tracks("GRÖSSE") && !tracks("عام"));
 }
 
 #[test]

@@ -1,6 +1,7 @@
 //! The pseudo-languages, made from English at run time: `qps` swaps every
 //! Latin letter for an accented one, `qps-rtl` for a Hebrew letter (right
-//! to left, drawn by the OS text stack); both bracket the string and pad
+//! to left, drawn by the OS text stack), `qps-ar` for an Arabic one (right
+//! to left, letters that join: shaping must see whole words); all bracket the string and pad
 //! it to 140 % of its length, so text that overflows, is cut off, is
 //! glued together from pieces, or was never extracted shows at a glance.
 //! `{placeholders}` and line breaks are kept.
@@ -16,23 +17,47 @@ const HEBREW: [char; 26] = [
     'א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ז', 'ח', 'ט', 'י', 'כ', 'ל', 'מ', 'נ', 'ס', 'ע', 'פ', 'צ', 'ק', 'ר', 'ש', 'ת', 'ך', 'ם', 'ן', 'ף',
 ];
 
-fn map(c: char, rtl: bool) -> char {
+/// Arabic letters for a..z: 22 that join on both sides, then four that
+/// join only to the letter before (alef, dal, reh, waw).
+const ARABIC: [char; 26] = [
+    'ب', 'ت', 'ث', 'ج', 'ح', 'خ', 'س', 'ش', 'ص', 'ض', 'ط', 'ظ', 'ع', 'غ', 'ف', 'ق', 'ك', 'ل', 'م', 'ن', 'ه', 'ي', 'ا', 'د', 'ر', 'و',
+];
+
+/// Which letters a pseudo-language uses.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Script {
+    Accented,
+    Hebrew,
+    Arabic,
+}
+
+impl Script {
+    /// The pseudo-language `code`'s letters.
+    pub fn of(code: &str) -> Script {
+        match code {
+            "qps-rtl" => Script::Hebrew,
+            "qps-ar" => Script::Arabic,
+            _ => Script::Accented,
+        }
+    }
+}
+
+fn map(c: char, sc: Script) -> char {
     let (lower, upper) = (c.is_ascii_lowercase(), c.is_ascii_uppercase());
     if !lower && !upper {
         return c;
     }
     let i = (c.to_ascii_lowercase() as u8 - b'a') as usize;
-    if rtl {
-        HEBREW[i]
-    } else if lower {
-        ACCENTED_LOWER[i]
-    } else {
-        ACCENTED_UPPER[i]
+    match sc {
+        Script::Hebrew => HEBREW[i],
+        Script::Arabic => ARABIC[i],
+        Script::Accented if lower => ACCENTED_LOWER[i],
+        Script::Accented => ACCENTED_UPPER[i],
     }
 }
 
-/// `s` in the pseudo-language (`rtl`: qps-rtl, else qps).
-pub fn pseudo(s: &str, rtl: bool) -> String {
+/// `s` in the pseudo-language written in `sc`.
+pub fn pseudo(s: &str, sc: Script) -> String {
     let mut out = String::with_capacity(s.len() * 2 + 4);
     let mut letters: Vec<char> = Vec::new();
     let mut n = 0usize;
@@ -50,7 +75,7 @@ pub fn pseudo(s: &str, rtl: bool) -> String {
             n += j + 1;
             continue;
         }
-        let m = map(c, rtl);
+        let m = map(c, sc);
         if m != c {
             letters.push(m);
         }
@@ -62,7 +87,7 @@ pub fn pseudo(s: &str, rtl: bool) -> String {
     let pad = (n * 2).div_ceil(5).saturating_sub(2);
     if pad > 0 {
         out.push(' ');
-        let fill: Vec<char> = if letters.is_empty() { vec![map('x', rtl)] } else { letters };
+        let fill: Vec<char> = if letters.is_empty() { vec![map('x', sc)] } else { letters };
         out.extend(fill.iter().cycle().take(pad.saturating_sub(1)));
     }
     out.push(']');
@@ -75,18 +100,18 @@ mod tests {
 
     #[test]
     fn keeps_placeholders_and_grows_by_forty_percent() {
-        let p = pseudo("Saved {name} to {dir}", false);
+        let p = pseudo("Saved {name} to {dir}", Script::Accented);
         assert!(p.starts_with("[Šáṽéð {name} ţö {dir}"), "{p}");
         assert!(p.ends_with(']'));
         let (a, b) = ("Saved {name} to {dir}".chars().count(), p.chars().count());
         assert!(b * 10 >= a * 14 - 10 && b * 10 <= a * 14 + 20, "{a} -> {b}: {p}");
-        assert_eq!(pseudo("OK", false), "[ÖĶ]");
-        assert_eq!(pseudo("a\nb", false).chars().nth(2), Some('\n'));
+        assert_eq!(pseudo("OK", Script::Accented), "[ÖĶ]");
+        assert_eq!(pseudo("a\nb", Script::Accented).chars().nth(2), Some('\n'));
     }
 
     #[test]
     fn rtl_is_hebrew() {
-        let p = pseudo("Save {n}", true);
+        let p = pseudo("Save {n}", Script::Hebrew);
         assert!(p.contains("{n}"));
         assert!(p.chars().any(|c| ('\u{5d0}'..='\u{5ea}').contains(&c)));
         assert!(!p.chars().any(|c| c.is_ascii_lowercase() && !"n".contains(c)), "{p}");

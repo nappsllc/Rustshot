@@ -236,10 +236,10 @@ impl Ui<'_> {
             let shift = self.input.mods.shift;
             self.focus.set(Some(id), false);
             self.focus.active = Some(id);
-            let i = hit(&st.text, self.input.pressed.unwrap().x - ox, wof);
+            let i = hit(&st.text, super::ltr_x(&self.fb, inner, self.input.pressed.unwrap().x) - ox, wof);
             st.move_to(i, shift);
         } else if self.focus.active == Some(id) && self.input.held {
-            let i = hit(&st.text, self.input.mouse.x - ox, wof);
+            let i = hit(&st.text, super::ltr_x(&self.fb, inner, self.input.mouse.x) - ox, wof);
             st.move_to(i, true);
         }
 

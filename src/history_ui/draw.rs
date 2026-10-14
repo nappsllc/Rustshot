@@ -645,7 +645,10 @@ fn text(ui: &mut Ui, size: f32, s: &str, x: f32, cy: f32, c: C4, bold: bool) -> 
 fn caps(ui: &mut Ui, size: f32, s: &str, x: f32, cy: f32, c: C4) -> f32 {
     // Uppercase, tracked .07em.
     let mut cx = x;
-    let up = s.to_uppercase();
+    let up = crate::i18n::upper(s);
+    if !crate::i18n::tracks(&up) {
+        return text(ui, size, &up, x, cy, c, true);
+    }
     for ch in up.chars() {
         let t = ch.to_string();
         text(ui, size, &t, cx, cy, c, true);
