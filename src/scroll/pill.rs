@@ -7,6 +7,7 @@
 //! The drawing ([`layout`], [`draw`]) is pure; the window is per platform
 //! (a layered window on Windows, an override-redirect window on X11; none
 //! on macOS yet).
+#![cfg_attr(target_os = "macos", allow(dead_code))] // no pill window there yet
 
 use super::{text, Ctl};
 use crate::capture::IRect;
@@ -106,6 +107,7 @@ pub fn draw(f: &mut Fb, ui: &Ui, l: &Layout, height: u32, hover: bool, pulse: bo
 
 /// Where the pill goes for `area`: beside it (else, where the window can
 /// stay out of the capture, inside at the bottom; else nowhere).
+#[cfg_attr(test, allow(dead_code))]
 fn spot(area: IRect, size: (u32, u32), s: f32, inside_ok: bool) -> Option<(i32, i32)> {
     let mons: Vec<IRect> = crate::capture::monitors().unwrap_or_default().iter().map(|m| (m.x, m.y, m.w, m.h)).collect();
     let m = (MARGIN * s).round() as i32;
@@ -120,6 +122,7 @@ fn spot(area: IRect, size: (u32, u32), s: f32, inside_ok: bool) -> Option<(i32, 
 }
 
 /// The UI scale where `area` is.
+#[cfg_attr(test, allow(dead_code))]
 fn scale_at(area: IRect) -> f32 {
     let (cx, cy) = (area.0 + area.2 as i32 / 2, area.1 + area.3 as i32 / 2);
     let mons = crate::capture::monitors().unwrap_or_default();
@@ -140,6 +143,7 @@ pub struct Pill {
 
 impl Pill {
     /// Show the pill for a run over `area`.
+    #[cfg_attr(test, allow(dead_code))] // shown outside tests
     pub fn show(area: IRect, th: Theme, ctl: &Ctl) -> anyhow::Result<Pill> {
         #[cfg(any(windows, target_os = "linux"))]
         {
@@ -169,7 +173,7 @@ impl Pill {
             if clicked {
                 ctl.stop();
             }
-            let pulse = self.started.elapsed().as_millis() / 600 % 2 == 0;
+            let pulse = (self.started.elapsed().as_millis() / 600).is_multiple_of(2);
             let state = (ctl.progress().height, hover, pulse);
             if self.drawn == Some(state) {
                 return;
@@ -188,6 +192,7 @@ impl Pill {
 mod imp {
     //! A top-most layered tool window that never takes focus and is kept
     //! out of screen capture; its clicks are read on the owner's tick.
+    #![cfg_attr(test, allow(dead_code))]
     use super::{on_stop, Layout};
     use crate::objects::Pt;
     use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};

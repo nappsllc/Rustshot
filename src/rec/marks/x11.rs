@@ -129,7 +129,7 @@ pub fn vk_of_keysym(ks: c_ulong) -> u32 {
         0xffbe..=0xffd5 => 0x70 + (ks - 0xffbe) as u32, // F1..F24
         0xffe1 | 0xffe2 => 0xA0,                         // Shift
         0xffe3 | 0xffe4 => 0xA2,                         // Control
-        0xffe9 | 0xffea | 0xffe7 | 0xffe8 => 0xA4,       // Alt, Meta
+        0xffe7..=0xffea => 0xA4,                         // Meta, Alt
         0xffeb | 0xffec => 0x5B,                         // Super
         0xffe5 => 0x14,                                  // Caps_Lock
         0x3d => 0xBB,

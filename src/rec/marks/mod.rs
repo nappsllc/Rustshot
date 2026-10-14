@@ -31,11 +31,12 @@ use std::time::{Duration, Instant};
 
 /// The words (one place, for the translations).
 pub mod text {
-    pub const SHOW_CLICKS: &str = "Show clicks";
-    pub const SHOW_CLICKS_NOTE: &str = "A ring where you click, in the recording only";
-    pub const SHOW_KEYS: &str = "Show keystrokes";
-    pub const SHOW_KEYS_NOTE: &str = "Shortcuts like Ctrl + S at the bottom; never logged";
-    pub const ALL_KEYS: &str = "Show all keys";
+    /// Settings › Recording: one row of three checkboxes.
+    pub const SHOW: &str = "Show clicks & keys";
+    pub const SHOW_NOTE: &str = "In the video only, never saved";
+    pub const CLICKS: &str = "Clicks";
+    pub const KEYS: &str = "Keystrokes";
+    pub const ALL_KEYS: &str = "All keys";
     pub const UNAVAILABLE: &str = "clicks and keystrokes not shown";
 }
 
@@ -70,6 +71,7 @@ pub struct MarkOpts {
 }
 
 impl MarkOpts {
+    #[cfg_attr(test, allow(dead_code))] // the app arms recordings outside tests
     pub fn from_config(cfg: &crate::config::Config) -> MarkOpts {
         MarkOpts { clicks: cfg.rec_show_clicks, keys: cfg.rec_show_keys, all_keys: cfg.rec_show_all_keys }
     }
@@ -167,7 +169,7 @@ pub fn chord_text(held: Held, vk: u32, all: bool) -> Option<String> {
     if modifier(vk).is_some() {
         return None;
     }
-    if !all && !(held.ctrl || held.alt || held.win) {
+    if !(all || held.ctrl || held.alt || held.win) {
         return None;
     }
     let key = key_label(vk)?;
@@ -342,9 +344,8 @@ impl Target for Bgra<'_> {
     fn blend(&mut self, x: u32, y: u32, p: [u8; 4]) {
         let i = (y as usize * self.w as usize + x as usize) * 4;
         let inv = 255 - p[3] as u32;
-        for c in 0..3 {
-            let d = &mut self.px[i + c];
-            *d = (p[c] as u32 + (*d as u32 * inv + 127) / 255).min(255) as u8;
+        for (d, s) in self.px[i..i + 3].iter_mut().zip(p) {
+            *d = (s as u32 + (*d as u32 * inv + 127) / 255).min(255) as u8;
         }
     }
 }

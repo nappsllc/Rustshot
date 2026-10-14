@@ -885,7 +885,7 @@ pub const TOOL_ROWS: [(&str, &[Action]); 7] = [
 /// keys (zoom, image edits) end the list.
 pub const ACTION_ROWS: [(&str, &[Action]); 7] = [
     ("Copy \u{b7} Save \u{b7} Upload \u{b7} Copy text \u{b7} color", &[Action::Copy, Action::Save, Action::Upload, Action::CopyText, Action::CopyColor]),
-    ("Save As \u{b7} Desktop \u{b7} Open with", &[Action::SaveAs, Action::SaveDesktop, Action::OpenWith]),
+    ("Save As \u{b7} Desktop \u{b7} Open with \u{b7} Scroll",&[Action::SaveAs, Action::SaveDesktop, Action::OpenWith, Action::ScrollCapture]),
     SEND_ROW,
     ("UI size + \u{b7} - \u{b7} Auto", &[Action::UiBigger, Action::UiSmaller, Action::UiReset]),
     ("Edit window zoom + \u{b7} - \u{b7} Fit \u{b7} 1:1", &[Action::ZoomIn, Action::ZoomOut, Action::ZoomFit, Action::ZoomActual]),

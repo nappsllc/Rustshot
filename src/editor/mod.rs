@@ -447,6 +447,11 @@ pub fn run(
         last_entry: None,
         upload_entry: None,
         rec_poster: None,
+        trim_job: None,
+        scroll: None,
+        scroll_meta: None,
+        #[cfg(test)]
+        scroll_asked: None,
         delay: Default::default(),
         delay_show: crate::launcher::Screen { th: theme::DARK, up: false },
         #[cfg(test)]
@@ -491,6 +496,15 @@ struct OcrJob {
     rx: Receiver<Result<String, crate::ocr::OcrError>>,
     at: (i32, i32),
     th: Theme,
+}
+
+/// A saved recording in the trim window: what is said of it once the
+/// window closes (and the cut is made).
+struct TrimJob {
+    rx: Receiver<rec_ui::trim::Outcome>,
+    path: std::path::PathBuf,
+    warnings: Vec<String>,
+    length: Duration,
 }
 
 /// Work to do after the overlay has been hidden again.
@@ -587,6 +601,15 @@ struct App {
     upload_entry: Option<String>,
     /// The running recording's poster and source, for its entry.
     rec_poster: Option<Box<HistShot>>,
+    /// The trim window after a recording (Trim after recording: Ask).
+    trim_job: Option<TrimJob>,
+    /// A scrolling capture in progress (the overlay is hidden meanwhile).
+    scroll: Option<crate::scroll::Job>,
+    /// Its capture's window title, app and scale (for the history).
+    scroll_meta: Option<(String, String, f32)>,
+    /// Tests: the area the last scrolling capture was asked for.
+    #[cfg(test)]
+    scroll_asked: Option<capture::IRect>,
     /// A delayed capture counting down (the launcher, the tray), and
     /// how it is shown (the pill, the tray's tip).
     delay: crate::launcher::Delay,
@@ -667,6 +690,8 @@ impl App {
             self.notice = None;
         }
         self.tick_recording();
+        self.poll_trim();
+        self.tick_scroll();
         if let State::Edit(e) = &mut self.st
             && e.pending.is_due(Instant::now())
         {
@@ -1075,7 +1100,166 @@ impl App {
         }
         let Some(end) = ended else { return };
         self.rec = None;
+        // Trim after recording: Ask (the toast and the history wait for it).
+        if let rec_ui::End::Saved { path, warnings } = &end
+            && self.cfg.rec_trim == "ask"
+            && !cfg!(test)
+            && let Some(rx) = rec_ui::trim::open(path, theme::resolve(&self.cfg))
+        {
+            if !self.one_shot() {
+                crate::tray::set_recording(false);
+                self.rec_hotkeys(false);
+            }
+            self.trim_job = Some(TrimJob { rx, path: path.clone(), warnings: warnings.clone(), length });
+            return;
+        }
         self.recording_over(end, length);
+    }
+
+    /// Start scrolling the window under `area` (global physical px; the
+    /// overlay is hidden already). `meta`: the capture's window title,
+    /// app and scale, for its history entry.
+    fn start_scroll(&mut self, area: capture::IRect, th: Theme, meta: (String, String, f32)) {
+        #[cfg(test)]
+        {
+            let _ = th;
+            self.scroll_asked = Some(area);
+            self.scroll_meta = Some(meta);
+            if self.one_shot() {
+                self.request_exit(0);
+            }
+        }
+        #[cfg(not(test))]
+        match crate::scroll::Job::start(area, th) {
+            Ok(job) => {
+                self.scroll = Some(job);
+                self.scroll_meta = Some(meta);
+            }
+            Err(e) => {
+                let msg = format!("{e:#}");
+                eprintln!("rustshot: scrolling capture: {msg}");
+                self.scroll_said(&msg, area, true);
+                if self.one_shot() {
+                    self.request_exit(1);
+                }
+            }
+        }
+    }
+
+    /// A toast (or a tray balloon) about the scrolling capture.
+    fn scroll_said(&self, msg: &str, area: capture::IRect, error: bool) {
+        if self.one_shot() {
+            return;
+        }
+        let at = (area.0 + area.2 as i32 / 2, area.1 + area.3 as i32 / 2);
+        let kind = if error { ToastKind::Error } else { ToastKind::Info };
+        if !crate::notice::show(crate::notice::Note::plain(msg.to_string(), kind), at, theme::resolve(&self.cfg)) {
+            crate::tray::notify(msg);
+        }
+    }
+
+    /// Advance the scrolling capture; once it is over, keep the picture
+    /// and open it in the Edit window (or save it, with the history off).
+    fn tick_scroll(&mut self) {
+        let Some(job) = self.scroll.as_mut() else { return };
+        let Some(r) = job.tick() else { return };
+        let (area, frames) = (job.area, job.ctl.progress().frames);
+        self.scroll = None;
+        let meta = self.scroll_meta.take().unwrap_or_default();
+        let (pic, end) = match r {
+            Ok(x) => x,
+            Err(e) => {
+                eprintln!("rustshot: scrolling capture: {e}");
+                self.scroll_said(&e, area, true);
+                if self.one_shot() {
+                    self.request_exit(1);
+                }
+                return;
+            }
+        };
+        if let Some(n) = end.note() {
+            eprintln!("rustshot: {n}");
+            self.scroll_said(n, area, false);
+        }
+        println!("scrolling capture: {}x{} from {frames} frames", pic.width(), pic.height());
+        let entry = self.history_root.clone().and_then(|root| {
+            let hist = crate::history::Meta {
+                captured: export::local_ymdhms(),
+                title: meta.0.clone(),
+                app: meta.1.clone(),
+                scale: meta.2,
+                ..Default::default()
+            };
+            crate::history::record(&self.cfg, &root, crate::history::ShotRec { original: pic.clone(), objects: Vec::new(), meta: hist })
+        });
+        match entry {
+            // The Edit window opens once the entry is on disk.
+            Some(id) => {
+                self.last_entry = Some(id.clone());
+                let open = move || {
+                    let t0 = Instant::now();
+                    while crate::history::writing(&id) && t0.elapsed() < Duration::from_secs(10) {
+                        std::thread::sleep(Duration::from_millis(30));
+                    }
+                    crate::edit_ui::open(&id);
+                };
+                if self.one_shot() {
+                    // A one-shot run lasts as long as its Edit window.
+                    open();
+                    crate::edit_ui::wait_all();
+                    self.request_exit(0);
+                    return;
+                }
+                if let Err(e) = std::thread::Builder::new().name("scroll-open".into()).spawn(open) {
+                    eprintln!("rustshot: cannot open the Edit window: {e}");
+                }
+            }
+            // No history: saved where a capture would be.
+            None => {
+                let path = crate::export::auto_save_path_ext(&self.cfg, export::local_ymdhms(), "png");
+                let saved = path.parent().map_or(Ok(()), std::fs::create_dir_all).map_err(anyhow::Error::from).and_then(|()| {
+                    let png = pic.to_png()?;
+                    std::fs::write(&path, png)?;
+                    Ok(())
+                });
+                match saved {
+                    Ok(()) => {
+                        println!("saved: {}", path.display());
+                        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                        self.scroll_said(&format!("Saved \u{b7} {name}"), area, false);
+                    }
+                    Err(e) => {
+                        eprintln!("error: could not save the scrolling capture: {e:#}");
+                        self.scroll_said(&format!("Could not save the scrolling capture: {e:#}"), area, true);
+                    }
+                }
+            }
+        }
+        if self.one_shot() {
+            self.request_exit(0);
+        }
+    }
+
+    /// The trim window closed (and the cut is made): the recording is over.
+    fn poll_trim(&mut self) {
+        let Some(job) = self.trim_job.as_ref() else { return };
+        let outcome = match job.rx.try_recv() {
+            Ok(o) => o,
+            Err(crate::chan::TryRecvError::Empty) => return,
+            Err(crate::chan::TryRecvError::Disconnected) => rec_ui::trim::Outcome::Full,
+        };
+        let Some(job) = self.trim_job.take() else { return };
+        let mut warnings = job.warnings;
+        let (path, length) = match outcome {
+            rec_ui::trim::Outcome::Trimmed(p, len) => (p, len),
+            rec_ui::trim::Outcome::Full => (job.path, job.length),
+            rec_ui::trim::Outcome::Failed(e) => {
+                eprintln!("rustshot: {e}");
+                warnings.push(e);
+                (job.path, job.length)
+            }
+        };
+        self.recording_over(rec_ui::End::Saved { path, warnings }, length);
     }
 
     /// Say how a recording ended: on stdout/stderr, and in a tray balloon
@@ -1278,6 +1462,8 @@ impl App {
             && self.upload_slot.lock().unwrap_or_else(|e| e.into_inner()).is_none()
             && self.ocr.is_empty()
             && self.edits.unsaved() == 0
+            && self.trim_job.is_none()
+            && self.scroll.is_none()
     }
 
     /// A quit asked while Edit windows asked about their unsaved edits:
@@ -1502,6 +1688,16 @@ impl App {
             config::copy_key(&edit.cfg, &mut self.cfg, k);
         }
         self.rec_opts = Some(edit.rec.opts.clone());
+        if edit.scroll_start && !cancelled {
+            // Scrolling capture: the overlay goes away, the region is
+            // scrolled and grabbed live.
+            let area = edit.rec_geom(&[]).area;
+            let meta = (edit.source.0.clone(), edit.source.1.clone(), edit.shot.scale);
+            wind::hide(self.hwnd);
+            self.st = State::Hidden;
+            self.start_scroll(area, edit.th, meta);
+            return;
+        }
         if edit.rec.start && !cancelled {
             // Recording: the overlay goes away, the area is recorded live.
             #[cfg(not(test))]
@@ -2231,6 +2427,7 @@ fn act_of(a: Action) -> Option<Act> {
         // The Edit window's own (its image menu).
         Action::RotateLeft | Action::RotateRight | Action::FlipHorizontal | Action::FlipVertical => return None,
         Action::ImageResize | Action::ImageCanvas | Action::ImageReset => return None,
+        Action::ScrollCapture => Act::Scroll,
     })
 }
 
@@ -2812,6 +3009,9 @@ struct Edit {
     label_at: Option<FRect>,
     slot_hold: Option<Instant>,
     rec: RecPop,
+    /// Scrolling capture asked (the size label menu, Shift+S): it starts
+    /// once the overlay is hidden.
+    scroll_start: bool,
     done: bool,
     cancelled: bool,
     dirty: bool,
@@ -2908,6 +3108,7 @@ impl Edit {
             label_at: None,
             slot_hold: None,
             rec,
+            scroll_start: false,
             done: false,
             cancelled: false,
             dirty: false,
@@ -3960,6 +4161,8 @@ mod history_tests;
 mod snip_tests;
 #[cfg(test)]
 mod trim_tests;
+#[cfg(test)]
+mod scroll_tests;
 
 #[cfg(test)]
 mod tests {
@@ -4326,6 +4529,11 @@ mod tests {
             last_entry: None,
             upload_entry: None,
             rec_poster: None,
+            trim_job: None,
+            scroll: None,
+            scroll_meta: None,
+            #[cfg(test)]
+            scroll_asked: None,
             delay: Default::default(),
             delay_show: crate::launcher::Screen { th: theme::DARK, up: false },
             rec_spec: None,

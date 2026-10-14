@@ -765,6 +765,16 @@ impl Edit {
             Act::Trim => {
                 self.trim_selection(true);
             }
+            // Scrolling capture: of the selection, once the overlay is gone.
+            Act::Scroll if self.host.is_some() || self.rec.open || self.sel.is_none() => {}
+            Act::Scroll if !crate::scroll::supported() => {
+                self.notice = Some(Toast::new(crate::scroll::text::UNSUPPORTED, ToastKind::Error));
+            }
+            Act::Scroll => {
+                self.scroll_start = true;
+                self.done = true;
+                self.cancelled = false;
+            }
             Act::Undo | Act::Redo => {
                 self.finish_callout_edit();
                 if act == Act::Undo {

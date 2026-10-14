@@ -369,7 +369,7 @@ impl Player {
                 self.canvas[o..o + 4].copy_from_slice(&[c[0], c[1], c[2], 255]);
             }
         }
-        if i % self.every == 0 && self.checkpoints.last().is_none_or(|(k, _)| *k < i) && f.disposal != 3 {
+        if i.is_multiple_of(self.every) && self.checkpoints.last().is_none_or(|(k, _)| *k < i) && f.disposal != 3 {
             self.checkpoints.push((i, self.canvas.clone()));
         }
     }
@@ -432,8 +432,8 @@ pub fn trim<R: Read, W: Write + Seek + Send>(src: &mut R, dst: &mut W, start: Du
         let mut enc = GifEncoder::new(&mut *dst, w, h, 100)?;
         let starts = idx.starts_cs();
         let s_cs = (start.as_millis() / 10) as u64;
-        for i in first..=last {
-            let ts = Duration::from_millis(starts[i].max(s_cs).saturating_sub(s_cs) * 10);
+        for (i, at) in starts.iter().enumerate().take(last + 1).skip(first) {
+            let ts = Duration::from_millis(at.max(&s_cs).saturating_sub(s_cs) * 10);
             let px = bgra_of(player.frame(i));
             enc.push_video(&RecFrame::bgra(w, h, px, ts))?;
         }

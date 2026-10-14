@@ -109,10 +109,13 @@ pub enum Action {
     ImageResize,
     ImageCanvas,
     ImageReset,
+    /// Scrolling capture of the selection: the window under it is
+    /// scrolled and the frames stitched (the size label menu's row).
+    ScrollCapture,
 }
 
 impl Action {
-    pub const ALL: [Action; 62] = [
+    pub const ALL: [Action; 63] = [
         Action::ToolSelect,
         Action::ToolPencil,
         Action::ToolLine,
@@ -175,6 +178,7 @@ impl Action {
         Action::ImageResize,
         Action::ImageCanvas,
         Action::ImageReset,
+        Action::ScrollCapture,
     ];
 
     /// A while-recording chord: global (Meta allowed), not an overlay key.
@@ -304,6 +308,8 @@ impl Action {
             Action::ImageResize => ("image_resize", "Resize\u{2026}", &["Ctrl+Shift+R"]),
             Action::ImageCanvas => ("image_canvas", "Canvas\u{2026}", &["Ctrl+Shift+K"]),
             Action::ImageReset => ("image_reset", "Reset image edits", &[]),
+            // Shift+S: S is the spotlight, Ctrl+S Save, Ctrl+Shift+S Save As.
+            Action::ScrollCapture => ("scroll_capture", "Scrolling capture", &["Shift+S"]),
         }
     }
 

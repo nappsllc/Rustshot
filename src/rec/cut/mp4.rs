@@ -322,6 +322,7 @@ fn ticks(d: Duration, scale: u32) -> u64 {
 /// start and ends with the last frame (decode order) shown before the
 /// end; sound starts
 /// `preroll` before the start.
+#[allow(clippy::too_many_arguments)]
 pub fn plan(s: &Samples, edit: Edit, timescale: u32, movie: u32, video: bool, start: Duration, end: Duration, preroll: Duration) -> Option<Keep> {
     let n = s.len();
     if n == 0 || end <= start {
@@ -723,6 +724,7 @@ pub fn duration<R: Read + Seek>(src: &mut R) -> Result<Duration> {
 
 /// The key frames' presentation times of the first video track (the trim
 /// window snaps nothing to them, but says where the cut really starts).
+#[cfg_attr(not(test), allow(dead_code))] // tests
 pub fn key_times<R: Read + Seek>(src: &mut R) -> Result<Vec<Duration>> {
     let tops = top_boxes(src)?;
     let t = tops.iter().find(|t| &t.kind == b"moov").copied().context("not an MP4 (no moov)")?;

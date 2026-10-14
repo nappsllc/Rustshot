@@ -46,9 +46,9 @@ pub mod text {
     /// Why it ended, said in a toast when that is not the end of the page.
     pub const LOST: &str = "Scrolling capture stopped: the next part did not match";
     pub const CAP: &str = "Scrolling capture stopped at 20 000 px";
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub const NO_TARGET: &str = "Nothing to scroll under the selection";
     pub const UNSUPPORTED: &str = "Scrolling capture is not available here";
-    pub const NOTHING: &str = "Nothing scrolled: the capture is the selection as it is";
 }
 
 /// Scrolls the target window.
@@ -89,7 +89,8 @@ impl End {
 /// The run's state, shared with the pill.
 #[derive(Clone, Debug, Default)]
 pub struct Progress {
-    /// Stitched height so far (px).
+    /// Stitched height so far (px; the pill shows it).
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     pub height: u32,
     pub frames: u32,
 }
@@ -102,6 +103,7 @@ pub struct Ctl {
 }
 
 impl Ctl {
+    #[cfg_attr(target_os = "macos", allow(dead_code))] // the pill's Stop
     pub fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
     }
@@ -261,6 +263,7 @@ pub fn supported() -> bool {
 
 /// The wheel for the window under `area`'s centre (found now: the overlay
 /// must be hidden already).
+#[cfg_attr(test, allow(dead_code))] // live only (tests drive `run`)
 pub fn wheel_for(area: IRect) -> Result<Box<dyn Wheel>> {
     let at = (area.0 + area.2 as i32 / 2, area.1 + area.3 as i32 / 2);
     #[cfg(windows)]
@@ -283,6 +286,7 @@ pub fn wheel_for(area: IRect) -> Result<Box<dyn Wheel>> {
 }
 
 /// Whether Esc is held now (read from the keyboard state; no hook).
+#[cfg_attr(test, allow(dead_code))]
 pub fn esc_down() -> bool {
     #[cfg(windows)]
     {
@@ -309,6 +313,7 @@ pub struct Job {
 impl Job {
     /// Start scrolling the window under `area`: the wheel is found now, the
     /// run goes on a worker thread, the pill shows beside the area.
+    #[cfg_attr(test, allow(dead_code))] // the app starts it outside tests
     pub fn start(area: IRect, th: crate::theme::Theme) -> Result<Job> {
         let wheel = wheel_for(area)?;
         let ctl = Ctl::default();

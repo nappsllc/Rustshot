@@ -28,9 +28,11 @@ fn avcc(stsd: &[u8]) -> Option<&[u8]> {
     stsd.get(at - 4..at - 4 + size)
 }
 
-/// Decoded frames of `path` shown from `from` (100 ns) to before `to`,
-/// as tight NV12 with their reader times.
-fn decode_range(path: &Path, from: i64, to: i64) -> Result<(u32, u32, Vec<(i64, Vec<u8>)>)> {
+/// A picture's size and its frames: reader time (100 ns) and tight NV12.
+type Decoded = (u32, u32, Vec<(i64, Vec<u8>)>);
+
+/// Decoded frames of `path` shown from `from` (100 ns) to before `to`.
+fn decode_range(path: &Path, from: i64, to: i64) -> Result<Decoded> {
     let video = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
     unsafe {
         let r = mf::open_reader(path)?;

@@ -39,6 +39,7 @@ pub struct WinWheel {
 
 impl WinWheel {
     /// The window under `at` (screen px); not one of ours.
+    #[cfg_attr(test, allow(dead_code))]
     pub fn at(at: (i32, i32)) -> Result<WinWheel> {
         WinWheel::find(at, false)
     }
@@ -127,6 +128,7 @@ impl Wheel for WinWheel {
 }
 
 /// Esc held now (the keyboard's state; no hook).
+#[cfg_attr(test, allow(dead_code))]
 pub fn esc_down() -> bool {
     unsafe { GetAsyncKeyState(VK_ESCAPE.0 as i32) as u16 & 0x8000 != 0 }
 }

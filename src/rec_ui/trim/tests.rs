@@ -1,0 +1,175 @@
+use super::*;
+use crate::wind::key;
+
+fn ms(n: u64) -> Duration {
+    Duration::from_millis(n)
+}
+
+#[test]
+fn handles_keep_their_order_and_a_minimum() {
+    let mut t = Trim::new(ms(10_000), 30);
+    assert!(!t.trims());
+    assert_eq!(t.choice(), Choice::Full, "nothing cut: kept as it is");
+    t.set_start(ms(2_000));
+    t.set_end(ms(7_500));
+    assert_eq!((t.start, t.end, t.selected()), (ms(2_000), ms(7_500), ms(5_500)));
+    assert!(t.trims());
+    assert_eq!(t.choice(), Choice::Trimmed { start: ms(2_000), end: ms(7_500) });
+    // Past each other: stopped MIN_LEN apart.
+    t.set_start(ms(9_000));
+    assert_eq!(t.start, ms(7_500) - MIN_LEN);
+    t.set_end(ms(100));
+    assert_eq!(t.end, t.start + MIN_LEN);
+    // Never past the recording.
+    t.set_end(ms(60_000));
+    assert_eq!(t.end, ms(10_000));
+}
+
+#[test]
+fn presses_take_the_handle_within_reach_else_the_head() {
+    let l = layout();
+    let mut t = Trim::new(ms(10_000), 30);
+    t.set_start(ms(2_000));
+    t.set_end(ms(8_000));
+    let sx = x_of(&l, t.len, t.start);
+    assert_eq!(near_handle(&l, &t, sx + REACH - 1.0), Some(Grab::Start));
+    assert_eq!(near_handle(&l, &t, x_of(&l, t.len, t.end) - 3.0), Some(Grab::End));
+    assert_eq!(near_handle(&l, &t, x_of(&l, t.len, ms(5_000))), None);
+    // A drag of the start handle.
+    t.press(time_at(&l, t.len, sx), Some(Grab::Start));
+    t.drag(time_at(&l, t.len, x_of(&l, t.len, ms(3_000))));
+    t.release();
+    assert!((t.start.as_millis() as i64 - 3_000).abs() < 20, "{:?}", t.start);
+    assert_eq!(t.head, t.start, "the preview follows the start");
+    // Elsewhere: the playhead.
+    t.press(ms(6_000), None);
+    assert_eq!((t.grab, t.head), (Some(Grab::Head), ms(6_000)));
+    t.release();
+    assert_eq!(t.grab, None);
+    // Close handles: the nearer.
+    let mut c = Trim::new(ms(10_000), 30);
+    c.set_start(ms(5_000));
+    c.set_end(ms(5_200));
+    let mid = (x_of(&l, c.len, c.start) + x_of(&l, c.len, c.end)) / 2.0;
+    assert_eq!(near_handle(&l, &c, mid - 1.0), Some(Grab::Start));
+    assert_eq!(near_handle(&l, &c, mid + 1.0), Some(Grab::End));
+}
+
+#[test]
+fn playing_runs_through_the_selection_once() {
+    let t0 = Instant::now();
+    let mut t = Trim::new(ms(10_000), 30);
+    t.set_start(ms(1_000));
+    t.set_end(ms(3_000));
+    t.seek(ms(9_000));
+    t.toggle_play(t0);
+    assert!(t.playing());
+    assert_eq!(t.head, ms(1_000), "outside the selection: from its start");
+    assert!(t.tick(t0 + ms(500)));
+    assert_eq!(t.head, ms(1_500));
+    t.toggle_play(t0 + ms(600));
+    assert!(!t.playing(), "paused");
+    assert!(!t.tick(t0 + ms(900)), "paused: no ticking");
+    t.toggle_play(t0 + ms(1_000));
+    assert!(!t.tick(t0 + ms(5_000)), "past the end: it stops");
+    assert!(t.head < ms(3_000) && t.head >= ms(3_000) - t.frame);
+    // Play again: from the start.
+    t.toggle_play(t0 + ms(6_000));
+    assert_eq!(t.head, ms(1_000));
+}
+
+#[test]
+fn keys() {
+    let now = Instant::now();
+    let mut t = Trim::new(ms(10_000), 25);
+    assert_eq!(t.frame, ms(40));
+    t.key(key::RIGHT, false, now);
+    assert_eq!(t.head, ms(40), "a frame");
+    t.key(key::RIGHT, true, now);
+    assert_eq!(t.head, ms(1_040), "Shift: a second");
+    t.key(0x49, false, now); // I
+    assert_eq!(t.start, ms(1_040));
+    t.seek(ms(4_000));
+    t.key(0x4F, false, now); // O
+    assert_eq!(t.end, ms(4_040), "the head's frame stays in");
+    t.key(key::HOME, false, now);
+    assert_eq!(t.head, t.start);
+    t.key(key::SPACE, false, now);
+    assert!(t.playing());
+    assert_eq!(t.key(key::RETURN, false, now), Some(Choice::Trimmed { start: ms(1_040), end: ms(4_040) }));
+    assert_eq!(t.key(key::ESCAPE, false, now), Some(Choice::Full));
+    assert_eq!(t.key(0x41, false, now), None);
+}
+
+#[test]
+fn times_read_with_tenths() {
+    assert_eq!(fmt_time(ms(0)), "0:00.0");
+    assert_eq!(fmt_time(ms(3_250)), "0:03.2");
+    assert_eq!(fmt_time(ms(754_900)), "12:34.9");
+    assert_eq!(fmt_time(ms(3_723_400)), "1:02:03.4");
+}
+
+#[test]
+fn layout_fits_the_window() {
+    let l = layout();
+    assert!(l.preview.y >= 0.0 && l.preview.h > 200.0);
+    assert!(l.preview.y1() < l.play.y && l.play.y1() < l.strip.y && l.strip.y1() + 20.0 <= l.footer);
+    assert!(l.strip.x1() <= W as f32 - PAD + 0.5);
+    assert_eq!(time_at(&l, ms(10_000), l.strip.x), ms(0));
+    assert_eq!(time_at(&l, ms(10_000), l.strip.x1() + 50.0), ms(10_000));
+    assert!((x_of(&l, ms(10_000), ms(5_000)) - (l.strip.x + l.strip.w / 2.0)).abs() < 0.01);
+}
+
+/// The window drawn (dark and light, previews under RUSTSHOT_PREVIEW_DIR):
+/// the buttons are there, Save trimmed only does something once trimmed.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn trim_window_preview() {
+    use crate::ui::{FocusState, Input};
+    for (name, th) in [("dark", &crate::theme::DARK), ("light", &crate::theme::LIGHT)] {
+        let mut t = Trim::new(ms(12_000), 30);
+        t.set_start(ms(1_500));
+        t.set_end(ms(9_000));
+        t.seek(ms(4_200));
+        let thumb = crate::pixbuf::PixBuf::from_pixel(72, 56, [70, 110, 160, 255]);
+        let pics = window::Pics {
+            ready: Some(true),
+            thumbs: (0..THUMBS).map(|_| Some(thumb.clone())).collect(),
+            frame: Some((ms(4_200), crate::pixbuf::PixBuf::from_pixel(600, 320, [40, 60, 90, 255]))),
+        };
+        let mut focus = FocusState::default();
+        let img = crate::ui::preview::render(W, H, 1.0, th, &Input::default(), &mut focus, |ui| {
+            assert_eq!(window::paint(ui, &mut t, &pics, Instant::now()), None, "nothing pressed");
+        });
+        for id in ["trim.play", "trim.save", "trim.keep"] {
+            assert!(focus.rect_of(id).is_some(), "{name}: {id}");
+        }
+        // The selection's start handle is the accent.
+        let l = layout();
+        let (x, y) = (x_of(&l, t.len, t.start), l.strip.y + 4.0);
+        let p = img.get_pixel(x as u32, y as u32);
+        let ac = th.accent;
+        assert!(p[0].abs_diff(ac.r) < 8 && p[1].abs_diff(ac.g) < 8 && p[2].abs_diff(ac.b) < 8, "{name}: handle {p:?}");
+        crate::ui::preview::save(&format!("trim_window_{name}.png"), &img);
+    }
+}
+
+#[test]
+fn applying_a_choice() {
+    let dir = std::env::temp_dir().join(format!("rustshot-trim-apply-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let p = dir.join("rec.gif");
+    let mut enc = crate::rec::gif::GifEncoder::new(std::io::Cursor::new(Vec::new()), 20, 20, 10).unwrap();
+    for k in 0..10u64 {
+        use crate::rec::VideoEncoder;
+        let px = [k as u8 * 20, 30, 30, 255].repeat(400);
+        enc.push_video(&crate::rec::Frame::bgra(20, 20, px, ms(k * 100))).unwrap();
+    }
+    std::fs::write(&p, enc.into_inner().unwrap().into_inner()).unwrap();
+    assert_eq!(apply(&p, Choice::Full), Outcome::Full);
+    assert_eq!(apply(&p, Choice::Trimmed { start: ms(200), end: ms(600) }), Outcome::Trimmed(p.clone(), ms(400)));
+    assert_eq!(crate::rec::cut::length(&p).unwrap(), ms(400), "the trimmed file has the recording's name");
+    assert!(!dir.join("rec-trimmed.gif").exists());
+    assert!(matches!(apply(&dir.join("gone.gif"), Choice::Trimmed { start: ms(0), end: ms(100) }), Outcome::Failed(_)));
+    let _ = std::fs::remove_dir_all(&dir);
+}

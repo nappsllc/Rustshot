@@ -1326,6 +1326,12 @@ fn limits(cfg: &crate::config::Config) -> (u32, u64) {
     (cfg.history_days.max(1), cfg.history_max_mb.max(1) as u64 * 1_000_000)
 }
 
+/// Whether entry `id`'s files are still being written (the scrolling
+/// capture opens it in the Edit window only once they are on disk).
+pub fn writing(id: &str) -> bool {
+    lock(&WRITING).iter().any(|w| w == id)
+}
+
 /// Keep screenshot `shot` (when `cfg.history` is on): its folder now, the
 /// files on the history thread. Returns the entry's id.
 pub fn record(cfg: &crate::config::Config, root: &Path, shot: ShotRec) -> Option<String> {
