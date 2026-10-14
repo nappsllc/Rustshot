@@ -601,6 +601,16 @@ fn within(a: FRect, b: FRect) -> bool {
     a.x >= b.x - 0.5 && a.y >= b.y - 0.5 && a.x1() <= b.x1() + 0.5 && a.y1() <= b.y1() + 0.5
 }
 
+/// A panel row's name size: 12, smaller (down to 10.5) for a long name
+/// in a row with an icon (its 92 px column, 4 px spare).
+pub(super) fn row_name_size(ui: &Ui, label: &str, icon_row: bool) -> f32 {
+    let mut size: f32 = 12.0;
+    while icon_row && size > 10.5 && tw(ui, size, label) > ui.px(96.0) {
+        size -= 0.5;
+    }
+    size
+}
+
 /// A segment's text size: 12 (11 in a short one), smaller (down to 10)
 /// when a long word needs it to fit with 2 px to spare each side.
 pub(super) fn seg_text_size(ui: &Ui, r: FRect, label: &str, icon: &str) -> f32 {
@@ -655,7 +665,7 @@ fn panel_row(f: &mut Fb, ui: &Ui, it: &Item, (icon, label, value): (&str, &str, 
         x = r.x + ui.px(38.0);
     }
     let name = if dim { th.text_muted } else { th.text };
-    let nw = text(f, ui, 12.0, label, x, cy, name.fade(k));
+    let nw = text(f, ui, row_name_size(ui, label, !icon.is_empty()), label, x, cy, name.fade(k));
     if let Some(v) = value {
         let vx = if icon.is_empty() { x + nw + ui.px(10.0) } else { r.x + ui.px(38.0 + 92.0 + 10.0) };
         let room = r.x1() - ui.px(6.0 + 32.0 + 10.0) - vx;

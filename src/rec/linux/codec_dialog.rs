@@ -278,7 +278,7 @@ pub fn paint(ui: &mut Ui, m: &Machine) -> Option<Btn> {
         ui.row(|ui| {
             ui.icon(icon, ICON, col);
             ui.space(4.0);
-            ui.heading(&title);
+            ui.heading_fit(&title, inner - ICON - 4.0 - 2.0 * crate::ui::layout::GAP);
         })
     });
     let mut y = title_r.y1() + 4.0;

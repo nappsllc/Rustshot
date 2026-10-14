@@ -243,8 +243,15 @@ pub fn layout(ui: &Ui, h: &History, w: f32, hh: f32) -> Lay {
         }
         let segs: f32 = FILTERS.iter().map(|(_, l)| seg_item_w(ui, l)).sum::<f32>() + 4.0 + 6.0;
         let view_w = if empty { 0.0 } else { 2.0 * 32.0 + 2.0 + 6.0 + 10.0 };
-        let room = right - x - 10.0 - segs - view_w;
-        let sw = room.clamp(140.0, SEARCH_W);
+        let mut room = right - x - 10.0 - segs - view_w;
+        // Crowded (a small window, long words): no zoom slider, then a
+        // narrower search.
+        if room < 140.0
+            && let Some(s) = slider.take()
+        {
+            room += s.w + 10.0;
+        }
+        let sw = if room >= 140.0 { room.min(SEARCH_W) } else { room.max(100.0) };
         search = Some(FRect { x, y: cy - 14.0, w: sw, h: 28.0 });
         x += sw + 10.0;
         let mut sx = x + 3.0;

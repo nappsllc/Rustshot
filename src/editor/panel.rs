@@ -767,7 +767,7 @@ mod tests {
                             Kind::Primary { label, .. } => assert!(10.0 + 10.0 + tw(&ui, 13.0, label) + 10.0 + 22.0 <= r.w - 16.0, "{}", what(label)),
                             Kind::Row { icon, label, value, .. } => {
                                 let x = r.x + if icon.is_empty() { 8.0 } else { 38.0 };
-                                let end = x + tw(&ui, 12.0, label);
+                                let end = x + tw(&ui, super::super::chrome::row_name_size(&ui, label, !icon.is_empty()), label);
                                 // What follows the name on its row.
                                 let next = tb
                                     .items

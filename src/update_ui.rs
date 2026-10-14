@@ -523,7 +523,13 @@ fn paint(ui: &mut Ui, m: &Machine, v: &mut View) -> Option<Btn> {
     // Buttons, right-aligned.
     let (btns, primary) = m.buttons();
     let gap = crate::ui::layout::GAP;
-    let total: f32 = btns.iter().map(|b| ui.button_width(b.label())).sum::<f32>() + gap * (btns.len() as f32 - 1.0);
+    let total_of = |ui: &Ui| btns.iter().map(|b| ui.button_width(b.label())).sum::<f32>() + gap * (btns.len() as f32 - 1.0);
+    // Long labels: smaller text (down to 11) before the row overflows.
+    let text_px = ui.text_px;
+    while ui.text_px > 11.0 && total_of(ui) > lay.buttons.w {
+        ui.text_px -= 0.5;
+    }
+    let total = total_of(ui);
     let mut clicked = None;
     ui.area(lay.buttons, |ui| {
         ui.row(|ui| {
@@ -537,6 +543,7 @@ fn paint(ui: &mut Ui, m: &Machine, v: &mut View) -> Option<Btn> {
             ui.enabled = true;
         })
     });
+    ui.text_px = text_px;
     clicked
 }
 

@@ -43,9 +43,6 @@ struct Entry {
     run: Option<Run>,
     /// Last use (measured or drawn): eviction keeps the recent ones.
     used: u64,
-    /// [`crate::text::font_generation`] when made: older is stale (a font
-    /// it lacked has been found since).
-    fonts: u64,
 }
 
 impl Entry {
@@ -63,6 +60,9 @@ struct Cache {
     index: std::collections::HashMap<u64, usize>,
     bytes: usize,
     tick: u64,
+    /// [`crate::text::font_generation`] of what is kept: when it moves (a
+    /// font text lacked has been found), all of it is drawn again.
+    fonts: u64,
 }
 
 fn key_hash(s: &str, px: f32, rtl: bool) -> u64 {
@@ -79,7 +79,7 @@ impl Cache {
         let tick = self.tick;
         let &i = self.index.get(&key_hash(s, px, rtl))?;
         let e = &mut self.entries[i];
-        if e.s != s || e.px != px.to_bits() || e.rtl != rtl || e.fonts != crate::text::font_generation() {
+        if e.s != s || e.px != px.to_bits() || e.rtl != rtl {
             return None;
         }
         e.used = tick;
@@ -89,7 +89,6 @@ impl Cache {
     fn insert(&mut self, mut e: Entry) {
         self.tick += 1;
         e.used = self.tick;
-        e.fonts = crate::text::font_generation();
         let h = key_hash(&e.s, f32::from_bits(e.px), e.rtl);
         self.bytes += e.bytes();
         match self.index.get(&h) {
@@ -142,7 +141,15 @@ const MAX_BYTES: usize = 8 << 20;
 
 fn cache() -> std::sync::MutexGuard<'static, Cache> {
     static C: OnceLock<Mutex<Cache>> = OnceLock::new();
-    C.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner())
+    let mut c = C.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    let g = crate::text::font_generation();
+    if c.fonts != g {
+        c.entries.clear();
+        c.index.clear();
+        c.bytes = 0;
+        c.fonts = g;
+    }
+    c
 }
 
 /// The OS font size whose em is the baked font's at `px`.
@@ -162,7 +169,7 @@ pub fn width(font: &UiFont, s: &str, px: f32) -> f32 {
         return e.w;
     }
     let w = face(rtl).width(s, os_px(font, px));
-    cache().insert(Entry { s: s.to_string(), px: px.to_bits(), rtl, w, run: None, used: 0, fonts: 0 });
+    cache().insert(Entry { s: s.to_string(), px: px.to_bits(), rtl, w, run: None, used: 0 });
     w
 }
 
@@ -303,7 +310,7 @@ mod tests {
     #[test]
     fn cache_keeps_recently_used() {
         let mut c = Cache::default();
-        let e = |s: String| Entry { s, px: 1.0f32.to_bits(), rtl: false, w: 1.0, run: None, used: 0, fonts: 0 };
+        let e = |s: String| Entry { s, px: 1.0f32.to_bits(), rtl: false, w: 1.0, run: None, used: 0 };
         for i in 0..20 {
             c.insert(e(format!("hot {i}")));
         }

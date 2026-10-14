@@ -348,9 +348,12 @@ fn footer(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) {
     line(ui, RAIL_W, y, w, 1.0, tok.sep);
     let bar = FRect { x: RAIL_W + PAD_X, y: y + (FOOT_H - CTL) / 2.0, w: w - 2.0 * PAD_X, h: CTL };
     let dirty = s.dirty() || s.retry_hotkeys();
+    let btns: f32 = [tr!("common.apply"), tr!("common.cancel"), tr!("common.ok")].iter().map(|l| ui.cbutton_width(l, false).max(72.0)).sum::<f32>() + 2.0 * 8.0;
+    // The link takes what the buttons leave (cut with "…" past that).
+    let link = ui.fit_text(12.0, tr!("settings.footer.open_config_file"), (bar.w - btns - 16.0).max(40.0));
     ui.area(bar, |ui| {
         ui.row(|ui| {
-            if ui.clink("open_config", tr!("settings.footer.open_config_file"), 12.0, false, tok) {
+            if ui.clink("open_config", &link, 12.0, false, tok) {
                 *click = Some(Click::OpenConfig);
             }
         })
