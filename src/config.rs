@@ -57,6 +57,8 @@ pub struct Config {
     /// Global hotkey that picks an area and copies its text (OCR; no
     /// annotation step).
     pub capture_text_hotkey: String,
+    /// Pick an area and read its QR codes (no default chord).
+    pub read_qr_hotkey: String,
     /// Show the notification-area (tray) icon; off, the daemon runs
     /// without one (hotkeys and a second launch still capture).
     pub show_tray: bool,
@@ -246,6 +248,23 @@ pub struct Config {
     /// in logical px (0 = no border, 1-8), around every exported image.
     pub border_color: String,
     pub border_width: u32,
+    /// Settings › Capture "Include mouse pointer": the pointer is captured
+    /// with the screen and added as an object (movable, deletable).
+    pub include_cursor: bool,
+    /// Settings › Saving "Watermark on export": every exported image gets
+    /// the watermark below (text, or a PNG image when `watermark_image` is
+    /// set), at `watermark_anchor` (top-left … bottom-right, center) with
+    /// `watermark_margin` px, `watermark_opacity` and `watermark_size`
+    /// (% of the width) in percent, or tiled.
+    pub export_watermark: bool,
+    pub watermark_text: String,
+    pub watermark_image: String,
+    pub watermark_anchor: String,
+    pub watermark_margin: u32,
+    pub watermark_opacity: u32,
+    pub watermark_size: u32,
+    pub watermark_tiled: bool,
+    pub watermark_color: String,
     /// Settings › Saving "Save at": "screen" (the screen's pixels, as
     /// captured), "logical" (1×: a high-DPI capture scaled down by its
     /// scale, area-averaged) or "custom" (`save_scale_percent`, 10-100 %).
@@ -266,7 +285,7 @@ pub const BORDER_MAX: u32 = 8;
 
 /// The drawing tools whose size and color are remembered
 /// (`tool_<id>_size`, `tool_<id>_color`).
-pub const TOOL_IDS: [&str; 12] = ["pencil", "line", "arrow", "rect", "ellipse", "marker", "text", "counter", "pixelate", "callout", "magnify", "blur"];
+pub const TOOL_IDS: [&str; 13] = ["pencil", "line", "arrow", "rect", "ellipse", "marker", "text", "counter", "pixelate", "callout", "magnify", "blur", "ruler"];
 
 /// The tools that draw filled or outlined (`tool_<id>_fill`).
 pub const FILL_IDS: [&str; 3] = ["rect", "ellipse", "callout"];
@@ -374,6 +393,7 @@ impl Default for Config {
             capture_window_hotkey: "Shift+Meta+E".into(),
             repeat_hotkey: String::new(),
             capture_text_hotkey: "Shift+Meta+Z".into(),
+            read_qr_hotkey: String::new(),
             show_tray: true,
             copy_after_capture: false,
             shutter_sound: false,
@@ -386,6 +406,16 @@ impl Default for Config {
             hdr_screenshots: "tonemap".into(),
             border_color: "#000000".into(),
             border_width: 0,
+            include_cursor: false,
+            export_watermark: false,
+            watermark_text: String::new(),
+            watermark_image: String::new(),
+            watermark_anchor: "bottom-right".into(),
+            watermark_margin: 24,
+            watermark_opacity: 60,
+            watermark_size: 20,
+            watermark_tiled: false,
+            watermark_color: "#ffffff".into(),
             save_scale: "screen".into(),
             save_scale_percent: 50,
             screenclip_hint: true,
@@ -976,6 +1006,7 @@ pub fn hotkey_warnings(cfg: &Config) -> Vec<String> {
         ("repeat_hotkey", &cfg.repeat_hotkey),
         ("capture_text_hotkey", &cfg.capture_text_hotkey),
         ("history_hotkey", &cfg.history_hotkey),
+        ("read_qr_hotkey", &cfg.read_qr_hotkey),
     ]
     .into_iter()
         .filter(|(_, v)| !v.trim().is_empty() && crate::keymap::Chord::parse(v).is_none())
@@ -1154,6 +1185,7 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
             "capture_window_hotkey" => cfg.capture_window_hotkey = as_string(val).map_err(|e| bad("string", &e))?,
             "repeat_hotkey" => cfg.repeat_hotkey = as_string(val).map_err(|e| bad("string", &e))?,
             "capture_text_hotkey" => cfg.capture_text_hotkey = as_string(val).map_err(|e| bad("string", &e))?,
+            "read_qr_hotkey" => cfg.read_qr_hotkey = as_string(val).map_err(|e| bad("string", &e))?,
             "show_tray" => cfg.show_tray = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "copy_after_capture" => cfg.copy_after_capture = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "shutter_sound" => cfg.shutter_sound = as_bool(val).map_err(|e| bad("boolean", &e))?,
@@ -1174,6 +1206,26 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
             "border_width" => {
                 cfg.border_width =
                     as_u64(val).ok().filter(|w| *w <= BORDER_MAX as u64).ok_or_else(|| bad("number (0-8)", val))? as u32
+            }
+            "include_cursor" => cfg.include_cursor = as_bool(val).map_err(|e| bad("boolean", &e))?,
+            "export_watermark" => cfg.export_watermark = as_bool(val).map_err(|e| bad("boolean", &e))?,
+            "watermark_text" => cfg.watermark_text = as_string(val).map_err(|e| bad("string", &e))?,
+            "watermark_image" => cfg.watermark_image = as_string(val).map_err(|e| bad("string", &e))?,
+            "watermark_anchor" => cfg.watermark_anchor = one_of(val, &crate::imgedit::effects::ANCHORS).map_err(|e| bad("value", &e))?,
+            "watermark_margin" => {
+                cfg.watermark_margin = as_u64(val).ok().filter(|v| *v <= 2000).ok_or_else(|| bad("number (0-2000)", val))? as u32
+            }
+            "watermark_opacity" => {
+                cfg.watermark_opacity = as_u64(val).ok().filter(|v| *v <= 100).ok_or_else(|| bad("number (0-100)", val))? as u32
+            }
+            "watermark_size" => {
+                cfg.watermark_size = as_u64(val).ok().filter(|v| (1..=100).contains(v)).ok_or_else(|| bad("number (1-100)", val))? as u32
+            }
+            "watermark_tiled" => cfg.watermark_tiled = as_bool(val).map_err(|e| bad("boolean", &e))?,
+            "watermark_color" => {
+                let v = as_string(val).map_err(|e| bad("string", &e))?;
+                parse_color(&v).ok_or_else(|| bad("color (#rrggbb)", &v))?;
+                cfg.watermark_color = v.trim().to_string();
             }
             "save_scale" => cfg.save_scale = one_of(val, &["screen", "logical", "custom"]).map_err(|e| bad("value", &e))?,
             "save_scale_percent" => {
@@ -1493,6 +1545,20 @@ pub fn to_toml(c: &Config) -> String {
         c.border_width
     ));
     out.push_str(&format!("save_scale = {}\nsave_scale_percent = {}\n", q(&c.save_scale), c.save_scale_percent));
+    out.push_str(&format!("include_cursor = {}\n", c.include_cursor));
+    out.push_str(&format!("read_qr_hotkey = {}\n", q(&c.read_qr_hotkey)));
+    out.push_str(&format!(
+        "export_watermark = {}\nwatermark_text = {}\nwatermark_image = {}\nwatermark_anchor = {}\nwatermark_margin = {}\nwatermark_opacity = {}\nwatermark_size = {}\nwatermark_tiled = {}\nwatermark_color = {}\n",
+        c.export_watermark,
+        q(&c.watermark_text),
+        q(&c.watermark_image),
+        q(&c.watermark_anchor),
+        c.watermark_margin,
+        c.watermark_opacity,
+        c.watermark_size,
+        c.watermark_tiled,
+        q(&c.watermark_color)
+    ));
     out.push_str(&format!(
         "launcher_source = {}\nlauncher_delay = {}\nlauncher_after = {}\n",
         q(&c.launcher_source),
@@ -2779,5 +2845,36 @@ record_hotkey = \"Ctrl+Shift+R\"
         assert_eq!((c.tool_sizes.get("line"), c.tool_sizes.get("rect")), (Some(&30.0), Some(&31.0)));
         assert!(text.starts_with("# keep\n") && c.theme == "dark", "{text}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod sharex_config_tests {
+    use super::*;
+
+    #[test]
+    fn cursor_and_watermark_keys_round_trip() {
+        let d = Config::default();
+        assert!(!d.include_cursor && !d.export_watermark && d.watermark_anchor == "bottom-right" && d.watermark_size == 20);
+        let c = Config {
+            include_cursor: true,
+            export_watermark: true,
+            watermark_text: "© me \"x\"".into(),
+            watermark_image: "C:\\a\\b.png".into(),
+            watermark_anchor: "center".into(),
+            watermark_margin: 5,
+            watermark_opacity: 33,
+            watermark_size: 50,
+            watermark_tiled: true,
+            watermark_color: "#ff0000".into(),
+            ..Config::default()
+        };
+        let back = parse_config(&to_toml(&c)).unwrap();
+        assert!(back.include_cursor && back.export_watermark && back.watermark_tiled);
+        assert_eq!((back.watermark_text.as_str(), back.watermark_image.as_str(), back.watermark_anchor.as_str()), ("© me \"x\"", "C:\\a\\b.png", "center"));
+        assert_eq!((back.watermark_margin, back.watermark_opacity, back.watermark_size, back.watermark_color.as_str()), (5, 33, 50, "#ff0000"));
+        for bad in ["watermark_anchor = \"middle\"", "watermark_opacity = 101", "watermark_size = 0", "watermark_color = \"red\"", "include_cursor = 2"] {
+            assert!(parse_config(bad).is_err(), "{bad}");
+        }
     }
 }

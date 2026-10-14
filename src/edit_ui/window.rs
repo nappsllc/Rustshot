@@ -47,6 +47,8 @@ pub struct Window {
     /// An image dialog's input and focus (its controls are the kit's).
     dlg_in: Input,
     dlg_focus: FocusState,
+    /// Read QR code is running (off this thread: the window keeps working).
+    pub qr_busy: bool,
 }
 
 impl Window {
@@ -68,6 +70,7 @@ impl Window {
             unsaved: Default::default(),
             dlg_in: Input::default(),
             dlg_focus: FocusState::default(),
+            qr_busy: false,
         }
     }
 
@@ -82,6 +85,7 @@ impl Window {
             self.dlg_focus.focus(match d {
                 super::image::ImgDialog::Resize(_) => "rs_w",
                 super::image::ImgDialog::Canvas(_) => "cv_pad",
+                super::image::ImgDialog::Effects(_) => "fx_wm_text",
             });
         }
     }
@@ -278,6 +282,7 @@ impl Window {
                     }
                 }
                 Request::SaveAs | Request::SaveDesktop | Request::OpenWith | Request::Share | Request::Copy | Request::Upload | Request::CopyText | Request::Pin => self.export(r),
+            Request::ReadQr => self.read_qr(),
             }
         }
     }
@@ -298,7 +303,7 @@ impl Window {
             crate::export::with_border(self.e.canvas.export(), &self.e.cfg, self.e.entry.meta.scale)
         } else {
             let resized = self.e.canvas.edits().resize.is_some();
-            crate::export::for_output(self.e.canvas.export(), &self.e.cfg, self.e.entry.meta.scale, resized)
+            crate::export::for_output_marked(self.e.canvas.export(), &self.e.cfg, self.e.entry.meta.scale, resized, self.e.canvas.edits().effects.watermark.is_some())
         };
         let objs = self.e.canvas.objects().to_vec();
         let doc = self.e.canvas.doc();
@@ -357,6 +362,37 @@ impl Window {
             let res = crate::export::run_export(&img, (0, 0), std::slice::from_ref(&task), &cfg);
             let _ = tx.send(export_done(res, saves, &store, &id, doc, objs, &cfg));
         });
+    }
+
+    /// Read QR code: the picture as it shows (before the resize and the
+    /// canvas), its codes in the notice with Copy and Open link (a toast
+    /// here where there is no notice window).
+    fn read_qr(&mut self) {
+        if self.qr_busy {
+            return;
+        }
+        let img = self.e.canvas.export_picture();
+        #[cfg(not(test))]
+        let at = crate::capture::cursor_pos();
+        #[cfg(test)]
+        let at = (0, 0);
+        self.qr_busy = true;
+        self.e.note(tr!("qr.reading"), ToastKind::Info);
+        crate::qr_ui::spawn(img, at, *self.e.canvas.theme());
+    }
+
+    /// Read QR code finished: its notice (a toast here without one).
+    pub(super) fn qr_done(&mut self) -> bool {
+        let done = crate::qr_ui::poll();
+        for (n, at, th) in &done {
+            self.qr_busy = false;
+            if crate::notice::show(n.clone(), *at, *th) {
+                self.e.toast = None;
+            } else {
+                self.e.note(n.text.clone(), n.kind);
+            }
+        }
+        !done.is_empty()
     }
 
     fn settle(&mut self) {
@@ -604,6 +640,9 @@ impl Window {
             if !d.text.is_empty() {
                 self.e.note(d.text, d.kind);
             }
+            changed = true;
+        }
+        if self.qr_busy && self.qr_done() {
             changed = true;
         }
         self.e.canvas.flush(false);

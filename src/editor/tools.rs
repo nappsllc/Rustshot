@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 /// coalesce); an overlay that closes first writes at once.
 pub const SAVE_DELAY: Duration = Duration::from_millis(300);
 
-/// Every tool: the toolbar's, then Invert (a key only).
+/// Every tool: the toolbar's, then Invert and the Ruler (keys only).
 pub const ALL: [Tool; N] = {
     let mut v = [Tool::Invert; N];
     let mut i = 0;
@@ -26,9 +26,10 @@ pub const ALL: [Tool; N] = {
         v[i] = super::toolbar::TOOL_ORDER[i];
         i += 1;
     }
+    v[N - 1] = Tool::Ruler;
     v
 };
-const N: usize = super::toolbar::TOOL_ORDER.len() + 1;
+const N: usize = super::toolbar::TOOL_ORDER.len() + 2;
 
 /// The number tag's diameter until one is chosen.
 pub const COUNTER_SIZE: f32 = 32.0;
@@ -59,6 +60,7 @@ pub fn id(t: Tool) -> Option<&'static str> {
         Tool::Callout => "callout",
         Tool::Magnify => "magnify",
         Tool::Blur => "blur",
+        Tool::Ruler => "ruler",
         Tool::Invert | Tool::Select | Tool::Spotlight => return None,
     })
 }

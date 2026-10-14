@@ -837,6 +837,41 @@ fn edit_window_smoke() {
     assert!(d.frames > 0, "drew a frame");
 }
 
+/// Image › Effects…: each tab (dark and light), Apply is one undo step
+/// and the export carries the effects after the canvas.
+#[test]
+fn effects_dialog_applies_and_previews() {
+    use super::image::{DlgOut, ImgAct, ImgDialog};
+    for (tn, th) in [("dark", DARK), ("light", LIGHT)] {
+        let (_r, mut w) = window(&format!("pv-fx-{tn}"), page(1180, 760), objects(), th, 1.0);
+        let before = w.e.canvas.export().dimensions();
+        w.image_act(ImgAct::Effects);
+        let Some(ImgDialog::Effects(f)) = w.e.img_dialog.as_mut() else { panic!("the Effects dialog") };
+        f.on = [true, true, true, true];
+        f.wm_text.set("Rustshot");
+        f.sides = [false, true, true, false];
+        for tab in 0..4 {
+            if let Some(ImgDialog::Effects(f)) = w.e.img_dialog.as_mut() {
+                f.tab = tab;
+            }
+            w.render();
+            crate::ui::preview::save(&format!("edit-effects-{tab}-{tn}.png"), w.pixels());
+        }
+        w.e.image_answer(DlgOut::Apply);
+        assert!(w.e.img_dialog.is_none());
+        let e = w.e.canvas.edits().effects;
+        assert!(e.watermark.is_some() && e.shadow.is_some() && e.torn.is_some() && e.reflection.is_some());
+        let after = w.e.canvas.export().dimensions();
+        assert!(after.0 > before.0 && after.1 > before.1, "{before:?} -> {after:?}");
+        crate::ui::preview::save(&format!("edit-effects-export-{tn}.png"), &w.e.canvas.export());
+        // No effects: back to the picture.
+        w.image_act(ImgAct::Effects);
+        w.e.image_answer(DlgOut::Remove);
+        assert!(w.e.canvas.edits().effects.is_empty());
+        assert_eq!(w.e.canvas.export().dimensions(), before);
+    }
+}
+
 /// The window at its smallest fits in English and the long
 /// pseudo-languages: the chrome, the save questions, the Image menu and
 /// its Resize and Canvas dialogs (previews per language).
@@ -875,6 +910,15 @@ fn fits_in_long_languages() {
                 key(&mut w, crate::wind::key::ESCAPE, Mods::default());
                 w.image_act(ImgAct::Canvas);
                 shot(&mut w, "canvas");
+                for tab in 0..4 {
+                    key(&mut w, crate::wind::key::ESCAPE, Mods::default());
+                    w.image_act(ImgAct::Effects);
+                    if let Some(super::image::ImgDialog::Effects(f)) = w.e.img_dialog.as_mut() {
+                        f.tab = tab;
+                        f.on = [true; 4];
+                    }
+                    shot(&mut w, &format!("effects-{tab}"));
+                }
             }
         });
     }

@@ -228,6 +228,7 @@ pub fn kind_name(o: &Obj) -> &'static str {
         Obj::Spotlight { .. } => "Spotlight",
         Obj::Magnify { .. } => "Magnify",
         Obj::Blur { .. } => "Blur",
+        Obj::Cursor { .. } => tr!("objects.cursor"),
     }
 }
 

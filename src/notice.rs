@@ -65,6 +65,10 @@ pub enum NoteAct {
     KeepUpload,
     /// "Rustshot is now in …": back to English (`language = "en"`).
     UseEnglish,
+    /// Read QR code's toast: copy the codes' text; open the http(s) link
+    /// it shows ([`crate::qr_ui`]).
+    QrCopy,
+    QrOpen,
 }
 
 impl NoteAct {
@@ -82,6 +86,8 @@ impl NoteAct {
             NoteAct::CancelDelay | NoteAct::KeepUpload => tr!("notice.act.cancel"),
             NoteAct::DeleteUpload => tr!("notice.act.delete_upload"),
             NoteAct::UseEnglish => tr!("notice.act.use_english"),
+            NoteAct::QrCopy => tr!("notice.act.qr_copy"),
+            NoteAct::QrOpen => tr!("notice.act.qr_open"),
         }
     }
 
@@ -98,7 +104,7 @@ impl NoteAct {
 
     /// The first button is the accent one.
     fn primary(self) -> bool {
-        matches!(self, NoteAct::CopyLink | NoteAct::Copy | NoteAct::Edit | NoteAct::DeleteUpload)
+        matches!(self, NoteAct::CopyLink | NoteAct::Copy | NoteAct::Edit | NoteAct::DeleteUpload | NoteAct::QrCopy)
     }
 }
 
@@ -130,6 +136,9 @@ pub struct Thumb {
     pub at: (i32, i32),
     /// Its History entry: the card's Edit opens it.
     pub entry: Option<String>,
+    /// What Pin shows instead of `img` (and where), when the export differs
+    /// from the screen's pixels (Save at, the export watermark).
+    pub pin: Option<(Arc<PixBuf>, (i32, i32))>,
 }
 
 impl PartialEq for Thumb {
@@ -418,7 +427,7 @@ pub fn upload_configured(cfg: &crate::config::Config) -> bool {
 pub fn run_action(a: NoteAct, file: &std::path::Path, entry: Option<String>, done: impl FnOnce(Note) + Send + 'static) -> Option<Note> {
     match a {
         // A thumbnail's buttons act on its picture (`run_note_action`).
-        NoteAct::ThumbCopy | NoteAct::ThumbSave | NoteAct::Pin | NoteAct::Edit | NoteAct::Dismiss | NoteAct::Card | NoteAct::CancelDelay | NoteAct::DeleteUpload | NoteAct::KeepUpload | NoteAct::UseEnglish => None,
+        NoteAct::ThumbCopy | NoteAct::ThumbSave | NoteAct::Pin | NoteAct::Edit | NoteAct::Dismiss | NoteAct::Card | NoteAct::CancelDelay | NoteAct::DeleteUpload | NoteAct::KeepUpload | NoteAct::UseEnglish | NoteAct::QrCopy | NoteAct::QrOpen => None,
         NoteAct::Open => {
             crate::actions::open_path(file);
             None
@@ -640,7 +649,7 @@ pub fn thumbnail(done: &[Done], uploading: bool, img: Arc<PixBuf>, at: (i32, i32
         actions.push(NoteAct::Edit);
     }
     actions.extend([NoteAct::ThumbCopy, NoteAct::ThumbSave, NoteAct::Pin]);
-    Some(Note { text, kind: ToastKind::Success, ttl: ACTION_TTL, actions, file: saved_file(done), thumb: Some(Thumb { img, at, entry: entry.clone() }), entry, corner: false })
+    Some(Note { text, kind: ToastKind::Success, ttl: ACTION_TTL, actions, file: saved_file(done), thumb: Some(Thumb { img, at, entry: entry.clone(), pin: None }), entry, corner: false })
 }
 
 /// The last file `done` saved.
@@ -886,6 +895,11 @@ pub fn run_note_action(note: &Note, a: NoteAct, th: Theme, done: impl FnOnce(Not
     match a {
         NoteAct::Card => Next::Keep,
         NoteAct::Dismiss => Next::Hide,
+        NoteAct::QrCopy => Next::Show(crate::qr_ui::copy_for(note.entry.as_deref())),
+        NoteAct::QrOpen => {
+            crate::qr_ui::open_for(note.entry.as_deref());
+            Next::Hide
+        }
         NoteAct::CancelDelay => {
             crate::launcher::cancel();
             Next::Hide
@@ -903,7 +917,10 @@ pub fn run_note_action(note: &Note, a: NoteAct, th: Theme, done: impl FnOnce(Not
         }
         NoteAct::Pin => {
             if let Some(t) = &note.thumb
-                && !crate::pin::open(t.img.clone(), t.at, th)
+                && !{
+                    let (img, at) = t.pin.clone().unwrap_or((t.img.clone(), t.at));
+                    crate::pin::open(img, at, th)
+                }
             {
                 crate::tray::notify(tr!("editor.pin_unavailable"));
             }
@@ -1205,6 +1222,9 @@ mod tests {
                     compose(&[Done::SavedDesktop(PathBuf::from("/home/me/Desktop/2026-10-11_14-02.png"))], false),
                     Some(recording_saved(&PathBuf::from("rustshot-2026-10-10-2131.mp4"), Duration::from_secs(42), 1_400_000, &[], true)),
                     Some(language_note("Deutsch")),
+                    Some(crate::qr_ui::note(vec!["https://example.com/some/long/path?q=1".into(), "hello".into()])),
+                    Some(crate::qr_ui::note(Vec::new())),
+                    Some(Note::plain(tr!("qr.reading"), ToastKind::Info)),
                 ];
                 for note in notes.iter().flatten() {
                     for (s, screen) in [(1.0f32, 1280u32), (1.5, 1920)] {
@@ -1337,7 +1357,7 @@ mod tests {
     fn thumbnail_layout() {
         for s in [1.0f32, 1.5, 2.0] {
             for (w, h) in [(1600u32, 900u32), (300, 2000), (2000, 100), (40, 30)] {
-                let t = Thumb { img: shot(w, h), at: (0, 0), entry: None };
+                let t = Thumb { img: shot(w, h), at: (0, 0), entry: None, pin: None };
                 let l = thumb_layout(&t, s);
                 let card = l.act.panel;
                 assert_eq!(card.w, (200.0 * s).round(), "{w}x{h}@{s}");

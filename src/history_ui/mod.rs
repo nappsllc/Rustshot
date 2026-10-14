@@ -533,7 +533,12 @@ pub fn run_export(store: &Store, id: &str, task: crate::export::Task, cfg: &Conf
     let img = match picture(store, &e) {
         // Save at (unless the Edit window resized it on purpose, or it is
         // a pin: that shows the screen's pixels), the border.
-        Ok(i) => crate::export::for_output(i, cfg, e.meta.scale, task == Task::Pin || store.doc(&e).is_ok_and(|d| d.edits.resize.is_some())),
+        Ok(i) if task == Task::Pin => crate::export::with_border(i, cfg, e.meta.scale),
+        Ok(i) => {
+            let doc = store.doc(&e).ok();
+            let (resized, marked) = doc.as_ref().map_or((false, false), |d| (d.edits.resize.is_some(), d.edits.effects.watermark.is_some()));
+            crate::export::for_output_marked(i, cfg, e.meta.scale, resized, marked)
+        }
         Err(err) => return fail(tr!("history.read_failed", e = format!("{err:#}"))),
     };
     if task == Task::Pin {

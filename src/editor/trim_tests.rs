@@ -328,6 +328,9 @@ fn save_at_one_x_halves_the_export_and_the_history_keeps_it_all() {
     let e = ed(&mut a);
     e.cfg.save_scale = "logical".into();
     e.cfg.border_width = 2;
+    // (The thumbnail card has a Pin too: with it on, its screen-size
+    // picture is kept as well.)
+    e.cfg.show_thumbnail = false;
     e.tasks = vec![Task::Copy];
     let State::Edit(e) = std::mem::replace(&mut a.st, State::Hidden) else { unreachable!() };
     let mut e = *e;

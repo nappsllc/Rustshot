@@ -118,6 +118,7 @@ fn tool_of(o: &Obj) -> Tool {
         Obj::Spotlight { .. } => Tool::Spotlight,
         Obj::Magnify { .. } => Tool::Magnify,
         Obj::Blur { .. } => Tool::Blur,
+        Obj::Cursor { .. } => Tool::Select,
     }
 }
 

@@ -1,8 +1,9 @@
 //! Tests only: the annotations.json reader of v0.3.0 (`json.rs` is
 //! `git show v0.3.0:src/objects/json.rs` up to its tests module), over
 //! this build's object types: v0.3.0's objects are this build's (no kind
-//! was added since). Checks what v0.3 makes of the documents this one
-//! writes (the crop's stand-ins).
+//! was added since but the pointer, `Obj::Cursor`, which its writer
+//! skips: v0.3.0 had no such kind). Checks what v0.3 makes of the
+//! documents this one writes (the crop's stand-ins).
 
 #![allow(dead_code)]
 

@@ -35,6 +35,8 @@ mod select;
 mod input;
 mod assist;
 mod snip;
+mod ruler;
+mod qr_read;
 mod imgedit;
 mod trim_sel;
 pub use assist::AcceptOn;
@@ -117,6 +119,12 @@ impl Pending {
     /// `screen`, saved straight away.
     pub fn repeat(region: (i32, i32, u32, u32), screen: Option<u32>) -> Self {
         Self { region: Some(region), screen, accept_on_select: true, tasks: vec![Task::Save { path: None, ask: false }], ..Self::editor() }
+    }
+
+    /// The Read QR code hotkey: pick an area, then its QR codes are read
+    /// (the result's toast has Copy and Open link).
+    pub fn qr() -> Self {
+        Self { accept_on_select: true, tasks: vec![Task::Qr], ..Self::editor() }
     }
 
     /// The copy-text hotkey: pick an area, then its text is recognized
@@ -354,6 +362,7 @@ fn without_globals(cfg: &Config) -> Config {
         &mut c.repeat_hotkey,
         &mut c.capture_text_hotkey,
         &mut c.history_hotkey,
+        &mut c.read_qr_hotkey,
     ] {
         s.clear();
     }
@@ -662,6 +671,7 @@ impl App {
         }
         self.poll_upload();
         self.poll_ocr();
+        crate::qr_ui::show_done();
         // Text mode's words or Quick Redact's finds arrived.
         // (An export queued behind Redact may finish the capture.)
         let mut snipped = false;
@@ -805,6 +815,7 @@ impl App {
             || crate::settings_ui::is_open()
             || crate::history_ui::is_open()
             || crate::launcher::is_open()
+            || crate::qr_make::is_open()
             || crate::update_ui::is_open()
     }
 
@@ -912,13 +923,13 @@ impl App {
             HotEvent::Pressed(i) if i != 1 && i != 7 && matches!(self.st, State::Edit(_)) => self.forward_hotkey(i),
             HotEvent::Pressed(i) => return self.on_hot(crate::hotkey::slot_event(i)),
             // A capture would show the overlay in the recording.
-            HotEvent::Capture | HotEvent::Record | HotEvent::CaptureFull | HotEvent::CaptureWindow | HotEvent::RepeatLast | HotEvent::CaptureText
+            HotEvent::Capture | HotEvent::Record | HotEvent::CaptureFull | HotEvent::CaptureWindow | HotEvent::RepeatLast | HotEvent::CaptureText | HotEvent::ReadQr
                 if self.rec.is_some() =>
             {
                 eprintln!("rustshot: a recording is running; capture ignored");
             }
             // No new capture while an update installs or restarts us.
-            HotEvent::Capture | HotEvent::Record | HotEvent::CaptureFull | HotEvent::CaptureWindow | HotEvent::RepeatLast | HotEvent::CaptureText
+            HotEvent::Capture | HotEvent::Record | HotEvent::CaptureFull | HotEvent::CaptureWindow | HotEvent::RepeatLast | HotEvent::CaptureText | HotEvent::ReadQr
                 if self.updating || self.restart_pending =>
             {
                 eprintln!("rustshot: an update is installing; capture ignored");
@@ -929,6 +940,7 @@ impl App {
             HotEvent::CaptureWindow => self.pending = Some(Pending::window()),
             HotEvent::RepeatLast => self.pending = Some(self.repeat_pending()),
             HotEvent::CaptureText => self.pending = Some(Pending::text()),
+            HotEvent::ReadQr => self.pending = Some(Pending::qr()),
             HotEvent::Record if !rec_ui::supported() => eprintln!("rustshot: recording is not supported on this platform yet"),
             HotEvent::Record => self.pending = Some(Pending::record()),
         }
@@ -1628,7 +1640,16 @@ impl App {
         };
         let sel = initial_sel.filter(|r| !r.is_trivial());
         let accept_now = accept_on_select && sel.is_some();
+        // Settings › Capture "Include mouse pointer": an object over the
+        // capture, there from the start (an undo never takes it away).
+        let pointer = if cfg.include_cursor { crate::pointer::object(shot.origin) } else { None };
         let mut edit = Edit::new(shot, base, cfg, th, self.font.clone(), self.ui_font, rec);
+        if let Some(p) = pointer {
+            edit.objects.push(p);
+            edit.hist = vec![edit.objects.clone()];
+            edit.hi = 0;
+            edit.dirty = true;
+        }
         edit.gdi = gdi;
         edit.sel = sel;
         edit.tasks = tasks;
@@ -1802,7 +1823,7 @@ impl App {
             tasks = crate::actions::after_capture(tasks, &edit.cfg);
         }
         // Copying text is not a picture: no shutter.
-        if edit.cfg.shutter_sound && !tasks.is_empty() && tasks != [Task::Text] {
+        if edit.cfg.shutter_sound && !tasks.is_empty() && tasks != [Task::Text] && tasks != [Task::Qr] {
             crate::actions::shutter();
         }
         // History: the capture as it was, its objects, where it came from.
@@ -1824,12 +1845,16 @@ impl App {
         // (the history keeps the capture without it); the exported
         // image's top-left moves out by it (a pin stays in place).
         // Copy text (OCR) reads the capture alone.
-        let framed = tasks.iter().any(|t| !matches!(t, Task::Text | Task::Geometry));
+        let framed = tasks.iter().any(|t| !matches!(t, Task::Text | Task::Qr | Task::Geometry));
         // Settings › Saving "Save at" too (the history keeps the capture
         // at the screen's pixels, and a pin shows it at screen size).
         let b = if framed { export::output_border(&edit.cfg, edit.shot.scale) as i32 } else { 0 };
         let scaled = framed && export::save_factor(&edit.cfg, edit.shot.scale) < 0.999;
-        let pin = (scaled && tasks.contains(&Task::Pin)).then(|| {
+        // A pin (and the thumbnail card's Pin) shows the screen's pixels:
+        // no Save at, no export watermark (it is not a file).
+        let wm = framed && export::export_watermark(&edit.cfg).is_some();
+        let pins = tasks.contains(&Task::Pin) || edit.cfg.show_thumbnail;
+        let pin = ((scaled || wm) && pins).then(|| {
             let pb = export::border(&edit.cfg, edit.shot.scale).map_or(0, |(b, _)| b as i32);
             (export::with_border(img.clone(), &edit.cfg, edit.shot.scale), (g.0 - pb, g.1 - pb))
         });
@@ -1882,10 +1907,12 @@ impl App {
         let img = Arc::new(job.img);
         // Pin to screen: the image where it was captured (at the screen's
         // pixels whatever Save at says).
+        let own_pin = job.pin.is_some();
         let (pin_img, pin_at) = match job.pin {
             Some((p, at)) => (Arc::new(p), at),
             None => (img.clone(), job.sel_global),
         };
+        let thumb_pin = own_pin.then(|| (pin_img.clone(), pin_at));
         if job.tasks.contains(&Task::Pin) && !crate::pin::open(pin_img, pin_at, th) {
             eprintln!("rustshot: pin to screen is not available here");
             if self.kind == RunKind::Daemon {
@@ -1900,7 +1927,13 @@ impl App {
             let note = job
                 .cfg
                 .show_thumbnail
-                .then(|| crate::notice::thumbnail(&res.done, up, img.clone(), job.sel_global, entry.clone()))
+                .then(|| crate::notice::thumbnail(&res.done, up, img.clone(), job.sel_global, entry.clone())
+                .map(|mut n| {
+                    if let Some(t) = n.thumb.as_mut() {
+                        t.pin = thumb_pin.clone();
+                    }
+                    n
+                }))
                 .flatten()
                 .or_else(|| crate::notice::compose(&res.done, up).map(|n| crate::notice::with_edit(n, entry.clone())));
             if let Some(note) = note {
@@ -1908,6 +1941,21 @@ impl App {
             }
         }
         *self.upload_slot.lock().unwrap() = res.upload;
+        if job.tasks.contains(&Task::Qr) {
+            match self.kind {
+                RunKind::Daemon => crate::qr_ui::spawn(Arc::unwrap_or_clone(img.clone()), at, th),
+                RunKind::OneShot => {
+                    let texts = crate::qr::read(&img);
+                    for t in &texts {
+                        println!("{}", crate::qr_ui::printable(t));
+                    }
+                    if texts.is_empty() {
+                        eprintln!("{}", tr!("qr.none"));
+                        self.exit_code.store(1, Ordering::SeqCst);
+                    }
+                }
+            }
+        }
         if job.tasks.contains(&Task::Text) {
             match self.kind {
                 // Off the UI thread; `poll_ocr` copies and says so.
@@ -2335,6 +2383,11 @@ fn video_key(edit: &Edit, vk: u32, mods: Mods) -> Option<Act> {
 /// Esc: close a device list or the ring's palette, drop the current
 /// tool / draft / palette, or cancel the capture (video mode's Close).
 fn cancel_key(edit: &mut Edit) {
+    // A measurement (or one being drawn): discarded, the tool kept.
+    if edit.ruler.take().is_some() {
+        edit.interact = Interact::None;
+        return;
+    }
     if edit.save_menu || edit.slot_menu || edit.size_menu {
         edit.save_menu = false;
         edit.slot_menu = false;
@@ -2381,6 +2434,10 @@ fn cancel_key(edit: &mut Edit) {
 /// Enter: select everything if nothing is selected, then run the given
 /// tasks (or save). The Edit window saves with its own Save.
 fn accept_key(edit: &mut Edit) {
+    // A measurement waiting: kept as an annotation.
+    if edit.keep_ruler() {
+        return;
+    }
     if edit.host.is_some() {
         edit.finish_callout_edit();
         return;
@@ -2419,6 +2476,8 @@ fn act_of(a: Action) -> Option<Act> {
         Action::ToolSpotlight => Act::Tool(Tool::Spotlight),
         Action::ToolMagnify => Act::Tool(Tool::Magnify),
         Action::ToolBlur => Act::Tool(Tool::Blur),
+        Action::ToolRuler => Act::Tool(Tool::Ruler),
+        Action::ReadQr => Act::ReadQr,
         Action::TextBold => Act::ObjBold,
         Action::TextItalic => Act::ObjItalic,
         Action::TextUnderline => Act::ObjUnderline,
@@ -2453,7 +2512,7 @@ fn act_of(a: Action) -> Option<Act> {
         Action::ZoomIn | Action::ZoomOut | Action::ZoomFit | Action::ZoomActual => return None,
         // The Edit window's own (its image menu).
         Action::RotateLeft | Action::RotateRight | Action::FlipHorizontal | Action::FlipVertical => return None,
-        Action::ImageResize | Action::ImageCanvas | Action::ImageReset => return None,
+        Action::ImageResize | Action::ImageCanvas | Action::ImageReset | Action::ImageEffects => return None,
         Action::ScrollCapture => Act::Scroll,
     })
 }
@@ -2490,6 +2549,9 @@ enum Tool {
     Magnify,
     /// A Gaussian-like blur of a rect (B).
     Blur,
+    /// Measure a line or (Ctrl) a rect; kept as a dimension line or
+    /// discarded (U).
+    Ruler,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -3077,6 +3139,8 @@ struct Edit {
     assist: assist::Assist,
     /// Text mode, Quick Redact, the lasso and the crop frame.
     snip: snip::Snip,
+    /// The ruler's measurement (the Ruler tool).
+    ruler: Option<ruler::Ruler>,
 }
 
 /// More merged dirty rects than this invalidate the whole window (a
@@ -3161,6 +3225,7 @@ impl Edit {
             host: None,
             assist,
             snip,
+            ruler: None,
         }
     }
 
@@ -3466,7 +3531,7 @@ impl Edit {
                 let dst = if far { b } else { Pt::new(a.x + w * 1.8, a.y - w * 1.8) };
                 Obj::Magnify { src: a, dst, radius: w, zoom: 2.0, color: c, width: 3.0 }
             }
-            Tool::Text | Tool::Select => None?,
+            Tool::Text | Tool::Select | Tool::Ruler => None?,
         })
     }
 
@@ -3488,7 +3553,7 @@ impl Edit {
             Some(Obj::Path { pts, .. }) => pts.len() >= 2,
             // A highlighter stroke reaches 2 px from where it began.
             Some(Obj::MarkerPath { pts, .. }) => pts.iter().any(|p| (p.x - pts[0].x).hypot(p.y - pts[0].y) >= 2.0),
-            Some(Obj::Text { .. }) | Some(Obj::Counter { .. }) => true,
+            Some(Obj::Text { .. }) | Some(Obj::Counter { .. }) | Some(Obj::Cursor { .. }) => true,
         }
     }
 
@@ -3753,6 +3818,12 @@ fn end_interaction(edit: &mut Edit) {
             edit.draft = None;
             edit.stroke_pts.clear();
             edit.obj.sel = vec![i];
+        }
+        Interact::Drawing { .. } if edit.tool == Some(Tool::Ruler) => {
+            // The measurement stays until Enter keeps it or Esc drops it.
+            edit.ruler = edit.ruler.filter(|r| !r.trivial()).map(|r| ruler::Ruler { done: true, ..r });
+            edit.draft = None;
+            edit.stroke_pts.clear();
         }
         Interact::Drawing { .. } => {
             if edit.draft_is_valid() {
@@ -4194,6 +4265,10 @@ mod snip_tests;
 mod store_tests;
 #[cfg(test)]
 mod trim_tests;
+#[cfg(test)]
+mod ruler_tests;
+#[cfg(test)]
+mod pointer_qr_tests;
 #[cfg(test)]
 mod scroll_tests;
 

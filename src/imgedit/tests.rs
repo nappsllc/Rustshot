@@ -307,6 +307,7 @@ fn render_applies_the_stack_in_order() {
         orient: Orient::ID.rotated(false),
         resize: Some(Resize { w: 15, h: 20, from: (30, 40), filter: Filter::Area }),
         canvas: Some(Pad::uniform(5, Bg::Solid(C4::rgb(0, 0, 255)), 0.0, false)),
+        ..Default::default()
     };
     let out = render(&img, &objs, Some(crop), None, &e);
     assert_eq!(out.dimensions(), (25, 30));
@@ -354,6 +355,7 @@ fn perf_4k() {
         orient: Orient::ID.rotated(true).flipped_h(),
         resize: Some(Resize { w: 1440, h: 2560, from: (2160, 3840), filter: Filter::Lanczos3 }),
         canvas: Some(Pad::presentation()),
+        ..Default::default()
     };
     let f = time("export 4K rotate+flip+resize+canvas+objects", &mut || {
         std::hint::black_box(render(&img, &objs, Some(FRect { x: 0.0, y: 0.0, w: 3840.0, h: 2160.0 }), None, &e));

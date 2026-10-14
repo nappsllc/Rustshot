@@ -45,6 +45,8 @@ screenshots, editing and video capture.** Windows, Linux and macOS.
 - A pixel magnifier shows the position and color under the pointer.
   <kbd>H</kbd> copies the color as `#rrggbb`.
 - *Accept on select*: copy or save the moment you release the mouse.
+- *Include mouse pointer* (Settings › Capture): the pointer is captured
+  too, as an object you can move or delete (Windows and X11).
 - *Trim to content*: <kbd>Shift</kbd>+<kbd>A</kbd> (or click the `W × H`
   readout) cuts the uniform margins off the selection. Settings can trim
   every new region or window for you.
@@ -61,6 +63,10 @@ screenshots, editing and video capture.** Windows, Linux and macOS.
 **Annotate & edit**
 - Pencil, line, arrow, rectangle, ellipse, marker, text, callout,
   numbered tags, pixelate, blur, invert, spotlight and magnifier.
+- A screen ruler (<kbd>U</kbd>): drag to measure a length in px (and logical px on a
+  scaled display) with Δx, Δy and the angle; <kbd>Shift</kbd> snaps to 15°, <kbd>Ctrl</kbd>
+  measures a rectangle (W × H and area). <kbd>Enter</kbd> keeps it as a dimension line,
+  <kbd>Esc</kbd> drops it; the magnifier shows for pixel accuracy.
 - Text styles: sans, serif or mono font, bold, italic, underline,
   strikethrough and alignment.
 - Annotations stay editable objects. Select, move, resize, restyle,
@@ -70,6 +76,9 @@ screenshots, editing and video capture.** Windows, Linux and macOS.
   estimate) and a canvas (padding, a solid color or a soft "presentation"
   gradient, rounded corners, a drop shadow). Text stays upright when the
   picture turns.
+- Effects (Image › Effects…): a watermark (text or a PNG, at one of nine
+  places or tiled, with its size, opacity and margin), a drop shadow, torn
+  edges and a reflection.
 - Right-click opens a color ring.
 
 **Record**
@@ -98,7 +107,7 @@ screenshots, editing and video capture.** Windows, Linux and macOS.
   system's share sheet (Windows, macOS), or (on Windows) drag the thumbnail
   into another app.
 - An optional border (any color, 1 to 8 px) around everything you copy,
-  save, upload or pin.
+  save, upload or pin, and an optional watermark (Settings › Saving).
 - *Save at*: screen pixels, 1× (a high-DPI capture at its logical size) or
   a percent, for everything you copy, save or upload. Pins and History keep
   the full capture.
@@ -128,6 +137,13 @@ screenshots, editing and video capture.** Windows, Linux and macOS.
   covered with an opaque fill in the surrounding color, all in one undo
   step (Settings › Overlay › Redact style: Solid, or Blur). Long-press
   Copy text to choose which kinds.
+
+**QR codes**
+- Read QR code (<kbd>Q</kbd>, or long-press Copy text): every QR code in the area is
+  decoded on your machine; the toast shows the text with **Copy** and, for
+  an http(s) link, **Open link**. Nothing opens until you click it.
+- Make QR code… (the tray, the launcher): type or paste text and copy,
+  save or pin the code.
 
 **Pin**
 - Pin a capture on top of every window. Zoom it, fade it and compare
@@ -199,7 +215,7 @@ recording runs). With the tray icon off on Windows nothing runs in the
 background: launching Rustshot (or **Rustshot Settings** in the Start
 menu) opens Settings. On Linux, macOS and in the Microsoft Store build
 the icon off keeps Rustshot running without it. The tray menu has
-**Capture…**, **History…** and **Settings…**.
+**Capture…**, **Make QR code…**, **History…** and **Settings…**.
 
 ## Replace the Snipping Tool (Windows)
 
@@ -239,6 +255,7 @@ off in Rustshot, and Windows uses the Snipping Tool again. More detail:
 | Capture a window | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd> |
 | Start or stop recording | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>G</kbd> |
 | Copy text from an area | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> |
+| Read QR code from an area | (unbound; Settings › Shortcuts › Global) |
 | Open History | <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd> |
 | Quit Rustshot | <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>Q</kbd> |
 
@@ -247,13 +264,14 @@ off in Rustshot, and Windows uses the Snipping Tool again. More detail:
 | Select / Pencil / Line / Arrow | <kbd>V</kbd> / <kbd>P</kbd> / <kbd>L</kbd> / <kbd>A</kbd> |
 | Rectangle / Ellipse / Marker / Text / Callout | <kbd>R</kbd> / <kbd>E</kbd> / <kbd>M</kbd> / <kbd>T</kbd> / <kbd>K</kbd> |
 | Number / Pixelate / Blur / Invert | <kbd>N</kbd> / <kbd>X</kbd> / <kbd>B</kbd> / <kbd>I</kbd> |
-| Spotlight / Magnify | <kbd>S</kbd> / <kbd>Z</kbd> |
+| Spotlight / Magnify / Ruler | <kbd>S</kbd> / <kbd>Z</kbd> / <kbd>U</kbd> |
 | Stroke size − / + | <kbd>[</kbd> / <kbd>]</kbd> or the mouse wheel |
 | Copy / Save / Save As / Upload | <kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>Ctrl</kbd>+<kbd>S</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> / <kbd>Ctrl</kbd>+<kbd>U</kbd> |
 | Save to Desktop / Open with… / Pin | <kbd>Ctrl</kbd>+<kbd>D</kbd> / <kbd>Ctrl</kbd>+<kbd>O</kbd> / <kbd>Ctrl</kbd>+<kbd>P</kbd> |
 | Share… (Windows, macOS) | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd> |
 | Copy text (OCR) / Copy color under pointer | <kbd>O</kbd> (or <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd>) / <kbd>H</kbd> |
 | Crop / Quick Redact / Freeform selection | <kbd>C</kbd> / <kbd>Shift</kbd>+<kbd>R</kbd> / <kbd>Shift</kbd>+<kbd>F</kbd> |
+| Read QR code | <kbd>Q</kbd> |
 | Text mode: copy the words / select all / leave | <kbd>Ctrl</kbd>+<kbd>C</kbd> (or <kbd>Enter</kbd>) / <kbd>Ctrl</kbd>+<kbd>A</kbd> / <kbd>Esc</kbd> |
 | Undo / Redo | <kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> (or <kbd>Ctrl</kbd>+<kbd>Y</kbd>) |
 | Delete / Duplicate selected objects | <kbd>Del</kbd> / <kbd>Ctrl</kbd>+<kbd>D</kbd> |
@@ -272,7 +290,7 @@ off in Rustshot, and Windows uses the Snipping Tool again. More detail:
 | Rotate left / right | <kbd>Ctrl</kbd>+<kbd>L</kbd> / <kbd>Ctrl</kbd>+<kbd>R</kbd> |
 | Flip horizontal / vertical | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd> |
 | Resize… / Canvas… | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>K</kbd> |
-| Reset image edits | (unbound; the Image menu) |
+| Effects… / Reset image edits | (unbound; the Image menu) |
 
 On macOS, <kbd>⌘</kbd> works wherever <kbd>Ctrl</kbd> is listed. Every key
 can be remapped in Settings › Shortcuts. The
