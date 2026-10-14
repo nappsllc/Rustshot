@@ -84,7 +84,7 @@ impl Wheel for WinWheel {
             !now.is_invalid() && GetAncestor(now, GA_ROOT) == GetAncestor(self.hwnd(), GA_ROOT)
         };
         if !same {
-            return Err(Interrupted(text::CHANGED).into());
+            return Err(Interrupted(text::CHANGED.get()).into());
         }
         if let Some(p) = &self.pattern {
             for _ in 0..notches {

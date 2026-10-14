@@ -154,6 +154,35 @@ fn trim_window_preview() {
     }
 }
 
+/// The window fits in English and the long pseudo-languages (accented,
+/// right to left, Arabic where it is shaped), at 1× and 2×: every control
+/// inside, none over another, no text cut.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn trim_window_fits() {
+    use crate::ui::{preview, FocusState, Input};
+    for lang in preview::LANGS {
+        crate::i18n::with_lang(lang, || {
+            for k in [1.0f32, 2.0] {
+                for ready in [None, Some(false), Some(true)] {
+                    let mut t = Trim::new(ms(3_723_400), 30);
+                    t.set_start(ms(1_500));
+                    t.seek(ms(4_200));
+                    let pics = window::Pics { ready, ..Default::default() };
+                    let mut focus = FocusState::default();
+                    let img = preview::render(W, H, k, &crate::theme::DARK, &Input::default(), &mut focus, |ui| {
+                        window::paint(ui, &mut t, &pics, Instant::now());
+                    });
+                    preview::assert_fits(&focus, W, H, k, &format!("trim {lang} {ready:?} {k}x"));
+                    if k == 1.0 && ready == Some(false) {
+                        preview::save(&format!("trim_window_{lang}.png"), &img);
+                    }
+                }
+            }
+        });
+    }
+}
+
 #[test]
 fn applying_a_choice() {
     let dir = std::env::temp_dir().join(format!("rustshot-trim-apply-{}", std::process::id()));

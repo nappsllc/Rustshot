@@ -119,8 +119,8 @@ fn steps_aim_for_half_the_frame() {
 
 #[test]
 fn ends_say_why() {
-    assert_eq!(End::Lost.note(), Some(text::LOST));
-    assert_eq!(End::Cap.note(), Some(text::CAP));
+    assert_eq!(End::Lost.note(), Some(text::LOST.get()));
+    assert_eq!(End::Cap.note(), Some(text::CAP.get()));
     assert_eq!(End::Bottom.note(), None);
     assert_eq!(End::Stopped.note(), None);
 }

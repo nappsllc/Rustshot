@@ -605,8 +605,8 @@ impl Deleted {
     /// The toast.
     pub fn text(self) -> &'static str {
         match self {
-            Deleted::Now => "Deleted from Imgur",
-            Deleted::AlreadyGone => "Already deleted on Imgur",
+            Deleted::Now => tr!("upload.deleted_imgur"),
+            Deleted::AlreadyGone => tr!("upload.already_deleted"),
         }
     }
 }
@@ -615,14 +615,14 @@ impl Deleted {
 /// they pass a fake).
 pub fn delete_remote(deletehash: &Secret, client_id: &str, http: DeleteFn) -> Result<Deleted, String> {
     if deletehash.is_empty() {
-        return Err("this upload can't be deleted (it was uploaded before Rustshot kept the key)".into());
+        return Err(tr!("upload.no_key").into());
     }
     if !valid_deletehash(deletehash.reveal()) {
         return Err("this upload's key is damaged".into());
     }
     let client_id = client_id.trim();
     if client_id.is_empty() || client_id.chars().any(|c| c.is_control()) {
-        return Err("no valid Imgur client id is set".into());
+        return Err(tr!("upload.no_client_id").into());
     }
     let (host, path, headers) = delete_request(deletehash, client_id);
     let hd: Vec<(&str, &str)> = headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
@@ -676,13 +676,13 @@ pub type S3DeleteFn<'a> = &'a dyn Fn(&crate::s3::Object) -> Result<(), String>;
 pub fn delete_record(store: &Store, rec: &Record, client_id: &str, http: DeleteFn, s3: S3DeleteFn) -> (String, crate::editor::style::ToastKind) {
     use crate::editor::style::ToastKind;
     let done = match &rec.info.s3 {
-        Some(obj) => s3(obj).map(|()| "Deleted from S3").map_err(|e| format!("Couldn't delete the upload: {e}")),
-        None => delete_remote(&rec.info.deletehash, client_id, http).map(Deleted::text).map_err(|e| format!("Couldn't delete from Imgur: {e}")),
+        Some(obj) => s3(obj).map(|()| tr!("upload.deleted_s3")).map_err(|e| tr!("upload.delete_failed", e)),
+        None => delete_remote(&rec.info.deletehash, client_id, http).map(Deleted::text).map_err(|e| tr!("upload.delete_imgur_failed", e)),
     };
     match done {
         Ok(text) => match forget(store, rec.entry.as_deref(), &rec.link) {
             Ok(()) => (text.into(), ToastKind::Success),
-            Err(e) => (format!("{text}, but the link is still listed: {e:#}"), ToastKind::Error),
+            Err(e) => (tr!("upload.still_listed", text, e = format!("{e:#}")), ToastKind::Error),
         },
         Err(e) => (e, ToastKind::Error),
     }
@@ -704,7 +704,7 @@ static ASKED: Mutex<Option<Record>> = Mutex::new(None);
 /// and Cancel (None: that upload is no longer listed).
 pub fn ask_delete(tag: u32) -> Option<crate::notice::Note> {
     let rec = by_tag(tag)?;
-    let mut n = crate::notice::Note::plain(format!("Delete upload {}?", short_link(&rec.link)), crate::editor::style::ToastKind::Info);
+    let mut n = crate::notice::Note::plain(tr!("upload.delete_question", link = short_link(&rec.link)), crate::editor::style::ToastKind::Info);
     n.actions = vec![crate::notice::NoteAct::DeleteUpload, crate::notice::NoteAct::KeepUpload];
     n.ttl = std::time::Duration::from_secs(10);
     *lock(&ASKED) = Some(rec);
@@ -728,7 +728,7 @@ pub fn answer(delete: bool, done: impl FnOnce(crate::notice::Note) + Send + 'sta
         let (text, kind) = delete_record(&Store::open_default(), &rec, &cfg.upload_client_id, &del, &s3);
         done(crate::notice::Note::plain(text, kind));
     });
-    Some(crate::notice::Note::plain("Deleting upload\u{2026}", crate::editor::style::ToastKind::Info))
+    Some(crate::notice::Note::plain(tr!("history.deleting_upload"), crate::editor::style::ToastKind::Info))
 }
 
 #[cfg(test)]

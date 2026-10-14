@@ -74,10 +74,10 @@ pub fn x11_session(wayland_display: Option<&std::ffi::OsStr>, session_type: Opti
 }
 
 /// Why MP4 is off (the MP4 segment's tooltip).
-pub const NO_MP4: &str = "MP4 needs an encoder (ffmpeg or OpenH264)";
+pub const NO_MP4: crate::i18n::Key = key!("rec.no_mp4");
 
 /// The MP4 segment's tooltip while ffmpeg is being asked.
-pub const CHECKING_MP4: &str = "Checking whether ffmpeg can record MP4";
+pub const CHECKING_MP4: crate::i18n::Key = key!("rec.checking_mp4");
 
 /// Whether MP4 can be recorded.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -206,7 +206,7 @@ pub const AMBER: C4 = C4::rgb(0xFF, 0xB4, 0x54);
 pub const ON_REC: C4 = C4::rgb(0x1A, 0x0A, 0x0A);
 
 /// The sound rows' value in GIF mode.
-pub const NOT_IN_GIF: &str = "Not recorded in GIF";
+pub const NOT_IN_GIF: crate::i18n::Key = key!("rec.not_in_gif");
 
 /// What the Record panel records: the monitor (F), a window picked like
 /// window snapping (W), or the selected region (R).
@@ -233,7 +233,7 @@ pub const GIF_MAX: [u32; 3] = [15, 30, 60];
 /// Regions narrower than this (logical px) get the compact pill.
 pub const COMPACT_W: f32 = 520.0;
 /// The toast when the microphone is silent this long while recording.
-pub const NO_MIC_INPUT: &str = "No mic input";
+pub const NO_MIC_INPUT: crate::i18n::Key = key!("rec.no_mic_input");
 pub const SILENCE: Duration = Duration::from_secs(5);
 /// Peaks below this count as silence (about -50 dBFS).
 const SILENT_PEAK: f32 = 0.003;
@@ -342,7 +342,7 @@ impl RecOpts {
         };
         let mb = bytes_s * 60.0 / 1_000_000.0;
         let mb = if mb >= 10.0 { format!("{mb:.0}") } else { format!("{mb:.1}") };
-        format!("{eh}p \u{b7} {fps} fps \u{b7} est. {mb} MB / min")
+        tr!("rec.estimate", height = eh, fps, mb)
     }
 
     pub fn set_fps(&mut self, n: u32) {
@@ -781,9 +781,9 @@ pub fn spot_bar_with(
 }
 
 /// The hint when the desktop put the camera bubble outside the recording.
-pub const BUBBLE_OUTSIDE: &str = "Your desktop placed the camera bubble outside the recording \u{2014} drag it in";
+pub const BUBBLE_OUTSIDE: crate::i18n::Key = key!("rec.bubble_outside");
 /// The hint when it put the control bar inside the recording.
-pub const BAR_INSIDE: &str = "Your desktop placed the recording bar inside the recording (it is recorded) \u{2014} drag it out";
+pub const BAR_INSIDE: crate::i18n::Key = key!("rec.bar_inside");
 
 /// Wayland, where the compositor places the recording's windows: a hint
 /// when the camera bubble (its shape, as placed) is not within the
@@ -794,10 +794,10 @@ pub fn placement_hint(area: IRect, bar: Option<IRect>, bubble: Option<IRect>) ->
     let within = |r: IRect| r.0 >= area.0 && r.1 >= area.1 && x1(r) <= x1(area) && y1(r) <= y1(area);
     let overlaps = |r: IRect| r.0 < x1(area) && area.0 < x1(r) && r.1 < y1(area) && area.1 < y1(r);
     if bubble.is_some_and(|b| !within(b)) {
-        return Some(BUBBLE_OUTSIDE);
+        return Some(BUBBLE_OUTSIDE.get());
     }
     if bar.is_some_and(overlaps) {
-        return Some(BAR_INSIDE);
+        return Some(BAR_INSIDE.get());
     }
     None
 }
@@ -948,7 +948,7 @@ pub enum End {
 pub fn with_camera_error(end: End, cam: Option<String>) -> End {
     match (end, cam) {
         (End::Saved { path, mut warnings }, Some(e)) => {
-            warnings.push(format!("camera stopped: {e}"));
+            warnings.push(tr!("rec.warn.camera_stopped", e));
             End::Saved { path, warnings }
         }
         (end, _) => end,
@@ -1047,7 +1047,7 @@ pub struct Run {
     silent_since: Option<Instant>,
     /// "No mic input" was said (once per recording) / waits to be taken.
     mic_noted: bool,
-    notice: Option<&'static str>,
+    notice: Option<crate::i18n::Key>,
     /// Effects carried out (tests run without windows or a worker).
     #[cfg(test)]
     pub(crate) log: Vec<Effect>,
@@ -1335,7 +1335,7 @@ impl Run {
     /// A toast for the user (the microphone has been silent for 5 s:
     /// "No mic input"), once.
     pub fn take_notice(&mut self) -> Option<&'static str> {
-        self.notice.take()
+        self.notice.take().map(crate::i18n::Key::get)
     }
 
     /// The control bar's state now.

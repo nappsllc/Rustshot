@@ -422,6 +422,11 @@ impl<'a> Ui<'a> {
         k: f32,
         area: FRect,
     ) -> Ui<'a> {
+        let mut fb = fb;
+        // A right-to-left language mirrors the window: drawn left to
+        // right, flipped in `finish` (the windows mirror their pointer
+        // events: [`rtl_ev`]).
+        fb.mirror = crate::i18n::is_rtl();
         let mut ui = Ui {
             fb,
             theme,
@@ -496,6 +501,9 @@ impl<'a> Ui<'a> {
         }
         if let Some(p) = self.popup.take() {
             controls::draw_popup(&mut self, &p.items, p.r, p.sel, p.hover);
+        }
+        if self.fb.mirror {
+            self.fb.flip();
         }
         let mut out = Out { redraw: self.redraw, ..Out::default() };
         for i in 0..self.input.keys.len() {
@@ -585,6 +593,36 @@ impl<'a> Ui<'a> {
     }
 }
 
+/// A window event with its pointer x mirrored in a right-to-left language
+/// (`width`: the window's physical width), so the window's layout and hit
+/// tests stay left to right while [`Ui::finish`] flips what is drawn.
+pub fn rtl_ev(ev: Ev, width: u32) -> Ev {
+    if !crate::i18n::is_rtl() || width == 0 {
+        return ev;
+    }
+    let m = |x: i32| width as i32 - 1 - x;
+    match ev {
+        Ev::Move { x, y } => Ev::Move { x: m(x), y },
+        Ev::Down { x, y } => Ev::Down { x: m(x), y },
+        Ev::Up { x, y } => Ev::Up { x: m(x), y },
+        Ev::Wheel { delta, x, y } => Ev::Wheel { delta, x: m(x), y },
+        Ev::Middle { down, x, y } => Ev::Middle { down, x: m(x), y },
+        Ev::Right { down, x, y } => Ev::Right { down, x: m(x), y },
+        e => e,
+    }
+}
+
+/// Left and Right as seen on screen: swapped in a mirrored frame (a
+/// segmented control or slider runs right to left there; text fields,
+/// drawn left to right, take the keys as they are).
+pub fn visual_key(fb: &Fb, vk: u32) -> u32 {
+    match vk {
+        crate::wind::key::LEFT if fb.mirror => crate::wind::key::RIGHT,
+        crate::wind::key::RIGHT if fb.mirror => crate::wind::key::LEFT,
+        v => v,
+    }
+}
+
 pub fn contains(r: FRect, p: Pt) -> bool {
     p.x >= r.x && p.y >= r.y && p.x < r.x1() && p.y < r.y1()
 }
@@ -592,6 +630,28 @@ pub fn contains(r: FRect, p: Pt) -> bool {
 /// Run `draw` with output clipped to `r` (physical px): the region is
 /// copied out, drawn into as its own buffer, and copied back.
 pub fn clipped(fb: &mut Fb, r: FRect, draw: impl FnOnce(&mut Fb)) {
+    clipped_as(fb, r, false, draw)
+}
+
+/// The x (window layout space) inside region `r` drawn by
+/// [`clipped_ltr`] that the pointer at layout `x` is over: in a mirrored
+/// frame the region is pre-flipped, so a pointer x maps back within it.
+pub fn ltr_x(fb: &Fb, r: FRect, x: f32) -> f32 {
+    if !fb.mirror {
+        return x;
+    }
+    let x0 = (r.x.floor() as i32).max(fb.ox);
+    let x1 = (r.x1().ceil() as i32).min(fb.ox + fb.stride as i32);
+    (x0 + x1 - 1) as f32 - x
+}
+
+/// [`clipped`], and in a mirrored frame the region reads left to right
+/// as a whole (a text field: its text, selection and caret together).
+pub fn clipped_ltr(fb: &mut Fb, r: FRect, draw: impl FnOnce(&mut Fb)) {
+    clipped_as(fb, r, true, draw)
+}
+
+fn clipped_as(fb: &mut Fb, r: FRect, ltr: bool, draw: impl FnOnce(&mut Fb)) {
     let (bx0, by0) = (fb.ox, fb.oy);
     let (bx1, by1) = (fb.ox + fb.stride as i32, fb.oy + fb.height());
     let x0 = (r.x.floor() as i32).max(bx0);
@@ -607,7 +667,14 @@ pub fn clipped(fb: &mut Fb, r: FRect, draw: impl FnOnce(&mut Fb)) {
     for y in 0..h {
         tmp[y * w * 4..(y + 1) * w * 4].copy_from_slice(&fb.d[row(y)..row(y) + w * 4]);
     }
-    draw(&mut Fb::with_origin(&mut tmp, w, x0, y0, fb.order));
+    let mut sub = Fb::with_origin(&mut tmp, w, x0, y0, fb.order);
+    sub.mirror = fb.mirror && !ltr;
+    draw(&mut sub);
+    // Kept left to right: pre-flipped as a whole (the frame's flip puts
+    // it back, a text field's caret where its text is).
+    if fb.mirror && ltr {
+        sub.flip();
+    }
     for y in 0..h {
         let at = row(y);
         fb.d[at..at + w * 4].copy_from_slice(&tmp[y * w * 4..(y + 1) * w * 4]);
@@ -634,8 +701,82 @@ pub mod preview {
     }
 
     /// `w`×`h` logical px at scale `k`, window background, one frame of `f`.
+    /// What a frame drawn by [`render`] did wrong: text past the window's
+    /// edge, a button label cut with "…" (the fit tests).
+    #[derive(Default)]
+    struct Check {
+        w: f32,
+        problems: Vec<String>,
+    }
+
+    thread_local!(static CHECK: std::cell::RefCell<Option<Check>> = const { std::cell::RefCell::new(None) });
+
+    /// Text `s` was drawn from physical x `x`, `w` wide.
+    pub(crate) fn note_text(s: &str, x: f32, w: f32) {
+        CHECK.with(|c| {
+            if let Some(c) = c.borrow_mut().as_mut()
+                && (x < -1.0 || x + w > c.w + 1.0)
+            {
+                c.problems.push(format!("text past the window's edge ({x:.0}..{:.0} of {:.0}): {s:?}", x + w, c.w));
+            }
+        });
+    }
+
+    /// A button's label did not fit and was cut.
+    pub(crate) fn note_cut(s: &str) {
+        CHECK.with(|c| {
+            if let Some(c) = c.borrow_mut().as_mut() {
+                c.problems.push(format!("label cut: {s:?}"));
+            }
+        });
+    }
+
+    /// The languages the fit tests run in: English and the long
+    /// pseudo-languages (accented, Hebrew and Arabic letters). Linux draws
+    /// Arabic without a shaper (isolated letters, much wider: a stated
+    /// limit, see uitext.rs), so there the Arabic one, which is about
+    /// joining, is left out; Hebrew still covers right to left.
+    #[cfg(not(target_os = "linux"))]
+    pub const LANGS: &[&str] = &["en", "qps", "qps-rtl", "qps-ar"];
+    #[cfg(target_os = "linux")]
+    pub const LANGS: &[&str] = &["en", "qps", "qps-rtl"];
+
+    /// Note problems in the frames drawn on this thread from now on, in a
+    /// window `pw` physical px wide ([`render`] does this itself).
+    pub fn begin_check(pw: u32) {
+        CHECK.with(|c| {
+            let mut c = c.borrow_mut();
+            // A new window: what earlier frames noted is gone.
+            *c = Some(Check { w: pw as f32, problems: Vec::new() });
+        });
+    }
+
+    /// The problems noted since the last call (frames drawn by [`render`]
+    /// on this thread).
+    pub fn take_problems() -> Vec<String> {
+        CHECK.with(|c| c.borrow_mut().as_mut().map(|c| std::mem::take(&mut c.problems)).unwrap_or_default())
+    }
+
+    /// A frame fits its `w`×`h` window (logical px) at scale `k`: every
+    /// control inside it and none over another, no text past its edge, no
+    /// label cut (`what` names the frame in the failure).
+    pub fn assert_fits(focus: &FocusState, w: u32, h: u32, k: f32, what: &str) {
+        let problems = take_problems();
+        assert!(problems.is_empty(), "{what}: {problems:#?}");
+        let rects: Vec<FRect> = focus.all_rects().into_iter().map(|r| FRect { x: r.x / k, y: r.y / k, w: r.w / k, h: r.h / k }).collect();
+        for (a, ra) in rects.iter().enumerate() {
+            assert!(ra.x >= -0.5 && ra.y >= -0.5 && ra.x1() <= w as f32 + 0.5 && ra.y1() <= h as f32 + 0.5, "{what}: {ra:?} outside {w}x{h}");
+            for rb in &rects[a + 1..] {
+                let ow = ra.x1().min(rb.x1()) - ra.x.max(rb.x);
+                let oh = ra.y1().min(rb.y1()) - ra.y.max(rb.y);
+                assert!(ow <= 1.0 || oh <= 1.0, "{what}: {ra:?} and {rb:?} overlap");
+            }
+        }
+    }
+
     pub fn render(w: u32, h: u32, k: f32, th: &Theme, input: &Input, focus: &mut FocusState, f: impl FnOnce(&mut Ui)) -> PixBuf {
         let (pw, ph) = ((w as f32 * k).round() as u32, (h as f32 * k).round() as u32);
+        begin_check(pw);
         let bg = th.surface.with_alpha(255);
         let mut img = PixBuf::from_pixel(pw, ph, [bg.r, bg.g, bg.b, 255]);
         let mut clip = FakeClip::default();

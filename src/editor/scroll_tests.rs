@@ -67,7 +67,7 @@ fn the_size_label_menu_has_a_scrolling_capture_row() {
     let tb = edit_of(&mut a).toolbar.clone().expect("toolbar");
     let row = tb.items.iter().find(|i| matches!(i.kind, toolbar::Kind::MenuItem { act: Act::Scroll, .. })).expect("the Scrolling capture row");
     if let toolbar::Kind::MenuItem { label, key, .. } = row.kind {
-        assert_eq!(label, crate::scroll::text::ACTION);
+        assert_eq!(label, tr!("tip.scroll_capture"));
         assert_eq!(tb.texts[key], format!("{}+S", chrome::SHIFT), "its key");
     }
     let r = row.r;

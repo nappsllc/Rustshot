@@ -152,7 +152,7 @@ pub(super) fn paint(ui: &mut Ui, t: &mut Trim, pics: &Pics, now: Instant) -> Opt
             blit(&mut ui.fb, p, x, y, 1.0);
         }
         (None, r) => {
-            let s = if r == Some(false) { text::NO_PREVIEW } else { text::LOADING };
+            let s = if r == Some(false) { text::NO_PREVIEW.get() } else { text::LOADING.get() };
             let w = ui.px(ui.text_w(12.0, s));
             ui.text_at(12.0, s, pr.x + (pr.w - w) / 2.0, pr.y + pr.h / 2.0, tok.tx2, false);
         }
@@ -175,13 +175,13 @@ pub(super) fn paint(ui: &mut Ui, t: &mut Trim, pics: &Pics, now: Instant) -> Opt
     let cy = ui.px(l.play.y + l.play.h / 2.0);
     let times = format!("{} / {}", super::fmt_time(t.head), super::fmt_time(t.len));
     ui.text_at(12.5, &times, ui.px(l.play.x1() + 12.0), cy, tok.tx, false);
-    let sel = format!("{} {}", text::SELECTED, super::fmt_time(t.selected()));
+    let sel = tr!("trim.selected", time = super::fmt_time(t.selected()));
     let sw = ui.text_w(12.5, &sel);
     ui.text_at(12.5, &sel, ui.px(l.strip.x1() - sw), cy, tok.tx2, false);
     // The timeline.
     strip(ui, &l, t, pics, &tok);
     let hint_y = ui.px(l.strip.y1() + 10.0);
-    ui.text_at(11.0, text::HINT, ui.px(l.strip.x), hint_y, tok.tx3, false);
+    ui.text_at(11.0, text::HINT.get(), ui.px(l.strip.x), hint_y, tok.tx3, false);
     // The buttons.
     let line = phys(ui, FRect { x: 0.0, y: l.footer, w: W as f32, h: 1.0 });
     ui.fb.fill_rect(line.x as i32, line.y as i32, line.w as i32, ui.k.round().max(1.0) as i32, tok.sep);
@@ -193,11 +193,11 @@ pub(super) fn paint(ui: &mut Ui, t: &mut Trim, pics: &Pics, now: Instant) -> Opt
         ui.row_rtl(|ui| {
             let on = ui.enabled;
             ui.enabled = on && can;
-            if ui.cbutton("trim.save", text::SAVE, Some("save"), true, &tok) {
+            if ui.cbutton("trim.save", text::SAVE.get(), Some("save"), true, &tok) {
                 out = Some(t.choice());
             }
             ui.enabled = on;
-            if ui.cbutton("trim.keep", text::KEEP, None, false, &tok) {
+            if ui.cbutton("trim.keep", text::KEEP.get(), None, false, &tok) {
                 out = Some(Choice::Full);
             }
         });
@@ -468,7 +468,7 @@ pub fn open(path: &Path, th: Theme) -> Option<Receiver<Outcome>> {
 /// Run the window on this thread until it closes; the choice.
 fn run(path: &Path, th: Theme) -> Choice {
     let (mut w, join) = Window::open(path, th);
-    let spec = WindowSpec { title: text::TITLE.into(), w: W, h: H, resizable: false, min: (W, H), controls: wind::Controls::MinClose };
+    let spec = WindowSpec { title: text::TITLE.get().into(), w: W, h: H, resizable: false, min: (W, H), controls: wind::Controls::MinClose };
     if let Err(e) = wind::run_window(spec, &mut w) {
         eprintln!("rustshot: trim window: {e:#}");
     }
@@ -541,7 +541,7 @@ mod tests {
         }
         std::fs::write(&p, enc.into_inner().unwrap().into_inner()).unwrap();
         let (mut w, join) = Window::open(&p, crate::theme::DARK);
-        let spec = WindowSpec { title: text::TITLE.into(), w: W, h: H, resizable: false, min: (W, H), controls: wind::Controls::MinClose };
+        let spec = WindowSpec { title: text::TITLE.get().into(), w: W, h: H, resizable: false, min: (W, H), controls: wind::Controls::MinClose };
         let frames = {
             let mut ac = wind::AutoClose::new(&mut w, 2000);
             wind::run_window(spec, &mut ac).expect("trim window");

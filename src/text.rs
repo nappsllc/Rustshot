@@ -377,6 +377,138 @@ impl TextCov {
     }
 }
 
+/// The OS face for UI strings the baked font cannot draw (`uitext.rs`):
+/// the Sans family at medium weight, laying lines out right to left when
+/// the UI language is.
+/// Bumped when a font UI text lacked has been found (Linux looks them up
+/// in the background): text cached before it is drawn again.
+pub fn font_generation() -> u64 {
+    #[cfg(target_os = "linux")]
+    return imp::font_generation();
+    #[cfg(not(target_os = "linux"))]
+    0
+}
+
+/// Start looking up the fonts `s`'s characters need (Linux: in the
+/// background; elsewhere the OS links fonts itself).
+pub fn prefetch_fonts(_s: &str) {
+    #[cfg(target_os = "linux")]
+    imp::prefetch(_s);
+}
+
+/// Wait for the lookups [`prefetch_fonts`] started (tests).
+#[cfg(test)]
+pub fn wait_fonts() {
+    #[cfg(target_os = "linux")]
+    imp::wait_fallbacks();
+}
+
+pub struct UiFace(imp::Face);
+
+/// The OS font's line height per em (UI text asks for the baked font's em).
+pub const UI_EM_RATIO: f32 = imp::EM_RATIO;
+
+impl UiFace {
+    pub fn new(rtl: bool) -> UiFace {
+        UiFace(imp::Face::new(Family::Sans, 500, false, false, false).with_rtl(rtl))
+    }
+
+    /// (ascent, descent) at `px` (the OS face's line height).
+    pub fn metrics(&self, px: f32) -> (f32, f32) {
+        let (a, d, _) = self.0.metrics(px);
+        (a, d)
+    }
+
+    pub fn width(&self, line: &str, px: f32) -> f32 {
+        if line.is_empty() { 0.0 } else { self.0.width(line, px) }
+    }
+
+    /// `line`'s coverage, its top-left at `top`, clipped to `clip`.
+    pub fn draw(&self, line: &str, px: f32, top: Pt, clip: (i32, i32, i32, i32), f: &mut dyn FnMut(i32, i32, f32)) {
+        let ascent = self.metrics(px).0;
+        self.0.draw(line, px, top, ascent, clip, f);
+    }
+}
+
+/// A strong right-to-left character (Hebrew, Arabic, Syriac, Thaana,
+/// N'Ko and their presentation forms).
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+pub fn is_rtl_char(c: char) -> bool {
+    matches!(c as u32, 0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF | 0x10800..=0x10FFF | 0x1E800..=0x1EFFF)
+}
+
+/// `s` in visual (left-to-right display) order, for a renderer without a
+/// bidi engine (Linux's ab_glyph): a simplified Unicode bidi algorithm
+/// for one line. Runs of right-to-left letters are reversed (brackets
+/// mirrored), digits and Latin keep their order; neutrals (spaces,
+/// punctuation) between runs of one direction take it, others the
+/// paragraph's (right to left when `rtl`, else the first strong
+/// character's); a right-to-left paragraph lays its runs out from the right.
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+pub fn visual_order(s: &str, rtl: bool) -> Vec<char> {
+    let chars: Vec<char> = s.chars().collect();
+    // Some(true): strong right to left; Some(false): left to right (letters, digits).
+    let strong = |c: char| {
+        if is_rtl_char(c) {
+            Some(true)
+        } else if c.is_alphanumeric() {
+            Some(false)
+        } else {
+            None
+        }
+    };
+    if !chars.iter().any(|&c| is_rtl_char(c)) && !rtl {
+        return chars;
+    }
+    let para = rtl || chars.iter().find_map(|&c| strong(c)).unwrap_or(false);
+    let mut dir: Vec<bool> = chars.iter().map(|&c| strong(c).unwrap_or(para)).collect();
+    // Neutrals: the direction on both sides when they agree, else the paragraph's.
+    let mut i = 0;
+    while i < chars.len() {
+        if strong(chars[i]).is_some() {
+            i += 1;
+            continue;
+        }
+        let j = (i..chars.len()).find(|&j| strong(chars[j]).is_some()).unwrap_or(chars.len());
+        let before = (0..i).rev().find_map(|k| strong(chars[k])).unwrap_or(para);
+        let after = chars[j..].iter().find_map(|&c| strong(c)).unwrap_or(para);
+        let d = if before == after { before } else { para };
+        dir[i..j].iter_mut().for_each(|x| *x = d);
+        i = j;
+    }
+    let mirror = |c: char| match c {
+        '(' => ')',
+        ')' => '(',
+        '[' => ']',
+        ']' => '[',
+        '{' => '}',
+        '}' => '{',
+        '<' => '>',
+        '>' => '<',
+        '«' => '»',
+        '»' => '«',
+        c => c,
+    };
+    // Runs of one direction, in logical order.
+    let mut runs: Vec<(bool, Vec<char>)> = Vec::new();
+    for (&c, &d) in chars.iter().zip(&dir) {
+        match runs.last_mut() {
+            Some((rd, v)) if *rd == d => v.push(c),
+            _ => runs.push((d, vec![c])),
+        }
+    }
+    for (d, v) in runs.iter_mut() {
+        if *d {
+            v.reverse();
+            v.iter_mut().for_each(|c| *c = mirror(*c));
+        }
+    }
+    if para {
+        runs.reverse();
+    }
+    runs.into_iter().flat_map(|(_, v)| v).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

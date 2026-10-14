@@ -316,6 +316,27 @@ pub trait Driver {
     }
     /// Window is being destroyed (loop ends after this).
     fn on_quit(&mut self) {}
+    /// `run_window` only: the title in the current language, asked when
+    /// the UI language switches (`None`: keep the one it has).
+    fn title(&self) -> Option<String> {
+        None
+    }
+}
+
+/// The UI language switched since `seen` (a window's last look at
+/// [`crate::i18n::generation`]): the driver lays itself out again (an
+/// `Ev::Resize` to the same `size`) and its title in the new language, if
+/// it has one, comes back (`Some(None)`: none; `None`: no switch).
+pub fn relocalize(seen: &mut u64, drv: &mut dyn Driver, size: (u32, u32)) -> Option<Option<String>> {
+    let g = crate::i18n::generation();
+    if *seen == g {
+        return None;
+    }
+    *seen = g;
+    if size.0 > 0 && size.1 > 0 {
+        drv.on_event(Ev::Resize(size.0, size.1));
+    }
+    Some(drv.title())
 }
 
 /// Virtual-key codes (Win32 numbering, shared by every platform backend).
@@ -519,6 +540,9 @@ impl Driver for AutoClose<'_> {
     }
     fn on_quit(&mut self) {
         self.inner.on_quit();
+    }
+    fn title(&self) -> Option<String> {
+        self.inner.title()
     }
 }
 

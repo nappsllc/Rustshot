@@ -13,12 +13,16 @@ use windows::Win32::Graphics::Gdi::{
     CreateCompatibleDC, CreateDIBSection, CreateFontW, DeleteDC, DeleteObject, DrawTextW, GdiFlush,
     GetTextMetricsW, SelectObject, SetBkMode, SetTextColor, ANTIALIASED_QUALITY, BITMAPINFO,
     BITMAPINFOHEADER, BI_RGB, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_PITCH, DIB_RGB_COLORS,
-    DRAW_TEXT_FORMAT, DT_CALCRECT, DT_NOCLIP, DT_NOPREFIX, DT_SINGLELINE, FW_NORMAL, HDC, HFONT,
+    DRAW_TEXT_FORMAT, DT_CALCRECT, DT_NOCLIP, DT_NOPREFIX, DT_RTLREADING, DT_SINGLELINE, FW_NORMAL, HDC, HFONT,
     HGDIOBJ, OUT_TT_PRECIS, TEXTMETRICW, TRANSPARENT,
 };
 
 /// GDI draws underline and strikeout itself.
 pub const NATIVE_DECO: bool = true;
+
+/// Segoe UI's line (ascent + descent) per em: UI text at the baked
+/// font's em size asks for this much more `px`.
+pub const EM_RATIO: f32 = 2724.0 / 2048.0;
 
 /// The face name of a family.
 fn face_name(f: Family) -> PCWSTR {
@@ -47,6 +51,9 @@ pub struct Face {
     italic: bool,
     underline: bool,
     strike: bool,
+    /// Right-to-left paragraph direction (`DT_RTLREADING`): UI text in a
+    /// right-to-left language.
+    rtl: bool,
 }
 
 impl Face {
@@ -97,10 +104,18 @@ impl FontDc {
         }
     }
 
-    fn text(&self, line: &str, r: &mut RECT, flags: DRAW_TEXT_FORMAT) {
-        let mut wide: Vec<u16> = line.encode_utf16().collect();
+    fn text(&self, line: &str, r: &mut RECT, flags: DRAW_TEXT_FORMAT, rtl: bool) {
+        // Right to left: DT_RTLREADING, and the line inside a right-to-left
+        // embedding (RLE ... PDF), which Uniscribe honors whatever the
+        // font's charset (DT_RTLREADING alone needs a Hebrew/Arabic one).
+        let mut wide: Vec<u16> = if rtl {
+            std::iter::once(0x202B).chain(line.encode_utf16()).chain(std::iter::once(0x202C)).collect()
+        } else {
+            line.encode_utf16().collect()
+        };
+        let dir = if rtl { DT_RTLREADING } else { DRAW_TEXT_FORMAT(0) };
         unsafe {
-            DrawTextW(self.dc, &mut wide, r, flags | DT_SINGLELINE | DT_NOPREFIX | DT_NOCLIP);
+            DrawTextW(self.dc, &mut wide, r, flags | dir | DT_SINGLELINE | DT_NOPREFIX | DT_NOCLIP);
         }
     }
 }
@@ -158,7 +173,12 @@ impl Face {
 
     /// `family` at GDI `weight`, italic, underlined, struck out.
     pub fn new(family: Family, weight: u16, italic: bool, underline: bool, strike: bool) -> Face {
-        Face { weight: weight as i32, family, italic, underline, strike }
+        Face { weight: weight as i32, family, italic, underline, strike, rtl: false }
+    }
+
+    /// The same face laying lines out right to left (or not).
+    pub fn with_rtl(self, rtl: bool) -> Face {
+        Face { rtl, ..self }
     }
 
     pub fn metrics(&self, px: f32) -> (f32, f32, f32) {
@@ -214,7 +234,7 @@ impl Face {
     pub fn width(&self, line: &str, px: f32) -> f32 {
         with_dc(px, self, |fd| {
             let mut r = RECT::default();
-            fd.text(line, &mut r, DT_CALCRECT);
+            fd.text(line, &mut r, DT_CALCRECT, self.rtl);
             (r.right - r.left).max(0) as f32
         })
         .unwrap_or(0.0)
@@ -229,12 +249,12 @@ impl Face {
         clip: (i32, i32, i32, i32),
         f: &mut dyn FnMut(i32, i32, f32),
     ) {
-        with_dc(px, self, |fd| Self::draw_with(fd, line, px, top, clip, f));
+        with_dc(px, self, |fd| Self::draw_with(fd, line, px, top, clip, self.rtl, f));
     }
 
-    fn draw_with(fd: &FontDc, line: &str, px: f32, top: Pt, clip: (i32, i32, i32, i32), f: &mut dyn FnMut(i32, i32, f32)) {
+    fn draw_with(fd: &FontDc, line: &str, px: f32, top: Pt, clip: (i32, i32, i32, i32), rtl: bool, f: &mut dyn FnMut(i32, i32, f32)) {
         let mut ext = RECT::default();
-        fd.text(line, &mut ext, DT_CALCRECT);
+        fd.text(line, &mut ext, DT_CALCRECT, rtl);
         // Overhang (italic-ish fallback glyphs, combining marks) beyond the
         // logical box.
         let pad = (px / 3.0).ceil() as i32 + 2;
@@ -267,7 +287,7 @@ impl Face {
             SetBkMode(fd.dc, TRANSPARENT);
             SetTextColor(fd.dc, COLORREF(0x00FF_FFFF));
             let mut r = RECT { left: ox - x0, top: oy - y0, right: ox - x0 + ext.right, bottom: oy - y0 + ext.bottom };
-            fd.text(line, &mut r, DRAW_TEXT_FORMAT(0));
+            fd.text(line, &mut r, DRAW_TEXT_FORMAT(0), rtl);
             let _ = GdiFlush();
             // A fresh DIB section is zero-filled: black, i.e. no coverage.
             let px_data = std::slice::from_raw_parts(bits as *const u8, (w * h * 4) as usize);

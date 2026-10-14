@@ -219,7 +219,7 @@ impl Wheel for XWheel {
             if !self.moved {
                 // Once, at the start: over the region, the same window there.
                 if top_at(self.dpy.0, self.root, self.at.0, self.at.1) != self.target {
-                    return Err(Interrupted(text::CHANGED).into());
+                    return Err(Interrupted(text::CHANGED.get()).into());
                 }
                 XWarpPointer(self.dpy.0, 0, self.root, 0, 0, 0, 0, self.at.0, self.at.1);
                 XSync(self.dpy.0, 0);
@@ -230,7 +230,7 @@ impl Wheel for XWheel {
                 // pointer away (or another window coming over) ends the
                 // run, never scrolls something else.
                 if !self.still_there() {
-                    return Err(Interrupted(text::POINTER_LEFT).into());
+                    return Err(Interrupted(text::POINTER_LEFT.get()).into());
                 }
                 (self.fake)(self.dpy.0, WHEEL_DOWN, 1, 0);
                 (self.fake)(self.dpy.0, WHEEL_DOWN, 0, 0);

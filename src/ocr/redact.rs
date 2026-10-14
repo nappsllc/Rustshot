@@ -42,12 +42,12 @@ impl Kind {
     /// Its checkbox in the Redact menu.
     pub fn label(self) -> &'static str {
         match self {
-            Kind::Email => "Emails",
-            Kind::Phone => "Phone numbers",
-            Kind::Card => "Card numbers",
-            Kind::Id => "IDs (IBAN)",
-            Kind::Url => "URLs, tokens & passwords",
-            Kind::Ip => "IP addresses",
+            Kind::Email => tr!("redact.kind.emails"),
+            Kind::Phone => tr!("redact.kind.phone_numbers"),
+            Kind::Card => tr!("redact.kind.card_numbers"),
+            Kind::Id => tr!("redact.kind.ids_iban"),
+            Kind::Url => tr!("redact.kind.urls_tokens_passwords"),
+            Kind::Ip => tr!("redact.kind.ip_addresses"),
         }
     }
 

@@ -89,7 +89,7 @@ fn api() -> Result<&'static Api> {
 unsafe fn load() -> std::result::Result<Api, String> {
     unsafe {
         let missing = |dll: &str| {
-            format!("Media Foundation is not available ({dll} is missing; on Windows N install the Media Feature Pack)")
+            crate::tr!("err.media_foundation_dll", dll = dll)
         };
         let plat = LoadLibraryExW(windows::core::w!("mfplat.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32)
             .map_err(|_| missing("mfplat.dll"))?;

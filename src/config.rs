@@ -27,6 +27,9 @@ pub struct Config {
     pub ui_color: String,
     /// Overlay theme: "auto" (follow the OS), "dark" or "light".
     pub theme: String,
+    /// UI language: empty for the system's, else a code of `i18n/` ("de",
+    /// "pt-BR"; Settings › General › Language).
+    pub language: String,
     /// UI size: "auto" (each monitor's OS scale) or a percentage of it
     /// (75, 90, 100, 125, 150, 200; see `uisize`).
     pub ui_scale: UiSize,
@@ -356,6 +359,7 @@ impl Default for Config {
             save_dialog: false,
             ui_color: String::new(),
             theme: "auto".into(),
+            language: String::new(),
             ui_scale: UiSize::Auto,
             contrast_opacity: 148,
             draw_color: "#f04438".into(),
@@ -1135,6 +1139,7 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
             }
             "ui_color" => cfg.ui_color = as_string(val).map_err(|e| bad("string", &e))?,
             "theme" => cfg.theme = as_string(val).map_err(|e| bad("string", &e))?,
+            "language" => cfg.language = as_string(val).map_err(|e| bad("string", &e))?,
             "ui_scale" => {
                 let v = if val.starts_with('"') { as_string(val).map_err(|e| bad("string", &e))? } else { val.to_string() };
                 cfg.ui_scale = UiSize::parse(&v)
@@ -1470,6 +1475,7 @@ pub fn to_toml(c: &Config) -> String {
         q(&c.rec_trim)
     ));
     out.push_str(&format!("show_thumbnail = {}\n", c.show_thumbnail));
+    out.push_str(&format!("language = {}\n", q(&c.language)));
     out.push_str(&format!(
         "magnifier = {}\nmagnifier_square = {}\naccept_on_select = {}\noverlay_hints = {}\n",
         c.magnifier,

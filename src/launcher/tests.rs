@@ -251,4 +251,23 @@ mod window_tests {
         let (img, _) = render(&mut f, &DARK, 1.0, &Input::default(), &mut focus);
         preview::save("launcher_dark_custom.png", &img);
     }
+
+    /// The window fits in English and the long pseudo-languages, at 1x
+    /// and 2x (previews per language).
+    #[test]
+    fn fits_in_long_languages() {
+        for lang in preview::LANGS {
+            crate::i18n::with_lang(lang, || {
+                for k in [1.0f32, 2.0] {
+                    let mut f = Form::new(Plan { source: Source::Region, delay: 3, after: After::Edit });
+                    let mut focus = FocusState::default();
+                    let (img, _) = render(&mut f, &DARK, k, &Input::default(), &mut focus);
+                    preview::assert_fits(&focus, W, H, k, &format!("launcher {lang} {k}x"));
+                    if k == 1.0 {
+                        preview::save(&format!("launcher-{lang}.png"), &img);
+                    }
+                }
+            });
+        }
+    }
 }

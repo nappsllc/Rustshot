@@ -132,8 +132,8 @@ pub fn caps_of(c: Option<&Chord>, split: bool) -> Vec<String> {
 pub const CSS: f32 = 1.21;
 
 /// The text "Press shortcut…" cap.
-pub const REC_TEXT: &str = "Press shortcut\u{2026}";
-pub const REC_HINT: &str = "Esc to cancel";
+pub const REC_TEXT: crate::i18n::Key = key!("ui.key.press");
+pub const REC_HINT: crate::i18n::Key = key!("ui.key.esc_cancel");
 
 /// A group label's height in the rail (logical px).
 pub const RAIL_LABEL_H: f32 = 24.0;
@@ -145,7 +145,7 @@ pub const RAIL_LABEL_H: f32 = 24.0;
 pub struct RailStyle<'a> {
     pub item: f32,
     pub pitch: f32,
-    pub groups: &'a [(usize, &'a str)],
+    pub groups: &'a [(usize, crate::i18n::Key)],
 }
 
 /// The rail's item tops and its group labels' tops (with their index in
@@ -186,16 +186,32 @@ impl Ui<'_> {
         tw(self, size * CSS, s)
     }
 
-    /// `s` cut with an ellipsis to `w` logical px at `size`.
+    /// The width of `full[..end]` at `size` as part of `full` (logical
+    /// px): see [`crate::fonts::UiFont::prefix_width`].
+    pub fn prefix_w(&self, size: f32, full: &str, end: usize) -> f32 {
+        crate::fonts::UI.prefix_width(full, end, self.px(size * CSS)) / self.k
+    }
+
+    /// `s` cut with an ellipsis to `w` logical px at `size`: the longest
+    /// prefix (a binary search over its character boundaries, each
+    /// candidate measured as it will be drawn) that fits with the "…".
     pub fn fit_text(&self, size: f32, s: &str, w: f32) -> String {
         if self.text_w(size, s) <= w {
             return s.to_string();
         }
-        let mut out = s.to_string();
-        while !out.is_empty() && self.text_w(size, &format!("{out}\u{2026}")) > w {
-            out.pop();
+        let ends: Vec<usize> = s.char_indices().map(|(i, _)| i).collect();
+        let cut = |n: usize| format!("{}\u{2026}", s[..ends.get(n).copied().unwrap_or(s.len())].trim_end());
+        // ends[n] is the end of the first n characters; 0 always "fits".
+        let (mut lo, mut hi) = (0usize, ends.len());
+        while lo < hi {
+            let mid = (lo + hi).div_ceil(2);
+            if self.text_w(size, &cut(mid)) <= w {
+                lo = mid;
+            } else {
+                hi = mid - 1;
+            }
         }
-        format!("{}\u{2026}", out.trim_end())
+        cut(lo)
     }
 
     /// A section heading ("APPEARANCE"): 10.5/600, uppercase, tracked
@@ -203,11 +219,15 @@ impl Ui<'_> {
     pub fn sec(&mut self, s: &str, tok: &Tok) {
         let r = self.alloc(None, 33.0);
         let size = 10.5;
-        let up = s.to_uppercase();
+        let up = crate::i18n::upper(s);
         let track = self.px(size * 0.07);
         let cy = r.y + self.px(14.0 + 6.5);
         let mut x = r.x;
         let c = tok.tx3.fade(fade(self));
+        if !crate::i18n::tracks(&up) {
+            self.text_at(size, &up, x, cy, c, true);
+            return;
+        }
         for ch in up.chars() {
             let t = ch.to_string();
             self.text_at(size, &t, x, cy, c, true);
@@ -284,7 +304,7 @@ impl Ui<'_> {
                 if m.ctrl || m.alt {
                     continue;
                 }
-                match vk {
+                match super::visual_key(&self.fb, vk) {
                     key::LEFT => *sel = (*sel).min(n).saturating_sub(1),
                     key::RIGHT => *sel = if *sel >= n { 0 } else { (*sel + 1).min(n - 1) },
                     _ => continue,
@@ -388,6 +408,10 @@ impl Ui<'_> {
         let cy = b.y + b.h / 2.0;
         let room = b.w / self.k - 16.0 - if icon.is_some() { 22.0 } else { 0.0 };
         let shown = self.fit_text(size, label, room);
+        #[cfg(test)]
+        if shown != label {
+            super::preview::note_cut(label);
+        }
         let content = self.px(self.text_w(size, &shown) + if icon.is_some() { 22.0 } else { 0.0 });
         let mut x = (b.x + (b.w - content) / 2.0).max(b.x + self.px(8.0)).round();
         if let Some(name) = icon {
@@ -508,12 +532,16 @@ impl Ui<'_> {
         let f = fade(self);
         for (y, gi) in labels {
             // Like the board's `.sec` (uppercase, tracked), a size smaller.
-            let up = style.groups[gi].1.to_uppercase();
+            let up = crate::i18n::upper(&style.groups[gi].1);
             let size = 10.0;
             let track = self.px(size * 0.07);
             let cy = px(y + RAIL_LABEL_H - 9.0);
             let mut x = px(area.x + 10.0);
             let c = tok.tx3.fade(f);
+            if !crate::i18n::tracks(&up) {
+                self.text_at(size, &up, x, cy, c, true);
+                continue;
+            }
             for ch in up.chars() {
                 let t = ch.to_string();
                 self.text_at(size, &t, x, cy, c, true);
@@ -552,13 +580,13 @@ impl Ui<'_> {
         let cy = r.y + r.h / 2.0;
         let y = (cy - h / 2.0).round();
         if rec {
-            let w = self.px((self.text_w(11.0, REC_TEXT) + self.text_w(11.0, REC_HINT) + 18.0).max(110.0)).round();
+            let w = self.px((self.text_w(11.0, &REC_TEXT) + self.text_w(11.0, &REC_HINT) + 18.0).max(110.0)).round();
             let cr = FRect { x: r.x1() - w, y, w, h };
             fill(self, cr, 5.0, tok.acbg.fade(k));
             ring(self, cr, 5.0, tok.acrg.fade(k));
             let x = cr.x + self.px(7.0);
-            let w = self.text_at(11.0, REC_TEXT, x, cy, tok.acfg.fade(k), false);
-            self.text_at(11.0, REC_HINT, x + w + self.px(4.0), cy, tok.acfg.fade(0.6 * k), false);
+            let w = self.text_at(11.0, &REC_TEXT, x, cy, tok.acfg.fade(k), false);
+            self.text_at(11.0, &REC_HINT, x + w + self.px(4.0), cy, tok.acfg.fade(0.6 * k), false);
             return vec![cr];
         }
         let ws: Vec<f32> = caps.iter().map(|c| self.px((self.text_w(11.0, &c.text) + 14.0).max(22.0)).round()).collect();
@@ -649,7 +677,7 @@ impl Ui<'_> {
                 continue;
             }
             let width = if rec == Some(i) {
-                self.px((self.text_w(11.0, REC_TEXT) + self.text_w(11.0, REC_HINT) + 18.0).max(110.0)).round()
+                self.px((self.text_w(11.0, &REC_TEXT) + self.text_w(11.0, &REC_HINT) + 18.0).max(110.0)).round()
             } else {
                 let ws: f32 = caps[i].iter().map(|c| self.px((self.text_w(11.0, &c.text) + 14.0).max(22.0)).round()).sum();
                 ws + gap * (caps[i].len().saturating_sub(1)) as f32
@@ -675,7 +703,7 @@ impl Ui<'_> {
         let rec = ids.iter().position(|i| self.focus.recording == Some(*i));
         let cy = r.y + r.h / 2.0;
         let name = match (rec, slots.len()) {
-            (Some(i), n) if n > 1 => format!("{label} \u{b7} {}", names.get(i).copied().unwrap_or("")),
+            (Some(i), n) if n > 1 => tr!("ui.key.row_slot", label, name = names.get(i).copied().unwrap_or("")),
             _ => label.to_string(),
         };
         let size = if h < 32.0 { 12.0 } else { 12.5 };

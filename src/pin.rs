@@ -217,17 +217,17 @@ fn item(cmd: Cmd, label: impl Into<String>, checked: bool, enabled: bool) -> Ent
 /// Copy, Save, Save As…, Zoom 100 % (off at 100 %), Opacity (the current
 /// one checked), Close, Close all pins (off with one pin).
 pub fn menu(v: View, pins: usize) -> Vec<Entry> {
-    let ops = OPACITIES.iter().map(|&o| item(Cmd::Opacity(o), format!("{o} %"), v.opacity == o, true)).collect();
+    let ops = OPACITIES.iter().map(|&o| item(Cmd::Opacity(o), tr!("pin.percent", o), v.opacity == o, true)).collect();
     vec![
-        item(Cmd::Copy, "Copy", false, true),
-        item(Cmd::Save, "Save", false, true),
-        item(Cmd::SaveAs, "Save As\u{2026}", false, true),
+        item(Cmd::Copy, tr!("pin.copy"), false, true),
+        item(Cmd::Save, tr!("pin.save"), false, true),
+        item(Cmd::SaveAs, tr!("pin.save_as"), false, true),
         Entry::Sep,
-        item(Cmd::Zoom100, "Zoom 100 %", false, v.zoom != 100),
-        Entry::Sub { label: "Opacity", items: ops },
+        item(Cmd::Zoom100, tr!("pin.zoom100"), false, v.zoom != 100),
+        Entry::Sub { label: tr!("pin.opacity"), items: ops },
         Entry::Sep,
-        item(Cmd::Close, "Close", false, true),
-        item(Cmd::CloseAll, "Close all pins", false, pins > 1),
+        item(Cmd::Close, tr!("pin.close"), false, true),
+        item(Cmd::CloseAll, tr!("pin.close_all"), false, pins > 1),
     ]
 }
 

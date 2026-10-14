@@ -70,7 +70,7 @@ fn put_text(f: &mut Fb, ui: &Ui, size: f32, s: &str, x: f32, cy: f32, c: C4) {
 pub fn layout(ui: &Ui) -> Layout {
     let s = ui.s;
     let words = (tw(ui, TEXT, &label(20_000)) / s).ceil();
-    let stop_w = STOP_L + STOP_SQ + GAP + (tw(ui, 12.0, text::STOP) / s).ceil() + STOP_R;
+    let stop_w = STOP_L + STOP_SQ + GAP + (tw(ui, 12.0, text::STOP.get()) / s).ceil() + STOP_R;
     let w = PAD + DOT_L + 2.0 * DOT + GAP + words + GAP + stop_w + PAD;
     let h = BTN + 2.0 * PAD;
     let px = |v: f32| v * s;
@@ -102,7 +102,7 @@ pub fn draw(f: &mut Fb, ui: &Ui, l: &Layout, height: u32, hover: bool, pulse: bo
     let q = (STOP_SQ * s).round();
     let sq = FRect { x: (r.x + STOP_L * s).round(), y: (r.y + (r.h - q) / 2.0).round(), w: q, h: q };
     fill(f, sq, 2.0 * s, ON_REC);
-    put_text(f, ui, 12.0, text::STOP, sq.x1() + GAP * s, r.y + r.h / 2.0, ON_REC);
+    put_text(f, ui, 12.0, text::STOP.get(), sq.x1() + GAP * s, r.y + r.h / 2.0, ON_REC);
 }
 
 /// Where the pill goes for `area`: beside it (else, where the window can

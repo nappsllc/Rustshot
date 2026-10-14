@@ -358,7 +358,7 @@ fn screenclip_guide_flow() {
     assert_eq!(s.modal, Some(Modal::Guide { broken: true, dont_show: false }));
     let (title, text) = s.guide_texts(true);
     assert_eq!(title, "One more step to use Win+Shift+S");
-    assert!(text.starts_with(crate::screenclip_win::GUIDE_BROKEN) && text.contains("Choose defaults by link type"));
+    assert!(text.starts_with(crate::screenclip_win::GUIDE_BROKEN.get()) && text.contains("Choose defaults by link type"));
     // Enter is Open Default apps; the guide stays.
     assert_eq!(s.on(Click::Enter), vec![Act::OpenDefaultApps]);
     assert!(s.guide_away && matches!(s.modal, Some(Modal::Guide { .. })));
@@ -1009,7 +1009,7 @@ fn the_stored_check_is_settled_and_cached() {
 /// No public URL base: a warning, and the copied link is the endpoint's.
 #[test]
 fn an_empty_public_url_warns() {
-    assert_eq!(upload::public_help(" "), (upload::PUBLIC_WARNING, true));
+    assert_eq!(upload::public_help(" "), (upload::PUBLIC_WARNING.get(), true));
     assert!(upload::PUBLIC_WARNING.starts_with("Links won't be public unless the bucket is public"));
     assert!(!upload::public_help("https://cdn.example.com").1);
 }
@@ -1627,6 +1627,138 @@ fn crowded() -> Settings {
     s
 }
 
+/// General › Language: a language not downloaded yet shows its
+/// download's state under the row, and Retry after a failure.
+#[test]
+fn language_row_shows_the_download() {
+    use crate::i18n::fetch::{set_status, Status};
+    let i = language_choices().iter().position(|c| c.0 == "zz-ui").unwrap();
+    for (st, retry) in [(Status::Failed("offline".into()), true), (Status::Downloading, false)] {
+        set_status("zz-ui", st.clone());
+        let mut s = sample();
+        s.section = GENERAL;
+        s.form.language = i;
+        let mut focus = FocusState::default();
+        let (img, _) = render(&mut s, &DARK, 1.0, &Input::default(), &mut focus);
+        assert_eq!(focus.rect_of("language_retry").is_some(), retry, "{st:?}");
+        preview::save(&format!("settings-language-{}.png", if retry { "failed" } else { "downloading" }), &img);
+    }
+}
+
+/// A right-to-left language mirrors the window: the rail on the right
+/// (its selected item where the English one is, mirrored), while a long
+/// left-to-right language does not move it; a click lands on the control
+/// drawn under it.
+#[test]
+fn right_to_left_mirrors_the_window() {
+    let shot = |lang: &str| {
+        crate::i18n::with_lang(lang, || {
+            let mut s = sample();
+            s.section = GENERAL;
+            render(&mut s, &DARK, 1.0, &Input::default(), &mut FocusState::default()).0
+        })
+    };
+    let (en, qps, rtl) = (shot("en"), shot("qps"), shot("qps-rtl"));
+    let px = |img: &PixBuf, x: u32, y: u32| img.get_pixel(x, y);
+    // The selected rail item's fill, left of its icon.
+    let (x, y) = (14, 64);
+    assert_eq!(px(&en, x, y), px(&qps, x, y));
+    assert_eq!(px(&en, x, y), px(&rtl, W - 1 - x, y), "mirrored");
+    assert_ne!(px(&en, x, y), px(&rtl, x, y));
+    // The pointer is mirrored too: a press where the Theme control is
+    // drawn (left in a right-to-left window) reaches it.
+    crate::i18n::with_lang("qps-rtl", || {
+        let mut s = sample();
+        s.section = GENERAL;
+        let mut focus = FocusState::default();
+        render(&mut s, &DARK, 1.0, &Input::default(), &mut focus);
+        let r = focus.rect_of("language").expect("the language dropdown");
+        let screen_x = W as i32 - 1 - (r.x + r.w / 2.0) as i32;
+        let ev = crate::ui::rtl_ev(crate::wind::Ev::Down { x: screen_x, y: (r.y + r.h / 2.0) as i32 }, W);
+        let crate::wind::Ev::Down { x, .. } = ev else { unreachable!() };
+        assert!((x as f32) >= r.x && (x as f32) < r.x1(), "{x} in {r:?}");
+    });
+}
+
+/// Every question and message of the window fits it in English and the
+/// long pseudo-languages: its buttons and checkbox inside the window,
+/// none over another (RUSTSHOT_PREVIEW_DIR: each, in each language).
+#[test]
+fn dialogs_fit_in_long_languages() {
+    let modals = || {
+        [
+            Modal::Rewrite { close: false },
+            Modal::Error("Could not save C:\\Users\\someone\\AppData\\Roaming\\rustshot\\config.toml: access is denied".into()),
+            Modal::Hotkeys { text: "Win+Shift+S is used by another app.".into(), field: None },
+            Modal::HideTray,
+            Modal::TrayOffNotice,
+            Modal::Broken("line 3: expected key = value".into()),
+            Modal::Reset("line 3".into()),
+            Modal::Guide { broken: true, dont_show: false },
+        ]
+    };
+    for lang in crate::ui::preview::LANGS {
+        crate::i18n::with_lang(lang, || {
+            for k in [1.0f32, 2.0] {
+                for (n, m) in modals().into_iter().enumerate() {
+                    let mut s = sample();
+                    s.modal = Some(m);
+                    let mut focus = FocusState::default();
+                    let (img, _) = render(&mut s, &DARK, k, &Input::default(), &mut focus);
+                    if k == 1.0 {
+                        preview::save(&format!("settings-dialog-{n}-{lang}.png"), &img);
+                    }
+                    let rects: Vec<FRect> = focus.all_rects().into_iter().map(|r| FRect { x: r.x / k, y: r.y / k, w: r.w / k, h: r.h / k }).collect();
+                    assert!(!rects.is_empty(), "{lang} dialog {n}: no buttons");
+                    for (a, ra) in rects.iter().enumerate() {
+                        assert!(ra.x >= 0.0 && ra.y >= 0.0 && ra.x1() <= W as f32 + 0.5 && ra.y1() <= H as f32 + 0.5, "{lang} dialog {n} at {k}: {ra:?}");
+                        for rb in &rects[a + 1..] {
+                            let ow = ra.x1().min(rb.x1()) - ra.x.max(rb.x);
+                            let oh = ra.y1().min(rb.y1()) - ra.y.max(rb.y);
+                            assert!(ow <= 1.0 || oh <= 1.0, "{lang} dialog {n} at {k}: {ra:?} and {rb:?} overlap");
+                        }
+                    }
+                }
+            }
+        });
+    }
+}
+
+/// The cost of a frame in each language (General, warm caches):
+/// `cargo test --release language_frame_cost -- --ignored --nocapture`.
+#[test]
+#[ignore = "a benchmark"]
+fn language_frame_cost() {
+    for lang in ["en", "qps", "qps-rtl", "qps-ar"] {
+        crate::i18n::with_lang(lang, || {
+            let mut s = sample();
+            s.section = GENERAL;
+            render(&mut s, &DARK, 1.5, &Input::default(), &mut FocusState::default());
+            let t = std::time::Instant::now();
+            let n = 50;
+            for _ in 0..n {
+                render(&mut s, &DARK, 1.5, &Input::default(), &mut FocusState::default());
+            }
+            eprintln!("{lang}: {:.2} ms a frame", t.elapsed().as_secs_f64() * 1000.0 / n as f64);
+        });
+    }
+}
+
+/// Every section in the pseudo-languages (RUSTSHOT_PREVIEW_DIR).
+#[test]
+fn preview_settings_pseudo_pngs() {
+    for lang in ["qps", "qps-rtl"] {
+        crate::i18n::with_lang(lang, || {
+            for i in 0..SECTIONS.len() {
+                let mut s = sample();
+                s.section = i;
+                let (img, _) = render(&mut s, &DARK, 1.0, &Input::default(), &mut FocusState::default());
+                preview::save(&format!("settings-{i:02}-{lang}.png"), &img);
+            }
+        });
+    }
+}
+
 #[test]
 fn preview_settings_pngs() {
     for k in [1.0f32, 1.5] {
@@ -1803,23 +1935,44 @@ fn preview_settings_pngs() {
 /// content ends above the footer and every control sits inside the body
 /// (or the header and footer bars).
 #[test]
+/// Every section fits the body without scrolling, in English and in the
+/// pseudo-languages (40 % longer, accented / right to left): no section
+/// taller than the body, every control inside the window, on its side of
+/// the rail edge, and no two controls overlapping.
 fn every_section_fits() {
+    for lang in crate::ui::preview::LANGS {
+        crate::i18n::with_lang(lang, || sections_fit(lang));
+    }
+}
+
+fn sections_fit(lang: &str) {
     let vp = viewport();
+    // (The pseudo-languages in one theme: the theme moves nothing.)
+    let themes: &[&Theme] = if lang == "en" { &[&DARK, &LIGHT] } else { &[&DARK] };
     for k in [1.0f32, 2.0, 3.0] {
-        for th in [&DARK, &LIGHT] {
+        for th in themes {
             for (i, title) in TITLES.iter().enumerate() {
                 for (state, mut s) in [("default", sample()), ("crowded", crowded())] {
                     s.section = i;
                     let mut focus = FocusState::default();
                     render(&mut s, th, k, &Input::default(), &mut focus);
                     let h = s.content_h[i];
-                    assert!(h > 100.0 && h <= vp.h, "{} ({state}) at {k}: {h} of {}", title, vp.h);
-                    for r in focus.all_rects() {
-                        let (x0, y0, x1, y1) = (r.x / k, r.y / k, r.x1() / k, r.y1() / k);
-                        assert!(x0 >= 0.0 && x1 <= W as f32 + 0.5 && y0 >= 0.0 && y1 <= H as f32 + 0.5, "{} ({state}): {r:?}", title);
+                    assert!(h > 100.0 && h <= vp.h, "{lang} {} ({state}) at {k}: {h} of {}", title, vp.h);
+                    let rects: Vec<FRect> = focus.all_rects().into_iter().map(|r| FRect { x: r.x / k, y: r.y / k, w: r.w / k, h: r.h / k }).collect();
+                    for r in &rects {
+                        let (x0, y0, x1, y1) = (r.x, r.y, r.x1(), r.y1());
+                        assert!(x0 >= 0.0 && x1 <= W as f32 + 0.5 && y0 >= 0.0 && y1 <= H as f32 + 0.5, "{lang} {} ({state}) at {k}: {r:?}", title);
+                        assert!(x1 <= RAIL_W + 0.5 || x0 >= RAIL_W - 0.5, "{lang} {} ({state}) at {k}: {r:?} across the rail edge", title);
                         if x0 >= RAIL_W {
                             let bar = y1 <= HDR_H + 0.5 || y0 >= H as f32 - FOOT_H - 0.5;
-                            assert!(bar || (y0 >= vp.y - 0.5 && y1 <= vp.y1() + 0.5), "{} ({state}): {r:?} outside the body", title);
+                            assert!(bar || (y0 >= vp.y - 0.5 && y1 <= vp.y1() + 0.5), "{lang} {} ({state}) at {k}: {r:?} outside the body", title);
+                        }
+                    }
+                    for (a, ra) in rects.iter().enumerate() {
+                        for rb in &rects[a + 1..] {
+                            let ow = ra.x1().min(rb.x1()) - ra.x.max(rb.x);
+                            let oh = ra.y1().min(rb.y1()) - ra.y.max(rb.y);
+                            assert!(ow <= 1.0 || oh <= 1.0, "{lang} {} ({state}) at {k}: {ra:?} and {rb:?} overlap", title);
                         }
                     }
                 }
@@ -2213,7 +2366,7 @@ fn while_recording_rows_notes() {
     s.form.keys.set(Action::RecPause, vec![Chord::parse("Ctrl+Alt+Shift+M").unwrap()]);
     assert_eq!(s.form.rec_note(Action::RecPause).as_deref(), Some("Already used by Mute microphone. Choose another."));
     s.form.keys.set(Action::RecPause, vec![Chord::parse("P").unwrap()]);
-    assert_eq!(s.form.rec_note(Action::RecPause).as_deref(), Some(BARE_NOTE));
+    assert_eq!(s.form.rec_note(Action::RecPause).as_deref(), Some(BARE_NOTE.get()));
     // The same chord as an overlay key is fine (the overlay is closed while recording).
     s.form.keys.set(Action::RecPause, vec![Chord::parse("Ctrl+S").unwrap()]);
     assert_eq!(s.form.rec_note(Action::RecPause), None);
@@ -2258,8 +2411,8 @@ fn about_links() {
     s.section = ABOUT;
     let mut focus = FocusState::default();
     assert_eq!(click(&mut s, &mut focus, "check_updates_now", 1.0), Some(Click::CheckUpdates));
-    for (label, url) in crate::actions::LINKS.iter().take(5) {
-        assert_eq!(click(&mut s, &mut focus, &format!("link_{label}"), 1.0), Some(Click::Link(url)), "{label}");
+    for (i, (label, url)) in crate::actions::LINKS.iter().take(5).enumerate() {
+        assert_eq!(click(&mut s, &mut focus, &format!("link_{i}"), 1.0), Some(Click::Link(url)), "{}", label.get());
     }
     assert_eq!(click(&mut s, &mut focus, "link_powernapps", 1.0), Some(Click::Link("https://powernapps.net")));
 }

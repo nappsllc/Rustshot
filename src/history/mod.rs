@@ -165,7 +165,7 @@ pub fn title(m: &Meta) -> String {
             .or(m.file.as_ref())
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| if m.kind.is_recording() { "Recording".into() } else { "Screenshot".into() }),
+            .unwrap_or_else(|| if m.kind.is_recording() { tr!("history.recording").into() } else { tr!("history.screenshot").into() }),
         (a, "") => a.to_string(),
         ("", t) => t.to_string(),
         (a, t) => format!("{a} \u{2014} {t}"),
@@ -201,10 +201,17 @@ pub fn object_chips(kinds: &[String]) -> Vec<String> {
             None => out.push((k.clone(), 1)),
         }
     }
-    out.into_iter().map(|(n, c)| if c > 1 { format!("{n} \u{d7}{c}") } else { n }).collect()
+    out.into_iter().map(|(n, c)| if c > 1 { tr!("history.chip_count", name = kind_label(&n), c) } else { kind_label(&n).to_string() }).collect()
 }
 
-/// An object's kind as History names it.
+/// An object kind's name in the current language (`kind_name`'s English
+/// name is what history.json keeps).
+pub fn kind_label(name: &str) -> &'static str {
+    let k = format!("history.kind.{}", name.to_ascii_lowercase());
+    crate::i18n::lookup(&k).map_or("?", |k| k.get())
+}
+
+/// An object's kind as History names it (kept in history.json: English).
 pub fn kind_name(o: &Obj) -> &'static str {
     match o {
         Obj::Path { .. } => "Pencil",
@@ -251,14 +258,36 @@ pub fn civil_from_days(days: i64) -> (i32, u32, u32) {
     (y, m, d)
 }
 
-const WEEKDAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const WEEKDAYS: [crate::i18n::Key; 7] = [
+    key!("date.mon"),
+    key!("date.tue"),
+    key!("date.wed"),
+    key!("date.thu"),
+    key!("date.fri"),
+    key!("date.sat"),
+    key!("date.sun"),
+];
+const MONTHS: [crate::i18n::Key; 12] = [
+    key!("date.jan"),
+    key!("date.feb"),
+    key!("date.mar"),
+    key!("date.apr"),
+    key!("date.may"),
+    key!("date.jun"),
+    key!("date.jul"),
+    key!("date.aug"),
+    key!("date.sep"),
+    key!("date.oct"),
+    key!("date.nov"),
+    key!("date.dec"),
+];
 
 /// "Sun 11 Oct" (with the year when it is not `this_year`).
 pub fn short_date(y: i32, m: u32, d: u32, this_year: i32) -> String {
     let wd = (days_from_civil(y, m, d) + 3).rem_euclid(7) as usize; // 1970-01-01 was a Thursday
     let mon = MONTHS[(m.clamp(1, 12) - 1) as usize];
-    if y == this_year { format!("{} {d} {mon}", WEEKDAYS[wd]) } else { format!("{} {d} {mon} {y}", WEEKDAYS[wd]) }
+    let weekday = WEEKDAYS[wd];
+    if y == this_year { tr!("date.short", weekday, day = d, month = mon) } else { tr!("date.short_year", weekday, day = d, month = mon, year = y) }
 }
 
 /// A day group's header: the heading ("Today", "Yesterday", "Fri 9 Oct")
@@ -267,8 +296,8 @@ pub fn short_date(y: i32, m: u32, d: u32, this_year: i32) -> String {
 pub fn day_header(day: (i32, u32, u32), today: (i32, u32, u32), count: usize) -> (String, Option<String>) {
     let age = days_from_civil(today.0, today.1, today.2) - days_from_civil(day.0, day.1, day.2);
     match age {
-        0 => ("Today".into(), Some(format!("\u{b7} {count} capture{}", if count == 1 { "" } else { "s" }))),
-        1 => ("Yesterday".into(), Some(format!("\u{b7} {}", short_date(day.0, day.1, day.2, today.0)))),
+        0 => (tr!("date.today").into(), Some(trn!("history.today_count", count))),
+        1 => (tr!("date.yesterday").into(), Some(tr!("history.yesterday_date", date = short_date(day.0, day.1, day.2, today.0)))),
         _ => (short_date(day.0, day.1, day.2, today.0), None),
     }
 }
@@ -276,7 +305,7 @@ pub fn day_header(day: (i32, u32, u32), today: (i32, u32, u32), count: usize) ->
 /// "3 results for "stripe"".
 pub fn results_header(n: usize, q: &str) -> String {
     // Straight quotes: the baked UI font has no curly ones.
-    format!("{n} result{} for \"{}\"", if n == 1 { "" } else { "s" }, q.trim())
+    trn!("history.results", n, query = q.trim())
 }
 
 /// "14:32", or with the day when the group does not say it ("Today 11:48",
@@ -288,9 +317,9 @@ pub fn time_text(t: &Tm, today: (i32, u32, u32), with_day: bool) -> String {
     }
     let age = days_from_civil(today.0, today.1, today.2) - days_from_civil(t.0, t.1, t.2);
     match age {
-        0 => format!("Today {hm}"),
-        1 => format!("Yesterday {hm}"),
-        _ => format!("{} {hm}", short_date(t.0, t.1, t.2, today.0)),
+        0 => tr!("date.today_at", time = hm),
+        1 => tr!("date.yesterday_at", time = hm),
+        _ => tr!("date.day_at", day = short_date(t.0, t.1, t.2, today.0), time = hm),
     }
 }
 
@@ -299,25 +328,25 @@ pub fn time_text(t: &Tm, today: (i32, u32, u32), with_day: bool) -> String {
 pub fn captured_text(t: &Tm, today: (i32, u32, u32)) -> String {
     let age = days_from_civil(today.0, today.1, today.2) - days_from_civil(t.0, t.1, t.2);
     let day = match age {
-        0 => "Today".to_string(),
-        1 => "Yesterday".to_string(),
+        0 => tr!("date.today").to_string(),
+        1 => tr!("date.yesterday").to_string(),
         _ => short_date(t.0, t.1, t.2, today.0),
     };
-    format!("{day}, {:02}:{:02}:{:02}", t.3, t.4, t.5)
+    tr!("date.day_time", day, time = format!("{:02}:{:02}:{:02}", t.3, t.4, t.5))
 }
 
 /// "486 KB", "1.2 GB", "0 B".
 pub fn size_text(bytes: u64) -> String {
     let b = bytes as f64;
     if bytes == 0 {
-        "0 B".into()
+        tr!("size.zero").into()
     } else if b < 1e6 {
-        format!("{} KB", (b / 1e3).round().max(1.0) as u64)
+        tr!("size.kb", n = (b / 1e3).round().max(1.0) as u64)
     } else if b < 1e9 {
         let mb = b / 1e6;
-        if mb < 10.0 { format!("{mb:.1} MB") } else { format!("{mb:.0} MB") }
+        tr!("size.mb", n = if mb < 10.0 { format!("{mb:.1}") } else { format!("{mb:.0}") })
     } else {
-        format!("{:.1} GB", b / 1e9)
+        tr!("size.gb", n = format!("{:.1}", b / 1e9))
     }
 }
 

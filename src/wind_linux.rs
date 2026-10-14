@@ -858,6 +858,11 @@ mod window {
                 &mut attrs,
             );
             let utf8 = atom(dpy, c"UTF8_STRING");
+            let set_title = |title: &str| {
+                for prop in [atom(dpy, c"_NET_WM_NAME"), atom(dpy, c"WM_NAME")] {
+                    XChangeProperty(dpy, win, prop, utf8, 8, PROP_MODE_REPLACE, title.as_ptr(), title.len() as c_int);
+                }
+            };
             for prop in [atom(dpy, c"_NET_WM_NAME"), atom(dpy, c"WM_NAME")] {
                 XChangeProperty(
                     dpy,
@@ -910,6 +915,7 @@ mod window {
             let prev_slot = WINDOWED.with(|c| c.replace(WinSlot { win, quit: false, present: false, scale: s, fixed: !spec.resizable }));
             let quit = || WINDOWED.with(|c| c.get().quit);
             let mut size = (pw, ph);
+            let mut lang = crate::i18n::generation();
             driver.on_create(Hwnd(win));
             if !quit() {
                 driver.on_event(Ev::Resize(pw, ph));
@@ -943,6 +949,13 @@ mod window {
                 }
                 if Instant::now() >= next_tick {
                     next_tick = Instant::now() + Duration::from_millis(tick_ms(me));
+                    // The UI language switched: lay out again, retitle.
+                    if let Some(title) = crate::wind::relocalize(&mut lang, driver, size) {
+                        if let Some(t) = title {
+                            set_title(&t);
+                        }
+                        repaint = true;
+                    }
                     repaint |= driver.on_event(Ev::Timer);
                 }
                 while XPending(dpy) > 0 && !quit() {

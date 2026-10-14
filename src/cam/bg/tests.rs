@@ -355,7 +355,7 @@ fn waits_for_the_model_fully_blurred() {
         let mut p = was.clone();
         fx.apply(Bg::Light, &raw, &mut p);
         assert!(fully_blurred(&p, &was), "blurred whole while the model comes");
-        assert_eq!(p.note, Some(super::LOADING_BADGE));
+        assert_eq!(p.note, Some(super::LOADING_BADGE.get()));
     }
     assert_eq!(fx.running(), None, "no segmenter yet");
     assert_eq!(super::requests(), asked + 1, "the model is asked for once");
@@ -383,7 +383,7 @@ fn unavailable_model_fully_blurred() {
     let mut p = was.clone();
     fx.apply(Bg::Strong, &raw, &mut p);
     assert!(fully_blurred(&p, &was));
-    assert_eq!(p.note, Some(super::UNAVAILABLE_BADGE));
+    assert_eq!(p.note, Some(super::UNAVAILABLE_BADGE.get()));
     let mut fx = Effect::default();
     for bg in [Bg::Light, Bg::Strong] {
         let mut p = was.clone();
@@ -397,16 +397,16 @@ fn unavailable_model_fully_blurred() {
 /// and what to do.
 #[test]
 fn blur_state_notes() {
-    use super::{Blur, DAMAGED, FAILED, FAILED_SHORT, UNAVAILABLE};
+    use super::{Blur, DAMAGED, FAILED_SHORT, UNAVAILABLE};
     assert_eq!(Blur::Ready.panel_note(), None);
     assert_eq!(Blur::Fetchable.panel_note(), None);
     assert_eq!(Blur::Downloading(47).panel_note(), Some("Downloading model… 40%"));
     assert_eq!(Blur::Downloading(100).panel_note(), Some("Downloading model… 100%"));
-    assert_eq!(Blur::Failed("x".into()).panel_note(), Some(FAILED_SHORT));
+    assert_eq!(Blur::Failed("x".into()).panel_note(), Some(FAILED_SHORT.get()));
     assert!(Blur::Fetchable.settings_note().contains("215 KB"));
-    assert_eq!(Blur::Failed("HTTP 404".into()).settings_note(), format!("{FAILED}: HTTP 404"));
+    assert_eq!(Blur::Failed("HTTP 404".into()).settings_note(), format!("Blur unavailable — couldn't download the model: HTTP 404"));
     let off = Blur::Off { asset: "selfie-f11cb3ec.bin", url: "https://github.com/x".into(), path: "/d/models/selfie.bin".into() };
-    assert_eq!(off.panel_note(), Some(UNAVAILABLE));
+    assert_eq!(off.panel_note(), Some(UNAVAILABLE.get()));
     let n = off.settings_note();
     assert!(n.contains("selfie-f11cb3ec.bin") && n.contains("https://github.com/x") && n.contains("selfie.bin"), "{n}");
     let d = off.settings_detail().unwrap();
@@ -416,9 +416,9 @@ fn blur_state_notes() {
     assert!(nowhere.settings_detail().unwrap().contains("RUSTSHOT_DATA_DIR"));
     assert!(Blur::Damaged("/d/m".into()).settings_detail().unwrap().contains("again"));
     assert_eq!(Blur::Ready.settings_detail(), None);
-    assert!(Blur::Damaged("/d/m".into()).settings_note().starts_with(DAMAGED));
+    assert!(Blur::Damaged("/d/m".into()).settings_note().starts_with(DAMAGED.get()));
     assert_eq!(Blur::Ready.ask_lines(), None);
-    assert_eq!(off.ask_lines(), Some((super::ASK_TITLE, "(downloads are off)")));
+    assert_eq!(off.ask_lines(), Some((super::ASK_TITLE.get(), "(downloads are off)")));
     assert_eq!(Blur::Downloading(3).ask_lines().map(|l| l.1), Some("(the blur model is still downloading)"));
 }
 
@@ -436,7 +436,7 @@ fn without_a_segmenter_it_is_blurred_whole() {
     assert_eq!(fx.running(), Some(false));
     let mut p = was.clone();
     fx.apply(Bg::Light, &raw, &mut p);
-    assert_eq!(p.note, Some(super::UNAVAILABLE_BADGE));
+    assert_eq!(p.note, Some(super::UNAVAILABLE_BADGE.get()));
 }
 
 #[test]
@@ -592,7 +592,7 @@ fn render_blur_previews() {
                 cells.push(crate::rec_ui::layer_over(&out, bg));
             }
             // No mask to be had: blurred whole, with each badge.
-            for badge in [super::LOADING_BADGE, super::UNAVAILABLE_BADGE] {
+            for badge in [super::LOADING_BADGE.get(), super::UNAVAILABLE_BADGE.get()] {
                 let mut pic = fit_square(&raw, t.d);
                 super::blur_all(&mut pic, &mut Scratch::default());
                 pic.note = Some(badge);

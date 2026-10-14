@@ -31,7 +31,10 @@ pub(super) fn tw(ui: &Ui, size: f32, s: &str) -> f32 {
 pub(super) fn text(ui: &mut Ui, size: f32, s: &str, x: f32, cy: f32, c: C4) -> f32 {
     let font = &crate::fonts::UI;
     let px = ui.px(size);
-    ui.fb.draw_text(font, px, s, x.round(), (cy - text_height(font, px) / 2.0).round(), c)
+    let w = ui.fb.draw_text(font, px, s, x.round(), (cy - text_height(font, px) / 2.0).round(), c);
+    #[cfg(test)]
+    super::preview::note_text(s, x.round(), w);
+    w
 }
 
 pub(super) fn fill(ui: &mut Ui, r: FRect, radius: f32, c: C4) {
@@ -154,6 +157,21 @@ impl Ui<'_> {
         }
         let c = self.theme.text;
         self.text_line(s, 15.0, c);
+    }
+
+    /// [`Ui::heading`] in at most `max_w` logical px: a smaller size (down
+    /// to 12) when a long translation needs it, cut with "…" past that.
+    pub fn heading_fit(&mut self, s: &str, max_w: f32) {
+        if !self.lay.in_row() && self.cursor_y() > self.bounds().y + 0.5 {
+            self.space(8.0);
+        }
+        let mut size = 15.0;
+        while size > 12.0 && tw(self, size, s) > max_w {
+            size -= 0.5;
+        }
+        let shown = if tw(self, size, s) > max_w { self.fit_text(size / super::compact::CSS, s, max_w) } else { s.to_string() };
+        let c = self.theme.text;
+        self.text_line(&shown, size, c);
     }
 
     fn text_line(&mut self, s: &str, size: f32, c: C4) {
@@ -394,7 +412,7 @@ impl Ui<'_> {
                     continue;
                 }
                 let n = *v as i32;
-                let to = match vk {
+                let to = match super::visual_key(&self.fb, vk) {
                     key::LEFT | key::DOWN => n - 1,
                     key::RIGHT | key::UP => n + 1,
                     key::PAGEDOWN => n - 10,
@@ -469,7 +487,7 @@ impl Ui<'_> {
                 if m.ctrl || m.alt {
                     continue;
                 }
-                match vk {
+                match super::visual_key(&self.fb, vk) {
                     key::LEFT => *sel = sel.saturating_sub(1),
                     key::RIGHT => *sel = (*sel + 1).min(n - 1),
                     key::HOME => *sel = 0,
@@ -702,10 +720,10 @@ impl Ui<'_> {
         let x0 = r.x + self.px(10.0);
         match (recording, chord.as_ref()) {
             (true, _) => {
-                text(self, self.text_px, "Press a shortcut…", x0, cy, th.accent_fg.fade(k));
+                text(self, self.text_px, tr!("ui.key.press_a"), x0, cy, th.accent_fg.fade(k));
             }
             (false, None) => {
-                text(self, self.text_px, "None", x0, cy, th.text_muted.fade(k));
+                text(self, self.text_px, tr!("ui.key.none"), x0, cy, th.text_muted.fade(k));
             }
             (false, Some(c)) => {
                 let mut x = x0;

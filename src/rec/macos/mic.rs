@@ -19,7 +19,7 @@ pub fn list() -> Vec<(String, String)> {
 /// Open microphone `id` ("" = the default one).
 pub fn open(id: &str) -> Result<FeedSource> {
     let m = media::media()?;
-    media::av_access(m.k.AVMediaTypeAudio, super::MIC_DENIED)?;
+    media::av_access(m.k.AVMediaTypeAudio, super::MIC_DENIED.get())?;
     let _pool = objc::Pool::new();
     unsafe {
         let dev = media::device(m.k.AVMediaTypeAudio, id)

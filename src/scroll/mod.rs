@@ -36,28 +36,27 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use stitch::{Img, Step, Stitcher};
 
-/// What the pill and the overlay say (one place, for the translations).
+/// What the pill and the overlay say (keys of `lang/en.txt`).
 pub mod text {
-    /// The size label menu's row and the Settings key row.
-    pub const ACTION: &str = "Scrolling capture";
+    use crate::i18n::Key;
     /// The pill while it runs: "Scrolling… 4 820 px".
-    pub const RUNNING: &str = "Scrolling\u{2026}";
-    pub const STOP: &str = "Stop";
+    pub const RUNNING: Key = key!("scroll.running");
+    pub const STOP: Key = key!("rec.bar.stop");
     /// Why it ended, said in a toast when that is not the end of the page.
-    pub const LOST: &str = "Scrolling capture stopped: the next part did not match";
-    pub const CAP: &str = "Scrolling capture stopped at its size limit (20 000 px, 400 MB)";
+    pub const LOST: Key = key!("scroll.lost");
+    pub const CAP: Key = key!("scroll.cap");
     #[cfg_attr(target_os = "macos", allow(dead_code))]
-    pub const NO_TARGET: &str = "Nothing to scroll under the selection";
-    pub const UNSUPPORTED: &str = "Scrolling capture is not available here";
+    pub const NO_TARGET: Key = key!("scroll.no_target");
+    pub const UNSUPPORTED: Key = key!("scroll.unsupported");
     /// Nothing moved at all: the capture is the selection as it was.
-    pub const NOTHING: &str = "Nothing scrolled under the selection";
+    pub const NOTHING: Key = key!("scroll.nothing");
     /// Ended early, what was stitched kept.
     #[cfg_attr(target_os = "macos", allow(dead_code))]
-    pub const CHANGED: &str = "Scrolling capture stopped: another window came over the selection";
+    pub const CHANGED: Key = key!("scroll.changed");
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-    pub const POINTER_LEFT: &str = "Scrolling capture stopped: the pointer left the selection";
+    pub const POINTER_LEFT: Key = key!("scroll.pointer_left");
     #[cfg_attr(not(windows), allow(dead_code))]
-    pub const ELEVATED: &str = "Cannot scroll a window running as administrator";
+    pub const ELEVATED: Key = key!("scroll.elevated");
 }
 
 /// The run cannot go on (the window under the selection changed, the
@@ -104,8 +103,8 @@ impl End {
     /// What to tell the user, when it is worth a toast.
     pub fn note(&self) -> Option<&'static str> {
         match self {
-            End::Lost => Some(text::LOST),
-            End::Cap => Some(text::CAP),
+            End::Lost => Some(text::LOST.get()),
+            End::Cap => Some(text::CAP.get()),
             End::Interrupted(why) => Some(why),
             End::Bottom | End::Stopped => None,
         }

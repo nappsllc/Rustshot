@@ -31,22 +31,23 @@ use std::time::{Duration, Instant};
 
 /// The words (one place, for the translations).
 pub mod text {
+    use crate::i18n::Key;
     /// Settings › Recording: one row of three checkboxes.
-    pub const SHOW: &str = "Show clicks & keys";
-    pub const SHOW_NOTE: &str = "Shown in the video; nothing else is saved";
-    pub const CLICKS: &str = "Clicks";
-    pub const KEYS: &str = "Keystrokes";
-    pub const ALL_KEYS: &str = "All keys";
-    pub const UNAVAILABLE: &str = "clicks and keystrokes not shown";
+    pub const SHOW: Key = key!("settings.recording.show");
+    pub const SHOW_NOTE: Key = key!("settings.recording.show.help");
+    pub const CLICKS: Key = key!("settings.recording.clicks");
+    pub const KEYS: Key = key!("settings.recording.keystrokes");
+    pub const ALL_KEYS: Key = key!("settings.recording.all_keys");
+    pub const UNAVAILABLE: Key = key!("rec.marks.unavailable");
     /// Said as All keys is turned on, and once when a recording starts.
-    pub const ALL_KEYS_WARNING: &str = "All keys can show passwords typed into terminals, remote desktops, games and some apps.";
-    pub const NO_DETECTION_LINUX: &str = "Rustshot can't detect password fields on Linux.";
+    pub const ALL_KEYS_WARNING: Key = key!("rec.marks.all_keys_warning");
+    pub const NO_DETECTION_LINUX: Key = key!("rec.marks.no_detection_linux");
     /// Under the row while All keys is on.
-    pub const ALL_KEYS_SHORT: &str = "All keys can show passwords";
+    pub const ALL_KEYS_SHORT: Key = key!("settings.recording.all_keys.help");
 
     /// The warning for this platform.
     pub fn all_keys_warning() -> String {
-        if cfg!(target_os = "linux") { format!("{ALL_KEYS_WARNING} {NO_DETECTION_LINUX}") } else { ALL_KEYS_WARNING.to_string() }
+        if cfg!(target_os = "linux") { format!("{ALL_KEYS_WARNING} {NO_DETECTION_LINUX}") } else { ALL_KEYS_WARNING.get().to_string() }
     }
 }
 

@@ -19,16 +19,16 @@ use crate::objects::FRect;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-/// The words (one place, for the translations).
+/// The words (keys of `lang/en.txt`; "Selected {time}" is `trim.selected`).
 pub mod text {
-    pub const TITLE: &str = "Trim recording";
-    pub const SAVE: &str = "Save trimmed";
-    pub const KEEP: &str = "Keep full length";
-    pub const SELECTED: &str = "Selected";
-    pub const NO_PREVIEW: &str = "No preview: the recording is trimmed all the same";
-    pub const LOADING: &str = "Loading\u{2026}";
-    pub const HINT: &str = "Drag the handles \u{b7} I / O at the playhead \u{b7} Space plays";
-    pub const FAILED: &str = "Could not trim the recording";
+    use crate::i18n::Key;
+    pub const TITLE: Key = key!("trim.title");
+    pub const SAVE: Key = key!("trim.save");
+    pub const KEEP: Key = key!("trim.keep");
+    pub const NO_PREVIEW: Key = key!("trim.no_preview");
+    pub const LOADING: Key = key!("trim.loading");
+    pub const HINT: Key = key!("trim.hint");
+    pub const FAILED: Key = key!("trim.failed");
 }
 
 /// The shortest selection (anything shorter is no recording).
