@@ -17,7 +17,8 @@ static LAST: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 /// Results waiting for the daemon's loop: the note, where, the theme.
 type Done = (Note, (i32, i32), Theme);
-static DONE: Mutex<Vec<Done>> = Mutex::new(Vec::new());
+/// (With the thread that asked: its loop shows it, never another's.)
+static DONE: Mutex<Vec<(std::thread::ThreadId, Done)>> = Mutex::new(Vec::new());
 
 /// The longest text a toast shows of a code.
 const SHOW_MAX: usize = 140;
@@ -116,16 +117,21 @@ thread_local! {
 /// Read the codes in `img` off the UI thread; [`poll`] hands the note
 /// back (to show at `at`).
 pub fn spawn(img: PixBuf, at: (i32, i32), th: Theme) {
+    let me = std::thread::current().id();
     crate::busy::spawn(move || {
         let texts = crate::qr::read(&img);
         let n = note(texts);
-        DONE.lock().unwrap_or_else(|e| e.into_inner()).push((n, at, th));
+        DONE.lock().unwrap_or_else(|e| e.into_inner()).push((me, (n, at, th)));
     });
 }
 
 /// The notes of the reads that finished.
 pub fn poll() -> Vec<Done> {
-    std::mem::take(&mut *DONE.lock().unwrap_or_else(|e| e.into_inner()))
+    let me = std::thread::current().id();
+    let mut all = DONE.lock().unwrap_or_else(|e| e.into_inner());
+    let (mine, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut *all).into_iter().partition(|(t, _)| *t == me);
+    *all = rest;
+    mine.into_iter().map(|(_, d)| d).collect()
 }
 
 /// Show what [`poll`] returned (the notice, else a tray balloon).
