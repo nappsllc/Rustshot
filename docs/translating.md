@@ -202,7 +202,10 @@ Notes:
    what to update. Releases do not wait for translations.
 6. A new language (one not in languages.md) needs someone willing to keep
    it up to date; open an issue first. Its `@plural` rule must exist in
-   `src/i18n/plural.rs` (most do).
+   `src/i18n/plural.rs` (most do). The Microsoft Store package declares
+   every language too: add the tag's Store code (Microsoft's "supported
+   languages" list) to `$storeLang` in `packaging/windows/msix.ps1`, or
+   the MSIX build stops.
 
 Files are published under the project's license (GPL-3.0); by sending a
 translation you agree to that.
