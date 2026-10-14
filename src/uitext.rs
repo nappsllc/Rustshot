@@ -415,7 +415,9 @@ mod tests {
         // The OS stacks: no width of their own...
         for rtl in [false, true] {
             let f = UiFace::new(rtl);
-            assert_eq!(f.width(&format!("Größe {iso}"), 20.0), f.width("Größe 1180 × 760", 20.0), "rtl {rtl}");
+            // (Within float rounding: Linux sums its runs in another order.)
+            let (a, b) = (f.width(&format!("Größe {iso}"), 20.0), f.width("Größe 1180 × 760", 20.0));
+            assert!((a - b).abs() < 0.01, "rtl {rtl}: {a} vs {b}");
         }
         // ...and the pair in order after right-to-left letters.
         let he = "\u{05e9}\u{05de}\u{05d5}\u{05e8}";
