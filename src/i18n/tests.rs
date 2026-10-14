@@ -50,6 +50,8 @@ fn headings_upper_case_by_language() {
     assert_eq!(upper_in("ar", "عام"), "عام");
     assert!(tracks("APPEARANCE"));
     assert!(!tracks("GRÖSSE") && !tracks("عام"));
+    // Right to left, letters one by one would run backwards.
+    assert!(!with_rtl(|| tracks("APPEARANCE")));
 }
 
 /// Odd files read as problems, not as junk: too large, UTF-16, not

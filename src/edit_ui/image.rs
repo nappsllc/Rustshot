@@ -395,6 +395,27 @@ pub fn paint(ui: &mut Ui, d: &mut ImgDialog, win: (f32, f32), pic: &PixBuf, smal
     out
 }
 
+/// A dialog's preview `img` fitted into the box `bx` (physical px; the
+/// preview is small already), centred. A picture: it reads left to right
+/// in a mirrored frame too (blitted pre-flipped, as the frame flips).
+pub(super) fn paint_preview(ui: &mut Ui, img: &PixBuf, bx: FRect) {
+    let k = ui.k;
+    let (iw, ih) = img.dimensions();
+    let fit = crate::scale::fit_size(iw, ih, (bx.w - 16.0 * k).max(1.0) as u32, (bx.h - 16.0 * k).max(1.0) as u32);
+    let shown = if fit == (iw, ih) { img.clone() } else { crate::imgedit::resample::resize(img, fit.0, fit.1, Filter::Area) };
+    let (x0, y0) = ((bx.x + (bx.w - fit.0 as f32) / 2.0).round(), (bx.y + (bx.h - fit.1 as f32) / 2.0).round());
+    let dst = FRect { x: x0, y: y0, w: fit.0 as f32, h: fit.1 as f32 };
+    crate::ui::paint::blit(&mut ui.fb, &shown, dst, dst, 0.0);
+    #[cfg(test)]
+    LAST_PREVIEW.with(|c| c.set(Some(dst)));
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Where the last preview went (layout space, physical px): tests.
+    pub(super) static LAST_PREVIEW: std::cell::Cell<Option<FRect>> = const { std::cell::Cell::new(None) };
+}
+
 fn resize_body(ui: &mut Ui, f: &mut ResizeForm, pic: &PixBuf, cfg: &crate::config::Config, tok: &Tok, out: &mut Option<DlgOut>) {
     ui.row(|ui| {
         label(ui, tr!("edit.img.width"), tok);
@@ -520,18 +541,7 @@ fn canvas_body(ui: &mut Ui, f: &mut CanvasForm, small: &(PixBuf, f32), tok: &Tok
     let bx = FRect { x: pb.x, y: pb.y, w: pb.w, h: pb.h };
     crate::ui::paint::fill(&mut ui.fb, bx, 8.0 * k, tok.sf2);
     match f.preview(&small.0, small.1) {
-        Some(img) => {
-            // Fitted into the box (the preview is small already).
-            let (iw, ih) = img.dimensions();
-            let fit = crate::scale::fit_size(iw, ih, (bx.w - 16.0 * k).max(1.0) as u32, (bx.h - 16.0 * k).max(1.0) as u32);
-            let shown = if fit == (iw, ih) { img.clone() } else { crate::imgedit::resample::resize(img, fit.0, fit.1, Filter::Area) };
-            let (x0, y0) = ((bx.x + (bx.w - fit.0 as f32) / 2.0).round() as i32, (bx.y + (bx.h - fit.1 as f32) / 2.0).round() as i32);
-            for (y, row) in shown.as_raw().chunks_exact(fit.0 as usize * 4).enumerate() {
-                for (x, p) in row.as_chunks::<4>().0.iter().enumerate() {
-                    ui.fb.blend_px(x0 + x as i32, y0 + y as i32, C4::new(p[0], p[1], p[2], p[3]));
-                }
-            }
-        }
+        Some(img) => paint_preview(ui, img, bx),
         None => {
             let msg = if f.over_cap() {
                 tr!("edit.img.too_large_pad", mp = crate::imgedit::MAX_PIXELS / 1_000_000)

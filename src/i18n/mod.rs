@@ -777,9 +777,11 @@ pub fn upper_in(tag: &str, s: &str) -> String {
 
 /// A heading's capitals are tracked letter by letter only when they are
 /// plain ASCII (the baked font); any other string is drawn whole, so the
-/// OS shaper sees the word (Arabic joining, Indic marks).
+/// OS shaper sees the word (Arabic joining, Indic marks). Never in a
+/// right-to-left frame: letters placed one by one there would run right
+/// to left (an English fallback heading spelled backwards).
 pub fn tracks(up: &str) -> bool {
-    up.is_ascii()
+    up.is_ascii() && !is_rtl()
 }
 
 /// The language the setting asks for (by code), whether its file is here
@@ -798,6 +800,10 @@ pub fn current() -> &'static str {
 /// Whether the current language is written right to left (the decorated
 /// windows mirror, the toolbar runs right to left).
 pub fn is_rtl() -> bool {
+    #[cfg(test)]
+    if FORCE_RTL.with(|f| f.get()) {
+        return true;
+    }
     let i = current_index();
     loaded(i).is_some() && known(i).rtl
 }
@@ -812,6 +818,28 @@ pub fn generation() -> u64 {
 thread_local! {
     /// [`with_lang`]'s language on this thread (tests run in parallel).
     static OVERRIDE: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+thread_local! {
+    /// [`with_rtl`]: this thread lays out right to left in its language.
+    static FORCE_RTL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `f` with this thread laid out right to left in its own (English)
+/// strings: a mirrored frame whose text and pictures can be compared
+/// pixel for pixel with the left-to-right one.
+#[cfg(test)]
+pub fn with_rtl<R>(f: impl FnOnce() -> R) -> R {
+    let old = FORCE_RTL.with(|o| o.replace(true));
+    struct Back(bool);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            FORCE_RTL.with(|o| o.set(self.0));
+        }
+    }
+    let _back = Back(old);
+    f()
 }
 
 /// Run `f` with this thread in language `code`, then switch back.

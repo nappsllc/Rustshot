@@ -14,9 +14,9 @@ pub const BAR_H: f32 = 44.0;
 pub const STATUS_H: f32 = 28.0;
 pub const RAIL_W: f32 = 200.0;
 pub const RAIL_MIN: f32 = 44.0;
-const RAIL_HEAD: f32 = 36.0;
+pub(super) const RAIL_HEAD: f32 = 36.0;
 const ROW_H: f32 = 32.0;
-const NOTE_H: f32 = 52.0;
+pub(super) const NOTE_H: f32 = 52.0;
 const DLG_W: f32 = 420.0;
 
 /// The zoom control: −, the value, +, Fit, 1:1.

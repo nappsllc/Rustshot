@@ -6,7 +6,7 @@
 
 use crate::config::Config;
 use crate::imgedit::effects::{self, Effects, Reflection, Shadow, Str, Torn, Watermark};
-use crate::imgedit::{Filter, Pad, frame};
+use crate::imgedit::{Pad, frame};
 use crate::pixbuf::PixBuf;
 use crate::ui::compact::Tok;
 use crate::ui::{TextState, Ui};
@@ -368,17 +368,7 @@ pub fn body(ui: &mut Ui, f: &mut EffectsForm, small: &(PixBuf, f32), tok: &Tok, 
     let k = ui.k;
     crate::ui::paint::fill(&mut ui.fb, pb, 8.0 * k, tok.sf2);
     match f.preview(&small.0, small.1) {
-        Some(img) => {
-            let (iw, ih) = img.dimensions();
-            let fit = crate::scale::fit_size(iw, ih, (pb.w - 16.0 * k).max(1.0) as u32, (pb.h - 16.0 * k).max(1.0) as u32);
-            let shown = if fit == (iw, ih) { img.clone() } else { crate::imgedit::resample::resize(img, fit.0, fit.1, Filter::Area) };
-            let (x0, y0) = ((pb.x + (pb.w - fit.0 as f32) / 2.0).round() as i32, (pb.y + (pb.h - fit.1 as f32) / 2.0).round() as i32);
-            for (y, row) in shown.as_raw().chunks_exact(fit.0 as usize * 4).enumerate() {
-                for (x, p) in row.as_chunks::<4>().0.iter().enumerate() {
-                    ui.fb.blend_px(x0 + x as i32, y0 + y as i32, C4::new(p[0], p[1], p[2], p[3]));
-                }
-            }
-        }
+        Some(img) => super::image::paint_preview(ui, img, pb),
         None => {
             ui.text_at(12.0, tr!("fx.bad"), pb.x + 12.0 * k, pb.y + pb.h / 2.0, tok.er, false);
         }
