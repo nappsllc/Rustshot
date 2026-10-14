@@ -38,7 +38,7 @@ fn api() -> Result<&'static Api> {
 unsafe fn load() -> std::result::Result<Api, String> {
     // Loads mfplat / mfreadwrite and calls MFStartup.
     if !mf::available() {
-        return Err("Media Foundation is not available (on Windows N install the Media Feature Pack)".into());
+        return Err(crate::tr!("err.media_foundation").into());
     }
     unsafe {
         let lib = |name: windows::core::PCWSTR| LoadLibraryExW(name, None, LOAD_LIBRARY_SEARCH_SYSTEM32);
@@ -119,7 +119,7 @@ pub fn list() -> Vec<CamDevice> {
         devs.iter()
             .filter_map(|a| unsafe {
                 let id = alloc_string(a, &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK)?;
-                let name = alloc_string(a, &MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME).unwrap_or_else(|| "Camera".into());
+                let name = alloc_string(a, &MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME).unwrap_or_else(|| tr!("tip.camera").into());
                 Some(CamDevice { id, name })
             })
             .collect()
@@ -223,7 +223,7 @@ impl WinCam {
             devs.iter().find(|a| unsafe { alloc_string(a, &MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK) }.as_deref() == Some(id))
         };
         let Some(act) = act else {
-            bail!(if devs.is_empty() { super::NO_CAMERA } else { "The chosen camera is not connected" });
+            bail!("{}", if devs.is_empty() { super::NO_CAMERA.get() } else { tr!("cam.not_connected") });
         };
         unsafe {
             let source: IMFMediaSource = act.ActivateObject().map_err(explain).context("open the camera")?;

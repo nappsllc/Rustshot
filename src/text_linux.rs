@@ -54,12 +54,16 @@ fn names(f: Family) -> [&'static [&'static str]; 4] {
 /// Lines and strikes are drawn by `text.rs`.
 pub const NATIVE_DECO: bool = false;
 
+/// DejaVu Sans's line (ascent + descent) per em (UI text matches the
+/// baked font's em size).
+pub const EM_RATIO: f32 = 2384.0 / 2048.0;
+
 /// The font dropdown's name for `f`.
 pub fn family_label(f: Family) -> &'static str {
     match f {
-        Family::Sans => "Sans",
-        Family::Serif => "Serif",
-        Family::Mono => "Mono",
+        Family::Sans => tr!("font.sans"),
+        Family::Serif => tr!("font.serif"),
+        Family::Mono => tr!("font.mono"),
     }
 }
 
@@ -103,6 +107,10 @@ pub struct Face {
     synth_bold: bool,
     /// Italic drawn sheared (no italic file).
     synth_italic: bool,
+    /// UI text (`Some(right to left)`): characters the face lacks come
+    /// from the font fontconfig picks for them, and lines are put in
+    /// visual order ([`crate::text::visual_order`]).
+    ui: Option<bool>,
 }
 
 /// Faces found so far, by family and style.
@@ -121,6 +129,152 @@ fn found(f: Family, i: usize) -> Option<(FontArc, bool)> {
     }
     let v = find(f, i);
     cache().lock().unwrap_or_else(|e| e.into_inner()).entry((f, i)).or_insert(v).clone()
+}
+
+/// fontconfig's language for the UI language (`:lang=`), so a font
+/// collection gives the face of that language: Simplified or Traditional
+/// Chinese, Japanese, Korean Han forms.
+fn fc_lang() -> String {
+    fc_lang_of(crate::i18n::current())
+}
+
+fn fc_lang_of(tag: &str) -> String {
+    match tag {
+        "zh-Hans" => "zh-cn".into(),
+        "zh-Hant" => "zh-tw".into(),
+        c => c.split('-').next().unwrap_or("en").to_ascii_lowercase(),
+    }
+}
+
+/// The file and face index fontconfig picks for `pattern`.
+fn fc_match_face(pattern: &str) -> Option<(String, u32)> {
+    let out = std::process::Command::new("fc-match").args(["-f", "%{file}\n%{index}", pattern]).output().ok()?;
+    let s = String::from_utf8(out.stdout).ok()?;
+    let mut it = s.lines();
+    let file = it.next().filter(|p| !p.is_empty())?.to_string();
+    let index = it.next().and_then(|i| i.trim().parse().ok()).unwrap_or(0);
+    out.status.success().then_some((file, index))
+}
+
+/// A cache key: a 256-codepoint block (or one character, where the
+/// block's font lacks it) in a language.
+type FbKey = (u32, String);
+
+#[derive(Default)]
+struct Fallbacks {
+    /// What each key resolved to (an index into `fonts`, or none).
+    keys: HashMap<FbKey, Option<usize>>,
+    /// Keys asked for and not answered yet.
+    pending: std::collections::HashSet<FbKey>,
+    /// (file, face index) → the face.
+    fonts: Vec<((String, u32), FontArc)>,
+}
+
+fn fallbacks() -> std::sync::MutexGuard<'static, Fallbacks> {
+    static C: OnceLock<Mutex<Fallbacks>> = OnceLock::new();
+    C.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Bumped when a fallback font is found: UI text drawn before is stale.
+static FONT_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn font_generation() -> u64 {
+    FONT_GEN.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The worker that runs `fc-match` and reads the font files: the UI
+/// thread never waits for either.
+fn queue() -> &'static Mutex<crate::chan::Sender<(char, FbKey)>> {
+    static Q: OnceLock<Mutex<crate::chan::Sender<(char, FbKey)>>> = OnceLock::new();
+    Q.get_or_init(|| {
+        let (tx, rx) = crate::chan::channel::<(char, FbKey)>();
+        let _ = std::thread::Builder::new().name("rustshot-fallback-fonts".into()).spawn(move || {
+            while let Ok((c, key)) = rx.recv() {
+                let found = fc_match_face(&format!("sans-serif:charset={:x}:lang={}", c as u32, key.1)).and_then(|(p, i)| {
+                    if let Some(id) = fallbacks().fonts.iter().position(|(q, _)| *q == (p.clone(), i)) {
+                        return Some(id);
+                    }
+                    let b = std::fs::read(&p).ok()?;
+                    let f = ab_glyph::FontVec::try_from_vec_and_index(b, i).ok().map(FontArc::new)?;
+                    let mut g = fallbacks();
+                    g.fonts.push(((p, i), f));
+                    Some(g.fonts.len() - 1)
+                });
+                {
+                    let mut g = fallbacks();
+                    g.pending.remove(&key);
+                    g.keys.insert(key, found);
+                }
+                if found.is_some() {
+                    FONT_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    // The windows draw again (with the font now).
+                    crate::i18n::bump();
+                }
+            }
+        });
+        Mutex::new(tx)
+    })
+}
+
+/// A fallback for `c`: found, none, or still being looked for.
+enum Fb {
+    Font(usize, FontArc),
+    None,
+    Pending,
+}
+
+/// The font fontconfig picks for `c` when the UI face lacks it (asked
+/// once per 256-codepoint block and language, then per character where
+/// the block's font lacks one), from the worker: [`Fb::Pending`] until it
+/// has answered.
+fn fallback_font(c: char) -> Fb {
+    let lang = fc_lang();
+    for key in [((c as u32 >> 8) | 1 << 31, lang.clone()), (c as u32, lang)] {
+        let mut g = fallbacks();
+        match g.keys.get(&key).copied() {
+            Some(Some(id)) => {
+                let f = g.fonts[id].1.clone();
+                if f.glyph_id(c).0 != 0 {
+                    return Fb::Font(id, f);
+                }
+                continue;
+            }
+            Some(None) => continue,
+            None => {}
+        }
+        if g.pending.insert(key.clone()) {
+            drop(g);
+            let _ = queue().lock().unwrap_or_else(|e| e.into_inner()).send((c, key));
+        }
+        return Fb::Pending;
+    }
+    Fb::None
+}
+
+/// Look up, in the background, the fonts the characters of `s` need
+/// (a language's strings when it loads).
+pub fn prefetch(s: &str) {
+    let face = &ui_face_font();
+    let mut seen = std::collections::HashSet::new();
+    for c in s.chars().filter(|c| !c.is_ascii() && !c.is_control()) {
+        if seen.insert(c as u32 >> 8) && face.glyph_id(c).0 == 0 {
+            let _ = fallback_font(c);
+        }
+    }
+}
+
+fn ui_face_font() -> FontArc {
+    static F: OnceLock<FontArc> = OnceLock::new();
+    F.get_or_init(|| Face::new(Family::Sans, 500, false, false, false).font).clone()
+}
+
+/// Wait until every fallback asked for has been answered (tests).
+#[cfg(test)]
+pub fn wait_fallbacks() {
+    let t = std::time::Instant::now();
+    while !fallbacks().pending.is_empty() && t.elapsed() < std::time::Duration::from_secs(30) {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
 }
 
 /// Find every family's faces on a thread of their own (once), so the
@@ -161,7 +315,48 @@ impl Face {
             .or_else(|| found(Family::Sans, 0).map(|(f, _)| (f, false)))
             .unwrap_or_else(|| (FontArc::try_from_slice(INTER).expect("bundled Inter parses"), false));
         let plain = want == 0 || styled;
-        Face { font, synth_bold: bold && !plain, synth_italic: italic && !plain }
+        Face { font, synth_bold: bold && !plain, synth_italic: italic && !plain, ui: None }
+    }
+
+    /// The UI face: per-character fallback fonts and visual order, the
+    /// paragraph right to left when `rtl`.
+    pub fn with_rtl(self, rtl: bool) -> Face {
+        Face { ui: Some(rtl), ..self }
+    }
+
+    /// `line` in visual order as runs of one font each: (fallback font
+    /// number, or None for this face; the font; its scale relative to
+    /// `px`, so every font has this face's em; the characters).
+    fn ui_runs(&self, line: &str, rtl: bool) -> Vec<(Option<usize>, FontArc, f32, Vec<char>)> {
+        let em = |f: &FontArc| f.height_unscaled() / f.units_per_em().unwrap_or(1000.0);
+        let own = em(&self.font);
+        let mut runs: Vec<(Option<usize>, FontArc, f32, Vec<char>)> = Vec::new();
+        for c in crate::text::visual_order(line, rtl) {
+            if c.is_control() {
+                continue;
+            }
+            let (c, fb) = if self.font.glyph_id(c).0 != 0 {
+                (c, None)
+            } else {
+                match fallback_font(c) {
+                    Fb::Font(id, f) => (c, Some((id, f))),
+                    Fb::None => (c, None),
+                    // Not found yet: a gap, not a box (drawn again when it is).
+                    Fb::Pending => (' ', None),
+                }
+            };
+            match runs.last_mut() {
+                Some((id, _, _, cs)) if *id == fb.as_ref().map(|f| f.0) => cs.push(c),
+                _ => match fb {
+                    Some((id, f)) => {
+                        let k = em(&f) / own;
+                        runs.push((Some(id), f, k, vec![c]))
+                    }
+                    None => runs.push((None, self.font.clone(), 1.0, vec![c])),
+                },
+            }
+        }
+        runs
     }
 
     /// A synthesized bold's offset at `px`.
@@ -175,6 +370,16 @@ impl Face {
     }
 
     pub fn width(&self, line: &str, px: f32) -> f32 {
+        if let Some(rtl) = self.ui {
+            return self
+                .ui_runs(line, rtl)
+                .iter()
+                .map(|(_, font, k, cs)| {
+                    let f = font.as_scaled(PxScale::from(px * k));
+                    cs.iter().map(|&c| f.h_advance(font.glyph_id(c))).sum::<f32>()
+                })
+                .sum();
+        }
         let f = self.font.as_scaled(PxScale::from(px));
         let dx = self.bold_dx(px);
         line.chars().map(|c| f.h_advance(self.font.glyph_id(c)) + dx).sum()
@@ -190,6 +395,28 @@ impl Face {
         f: &mut dyn FnMut(i32, i32, f32),
     ) {
         let (bx0, by0, bx1, by1) = clip;
+        if let Some(rtl) = self.ui {
+            let mut put = |px: i32, py: i32, cov: f32| {
+                if px >= bx0 && py >= by0 && px < bx1 && py < by1 {
+                    f(px, py, cov);
+                }
+            };
+            let y = top.y + ascent;
+            let mut x = top.x;
+            for (_, font, k, cs) in self.ui_runs(line, rtl) {
+                let scale = PxScale::from(px * k);
+                let sf = font.as_scaled(scale);
+                for c in cs {
+                    let gid = font.glyph_id(c);
+                    if let Some(og) = font.outline_glyph(gid.with_scale_and_position(scale, ab_glyph::point(x, y))) {
+                        let b = og.px_bounds();
+                        og.draw(|gx, gy, cov| put(b.min.x.floor() as i32 + gx as i32, b.min.y.floor() as i32 + gy as i32, cov));
+                    }
+                    x += sf.h_advance(gid);
+                }
+            }
+            return;
+        }
         let scale = PxScale::from(px);
         let sf = self.font.as_scaled(scale);
         let y = top.y + ascent;
@@ -260,5 +487,28 @@ impl Face {
         }
         let (ox, oy) = (x0 as i32, y0 as i32);
         cov.for_each(|gx, gy, c| put(ox + gx as i32, oy + gy as i32, c.min(1.0)));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// fontconfig is asked in the UI language, so a CJK collection gives
+    /// that language's face (the Han forms differ).
+    #[test]
+    fn fallbacks_ask_in_the_ui_language() {
+        assert_eq!(fc_lang_of("zh-Hans"), "zh-cn");
+        assert_eq!(fc_lang_of("zh-Hant"), "zh-tw");
+        assert_eq!(fc_lang_of("ja"), "ja");
+        assert_eq!(fc_lang_of("pt-BR"), "pt");
+        // A collection's face for the language (when Noto CJK is here).
+        let (Some(sc), Some(tc)) = (fc_match_face("sans-serif:charset=4e2d:lang=zh-cn"), fc_match_face("sans-serif:charset=4e2d:lang=zh-tw")) else {
+            eprintln!("skipping: no fontconfig");
+            return;
+        };
+        if sc.0 == tc.0 && sc.0.ends_with(".ttc") {
+            assert_ne!(sc.1, tc.1, "{sc:?} {tc:?}: another face of the collection");
+        }
     }
 }

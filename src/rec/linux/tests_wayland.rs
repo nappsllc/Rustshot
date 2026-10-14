@@ -187,7 +187,7 @@ fn live_rec_wayland_share_stopped_ends_the_recording() {
     assert!(st.failed, "the recording did not notice the share stopping within 10 s");
     let e = format!("{:#}", s.stop().unwrap_err());
     println!("WAYLAND share stopped: noticed in {} ms, {} frames: {e}", noticed.as_millis(), st.frames);
-    assert!(e.contains(portal::SHARING_STOPPED), "{e}");
+    assert!(e.contains(portal::SHARING_STOPPED.get()), "{e}");
     assert!(e.contains("saved"), "the file is kept: {e}");
     let b = std::fs::read(dir.join("stopped.gif")).expect("the kept file");
     let _ = std::fs::remove_dir_all(&dir);

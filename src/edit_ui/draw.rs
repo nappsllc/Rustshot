@@ -193,10 +193,10 @@ pub fn obj_name(o: &Obj) -> String {
         if t.chars().count() > 12 { format!("\"{short}\u{2026}\"") } else { format!("\"{short}\"") }
     };
     match o {
-        Obj::Counter { n, .. } => format!("Number {n}"),
-        Obj::Text { text, .. } if !text.trim().is_empty() => format!("Text {}", quote(text)),
-        Obj::Callout { text, .. } if !text.trim().is_empty() => format!("Callout {}", quote(text)),
-        o => crate::history::kind_name(o).to_string(),
+        Obj::Counter { n, .. } => tr!("edit.obj.number", n),
+        Obj::Text { text, .. } if !text.trim().is_empty() => tr!("edit.obj.text", text = quote(text)),
+        Obj::Callout { text, .. } if !text.trim().is_empty() => tr!("edit.obj.callout", text = quote(text)),
+        o => crate::history::kind_label(crate::history::kind_name(o)).to_string(),
     }
 }
 
@@ -255,7 +255,11 @@ fn text(ui: &mut Ui, size: f32, s: &str, x: f32, cy: f32, c: C4, bold: bool) -> 
 
 fn caps(ui: &mut Ui, size: f32, s: &str, x: f32, cy: f32, c: C4) -> f32 {
     let mut cx = x;
-    for ch in s.to_uppercase().chars() {
+    let up = crate::i18n::upper(s);
+    if !crate::i18n::tracks(&up) {
+        return text(ui, size, &up, x, cy, c, true);
+    }
+    for ch in up.chars() {
         let t = ch.to_string();
         text(ui, size, &t, cx, cy, c, true);
         cx += ui.text_w(size, &t) + size * 0.07;
@@ -325,7 +329,7 @@ pub fn paint_rail(ui: &mut Ui, e: &Edit, lay: &Lay, t: &WTok, hover: Option<Hit>
         return;
     }
     let cy = r.y + RAIL_HEAD / 2.0;
-    caps(ui, 10.5, &format!("Objects \u{b7} {}", objs.len()), r.x + 12.0, cy, t.tx3);
+    caps(ui, 10.5, &tr!("edit.objects", n = objs.len()), r.x + 12.0, cy, t.tx3);
     let b = lay.collapse;
     let hov = hover == Some(Hit::Collapse);
     btn_bg(ui, b, t, false, hov, 6.0);
@@ -362,7 +366,7 @@ pub fn paint_rail(ui: &mut Ui, e: &Edit, lay: &Lay, t: &WTok, hover: Option<Hit>
     // The note at the bottom.
     let ny = r.y1() - NOTE_H;
     line_h(ui, r.x, ny, r.w - 1.0, t.sep);
-    let note = "Top of list is front-most. Drag to reorder \u{b7} Del removes.";
+    let note = tr!("edit.objects_note");
     let lines = crate::ui::controls::wrap(note, r.w - 24.0, |s| ui.text_w(11.0, s));
     for (n, l) in lines.iter().enumerate() {
         text(ui, 11.0, l, r.x + 12.0, ny + 10.0 + 8.0 + n as f32 * 15.0, t.tx3, false);
@@ -392,9 +396,9 @@ pub fn paint_status(ui: &mut Ui, e: &Edit, lay: &Lay, t: &WTok, hover: Option<Hi
             let k = ui.k;
             ui.fb.fill_circle((x + 3.5) * k, cy * k, 3.5 * k, C4::rgb(0xFF, 0xB4, 0x54));
             x += 13.0;
-            text(ui, 11.0, "Edited \u{b7} unsaved changes", x, cy, t.tx2, false);
+            text(ui, 11.0, tr!("edit.unsaved"), x, cy, t.tx2, false);
         } else {
-            text(ui, 11.0, "Edited", x, cy, t.tx2, false);
+            text(ui, 11.0, tr!("history.edited"), x, cy, t.tx2, false);
         }
     }
     // Right: the selection's geometry and the pointer.
@@ -407,8 +411,8 @@ pub fn paint_status(ui: &mut Ui, e: &Edit, lay: &Lay, t: &WTok, hover: Option<Hi
     }
     if let Some((b, o)) = e.canvas.selection_box() {
         let n = e.canvas.selected().len();
-        let what = if n > 1 { format!("{n} objects") } else { crate::history::kind_name(o).to_string() };
-        let g = format!("{what} \u{b7} {} \u{d7} {} at {}, {}", b.w.round() as i32, b.h.round() as i32, b.x.round() as i32, b.y.round() as i32);
+        let what = if n > 1 { trn!("edit.n_objects", n) } else { crate::history::kind_label(crate::history::kind_name(o)).to_string() };
+        let g = tr!("edit.geometry", what, w = b.w.round() as i32, h = b.h.round() as i32, x = b.x.round() as i32, y = b.y.round() as i32);
         if pointer.is_some() {
             let dw = ui.text_w(11.0, "\u{b7}");
             text(ui, 11.0, "\u{b7}", right - dw, cy, t.tx3, false);
@@ -440,7 +444,7 @@ pub fn paint_img_menu(ui: &mut Ui, e: &Edit, lay: &Lay, t: &WTok, hover: Option<
         let cy = rr.y + rr.h / 2.0;
         let c = if off { t.tx3 } else if hov { t.ich } else { t.ic };
         icon(ui, ic, rr.x + 8.0, cy - 8.0, 16.0, c);
-        text(ui, 12.0, label, rr.x + 32.0, cy, if off { t.tx3 } else { t.tx }, false);
+        text(ui, 12.0, label.get(), rr.x + 32.0, cy, if off { t.tx3 } else { t.tx }, false);
         if let Some(ch) = e.canvas.keymap().chords(action).first() {
             let cap = ch.label();
             let w = ui.text_w(11.0, &cap);
@@ -475,18 +479,18 @@ pub fn dialog_lay(ui: &Ui, e: &Edit, lay: &Lay) -> (FRect, Vec<(FRect, Btn)>) {
     };
     match d {
         Dialog::Unsaved => {
-            right("Save", Btn::Save, &mut bs);
-            right("Save as copy", Btn::SaveCopy, &mut bs);
-            right("Cancel", Btn::Cancel, &mut bs);
-            bs.push((FRect { x: r.x + 20.0, y: by, w: bw("Discard"), h: 28.0 }, Btn::Discard));
+            right(tr!("common.save"), Btn::Save, &mut bs);
+            right(tr!("edit.save_copy"), Btn::SaveCopy, &mut bs);
+            right(tr!("common.cancel"), Btn::Cancel, &mut bs);
+            bs.push((FRect { x: r.x + 20.0, y: by, w: bw(tr!("edit.discard")), h: 28.0 }, Btn::Discard));
         }
         Dialog::Choose { .. } => {
-            right("Save", Btn::Save, &mut bs);
-            right("Cancel", Btn::Cancel, &mut bs);
+            right(tr!("common.save"), Btn::Save, &mut bs);
+            right(tr!("common.cancel"), Btn::Cancel, &mut bs);
             let oy = r.y + 20.0 + 18.0 + 10.0;
             bs.push((FRect { x: r.x + 20.0, y: oy, w: DLG_W - 40.0, h: 50.0 }, Btn::Pick(Choice::Overwrite)));
             bs.push((FRect { x: r.x + 20.0, y: oy + 60.0, w: DLG_W - 40.0, h: 50.0 }, Btn::Pick(Choice::New)));
-            let w = ui.text_w(12.0, "Don't ask again") + 24.0;
+            let w = ui.text_w(12.0, tr!("edit.dont_ask")) + 24.0;
             bs.push((FRect { x: r.x + 20.0, y: oy + 120.0, w, h: 18.0 }, Btn::DontAsk));
         }
     }
@@ -494,7 +498,7 @@ pub fn dialog_lay(ui: &Ui, e: &Edit, lay: &Lay) -> (FRect, Vec<(FRect, Btn)>) {
 }
 
 fn unsaved_text(e: &Edit) -> String {
-    format!("You edited {}. Unsaved annotations will be lost if you discard.", e.file_name())
+    tr!("edit.unsaved_text", name = e.file_name())
 }
 
 fn button(ui: &mut Ui, r: FRect, label: &str, style: u8, hov: bool, focus: bool, t: &WTok) {
@@ -529,23 +533,23 @@ pub fn paint_dialog(ui: &mut Ui, e: &Edit, lay: &Lay, t: &WTok, hover: Option<Hi
     let hov = |b: Btn| hover == Some(Hit::Dialog(b));
     match d {
         Dialog::Unsaved => {
-            text(ui, 14.0, "Save changes to this capture?", r.x + 20.0, r.y + 29.0, t.tx, true);
+            text(ui, 14.0, tr!("edit.save_question"), r.x + 20.0, r.y + 29.0, t.tx, true);
             let lines = crate::ui::controls::wrap(&unsaved_text(e), DLG_W - 40.0, |s| ui.text_w(12.0, s));
             for (n, l) in lines.iter().enumerate() {
                 text(ui, 12.0, l, r.x + 20.0, r.y + 48.0 + 9.0 + n as f32 * 18.0, t.tx2, false);
             }
             for (br, b) in &bs {
                 let (label, style) = match b {
-                    Btn::Discard => ("Discard", 2),
-                    Btn::Cancel => ("Cancel", 0),
-                    Btn::SaveCopy => ("Save as copy", 0),
-                    _ => ("Save", 1),
+                    Btn::Discard => (tr!("edit.discard"), 2),
+                    Btn::Cancel => (tr!("common.cancel"), 0),
+                    Btn::SaveCopy => (tr!("edit.save_copy"), 0),
+                    _ => (tr!("common.save"), 1),
                 };
                 button(ui, *br, label, style, hov(*b), *b == Btn::Save, t);
             }
         }
         Dialog::Choose { choice, dont_ask, .. } => {
-            text(ui, 14.0, "Save", r.x + 20.0, r.y + 29.0, t.tx, true);
+            text(ui, 14.0, tr!("common.save"), r.x + 20.0, r.y + 29.0, t.tx, true);
             let (over, new) = e.choice_files();
             for (br, b) in &bs {
                 match b {
@@ -563,8 +567,8 @@ pub fn paint_dialog(ui: &mut Ui, e: &Edit, lay: &Lay, t: &WTok, hover: Option<Hi
                             ui.fb.stroke_circle(cx * k, cy * k, 7.25 * k, 1.5 * k, t.cb);
                         }
                         let (label, small) = match c {
-                            Choice::Overwrite => ("Overwrite the original", format!("{over} \u{b7} keeps the History entry")),
-                            Choice::New => ("Save as new file", new.clone()),
+                            Choice::Overwrite => (tr!("edit.overwrite"), tr!("edit.overwrite_note", file = over)),
+                            Choice::New => (tr!("edit.save_new"), new.clone()),
                         };
                         text(ui, 12.5, label, br.x + 38.0, br.y + 17.0, t.tx, true);
                         let small = ui.fit_text(11.0, &small, br.w - 50.0);
@@ -579,10 +583,10 @@ pub fn paint_dialog(ui: &mut Ui, e: &Edit, lay: &Lay, t: &WTok, hover: Option<Hi
                             let qb = paint::px(bx, k);
                             ui.fb.stroke_rounded(FRect { x: qb.x + 0.75 * k, y: qb.y + 0.75 * k, w: qb.w - 1.5 * k, h: qb.h - 1.5 * k }, 3.25 * k, 1.5 * k, t.cb);
                         }
-                        text(ui, 12.0, "Don't ask again", br.x + 24.0, br.y + 9.0, t.tx2, false);
+                        text(ui, 12.0, tr!("edit.dont_ask"), br.x + 24.0, br.y + 9.0, t.tx2, false);
                     }
-                    Btn::Cancel => button(ui, *br, "Cancel", 0, hov(*b), false, t),
-                    _ => button(ui, *br, "Save", 1, hov(*b), false, t),
+                    Btn::Cancel => button(ui, *br, tr!("common.cancel"), 0, hov(*b), false, t),
+                    _ => button(ui, *br, tr!("common.save"), 1, hov(*b), false, t),
                 }
             }
         }

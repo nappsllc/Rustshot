@@ -532,8 +532,7 @@ pub fn crop_for(area: IRect, screen: Option<IRect>, frame: (u32, u32)) -> (IRect
 }
 
 /// What is said when the area could not be cropped from the shared screen.
-pub const WHOLE_SCREEN: &str =
-    "the selection is not within the screen shared in the portal dialog; the whole shared screen was recorded";
+pub const WHOLE_SCREEN: crate::i18n::Key = key!("rec.whole_screen");
 
 /// Whether `area` lies on the shared monitor `screen` at all (a restored
 /// choice of another monitor is asked again).
@@ -679,7 +678,7 @@ pub fn grab_screen(timeout: Duration) -> Result<crate::pixbuf::PixBuf> {
 
 /// What a recording ends with when the screen share stops under it (the
 /// desktop's "stop sharing", the portal closing the session).
-pub const SHARING_STOPPED: &str = "Screen sharing was stopped";
+pub const SHARING_STOPPED: crate::i18n::Key = key!("rec.sharing_stopped");
 
 /// A running screen cast: the bus connection that holds the session, the
 /// PipeWire socket (taken by the frame source) and the stream.

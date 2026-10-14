@@ -480,11 +480,11 @@ fn friendly(e: &str) -> String {
     let timeout = ["80072ee2", "timed out", "timeout"];
     let low = e.to_ascii_lowercase();
     let why = if offline.iter().any(|k| low.contains(k)) {
-        "no connection to github.com"
+        tr!("err.offline")
     } else if timeout.iter().any(|k| low.contains(k)) {
-        "github.com did not answer in time"
+        tr!("err.github_timeout")
     } else if is_404(e) || e.contains("is not listed in SHA256SUMS") {
-        "this version's release does not have the file"
+        tr!("err.not_in_release")
     } else {
         return e.to_string();
     };

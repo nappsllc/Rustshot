@@ -10,6 +10,10 @@ use std::ffi::c_void;
 /// Lines and strikes are drawn by `text.rs`.
 pub const NATIVE_DECO: bool = false;
 
+/// Helvetica's line (ascent + descent) per em (UI text matches the baked
+/// font's em size).
+pub const EM_RATIO: f32 = 1.0;
+
 /// The font dropdown's name for `f`.
 pub fn family_label(f: Family) -> &'static str {
     match f {
@@ -210,6 +214,12 @@ impl Face {
     /// `text.rs`.
     pub fn new(family: Family, weight: u16, italic: bool, _underline: bool, _strike: bool) -> Face {
         Face { family, weight, italic }
+    }
+
+    /// CoreText takes each line's direction from its first strong
+    /// character (right-to-left UI strings start with one).
+    pub fn with_rtl(self, _rtl: bool) -> Face {
+        self
     }
 
     pub fn metrics(&self, px: f32) -> (f32, f32, f32) {

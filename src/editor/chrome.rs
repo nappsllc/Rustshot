@@ -302,7 +302,7 @@ pub fn toolbar(f: &mut Fb, ui: &Ui, tb: &Toolbar, st: &BarState, k: f32) {
                 panel(f, ui, r, 9.0, &ALL_LAYERS, ui.th.surface, ui.th.border, k);
             }
             Kind::Mode { video, on } => {
-                let (label, icon) = if video { ("Video", "video") } else { ("Screenshot", "camera") };
+                let (label, icon) = if video { (tr!("tip.video"), "video") } else { (tr!("tip.screenshot"), "camera") };
                 mode_btn(f, ui, it.r, label, icon, on, hovered, k);
             }
             Kind::Close => {
@@ -566,7 +566,7 @@ fn ring_value(f: &mut Fb, ui: &Ui, r: FRect, w: u32, c: C4, k: f32) {
     let bx = r.x + ui.px(24.0);
     let bw = r.x1() - ui.px(4.0) - bx;
     if w == 0 {
-        text(f, ui, 11.0, "Off", bx + (bw - tw(ui, 11.0, "Off")) / 2.0, cy, ui.th.text_muted.fade(k));
+        text(f, ui, 11.0, tr!("editor.ring.off"), bx + (bw - tw(ui, 11.0, tr!("editor.ring.off"))) / 2.0, cy, ui.th.text_muted.fade(k));
         return;
     }
     let lw = ui.px(w as f32).min(ui.px(20.0));
@@ -601,6 +601,28 @@ fn within(a: FRect, b: FRect) -> bool {
     a.x >= b.x - 0.5 && a.y >= b.y - 0.5 && a.x1() <= b.x1() + 0.5 && a.y1() <= b.y1() + 0.5
 }
 
+/// A panel row's name size: 12, smaller (down to 10.5) for a long name
+/// in a row with an icon (its 92 px column, 4 px spare).
+pub(super) fn row_name_size(ui: &Ui, label: &str, icon_row: bool) -> f32 {
+    let mut size: f32 = 12.0;
+    while icon_row && size > 10.5 && tw(ui, size, label) > ui.px(96.0) {
+        size -= 0.5;
+    }
+    size
+}
+
+/// A segment's text size: 12 (11 in a short one), smaller (down to 10)
+/// when a long word needs it to fit with 2 px to spare each side.
+pub(super) fn seg_text_size(ui: &Ui, r: FRect, label: &str, icon: &str) -> f32 {
+    let mut size: f32 = if r.h < ui.px(24.0) { 11.0 } else { 12.0 };
+    let isz = if icon.is_empty() { 0.0 } else { ui.px(16.0) };
+    let gap = if icon.is_empty() || label.is_empty() { 0.0 } else { ui.px(6.0) };
+    while size > 10.0 && isz + gap + tw(ui, size, label) > r.w - ui.px(4.0) {
+        size -= 0.5;
+    }
+    size
+}
+
 /// One segment of a segmented control: the accent tint when chosen; an
 /// icon (16 px) and / or a label (12 px), centred, 6 px apart.
 #[allow(clippy::too_many_arguments)]
@@ -615,7 +637,7 @@ fn segment(f: &mut Fb, ui: &Ui, r: FRect, label: &str, icon: &str, on: bool, hov
         fill(f, r, rad, th.bg_hover.fade(k));
     }
     let fg = if on { th.accent_fg } else if hovered { th.icon_hover } else { th.icon };
-    let size = if r.h < ui.px(24.0) { 11.0 } else { 12.0 };
+    let size = seg_text_size(ui, r, label, icon);
     let isz = if icon.is_empty() { 0.0 } else { ui.px(16.0) };
     let gap = if icon.is_empty() || label.is_empty() { 0.0 } else { ui.px(6.0) };
     let w = isz + gap + tw(ui, size, label);
@@ -643,7 +665,7 @@ fn panel_row(f: &mut Fb, ui: &Ui, it: &Item, (icon, label, value): (&str, &str, 
         x = r.x + ui.px(38.0);
     }
     let name = if dim { th.text_muted } else { th.text };
-    let nw = text(f, ui, 12.0, label, x, cy, name.fade(k));
+    let nw = text(f, ui, row_name_size(ui, label, !icon.is_empty()), label, x, cy, name.fade(k));
     if let Some(v) = value {
         let vx = if icon.is_empty() { x + nw + ui.px(10.0) } else { r.x + ui.px(38.0 + 92.0 + 10.0) };
         let room = r.x1() - ui.px(6.0 + 32.0 + 10.0) - vx;
@@ -724,7 +746,7 @@ fn grip(f: &mut Fb, ui: &Ui, r: FRect, k: f32) {
     for (dx, dy) in [(9.0, 7.0), (15.0, 7.0), (9.0, 12.0), (15.0, 12.0), (9.0, 17.0), (15.0, 17.0)] {
         f.fill_circle(x + dx * u, cy + (dy - 12.0) * u, (1.4 * u).max(0.8), th.icon.fade(k));
     }
-    text(f, ui, 11.0, crate::cam::GRIP_HINT, x + ui.px(14.0 + 6.0), cy, th.text.fade(k));
+    text(f, ui, 11.0, crate::cam::GRIP_HINT.get(), x + ui.px(14.0 + 6.0), cy, th.text.fade(k));
 }
 
 /// A row's device: the chosen name (muted, cut to fit) and a chevron
@@ -833,9 +855,9 @@ fn button(f: &mut Fb, ui: &Ui, it: &Item, act: Act, (hovered, pressed): (bool, b
         }
         Act::Accept => {
             let (icon, gap) = (ui.px(20.0), ui.px(6.0));
-            let x0 = cx - (icon + gap + tw(ui, 12.0, "OK")) / 2.0;
+            let x0 = cx - (icon + gap + tw(ui, 12.0, tr!("common.ok"))) / 2.0;
             draw_icon(f, "check", x0, cy - icon / 2.0, icon, fg);
-            text(f, ui, 12.0, "OK", x0 + icon + gap, cy, fg);
+            text(f, ui, 12.0, tr!("common.ok"), x0 + icon + gap, cy, fg);
         }
         _ => {
             let icon = ui.px(if pressed { 19.2 } else { 20.0 });
@@ -1068,7 +1090,7 @@ pub fn size_label(f: &mut Fb, ui: &Ui, sr: FRect, show_pos: bool, area: FRect, a
 }
 
 /// What the window snapping badge says after the size, until Tab is used.
-const SNAP_TAB: &str = "parts of the window";
+const SNAP_TAB: crate::i18n::Key = key!("editor.snap.parts");
 
 fn tab_cap_w(ui: &Ui) -> f32 {
     tw(ui, 10.5, "Tab") + ui.px(10.0)
@@ -1080,7 +1102,7 @@ fn snap_label_rect(ui: &Ui, sr: FRect, hint: bool, area: FRect) -> FRect {
     let pad = ui.px(8.0);
     let mut w = 2.0 * pad + tw(ui, 12.0, &size);
     if hint {
-        w += pad + tab_cap_w(ui) + ui.px(6.0) + tw(ui, 11.0, SNAP_TAB);
+        w += pad + tab_cap_w(ui) + ui.px(6.0) + tw(ui, 11.0, &SNAP_TAB);
     }
     label_rect(sr, w, ui.s, area, None)
 }
@@ -1099,7 +1121,7 @@ pub fn snap_label(f: &mut Fb, ui: &Ui, sr: FRect, hint: bool, area: FRect, k: f3
         let cap = round(FRect { x: x + pad, y: cy - h / 2.0, w, h });
         fill(f, cap, ui.px(4.0), ui.th.bg_pressed.fade(k));
         text(f, ui, 10.5, "Tab", cap.x + (w - tw(ui, 10.5, "Tab")) / 2.0, cy, ui.th.text.fade(k));
-        text(f, ui, 11.0, SNAP_TAB, cap.x + w + ui.px(6.0), cy, ui.th.text_muted.fade(k));
+        text(f, ui, 11.0, &SNAP_TAB, cap.x + w + ui.px(6.0), cy, ui.th.text_muted.fade(k));
     }
 }
 
@@ -1189,94 +1211,94 @@ pub(crate) fn chord_caps(c: &Chord) -> Vec<String> {
 /// Tooltip label and key caps (the first chord bound in `km`).
 pub fn act_tip(a: Act, km: &Keymap) -> (&'static str, Vec<String>) {
     let label = match a {
-        Act::Tool(Tool::Path) => "Pencil",
-        Act::Tool(Tool::Line) => "Line",
-        Act::Tool(Tool::Arrow) => "Arrow",
-        Act::Tool(Tool::Rect) => "Rectangle",
-        Act::Tool(Tool::Ellipse) => "Ellipse",
-        Act::Tool(Tool::Marker) => "Marker",
-        Act::Tool(Tool::Text) => "Text",
-        Act::Tool(Tool::Counter) => "Number (Ctrl+drag: pointer)",
-        Act::Tool(Tool::Pixelate) => "Pixelate",
-        Act::Tool(Tool::Invert) => "Invert",
-        Act::Tool(Tool::Select) => "Select (Shift: add, drag: marquee)",
-        Act::Tool(Tool::Callout) => "Callout",
-        Act::Tool(Tool::Spotlight) => "Spotlight",
-        Act::Tool(Tool::Magnify) => "Magnify",
-        Act::Tool(Tool::Blur) => "Blur",
-        Act::ObjColor => "Color",
-        Act::ObjFill => "Fill",
-        Act::ObjSize(d) if d < 0 => "Smaller",
-        Act::ObjSize(_) => "Larger",
-        Act::ObjStyle(crate::objects::CalloutStyle::Rounded) => "Rounded",
-        Act::ObjStyle(crate::objects::CalloutStyle::Cloud) => "Cloud",
-        Act::ObjStyle(crate::objects::CalloutStyle::Ellipse) => "Ellipse",
-        Act::SaveMenu => "More ways to save",
-        Act::Crop => "Crop",
-        Act::Redact => "Quick Redact",
-        Act::Freeform => "Freeform selection",
-        Act::TextSelect => "Select text",
-        Act::CopyAll => "Copy all text",
-        Act::TextCopy => "Copy",
+        Act::Tool(Tool::Path) => tr!("tip.pencil"),
+        Act::Tool(Tool::Line) => tr!("tip.line"),
+        Act::Tool(Tool::Arrow) => tr!("tip.arrow"),
+        Act::Tool(Tool::Rect) => tr!("tip.rectangle"),
+        Act::Tool(Tool::Ellipse) => tr!("tip.ellipse"),
+        Act::Tool(Tool::Marker) => tr!("tip.marker"),
+        Act::Tool(Tool::Text) => tr!("tip.text"),
+        Act::Tool(Tool::Counter) => tr!("tip.number_ctrl_drag_pointer"),
+        Act::Tool(Tool::Pixelate) => tr!("tip.pixelate"),
+        Act::Tool(Tool::Invert) => tr!("tip.invert"),
+        Act::Tool(Tool::Select) => tr!("tip.select_shift_add_drag"),
+        Act::Tool(Tool::Callout) => tr!("tip.callout"),
+        Act::Tool(Tool::Spotlight) => tr!("tip.spotlight"),
+        Act::Tool(Tool::Magnify) => tr!("tip.magnify"),
+        Act::Tool(Tool::Blur) => tr!("tip.blur"),
+        Act::ObjColor => tr!("tip.color"),
+        Act::ObjFill => tr!("tip.fill"),
+        Act::ObjSize(d) if d < 0 => tr!("tip.smaller"),
+        Act::ObjSize(_) => tr!("tip.larger"),
+        Act::ObjStyle(crate::objects::CalloutStyle::Rounded) => tr!("tip.rounded"),
+        Act::ObjStyle(crate::objects::CalloutStyle::Cloud) => tr!("tip.cloud"),
+        Act::ObjStyle(crate::objects::CalloutStyle::Ellipse) => tr!("tip.ellipse"),
+        Act::SaveMenu => tr!("tip.more_ways_to_save"),
+        Act::Crop => tr!("tip.crop"),
+        Act::Redact => tr!("tip.quick_redact"),
+        Act::Freeform => tr!("tip.freeform_selection"),
+        Act::TextSelect => tr!("tip.select_text"),
+        Act::CopyAll => tr!("tip.copy_all_text"),
+        Act::TextCopy => tr!("tip.copy"),
         Act::RedactKind(k) => k.label(),
-        Act::ObjFront => "Bring to front",
-        Act::ObjBack => "Send to back",
-        Act::ObjDup => "Duplicate",
-        Act::ObjDelete => "Delete",
-        Act::ObjBold => "Bold",
-        Act::ObjItalic => "Italic",
-        Act::ObjUnderline => "Underline",
-        Act::ObjStrike => "Strikethrough",
-        Act::ObjAlign(crate::text::Align::Left) => "Align left",
-        Act::ObjAlign(crate::text::Align::Center) => "Align center",
-        Act::ObjAlign(crate::text::Align::Right) => "Align right",
-        Act::ObjFontMenu | Act::ObjFont(_) => "Font",
-        Act::Undo => "Undo",
-        Act::Redo => "Redo",
-        Act::Size(d) if d < 0 => "Smaller",
-        Act::Size(_) => "Larger",
-        Act::Palette => "Color",
-        Act::Fill => "Fill shape",
-        Act::Color(_) => "Use color",
-        Act::Copy => "Copy",
-        Act::CopyText => "Copy text",
-        Act::Save => "Save",
-        Act::SaveAs => "Save as\u{2026}",
-        Act::SaveDesktop => "Save to Desktop",
-        Act::OpenWith => "Open with\u{2026}",
-        Act::Share => "Share\u{2026}",
-        Act::Upload => "Upload",
-        Act::Pin => "Pin to screen",
-        Act::Trim => "Trim to content",
-        Act::Exit => "Close",
-        Act::Accept => "Accept",
-        Act::Record => "Record video",
-        Act::Mode(false) => "Screenshot",
-        Act::Mode(true) => "Video",
-        Act::RecSource(crate::rec_ui::RecSource::Screen) => "Full screen",
-        Act::RecSource(crate::rec_ui::RecSource::Window) => "Window",
-        Act::RecSource(crate::rec_ui::RecSource::Region) => "Region",
-        Act::RecCountdown(_) => "Countdown",
-        Act::RecGifMax(_) => "Max length",
-        Act::RecFormat(_) => "Format",
-        Act::RecFps(_) => "Frame rate",
-        Act::RecSystem => "System sound",
-        Act::RecMic | Act::RecDevMenu(Dev::Mic) | Act::RecDev(Dev::Mic, _) => "Microphone",
-        Act::RecCamera | Act::RecDevMenu(Dev::Cam) | Act::RecDev(Dev::Cam, _) => "Camera",
-        Act::RecShape(_) => "Camera shape",
-        Act::RecBg(_) => "Camera background",
-        Act::RecStart => "Start recording",
-        Act::RecAskCamOff => crate::cam::bg::ASK_CAM_OFF,
-        Act::RecAskCancel => crate::cam::bg::ASK_CANCEL,
-        Act::Wheel | Act::RingWheel => "More colors",
-        Act::RingSize(d) if d < 0 => "Thinner ring",
-        Act::RingSize(_) => "Thicker ring",
-        Act::RingPalette | Act::RingColor(_) => "Ring color",
-        Act::Pick(_) | Act::PickColor(_) => "Color",
-        Act::Eyedrop => "Pick from screen",
+        Act::ObjFront => tr!("tip.bring_to_front"),
+        Act::ObjBack => tr!("tip.send_to_back"),
+        Act::ObjDup => tr!("tip.duplicate"),
+        Act::ObjDelete => tr!("tip.delete"),
+        Act::ObjBold => tr!("tip.bold"),
+        Act::ObjItalic => tr!("tip.italic"),
+        Act::ObjUnderline => tr!("tip.underline"),
+        Act::ObjStrike => tr!("tip.strikethrough"),
+        Act::ObjAlign(crate::text::Align::Left) => tr!("tip.align_left"),
+        Act::ObjAlign(crate::text::Align::Center) => tr!("tip.align_center"),
+        Act::ObjAlign(crate::text::Align::Right) => tr!("tip.align_right"),
+        Act::ObjFontMenu | Act::ObjFont(_) => tr!("tip.font"),
+        Act::Undo => tr!("tip.undo"),
+        Act::Redo => tr!("tip.redo"),
+        Act::Size(d) if d < 0 => tr!("tip.smaller"),
+        Act::Size(_) => tr!("tip.larger"),
+        Act::Palette => tr!("tip.color"),
+        Act::Fill => tr!("tip.fill_shape"),
+        Act::Color(_) => tr!("tip.use_color"),
+        Act::Copy => tr!("tip.copy"),
+        Act::CopyText => tr!("tip.copy_text"),
+        Act::Save => tr!("tip.save"),
+        Act::SaveAs => tr!("tip.save_as"),
+        Act::SaveDesktop => tr!("tip.save_to_desktop"),
+        Act::OpenWith => tr!("tip.open_with"),
+        Act::Share => tr!("tip.share"),
+        Act::Upload => tr!("tip.upload"),
+        Act::Pin => tr!("tip.pin_to_screen"),
+        Act::Trim => tr!("tip.trim_to_content"),
+        Act::Exit => tr!("tip.close"),
+        Act::Accept => tr!("tip.accept"),
+        Act::Record => tr!("tip.record_video"),
+        Act::Mode(false) => tr!("tip.screenshot"),
+        Act::Mode(true) => tr!("tip.video"),
+        Act::RecSource(crate::rec_ui::RecSource::Screen) => tr!("tip.full_screen"),
+        Act::RecSource(crate::rec_ui::RecSource::Window) => tr!("tip.window"),
+        Act::RecSource(crate::rec_ui::RecSource::Region) => tr!("tip.region"),
+        Act::RecCountdown(_) => tr!("tip.countdown"),
+        Act::RecGifMax(_) => tr!("tip.max_length"),
+        Act::RecFormat(_) => tr!("tip.format"),
+        Act::RecFps(_) => tr!("tip.frame_rate"),
+        Act::RecSystem => tr!("tip.system_sound"),
+        Act::RecMic | Act::RecDevMenu(Dev::Mic) | Act::RecDev(Dev::Mic, _) => tr!("tip.microphone"),
+        Act::RecCamera | Act::RecDevMenu(Dev::Cam) | Act::RecDev(Dev::Cam, _) => tr!("tip.camera"),
+        Act::RecShape(_) => tr!("tip.camera_shape"),
+        Act::RecBg(_) => tr!("tip.camera_background"),
+        Act::RecStart => tr!("tip.start_recording"),
+        Act::RecAskCamOff => crate::cam::bg::ASK_CAM_OFF.get(),
+        Act::RecAskCancel => crate::cam::bg::ASK_CANCEL.get(),
+        Act::Wheel | Act::RingWheel => tr!("tip.more_colors"),
+        Act::RingSize(d) if d < 0 => tr!("tip.thinner_ring"),
+        Act::RingSize(_) => tr!("tip.thicker_ring"),
+        Act::RingPalette | Act::RingColor(_) => tr!("tip.ring_color"),
+        Act::Pick(_) | Act::PickColor(_) => tr!("tip.color"),
+        Act::Eyedrop => tr!("tip.pick_from_screen"),
     };
     let keys = match a {
-        Act::Size(_) => vec!["Wheel".to_string()],
+        Act::Size(_) => vec![tr!("tip.key.wheel").to_string()],
         // Built in (not remappable): the mode keys, the source keys.
         Act::Mode(v) => vec![if v { "2" } else { "1" }.to_string()],
         Act::RecSource(src) => vec![crate::rec_ui::source_key(src).to_string()],
@@ -1316,7 +1338,7 @@ pub fn tooltip(f: &mut Fb, ui: &Ui, at: TipAt, label: &str, keys: &[String], k: 
 }
 
 /// Where `tooltip` puts its panel.
-fn tooltip_rect(ui: &Ui, at: TipAt, label: &str, keys: &[String]) -> FRect {
+pub(crate) fn tooltip_rect(ui: &Ui, at: TipAt, label: &str, keys: &[String]) -> FRect {
     let TipAt { anchor, area, below } = at;
     let (h, gap, kgap) = (ui.px(26.0), ui.px(8.0), ui.px(4.0));
     let keys_w: f32 = keys.iter().map(|s| key_w(ui, s)).sum::<f32>() + kgap * keys.len().saturating_sub(1) as f32;
@@ -1514,7 +1536,7 @@ pub fn snap_label_bounds(ui: &Ui, sr: FRect, hint: bool, area: FRect) -> FRect {
     let (size, _) = label_texts(sr);
     let mut w = ui.px(8.0) * 2.0 + tw(ui, 12.0, &size);
     if hint {
-        w += ui.px(8.0) + tab_cap_w(ui) + ui.px(6.0) + tw(ui, 11.0, SNAP_TAB);
+        w += ui.px(8.0) + tab_cap_w(ui) + ui.px(6.0) + tw(ui, 11.0, &SNAP_TAB);
     }
     union(surface_bounds(ui, r), grow4(FRect { w, ..r }, AA, AA, AA, AA))
 }

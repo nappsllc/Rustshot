@@ -46,12 +46,11 @@ const ICON: f32 = 24.0;
 const TITLE_H: f32 = 32.0;
 const TEXT_X: f32 = ICON + 4.0 + crate::ui::layout::GAP;
 
-pub const TITLE: &str = "Recording MP4 needs an encoder";
-const ASK_TEXT: &str = "Rustshot records MP4 with ffmpeg when it is installed. Without it, Rustshot can download \
-Cisco's OpenH264 and record with that (the sound is encoded with your system's Opus). Or record a GIF now.";
-const FFMPEG_TEXT: &str = "Run this in a terminal, then start the recording again:";
-const FFMPEG_UNKNOWN: &str = "Install ffmpeg with your distribution's package manager, then start the recording again.";
-const FROM_CISCO: &str = "OpenH264 Video Codec provided by Cisco Systems, Inc.";
+pub const TITLE: crate::i18n::Key = key!("codec.title");
+const ASK_TEXT: crate::i18n::Key = key!("codec.ask");
+const FFMPEG_TEXT: crate::i18n::Key = key!("codec.ffmpeg_cmd");
+const FFMPEG_UNKNOWN: crate::i18n::Key = key!("codec.ffmpeg_unknown");
+const FROM_CISCO: crate::i18n::Key = key!("codec.from_cisco");
 
 /// The `ID` and `ID_LIKE` words of an `/etc/os-release` file.
 pub fn os_ids(os_release: &str) -> Vec<String> {
@@ -98,15 +97,15 @@ pub enum Btn {
 impl Btn {
     fn label(self, copied: bool) -> &'static str {
         match self {
-            Btn::Download => "Download OpenH264 (Cisco, ~1 MB)",
-            Btn::Ffmpeg => "Install ffmpeg",
-            Btn::Gif => "Record GIF instead",
-            Btn::Cancel => "Cancel",
-            Btn::Copy if copied => "Copied",
-            Btn::Copy => "Copy",
-            Btn::Back => "Back",
-            Btn::Done => "Done",
-            Btn::Retry => "Retry",
+            Btn::Download => tr!("codec.btn.download_openh264_cisco_1"),
+            Btn::Ffmpeg => tr!("codec.btn.install_ffmpeg"),
+            Btn::Gif => tr!("codec.btn.record_gif_instead"),
+            Btn::Cancel => tr!("codec.btn.cancel"),
+            Btn::Copy if copied => tr!("codec.btn.copied"),
+            Btn::Copy => tr!("codec.btn.copy"),
+            Btn::Back => tr!("codec.btn.back"),
+            Btn::Done => tr!("codec.btn.done"),
+            Btn::Retry => tr!("codec.btn.retry"),
         }
     }
 
@@ -233,7 +232,7 @@ impl Machine {
 }
 
 fn mb(b: u64) -> String {
-    format!("{:.1} MB", b as f64 / 1_000_000.0)
+    tr!("codec.mb", n = format!("{:.1}", b as f64 / 1_000_000.0))
 }
 
 /// Lay out a right-aligned row of `btns` in `r`; the clicked one.
@@ -268,18 +267,18 @@ pub fn paint(ui: &mut Ui, m: &Machine) -> Option<Btn> {
         Screen::Ffmpeg => (
             "video",
             th.accent,
-            "Install ffmpeg".into(),
+            tr!("codec.btn.install_ffmpeg").into(),
             Some(if m.cmd.is_some() { FFMPEG_TEXT } else { FFMPEG_UNKNOWN }.into()),
         ),
-        Screen::Downloading { .. } => ("video", th.accent, "Downloading OpenH264…".into(), Some(FROM_CISCO.into())),
-        Screen::Failed(e) => ("alert", th.error, "Could not get OpenH264".into(), Some(e.clone())),
+        Screen::Downloading { .. } => ("video", th.accent, tr!("codec.downloading_title").into(), Some(FROM_CISCO.into())),
+        Screen::Failed(e) => ("alert", th.error, tr!("codec.failed").into(), Some(e.clone())),
     };
     let title_r = FRect { x: PAD, y: PAD, w: inner, h: TITLE_H };
     ui.area(title_r, |ui| {
         ui.row(|ui| {
             ui.icon(icon, ICON, col);
             ui.space(4.0);
-            ui.heading(&title);
+            ui.heading_fit(&title, inner - ICON - 4.0 - 2.0 * crate::ui::layout::GAP);
         })
     });
     let mut y = title_r.y1() + 4.0;
@@ -309,8 +308,8 @@ pub fn paint(ui: &mut Ui, m: &Machine) -> Option<Btn> {
         }
         Screen::Downloading { got, total } => {
             let s = match total {
-                Some(t) => format!("Downloading… {} of {}", mb(*got), mb(*t)),
-                None => "Downloading…".into(),
+                Some(t) => tr!("codec.progress", got = mb(*got), total = mb(*t)),
+                None => tr!("codec.downloading").into(),
             };
             let f = total.map_or(0.0, |t| (*got as f32 / t.max(1) as f32).min(1.0));
             let r = FRect { x: PAD + TEXT_X, y, w: text_w, h: 32.0 };
@@ -453,6 +452,8 @@ mod imp {
         }
 
         fn on_event(&mut self, ev: Ev) -> bool {
+            // Right to left: the pointer mirrored, as the frame is.
+            let ev = crate::ui::rtl_ev(ev, self.canvas.width());
             match ev {
                 Ev::Resize(w, h) => {
                     self.canvas = PixBuf::new(w.max(1), h.max(1));
@@ -718,6 +719,31 @@ mod tests {
         for (name, m) in screens().into_iter().filter(|(n, _)| ["ask", "ffmpeg"].contains(n)) {
             let (img, _) = render(&m, &crate::theme::DARK, 1.5, &Input::default());
             preview::save(&format!("encoder-{name}-dark-150.png"), &img);
+        }
+    }
+
+    /// Every screen fits the dialog in English and the long
+    /// pseudo-languages, at 1x and 1.5x (previews per language).
+    #[test]
+    fn fits_in_long_languages() {
+        for lang in preview::LANGS {
+            crate::i18n::with_lang(lang, || {
+                for k in [1.0f32, 1.5] {
+                    for (name, m) in screens() {
+                        let mut focus = FocusState::default();
+                        preview::render(W, H, k, &crate::theme::DARK, &Input::default(), &mut focus, |ui| {
+                            paint(ui, &m);
+                        });
+                        let img = preview::render(W, H, k, &crate::theme::DARK, &Input::default(), &mut focus, |ui| {
+                            paint(ui, &m);
+                        });
+                        preview::assert_fits(&focus, W, H, k, &format!("encoder {name} {lang} {k}x"));
+                        if k == 1.0 {
+                            preview::save(&format!("encoder-{name}-{lang}.png"), &img);
+                        }
+                    }
+                }
+            });
         }
     }
 }

@@ -93,7 +93,7 @@ fn shift_a_trims_and_undo_redo_restore_the_selection() {
     // Again on the trimmed selection: nothing more to cut, a toast.
     key_m(&mut a, 'A' as u32, SHIFT);
     assert_eq!(ed(&mut a).sel, Some(CARD));
-    assert_eq!(ed(&mut a).notice.as_ref().map(|t| t.text.as_str()), Some(trim_sel::NOTHING));
+    assert_eq!(ed(&mut a).notice.as_ref().map(|t| t.text.as_str()), Some(trim_sel::NOTHING.get()));
     // Plain A is still the arrow.
     key_m(&mut a, 'A' as u32, NONE);
     assert_eq!(ed(&mut a).tool, Some(Tool::Arrow));

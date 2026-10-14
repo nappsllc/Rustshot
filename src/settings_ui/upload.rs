@@ -20,7 +20,7 @@ use crate::ui::Ui;
 use crate::chan::Receiver;
 
 /// (label, config value) of the destinations.
-pub const DESTS: [(&str, &str); 2] = [("Imgur", "imgur"), ("S3-compatible", "s3")];
+pub const DESTS: [(crate::i18n::Key, &str); 2] = [(key!("settings.upload.imgur"), "imgur"), (key!("settings.upload.s3"), "s3")];
 pub const S3: usize = 1;
 
 /// The values this tab edits.
@@ -141,7 +141,7 @@ pub fn store_secret(store: &dyn crate::keystore::Store, slot: &Slot, secret: &st
     let (host, bucket, key_id) = slot;
     store
         .set(&crate::keystore::s3_name(host, bucket, key_id), &crate::keystore::s3_label(bucket), secret)
-        .map_err(|e| format!("Could not keep the secret access key in {}: {e}", crate::keystore::place()))
+        .map_err(|e| tr!("settings.s3.keep_failed_in", place = crate::keystore::place(), e))
 }
 
 /// What Test connection said.
@@ -218,7 +218,7 @@ impl State {
         if let Err(e) = std::thread::Builder::new().name("s3-secret".into()).spawn(move || {
             let _ = tx.send(store_secret(crate::keystore::os(), &sl, &se));
         }) {
-            let _ = tx2.send(Err(format!("Could not keep the secret access key: {e}")));
+            let _ = tx2.send(Err(tr!("settings.s3.keep_failed", e)));
         }
         self.saving = Some(Saving { slot, secret, close, rx });
     }
@@ -277,7 +277,7 @@ impl State {
             }
             out.changed = true;
         }
-        if let Some(r) = self.saving.as_ref().and_then(|sv| answer(&sv.rx, || Err("the save stopped".into()))) {
+        if let Some(r) = self.saving.as_ref().and_then(|sv| answer(&sv.rx, || Err(tr!("settings.s3.save_stopped").into()))) {
             let sv = self.saving.take().expect("saving");
             if r.is_ok() {
                 self.stored.retain(|(s, _)| *s != sv.slot);
@@ -286,7 +286,7 @@ impl State {
             out.saved = Some((r, sv.secret, sv.close));
             out.changed = true;
         }
-        if let Some(r) = self.rx.as_ref().and_then(|rx| answer(rx, || Err("the test stopped".into()))) {
+        if let Some(r) = self.rx.as_ref().and_then(|rx| answer(rx, || Err(tr!("settings.s3.test_stopped").into()))) {
             self.rx = None;
             self.probe = Some(match r {
                 Ok(()) => Probe::Passed,
@@ -330,29 +330,29 @@ impl State {
 pub fn secret_help(typed: bool, stored: Option<bool>, saving: bool) -> String {
     let place = crate::keystore::place();
     match (saving, typed, stored) {
-        (true, _, _) => format!("Saving to {place}\u{2026}"),
-        (false, true, _) => format!("Saved to {place} on Apply"),
-        (false, false, Some(true)) => format!("Stored in {place}"),
-        (false, false, Some(false)) => format!("Not stored; goes to {place}"),
-        (false, false, None) => format!("Kept in {place}"),
+        (true, _, _) => tr!("settings.s3.secret.saving", place),
+        (false, true, _) => tr!("settings.s3.secret.saved_on_apply", place),
+        (false, false, Some(true)) => tr!("settings.s3.secret.stored", place),
+        (false, false, Some(false)) => tr!("settings.s3.secret.not_stored", place),
+        (false, false, None) => tr!("settings.s3.secret.kept", place),
     }
 }
 
 /// Shown under an empty Public URL base: the copied link is then the
 /// bucket's own URL, which only opens for others when the bucket is public.
-pub const PUBLIC_WARNING: &str = "Links won't be public unless the bucket is public \u{2014} set a Public URL (e.g. your r2.dev or custom domain)";
+pub const PUBLIC_WARNING: crate::i18n::Key = key!("settings.s3.public_warning");
 
 /// The Public URL row's helper line, and whether it warns.
 pub fn public_help(base: &str) -> (&'static str, bool) {
-    if base.trim().is_empty() { (PUBLIC_WARNING, true) } else { ("Shared links begin with it", false) }
+    if base.trim().is_empty() { (PUBLIC_WARNING.get(), true) } else { (tr!("settings.s3.public_url.help"), false) }
 }
 
 /// The Test connection row's helper line (and whether it is an error).
 pub fn probe_help(p: Option<&Probe>) -> (String, bool) {
     match p {
-        None => ("Uploads and deletes rustshot-test-\u{2026}.txt".into(), false),
-        Some(Probe::Running) => ("Testing\u{2026}".into(), false),
-        Some(Probe::Passed) => ("Connected \u{b7} uploaded and deleted a test file".into(), false),
+        None => (tr!("settings.s3.probe.idle").into(), false),
+        Some(Probe::Running) => (tr!("settings.s3.probe.running").into(), false),
+        Some(Probe::Passed) => (tr!("settings.s3.probe.passed").into(), false),
         Some(Probe::Failed(e)) => {
             let mut c = e.chars();
             let first = c.next().map(|f| f.to_uppercase().collect::<String>()).unwrap_or_default();
@@ -367,8 +367,8 @@ pub fn s3_summary(f: &UpForm) -> String {
     let bucket = f.bucket.text.trim();
     let host = f.endpoint.text.trim().trim_start_matches("https://").trim_start_matches("http://").trim_end_matches('/');
     match (bucket.is_empty(), host.is_empty()) {
-        (true, _) | (_, true) => "Not set up yet".into(),
-        (false, false) => format!("{bucket} at {host}"),
+        (true, _) | (_, true) => tr!("settings.s3.not_set_up").into(),
+        (false, false) => tr!("settings.s3.summary", bucket, host),
     }
 }
 
@@ -377,26 +377,26 @@ pub fn s3_summary(f: &UpForm) -> String {
 pub fn section(ui: &mut Ui, s: &mut super::Settings, tok: &Tok) {
     let mut open_s3 = false;
     let f = &mut s.form.up;
-    ui.sec("Destination", tok);
-    srow(ui, tok, "Upload to", None, |ui| {
-        let labels: Vec<&str> = DESTS.iter().map(|d| d.0).collect();
+    ui.sec(tr!("settings.upload.destination"), tok);
+    srow(ui, tok, tr!("settings.upload.upload_to"), None, |ui| {
+        let labels: Vec<&str> = DESTS.iter().map(|d| d.0.get()).collect();
         ui.seg("upload_dest", &labels, &mut f.dest, tok);
     });
     if f.dest != S3 {
-        srow(ui, tok, "Imgur client ID", Some("Rustshot's own unless you register one"), |ui| {
+        srow(ui, tok, tr!("settings.upload.imgur_client_id"), Some(tr!("settings.upload.imgur_client_id.help")), |ui| {
             ui.width(FIELD_W).text_field("upload_client_id", &mut f.client_id);
         });
     } else {
         let summary = s3_summary(f);
-        srow(ui, tok, "S3 storage", Some(&summary), |ui| {
-            open_s3 = ui.cbutton("s3_open", "Set up\u{2026}", None, false, tok);
+        srow(ui, tok, tr!("settings.upload.s3_storage"), Some(&summary), |ui| {
+            open_s3 = ui.cbutton("s3_open", tr!("settings.upload.set_up"), None, false, tok);
         });
     }
-    ui.sec("After upload", tok);
-    srow(ui, tok, "Copy link after upload", Some("Ctrl+U in the overlay uploads; the link replaces the image"), |ui| {
+    ui.sec(tr!("settings.upload.after_upload"), tok);
+    srow(ui, tok, tr!("settings.upload.copy_link_after_upload"), Some(tr!("settings.upload.copy_link_after_upload.help")), |ui| {
         ui.switch("copy_url", &mut f.copy_url, tok);
     });
-    srow(ui, tok, "Upload recordings automatically", Some("When saved; Copy link then copies at once"), |ui| {
+    srow(ui, tok, tr!("settings.upload.upload_recordings_automatically"), Some(tr!("settings.upload.upload_recordings_automatically.help")), |ui| {
         ui.switch("upload_recordings", &mut f.auto_rec, tok);
     });
     if open_s3 {
@@ -413,38 +413,38 @@ pub fn s3_section(ui: &mut Ui, s: &mut super::Settings, tok: &Tok, click: &mut O
     let busy = matches!(s.upload.probe, Some(Probe::Running));
     let f = &mut s.form.up;
     if f.dest != S3 {
-        super::draw::note_line(ui, tok, "Used when Upload \u{203a} Upload to is S3-compatible", false, Some(2.0));
+        super::draw::note_line(ui, tok, tr!("settings.s3.used_when"), false, Some(2.0));
     }
-    srow(ui, tok, "Endpoint", Some("The provider's S3 API address"), |ui| {
+    srow(ui, tok, tr!("settings.s3.endpoint"), Some(tr!("settings.s3.endpoint.help")), |ui| {
         ui.width(FIELD_W).text_field("s3_endpoint", &mut f.endpoint);
     });
     // Bucket and region share a row (the region is short: "auto", "us-east-1").
-    srow(ui, tok, "Bucket and region", Some("Region \"auto\" for Cloudflare R2"), |ui| {
+    srow(ui, tok, tr!("settings.s3.bucket_and_region"), Some(tr!("settings.s3.bucket_and_region.help")), |ui| {
         ui.width(96.0).text_field("s3_region", &mut f.region);
         ui.width(FIELD_W - 96.0 - 12.0).text_field("s3_bucket", &mut f.bucket);
     });
-    srow(ui, tok, "Access key ID", None, |ui| {
+    srow(ui, tok, tr!("settings.s3.access_key_id"), None, |ui| {
         ui.width(FIELD_W).text_field("s3_access_key", &mut f.access_key);
     });
     let help = secret_help(!f.secret.text.trim().is_empty(), stored, saving);
-    srow_ex(ui, tok, "Secret access key", Some(&help), false, 44.0, |ui| {
+    srow_ex(ui, tok, tr!("settings.s3.secret_access_key"), Some(&help), false, 44.0, |ui| {
         ui.masked = true;
         ui.width(FIELD_W).text_field("s3_secret", &mut f.secret);
     });
     let (help, warn) = public_help(&f.public_url.text);
-    srow_ex(ui, tok, "Public URL base", Some(help), warn, if warn { 58.0 } else { ROW_H }, |ui| {
+    srow_ex(ui, tok, tr!("settings.s3.public_url_base"), Some(help), warn, if warn { 58.0 } else { ROW_H }, |ui| {
         ui.width(FIELD_W).text_field("s3_public_url", &mut f.public_url);
     });
-    srow(ui, tok, "Key prefix", Some("%Y %m %d as in file names"), |ui| {
+    srow(ui, tok, tr!("settings.s3.key_prefix"), Some(tr!("settings.s3.key_prefix.help")), |ui| {
         ui.width(FIELD_W).text_field("s3_key_prefix", &mut f.prefix);
     });
-    srow(ui, tok, "Path-style URLs", Some("On for R2 and most S3-compatible servers"), |ui| {
+    srow(ui, tok, tr!("settings.s3.path_style_urls"), Some(tr!("settings.s3.path_style_urls.help")), |ui| {
         ui.switch("s3_path_style", &mut f.path_style, tok);
     });
-    srow_ex(ui, tok, "Test connection", Some(&probe), probe_err, if probe_err { 44.0 } else { ROW_H }, |ui| {
+    srow_ex(ui, tok, tr!("settings.s3.test_connection"), Some(&probe), probe_err, if probe_err { 44.0 } else { ROW_H }, |ui| {
         let on = ui.enabled;
         ui.enabled = on && !busy;
-        if ui.cbutton("s3_test", "Test connection", None, false, tok) {
+        if ui.cbutton("s3_test", tr!("settings.s3.test_connection"), None, false, tok) {
             *click = Some(Click::TestUpload);
         }
         ui.enabled = on;

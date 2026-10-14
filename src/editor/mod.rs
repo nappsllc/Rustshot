@@ -735,7 +735,7 @@ impl App {
                     // Only work in the background is left (an upload from an
                     // Edit window): it finishes first.
                     self.finishing_said = true;
-                    say("Rustshot is finishing in the background\u{2026}", ToastKind::Info, theme::resolve(&self.cfg), false);
+                    say(tr!("editor.finishing"), ToastKind::Info, theme::resolve(&self.cfg), false);
                 }
                 Linger::GaveUp => {
                     eprintln!("rustshot: gave up waiting for background work after {} s", LINGER_CAP.as_secs());
@@ -860,10 +860,10 @@ impl App {
                     #[cfg(test)]
                     let at = (0, 0);
                     if !crate::notice::show(n, at, theme::resolve(&self.cfg)) {
-                        crate::tray::notify("Delete it from the History window (no notice window here)");
+                        crate::tray::notify(tr!("editor.delete_from_history"));
                     }
                 }
-                None => crate::tray::notify("That upload is no longer listed"),
+                None => crate::tray::notify(tr!("editor.upload_gone")),
             },
             // History opens over anything (a recording, another window).
             HotEvent::History => crate::history_ui::show(),
@@ -944,7 +944,7 @@ impl App {
     /// A launch found a capture open (or a recording, an update): say so
     /// over the capture, else in a balloon.
     fn say_capture_open(&mut self) {
-        let text = "Capture already open";
+        let text = tr!("editor.capture_open");
         eprintln!("rustshot: {text}; the launch was dropped");
         if let State::Edit(e) = &mut self.st {
             e.notice = Some(Toast::new(text.to_string(), ToastKind::Info));
@@ -1136,7 +1136,7 @@ impl App {
             rec_ui::End::Failed(e) => {
                 eprintln!("error: recording failed: {e}");
                 if daemon {
-                    crate::tray::notify(&format!("Recording failed: {e}"));
+                    crate::tray::notify(&tr!("editor.recording_failed", e));
                 }
                 1
             }
@@ -1216,6 +1216,8 @@ impl App {
     /// hotkeys are re-registered and the update checker follows
     /// `check_updates`. An open capture keeps the config it started with.
     fn reload_config(&mut self, cfg: Config) {
+        // Open windows of this process re-lay themselves out in it.
+        crate::i18n::set_language(&cfg.language);
         if self.kind == RunKind::Daemon {
             match (self.bg, cfg.show_tray) {
                 // The tray icon on again: this run is the daemon now.
@@ -1332,6 +1334,10 @@ impl App {
         }
         // macOS: the pins' input is handled on these ticks.
         crate::pin::tick();
+        // The system's language arrived (a first run): say so, with the way back.
+        if let Some(name) = crate::i18n::take_auto_switch() {
+            crate::notice::show(crate::notice::language_note(name), capture::cursor_pos(), theme::resolve(&self.cfg));
+        }
         // macOS: the notice fades on these ticks (fast while it is up).
         if let Some(fast) = crate::notice::tick()
             && self.rec.is_none()
@@ -1435,7 +1441,7 @@ impl App {
         }
         #[cfg(target_os = "macos")]
         if let Some(r) = self.update_pending.take() {
-            let mut t = Toast::new(format!("Rustshot {} is available — run `rustshot update`", r.version), ToastKind::Info);
+            let mut t = Toast::new(tr!("editor.update_available", version = r.version), ToastKind::Info);
             t.ttl = 6000.0;
             edit.notice = Some(t);
         }
@@ -1670,7 +1676,7 @@ impl App {
         if job.tasks.contains(&Task::Pin) && !crate::pin::open(pin_img, pin_at, th) {
             eprintln!("rustshot: pin to screen is not available here");
             if self.kind == RunKind::Daemon {
-                crate::tray::notify("Pin to screen is not available here");
+                crate::tray::notify(tr!("editor.pin_unavailable"));
             }
         }
         // The overlay is gone: a notice says what happened (the daemon's
@@ -1725,7 +1731,7 @@ impl App {
             let res = match job.rx.try_recv() {
                 Ok(res) => res,
                 Err(crate::chan::TryRecvError::Empty) => return true,
-                Err(crate::chan::TryRecvError::Disconnected) => Err(crate::ocr::OcrError::Failed("the recognizer stopped".into())),
+                Err(crate::chan::TryRecvError::Disconnected) => Err(crate::ocr::OcrError::Failed(tr!("ocr.stopped").into())),
             };
             done.push((res, job.at, job.th));
             false
@@ -1774,12 +1780,12 @@ impl App {
                     && export::copy_text_to_clipboard(url)
                         .map_err(|e| eprintln!("warning: could not copy URL: {e:#}"))
                         .is_ok();
-                let head = if copied { "Uploaded \u{2014} link copied" } else { "Uploaded" };
+                let head = if copied { tr!("editor.uploaded_copied") } else { tr!("editor.uploaded") };
                 (format!("{head}\n{url}"), ToastKind::Success, copied)
             }
             Err(e) => {
                 eprintln!("error: upload failed: {e}");
-                (format!("Upload failed: {e}"), ToastKind::Error, false)
+                (tr!("editor.upload_failed", e), ToastKind::Error, false)
             }
         };
         if matches!(self.st, State::Edit(_)) || self.one_shot() {
@@ -2545,7 +2551,7 @@ impl RecPop {
             return DEFAULT_MIC.into();
         }
         let named = self.devs.iter().flatten().find(|d| d.0 == self.opts.mic_dev).map(|d| d.1.clone());
-        named.unwrap_or_else(|| "Microphone".into())
+        named.unwrap_or_else(|| tr!("tip.microphone").into())
     }
 
     fn cam_label(&self) -> String {
@@ -2553,7 +2559,7 @@ impl RecPop {
             return DEFAULT_CAM.into();
         }
         let named = self.cams.iter().flatten().find(|d| d.id == self.opts.cam_dev).map(|d| d.name.clone());
-        named.unwrap_or_else(|| "Camera".into())
+        named.unwrap_or_else(|| tr!("tip.camera").into())
     }
 }
 
@@ -2731,8 +2737,8 @@ impl CamSlot {
     }
 }
 
-const DEFAULT_MIC: &str = "Default microphone";
-const DEFAULT_CAM: &str = "Default camera";
+const DEFAULT_MIC: crate::i18n::Key = key!("settings.recording.default_mic");
+const DEFAULT_CAM: crate::i18n::Key = key!("settings.camera.default_camera");
 
 struct TextDraft {
     pos: Pt,
@@ -3148,7 +3154,7 @@ impl Edit {
             return;
         }
         let v = self.mem.step(t, dir).unwrap_or(self.mem.size(t));
-        self.notice = Some(Toast::new(format!("Size {}", v as i32), ToastKind::Info));
+        self.notice = Some(Toast::new(tr!("editor.size", n = v as i32), ToastKind::Info));
         self.remember_size(t, Instant::now());
     }
 

@@ -75,7 +75,7 @@ pub struct BarView {
 }
 
 /// What the bar says while the screen is being chosen.
-pub const ASKING: &str = "Asking…";
+pub const ASKING: crate::i18n::Key = key!("rec.bar.asking");
 
 /// The bar in its window (physical px; the panel sits `MARGIN` inside).
 #[derive(Clone, Debug, PartialEq)]
@@ -108,7 +108,7 @@ fn timer_text(v: &BarView) -> String {
 
 /// The Stop button's width (logical px).
 fn stop_w(ui: &Ui) -> f32 {
-    STOP_L + STOP_SQ + DOT_GAP + (tw(ui, 12.0, "Stop") / ui.s).ceil() + STOP_R
+    STOP_L + STOP_SQ + DOT_GAP + (tw(ui, 12.0, tr!("rec.bar.stop")) / ui.s).ceil() + STOP_R
 }
 
 /// Lay the bar out for `v` at scale `ui.s` (the timer is as wide as
@@ -238,7 +238,7 @@ pub fn draw(f: &mut Fb, ui: &Ui, l: &BarLayout, v: &BarView, hover: Option<BarAc
             let q = (STOP_SQ * s).round();
             let sq = FRect { x: (r.x + STOP_L * s).round(), y: (r.y + (r.h - q) / 2.0).round(), w: q, h: q };
             fill(f, sq, 2.0 * s, ON_REC.fade(k));
-            text(f, ui, 12.0, "Stop", sq.x1() + DOT_GAP * s, r.y + r.h / 2.0, ON_REC.fade(k));
+            text(f, ui, 12.0, tr!("rec.bar.stop"), sq.x1() + DOT_GAP * s, r.y + r.h / 2.0, ON_REC.fade(k));
             continue;
         }
         // Paused: Pause is the active (accent) Resume. Muted / hidden: the

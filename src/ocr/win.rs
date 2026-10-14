@@ -299,7 +299,7 @@ pub fn recognize_lines(img: &PixBuf) -> Result<Vec<Line>, OcrError> {
     if let Some(m) = max
         && img.width().max(img.height()) > m
     {
-        return Err(fail(format!("the area is larger than {m} px")));
+        return Err(fail(crate::tr!("err.ocr_too_large", px = m)));
     }
     let (img, k) = super::prepare(img, max);
     let bmp = software_bitmap(&img)?;

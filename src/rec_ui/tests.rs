@@ -485,9 +485,9 @@ fn misplaced_windows_get_a_hint() {
     let area = (100, 100, 800, 600);
     assert_eq!(placement_hint(area, None, None), None, "nothing known yet");
     assert_eq!(placement_hint(area, Some((100, 720, 200, 44)), Some((116, 444, 240, 240))), None, "bar below, bubble inside");
-    assert_eq!(placement_hint(area, None, Some((0, 0, 240, 240))), Some(BUBBLE_OUTSIDE));
-    assert_eq!(placement_hint(area, None, Some((800, 500, 240, 240))), Some(BUBBLE_OUTSIDE), "half out");
-    assert_eq!(placement_hint(area, Some((400, 300, 200, 44)), None), Some(BAR_INSIDE));
+    assert_eq!(placement_hint(area, None, Some((0, 0, 240, 240))), Some(BUBBLE_OUTSIDE.get()));
+    assert_eq!(placement_hint(area, None, Some((800, 500, 240, 240))), Some(BUBBLE_OUTSIDE.get()), "half out");
+    assert_eq!(placement_hint(area, Some((400, 300, 200, 44)), None), Some(BAR_INSIDE.get()));
     assert_eq!(placement_hint(area, Some((0, 0, 100, 100)), None), None, "touching the corner is outside");
 }
 
@@ -678,7 +678,7 @@ fn silent_microphone_is_said_once() {
     run.tick(t + secs(10.9));
     assert_eq!(run.take_notice(), None, "heard at 5 s: the watch starts again");
     run.tick(t + secs(11.0));
-    assert_eq!(run.take_notice(), Some(NO_MIC_INPUT));
+    assert_eq!(run.take_notice(), Some(NO_MIC_INPUT.get()));
     run.tick(t + secs(30.0));
     assert_eq!(run.take_notice(), None, "once per recording");
     // Muted: not a problem.

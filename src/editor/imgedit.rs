@@ -163,6 +163,6 @@ impl Edit {
             return;
         }
         self.set_image_edits(Edits::default());
-        self.notice = Some(Toast::new("Image edits reset", ToastKind::Info));
+        self.notice = Some(Toast::new(tr!("editor.image_edits_reset"), ToastKind::Info));
     }
 }

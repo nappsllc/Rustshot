@@ -17,7 +17,9 @@ param(
     # copies the working tree with its uncommitted edits.
     [string]$Ref = 'HEAD',
     # Rebuild the image even when it exists.
-    [switch]$Rebuild
+    [switch]$Rebuild,
+    # The build-output volume (another one per branch run side by side).
+    [string]$TargetVolume = 'rustshot-target'
 )
 $ErrorActionPreference = 'Stop'
 $here = $PSScriptRoot
@@ -37,7 +39,7 @@ $run = @(
     '--shm-size=1g',
     '-v', "${repo}:/src:ro",
     '-v', "${Out}:/out",
-    '-v', 'rustshot-target:/target',
+    '-v', "${TargetVolume}:/target",
     '-v', 'rustshot-cargo:/usr/local/cargo/registry',
     '-e', 'RS_TEST_TIMEOUT', '-e', 'RS_ONLY', '-e', 'RS_GST_CHECK', '-e', 'RS_WL_ANIM', '-e', "RS_REF=$Ref"
 )

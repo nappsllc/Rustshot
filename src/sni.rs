@@ -301,7 +301,7 @@ const MENU_PROPS: [&str; 4] = ["Version", "TextDirection", "Status", "IconThemeP
 fn menu_prop(p: &str) -> Option<Value> {
     Some(match p {
         "Version" => Value::U32(3),
-        "TextDirection" => Value::str("ltr"),
+        "TextDirection" => Value::str(if crate::i18n::is_rtl() { "rtl" } else { "ltr" }),
         "Status" => Value::str("normal"),
         "IconThemePath" => Value::Array("s".into(), vec![]),
         _ => return None,

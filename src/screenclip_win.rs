@@ -329,19 +329,15 @@ pub fn handler_in(r: &impl RegRead, n: &Names) -> Handler {
 }
 
 /// The message that says how to pick Rustshot (Windows lets no app do it).
-pub const GUIDE_TITLE: &str = "One more step to use Win+Shift+S";
-pub const GUIDE_STEPS: &str = "Windows lets only you choose which app opens Win+Shift+S.\n\
-1. Click Open Default apps below.\n\
-2. Scroll to the bottom and click \"Choose defaults by link type\".\n\
-3. Find MS-SCREENCLIP and pick Rustshot.";
+pub const GUIDE_TITLE: crate::i18n::Key = key!("screenclip.guide.title");
+pub const GUIDE_STEPS: crate::i18n::Key = key!("screenclip.guide.steps");
 /// Said first when the choice names an app that is gone.
-pub const GUIDE_BROKEN: &str =
-    "Win+Shift+S is currently set to an app that is no longer installed, so Windows shows an error instead of asking.";
-pub const GUIDE_OPEN: &str = "Open Default apps";
-pub const GUIDE_LATER: &str = "Remind me later";
-pub const GUIDE_DONT_SHOW: &str = "Don't show again";
+pub const GUIDE_BROKEN: crate::i18n::Key = key!("screenclip.guide.broken");
+pub const GUIDE_OPEN: crate::i18n::Key = key!("screenclip.guide.open");
+pub const GUIDE_LATER: crate::i18n::Key = key!("screenclip.guide.later");
+pub const GUIDE_DONT_SHOW: crate::i18n::Key = key!("screenclip.guide.dont_show");
 /// The toast once Windows uses Rustshot.
-pub const NOW_OURS: &str = "Win+Shift+S now opens Rustshot";
+pub const NOW_OURS: crate::i18n::Key = key!("screenclip.now_ours");
 
 /// The guide's body for a choice that is `broken` or not.
 pub fn guide_text(broken: bool) -> String {
@@ -358,19 +354,19 @@ pub enum Tone {
 
 /// The Settings row's line when the tray icon is off and Windows does not
 /// open Rustshot: no shortcut reaches Rustshot then.
-pub const NO_SHORTCUT: &str = "Set up Win+Shift+S \u{2014} otherwise Rustshot can't be opened by a shortcut";
+pub const NO_SHORTCUT: crate::i18n::Key = key!("screenclip.no_shortcut");
 
 /// The Settings row's line for `h`; `show_tray`: the tray icon is on
 /// (off, anything but Rustshot is [`NO_SHORTCUT`], a link to the guide).
 pub fn state_line(h: &Handler, show_tray: bool) -> (String, Tone) {
     if !show_tray && *h != Handler::Ours {
-        return (NO_SHORTCUT.into(), Tone::Bad);
+        return (NO_SHORTCUT.to_string(), Tone::Bad);
     }
     match h {
-        Handler::Ours => ("Opens Rustshot".into(), Tone::Good),
-        Handler::Other { name, .. } => (format!("Opens {name}"), Tone::Plain),
-        Handler::Broken { .. } => ("Set to a missing app \u{2014} click to fix".into(), Tone::Bad),
-        Handler::None => ("Not set".into(), Tone::Plain),
+        Handler::Ours => (tr!("screenclip.state.ours").into(), Tone::Good),
+        Handler::Other { name, .. } => (tr!("screenclip.state.other", name), Tone::Plain),
+        Handler::Broken { .. } => (tr!("screenclip.state.broken").into(), Tone::Bad),
+        Handler::None => (tr!("screenclip.state.none").into(), Tone::Plain),
     }
 }
 
@@ -390,7 +386,7 @@ pub fn open_default_apps() -> Result<(), String> {
 
 /// The guide's line when Default apps did not open.
 pub fn open_failed_text(e: &str) -> String {
-    format!("Couldn't open Default apps ({}). Open Settings > Apps > Default apps yourself.", e.trim().trim_end_matches('.'))
+    tr!("screenclip.open_failed", e = e.trim().trim_end_matches('.'))
 }
 
 /// The registry: writes only our own HKCU keys; reads HKCU and (for the
@@ -674,7 +670,7 @@ pub fn show_setup_guide(owner: Option<crate::wind::Hwnd>) {
         None => return,
         Some(false) => {
             if let Err(e) = set(true) {
-                let text = format!("Could not change Win+Shift+S: {e}");
+                let text = tr!("settings.error.screenclip", e);
                 eprintln!("rustshot: {text}");
                 if !crate::settings_ui::notify(&text) {
                     crate::tray::notify(&text);

@@ -326,14 +326,14 @@ pub fn ring_center(p: Pt, area: FRect, s: f32) -> Pt {
 /// or drag to select" while snapping). An unbound action is left out.
 pub fn hint_parts(keys: &Keymap, snap: bool) -> Vec<HintPart> {
     let dot = || HintPart::T(chrome::HINT_DOT.into());
-    let first = if snap { "Click a window or drag to select" } else { "Drag to select" };
+    let first = if snap { tr!("editor.hint.snap_select") } else { tr!("editor.hint.select") };
     let mut v = vec![HintPart::T(first.into())];
-    for (a, word) in [(Action::Copy, "copy"), (Action::Save, "save"), (Action::Cancel, "cancel")] {
+    for (a, word) in [(Action::Copy, tr!("editor.hint.copy")), (Action::Save, tr!("editor.hint.save")), (Action::Cancel, tr!("editor.hint.cancel"))] {
         if let Some(c) = keys.chords(a).first() {
             v.extend([dot(), HintPart::K(chrome::chord_caps(c).join("+")), HintPart::T(word.into())]);
         }
     }
-    v.extend([dot(), HintPart::T("right-click colors".into())]);
+    v.extend([dot(), HintPart::T(tr!("editor.hint.colors").into())]);
     v
 }
 
@@ -544,10 +544,10 @@ impl Edit {
         }
         #[cfg(not(test))]
         if let Err(e) = export::copy_text_to_clipboard(&text) {
-            self.notice = Some(Toast::new(format!("Could not copy: {e}"), ToastKind::Error));
+            self.notice = Some(Toast::new(tr!("editor.copy_failed", e), ToastKind::Error));
             return;
         }
-        self.notice = Some(Toast::new(format!("Copied {text}"), ToastKind::Success));
+        self.notice = Some(Toast::new(tr!("editor.copied", text), ToastKind::Success));
     }
 
     /// Accept on select after a new region (or window click): run the
@@ -851,7 +851,7 @@ pub fn ring(f: &mut Fb, ui: &Ui, r: &RingUi) {
     f.fill_circle(cx, cy, ui.px(RING_C), bg);
     chrome::rainbow(f, ui, cx, cy, ui.px(9.0), k);
     if hot {
-        let label = "Custom\u{2026}";
+        let label = tr!("editor.palette.custom");
         let w = chrome::tw(ui, 11.0, label);
         chrome::text(f, ui, 11.0, label, cx - w / 2.0, cy + ui.px(RING_C + 11.0), ui.th.text_muted);
     }

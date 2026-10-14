@@ -50,7 +50,7 @@ impl Form {
 }
 
 /// The labels of the delay choices.
-const DELAY_LABELS: [&str; 4] = ["0 s", "3 s", "5 s", "10 s"];
+const DELAY_LABELS: [crate::i18n::Key; 4] = [key!("launcher.s0"), key!("launcher.s3"), key!("launcher.s5"), key!("launcher.s10")];
 
 fn phys(ui: &Ui, r: FRect) -> FRect {
     let k = ui.k;
@@ -78,7 +78,7 @@ pub fn paint(ui: &mut Ui, f: &mut Form) -> Option<Click> {
     };
     // What to capture.
     let mut src = Source::ALL.iter().position(|s| *s == f.plan.source).unwrap_or(0);
-    group(ui, "Capture", &mut y, &mut |ui, r| {
+    group(ui, tr!("launcher.capture"), &mut y, &mut |ui, r| {
         let labels: Vec<&str> = Source::ALL.iter().map(|s| s.label()).collect();
         ui.area(r, |ui| ui.seg("launcher.source", &labels, &mut src, &tok));
     });
@@ -86,10 +86,10 @@ pub fn paint(ui: &mut Ui, f: &mut Form) -> Option<Click> {
     // After how long: the choices, and the stepper for any 0–60 s.
     let mut dsel = f.delay_sel();
     let mut stepped = None;
-    group(ui, "Delay", &mut y, &mut |ui, r| {
+    group(ui, tr!("launcher.delay"), &mut y, &mut |ui, r| {
         ui.area(r, |ui| {
             ui.row(|ui| {
-                if ui.seg("launcher.delay", &DELAY_LABELS, &mut dsel, &tok) {
+                if ui.seg("launcher.delay", &DELAY_LABELS.map(|k| k.get()), &mut dsel, &tok) {
                     stepped = Some(None);
                 }
                 let sx = r.x1() - (2.0 * STEP_W + VALUE_W);
@@ -106,7 +106,7 @@ pub fn paint(ui: &mut Ui, f: &mut Form) -> Option<Click> {
                 }
             });
         });
-        let v = format!("{} s", f.plan.delay);
+        let v = tr!("launcher.seconds", n = f.plan.delay);
         let vx = r.x1() - STEP_W - VALUE_W / 2.0 - ui.text_w(12.5, &v) / 2.0;
         ui.text_at(12.5, &v, ui.px(vx), ui.px(r.y + CTL / 2.0), tok.tx, false);
     });
@@ -117,7 +117,7 @@ pub fn paint(ui: &mut Ui, f: &mut Form) -> Option<Click> {
     }
     // What follows.
     let mut after = After::ALL.iter().position(|a| *a == f.plan.after).unwrap_or(0);
-    group(ui, "After capture", &mut y, &mut |ui, r| {
+    group(ui, tr!("settings.capture.after_capture"), &mut y, &mut |ui, r| {
         let labels: Vec<&str> = After::ALL.iter().map(|a| a.label()).collect();
         ui.area(r, |ui| ui.seg("launcher.after", &labels, &mut after, &tok));
     });
@@ -129,10 +129,10 @@ pub fn paint(ui: &mut Ui, f: &mut Form) -> Option<Click> {
     ui.area(bar, |ui| {
         ui.ctl_h = 28.0;
         ui.row_rtl(|ui| {
-            if ui.cbutton("launcher.capture", "Capture", Some("region"), true, &tok) {
+            if ui.cbutton("launcher.capture", tr!("launcher.capture"), Some("region"), true, &tok) {
                 click = Some(Click::Capture);
             }
-            if ui.cbutton("launcher.cancel", "Cancel", None, false, &tok) {
+            if ui.cbutton("launcher.cancel", tr!("common.cancel"), None, false, &tok) {
                 click = Some(Click::Cancel);
             }
         });
@@ -238,11 +238,17 @@ impl Window {
 }
 
 impl Driver for Window {
+    fn title(&self) -> Option<String> {
+        Some(tr!("launcher.window_title").into())
+    }
+
     fn on_create(&mut self, hwnd: Hwnd) {
         self.hwnd = hwnd;
     }
 
     fn on_event(&mut self, ev: Ev) -> bool {
+        // Right to left: the pointer mirrored, as the frame is.
+        let ev = crate::ui::rtl_ev(ev, self.canvas.width());
         match ev {
             Ev::Resize(w, h) => {
                 self.canvas = PixBuf::new(w.max(1), h.max(1));
@@ -300,7 +306,7 @@ pub fn run(rx: Receiver<()>) {
     let cfg = crate::config::load();
     let th = crate::theme::resolve(&cfg);
     let mut w = Window::new(Form::new(Plan::from_config(&cfg)), th, rx);
-    let spec = WindowSpec { title: "Rustshot Capture".into(), w: W, h: H, resizable: false, min: (W, H), controls: wind::Controls::MinClose };
+    let spec = WindowSpec { title: tr!("launcher.window_title").into(), w: W, h: H, resizable: false, min: (W, H), controls: wind::Controls::MinClose };
     if let Err(e) = wind::run_window(spec, &mut w) {
         eprintln!("rustshot: launcher window: {e:#}");
     }

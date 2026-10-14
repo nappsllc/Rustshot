@@ -173,9 +173,9 @@ pub fn pick_format(listed: &[u32]) -> Result<u32, &'static str> {
     } else if listed.contains(&NV12) {
         Ok(NV12)
     } else if listed.iter().any(|f| *f == MJPG || *f == JPEG) {
-        Err(MJPG_ONLY)
+        Err(MJPG_ONLY.get())
     } else {
-        Err(NO_FORMAT)
+        Err(NO_FORMAT.get())
     }
 }
 
@@ -276,7 +276,7 @@ mod dev {
             let Ok(fd) = open_dev(&path) else { continue };
             if let Some(c) = query(&fd).filter(is_camera) {
                 let name = cstr(&c.card);
-                out.push(CamDevice { id: path, name: if name.is_empty() { format!("Camera {n}") } else { name } });
+                out.push(CamDevice { id: path, name: if name.is_empty() { tr!("cam.numbered", n) } else { name } });
             }
         }
         out
@@ -489,9 +489,9 @@ mod tests {
         assert_eq!(YUYV, 0x5659_5559);
         assert_eq!(pick_format(&[MJPG, YUYV]), Ok(YUYV));
         assert_eq!(pick_format(&[NV12, MJPG]), Ok(NV12));
-        assert_eq!(pick_format(&[MJPG]), Err(MJPG_ONLY));
-        assert_eq!(pick_format(&[fourcc(b"H264")]), Err(NO_FORMAT));
-        assert_eq!(pick_format(&[]), Err(NO_FORMAT));
+        assert_eq!(pick_format(&[MJPG]), Err(MJPG_ONLY.get()));
+        assert_eq!(pick_format(&[fourcc(b"H264")]), Err(NO_FORMAT.get()));
+        assert_eq!(pick_format(&[]), Err(NO_FORMAT.get()));
     }
 
     #[test]
