@@ -370,8 +370,8 @@ pub fn paint(ui: &mut Ui, d: &mut ImgDialog, win: (f32, f32), pic: &PixBuf, smal
     ui.radius = 7.0;
     ui.area(inner, |ui| {
         let title = match d {
-            ImgDialog::Resize(_) => "Resize image",
-            ImgDialog::Canvas(_) => "Canvas",
+            ImgDialog::Resize(_) => tr!("edit.img.resize_title"),
+            ImgDialog::Canvas(_) => tr!("edit.img.canvas_title"),
             ImgDialog::Effects(_) => tr!("fx.title"),
         };
         let t = ui.alloc(None, 24.0);

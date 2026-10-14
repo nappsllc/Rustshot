@@ -262,7 +262,8 @@ const SAME_EVERYWHERE: &[&str] = &[
 /// UI text passed straight to a drawing, control or notice call is a
 /// `tr!`, never a literal: every UI code path is scanned for literals in
 /// those shapes (`text(ui, 12.0, "…"`, `.cbutton("id", "…"`, `Toast::new("…"`,
-/// `label: "…"`, `=> "…"` arms of `label`/`tip` functions ...).
+/// `label: "…"`, `=> "…"` arms of `label`/`tip` functions, and any
+/// `=> "Capitalised …"` arm ...).
 #[test]
 fn no_untranslated_ui_literals() {
     // (what comes before, arguments to skip): the literal follows.
@@ -356,6 +357,26 @@ fn no_untranslated_ui_literals() {
         })
     };
     let label_fns = ["fn label(", "fn fixed_label(", "fn tip(", "fn title("];
+    // Any match arm that picks a capitalised word or phrase (`=> "Resize
+    // image"`: a dialog's title by its kind) is UI copy too, except in
+    // these functions (file, function): names that are not shown as
+    // copy — folders on disk, History's kind kept in history.json (shown
+    // through `kind_label`), key caps, font and mutex names.
+    const NOT_COPY: &[(&str, &str)] = &[
+        ("desktop.rs", "fn name("),
+        ("history/mod.rs", "fn kind_name("),
+        ("hotkey.rs", "fn key_name("),
+        ("rec/marks/mod.rs", "fn key_label("),
+        ("text_win.rs", "fn face_name("),
+        ("text_win.rs", "fn family_label("),
+        ("text_macos.rs", "fn family_label("),
+        ("text_macos.rs", "fn new("),
+        ("instance.rs", "fn mutex_name("),
+    ];
+    let copy_like = |s: &str| {
+        let mut c = s.chars();
+        c.next().is_some_and(|c| c.is_ascii_uppercase()) && c.next().is_some_and(|c| c.is_ascii_lowercase())
+    };
     let mut bad = Vec::new();
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut stack = vec![root.clone()];
@@ -373,7 +394,9 @@ fn no_untranslated_ui_literals() {
                 continue;
             }
             let src = std::fs::read_to_string(&p).unwrap();
+            let rel = p.strip_prefix(&root).unwrap().to_string_lossy().replace('\\', "/");
             let mut in_label_fn = false;
+            let mut copy_fn = true;
             let code = non_test(&src);
             for (i, line) in code.lines().enumerate() {
                 let t = line.trim_start();
@@ -382,6 +405,7 @@ fn no_untranslated_ui_literals() {
                 }
                 if t.contains("fn ") && (t.starts_with("fn ") || t.starts_with("pub") || t.starts_with("const fn ")) {
                     in_label_fn = label_fns.iter().any(|f| t.contains(f));
+                    copy_fn = !NOT_COPY.iter().any(|&(file, f)| rel == file && t.contains(f));
                 }
                 let mut found: Vec<&str> = Vec::new();
                 for &(needle, skip) in SHAPES {
@@ -402,9 +426,11 @@ fn no_untranslated_ui_literals() {
                         }
                     }
                 }
-                if in_label_fn {
-                    for (at, _) in line.match_indices("=> ") {
-                        found.extend(literal(&line[at + 3..]));
+                for (at, _) in line.match_indices("=> ") {
+                    if let Some(l) = literal(&line[at + 3..])
+                        && (in_label_fn || copy_fn && copy_like(l))
+                    {
+                        found.push(l);
                     }
                 }
                 for f in found {
