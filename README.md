@@ -367,6 +367,11 @@ UI design boards are in
 [docs/design/rustshot-ui](docs/design/rustshot-ui), and the specs and
 plans are in [docs/superpowers](docs/superpowers).
 
+Translations are plain text files in [`lang/`](lang); how to write, test
+and send one: [docs/translating.md](docs/translating.md) (languages in
+[i18n/languages.md](i18n/languages.md), terms in
+[i18n/glossary.md](i18n/glossary.md)).
+
 ## Known limitations
 
 From the v0.3.0 release notes:
