@@ -57,7 +57,9 @@ screenshots, editing and video capture.** Windows, Linux and macOS.
 - Crop (<kbd>C</kbd>): a frame inside the selection, or inside the picture in the
   Edit window, where the crop can be undone or widened again later.
 - A pixel magnifier shows the position and color under the pointer.
-  <kbd>H</kbd> copies the color as `#rrggbb`.
+  <kbd>H</kbd> copies the color as `#rrggbb`. Its crosshair replaces the
+  system pointer while it shows (no lag between the two), with the exact
+  pixel left open at its centre.
 - *Accept on select*: copy or save the moment you release the mouse.
 - *Include mouse pointer* (Settings › Capture): the pointer is captured
   too, as an object you can move or delete (Windows and X11).
