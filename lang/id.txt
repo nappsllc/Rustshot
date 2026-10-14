@@ -630,6 +630,7 @@ history.settings = Pengaturan Riwayat
 history.off_caption = Tangkapan tidak disimpan setelah Anda menutupnya. File yang disimpan dan diunggah tidak terpengaruh.
 history.still_kept[other] = {n} tangkapan masih disimpan ·
 history.search = Cari jendela atau tanggal…
+history.search_short = Cari…
 history.nothing_yet = Belum ada apa pun
 history.no_match = Tidak ada tangkapan yang cocok
 history.search_note = Mencari judul jendela, nama aplikasi, nama file, dan tanggal.

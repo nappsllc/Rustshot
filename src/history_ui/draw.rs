@@ -176,6 +176,10 @@ pub struct Lay {
     pub panel: Option<FRect>,
     pub foot: Option<FRect>,
     pub search: Option<FRect>,
+    /// The header shows its title (left out when the search needs it).
+    pub title: bool,
+    /// A card's Edit button: its label's width (54 px at least).
+    pub edit_w: f32,
     pub filters: Vec<(FRect, Filter)>,
     pub views: Vec<(FRect, View)>,
     pub slider: Option<FRect>,
@@ -226,6 +230,7 @@ pub fn layout(ui: &Ui, h: &History, w: f32, hh: f32) -> Lay {
     // the panel toggle, ⋯.
     let title_w = ui.text_w(14.0, tr!("history.title")) + 6.0;
     let mut x = 18.0 + title_w + 10.0;
+    let mut title = true;
     let more = FRect { x: w - 14.0 - IB, y: cy - IB / 2.0, w: IB, h: IB };
     let mut right = more.x - 10.0;
     let empty = h.entries.is_empty();
@@ -251,7 +256,18 @@ pub fn layout(ui: &Ui, h: &History, w: f32, hh: f32) -> Lay {
         {
             room += s.w + 10.0;
         }
-        let sw = if room >= 140.0 { room.min(SEARCH_W) } else { room.max(100.0) };
+        // Room for the placeholder (34 px before it, 10 after): the whole
+        // one up to the board's width, at least the short one.
+        let need = |k: crate::i18n::Key| (44.0 + ui.text_w(12.0, k.get()) + 0.5).ceil();
+        let short = key!("history.search_short");
+        let least = need(if short.own() { short } else { key!("history.search") }).max(100.0);
+        // Still too small for the short one: the title makes way.
+        if room < least {
+            title = false;
+            x -= title_w + 10.0;
+            room += title_w + 10.0;
+        }
+        let sw = if room >= 140.0 { room.min(SEARCH_W.max(need(key!("history.search")))) } else { room }.max(least.min(room).max(100.0));
         search = Some(FRect { x, y: cy - 14.0, w: sw, h: 28.0 });
         x += sw + 10.0;
         let mut sx = x + 3.0;
@@ -314,6 +330,8 @@ pub fn layout(ui: &Ui, h: &History, w: f32, hh: f32) -> Lay {
         panel,
         foot,
         search,
+        title,
+        edit_w: (26.0 + ui.text_w(11.5, tr!("history.edit")) + 9.0).ceil().max(54.0),
         filters,
         views,
         slider,
@@ -357,7 +375,8 @@ pub fn quick(lay: &Lay, it: &ItemLay, e: &Entry, scroll: f32, list: bool) -> Vec
             out.push((FRect { x: t.x1() - 6.0 - 26.0, y, w: 26.0, h: 26.0 }, *q));
             continue;
         }
-        let w = if *q == Quick::Edit { 54.0 } else { 26.0 };
+        // (Edit: its label's width, never past the More button.)
+        let w = if *q == Quick::Edit { lay.edit_w.min(t.x1() - 6.0 - 28.0 - x).max(26.0) } else { 26.0 };
         out.push((FRect { x, y, w, h: 26.0 }, *q));
         x += w + 2.0;
     }
@@ -715,7 +734,9 @@ fn paint_header(ui: &mut Ui, h: &mut History, lay: &Lay, t: &WTok, hover: Option
     let cy = HDR_H / 2.0;
     fill(ui, lay.hdr, 0.0, t.win);
     line_h(ui, 0.0, HDR_H - 1.0, lay.w, t.sep);
-    text(ui, 14.0, tr!("history.title"), 18.0, cy, t.tx, true);
+    if lay.title {
+        text(ui, 14.0, tr!("history.title"), 18.0, cy, t.tx, true);
+    }
     let dim = h.on() && h.entries.is_empty();
     let k = if dim { 0.5 } else { 1.0 };
     if let Some(s) = lay.search {
@@ -747,7 +768,15 @@ fn paint_header(ui: &mut Ui, h: &mut History, lay: &Lay, t: &WTok, hover: Option
             h.scroll = 0.0;
         }
         if h.search.text.is_empty() {
-            text(ui, 12.0, tr!("history.search"), s.x + 34.0, cy, t.tx3.fade(k), false);
+            // Inside the field with a gap at its end (not under the
+            // filters beside it).
+            // The short one when the whole does not fit (when the
+            // language has it; else the whole, cut).
+            let room = s.x1() - 10.0 - (s.x + 34.0);
+            let short = key!("history.search_short");
+            let ph = if ui.text_w(12.0, tr!("history.search")) > room && short.own() { short.get() } else { tr!("history.search") };
+            let ph = ui.fit_text(12.0, ph, room);
+            text(ui, 12.0, &ph, s.x + 34.0, cy, t.tx3.fade(k), false);
         } else {
             let hov = hover == Some(&Target::SearchClear);
             icon(ui, "x", s.x1() - 23.0, cy - 7.0, 14.0, if hov { t.ich } else { t.ic });
@@ -925,6 +954,16 @@ fn kind_badge(ui: &mut Ui, e: &Entry, x: f32, y: f32, t: &WTok) -> f32 {
     w
 }
 
+/// A tag's word in `w` logical px: whole, cut with "…", or None when not
+/// even a few letters fit (the tag is left out rather than overlap).
+fn fit_tag(ui: &Ui, size: f32, s: &str, w: f32) -> Option<String> {
+    if ui.text_w(size, s) <= w {
+        return Some(s.to_string());
+    }
+    let cut = ui.fit_text(size, s, w);
+    (cut.chars().count() >= 4).then_some(cut)
+}
+
 /// "Uploaded": a cloud badge beside the kind's.
 fn upload_badge(ui: &mut Ui, x: f32, y: f32, t: &WTok) {
     let b = FRect { x, y, w: 26.0, h: 20.0 };
@@ -984,21 +1023,30 @@ fn paint_card(ui: &mut Ui, h: &mut History, lay: &Lay, it: &ItemLay, e: &Entry, 
         let q = p(ui, th);
         paint::outer_ring(&mut ui.fb, q, 10.0 * k, 2.0 * k, 2.0 * k, t.ac);
     }
+    // Where the badges on the left end.
+    let mut left;
     if multi {
         let cb = FRect { x: th.x + 8.0, y: th.y + 8.0, w: 20.0, h: 20.0 };
         checkbox(ui, cb, selected, t);
+        left = cb.x1();
     } else {
         let bw = kind_badge(ui, e, th.x + 8.0, th.y + 8.0, t);
+        left = th.x + 8.0 + bw;
         if e.meta.uploaded.is_some() {
-            upload_badge(ui, th.x + 8.0 + bw + 4.0, th.y + 8.0, t);
+            upload_badge(ui, left + 4.0, th.y + 8.0, t);
+            left += 4.0 + 26.0;
         }
     }
-    if e.meta.edited {
-        let tw = ui.text_w(10.5, tr!("history.edited"));
+    // The Edited tag on the right, cut (or left out) before it reaches
+    // them.
+    if e.meta.edited
+        && let Some(tag) = fit_tag(ui, 10.5, tr!("history.edited"), th.x1() - 8.0 - (left + 6.0) - 14.0)
+    {
+        let tw = ui.text_w(10.5, &tag);
         let b = FRect { x: th.x1() - 8.0 - tw - 14.0, y: th.y + 8.0, w: tw + 14.0, h: 20.0 };
         fill(ui, b, 5.0, t.acbg);
         ring(ui, b, 5.0, t.acrg);
-        text(ui, 10.5, tr!("history.edited"), b.x + 7.0, b.y + 10.0, t.acfg, true);
+        text(ui, 10.5, &tag, b.x + 7.0, b.y + 10.0, t.acfg, true);
     }
     if e.meta.kind.is_recording() && (multi || !hovered) {
         let d = history::duration_text(e.meta.duration_ms);
@@ -1019,7 +1067,8 @@ fn paint_card(ui: &mut Ui, h: &mut History, lay: &Lay, it: &ItemLay, e: &Entry, 
                 fill(ui, r, 6.0, if hov { t.acbg_hover } else { t.acbg });
                 ring(ui, r, 6.0, t.acrg);
                 icon(ui, "pencil", r.x + 7.0, r.y + 6.0, 14.0, t.acfg);
-                text(ui, 11.5, tr!("history.edit"), r.x + 26.0, r.y + 13.0, t.acfg, true);
+                let label = ui.fit_text(11.5, tr!("history.edit"), r.w - 26.0 - 7.0);
+                text(ui, 11.5, &label, r.x + 26.0, r.y + 13.0, t.acfg, true);
             } else {
                 if hov {
                     fill(ui, r, 6.0, C4::new(255, 255, 255, 30));
@@ -1119,12 +1168,17 @@ fn paint_row(ui: &mut Ui, h: &mut History, lay: &Lay, it: &ItemLay, e: &Entry, t
     let dim_x = time_x - 14.0 - 90.0;
     let ty_x = dim_x - 14.0 - 92.0;
     let title = history::title(&e.meta);
-    let edited_w = if e.meta.edited { ui.text_w(10.5, tr!("history.edited")) + 6.0 } else { 0.0 };
-    let name = ui.fit_text(12.5, &title, (ty_x - 14.0 - x - edited_w).max(20.0));
+    // The name and its Edited tag end before the cloud (or the type),
+    // a gap between: the tag takes at most 40 % of the room, cut first.
+    let end = if e.meta.uploaded.is_some() { ty_x - 19.0 - 8.0 } else { ty_x - 14.0 };
+    let room = (end - x).max(20.0);
+    let tag = if e.meta.edited { fit_tag(ui, 10.5, tr!("history.edited"), room * 0.4) } else { None };
+    let edited_w = tag.as_ref().map_or(0.0, |s| ui.text_w(10.5, s) + 6.0);
+    let name = ui.fit_text(12.5, &title, (room - edited_w).max(20.0));
     highlighted(ui, &name, &it.hl, x, cy, 12.5, t);
-    if e.meta.edited {
+    if let Some(tag) = &tag {
         let nw = ui.text_w(12.5, &name);
-        text(ui, 10.5, tr!("history.edited"), x + nw + 6.0, cy, t.acfg, true);
+        text(ui, 10.5, tag, x + nw + 6.0, cy, t.acfg, true);
     }
     let rec = e.meta.kind.is_recording();
     icon(ui, if rec { "video" } else { "camera" }, ty_x, cy - 7.0, 14.0, t.tx2);

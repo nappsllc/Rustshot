@@ -133,7 +133,9 @@ impl UiFont {
         let k = self.k(px);
         let mut pen = start;
         let mut prev: Option<usize> = None;
-        for ch in s.chars() {
+        // Bidi format characters (isolates round number pairs): no
+        // glyph, no width, no effect on the kerning.
+        for ch in s.chars().filter(|&c| !crate::text::is_bidi_control(c)) {
             let g = self.slot(ch);
             if let Some(p) = prev {
                 pen += k * self.kern(p, g);

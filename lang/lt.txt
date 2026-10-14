@@ -640,6 +640,7 @@ history.still_kept[one] = Dar saugomas {n} fiksavimas ·
 history.still_kept[few] = Dar saugomi {n} fiksavimai ·
 history.still_kept[other] = Dar saugoma {n} fiksavimų ·
 history.search = Ieškoti pagal langą ar datą…
+history.search_short = Ieškoti…
 history.nothing_yet = Čia dar nieko nėra
 history.no_match = Atitinkančių fiksavimų nėra
 history.search_note = Ieškoma lango pavadinime, programos pavadinime, failo varde ir datoje.

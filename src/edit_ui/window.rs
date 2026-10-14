@@ -129,35 +129,15 @@ impl Window {
     }
 
     /// Right to left: the toolbar and the canvas (the picture) keep
-    /// reading left to right, their region flipped back as a whole in the
-    /// mirrored frame: its span (physical px) while that is so.
-    fn ltr_span(&self) -> Option<(f32, f32)> {
-        if !crate::i18n::is_rtl() {
-            return None;
+    /// reading left to right, so the editor works in screen space (the
+    /// window's layout is mirrored, the rest of the frame drawn left to
+    /// right and flipped once drawn): a layout point (physical px, as
+    /// `rtl_ev` hands it) as the editor sees it.
+    fn ed(&self, p: Pt) -> Pt {
+        if !crate::i18n::is_rtl() || self.canvas.width() == 0 {
+            return p;
         }
-        let (k, lay) = (self.k(), self.lay());
-        let x0 = lay.bar.x.min(lay.canvas.x) * k;
-        let x1 = lay.bar.x1().max(lay.canvas.x1()) * k;
-        Some((x0.round(), x1.round()))
-    }
-
-    /// A pointer event (already mirrored for the frame: `rtl_ev`) on the
-    /// toolbar or the canvas, mirrored back within their region; others
-    /// as they are (a question or a menu over it: the frame's).
-    fn ltr_ev(&self, ev: Ev) -> Ev {
-        let Some((x0, x1)) = self.ltr_span() else { return ev };
-        if self.e.flow.dialog.is_some() || self.e.img_menu || self.e.img_dialog.is_some() {
-            return ev;
-        }
-        let m = |x: i32| if (x as f32) >= x0 && (x as f32) < x1 { (x0 + x1) as i32 - 1 - x } else { x };
-        match ev {
-            Ev::Move { x, y } => Ev::Move { x: m(x), y },
-            Ev::Down { x, y } => Ev::Down { x: m(x), y },
-            Ev::Up { x, y } => Ev::Up { x: m(x), y },
-            Ev::Wheel { delta, x, y } => Ev::Wheel { delta, x: m(x), y },
-            Ev::Middle { down, x, y } => Ev::Middle { down, x: m(x), y },
-            e => e,
-        }
+        Pt::new(self.canvas.width() as f32 - 1.0 - p.x, p.y)
     }
 
     /// Tell the canvas where it is.
@@ -166,7 +146,13 @@ impl Window {
         let lay = self.lay();
         let p = |r: FRect| crate::ui::paint::px(r, k);
         let win = FRect { x: 0.0, y: 0.0, w: self.canvas.width() as f32, h: self.canvas.height() as f32 };
-        self.e.canvas.set_rects(p(lay.canvas), p(lay.bar), win, k);
+        // Right to left: the canvas where it shows, at the mirrored place
+        // (the editor works in screen space: [`Window::ed`]).
+        let mut cv = p(lay.canvas);
+        if crate::i18n::is_rtl() {
+            cv.x = win.w - cv.x1();
+        }
+        self.e.canvas.set_rects(cv, p(lay.bar), win, k);
     }
 
     /// Compose the frame (twice when an image dialog's answer or its
@@ -196,7 +182,6 @@ impl Window {
             let _dp = crate::perf::span(crate::perf::K::Damage);
             self.e.canvas.paint(&mut fb, tok.cv, edge, now);
         }
-        let span = self.ltr_span();
         let inp = Input::default();
         let mut focus = FocusState::default();
         let mut clip = crate::ui::SystemClipboard;
@@ -206,21 +191,30 @@ impl Window {
         let dlg = self.e.img_dialog.is_some();
         let (input, focus) = if dlg { (&self.dlg_in, &mut self.dlg_focus) } else { (&inp, &mut focus) };
         let mut ui = Ui::new(fb, &th, input, focus, &mut clip, k, area);
+        // Right to left: the editor painted the canvas in screen space
+        // (it reads left to right); the frame is drawn in the mirrored
+        // layout and flipped in `finish`, so the canvas is flipped to the
+        // layout first (and back with the frame: [`Window::ed`]).
+        let mirror = ui.fb.mirror;
+        if mirror {
+            ui.fb.flip();
+        }
         let _lp = crate::perf::span(crate::perf::K::Label);
         draw::paint_strip(&mut ui, &lay, &tok);
         draw::paint_rail(&mut ui, &self.e, &lay, &tok, self.hover);
         draw::paint_status(&mut ui, &self.e, &lay, &tok, self.hover);
         draw::paint_zoom(&mut ui, &self.e, &lay, &tok, self.hover);
         drop(_lp);
-        // The toolbar and the canvas read left to right in a mirrored
-        // frame: drawn unmirrored, their region flipped back as a whole.
-        let mirror = ui.fb.mirror;
-        ui.fb.mirror = false;
+        // The toolbar (and its popups) in screen space too: drawn
+        // unmirrored over the frame as it will show.
+        if mirror {
+            ui.fb.flip();
+            ui.fb.mirror = false;
+        }
         self.e.canvas.paint_bar(&mut ui.fb, now);
-        ui.fb.mirror = mirror;
-        if let Some((x0, x1)) = span {
-            let (y0, y1) = ((lay.bar.y.min(lay.canvas.y) * k).round() as i32, (lay.bar.y1().max(lay.canvas.y1()) * k).round() as i32);
-            ui.fb.flip_rect(x0 as i32, y0, x1 as i32, y1);
+        if mirror {
+            ui.fb.mirror = true;
+            ui.fb.flip();
         }
         draw::paint_toast(&mut ui, &self.e, &lay, now);
         draw::paint_img_menu(&mut ui, &self.e, &lay, &tok, self.hover);
@@ -522,7 +516,7 @@ impl Window {
                     self.press = h;
                 } else {
                     self.press = None;
-                    self.e.canvas.press(p);
+                    self.e.canvas.press(self.ed(p));
                 }
             }
             // The overlay's color ring only; the Edit window has none.
@@ -530,9 +524,9 @@ impl Window {
             Ev::Middle { down, x, y } => {
                 let p = Pt::new(x as f32, y as f32);
                 if down {
-                    self.e.canvas.middle_press(p);
+                    self.e.canvas.middle_press(self.ed(p));
                 } else {
-                    self.e.canvas.middle_release(p);
+                    self.e.canvas.middle_release(self.ed(p));
                 }
             }
             Ev::Move { x, y } => {
@@ -556,7 +550,7 @@ impl Window {
                 let hov = if self.e.flow.dialog.is_some() || !self.held { self.hit_at(p) } else { None };
                 let changed = hov != self.hover;
                 self.hover = hov;
-                let c = if self.e.flow.dialog.is_some() { false } else { self.e.canvas.moved(p, self.held && self.press.is_none()) };
+                let c = if self.e.flow.dialog.is_some() { false } else { self.e.canvas.moved(self.ed(p), self.held && self.press.is_none()) };
                 return c || changed;
             }
             Ev::Up { x, y } => {
@@ -575,18 +569,18 @@ impl Window {
                             self.click(h, Mods::current_or_default(), now);
                         }
                     }
-                    None => self.e.canvas.release(p),
+                    None => self.e.canvas.release(self.ed(p)),
                 }
             }
             Ev::Wheel { delta, x, y } => {
                 let p = Pt::new(x as f32, y as f32);
-                if self.e.flow.dialog.is_some() || !self.e.canvas.on_canvas(p) {
+                if self.e.flow.dialog.is_some() || !self.e.canvas.on_canvas(self.ed(p)) {
                     return false;
                 }
                 let m = Mods::current_or_default();
                 let notches = delta as f32 / 120.0;
                 if m.ctrl {
-                    self.e.canvas.zoom_by(1.25f32.powf(notches), p);
+                    self.e.canvas.zoom_by(1.25f32.powf(notches), self.ed(p));
                 } else if m.alt {
                     self.e.canvas.wheel_size(delta);
                 } else if m.shift {
@@ -708,9 +702,9 @@ impl Driver for Window {
     }
 
     fn on_event(&mut self, ev: Ev) -> bool {
-        // Right to left: the pointer mirrored, as the frame is (and back
-        // on the toolbar and the canvas, which read left to right).
-        let ev = self.ltr_ev(crate::ui::rtl_ev(ev, self.canvas.width()));
+        // Right to left: the pointer mirrored, as the frame is (the
+        // editor gets it back in screen space: [`Window::ed`]).
+        let ev = crate::ui::rtl_ev(ev, self.canvas.width());
         let timer = matches!(ev, Ev::Timer);
         let mv = matches!(ev, Ev::Move { .. });
         let due = self.event(ev);
@@ -739,7 +733,7 @@ impl Driver for Window {
         if self.e.flow.dialog.is_some() {
             return Cursor::Arrow;
         }
-        self.e.canvas.cursor(self.mouse)
+        self.e.canvas.cursor(self.ed(self.mouse))
     }
 
     fn frame_colors(&self) -> Option<wind::FrameColors> {

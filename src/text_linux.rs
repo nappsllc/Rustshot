@@ -256,7 +256,7 @@ fn fallback_font(c: char) -> Fb {
 pub fn prefetch(s: &str) {
     let face = &ui_face_font();
     let mut seen = std::collections::HashSet::new();
-    for c in s.chars().filter(|c| !c.is_ascii() && !c.is_control()) {
+    for c in s.chars().filter(|&c| !c.is_ascii() && !c.is_control() && !crate::text::is_bidi_control(c)) {
         if seen.insert(c as u32 >> 8) && face.glyph_id(c).0 == 0 {
             let _ = fallback_font(c);
         }

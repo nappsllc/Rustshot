@@ -630,6 +630,7 @@ history.settings = การตั้งค่าประวัติ
 history.off_caption = การจับภาพจะไม่ถูกเก็บไว้หลังจากปิด ไม่มีผลต่อไฟล์ที่บันทึกและอัปโหลดแล้ว
 history.still_kept[other] = ยังเก็บไว้ {n} รายการ ·
 history.search = ค้นหาตามหน้าต่างหรือวันที่…
+history.search_short = ค้นหา…
 history.nothing_yet = ยังไม่มีอะไรที่นี่
 history.no_match = ไม่มีการจับภาพที่ตรงกัน
 history.search_note = ค้นหาชื่อหน้าต่าง ชื่อแอป ชื่อไฟล์ และวันที่

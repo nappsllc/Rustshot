@@ -1982,27 +1982,45 @@ fn sections_fit(lang: &str) {
     }
 }
 
-/// The overlay key rows' labels end before their first key cap (the
-/// row draws them over each other otherwise), at every UI scale.
+/// The overlay key rows' labels (a long translation wrapped, or above
+/// the caps) never run into their key caps, at every UI scale, in English,
+/// the pseudo-languages and the `RUSTSHOT_FIT_LANGS` catalogs.
 #[test]
-fn key_row_labels_clear_their_caps() {
-    for k in [1.0f32, 1.5, 2.0] {
-        for (sec, rows) in [(KEYS_TOOLS, &TOOL_ROWS[..]), (KEYS_ACTIONS, &ACTION_ROWS[..])] {
-            let mut s = sample();
-            s.section = sec;
-            let mut focus = FocusState::default();
-            let mut widths = Vec::new();
-            render(&mut s, &DARK, k, &Input::default(), &mut focus);
-            preview::render(W, H, k, &DARK, &Input::default(), &mut focus, |ui| {
-                widths = rows.iter().map(|(l, _)| ui.text_w(12.0, l)).collect();
-                draw::paint(ui, &mut s);
-            });
-            for ((label, acts), lw) in rows.iter().zip(&widths) {
-                let first = acts.iter().filter_map(|a| focus.rect_of(&format!("key_{}", a.id()))).map(|r| r.x / k).fold(f32::MAX, f32::min);
-                let label_end = RAIL_W + draw::KEYS_PAD_X + 8.0 + lw;
-                assert!(label_end <= first, "{label} at {k}: label ends {label_end}, caps start {first}");
+fn key_row_labels_fit_clear_of_their_caps() {
+    for lang in preview::langs() {
+        crate::i18n::with_lang(lang, || {
+            for k in [1.0f32, 1.5, 2.0] {
+                for (sec, rows) in [(KEYS_TOOLS, &TOOL_ROWS[..]), (KEYS_ACTIONS, &ACTION_ROWS[..])] {
+                    let mut s = sample();
+                    s.section = sec;
+                    let mut focus = FocusState::default();
+                    render(&mut s, &DARK, k, &Input::default(), &mut focus);
+                    let img = preview::render(W, H, k, &DARK, &Input::default(), &mut focus, |ui| {
+                        draw::paint(ui, &mut s);
+                    });
+                    if k == 1.0 {
+                        preview::save(&format!("settings-key-rows-{sec}-{lang}.png"), &img);
+                    }
+                    let problems = preview::take_problems();
+                    assert!(problems.is_empty(), "{lang} {sec} at {k}: {problems:#?}");
+                    let caps: Vec<FRect> = rows.iter().flat_map(|(_, acts)| acts.iter()).filter_map(|a| focus.rect_of(&format!("key_{}", a.id()))).collect();
+                    assert!(!caps.is_empty());
+                    let texts = preview::drawn_texts();
+                    // A label's lines: text not inside a cap area.
+                    let inside = |t: &FRect, c: &FRect| t.x >= c.x - 1.0 && t.x1() <= c.x1() + 1.0 && t.y >= c.y - 1.0 && t.y1() <= c.y1() + 1.0;
+                    let mut labels = 0;
+                    for (s, t) in texts.iter().filter(|(_, t)| !caps.iter().any(|c| inside(t, c))) {
+                        labels += rows.iter().any(|(l, _)| l.get().contains(s.trim())) as usize;
+                        for c in &caps {
+                            let ow = t.x1().min(c.x1()) - t.x.max(c.x);
+                            let oh = t.y1().min(c.y1()) - t.y.max(c.y);
+                            assert!(ow <= 0.5 || oh <= 0.5, "{lang} {sec} at {k}: {s:?} at {t:?} runs into the caps at {c:?}");
+                        }
+                    }
+                    assert!(labels >= rows.len().min(4), "{lang} {sec} at {k}: the labels were drawn ({labels})");
+                }
             }
-        }
+        });
     }
 }
 

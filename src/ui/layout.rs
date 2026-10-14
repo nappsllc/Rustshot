@@ -33,6 +33,11 @@ pub struct Layout {
 }
 
 impl Layout {
+    /// The area's width (logical px): what a control on a line of its own gets.
+    pub fn width(&self) -> f32 {
+        self.area.w
+    }
+
     pub fn new(area: FRect) -> Layout {
         Layout { area, y: area.y, row: None, next_w: None, next_h: None, next: None, gap: GAP }
     }

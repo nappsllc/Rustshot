@@ -123,6 +123,10 @@ struct Line {
 
 impl Line {
     fn new(s: &str, px: f32, face: &Face) -> Option<Self> {
+        // Isolates (number pairs) as embeddings, which every CoreText
+        // version orders by.
+        let s = crate::text::as_embeddings(s);
+        let s: &str = &s;
         unsafe {
             let base = match face.family {
                 // Bold starts from each family's bold member (the bold trait

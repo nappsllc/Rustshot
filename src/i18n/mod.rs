@@ -117,6 +117,13 @@ impl Key {
         if v.is_empty() { table_of(0)[self.0 as usize] } else { v }
     }
 
+    /// The current language has this string itself (English always does):
+    /// not the English one a missing key falls back to.
+    pub fn own(self) -> bool {
+        let lang = current_index();
+        lang == 0 || !table_of(lang)[self.0 as usize].is_empty()
+    }
+
     /// The plural form for `n` in the current language (its `other`, then
     /// English, when it lacks that form).
     #[inline(never)]
@@ -232,7 +239,99 @@ pub fn t(k: &str) -> &'static str {
     }
 }
 
-/// `s` with each `{name}` replaced by its argument (unknown ones kept).
+/// Right to left, a run of numbers joined by separators (`1180 × 760`,
+/// `724, 120`, `3/4`, `10–20`), a signed number (`-5`) or one grouped by
+/// thin spaces (`1 234`) is wrapped in a left-to-right isolate (LRI …
+/// PDI), so it keeps its order inside right-to-left text instead of
+/// reading backwards (`760 × 1180`). Strings that already hold an isolate
+/// are left as they are. [`fmt`] does this for every filled-in string
+/// while the UI runs right to left; the text renderers draw the isolates
+/// as nothing (crate::text::is_bidi_control).
+pub fn isolate_numbers(s: &str) -> String {
+    const LRI: char = '\u{2066}';
+    const PDI: char = '\u{2069}';
+    if !s.bytes().any(|b| b.is_ascii_digit()) || s.contains([LRI, '\u{2067}', '\u{2068}', PDI]) {
+        return s.to_string();
+    }
+    let c: Vec<char> = s.chars().collect();
+    let digit = |i: usize| c.get(i).is_some_and(|c| c.is_ascii_digit());
+    let space = |i: usize| c.get(i).is_some_and(|&c| matches!(c, ' ' | '\u{a0}' | '\u{2009}' | '\u{202f}'));
+    // A number from `i` (digits, inner `.`/`,`/thin-space groups, a `%`):
+    // its end and whether it holds a group space.
+    let number = |i: usize| -> Option<(usize, bool)> {
+        if !digit(i) {
+            return None;
+        }
+        let (mut j, mut grouped) = (i, false);
+        loop {
+            while digit(j) {
+                j += 1;
+            }
+            match c.get(j) {
+                Some('.' | ',') if digit(j + 1) => j += 1,
+                Some('\u{2009}' | '\u{202f}') if digit(j + 1) => {
+                    grouped = true;
+                    j += 1;
+                }
+                _ => break,
+            }
+        }
+        if c.get(j) == Some(&'%') {
+            j += 1;
+        }
+        Some((j, grouped))
+    };
+    // A separator from `i` and the number after it: that number's end.
+    let joined = |i: usize| -> Option<(usize, bool)> {
+        let mut j = i;
+        while space(j) && j < i + 2 {
+            j += 1;
+        }
+        if !c.get(j).is_some_and(|&c| matches!(c, '×' | 'x' | ',' | ':' | '/' | '–' | '-')) {
+            return None;
+        }
+        j += 1;
+        while space(j) && j < i + 4 {
+            j += 1;
+        }
+        number(j)
+    };
+    let mut out = String::with_capacity(s.len() + 8);
+    let mut i = 0;
+    while i < c.len() {
+        let word = i > 0 && (c[i - 1].is_alphanumeric() || c[i - 1] == '_');
+        let sign = matches!(c[i], '-' | '+' | '\u{2212}') && digit(i + 1) && !word;
+        let start = if sign { i + 1 } else { i };
+        let Some((mut end, mut grouped)) = (!word || sign).then(|| number(start)).flatten() else {
+            // Not a number's start: the character, or a word's whole digit run.
+            let alnum = c[i].is_alphanumeric();
+            out.push(c[i]);
+            i += 1;
+            while alnum && digit(i) {
+                out.push(c[i]);
+                i += 1;
+            }
+            continue;
+        };
+        let mut n = 1;
+        while let Some((e, g)) = joined(end) {
+            (end, grouped, n) = (e, grouped || g, n + 1);
+        }
+        let wrap = sign || grouped || n > 1;
+        if wrap {
+            out.push(LRI);
+        }
+        out.extend(&c[i..end]);
+        if wrap {
+            out.push(PDI);
+        }
+        i = end;
+    }
+    out
+}
+
+/// `s` with each `{name}` replaced by its argument (unknown ones kept);
+/// right to left, number pairs kept in order ([`isolate_numbers`]).
 #[inline(never)]
 pub fn fmt(s: &str, args: &[(&str, &dyn std::fmt::Display)]) -> String {
     use std::fmt::Write as _;
@@ -253,7 +352,7 @@ pub fn fmt(s: &str, args: &[(&str, &dyn std::fmt::Display)]) -> String {
         }
     }
     out.push_str(rest);
-    out
+    if is_rtl() { isolate_numbers(&out) } else { out }
 }
 
 /// The key `$k` as a [`Key`] constant (for tables of strings).
@@ -777,9 +876,11 @@ pub fn upper_in(tag: &str, s: &str) -> String {
 
 /// A heading's capitals are tracked letter by letter only when they are
 /// plain ASCII (the baked font); any other string is drawn whole, so the
-/// OS shaper sees the word (Arabic joining, Indic marks).
+/// OS shaper sees the word (Arabic joining, Indic marks). Never in a
+/// right-to-left frame: letters placed one by one there would run right
+/// to left (an English fallback heading spelled backwards).
 pub fn tracks(up: &str) -> bool {
-    up.is_ascii()
+    up.is_ascii() && !is_rtl()
 }
 
 /// The language the setting asks for (by code), whether its file is here
@@ -798,6 +899,10 @@ pub fn current() -> &'static str {
 /// Whether the current language is written right to left (the decorated
 /// windows mirror, the toolbar runs right to left).
 pub fn is_rtl() -> bool {
+    #[cfg(test)]
+    if FORCE_RTL.with(|f| f.get()) {
+        return true;
+    }
     let i = current_index();
     loaded(i).is_some() && known(i).rtl
 }
@@ -812,6 +917,50 @@ pub fn generation() -> u64 {
 thread_local! {
     /// [`with_lang`]'s language on this thread (tests run in parallel).
     static OVERRIDE: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+thread_local! {
+    /// [`with_rtl`]: this thread lays out right to left in its language.
+    static FORCE_RTL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `f` with this thread laid out right to left in its own (English)
+/// strings: a mirrored frame whose text and pictures can be compared
+/// pixel for pixel with the left-to-right one.
+#[cfg(test)]
+pub fn with_rtl<R>(f: impl FnOnce() -> R) -> R {
+    let old = FORCE_RTL.with(|o| o.replace(true));
+    struct Back(bool);
+    impl Drop for Back {
+        fn drop(&mut self) {
+            FORCE_RTL.with(|o| o.set(self.0));
+        }
+    }
+    let _back = Back(old);
+    f()
+}
+
+/// Whether `s` is a whole string of the current language's catalog (its
+/// own or the English one a missing key falls back to; every plural
+/// form): the fit tests' cut labels, help lines and placeholders.
+#[cfg(test)]
+pub fn is_catalog_text(s: &str) -> bool {
+    thread_local!(static SETS: std::cell::RefCell<std::collections::HashMap<usize, std::collections::HashSet<&'static str>>> = Default::default());
+    let lang = current_index();
+    SETS.with(|m| {
+        let mut m = m.borrow_mut();
+        let set = m.entry(lang).or_insert_with(|| {
+            let mut set = std::collections::HashSet::new();
+            for i in 0..names().len() {
+                let v = table_of(lang)[i];
+                let v = if v.is_empty() { table_of(0)[i] } else { v };
+                set.extend(v.split('\u{1f}').filter(|f| !f.is_empty()));
+            }
+            set
+        });
+        set.contains(s)
+    })
 }
 
 /// Run `f` with this thread in language `code`, then switch back.

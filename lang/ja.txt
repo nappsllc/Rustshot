@@ -630,6 +630,7 @@ history.settings = 履歴の設定
 history.off_caption = キャプチャは閉じた後に保持されません。保存済みやアップロード済みのファイルには影響しません。
 history.still_kept[other] = {n} 件のキャプチャが残っています ·
 history.search = ウィンドウや日付で検索…
+history.search_short = 検索…
 history.nothing_yet = まだ何もありません
 history.no_match = 一致するキャプチャはありません
 history.search_note = ウィンドウ タイトル、アプリ名、ファイル名、日付を検索します。

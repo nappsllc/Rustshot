@@ -645,6 +645,7 @@ history.still_kept[few] = Ще зберігаються {n} знімки ·
 history.still_kept[many] = Ще зберігається {n} знімків ·
 history.still_kept[other] = Ще зберігається {n} знімка ·
 history.search = Пошук за вікном або датою…
+history.search_short = Пошук…
 history.nothing_yet = Тут поки порожньо
 history.no_match = Відповідних знімків немає
 history.search_note = Шукає в заголовку вікна, назві програми, імені файлу й даті.

@@ -437,6 +437,40 @@ pub fn is_rtl_char(c: char) -> bool {
     matches!(c as u32, 0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF | 0x10800..=0x10FFF | 0x1E800..=0x1EFFF)
 }
 
+/// A Unicode bidi format character (marks, embeddings, overrides,
+/// isolates: LRM, RLM, LRE..RLO, LRI..PDI): it has no glyph and no width,
+/// it only steers the order (the UI wraps number pairs in isolates in a
+/// right-to-left language, [`crate::i18n::isolate_numbers`]).
+pub fn is_bidi_control(c: char) -> bool {
+    matches!(c, '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
+/// `s` with its bidi isolates as embeddings (LRI → LRE, RLI → RLE, FSI →
+/// either as its first strong character says, PDI → PDF), for the OS
+/// stacks that order by embeddings but draw isolates as boxes with a
+/// width (GDI/Uniscribe; CoreText takes both). Each is one UTF-16 unit
+/// and one char either way, so offsets into `s` still hold.
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+pub fn as_embeddings(s: &str) -> std::borrow::Cow<'_, str> {
+    if !s.contains(['\u{2066}', '\u{2067}', '\u{2068}', '\u{2069}']) {
+        return s.into();
+    }
+    let chars: Vec<char> = s.chars().collect();
+    let out: String = (chars.iter().enumerate())
+        .map(|(i, &c)| match c {
+            '\u{2066}' => '\u{202A}',
+            '\u{2067}' => '\u{202B}',
+            '\u{2068}' => {
+                let rtl = chars[i + 1..].iter().take_while(|&&c| c != '\u{2069}').find(|c| c.is_alphanumeric()).is_some_and(|&c| is_rtl_char(c));
+                if rtl { '\u{202B}' } else { '\u{202A}' }
+            }
+            '\u{2069}' => '\u{202C}',
+            c => c,
+        })
+        .collect();
+    out.into()
+}
+
 /// `s` in visual (left-to-right display) order, for a renderer without a
 /// bidi engine (Linux's ab_glyph): a simplified Unicode bidi algorithm
 /// for one line. Runs of right-to-left letters are reversed (brackets
@@ -444,34 +478,85 @@ pub fn is_rtl_char(c: char) -> bool {
 /// punctuation) between runs of one direction take it, others the
 /// paragraph's (right to left when `rtl`, else the first strong
 /// character's); a right-to-left paragraph lays its runs out from the right.
+/// An isolate (LRI, RLI or FSI up to its PDI) is ordered on its own (left
+/// to right, right to left, or as its first strong character says) and
+/// moves as one neutral; the bidi format characters themselves are left
+/// out (they draw nothing).
 #[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
 pub fn visual_order(s: &str, rtl: bool) -> Vec<char> {
     let chars: Vec<char> = s.chars().collect();
-    // Some(true): strong right to left; Some(false): left to right (letters, digits).
-    let strong = |c: char| {
-        if is_rtl_char(c) {
-            Some(true)
-        } else if c.is_alphanumeric() {
-            Some(false)
-        } else {
-            None
-        }
-    };
-    if !chars.iter().any(|&c| is_rtl_char(c)) && !rtl {
-        return chars;
-    }
-    let para = rtl || chars.iter().find_map(|&c| strong(c)).unwrap_or(false);
-    let mut dir: Vec<bool> = chars.iter().map(|&c| strong(c).unwrap_or(para)).collect();
-    // Neutrals: the direction on both sides when they agree, else the paragraph's.
+    order_items(&chars, rtl)
+}
+
+/// A character, or an isolate already in visual order.
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+enum Item {
+    C(char),
+    Iso(Vec<char>),
+}
+
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+fn order_items(chars: &[char], rtl: bool) -> Vec<char> {
+    // Isolates out first (nested ones by their own PDI).
+    let mut items = Vec::with_capacity(chars.len());
     let mut i = 0;
     while i < chars.len() {
-        if strong(chars[i]).is_some() {
+        let c = chars[i];
+        i += 1;
+        if matches!(c, '\u{2066}'..='\u{2068}') {
+            let (start, mut depth) = (i, 1);
+            while i < chars.len() {
+                match chars[i] {
+                    '\u{2066}'..='\u{2068}' => depth += 1,
+                    '\u{2069}' => depth -= 1,
+                    _ => {}
+                }
+                i += 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            let inner = &chars[start..if depth == 0 { i - 1 } else { i }];
+            let dir = match c {
+                '\u{2066}' => false,
+                '\u{2067}' => true,
+                _ => inner.iter().find(|c| c.is_alphanumeric()).is_some_and(|&c| is_rtl_char(c)),
+            };
+            items.push(Item::Iso(order_items(inner, dir)));
+        } else if !is_bidi_control(c) {
+            items.push(Item::C(c));
+        }
+    }
+    // Some(true): strong right to left; Some(false): left to right (letters, digits).
+    let strong = |it: &Item| match *it {
+        Item::C(c) if is_rtl_char(c) => Some(true),
+        Item::C(c) if c.is_alphanumeric() => Some(false),
+        _ => None,
+    };
+    let flat = |items: Vec<Item>| -> Vec<char> {
+        items
+            .into_iter()
+            .flat_map(|it| match it {
+                Item::C(c) => vec![c],
+                Item::Iso(v) => v,
+            })
+            .collect()
+    };
+    if !items.iter().any(|it| strong(it) == Some(true)) && !rtl {
+        return flat(items);
+    }
+    let para = rtl || items.iter().find_map(strong).unwrap_or(false);
+    let mut dir: Vec<bool> = items.iter().map(|it| strong(it).unwrap_or(para)).collect();
+    // Neutrals: the direction on both sides when they agree, else the paragraph's.
+    let mut i = 0;
+    while i < items.len() {
+        if strong(&items[i]).is_some() {
             i += 1;
             continue;
         }
-        let j = (i..chars.len()).find(|&j| strong(chars[j]).is_some()).unwrap_or(chars.len());
-        let before = (0..i).rev().find_map(|k| strong(chars[k])).unwrap_or(para);
-        let after = chars[j..].iter().find_map(|&c| strong(c)).unwrap_or(para);
+        let j = (i..items.len()).find(|&j| strong(&items[j]).is_some()).unwrap_or(items.len());
+        let before = (0..i).rev().find_map(|k| strong(&items[k])).unwrap_or(para);
+        let after = items[j..].iter().find_map(strong).unwrap_or(para);
         let d = if before == after { before } else { para };
         dir[i..j].iter_mut().for_each(|x| *x = d);
         i = j;
@@ -490,23 +575,27 @@ pub fn visual_order(s: &str, rtl: bool) -> Vec<char> {
         c => c,
     };
     // Runs of one direction, in logical order.
-    let mut runs: Vec<(bool, Vec<char>)> = Vec::new();
-    for (&c, &d) in chars.iter().zip(&dir) {
+    let mut runs: Vec<(bool, Vec<Item>)> = Vec::new();
+    for (it, &d) in items.into_iter().zip(&dir) {
         match runs.last_mut() {
-            Some((rd, v)) if *rd == d => v.push(c),
-            _ => runs.push((d, vec![c])),
+            Some((rd, v)) if *rd == d => v.push(it),
+            _ => runs.push((d, vec![it])),
         }
     }
     for (d, v) in runs.iter_mut() {
         if *d {
             v.reverse();
-            v.iter_mut().for_each(|c| *c = mirror(*c));
+            for it in v.iter_mut() {
+                if let Item::C(c) = it {
+                    *c = mirror(*c);
+                }
+            }
         }
     }
     if para {
         runs.reverse();
     }
-    runs.into_iter().flat_map(|(_, v)| v).collect()
+    flat(runs.into_iter().flat_map(|(_, v)| v).collect())
 }
 
 #[cfg(test)]

@@ -938,3 +938,155 @@ fn store_screenshot_edit() {
         crate::ui::preview::save(&format!("store-edit-presentation-{tn}.png"), w.pixels());
     }
 }
+
+/// Pixels `x0..x1` × `y0..y1` of `img`.
+fn crop(img: &PixBuf, (x0, y0, x1, y1): (u32, u32, u32, u32)) -> Vec<[u8; 4]> {
+    (y0..y1).flat_map(|y| (x0..x1).map(move |x| img.get_pixel(x, y))).collect()
+}
+
+/// `c` (`w` wide) mirrored left-right.
+fn mirrored(c: &[[u8; 4]], w: usize) -> Vec<[u8; 4]> {
+    c.chunks(w).flat_map(|r| r.iter().rev().copied()).collect()
+}
+
+/// Right to left, what `r` (physical px of the left-to-right frame
+/// `ltr`: one line of text per band of rows, on a plain background)
+/// shows reads as it does left to right in the mirrored frame `rtl`:
+/// each band's ink is the same pixels at the mirrored place, not its
+/// mirror image (glyphs drawn mirrored). Returns the bands that are not
+/// symmetric (where a mirrored glyph would have shown).
+fn assert_reads_ltr(ltr: &PixBuf, rtl: &PixBuf, r: (u32, u32, u32, u32), what: &str) -> usize {
+    let w = ltr.width();
+    let (x0, y0, x1, y1) = r;
+    let (bga, bgb) = (ltr.get_pixel(x0, y0), rtl.get_pixel(w - 1 - x0, y0));
+    let ink = |img: &PixBuf, bg: [u8; 4], xs: std::ops::Range<u32>, y: u32| xs.filter(|&x| img.get_pixel(x, y) != bg).collect::<Vec<_>>();
+    let mut asym = 0;
+    let mut y = y0;
+    while y < y1 {
+        if ink(ltr, bga, x0..x1, y).is_empty() {
+            y += 1;
+            continue;
+        }
+        let ya = y;
+        while y < y1 && !ink(ltr, bga, x0..x1, y).is_empty() {
+            y += 1;
+        }
+        let cols = |img: &PixBuf, bg, xs: std::ops::Range<u32>| {
+            let c: Vec<u32> = (ya..y).flat_map(|yy| ink(img, bg, xs.clone(), yy)).collect();
+            (*c.iter().min().unwrap_or(&0), *c.iter().max().unwrap_or(&0) + 1)
+        };
+        let (a0, a1) = cols(ltr, bga, x0..x1);
+        let (b0, b1) = cols(rtl, bgb, w - x1..w - x0);
+        let a = crop(ltr, (a0, ya, a1, y));
+        let b = crop(rtl, (b0, ya, b1, y));
+        let m = mirrored(&a, (a1 - a0) as usize);
+        // Mirrored glyphs, at either place (the region flipped twice).
+        let (s0, s1) = cols(rtl, rtl.get_pixel(x0, y0), x0..x1);
+        let same = crop(rtl, (s0, ya, s1, y));
+        assert!(a == m || (b != m && same != m), "{what}: rows {ya}..{y} drawn mirrored right to left");
+        assert_eq!((b1 - b0, b == a), (a1 - a0, true), "{what}: rows {ya}..{y} differ right to left ({a0}..{a1} vs {b0}..{b1})");
+        // (Within a pixel: a text box of a fractional width.)
+        assert!(b1.abs_diff(w - a0) <= 1, "{what}: rows {ya}..{y} at the mirrored place ({b1} vs {})", w - a0);
+        asym += (a != m) as usize;
+    }
+    asym
+}
+
+/// Right to left the window is mirrored (the list on the right, the
+/// canvas on the left) but nothing in it reads backwards: the list's
+/// heading, its rows and its note, the picture on the canvas, and the
+/// Canvas and Effects dialogs' previews are the left-to-right pixels at
+/// their mirrored places.
+#[test]
+fn right_to_left_mirrors_the_window_not_its_text() {
+    use super::image::{ImgAct, LAST_PREVIEW};
+    let frames = |rtl: bool| {
+        let run = || {
+            let (_r, mut w) = window(&format!("rtl-text-{rtl}"), page(1180, 760), objects(), DARK, 1.0);
+            w.e.canvas.select(3, false);
+            w.render();
+            let main = w.pixels().clone();
+            let mut previews = Vec::new();
+            for a in [ImgAct::Canvas, ImgAct::Effects] {
+                LAST_PREVIEW.with(|c| c.set(None));
+                w.image_act(a);
+                w.render();
+                previews.push((w.pixels().clone(), LAST_PREVIEW.with(|c| c.get()).expect("a preview")));
+                key(&mut w, crate::wind::key::ESCAPE, Mods::default());
+            }
+            let lay = draw::layout(&w.e, W as f32, H as f32, w.e.canvas.bar_width());
+            (main, previews, lay)
+        };
+        if rtl { crate::i18n::with_rtl(run) } else { run() }
+    };
+    let (ltr, ltr_pv, lay) = frames(false);
+    let (rtl, rtl_pv, _) = frames(true);
+    crate::ui::preview::save("edit-rtl-forced.png", &rtl);
+    let u = |v: f32| v.round() as u32;
+    let rail = lay.rail;
+    let mut asym = 0;
+    let head = (u(rail.x + 4.0), u(rail.y + 2.0), u(lay.collapse.x - 2.0), u(rail.y + draw::RAIL_HEAD - 2.0));
+    asym += assert_reads_ltr(&ltr, &rtl, head, "the list's heading");
+    for (rr, i) in &lay.rows {
+        asym += assert_reads_ltr(&ltr, &rtl, (u(rr.x + 36.0), u(rr.y + 2.0), u(rr.x1() - 8.0), u(rr.y1() - 2.0)), &format!("row {i}"));
+    }
+    let ny = rail.y1() - draw::note_h();
+    asym += assert_reads_ltr(&ltr, &rtl, (u(rail.x + 4.0), u(ny + 2.0), u(rail.x1() - 4.0), u(rail.y1() - 2.0)), "the list's note");
+    assert!(asym >= 6, "the heading, four rows and the note lines: {asym}");
+    // The canvas: the same pixels, moved to the left.
+    let (cx0, cy0, cx1, cy1) = (u(lay.canvas.x), u(lay.canvas.y), u(lay.canvas.x1()), u(lay.canvas.y1()));
+    assert!(crop(&ltr, (cx0, cy0, cx1, cy1)) == crop(&rtl, (W - cx1, cy0, W - cx0, cy1)), "the canvas reads left to right");
+    // The previews: the same layout, the picture not mirrored.
+    for ((a, ra), (b, rb)) in ltr_pv.iter().zip(&rtl_pv) {
+        assert_eq!(ra, rb);
+        let (x0, y0, x1, y1) = (u(ra.x), u(ra.y), u(ra.x1()), u(ra.y1()));
+        let pa = crop(a, (x0, y0, x1, y1));
+        assert_ne!(pa, mirrored(&pa, (x1 - x0) as usize), "an asymmetric picture");
+        assert!(pa == crop(b, (W - x1, y0, W - x0, y1)), "the preview at {ra:?} reads left to right");
+    }
+}
+
+/// Right to left the pointer lands where things show: a row of the list
+/// (on the right), a tool of the toolbar, a drag on the canvas (on the
+/// left) draws where it went in the picture.
+#[test]
+fn right_to_left_pointer_lands_where_things_show() {
+    use crate::wind::Driver;
+    crate::i18n::with_rtl(|| {
+        let (_r, mut w) = window("rtl-pointer", page(1180, 760), objects(), DARK, 1.0);
+        let screen = |w: &mut Window, evs: &[Ev]| {
+            for &e in evs {
+                if w.on_event(e) {
+                    w.render();
+                }
+            }
+        };
+        let click = |w: &mut Window, x: f32, y: f32| {
+            let (x, y) = (x as i32, y as i32);
+            screen(w, &[Ev::Move { x, y }, Ev::Down { x, y }, Ev::Up { x, y }]);
+        };
+        // The list's row for the arrow (object 0), at its mirrored place.
+        let lay = draw::layout(&w.e, W as f32, H as f32, w.e.canvas.bar_width());
+        let (rr, _) = *lay.rows.iter().find(|(_, i)| *i == 0).unwrap();
+        click(&mut w, W as f32 - 1.0 - (rr.x + rr.w / 2.0), rr.y + rr.h / 2.0);
+        assert_eq!(w.e.canvas.selected(), [0], "the row selects its object");
+        // The toolbar and the canvas are in screen space.
+        let arrow = w.e.canvas.button("arrow").expect("arrow button");
+        click(&mut w, arrow.x + arrow.w / 2.0, arrow.y + arrow.h / 2.0);
+        let v = w.e.canvas.view;
+        let (a, b) = (v.to_win(Pt::new(200.0, 200.0)), v.to_win(Pt::new(500.0, 400.0)));
+        assert!(b.x < W as f32 - draw::RAIL_W, "the canvas is on the left: {b:?}");
+        let mut evs = vec![Ev::Move { x: a.x as i32, y: a.y as i32 }, Ev::Down { x: a.x as i32, y: a.y as i32 }];
+        evs.extend((1..=6).map(|i| {
+            let t = i as f32 / 6.0;
+            Ev::Move { x: (a.x + (b.x - a.x) * t) as i32, y: (a.y + (b.y - a.y) * t) as i32 }
+        }));
+        evs.push(Ev::Up { x: b.x as i32, y: b.y as i32 });
+        screen(&mut w, &evs);
+        let o = w.e.canvas.objects().to_vec();
+        assert_eq!(o.len(), 5);
+        let Obj::Arrow { a: oa, b: ob, .. } = &o[4] else { panic!("{o:?}") };
+        assert!((oa.x - 200.0).abs() < 2.0 && (oa.y - 200.0).abs() < 2.0, "{oa:?}");
+        assert!((ob.x - 500.0).abs() < 2.0 && (ob.y - 400.0).abs() < 2.0, "{ob:?}");
+    });
+}

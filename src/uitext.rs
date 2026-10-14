@@ -20,8 +20,10 @@ use crate::text::{UiFace, UI_EM_RATIO};
 use std::sync::{Mutex, OnceLock};
 
 /// Whether `s` needs the OS text stack (a character the baked font lacks).
+/// Bidi format characters do not count: they draw nothing (the baked
+/// font skips them; the OS stacks order by them).
 pub fn needed(font: &UiFont, s: &str) -> bool {
-    !s.is_ascii() && s.chars().any(|c| !c.is_control() && !font.has_glyph(c))
+    !s.is_ascii() && s.chars().any(|c| !c.is_control() && !crate::text::is_bidi_control(c) && !font.has_glyph(c))
 }
 
 /// One cached raster: coverage `a` (`w` wide, 0..=255) with its top-left
@@ -371,5 +373,88 @@ mod tests {
         assert_eq!(s(visual_order("abc", true)), "abc");
         assert_eq!(s(visual_order("שמור (file.png)", true)), "(file.png) רומש");
         assert_eq!(s(visual_order("[אב]", true)), "[בא]");
+    }
+
+    #[test]
+    fn visual_order_keeps_isolates_whole() {
+        use crate::text::visual_order;
+        let s = |v: Vec<char>| v.into_iter().collect::<String>();
+        // The format characters themselves are left out.
+        assert_eq!(s(visual_order("\u{2066}12 × 34\u{2069}", false)), "12 × 34");
+        assert_eq!(s(visual_order("\u{2066}12 × 34\u{2069}", true)), "12 × 34");
+        assert_eq!(s(visual_order("אב \u{2066}12 × 34\u{2069} גד", true)), "דג 12 × 34 בא");
+        // An isolate moves as one neutral, ordered inside on its own.
+        assert_eq!(s(visual_order("ab \u{2067}אב גד\u{2069} cd", false)), "ab דג בא cd");
+        assert_eq!(s(visual_order("אב \u{2066}x (y)\u{2069}", true)), "x (y) בא");
+        assert_eq!(s(visual_order("\u{2068}אב\u{2069} cd", false)), "בא cd", "first strong: right to left");
+        // Unclosed, nested, and other controls.
+        assert_eq!(s(visual_order("אב \u{2066}1 \u{2067}גד\u{2069} 2", true)), "1 דג 2 בא");
+        assert_eq!(s(visual_order("\u{200F}a\u{202A}b\u{202C}", false)), "ab");
+    }
+
+    /// Bidi isolates (round number pairs in a right-to-left language)
+    /// draw nothing and take no room, on the baked font and on every OS
+    /// stack, and order the pair as a whole: as an embedding does there
+    /// (GDI/Uniscribe, CoreText), so `12 × 34` after Hebrew stays `12 × 34`.
+    #[test]
+    fn bidi_isolates_are_invisible_and_keep_a_pair_in_order() {
+        if cfg!(target_os = "linux") && std::process::Command::new("fc-match").arg("-v").output().is_err() {
+            eprintln!("skipping: no fontconfig");
+            return;
+        }
+        let iso = "\u{2066}1180 × 760\u{2069}";
+        // The baked font: skipped (no .notdef box, no width).
+        assert!(!needed(&UI, iso));
+        assert_eq!(UI.width(iso, 13.0), UI.width("1180 × 760", 13.0));
+        let px = |s: &str| {
+            let mut v = Vec::new();
+            UI.draw(s, 13.0, 0.0, 0.0, |x, y, c| v.push((x, y, (c * 255.0) as u8)));
+            v
+        };
+        assert_eq!(px(iso), px("1180 × 760"));
+        // The OS stacks: no width of their own...
+        for rtl in [false, true] {
+            let f = UiFace::new(rtl);
+            // (Within float rounding: Linux sums its runs in another order.)
+            let (a, b) = (f.width(&format!("Größe {iso}"), 20.0), f.width("Größe 1180 × 760", 20.0));
+            assert!((a - b).abs() < 0.01, "rtl {rtl}: {a} vs {b}");
+        }
+        // ...and the pair in order after right-to-left letters.
+        let he = "\u{05e9}\u{05de}\u{05d5}\u{05e8}";
+        crate::text::prefetch_fonts(he);
+        crate::text::wait_fonts();
+        let f = UiFace::new(true);
+        let ras = |s: &str| {
+            let mut v = Vec::new();
+            f.draw(s, 20.0, Pt::new(0.0, 0.0), (-50, -50, 400, 80), &mut |x, y, c| v.push((x, y, (c * 255.0) as u8)));
+            v.sort_unstable();
+            v
+        };
+        // Ink columns in runs (glyphs a few px apart): the narrow `1`, the
+        // `×`, the wide `2222` from the left when the pair keeps its order.
+        let runs = |v: &[(i32, i32, u8)]| {
+            let mut xs: Vec<i32> = v.iter().filter(|p| p.2 > 100).map(|p| p.0).collect();
+            xs.sort_unstable();
+            xs.dedup();
+            let mut out: Vec<(i32, i32)> = Vec::new();
+            for x in xs {
+                match out.last_mut() {
+                    Some(r) if x - r.1 <= 3 => r.1 = x,
+                    _ => out.push((x, x)),
+                }
+            }
+            out
+        };
+        let in_order = |v: &[(i32, i32, u8)]| {
+            let r = runs(v);
+            r.len() >= 3 && r[0].1 - r[0].0 < r[2].1 - r[2].0
+        };
+        let isolated = ras(&format!("{he} \u{2066}1 × 2222\u{2069}"));
+        assert!(in_order(&isolated), "{:?}", runs(&isolated));
+        assert_eq!(isolated, ras(&format!("{he} \u{202A}1 × 2222\u{202C}")), "as an embedding orders it");
+        if !cfg!(target_os = "linux") {
+            // (Linux's simplified order keeps digits left to right anyway.)
+            assert!(!in_order(&ras(&format!("{he} 1 × 2222"))), "without: the pair reversed");
+        }
     }
 }

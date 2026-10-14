@@ -334,11 +334,25 @@ fn header(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) {
     fill_rect(ui, FRect { x: RAIL_W, y: 0.0, w, h: HDR_H }, tok.win);
     line(ui, RAIL_W, HDR_H - 1.0, w, 1.0, tok.sep);
     let (x, cy) = (ui.px(RAIL_W + PAD_X), ui.px(HDR_H / 2.0));
-    ui.text_at(14.0, &TITLES[s.section], x, cy, tok.tx, true);
-    if is_keys(s.section) {
-        let bw = ui.cbutton_width(tr!("settings.header.reset_to_defaults"), true);
+    // The title ends 12 px before the Reset button: a size smaller when
+    // long, then with the button as its icon alone, cut only after that.
+    let keys = is_keys(s.section);
+    let full = if keys { ui.cbutton_width(tr!("settings.header.reset_to_defaults"), true) } else { 0.0 };
+    let room = |bw: f32| W as f32 - PAD_X - bw - 12.0 - (RAIL_W + PAD_X);
+    let t = &TITLES[s.section];
+    let (size, bw) = if ui.text_w(14.0, t) <= room(full) {
+        (14.0, full)
+    } else if ui.text_w(12.5, t) <= room(full) || !keys {
+        (12.5, full)
+    } else {
+        (12.5, 32.0)
+    };
+    let title = ui.fit_text(size, t, room(bw));
+    ui.text_at(size, &title, x, cy, tok.tx, true);
+    if keys {
+        let label = if bw == full { tr!("settings.header.reset_to_defaults") } else { "" };
         let r = FRect { x: W as f32 - PAD_X - bw, y: (HDR_H - CTL) / 2.0, w: bw, h: CTL };
-        if ui.place(r).cbutton("reset_all", tr!("settings.header.reset_to_defaults"), Some("set-rotate"), false, tok) {
+        if ui.place(r).cbutton("reset_all", label, Some("set-rotate"), false, tok) {
             *click = Some(Click::ResetAll);
         }
     }

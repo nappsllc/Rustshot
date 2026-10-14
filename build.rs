@@ -443,6 +443,11 @@ fn pack_i18n() {
         .filter(|p| p.extension().is_some_and(|x| x == "txt"))
         .collect();
     all.sort();
+    // Every catalog (not only English's): a file added or changed lists
+    // its language again (the directory itself covers one removed).
+    for f in &all {
+        println!("cargo:rerun-if-changed={}", f.display());
+    }
     let others = available_languages(&all);
     let mut files: Vec<PathBuf> =
         all.iter().filter(|p| p.file_stem().and_then(|s| s.to_str()).and_then(|s| s.split('.').next()) == Some("en")).cloned().collect();
