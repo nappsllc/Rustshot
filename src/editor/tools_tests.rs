@@ -828,16 +828,76 @@ fn background_choice_reaches_the_bubble_and_is_remembered() {
     assert_eq!(a.cfg.rec_camera_bg, "strong");
     assert_eq!(a.rec_opts.as_ref().map(|o| o.cam_bg), Some(Bg::Strong));
     assert_eq!(RecOpts::from_config(&Config { rec_camera_bg: "light".into(), ..Config::default() }).cam_look().bg, Bg::Light);
-    // Unavailable: the row has no choices, and the action does nothing.
+    // Unavailable (downloads off): the choices stay, a blur chosen shows
+    // the note, and Off can still be chosen.
     crate::cam::bg::set_available(Some(false));
     let mut a = app_big();
     let rec = item(&mut a, |k| *k == toolbar::Kind::Btn(Act::Record));
     click(&mut a, mid(rec));
     let cam = item(&mut a, |k| matches!(k, toolbar::Kind::Switch { act: Act::RecCamera, .. }));
     click(&mut a, mid(cam));
+    let strong = item(&mut a, |k| matches!(k, toolbar::Kind::Seg { act: Act::RecBg(Bg::Strong), .. }));
+    click(&mut a, mid(strong));
+    assert_eq!(look(&mut a).bg, Bg::Strong);
     item(&mut a, |k| matches!(k, toolbar::Kind::Row { act: Act::RecBg(_), value: Some(crate::cam::bg::UNAVAILABLE), .. }));
-    let tb = ed(&mut a).toolbar.clone().unwrap();
-    assert!(!tb.items.iter().any(|i| matches!(i.kind, toolbar::Kind::Seg { act: Act::RecBg(_), .. })));
+    let off = item(&mut a, |k| matches!(k, toolbar::Kind::Seg { act: Act::RecBg(Bg::Off), .. }));
+    click(&mut a, mid(off));
+    assert_eq!(look(&mut a).bg, Bg::Off);
+    crate::cam::bg::set_available(None);
+}
+
+/// Start with a blur chosen that cannot be had: the question, never a
+/// recording straight away; Cancel goes back, Esc too; "fully blurred"
+/// records with the blur kept (the bubble blurs whole); "camera off"
+/// records without the camera.
+#[test]
+fn blur_question_at_record_start() {
+    use crate::cam::bg::Bg;
+    let start = |a: &mut App| {
+        let go = item(a, |k| matches!(k, toolbar::Kind::Primary { act: Act::RecStart, .. }));
+        click(a, mid(go));
+    };
+    let setup = || {
+        let mut a = app_big();
+        let rec = item(&mut a, |k| *k == toolbar::Kind::Btn(Act::Record));
+        click(&mut a, mid(rec));
+        let cam = item(&mut a, |k| matches!(k, toolbar::Kind::Switch { act: Act::RecCamera, .. }));
+        click(&mut a, mid(cam));
+        let strong = item(&mut a, |k| matches!(k, toolbar::Kind::Seg { act: Act::RecBg(Bg::Strong), .. }));
+        click(&mut a, mid(strong));
+        a
+    };
+    crate::cam::bg::set_available(Some(false));
+    // Cancel, then Esc: back to the panel, nothing recorded.
+    let mut a = setup();
+    start(&mut a);
+    assert!(ed(&mut a).rec.blur_ask.is_some() && !ed(&mut a).rec.start, "asked, not started");
+    let cancel = item(&mut a, |k| matches!(k, toolbar::Kind::Seg { act: Act::RecAskCancel, .. }));
+    click(&mut a, mid(cancel));
+    assert!(ed(&mut a).rec.blur_ask.is_none() && !ed(&mut a).rec.start);
+    start(&mut a);
+    key(&mut a, key_esc());
+    assert!(ed(&mut a).rec.blur_ask.is_none() && !ed(&mut a).rec.start, "Esc closes the question only");
+    // Fully blurred: records, the camera on, the blur kept.
+    start(&mut a);
+    start(&mut a);
+    a.pump();
+    let o = a.rec_opts.clone().expect("recorded");
+    assert!(o.camera && o.cam_bg == Bg::Strong);
+    // Camera off: records without the camera.
+    let mut a = setup();
+    start(&mut a);
+    let off = item(&mut a, |k| matches!(k, toolbar::Kind::Seg { act: Act::RecAskCamOff, .. }));
+    click(&mut a, mid(off));
+    a.pump();
+    let o = a.rec_opts.clone().expect("recorded");
+    assert!(!o.camera);
+    // The model here: no question.
+    crate::cam::bg::set_available(Some(true));
+    let mut a = setup();
+    start(&mut a);
+    a.pump();
+    assert!(a.rec_opts.as_ref().is_some_and(|o| o.camera && o.cam_bg == Bg::Strong));
     crate::cam::bg::set_available(None);
 }
 

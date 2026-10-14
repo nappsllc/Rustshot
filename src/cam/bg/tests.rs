@@ -95,7 +95,7 @@ fn split_pic(d: u32, edge: u32, left: [u8; 3], right: [u8; 3]) -> CamFrame {
             bgra.extend_from_slice(&[c[0], c[1], c[2], 255]);
         }
     }
-    CamFrame { w: d, h: d, bgra }
+    CamFrame { w: d, h: d, bgra, note: None }
 }
 
 #[test]
@@ -147,7 +147,7 @@ fn noise_pic(d: u32, seed: u32) -> CamFrame {
             [(s >> 8) as u8, (s >> 16) as u8, (s >> 24) as u8, 255]
         })
         .collect();
-    CamFrame { w: d, h: d, bgra }
+    CamFrame { w: d, h: d, bgra, note: None }
 }
 
 #[test]
@@ -179,7 +179,7 @@ fn big_bubbles_blur_at_half_size() {
     let d = 300u32;
     assert!(d as usize >= HALF_FROM);
     // Smooth content (a camera's), not noise: gradients and blobs.
-    let mut pic = CamFrame { w: d, h: d, bgra: Vec::new() };
+    let mut pic = CamFrame { w: d, h: d, bgra: Vec::new(), note: None };
     for y in 0..d {
         for x in 0..d {
             let (u, v) = (x as f32 / d as f32, y as f32 / d as f32);
@@ -270,22 +270,25 @@ fn fake(delay: Duration) -> (Effect, Arc<AtomicUsize>) {
 fn effect_blurs_once_a_mask_came() {
     let (mut fx, calls) = fake(Duration::ZERO);
     let raw = noise_pic(320, 3);
-    let raw = CamFrame { w: 320, h: 180, bgra: raw.bgra[..320 * 180 * 4].to_vec() };
+    let raw = CamFrame { w: 320, h: 180, bgra: raw.bgra[..320 * 180 * 4].to_vec(), note: None };
     let sq = super::super::fit_square(&raw, 120);
     // Off: nothing happens, no thread.
     let mut p = sq.clone();
     fx.apply(Bg::Off, &raw, &mut p);
     assert_eq!((p == sq, fx.running()), (true, None));
     // The segmenter is made on its thread (the camera thread goes on);
-    // then a picture goes out; until its mask is back it shows as is.
+    // then a picture goes out; until its mask is back the picture is
+    // blurred whole (never shown as it is).
     let mut p = sq.clone();
     fx.apply(Bg::Strong, &raw, &mut p);
-    assert!(p == sq, "no mask yet");
+    assert!(fully_blurred(&p, &sq), "no mask yet: blurred whole");
+    assert_eq!(p.note, None, "a moment: no badge");
     fx.settle();
     assert_eq!(fx.running(), Some(true));
     let mut p = sq.clone();
     fx.apply(Bg::Strong, &raw, &mut p);
-    assert!(p == sq || calls.load(Ordering::SeqCst) >= 1, "a mask shows only after a segmentation (the next one may already be running)");
+    assert!(p != sq, "never as it is while a blur is chosen");
+    let _ = calls.load(Ordering::SeqCst);
     fx.settle();
     let mut p = sq.clone();
     fx.apply(Bg::Strong, &raw, &mut p);
@@ -317,23 +320,129 @@ fn bad_mask_values_do_not_stick() {
     assert!(s.m.v.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)), "{:?}", s.m.v);
 }
 
+/// Every pixel of `p` is close to the mean of `orig` (a noise picture
+/// blurred whole: nothing of it can be made out), and `p` is not `orig`.
+fn fully_blurred(p: &CamFrame, orig: &CamFrame) -> bool {
+    let mean = |f: &CamFrame, c: usize| f.bgra.chunks_exact(4).map(|q| q[c] as f64).sum::<f64>() / (f.bgra.len() / 4) as f64;
+    p != orig && (0..3).all(|c| {
+        let m = mean(orig, c);
+        p.bgra.chunks_exact(4).all(|q| (q[c] as f64 - m).abs() < 40.0)
+    })
+}
+
+fn engine(ready: bool, loading: bool) -> super::Engine {
+    match (ready, loading) {
+        (true, _) => super::Engine::Ready,
+        (false, true) => super::Engine::Loading,
+        _ => super::Engine::Unavailable,
+    }
+}
+
+/// The model still on its way: the picture is blurred whole with the
+/// "loading" badge (never the camera as it is), no segmenter is made,
+/// and the model is asked for once; once it is here, the segmenter
+/// starts.
 #[test]
-fn without_a_segmenter_nothing_changes() {
+fn waits_for_the_model_fully_blurred() {
+    static READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut once = Some(Fake { calls: calls.clone(), delay: Duration::ZERO });
+    let mut fx = Effect::with_ready(Box::new(move || once.take().map(|f| Box::new(f) as Box<dyn Segment>)), || engine(READY.load(Ordering::SeqCst), true));
+    let raw = noise_pic(64, 1);
+    let was = super::super::fit_square(&raw, 32);
+    let asked = super::requests();
+    for _ in 0..3 {
+        let mut p = was.clone();
+        fx.apply(Bg::Light, &raw, &mut p);
+        assert!(fully_blurred(&p, &was), "blurred whole while the model comes");
+        assert_eq!(p.note, Some(super::LOADING_BADGE));
+    }
+    assert_eq!(fx.running(), None, "no segmenter yet");
+    assert_eq!(super::requests(), asked + 1, "the model is asked for once");
+    READY.store(true, Ordering::SeqCst);
+    let mut p = was.clone();
+    fx.apply(Bg::Light, &raw, &mut p);
+    fx.settle();
+    assert_eq!(fx.running(), Some(true));
+    assert!(p != was && p.note.is_none());
+    // Off: as it is, no badge.
+    let mut p = was.clone();
+    p.note = Some("stale");
+    fx.apply(Bg::Off, &raw, &mut p);
+    assert_eq!(p, was);
+}
+
+/// The model not to be had (downloads off, failed, damaged): blurred
+/// whole with "Blur unavailable"; the default effect in tests (no cache:
+/// the model is missing) never shows the camera as it is either.
+#[test]
+fn unavailable_model_fully_blurred() {
+    let mut fx = Effect::with_ready(Box::new(|| None), || engine(false, false));
+    let raw = noise_pic(96, 2);
+    let was = super::super::fit_square(&raw, 48);
+    let mut p = was.clone();
+    fx.apply(Bg::Strong, &raw, &mut p);
+    assert!(fully_blurred(&p, &was));
+    assert_eq!(p.note, Some(super::UNAVAILABLE_BADGE));
+    let mut fx = Effect::default();
+    for bg in [Bg::Light, Bg::Strong] {
+        let mut p = was.clone();
+        fx.apply(bg, &raw, &mut p);
+        assert!(fully_blurred(&p, &was), "{bg:?}");
+        assert!(p.note.is_some());
+    }
+}
+
+/// The notes of each state: the panel's are short, Settings' say why
+/// and what to do.
+#[test]
+fn blur_state_notes() {
+    use super::{Blur, DAMAGED, FAILED, FAILED_SHORT, UNAVAILABLE};
+    assert_eq!(Blur::Ready.panel_note(), None);
+    assert_eq!(Blur::Fetchable.panel_note(), None);
+    assert_eq!(Blur::Downloading(47).panel_note(), Some("Downloading model… 40%"));
+    assert_eq!(Blur::Downloading(100).panel_note(), Some("Downloading model… 100%"));
+    assert_eq!(Blur::Failed("x".into()).panel_note(), Some(FAILED_SHORT));
+    assert!(Blur::Fetchable.settings_note().contains("215 KB"));
+    assert_eq!(Blur::Failed("HTTP 404".into()).settings_note(), format!("{FAILED}: HTTP 404"));
+    let off = Blur::Off { asset: "selfie-f11cb3ec.bin", url: "https://github.com/x".into(), path: "/d/models/selfie.bin".into() };
+    assert_eq!(off.panel_note(), Some(UNAVAILABLE));
+    let n = off.settings_note();
+    assert!(n.contains("selfie-f11cb3ec.bin") && n.contains("https://github.com/x") && n.contains("selfie.bin"), "{n}");
+    let d = off.settings_detail().unwrap();
+    assert!(d.starts_with("To blur, download selfie-f11cb3ec.bin (https://github.com/x) and save it as "), "{d}");
+    // No data folder at all: never a relative path (M-8).
+    let nowhere = Blur::Off { asset: "selfie-f11cb3ec.bin", url: "u".into(), path: std::path::PathBuf::new() };
+    assert!(nowhere.settings_detail().unwrap().contains("RUSTSHOT_DATA_DIR"));
+    assert!(Blur::Damaged("/d/m".into()).settings_detail().unwrap().contains("again"));
+    assert_eq!(Blur::Ready.settings_detail(), None);
+    assert!(Blur::Damaged("/d/m".into()).settings_note().starts_with(DAMAGED));
+    assert_eq!(Blur::Ready.ask_lines(), None);
+    assert_eq!(off.ask_lines(), Some((super::ASK_TITLE, "(downloads are off)")));
+    assert_eq!(Blur::Downloading(3).ask_lines().map(|l| l.1), Some("(the blur model is still downloading)"));
+}
+
+#[test]
+fn without_a_segmenter_it_is_blurred_whole() {
     let mut fx = Effect::with_maker(Box::new(|| None));
     let raw = noise_pic(64, 1);
-    let mut p = super::super::fit_square(&raw, 32);
-    let was = p.clone();
+    let was = super::super::fit_square(&raw, 32);
     for _ in 0..3 {
+        let mut p = was.clone();
         fx.apply(Bg::Light, &raw, &mut p);
         fx.settle();
+        assert!(fully_blurred(&p, &was), "the segmenter failed: never as it is");
     }
-    assert_eq!((p, fx.running()), (was, Some(false)));
+    assert_eq!(fx.running(), Some(false));
+    let mut p = was.clone();
+    fx.apply(Bg::Light, &raw, &mut p);
+    assert_eq!(p.note, Some(super::UNAVAILABLE_BADGE));
 }
 
 #[test]
 fn slow_segmentation_runs_on_every_other_picture() {
     let (mut fx, calls) = fake(Duration::from_millis(12));
-    let raw = CamFrame { w: 320, h: 180, bgra: vec![128; 320 * 180 * 4] };
+    let raw = CamFrame { w: 320, h: 180, bgra: vec![128; 320 * 180 * 4], note: None };
     let sq = super::super::fit_square(&raw, 64);
     // Pictures at a steady rate, each after the last mask came: the
     // pacer learns it is over budget and skips every other one.
@@ -367,7 +476,7 @@ fn bg_frame_bench() {
         f();
         t.elapsed().as_secs_f64() * 1000.0
     }).fold(f64::MAX, f64::min);
-    let raw = CamFrame { w: 1280, h: 720, bgra: (0..1280 * 720 * 4).map(|i| (i * 31 % 251) as u8).collect() };
+    let raw = CamFrame { w: 1280, h: 720, bgra: (0..1280 * 720 * 4).map(|i| (i * 31 % 251) as u8).collect(), note: None };
     let mut inp = SegInput::default();
     let prep = best(&mut || inp.prepare(&raw, 256, 144));
     for d in [160u32, 240, 320, 480] {
@@ -428,7 +537,7 @@ pub(crate) fn person_scene(w: u32, h: u32) -> (CamFrame, impl Fn(f32, f32) -> f3
     }
     // Soft over 8 % of a part's size, centred on its edge.
     let soft = move |x: f32, y: f32| (0.5 - (inside(x, y) - 1.0) / 0.08).clamp(0.0, 1.0);
-    (CamFrame { w, h, bgra }, soft)
+    (CamFrame { w, h, bgra, note: None }, soft)
 }
 
 /// Preview PNGs: the M and XL bubbles (circle and rounded) with the
@@ -457,10 +566,10 @@ fn render_blur_previews() {
             })
             .collect(),
     };
-    // And the embedded model's own mask of the scene, when there is one.
+    // And the real model's own mask of the scene (models/selfie.bin).
     let mut masks = vec![("", m)];
-    if let Some(bytes) = seg::embedded() {
-        let mut net = seg::Net::selfie(bytes).unwrap();
+    if let Ok(bytes) = std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("models/selfie.bin")) {
+        let mut net = seg::Net::selfie(&bytes).unwrap();
         let mut inp = SegInput::default();
         inp.prepare(&raw, 256, 144);
         let mut mm = SqMask::default();
@@ -478,6 +587,15 @@ fn render_blur_previews() {
                 let (mut mask, mut s) = (Vec::new(), Scratch::default());
                 refine(m, &pic, &mut mask, &mut s);
                 composite(&mut pic, &mask, b.sigma(), &mut s);
+                let mut out = Vec::new();
+                compose(&t, Some(&pic), look.mirror, &mut out);
+                cells.push(crate::rec_ui::layer_over(&out, bg));
+            }
+            // No mask to be had: blurred whole, with each badge.
+            for badge in [super::LOADING_BADGE, super::UNAVAILABLE_BADGE] {
+                let mut pic = fit_square(&raw, t.d);
+                super::blur_all(&mut pic, &mut Scratch::default());
+                pic.note = Some(badge);
                 let mut out = Vec::new();
                 compose(&t, Some(&pic), look.mirror, &mut out);
                 cells.push(crate::rec_ui::layer_over(&out, bg));

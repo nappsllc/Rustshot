@@ -18,7 +18,7 @@
 //! bubble is shown and released when it closes. The OS's own effects
 //! (Windows Studio Effects, macOS Center Stage and Portrait) apply to the
 //! feed by themselves; Rustshot can blur the background behind the person
-//! itself ([`bg`]: `rec_camera_bg`, segmented by the embedded model
+//! itself ([`bg`]: `rec_camera_bg`, segmented by the MediaPipe model
 //! ([`seg`]) or, on macOS 12+, by Vision).
 //!
 //! Position memory is in-memory (process lifetime, not in the config):
@@ -89,6 +89,9 @@ pub struct CamFrame {
     pub w: u32,
     pub h: u32,
     pub bgra: Vec<u8>,
+    /// A badge the bubble shows over the picture (the background blur's
+    /// "Blur model loading…" while the picture is blurred whole).
+    pub note: Option<&'static str>,
 }
 
 /// An open camera.
@@ -425,14 +428,31 @@ pub fn template(look: Look, scale: f32, th: &Theme) -> Template {
 
 /// The bubble's pixels: `t`'s shadow, the picture `frame` (`t.d` square,
 /// see [`fit_square`]; the placeholder when `None`) inside the shape,
-/// flipped when `mirror`, and the ring. Premultiplied BGRA `t.w`x`t.w`.
+/// flipped when `mirror`, its badge ([`CamFrame::note`]) over it (never
+/// mirrored), and the ring. Premultiplied BGRA `t.w`x`t.w`.
 pub fn compose(t: &Template, frame: Option<&CamFrame>, mirror: bool, out: &mut Vec<u8>) {
     out.clear();
     out.extend_from_slice(&t.shadow);
     let d = t.d as usize;
-    let (pic, flip) = match frame {
-        Some(f) if f.w as usize == d && f.h as usize == d && f.bgra.len() >= d * d * 4 => (&f.bgra[..], mirror),
-        _ => (&t.placeholder[..], false),
+    let (pic, flip, note) = match frame {
+        Some(f) if f.w as usize == d && f.h as usize == d && f.bgra.len() >= d * d * 4 => (&f.bgra[..], mirror, f.note),
+        _ => (&t.placeholder[..], false, None),
+    };
+    // A badge: on a copy, mirrored first, so its text reads right.
+    let badged;
+    let (pic, flip) = match note {
+        Some(note) => {
+            let mut v = pic[..d * d * 4].to_vec();
+            if flip {
+                for row in v.chunks_exact_mut(d * 4) {
+                    row.as_chunks_mut::<4>().0.reverse();
+                }
+            }
+            draw_badge(&mut v, d, note);
+            badged = v;
+            (&badged[..], false)
+        }
+        None => (pic, flip),
     };
     let rc = [t.ring_c.b as u32, t.ring_c.g as u32, t.ring_c.r as u32, 255u32];
     let (w, pad) = (t.w as usize, t.pad as usize);
@@ -457,6 +477,25 @@ pub fn compose(t: &Template, frame: Option<&CamFrame>, mirror: bool, out: &mut V
             }
         }
     }
+}
+
+/// `note` in a dark pill in the lower middle of the `d`x`d` BGRA picture
+/// `px` (alpha 255), sized to the bubble (and narrower than it).
+pub fn draw_badge(px: &mut [u8], d: usize, note: &str) {
+    let font = crate::fonts::ui_font();
+    let df = d as f32;
+    let mut size = (df * 0.075).clamp(9.0, 16.0);
+    let fit = df * 0.78;
+    let mut tw = crate::uifb::text_width(font, size, note);
+    if tw + size * 1.4 > fit {
+        size = (size * fit / (tw + size * 1.4)).max(6.0);
+        tw = crate::uifb::text_width(font, size, note);
+    }
+    let (bw, bh) = (tw + size * 1.4, size * 1.9);
+    let (x, y) = ((df - bw) / 2.0, df * 0.70);
+    let mut f = Fb::with_origin(px, d, 0, 0, crate::raster::Order::Bgra);
+    f.fill_rounded(x.round() as i32, y.round() as i32, bw.round() as i32, bh.round() as i32, bh / 2.0, C4::new(0, 0, 0, 178));
+    f.draw_text(font, size, note, x + size * 0.7, y + (bh - size * 1.2) / 2.0, C4::rgb(245, 246, 248));
 }
 
 // ---------------------------------------------------------------------------

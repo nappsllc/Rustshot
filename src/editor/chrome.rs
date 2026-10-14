@@ -169,6 +169,8 @@ pub fn act_icon(a: Act) -> &'static str {
         | Act::RecCountdown(_)
         | Act::RecGifMax(_)
         | Act::RecStart
+        | Act::RecAskCamOff
+        | Act::RecAskCancel
         | Act::Wheel
         | Act::RingPalette
         | Act::RingColor(_)
@@ -1268,6 +1270,8 @@ pub fn act_tip(a: Act, km: &Keymap) -> (&'static str, Vec<String>) {
         Act::RecShape(_) => "Camera shape",
         Act::RecBg(_) => "Camera background",
         Act::RecStart => "Start recording",
+        Act::RecAskCamOff => crate::cam::bg::ASK_CAM_OFF,
+        Act::RecAskCancel => crate::cam::bg::ASK_CANCEL,
         Act::Wheel | Act::RingWheel => "More colors",
         Act::RingSize(d) if d < 0 => "Thinner ring",
         Act::RingSize(_) => "Thicker ring",

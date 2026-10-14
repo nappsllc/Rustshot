@@ -131,6 +131,10 @@ pub struct Config {
     pub snap_tab_hint: bool,
     /// Let the daemon check GitHub for a newer release once a day.
     pub check_updates: bool,
+    /// Download data files from this version's GitHub release when they
+    /// are first needed (a language file, the camera blur's model). Off:
+    /// Settings says which file to get and where to put it.
+    pub download_data: bool,
     /// A release version the user chose to skip; the daily check ignores it
     /// (a manual check still offers it). Empty = none.
     pub skip_version: String,
@@ -434,6 +438,7 @@ impl Default for Config {
             snap_windows: true,
             snap_tab_hint: true,
             check_updates: true,
+            download_data: true,
             skip_version: String::new(),
             renderer: "gdi".into(),
             rec_format: "mp4".into(),
@@ -1288,6 +1293,7 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
             "check_updates" => {
                 cfg.check_updates = as_bool(val).map_err(|e| bad("boolean", &e))?
             }
+            "download_data" => cfg.download_data = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "skip_version" => {
                 cfg.skip_version = as_string(val).map_err(|e| bad("string", &e))?
             }
@@ -1412,6 +1418,7 @@ pub fn to_toml(c: &Config) -> String {
          snap_windows = {}\n\
          snap_tab_hint = {}\n\
          check_updates = {}\n\
+         download_data = {}\n\
          skip_version = {}\n\
          renderer = {}\n\
          rec_format = {}\n\
@@ -1465,6 +1472,7 @@ pub fn to_toml(c: &Config) -> String {
         c.snap_windows,
         c.snap_tab_hint,
         c.check_updates,
+        c.download_data,
         q(&c.skip_version),
         q(&c.renderer),
         q(&c.rec_format),
