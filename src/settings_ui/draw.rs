@@ -41,9 +41,9 @@ pub fn viewport() -> FRect {
 /// shorter than the board's 32 px (26, 28 apart).
 pub const RAIL: RailStyle<'static> = RailStyle { item: 26.0, pitch: 28.0, groups: &RAIL_GROUPS };
 
-/// Where the rail's items go (under the mark and the name).
+/// Where the rail's items go (from the top: the title bar names the app).
 pub fn rail_area() -> FRect {
-    FRect { x: 10.0, y: 52.0, w: RAIL_W - 20.0, h: H as f32 - 14.0 - 52.0 }
+    FRect { x: 10.0, y: 10.0, w: RAIL_W - 20.0, h: H as f32 - 14.0 - 10.0 }
 }
 
 /// Logical → physical px (rounded).
@@ -252,9 +252,6 @@ pub fn paint(ui: &mut Ui, s: &mut Settings) -> Option<Click> {
     // The rail.
     fill_rect(ui, FRect { x: 0.0, y: 0.0, w: RAIL_W, h }, tok.side);
     line(ui, RAIL_W - 1.0, 0.0, 1.0, h, tok.sep);
-    mark(ui, 18.0, 18.0, 20.0);
-    let (tx, ty) = (ui.px(46.0), ui.px(28.0));
-    ui.text_at(13.0, NAME, tx, ty, tok.tx, true);
     let items: Vec<(&str, &str)> = SECTIONS.iter().map(|(i, k)| (*i, k.get())).collect();
     ui.rail("rail", &items, ABOUT, rail_area(), &mut s.section, &RAIL, &tok);
 

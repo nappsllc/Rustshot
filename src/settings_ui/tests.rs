@@ -2186,7 +2186,7 @@ fn e2e_rail_keys() {
 fn sandbox_click_points() {
     let mut s = sample().with_screenclip(Some(false), Handler::None);
     let mut focus = FocusState::default();
-    for (x, y) in [(60, 93), (641, 304)] {
+    for (x, y) in [(60, 51), (641, 304)] {
         render(&mut s, &DARK, 1.0, &Input::default(), &mut focus);
         let mut input = Input::default();
         for e in [Ev::Move { x, y }, Ev::Down { x, y }, Ev::Up { x, y }] {
