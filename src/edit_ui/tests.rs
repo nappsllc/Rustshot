@@ -301,6 +301,12 @@ fn key(w: &mut Window, vk: u32, mods: Mods) {
 #[test]
 fn fit_matches_the_board_and_zoom_keeps_the_point() {
     let (_r, mut w) = window("fit", page(1180, 760), objects(), DARK, 1.0);
+    // The layout with the OS's title bar above it (macOS's, under it,
+    // moves the zoom control to the status bar at 1200 px:
+    // `the_toolbar_clears_the_macos_traffic_lights`).
+    w.e.chrome = crate::wind::Overlap::NONE;
+    w.event(Ev::Resize(W, H));
+    w.render();
     // 1180 x 760 in the board's canvas: 72 %.
     let z = (w.e.canvas.zoom() * 100.0).round();
     assert!((72.0..=73.0).contains(&z), "{z}");
@@ -320,7 +326,7 @@ fn fit_matches_the_board_and_zoom_keeps_the_point() {
     let after = w.e.canvas.view.to_img(p);
     assert!((before.x - after.x).abs() < 1.0 && (before.y - after.y).abs() < 1.0, "{before:?} {after:?}");
     // The zoom control's Fit.
-    let lay = draw::layout(&w.e, W as f32, H as f32, w.e.canvas.bar_width());
+    let lay = draw::layout(&w.e, W as f32, H as f32, draw::bar_w(&w.e, W as f32));
     assert!(!lay.zoom_in_status, "room for the zoom control in the strip at 1200 px");
     click(&mut w, Pt::new(lay.zoom.fit.x + 5.0, lay.zoom.fit.y + 5.0));
     assert!(w.e.canvas.is_fit());
@@ -364,7 +370,7 @@ fn drawing_at_a_zoom_lands_in_image_coordinates() {
 #[test]
 fn the_list_selects_and_reorders() {
     let (_r, mut w) = window("list", page(1180, 760), objects(), DARK, 1.0);
-    let lay = draw::layout(&w.e, W as f32, H as f32, w.e.canvas.bar_width());
+    let lay = draw::layout(&w.e, W as f32, H as f32, draw::bar_w(&w.e, W as f32));
     // Top of the list is front-most: the callout.
     assert_eq!(lay.rows.iter().map(|r| r.1).collect::<Vec<_>>(), [3, 2, 1, 0]);
     assert_eq!(draw::obj_name(&w.e.canvas.objects()[3]), "Callout \"Move this to\u{2026}\"");
@@ -536,7 +542,7 @@ fn the_image_menu_and_its_dialogs() {
     let _ = th;
     let chip = {
         let k = 1.0;
-        let lay = draw::layout(&w.e, W as f32, H as f32, w.e.canvas.bar_width());
+        let lay = draw::layout(&w.e, W as f32, H as f32, draw::bar_w(&w.e, W as f32));
         let mut px = [0u8; 4];
         let inp = crate::ui::Input::default();
         let mut focus = crate::ui::FocusState::default();
@@ -642,7 +648,7 @@ fn closing_with_unsaved_changes_asks() {
     at(&mut w, Ev::Close);
     // Discard (the button).
     let (_, bs) = {
-        let lay = draw::layout(&w.e, W as f32, H as f32, w.e.canvas.bar_width());
+        let lay = draw::layout(&w.e, W as f32, H as f32, draw::bar_w(&w.e, W as f32));
         let th = DARK;
         let inp = crate::ui::Input::default();
         let mut focus = crate::ui::FocusState::default();
@@ -778,7 +784,7 @@ fn the_toolbar_clears_the_macos_traffic_lights() {
                 for (icon, r) in &buttons {
                     assert!(!meets(*r, zone), "{lang}: {icon} {r:?} under the traffic lights");
                 }
-                let lay = draw::layout(&w.e, W as f32, H as f32, w.e.canvas.bar_width());
+                let lay = draw::layout(&w.e, W as f32, H as f32, draw::bar_w(&w.e, W as f32));
                 let z = if rtl { FRect { x: W as f32 - lay.zoom.r.x1(), ..lay.zoom.r } } else { lay.zoom.r };
                 assert!(!meets(z, zone), "{lang}: the zoom control {z:?}");
                 if !rtl {
@@ -997,48 +1003,53 @@ fn fits_in_long_languages() {
 /// The docked toolbar fits the window at its smallest, in every language
 /// and at every scale: each button inside the window and clear of the
 /// zoom control (Save As and Save to Desktop in Save's menu then, its
-/// rows inside too); a wide window keeps them as buttons.
+/// rows inside too); a wide window keeps them as buttons. With the OS's
+/// title bar above the content and with macOS's over it (the smallest
+/// window wider by the traffic lights' zone: `min_size`).
 #[test]
 fn toolbar_fits_at_the_minimum_width() {
-    let (mw, mh) = MIN;
-    for lang in crate::ui::preview::langs() {
-        crate::i18n::with_lang(lang, || {
-            for k in [1.0f32, 1.25, 1.5, 2.0] {
-                let (pw, ph) = ((mw as f32 * k).round() as u32, (mh as f32 * k).round() as u32);
-                let (_r, mut w) = window(&format!("bar-fit-{lang}-{k}"), page(1180, 760), objects(), DARK, k);
-                w.event(Ev::Resize(pw, ph));
-                w.render();
-                let at = format!("{lang} {k}x");
-                let buttons = w.e.canvas.bar_buttons();
-                assert!(buttons.len() >= 20, "{at}: the toolbar is there ({})", buttons.len());
-                let lay = draw::layout(&w.e, mw as f32, mh as f32, w.e.canvas.bar_width());
-                let mut zoom = crate::ui::paint::px(lay.zoom.r, k);
-                if crate::i18n::is_rtl() {
-                    zoom.x = pw as f32 - zoom.x1();
-                }
-                for (icon, r) in &buttons {
-                    assert!(r.x >= -0.5 && r.x1() <= pw as f32 + 0.5, "{at}: {icon} at {r:?} past the window's edge ({pw})");
-                    let apart = r.x1() <= zoom.x + 0.5 || r.x >= zoom.x1() - 0.5 || r.y1() <= zoom.y + 0.5 || r.y >= zoom.y1() - 0.5;
-                    assert!(apart, "{at}: {icon} at {r:?} under the zoom control at {zoom:?}");
-                }
-                for a in ["save", "copy", "cloud"] {
-                    assert!(buttons.iter().any(|(i, _)| *i == a), "{at}: {a}");
-                }
-                let menu = w.e.canvas.button("chevron");
-                let as_buttons = w.e.canvas.button("save-as").is_some() && w.e.canvas.button("save-desktop").is_some();
-                assert!(menu.is_some() || as_buttons, "{at}: Save As and Save to Desktop are somewhere");
-                // Save's menu opens inside the window.
-                if menu.is_some() {
-                    w.e.canvas.open_save_menu_for_tests();
+    for chrome in [crate::wind::Overlap::NONE, crate::wind::Overlap::MACOS] {
+        let (mw, mh) = min_size(chrome);
+        for lang in crate::ui::preview::langs() {
+            crate::i18n::with_lang(lang, || {
+                for k in [1.0f32, 1.25, 1.5, 2.0] {
+                    let (pw, ph) = ((mw as f32 * k).round() as u32, (mh as f32 * k).round() as u32);
+                    let (_r, mut w) = window(&format!("bar-fit-{lang}-{k}"), page(1180, 760), objects(), DARK, k);
+                    w.e.chrome = chrome;
+                    w.event(Ev::Resize(pw, ph));
                     w.render();
-                    let rows = w.e.canvas.bar_menu_rows();
-                    assert!(rows.len() >= 3, "{at}: the save menu's rows ({})", rows.len());
-                    for r in rows {
-                        assert!(r.x >= -0.5 && r.x1() <= pw as f32 + 0.5 && r.y1() <= ph as f32 + 0.5, "{at}: a save menu row at {r:?}");
+                    let at = format!("{lang} {k}x {chrome:?}");
+                    let buttons = w.e.canvas.bar_buttons();
+                    assert!(buttons.len() >= 20, "{at}: the toolbar is there ({})", buttons.len());
+                    let lay = draw::layout(&w.e, mw as f32, mh as f32, draw::bar_w(&w.e, mw as f32));
+                    let mut zoom = crate::ui::paint::px(lay.zoom.r, k);
+                    if crate::i18n::is_rtl() {
+                        zoom.x = pw as f32 - zoom.x1();
+                    }
+                    for (icon, r) in &buttons {
+                        assert!(r.x >= -0.5 && r.x1() <= pw as f32 + 0.5, "{at}: {icon} at {r:?} past the window's edge ({pw})");
+                        let apart = r.x1() <= zoom.x + 0.5 || r.x >= zoom.x1() - 0.5 || r.y1() <= zoom.y + 0.5 || r.y >= zoom.y1() - 0.5;
+                        assert!(apart, "{at}: {icon} at {r:?} under the zoom control at {zoom:?}");
+                    }
+                    for a in ["save", "copy", "cloud"] {
+                        assert!(buttons.iter().any(|(i, _)| *i == a), "{at}: {a}");
+                    }
+                    let menu = w.e.canvas.button("chevron");
+                    let as_buttons = w.e.canvas.button("save-as").is_some() && w.e.canvas.button("save-desktop").is_some();
+                    assert!(menu.is_some() || as_buttons, "{at}: Save As and Save to Desktop are somewhere");
+                    // Save's menu opens inside the window.
+                    if menu.is_some() {
+                        w.e.canvas.open_save_menu_for_tests();
+                        w.render();
+                        let rows = w.e.canvas.bar_menu_rows();
+                        assert!(rows.len() >= 3, "{at}: the save menu's rows ({})", rows.len());
+                        for r in rows {
+                            assert!(r.x >= -0.5 && r.x1() <= pw as f32 + 0.5 && r.y1() <= ph as f32 + 0.5, "{at}: a save menu row at {r:?}");
+                        }
                     }
                 }
-            }
-        });
+            });
+        }
     }
     // Wide: every save button on the bar, no menu.
     let (_r, mut w) = window("bar-wide", page(1180, 760), objects(), DARK, 1.0);
@@ -1140,7 +1151,7 @@ fn right_to_left_mirrors_the_window_not_its_text() {
                 previews.push((w.pixels().clone(), LAST_PREVIEW.with(|c| c.get()).expect("a preview")));
                 key(&mut w, crate::wind::key::ESCAPE, Mods::default());
             }
-            let lay = draw::layout(&w.e, W as f32, H as f32, w.e.canvas.bar_width());
+            let lay = draw::layout(&w.e, W as f32, H as f32, draw::bar_w(&w.e, W as f32));
             (main, previews, lay)
         };
         if rtl { crate::i18n::with_rtl(run) } else { run() }
@@ -1192,7 +1203,7 @@ fn right_to_left_pointer_lands_where_things_show() {
             screen(w, &[Ev::Move { x, y }, Ev::Down { x, y }, Ev::Up { x, y }]);
         };
         // The list's row for the arrow (object 0), at its mirrored place.
-        let lay = draw::layout(&w.e, W as f32, H as f32, w.e.canvas.bar_width());
+        let lay = draw::layout(&w.e, W as f32, H as f32, draw::bar_w(&w.e, W as f32));
         let (rr, _) = *lay.rows.iter().find(|(_, i)| *i == 0).unwrap();
         click(&mut w, W as f32 - 1.0 - (rr.x + rr.w / 2.0), rr.y + rr.h / 2.0);
         assert_eq!(w.e.canvas.selected(), [0], "the row selects its object");

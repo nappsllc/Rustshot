@@ -772,57 +772,62 @@ fn history_window_smoke() {
 /// The window at its smallest fits in English and the long
 /// pseudo-languages: the grid, the list, a search, several selected,
 /// Clear history?, a card's menu, empty and off (previews per language).
+/// With the OS's title bar above the content and with macOS's over it
+/// (the smallest window wider by the traffic lights' zone: `min_size`).
 #[test]
 fn fits_in_long_languages() {
-    let (w, hh) = MIN;
-    for lang in crate::ui::preview::langs() {
-        crate::i18n::with_lang(lang, || {
-            for k in [1.0f32, 1.5] {
-                let (_r, st) = fixture(&format!("fit-{lang}-{k}"));
-                let empty = TempRoot::new(&format!("fit-empty-{lang}-{k}"));
-                let states: Vec<(&str, History)> = vec![
-                    ("grid", history(&st)),
-                    ("list", {
-                        let mut h = history(&st);
-                        h.view = View::List;
-                        h
-                    }),
-                    ("search", {
-                        let mut h = history(&st);
-                        h.search.set("stripe");
-                        h.focus_search = true;
-                        h
-                    }),
-                    ("multi", {
-                        let mut h = history(&st);
-                        h.sel = [0, 1, 3].iter().map(|i| h.entries[*i].id.clone()).collect();
-                        h
-                    }),
-                    ("clear", {
-                        let mut h = history(&st);
-                        h.clear = Some(false);
-                        h
-                    }),
-                    ("card-menu", {
-                        let mut h = history(&st);
-                        h.menu = Some(Menu::Card(h.entries[0].id.clone()));
-                        h
-                    }),
-                    ("empty", History::new(Store::new(&empty.0), Config::default(), TODAY)),
-                    ("off", History::new(Store::new(&empty.0), Config { history: false, ..Config::default() }, TODAY)),
-                ];
-                for (name, mut h) in states {
-                    crate::ui::preview::begin_check((w as f32 * k).round() as u32);
-                    let mut focus = FocusState::default();
-                    let (img, _) = render_with(&mut h, &DARK, w, hh, k, &Input::default(), &mut focus);
-                    // (Saved first: a failure has its picture.)
-                    if k == 1.0 {
-                        crate::ui::preview::save(&format!("history-{name}-{lang}.png"), &img);
+    for chrome in [crate::wind::Overlap::NONE, crate::wind::Overlap::MACOS] {
+        let (w, hh) = min_size(chrome);
+        for lang in crate::ui::preview::langs() {
+            crate::i18n::with_lang(lang, || {
+                for k in [1.0f32, 1.5] {
+                    let (_r, st) = fixture(&format!("fit-{lang}-{k}"));
+                    let empty = TempRoot::new(&format!("fit-empty-{lang}-{k}"));
+                    let states: Vec<(&str, History)> = vec![
+                        ("grid", history(&st)),
+                        ("list", {
+                            let mut h = history(&st);
+                            h.view = View::List;
+                            h
+                        }),
+                        ("search", {
+                            let mut h = history(&st);
+                            h.search.set("stripe");
+                            h.focus_search = true;
+                            h
+                        }),
+                        ("multi", {
+                            let mut h = history(&st);
+                            h.sel = [0, 1, 3].iter().map(|i| h.entries[*i].id.clone()).collect();
+                            h
+                        }),
+                        ("clear", {
+                            let mut h = history(&st);
+                            h.clear = Some(false);
+                            h
+                        }),
+                        ("card-menu", {
+                            let mut h = history(&st);
+                            h.menu = Some(Menu::Card(h.entries[0].id.clone()));
+                            h
+                        }),
+                        ("empty", History::new(Store::new(&empty.0), Config::default(), TODAY)),
+                        ("off", History::new(Store::new(&empty.0), Config { history: false, ..Config::default() }, TODAY)),
+                    ];
+                    for (name, mut h) in states {
+                        h.chrome = chrome;
+                        crate::ui::preview::begin_check((w as f32 * k).round() as u32);
+                        let mut focus = FocusState::default();
+                        let (img, _) = render_with(&mut h, &DARK, w, hh, k, &Input::default(), &mut focus);
+                        // (Saved first: a failure has its picture.)
+                        if k == 1.0 && chrome == crate::wind::Overlap::NONE {
+                            crate::ui::preview::save(&format!("history-{name}-{lang}.png"), &img);
+                        }
+                        crate::ui::preview::assert_fits(&focus, w, hh, k, &format!("history {name} {lang} {k}x {chrome:?}"));
                     }
-                    crate::ui::preview::assert_fits(&focus, w, hh, k, &format!("history {name} {lang} {k}x"));
                 }
-            }
-        });
+            });
+        }
     }
 }
 

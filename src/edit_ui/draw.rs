@@ -154,15 +154,28 @@ fn zoom_lay(right: f32, cy: f32, h: f32) -> ZoomLay {
     ZoomLay { r, minus, value, plus, fit, actual }
 }
 
-/// Lay the window out at `w` × `h`; `bar_w`: the docked toolbar's buttons.
-pub fn layout(e: &Edit, w: f32, h: f32, bar_w: f32) -> Lay {
-    // The title bar's window buttons keep their zone (macOS: the 72 px
-    // at the window's left on screen; the strip stays 44 px, its top 28
-    // the drag strip): the toolbar's buttons start past it, or (right to
-    // left, the toolbar from the right) the zoom control ends before it.
-    // (Both 12 px past the zone, as History's row: board 12's x 84.)
+/// What the title bar's window buttons take of the toolbar strip at its
+/// (leading, trailing) end (macOS: the 72 px zone at the window's left on
+/// screen; the strip stays 44 px, its top 28 the drag strip): the
+/// toolbar's buttons start past it, or (right to left, the toolbar from
+/// the right) the zoom control ends before it. (Both 12 px past the
+/// zone, as History's row: board 12's x 84.)
+fn strip_insets(e: &Edit) -> (f32, f32) {
     let (lead, trail) = e.chrome.sides(crate::i18n::is_rtl());
-    let (lead, trail) = (Overlap::past(DOCK_PAD, lead) - DOCK_PAD, Overlap::past(8.0, trail) - 8.0);
+    (Overlap::past(DOCK_PAD, lead) - DOCK_PAD, Overlap::past(8.0, trail) - 8.0)
+}
+
+/// The docked toolbar's buttons' width (logical px) in a window `w` wide
+/// (in the strip past the title bar's window buttons: Save As and Save to
+/// Desktop go into Save's menu when the strip is too narrow for them).
+pub fn bar_w(e: &Edit, w: f32) -> f32 {
+    e.canvas.bar_width((w - strip_insets(e).0).max(1.0))
+}
+
+/// Lay the window out at `w` × `h`; `bar_w`: the docked toolbar's buttons
+/// ([`bar_w`]).
+pub fn layout(e: &Edit, w: f32, h: f32, bar_w: f32) -> Lay {
+    let (lead, trail) = strip_insets(e);
     let strip = FRect { x: 0.0, y: 0.0, w, h: BAR_H };
     let bar = FRect { x: lead, w: (w - lead).max(1.0), ..strip };
     let status = FRect { x: 0.0, y: h - STATUS_H, w, h: STATUS_H };

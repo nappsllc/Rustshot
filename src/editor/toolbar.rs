@@ -628,7 +628,9 @@ pub fn layout(inp: &Input) -> Toolbar {
 /// The Edit window's groups: the overlay's tools and Crop, history and
 /// size groups, then Save, Save As, Save to Desktop, Copy, Upload (no
 /// Record, Copy text, Pin or Close: the window has its own).
-fn docked_groups(inp: &Input) -> [Group; 4] {
+/// `room`: the strip's width the buttons have (logical px: the window's,
+/// less what a title bar's window buttons take of it).
+fn docked_groups(inp: &Input, room: f32) -> [Group; 4] {
     let [mut tools, history, size, _] = groups(inp);
     tools.push((Kind::Btn(Act::Crop), false, BTN));
     let btn = |a: Act| (Kind::Btn(a), false, BTN);
@@ -637,15 +639,16 @@ fn docked_groups(inp: &Input) -> [Group; 4] {
     // A window too narrow for them all (the Edit window at its smallest):
     // Save As and Save to Desktop go into Save's menu (its chevron),
     // as the overlay's.
-    if row_w(&gs) + 2.0 * DOCK_PAD > inp.area.w / inp.s.max(0.01) + 0.5 {
+    if row_w(&gs) + 2.0 * DOCK_PAD > room + 0.5 {
         gs[3] = vec![btn(Act::Save), (Kind::Btn(Act::SaveMenu), false, SAVE_MENU_W), btn(Act::Copy), btn(Act::Upload)];
     }
     gs
 }
 
-/// The width the docked toolbar's buttons take (logical px).
-pub fn docked_width(inp: &Input) -> f32 {
-    row_w(&docked_groups(inp)) + 2.0 * DOCK_PAD
+/// The width the docked toolbar's buttons take (logical px) in a strip
+/// `room` logical px wide.
+pub fn docked_width(inp: &Input, room: f32) -> f32 {
+    row_w(&docked_groups(inp, room)) + 2.0 * DOCK_PAD
 }
 
 /// The docked toolbar's side padding (logical px).
@@ -657,7 +660,7 @@ const DOCK_PAD: f32 = 8.0;
 /// kept inside `inp.area` (the window).
 pub fn layout_docked(inp: &Input, bar: FRect) -> Toolbar {
     let s = inp.s;
-    let gs = docked_groups(inp);
+    let gs = docked_groups(inp, bar.w / s.max(0.01));
     let mut items = Vec::new();
     place_row(&gs, 0.0, 0.0, &mut items);
     let row = row_w(&gs);
