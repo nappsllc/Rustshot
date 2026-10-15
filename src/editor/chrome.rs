@@ -1059,8 +1059,9 @@ fn label_texts(sr: FRect) -> (String, String) {
 }
 
 /// Where `size_label` puts its panel.
-/// `at`: what to keep off (the toolbar above), and the mode switch it
-/// follows (10 px right of it, centred on it) when there is one.
+/// `at`: what to keep off (the toolbar above, Close), and the mode switch
+/// or freeform toggle it follows (10 px right of it, centred on it; see
+/// `follow_rect`) when there is one.
 pub(super) fn size_label_rect(ui: &Ui, sr: FRect, show_pos: bool, area: FRect, at: LabelAt) -> FRect {
     let (size, pos) = label_texts(sr);
     let pad = ui.px(8.0);
