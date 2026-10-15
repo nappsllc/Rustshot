@@ -1059,9 +1059,10 @@ fn label_texts(sr: FRect) -> (String, String) {
 }
 
 /// Where `size_label` puts its panel.
-/// `at`: what to keep off (the toolbar above), and the mode switch it
-/// follows (10 px right of it, centred on it) when there is one.
-pub(super) fn size_label_rect(ui: &Ui, sr: FRect, show_pos: bool, area: FRect, at: (Option<FRect>, Option<FRect>)) -> FRect {
+/// `at`: what to keep off (the toolbar above, Close), and the mode switch
+/// or freeform toggle it follows (10 px right of it, centred on it; see
+/// `follow_rect`) when there is one.
+pub(super) fn size_label_rect(ui: &Ui, sr: FRect, show_pos: bool, area: FRect, at: LabelAt) -> FRect {
     let (size, pos) = label_texts(sr);
     let pad = ui.px(8.0);
     let mut w = 2.0 * pad + tw(ui, 12.0, &size);
@@ -1069,19 +1070,47 @@ pub(super) fn size_label_rect(ui: &Ui, sr: FRect, show_pos: bool, area: FRect, a
         w += pad + tw(ui, 11.0, &pos);
     }
     if let Some(m) = at.1 {
-        // Right of the switch; when that runs into what to keep off (the
-        // Close button) or off the monitor, under the switch instead.
-        let h = ui.px(22.0);
-        let x = m.x1() + ui.px(10.0);
-        let r = FRect { x, y: m.y + (m.h - h) / 2.0, w, h };
-        let clash = at.0.is_some_and(|a| r.x < a.x1() && a.x < r.x1() && r.y < a.y1() && a.y < r.y1()) || r.x1() > area.x1();
-        return if clash { FRect { x: m.x, y: m.y1() + ui.px(6.0), w, h } } else { r };
+        return follow_rect(ui, sr, m, w, area, &at.0);
     }
-    label_rect(sr, w, ui.s, area, at.0)
+    label_rect(sr, w, ui.s, area, at.0[0])
+}
+
+/// What the size label keeps off and the switch it follows
+/// (`toolbar::label_keep_off`).
+pub type LabelAt = ([Option<FRect>; 2], Option<FRect>);
+
+/// The size label (`w` wide) by the mode switch or freeform toggle `m`:
+/// right of it; when that covers what to keep off (the toolbar above,
+/// Close) or leaves the monitor, below it (clear of the selection's
+/// corner handle), else right of what it ran into, else left of the
+/// switch. Never over the toolbar while any of these fits.
+fn follow_rect(ui: &Ui, sr: FRect, m: FRect, w: f32, area: FRect, avoid: &[Option<FRect>; 2]) -> FRect {
+    let h = ui.px(22.0);
+    let hits = |a: &FRect, r: &FRect| r.x < a.x1() && a.x < r.x1() && r.y < a.y1() && a.y < r.y1();
+    let fits = |r: &FRect| r.x >= area.x && r.x1() <= area.x1() && r.y >= area.y && r.y1() <= area.y1() && !avoid.iter().flatten().any(|a| hits(a, r));
+    let y = m.y + (m.h - h) / 2.0;
+    let right = FRect { x: m.x1() + ui.px(10.0), y, w, h };
+    if fits(&right) {
+        return right;
+    }
+    // Under the switch: when that is the selection's top edge, inside it
+    // as the plain label goes (off the corner handle).
+    let gap = ui.px(8.0);
+    let mut below = FRect { x: m.x, y: m.y1() + ui.px(6.0), w, h };
+    if below.y < sr.y + gap && below.y1() > sr.y {
+        below = FRect { x: below.x.max(sr.x + gap), y: sr.y + gap, ..below };
+    }
+    below.x = below.x.clamp(area.x, (area.x1() - w).max(area.x));
+    if fits(&below) {
+        return below;
+    }
+    let past = avoid.iter().flatten().filter(|a| hits(a, &right)).map(|a| a.x1()).fold(m.x1(), f32::max);
+    let beside = [FRect { x: past + ui.px(10.0), ..right }, FRect { x: m.x - ui.px(10.0) - w, ..right }];
+    beside.into_iter().find(|r| fits(r)).unwrap_or(below)
 }
 
 /// "W × H" (and "x, y" when not dragging) above the selection.
-pub fn size_label(f: &mut Fb, ui: &Ui, sr: FRect, show_pos: bool, area: FRect, at: (Option<FRect>, Option<FRect>), k: f32) {
+pub fn size_label(f: &mut Fb, ui: &Ui, sr: FRect, show_pos: bool, area: FRect, at: LabelAt, k: f32) {
     let (size, pos) = label_texts(sr);
     let pad = ui.px(8.0);
     let r = size_label_rect(ui, sr, show_pos, area, at);
@@ -1533,7 +1562,7 @@ pub fn selection_bounds(ui: &Ui, sr: FRect) -> Vec<FRect> {
     v
 }
 
-pub fn size_label_bounds(ui: &Ui, sr: FRect, show_pos: bool, area: FRect, at: (Option<FRect>, Option<FRect>)) -> FRect {
+pub fn size_label_bounds(ui: &Ui, sr: FRect, show_pos: bool, area: FRect, at: LabelAt) -> FRect {
     surface_bounds(ui, size_label_rect(ui, sr, show_pos, area, at))
 }
 
@@ -1648,6 +1677,62 @@ mod tests {
         };
         toolbar(&mut Fb::new(&mut d, 800), &ui(), &tb, &st, 1.0);
         (d, tb)
+    }
+
+    /// No Record button (Wayland without the ScreenCast portal, the
+    /// macOS build): the freeform toggle alone leads the size label. With
+    /// the toolbar above the selection the label (and the toggle) never
+    /// lie under it: beside the toggle when there is room, else below it,
+    /// off the selection's corner handle; a narrow selection, a wide one,
+    /// a popover open.
+    #[test]
+    fn size_label_keeps_off_the_toolbar_above_without_record() {
+        let area = FRect { x: 0.0, y: 0.0, w: 1440.0, h: 900.0 };
+        let hits = |a: FRect, b: FRect| a.x < b.x1() && b.x < a.x1() && a.y < b.y1() && b.y < a.y1();
+        let colors = [C4::rgb(240, 68, 56); 8];
+        for (sel, palette) in [
+            (FRect { x: 100.0, y: 80.0, w: 1200.0, h: 760.0 }, false),
+            (FRect { x: 100.0, y: 80.0, w: 1200.0, h: 760.0 }, true),
+            (FRect { x: 300.0, y: 120.0, w: 520.0, h: 760.0 }, false),
+            (FRect { x: 600.0, y: 120.0, w: 140.0, h: 760.0 }, false),
+            (FRect { x: 0.0, y: 70.0, w: 1440.0, h: 830.0 }, false),
+        ] {
+            let tb = layout(&Input {
+                sel,
+                area,
+                s: 1.0,
+                busy: false,
+                can_undo: true,
+                can_redo: true,
+                palette: palette.then_some(&colors[..]),
+                record: false,
+                rec: None,
+                grip: None,
+                top: true,
+                sizes: true,
+                colors: true,
+                fills: true,
+                pick: None,
+                save_menu: None,
+                slot_menu: None,
+                copy_menu: None,
+                freeform: Some(false),
+            });
+            assert!(tb.above, "{sel:?}: the toolbar above");
+            let toggle = tb.items.iter().find(|i| matches!(i.kind, Kind::Toggle { act: Act::Freeform, .. })).expect("the freeform toggle").r;
+            let bar = tb.pop.map_or(tb.bar, |p| super::super::toolbar::union(tb.bar, p));
+            assert!(!hits(toggle, bar), "{sel:?}: the toggle {toggle:?} under the toolbar {bar:?}");
+            let at = super::super::toolbar::label_keep_off(Some(&tb), sel);
+            assert_eq!(at.1, Some(toggle), "the label follows the toggle");
+            for show_pos in [true, false] {
+                let l = size_label_rect(&Ui { th: &DARK, s: 1.0, font: Some(crate::fonts::ui_font()) }, sel, show_pos, area, at);
+                assert!(!hits(l, bar), "{sel:?}: the label {l:?} under the toolbar {bar:?}");
+                assert!(!hits(l, toggle), "{sel:?}: the label {l:?} over the toggle {toggle:?}");
+                assert!(l.x >= area.x && l.x1() <= area.x1() && l.y >= area.y && l.y1() <= area.y1(), "{l:?} on the monitor");
+                let corner = FRect { x: sel.x - 6.0, y: sel.y - 6.0, w: 12.0, h: 12.0 };
+                assert!(!hits(l, corner), "{sel:?}: the label {l:?} on the corner handle");
+            }
+        }
     }
 
     fn btn_rect(tb: &Toolbar, a: Act) -> FRect {

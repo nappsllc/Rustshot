@@ -2107,3 +2107,120 @@ fn copy_after_capture_joins_the_save() {
     let State::Finish(job) = &a.st else { panic!("finish job") };
     assert_eq!(job.tasks, vec![Task::Save { path: None, ask: false }, Task::Copy]);
 }
+
+// ---- every pointer position, one paint per frame (Windows overlay) -----------
+
+/// What the editor in a real overlay saw of a fast drag.
+#[cfg(windows)]
+#[derive(Default)]
+struct DragSeen {
+    /// The stroke's points, or the lasso's, when the button went up.
+    pts: Vec<(i32, i32)>,
+    /// `Ev::Move`s handled (one per frame) and frames painted.
+    moves: u32,
+    paints: u32,
+}
+
+/// The editor hosted in a real overlay window (off screen): a helper
+/// thread posts a press, `path`'s moves all at once (a fast hand: far
+/// more than one per display refresh) and a release, then closes it.
+#[cfg(windows)]
+struct Hosted {
+    app: App,
+    lasso: bool,
+    path: Vec<(i32, i32)>,
+    seen: std::sync::Arc<std::sync::Mutex<DragSeen>>,
+    helper: Option<std::thread::JoinHandle<()>>,
+}
+
+#[cfg(windows)]
+impl Driver for Hosted {
+    fn on_create(&mut self, hwnd: Hwnd) {
+        self.app.on_create(hwnd);
+        wind::show_at(hwnd, -30000, -30000, 1440, 900);
+        let raw = hwnd.0 as usize;
+        let path = self.path.clone();
+        self.helper = Some(std::thread::spawn(move || unsafe {
+            use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+            use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE};
+            let hwnd = HWND(raw as *mut core::ffi::c_void);
+            let at = |(x, y): (i32, i32)| LPARAM(((y as isize) << 16) | (x as isize & 0xffff));
+            let _ = PostMessageW(Some(hwnd), WM_MOUSEMOVE, WPARAM(0), at(path[0]));
+            let _ = PostMessageW(Some(hwnd), WM_LBUTTONDOWN, WPARAM(1), at(path[0]));
+            for &p in &path[1..] {
+                let _ = PostMessageW(Some(hwnd), WM_MOUSEMOVE, WPARAM(1), at(p));
+            }
+            let _ = PostMessageW(Some(hwnd), WM_LBUTTONUP, WPARAM(0), at(path[path.len() - 1]));
+            std::thread::sleep(Duration::from_millis(100));
+            let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
+        }));
+    }
+    fn on_event(&mut self, ev: Ev) -> bool {
+        match ev {
+            Ev::Move { .. } => self.seen.lock().unwrap().moves += 1,
+            Ev::Up { .. } => {
+                let e = edit_of(&mut self.app);
+                let pts = if self.lasso { &e.snip.lasso } else { &e.stroke_pts };
+                self.seen.lock().unwrap().pts = pts.iter().map(|p| (p.x as i32, p.y as i32)).collect();
+            }
+            _ => {}
+        }
+        self.app.on_event(ev)
+    }
+    fn frame(&mut self) -> Option<&mut PixBuf> {
+        self.seen.lock().unwrap().paints += 1;
+        self.app.frame()
+    }
+    fn damage(&mut self) -> Option<Vec<[i32; 4]>> {
+        self.app.damage()
+    }
+    fn paint(&mut self, hdc: windows::Win32::Graphics::Gdi::HDC, rects: &[[i32; 4]]) -> bool {
+        self.app.paint(hdc, rects)
+    }
+    fn cursor(&self) -> crate::wind::Cursor {
+        self.app.cursor()
+    }
+    // Not the app's: nothing of the test's is saved.
+    fn on_quit(&mut self) {}
+}
+
+/// A 200-point drag posted to a real overlay in one burst: the overlay
+/// still paints once per display refresh (a handful of frames, a handful
+/// of `Move`s), but a pencil stroke and a freeform lasso get every point,
+/// in order (the positions passed come as `Ev::Trail` before each frame's
+/// `Move`): the curve stays a curve.
+#[cfg(windows)]
+#[test]
+fn fast_drags_in_the_overlay_keep_every_point() {
+    let _guard = crate::wind::test_window_lock();
+    // A circle of 200 points about 9 px apart (none merged as closer
+    // than 2 px), back where it began.
+    let path: Vec<(i32, i32)> = (0..=200)
+        .map(|i| {
+            let a = i as f32 / 200.0 * std::f32::consts::TAU;
+            ((720.0 + 300.0 * a.cos()).round() as i32, (450.0 + 300.0 * a.sin()).round() as i32)
+        })
+        .collect();
+    for lasso in [false, true] {
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(DragSeen::default()));
+        let (s, p) = (seen.clone(), path.clone());
+        std::thread::spawn(move || {
+            let mut a = if lasso { app(None) } else { app(Some(r(0.0, 0.0, 1440.0, 900.0))) };
+            if lasso {
+                edit_of(&mut a).snip.freeform = true;
+            } else {
+                edit_of(&mut a).tool = Some(Tool::Path);
+            }
+            let mut d = Hosted { app: a, lasso, path: p, seen: s, helper: None };
+            assert_eq!(wind::run(&mut d), 0);
+            d.helper.take().expect("helper").join().expect("helper thread");
+        })
+        .join()
+        .expect("overlay thread");
+        let seen = seen.lock().unwrap();
+        let what = if lasso { "lasso" } else { "pencil" };
+        assert_eq!(seen.pts, path, "{what}: every point, in order");
+        assert!(seen.moves >= 1 && seen.moves < 100, "{what}: {} frames' moves for 200 messages", seen.moves);
+        assert!(seen.paints >= 1, "{what}: painted");
+    }
+}

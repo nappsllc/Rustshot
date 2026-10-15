@@ -176,7 +176,8 @@ pub struct LabelUi {
     pub sr: FRect,
     pub show_pos: bool,
     pub area: FRect,
-    pub avoid: Option<FRect>,
+    /// What it keeps off (the toolbar above, Close).
+    pub avoid: [Option<FRect>; 2],
     /// The mode switch the label follows.
     pub lead: Option<FRect>,
 }
@@ -746,15 +747,9 @@ impl Edit {
         let snap_r = self.snap_rect();
         let snap = snap_r.map(|r| SnapUi { r, hint: self.cfg.snap_tab_hint && self.hover_win.has_parts(), area });
         let label = self.sel.map(|sr| {
-            let avoid = self
-                .toolbar
-                .as_ref()
-                .filter(|t| t.above && t.bar.y1() <= sr.y)
-                .map(|t| t.pop.map_or(t.bar, |p| toolbar::union(t.bar, p)));
-            let lead = self.toolbar.as_ref().and_then(|t| t.mode);
-            // Following the mode switch it keeps off the Close button.
-            let close = self.toolbar.as_ref().and_then(|t| t.items.iter().find(|i| i.kind == toolbar::Kind::Close)).map(|i| i.r);
-            let avoid = if lead.is_some() { close } else { avoid };
+            // It keeps off the toolbar above and Close, following the mode
+            // switch (or, with no Record button, the freeform toggle).
+            let (avoid, lead) = toolbar::label_keep_off(self.toolbar.as_ref(), sr);
             LabelUi { sr, show_pos: !interacting, area, avoid, lead }
         });
         // The label's menu (Trim to content) hangs off it, part of the

@@ -264,6 +264,13 @@ fn coalesce(rects: Vec<[i32; 4]>, max: usize) -> Vec<[i32; 4]> {
 // is; the loop draws that, once per refresh, late in it (the freshest
 // position, done before the compositor takes the frame). Any other input
 // (a press, a key) first takes the noted move, so its order is kept.
+//
+// Drawing needs only the newest position, but a stroke, the lasso or the
+// ruler needs every one the pointer passed: each move's position is
+// kept (`TRAIL`), with the positions the system coalesced away between
+// two WM_MOUSEMOVEs (a busy frame) taken back from its move history
+// (GetMouseMovePointsEx), and the driver gets them in order as
+// `Ev::Trail` before the newest as `Ev::Move`; still one paint.
 
 /// Sent to the overlay by its loop: handle the noted move and paint now.
 const WM_APP_MOVE: u32 = WM_APP + 0x31;
@@ -278,30 +285,127 @@ struct Noted {
     times: Option<(std::time::Instant, std::time::Instant)>,
 }
 
+/// The positions kept for one frame at most: past it (a frame stalled for
+/// seconds) the newest replaces the last one kept.
+const TRAIL_MAX: usize = 8192;
+
 thread_local! {
     static NOTED: std::cell::Cell<Option<Noted>> = const { std::cell::Cell::new(None) };
     static PACER: std::cell::RefCell<Pacer> = const { std::cell::RefCell::new(Pacer::new()) };
+    /// Every position (client px) since the noted move was last taken,
+    /// oldest first; the last is the noted one.
+    static TRAIL: std::cell::RefCell<Vec<(i32, i32)>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// The last move or press: its window, screen position and message
+    /// time (where the next move's gap in the history starts).
+    static LAST_AT: std::cell::Cell<Option<(isize, i32, i32, u32)>> = const { std::cell::Cell::new(None) };
 }
 
-/// Note a move to `(x, y)` (at `t`, see `perf::move_time`).
-fn note_move(hwnd: HWND, x: i32, y: i32, t: Option<std::time::Instant>) {
+/// Note a move to `(x, y)` (at `t`, see `perf::move_time`), after the
+/// positions `gap` it passed since the last one (oldest first).
+fn note_move(hwnd: HWND, gap: &[(i32, i32)], x: i32, y: i32, t: Option<std::time::Instant>) {
     let prev = NOTED.get().filter(|n| n.hwnd == hwnd.0 as isize);
     let times = match (prev.and_then(|p| p.times), t) {
         (Some((first, _)), Some(t)) => Some((first, t)),
         (None, Some(t)) => Some((t, t)),
         (old, None) => old,
     };
+    TRAIL.with_borrow_mut(|tr| {
+        // Another window's positions are not this one's.
+        if prev.is_none() {
+            tr.clear();
+        }
+        for &p in gap.iter().chain(std::iter::once(&(x, y))) {
+            if tr.len() < TRAIL_MAX {
+                tr.push(p);
+            } else if let Some(l) = tr.last_mut() {
+                *l = p;
+            }
+        }
+    });
     NOTED.set(Some(Noted { hwnd: hwnd.0 as isize, x, y, times }));
 }
 
-/// Hand the noted move of `hwnd` (if any) to the driver; true when there
-/// was one.
+/// Hand the noted move of `hwnd` (if any) to the driver: the positions
+/// passed on the way in order (`Ev::Trail`), then the newest (`Ev::Move`);
+/// true when there was one.
 unsafe fn take_move(hwnd: HWND, drv: &mut dyn Driver) -> bool {
     let Some(n) = NOTED.get().filter(|n| n.hwnd == hwnd.0 as isize) else { return false };
     NOTED.set(None);
+    let trail = TRAIL.take();
     let _m = crate::perf::mouse_move(n.times);
+    for &(x, y) in &trail[..trail.len().saturating_sub(1)] {
+        drv.on_event(Ev::Trail { x, y });
+    }
     drv.on_event(Ev::Move { x: n.x, y: n.y });
+    // The buffer back for the next frame (no allocation per frame).
+    TRAIL.with_borrow_mut(|tr| {
+        if tr.is_empty() {
+            let mut trail = trail;
+            trail.clear();
+            *tr = trail;
+        }
+    });
     true
+}
+
+/// A history point's coordinate: GMMP_USE_DISPLAY_POINTS reports a
+/// negative one (a monitor left of or above the primary) as 16-bit
+/// unsigned.
+fn history_coord(v: i32) -> i32 {
+    if v > 32767 { v - 65536 } else { v }
+}
+
+/// The positions the pointer passed between the move or press `last` and
+/// the move `cur` (screen px, message times), oldest first, from the
+/// system's move history `hist` (newest first, as GetMouseMovePointsEx
+/// returns it: `cur` itself first). The history holds 64 points: a gap
+/// longer than that keeps its newest 64.
+fn history_gap(hist: &[(i32, i32, u32)], cur: (i32, i32, u32), last: (i32, i32, u32)) -> Vec<(i32, i32)> {
+    let skip = usize::from(hist.first().is_some_and(|p| (p.0, p.1) == (cur.0, cur.1)));
+    let mut out: Vec<(i32, i32)> = Vec::new();
+    for &(x, y, t) in &hist[skip..] {
+        // Reached the last move, or older than it (times wrap after 49 days).
+        if (x, y, t) == last || (last.2.wrapping_sub(t) as i32) > 0 {
+            break;
+        }
+        out.push((x, y));
+    }
+    out.reverse();
+    out.dedup();
+    // Neither end again.
+    if out.last() == Some(&(cur.0, cur.1)) {
+        out.pop();
+    }
+    if out.first() == Some(&(last.0, last.1)) {
+        out.remove(0);
+    }
+    out
+}
+
+/// A move or press of `hwnd` at client `(x, y)`, the message being
+/// handled: the positions the system's move history has between the last
+/// one and this (client px, oldest first; empty for posted input, which
+/// is not in the history), and this one remembered as the last.
+unsafe fn history_since_last(hwnd: HWND, x: i32, y: i32) -> Vec<(i32, i32)> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetMouseMovePointsEx, GMMP_USE_DISPLAY_POINTS, MOUSEMOVEPOINT};
+    unsafe {
+        let mut o = POINT::default();
+        let _ = windows::Win32::Graphics::Gdi::ClientToScreen(hwnd, &mut o);
+        let cur = (x + o.x, y + o.y, GetMessageTime() as u32);
+        let last = LAST_AT.replace(Some((hwnd.0 as isize, cur.0, cur.1, cur.2)));
+        let Some((_, lx, ly, lt)) = last.filter(|l| l.0 == hwnd.0 as isize && (l.1, l.2) != (cur.0, cur.1)) else {
+            return Vec::new();
+        };
+        // The point to look up is given as 16-bit coordinates.
+        let at = MOUSEMOVEPOINT { x: cur.0 & 0xffff, y: cur.1 & 0xffff, time: cur.2, dwExtraInfo: 0 };
+        let mut buf = [MOUSEMOVEPOINT::default(); 64];
+        let n = GetMouseMovePointsEx(std::mem::size_of::<MOUSEMOVEPOINT>() as u32, &at, &mut buf, GMMP_USE_DISPLAY_POINTS);
+        if n <= 0 {
+            return Vec::new();
+        }
+        let hist: Vec<(i32, i32, u32)> = buf[..(n as usize).min(64)].iter().map(|p| (history_coord(p.x), history_coord(p.y), p.time)).collect();
+        history_gap(&hist, cur, (lx, ly, lt)).into_iter().map(|(sx, sy)| (sx - o.x, sy - o.y)).collect()
+    }
 }
 
 /// A move is noted (for any overlay on this thread).
@@ -434,12 +538,18 @@ fn move_wait() -> Option<(f64, f64)> {
     }))
 }
 
-/// Draw the noted move now: the newest moves still queued are noted
-/// first (the freshest position), then the overlay handles it and paints.
+/// Draw the noted move now: the moves queued next are noted first (the
+/// freshest position), then the overlay handles it and paints. Only the
+/// moves at the head of the queue: one behind a press or a key is not
+/// taken before it (its position would join the drag before the press).
 unsafe fn draw_move(hwnd: HWND, target: f64) {
     unsafe {
         let mut m = MSG::default();
-        while PeekMessageW(&mut m, Some(hwnd), WM_MOUSEMOVE, WM_MOUSEMOVE, PM_REMOVE).as_bool() {
+        while PeekMessageW(&mut m, None, 0, 0, PM_NOREMOVE).as_bool()
+            && m.message == WM_MOUSEMOVE
+            && m.hwnd == hwnd
+            && PeekMessageW(&mut m, Some(hwnd), WM_MOUSEMOVE, WM_MOUSEMOVE, PM_REMOVE).as_bool()
+        {
             DispatchMessageW(&m);
         }
         let t0 = std::time::Instant::now();
@@ -489,7 +599,9 @@ unsafe extern "system" fn wndproc(
         // Moves are noted and drawn once per refresh (see `Pacer`).
         if msg == WM_MOUSEMOVE {
             crate::perf::move_arrived();
-            note_move(hwnd, x_of(lp), y_of(lp), crate::perf::move_time(wp.0));
+            let (x, y) = (x_of(lp), y_of(lp));
+            let gap = history_since_last(hwnd, x, y);
+            note_move(hwnd, &gap, x, y, crate::perf::move_time(wp.0));
             return LRESULT(0);
         }
         if msg == WM_APP_MOVE {
@@ -502,6 +614,13 @@ unsafe extern "system" fn wndproc(
         if takes_move_first(msg) {
             take_move(hwnd, drv);
         }
+        // A press or release: the next move's gap starts here (the history
+        // before it is not the drag's).
+        if matches!(msg, WM_LBUTTONDOWN | WM_LBUTTONUP | WM_MBUTTONDOWN | WM_MBUTTONUP | WM_RBUTTONDOWN | WM_RBUTTONUP) {
+            let mut o = POINT::default();
+            let _ = windows::Win32::Graphics::Gdi::ClientToScreen(hwnd, &mut o);
+            LAST_AT.set(Some((hwnd.0 as isize, x_of(lp) + o.x, y_of(lp) + o.y, GetMessageTime() as u32)));
+        }
         // Focus lost (another window activated) or back: the pointer shows
         // again, or hides, at once (the pointer may not move meanwhile).
         if msg == WM_ACTIVATE {
@@ -511,6 +630,8 @@ unsafe extern "system" fn wndproc(
         if msg == WM_DESTROY {
             show_pointer();
             NOTED.set(None);
+            TRAIL.with_borrow_mut(Vec::clear);
+            LAST_AT.set(None);
             unpin(hwnd);
             drv.on_quit();
             forget_tick(hwnd);
@@ -1886,8 +2007,8 @@ mod tests {
         let t0 = std::time::Instant::now();
         let t1 = t0 + std::time::Duration::from_millis(3);
         NOTED.set(None);
-        note_move(a, 1, 2, Some(t0));
-        note_move(a, 5, 6, Some(t1));
+        note_move(a, &[], 1, 2, Some(t0));
+        note_move(a, &[(3, 3), (4, 5)], 5, 6, Some(t1));
         let n = NOTED.get().expect("noted");
         assert_eq!((n.x, n.y, n.times), (5, 6, Some((t0, t1))));
         assert!(move_noted());
@@ -1908,14 +2029,63 @@ mod tests {
         let mut r = Rec(Vec::new());
         assert!(!unsafe { take_move(b, &mut r) }, "not b's");
         assert!(unsafe { take_move(a, &mut r) });
-        assert!(matches!(r.0[..], [Ev::Move { x: 5, y: 6 }]));
+        // Every position on the way first, in order (the gap before the
+        // newest too), then the newest.
+        assert!(
+            matches!(r.0[..], [Ev::Trail { x: 1, y: 2 }, Ev::Trail { x: 3, y: 3 }, Ev::Trail { x: 4, y: 5 }, Ev::Move { x: 5, y: 6 }]),
+            "{:?}",
+            r.0
+        );
         assert!(!move_noted() && !unsafe { take_move(a, &mut r) });
+        // Another window's note starts its own trail.
+        note_move(a, &[], 1, 1, None);
+        note_move(b, &[], 9, 9, None);
+        r.0.clear();
+        assert!(unsafe { take_move(b, &mut r) });
+        assert!(matches!(r.0[..], [Ev::Move { x: 9, y: 9 }]), "{:?}", r.0);
+        // Past TRAIL_MAX positions the newest replaces the last kept.
+        let many: Vec<(i32, i32)> = (0..TRAIL_MAX as i32 + 10).map(|i| (i, 0)).collect();
+        note_move(a, &many, -1, -1, None);
+        r.0.clear();
+        assert!(unsafe { take_move(a, &mut r) });
+        assert_eq!(r.0.len(), TRAIL_MAX);
+        assert!(matches!(r.0[TRAIL_MAX - 2], Ev::Trail { x: 8190, y: 0 }) && matches!(r.0[TRAIL_MAX - 1], Ev::Move { x: -1, y: -1 }));
         for m in [WM_LBUTTONDOWN, WM_LBUTTONUP, WM_RBUTTONDOWN, WM_MOUSEWHEEL, WM_KEYDOWN, WM_CHAR] {
             assert!(takes_move_first(m), "{m:#x}");
         }
         for m in [WM_PAINT, WM_TIMER, WM_SETCURSOR, WM_MOUSEMOVE] {
             assert!(!takes_move_first(m), "{m:#x}");
         }
+    }
+
+    /// The move history's gap between two moves: newest first in, oldest
+    /// first out, neither end; stops at the last move (or what is older);
+    /// a gap past the 64-point buffer keeps its newest 63; display points
+    /// left of / above the primary monitor come back negative.
+    #[test]
+    fn history_gap_takes_the_positions_between_two_moves() {
+        // Moves 1 ms apart along x; the last move at (100, 50, t=1000).
+        let pt = |i: i32| (100 + i * 3, 50 + i, 1000 + i as u32);
+        let hist: Vec<(i32, i32, u32)> = (0..=10).rev().map(pt).chain([(1, 1, 990)]).collect();
+        let gap = history_gap(&hist, pt(10), pt(0));
+        assert_eq!(gap, (1..10).map(|i| (pt(i).0, pt(i).1)).collect::<Vec<_>>());
+        // The last move not in it (a press, or rounded away): stops at what is older.
+        let gap = history_gap(&hist, pt(10), (7, 7, 1004));
+        assert_eq!(gap, (4..10).map(|i| (pt(i).0, pt(i).1)).collect::<Vec<_>>());
+        // No gap: the two moves adjacent.
+        assert!(history_gap(&hist[9..], pt(1), pt(0)).is_empty());
+        // A fast stroke between two frames: 200 points, the buffer 64.
+        let long: Vec<(i32, i32, u32)> = (137..=200).rev().map(pt).collect();
+        assert_eq!(long.len(), 64);
+        let gap = history_gap(&long, pt(200), pt(0));
+        assert_eq!(gap, (137..200).map(|i| (pt(i).0, pt(i).1)).collect::<Vec<_>>(), "the newest 63 between");
+        // Repeats of one position (a slow pointer) come once.
+        let hist = [(5, 5, 20), (4, 4, 19), (4, 4, 18), (3, 3, 17), (2, 2, 16)];
+        assert_eq!(history_gap(&hist, (5, 5, 20), (2, 2, 16)), [(3, 3), (4, 4)]);
+        // Times wrap.
+        let hist = [(5, 5, 2), (4, 4, 0), (3, 3, u32::MAX), (2, 2, u32::MAX - 1)];
+        assert_eq!(history_gap(&hist, (5, 5, 2), (2, 2, u32::MAX - 1)), [(3, 3), (4, 4)]);
+        assert_eq!((history_coord(65535), history_coord(65536 - 1920), history_coord(32767), history_coord(0)), (-1, -1920, 32767, 0));
     }
 
     /// What the paced-overlay test saw.
@@ -1988,6 +2158,10 @@ mod tests {
         let moves: Vec<(i32, i32)> = seen.evs.iter().filter_map(|e| if let Ev::Move { x, y } = e { Some((*x, *y)) } else { None }).collect();
         assert!(!moves.is_empty() && moves.len() < 200, "{} moves handled for 2000 messages", moves.len());
         assert_eq!(moves.last(), Some(&(1999 % 300, 1999 % 200)), "the newest position");
+        // Every position still reaches the driver, in order (the ones
+        // passed on the way as `Trail`, before each frame's `Move`).
+        let path: Vec<(i32, i32)> = seen.evs.iter().filter_map(|e| if let Ev::Trail { x, y } | Ev::Move { x, y } = e { Some((*x, *y)) } else { None }).collect();
+        assert_eq!(path, (0..2000).map(|i| (i % 300, i % 200)).collect::<Vec<_>>(), "every move, in order");
         let down = seen.evs.iter().position(|e| matches!(e, Ev::Down { .. })).expect("a press");
         assert!(matches!(seen.evs[down - 1], Ev::Move { x: 199, y: 199 }), "the move before the press: {:?}", seen.evs[down - 1]);
         assert!(matches!(seen.evs[down..], [Ev::Down { x: 7, y: 9 }, Ev::Up { x: 7, y: 9 }, ..]), "{:?}", &seen.evs[down..]);
