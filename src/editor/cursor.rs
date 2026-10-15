@@ -14,9 +14,7 @@
 //! capture and while the overlay does not have the keyboard focus.
 //!
 //! Objects are picked up with the select tool, with no tool and with every
-//! drawing tool that makes objects of its own; Ctrl held draws over them
-//! instead. The tools that act on what is under them (Pixelate, Blur,
-//! Invert, Spotlight, Ruler, Magnify) always draw.
+//! drawing tool; Ctrl held draws over them instead.
 
 use super::*;
 
@@ -29,18 +27,12 @@ pub(super) enum Under {
     Grab(usize),
 }
 
-/// Tool `t` acts on what is under it: it draws over objects (no pick-up).
-pub(super) fn acts_beneath(t: Tool) -> bool {
-    matches!(t, Tool::Pixelate | Tool::Blur | Tool::Invert | Tool::Spotlight | Tool::Ruler | Tool::Magnify)
-}
-
 impl Edit {
     /// The object a press at `p` picks up instead of drawing (the topmost
     /// one hit), see the module docs.
     pub(super) fn grab_at(&self, p: Pt, mods: Mods) -> Option<usize> {
         match self.tool {
             Some(Tool::Select) => {}
-            Some(t) if acts_beneath(t) => return None,
             _ if mods.ctrl => return None,
             _ => {}
         }

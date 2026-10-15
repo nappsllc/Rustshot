@@ -1,7 +1,6 @@
 //! The cursor per region (chrome, objects, handles, the tool) and picking
 //! objects up with the drawing tools: hover outline, drag moves (snapping,
-//! one undo step), click selects, Ctrl draws over, the tools that act on
-//! what is under them always draw.
+//! one undo step), click selects, Ctrl draws over.
 
 use super::super::tests::{edit_of, preview_app};
 use super::super::*;
@@ -108,17 +107,17 @@ fn cursor_per_region_with_a_drawing_tool() {
 }
 
 #[test]
-fn tools_acting_on_what_is_under_them_keep_their_cursor() {
-    for t in [Tool::Pixelate, Tool::Blur, Tool::Invert, Tool::Spotlight, Tool::Ruler, Tool::Magnify] {
+fn every_tool_picks_up_and_ctrl_draws_over() {
+    let all = [
+        Tool::Path, Tool::Line, Tool::Arrow, Tool::Rect, Tool::Ellipse, Tool::Marker, Tool::Text, Tool::Counter,
+        Tool::Pixelate, Tool::Invert, Tool::Callout, Tool::Spotlight, Tool::Magnify, Tool::Blur, Tool::Ruler,
+    ];
+    for t in all {
         let mut a = with(Some(SEL), vec![rect(300.0, 300.0, 200.0, 100.0)], Some(t));
         let e = ed(&mut a);
-        assert_eq!(at(e, 350.0, 301.0), Cursor::Cross, "{t:?}");
-        assert_eq!(e.hover_obj(Pt::new(350.0, 301.0), NONE), None, "{t:?}");
-    }
-    // The others pick up.
-    for t in [Tool::Path, Tool::Line, Tool::Arrow, Tool::Ellipse, Tool::Marker, Tool::Text, Tool::Counter, Tool::Callout] {
-        let mut a = with(Some(SEL), vec![rect(300.0, 300.0, 200.0, 100.0)], Some(t));
-        assert_eq!(at(ed(&mut a), 350.0, 301.0), Cursor::Move, "{t:?}");
+        assert_eq!(at(e, 350.0, 301.0), Cursor::Move, "{t:?}");
+        assert_eq!(e.hover_obj(Pt::new(350.0, 301.0), NONE), Some(0), "{t:?}");
+        assert_eq!(e.grab_at(Pt::new(350.0, 301.0), CTRL), None, "{t:?} with Ctrl");
     }
 }
 
@@ -230,8 +229,12 @@ fn ctrl_draws_over_and_the_exceptions_always_draw() {
     for t in [Tool::Pixelate, Tool::Blur, Tool::Spotlight] {
         let mut a = with(Some(SEL), vec![rect(300.0, 300.0, 200.0, 100.0)], Some(t));
         drag(&mut a, ON, (450, 380));
-        assert_eq!(ed(&mut a).objects.len(), 2, "{t:?} draws on the object");
-        assert!(ed(&mut a).obj.sel.is_empty(), "{t:?}");
+        assert_eq!(ed(&mut a).objects.len(), 1, "{t:?} moves the object");
+        {
+            let _m = hold(CTRL);
+            drag(&mut a, ON, (450, 380));
+        }
+        assert_eq!(ed(&mut a).objects.len(), 2, "{t:?} with Ctrl draws on the object");
     }
 }
 
@@ -314,7 +317,7 @@ fn edit_window_cursor_per_region() {
         assert_eq!(c.cursor(on), Cursor::Cross);
     }
     c.key('B' as u32, false, false, NONE);
-    assert_eq!(c.cursor(on), Cursor::Cross);
+    assert_eq!(c.cursor(on), Cursor::Move, "the blur tool picks up too");
     c.key('V' as u32, false, false, NONE);
     assert_eq!(c.cursor(on), Cursor::Move);
 }
@@ -367,15 +370,15 @@ fn pointer_hidden_only_where_the_crosshair_is() {
     assert_eq!(ptr(e, 1000.0, 600.0), Cursor::Cross);
 }
 
-/// The Ruler keeps the crosshair over the canvas: hidden there (over an
-/// object too, it draws over it), the arrow over the toolbar, a selected
+/// The Ruler keeps the crosshair over the canvas: hidden there (an object
+/// shows the move cursor), the arrow over the toolbar, a selected
 /// object's handles their own cursor.
 #[test]
 fn pointer_with_the_ruler() {
     let mut a = with(Some(SEL), vec![rect(300.0, 300.0, 200.0, 100.0)], Some(Tool::Ruler));
     let e = ed(&mut a);
     assert_eq!(ptr(e, 1000.0, 600.0), Cursor::Hidden);
-    assert_eq!(ptr(e, 350.0, 301.0), Cursor::Hidden, "the ruler draws over objects");
+    assert_eq!(ptr(e, 350.0, 301.0), Cursor::Move, "the ruler picks objects up");
     let tb = e.toolbar.clone().expect("toolbar");
     assert!(e.crosshair_at(mid(tb.bar)));
     assert_eq!(e.pointer_at(mid(tb.bar), NONE, true), Cursor::Arrow);
