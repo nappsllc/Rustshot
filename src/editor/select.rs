@@ -653,9 +653,7 @@ impl Edit {
                 for &i in &sel {
                     let o = &mut self.objects[i];
                     let Some(v) = oe::size(o) else { continue };
-                    let (lo, hi) = tools::range(tool_of(o));
-                    let step = if matches!(o, Obj::Magnify { .. }) { 5.0 } else { 1.0 };
-                    oe::set_size(o, (v + d as f32 * step).clamp(lo, hi));
+                    oe::set_size(o, tools::step_size(v, d, tools::range(tool_of(o))));
                     if matches!(o, Obj::Callout { .. }) {
                         self.fit_callout(i, true, true);
                     }

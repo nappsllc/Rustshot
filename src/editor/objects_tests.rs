@@ -891,7 +891,6 @@ fn keys_during_a_drag_wait_or_cancel_it() {
     click(&mut a, 700, 550);
     down(&mut a, 800, 500);
     mv(&mut a, 820, 510);
-    ed(&mut a).last_wheel = Instant::now() - Duration::from_secs(1);
     a.on_event(Ev::Wheel { delta: 120, x: 820, y: 510 });
     up(&mut a, 820, 510);
     assert_eq!(oe::size(&ed(&mut a).objects[0]), Some(4.0));
@@ -931,7 +930,7 @@ fn a_new_callout_survives_restyling() {
     }
     assert_eq!(e.obj.style, CalloutStyle::Ellipse);
     let Obj::Callout { style, size, fill, color, .. } = e.objects[0].clone() else { panic!() };
-    assert_eq!((style, size, fill, color), (CalloutStyle::Ellipse, 19.0, true, C4::rgb(1, 2, 3)));
+    assert_eq!((style, size, fill, color), (CalloutStyle::Ellipse, 21.0, true, C4::rgb(1, 2, 3)), "17 two steps up");
     assert_eq!(e.hi, 0, "no step while typing");
     a.st = State::Edit(Box::new(e));
     type_str(&mut a, "Hi");
@@ -1096,7 +1095,6 @@ fn nudges_and_wheel_ticks_coalesce() {
     assert_eq!(r_of(&ed(&mut a).objects[0]).x, 305.0);
     assert_eq!(ed(&mut a).hi, 2, "one step for the run");
     for _ in 0..3 {
-        ed(&mut a).last_wheel = Instant::now() - Duration::from_secs(1);
         a.on_event(Ev::Wheel { delta: 120, x: 350, y: 301 });
     }
     assert_eq!(oe::size(&ed(&mut a).objects[0]), Some(7.0));
@@ -1217,7 +1215,7 @@ fn a_callouts_style_is_remembered() {
     }
     e.color_selection(C4::rgb(10, 20, 30));
     assert_eq!(e.mem.color(Tool::Callout), C4::rgb(10, 20, 30));
-    assert_eq!(e.mem.size(Tool::Callout), tools::CALLOUT_SIZE + 1.0);
+    assert_eq!(e.mem.size(Tool::Callout), 19.0, "17 a step up");
     assert_eq!(e.mem.fill(Tool::Callout), !fill0);
     assert_eq!(e.cfg.callout_style, "cloud");
     assert_eq!(e.cfg.tool_colors.get("callout").map(String::as_str), Some("#0a141e"));
@@ -1230,7 +1228,7 @@ fn a_callouts_style_is_remembered() {
     key(&mut a, key::ESCAPE);
     click(&mut a, 700, 600);
     let Obj::Callout { style, size, fill, color, .. } = ed(&mut a).objects[1].clone() else { panic!() };
-    assert_eq!((style, size, fill, color), (CalloutStyle::Cloud, tools::CALLOUT_SIZE + 1.0, !fill0, C4::rgb(10, 20, 30)));
+    assert_eq!((style, size, fill, color), (CalloutStyle::Cloud, 19.0, !fill0, C4::rgb(10, 20, 30)));
     // A new overlay starts from the config.
     let mut cfg = ed(&mut a).cfg.clone();
     cfg.callout_style = "ellipse".into();

@@ -30,7 +30,7 @@ fn quiet(mut a: App) -> App {
     a
 }
 
-/// One second before now, for wheel-throttle stamps (no underflow panic
+/// One second before now, for timestamps (no underflow panic
 /// on a clock that started less than a second ago).
 fn a_second_ago() -> Instant {
     let now = Instant::now();
@@ -615,7 +615,6 @@ fn text_commit_cancel_and_click_outside() {
     assert_eq!(ed(&mut a).text.as_ref().map(|t| t.pos), Some(Pt::new(700.0, 600.0)));
     // The wheel does not change sizes while typing.
     let before = ed(&mut a).mem.size(Tool::Text);
-    ed(&mut a).last_wheel = a_second_ago();
     a.on_event(Ev::Wheel { delta: 120, x: 0, y: 0 });
     assert_eq!(ed(&mut a).mem.size(Tool::Text), before);
 }
@@ -693,7 +692,6 @@ fn undo_limit_drops_the_oldest_states() {
 fn wheel_and_size_acts_change_the_active_tool_size() {
     let mut a = app(Some(r(100.0, 100.0, 600.0, 400.0)));
     let wheel = |a: &mut App, delta: i32| {
-        ed(a).last_wheel = a_second_ago();
         a.on_event(Ev::Wheel { delta, x: 10, y: 10 });
     };
     // No tool chosen yet: the pencil's size (the first tool).
@@ -702,10 +700,18 @@ fn wheel_and_size_acts_change_the_active_tool_size() {
     assert_eq!(ed(&mut a).mem.size(Tool::Path), line + 1.0);
     assert_eq!(ed(&mut a).mem.size(Tool::Line), line, "every tool has its own");
     assert_eq!(ed(&mut a).notice.as_ref().map(|t| t.text.clone()), Some(format!("Size {}", line as i32 + 1)));
-    // A second notch within 160 ms is ignored, as is a zero delta.
-    a.on_event(Ev::Wheel { delta: 120, x: 10, y: 10 });
+    // Every notch counts, however quick (no throttle); a notch in pieces
+    // (a high-resolution wheel) counts once it adds up; zero does nothing.
+    wheel(&mut a, 120);
+    assert_eq!(ed(&mut a).mem.size(Tool::Path), line + 2.0);
+    wheel(&mut a, 40);
     wheel(&mut a, 0);
-    assert_eq!(ed(&mut a).mem.size(Tool::Path), line + 1.0);
+    wheel(&mut a, 40);
+    assert_eq!(ed(&mut a).mem.size(Tool::Path), line + 2.0, "two thirds of a notch");
+    wheel(&mut a, 40);
+    assert_eq!(ed(&mut a).mem.size(Tool::Path), line + 3.0);
+    wheel(&mut a, -360);
+    assert_eq!(ed(&mut a).mem.size(Tool::Path), line, "three notches in one message");
     // Invert has no size: the wheel does nothing, the readout is empty.
     key(&mut a, 'I' as u32);
     wheel(&mut a, 120);
