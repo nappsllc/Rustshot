@@ -207,7 +207,10 @@ fn icon(hwnd: HWND) -> HICON {
     if *g == 0 {
         *g = match build_glyph(hwnd) {
             Some(h) => h.0 as usize,
-            None => return unsafe { load_icon() },
+            None => {
+                eprintln!("Rustshot: could not draw the tray icon; using the exe's icon");
+                return unsafe { load_icon() };
+            }
         };
     }
     HICON(*g as *mut _)

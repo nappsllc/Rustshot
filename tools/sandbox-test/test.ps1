@@ -86,6 +86,8 @@ function KillAll { Get-Process rustshot -ErrorAction SilentlyContinue | Stop-Pro
 . "$T\v050.ps1"
 # 0.6.0 (Settings > About opens the powernapps.net short link; Apache-2.0): Checks060.
 . "$T\v060.ps1"
+# 0.6.2 (the tray icon is the drawn app icon, no fallback): Checks062.
+. "$T\v062.ps1"
 # The sideload-signed MSIX (and an update over the older release's): MsixChecks.
 . "$T\msix.ps1"
 HotkeyProbe $log
@@ -137,6 +139,15 @@ if (Test-Path "$T\v060-only") {
     Copy-Item $portable.FullName "$env:TEMP\rustshot.exe"
     Add-Content $log "      portable exe: $($portable.FullName) $((Get-Item $portable.FullName).Length) B"
     Checks060 "$env:TEMP\rustshot.exe"
+    Add-Content $log 'DONE'
+    return
+}
+# <T>\v062-only: just the 0.6.2 checks.
+if (Test-Path "$T\v062-only") {
+    $portable = PortableExe
+    Copy-Item $portable.FullName "$env:TEMP\rustshot.exe"
+    Add-Content $log "      portable exe: $($portable.FullName) $((Get-Item $portable.FullName).Length) B"
+    Checks062 "$env:TEMP\rustshot.exe"
     Add-Content $log 'DONE'
     return
 }
@@ -364,6 +375,7 @@ if ($portable) {
     ChecksData "$env:TEMP\rustshot.exe"
     Checks050 "$env:TEMP\rustshot.exe"
     Checks060 "$env:TEMP\rustshot.exe"
+    Checks062 "$env:TEMP\rustshot.exe"
     RecordingChecks "$env:TEMP\rustshot.exe"
     Start-Process "$env:TEMP\rustshot.exe"
     Check 'portable: daemon started for visual tray check' (WaitFor { [W]::TrayWindow() })
