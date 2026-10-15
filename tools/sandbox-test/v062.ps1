@@ -35,7 +35,7 @@ public static class V62 {
 
 # The taskbar's buttons whose name starts with Rustshot (the notification icons).
 function TrayButtons {
-    $tb = [V62]::FindWindow('Shell_TrayWnd', $null)
+    $tb = [V62]::FindWindow('Shell_TrayWnd', [NullString]::Value)
     if ($tb -eq [IntPtr]::Zero) { return @() }
     $root = [System.Windows.Automation.AutomationElement]::FromHandle($tb)
     $all = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
@@ -55,7 +55,7 @@ function Checks062($exe) {
     $err = "$out\v062-daemon-stderr.txt"
     $dm = WithEnv $vars { Start-Process $exe -ArgumentList 'daemon' -PassThru -RedirectStandardError $err }
     $h = [IntPtr]::Zero
-    $up = WaitFor { $script:v62h = [V62]::FindWindow('rustshot_tray_sbx-062', $null); $script:v62h -ne [IntPtr]::Zero } 10
+    $up = WaitFor { $script:v62h = [V62]::FindWindow('rustshot_tray_sbx-062', [NullString]::Value); $script:v62h -ne [IntPtr]::Zero } 10
     $h = $script:v62h
     Check 'v062 tray: the daemon makes its tray window (rustshot_tray_sbx-062)' ($up -and [W]::Owner($h) -eq $dm.Id) "pid=$($dm.Id)"
     if ($up) {
