@@ -41,6 +41,43 @@ pub const MAGNIFY_SIZE: f32 = 60.0;
 /// is chosen.
 pub const BLUR_SIZE: f32 = 10.0;
 
+/// One size step (a wheel notch, a +/- press): ×1.12 up, ÷1.12 down,
+/// rounded to whole px and never less than 1 px, so thin pens still move
+/// a pixel a notch and a 300 px loupe moves ~30.
+const SIZE_STEP: f32 = 1.12;
+
+/// `v` stepped `notches` sizes (up when positive) within `lo..=hi`.
+pub fn step_size(v: f32, notches: i32, (lo, hi): (f32, f32)) -> f32 {
+    let mut v = v.clamp(lo, hi);
+    for _ in 0..notches.unsigned_abs().min(64) {
+        let n = if notches > 0 {
+            (v * SIZE_STEP).round().max(v.floor() + 1.0)
+        } else {
+            (v / SIZE_STEP).round().min(v.ceil() - 1.0)
+        }
+        .clamp(lo, hi);
+        if n == v {
+            break;
+        }
+        v = n;
+    }
+    v
+}
+
+/// The whole notches in `delta` of wheel (120 a notch) with what is left
+/// of earlier ones in `acc`: a high-resolution wheel or a touchpad sends
+/// a notch in pieces, a fast spin several in one message. Turning back
+/// drops the leftover.
+pub fn wheel_notches(acc: &mut i32, delta: i32) -> i32 {
+    if (*acc > 0 && delta < 0) || (*acc < 0 && delta > 0) {
+        *acc = 0;
+    }
+    *acc = acc.saturating_add(delta);
+    let n = *acc / 120;
+    *acc -= n * 120;
+    n
+}
+
 fn slot(t: Tool) -> usize {
     ALL.iter().position(|x| *x == t).expect("every tool has a slot")
 }
@@ -228,15 +265,14 @@ impl ToolMem {
         true
     }
 
-    /// Step `t`'s size by `dir` within its range; the new size when it
-    /// changed.
+    /// Step `t`'s size `dir` steps ([`step_size`]) within its range; the
+    /// new size when it changed.
     pub fn step(&mut self, t: Tool, dir: i32) -> Option<f32> {
         if !has_size(t) {
             return None;
         }
-        let (lo, hi) = range(t);
         let v = &mut self.size[slot(t)];
-        let n = (*v + dir as f32).clamp(lo, hi);
+        let n = step_size(*v, dir, range(t));
         (n != *v).then(|| {
             *v = n;
             n
@@ -336,6 +372,62 @@ mod tests {
         assert_eq!(m.step(Tool::Invert, 1), None);
         assert!(m.set_color(Tool::Rect, C4::rgb(1, 2, 3)));
         assert!(!m.set_color(Tool::Rect, C4::rgb(1, 2, 3)));
+    }
+
+    #[test]
+    fn size_steps_are_proportional_and_reversible() {
+        let mag = range(Tool::Magnify);
+        // Thin pens still move a pixel a notch; big loupes move ~12 %.
+        assert_eq!(step_size(1.0, 1, (1.0, 50.0)), 2.0);
+        assert_eq!(step_size(3.0, 1, (1.0, 50.0)), 4.0);
+        assert_eq!(step_size(60.0, 1, mag), 67.0);
+        assert_eq!(step_size(200.0, 1, mag), 224.0);
+        assert_eq!(step_size(60.0, -1, mag), 54.0);
+        // A notch up then down lands where it started (short of the top).
+        for lo_hi in [(1.0, 50.0), (2.0, 50.0), (4.0, 100.0), (8.0, 96.0), (12.0, 120.0), mag] {
+            for v in lo_hi.0 as i32..lo_hi.1 as i32 {
+                let v = v as f32;
+                let up = step_size(v, 1, lo_hi);
+                assert!(up > v, "{v} {lo_hi:?}");
+                if up < lo_hi.1 {
+                    assert_eq!(step_size(up, -1, lo_hi), v, "{v} {lo_hi:?}");
+                }
+            }
+        }
+        // The loupe's whole range in a couple dozen notches (it took 280).
+        let mut v = mag.0;
+        let mut n = 0;
+        while v < mag.1 {
+            v = step_size(v, 1, mag);
+            n += 1;
+        }
+        assert!(n <= 25, "{n} notches");
+        assert_eq!(step_size(20.0, n, mag), 300.0, "several notches at once");
+        // Clamped; fractional sizes from the config step to whole ones.
+        assert_eq!(step_size(300.0, 1, mag), 300.0);
+        assert_eq!(step_size(20.0, -3, mag), 20.0);
+        assert_eq!(step_size(500.0, -1, mag), 268.0);
+        assert_eq!(step_size(2.5, 1, (1.0, 50.0)), 3.0);
+        assert_eq!(step_size(2.5, -1, (1.0, 50.0)), 2.0);
+        assert_eq!(step_size(7.0, 0, (1.0, 50.0)), 7.0);
+    }
+
+    #[test]
+    fn wheel_deltas_add_up_to_notches() {
+        let mut acc = 0;
+        assert_eq!(wheel_notches(&mut acc, 120), 1);
+        assert_eq!(wheel_notches(&mut acc, 360), 3, "a fast spin in one message");
+        assert_eq!(acc, 0);
+        // A high-resolution wheel: a notch in eighths.
+        let n: i32 = (0..8).map(|_| wheel_notches(&mut acc, 15)).sum();
+        assert_eq!((n, acc), (1, 0));
+        assert_eq!(wheel_notches(&mut acc, 100), 0);
+        // Turning back drops the leftover: the first notch down is whole.
+        assert_eq!(wheel_notches(&mut acc, -100), 0);
+        assert_eq!(wheel_notches(&mut acc, -20), -1, "-120 so far: one down");
+        assert_eq!(wheel_notches(&mut acc, 0), 0);
+        assert_eq!(wheel_notches(&mut acc, -250), -2);
+        assert_eq!(acc, -10);
     }
 
     #[test]

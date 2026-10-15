@@ -288,12 +288,10 @@ fn tag_size_and_color_are_remembered() {
     let mut a = app();
     a.kind = RunKind::Daemon;
     key(&mut a, 'N' as u32);
-    for _ in 0..4 {
-        act(&mut a, Act::Size(1));
-    }
+    act(&mut a, Act::Size(1));
     let blue = C4::rgb(59, 130, 246);
     act(&mut a, Act::Color(blue));
-    assert_eq!(ed(&mut a).size_label(), "36");
+    assert_eq!(ed(&mut a).size_label(), "36", "32 a step up");
     assert_eq!(ed(&mut a).pending.get("tool_counter_size"), Some(&Some("36".to_string())));
     assert_eq!(ed(&mut a).pending.get("tool_counter_color"), Some(&Some("\"#3b82f6\"".to_string())));
     // The preview: the tag's color in the readout's box.

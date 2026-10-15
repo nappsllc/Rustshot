@@ -3083,7 +3083,8 @@ struct Edit {
     cancelled: bool,
     dirty: bool,
     notice: Option<Toast>,
-    last_wheel: Instant,
+    /// Wheel delta short of a whole notch (see [`tools::wheel_notches`]).
+    wheel_acc: i32,
     font: Option<AnnotFont>,
     th: Theme,
     ui_font: Option<&'static UiFont>,
@@ -3183,7 +3184,7 @@ impl Edit {
             cancelled: false,
             dirty: false,
             notice: None,
-            last_wheel: Instant::now(),
+            wheel_acc: 0,
             font,
             th,
             ui_font,

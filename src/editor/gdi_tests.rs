@@ -951,3 +951,69 @@ fn perf_gdi_magnifier() {
         println!("  per move: {}", per.join(", "));
     }
 }
+
+/// The wheel resizing the tool (Line, Magnify) and a selected loupe at
+/// 3840x2160 (scale 1.5): per notch, the driver's wheel handling +
+/// `damage()` + paint of the damaged rects; and how far a quick scroll
+/// (notches back to back, as a flick sends them) moves the size.
+/// `cargo test --release perf_gdi_wheel_size -- --ignored --nocapture`
+#[test]
+#[ignore = "benchmark; run in release"]
+fn perf_gdi_wheel_size() {
+    let (w, h) = (3840u32, 2160u32);
+    let pct = |v: &mut Vec<f64>, q: f64| {
+        v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        v[((v.len() - 1) as f64 * q) as usize]
+    };
+    let sel = FRect { x: 400.0, y: 300.0, w: 2400.0, h: 1400.0 };
+    for (name, tool, obj) in [("line", Tool::Line, false), ("magnify", Tool::Magnify, false), ("selected loupe", Tool::Magnify, true)] {
+        let shot = Shot { scale: 1.5, ..tiled_shot(w, h) };
+        let mut app = preview_app_with(theme::DARK, Some(sel), shot);
+        {
+            let e = edit_of(&mut app);
+            e.assist.dismiss_hint(Instant::now());
+            e.tool = Some(tool);
+            if obj {
+                let c = C4::rgb(255, 0, 0);
+                e.commit_object(Obj::Magnify { src: Pt::new(900.0, 700.0), dst: Pt::new(1600.0, 1000.0), radius: 60.0, zoom: 2.0, color: c, width: 3.0 });
+                e.obj.sel = vec![0];
+            }
+        }
+        settled(&mut app);
+        attach(&mut app);
+        let t = Target::new(w, h);
+        let _ = app.damage();
+        edit_of(&mut app).paint_gdi(t.dc, &[PxRect::image((w, h))]);
+        let size = |app: &mut App| {
+            let e = edit_of(app);
+            if obj { crate::objects::edit::size(&e.objects[0]).unwrap() } else { e.mem.size(tool) }
+        };
+        let (mut tt, mut th, mut area) = (vec![], vec![], vec![]);
+        for k in 0..120 {
+            let delta = if (k / 30) % 2 == 0 { 120 } else { -120 };
+            let t0 = Instant::now();
+            app.on_event(Ev::Wheel { delta, x: 1600, y: 1000 });
+            th.push(t0.elapsed().as_secs_f64() * 1000.0);
+            let rects = app.damage().unwrap_or_else(|| vec![[0, 0, w as i32, h as i32]]);
+            let rects: Vec<PxRect> = rects.iter().map(|r| PxRect::new(r[0], r[1], r[2], r[3])).collect();
+            edit_of(&mut app).paint_gdi(t.dc, &rects);
+            let _ = t.pixels();
+            tt.push(t0.elapsed().as_secs_f64() * 1000.0);
+            area.push(rects.iter().map(|r| r.w() as f64 * r.h() as f64).sum::<f64>());
+        }
+        // A flick: ten notches up as fast as they come.
+        let s0 = size(&mut app);
+        for _ in 0..10 {
+            app.on_event(Ev::Wheel { delta: 120, x: 1600, y: 1000 });
+        }
+        let s1 = size(&mut app);
+        println!(
+            "GDI BENCH 4K wheel {name}: handler {:.3} ms, with paint median {:.3} p90 {:.3} max {:.3} ms | damage {:.0} px | 10 quick notches: {s0} -> {s1}",
+            pct(&mut th, 0.5),
+            pct(&mut tt.clone(), 0.5),
+            pct(&mut tt.clone(), 0.9),
+            pct(&mut tt, 1.0),
+            pct(&mut area, 0.5)
+        );
+    }
+}

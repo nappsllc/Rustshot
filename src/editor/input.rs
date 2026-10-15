@@ -295,18 +295,16 @@ impl Edit {
         }
     }
 
+    /// The wheel: every notch a size step (of the selected objects, else
+    /// the tool), a notch sent in pieces counted once it adds up.
     pub(super) fn wheel(&mut self, delta: i32) {
-        {
-            if self.text.is_some() || self.obj_dragging() {
-                return;
-            }
-            if delta != 0 && self.last_wheel.elapsed() > Duration::from_millis(160) {
-                self.last_wheel = Instant::now();
-                let dir = if delta > 0 { 1 } else { -1 };
-                if !self.obj_act(Act::ObjSize(dir)) {
-                    self.adjust_size(dir);
-                }
-            }
+        if self.text.is_some() || self.obj_dragging() {
+            self.wheel_acc = 0;
+            return;
+        }
+        let n = tools::wheel_notches(&mut self.wheel_acc, delta);
+        if n != 0 && !self.obj_act(Act::ObjSize(n)) {
+            self.adjust_size(n);
         }
     }
 
