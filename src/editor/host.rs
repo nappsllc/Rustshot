@@ -779,9 +779,9 @@ impl Canvas {
         }
     }
 
-    /// The docked toolbar's buttons' width (logical px) — where the
-    /// window's zoom control can go.
-    pub fn bar_width(&self) -> f32 {
+    /// The docked toolbar's buttons' width (logical px) in a strip `room`
+    /// logical px wide — where the window's zoom control can go.
+    pub fn bar_width(&self, room: f32) -> f32 {
         let cur = self.e.cur_tool();
         let inp = toolbar::Input {
             sel: FRect { x: 0.0, y: 0.0, w: 1.0, h: 1.0 },
@@ -804,7 +804,7 @@ impl Canvas {
             copy_menu: None,
             freeform: None,
         };
-        toolbar::docked_width(&inp)
+        toolbar::docked_width(&inp, room)
     }
 
     /// The objects a drag is moving, resizing or re-aiming (not the

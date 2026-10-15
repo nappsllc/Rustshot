@@ -4,6 +4,36 @@ Release notes for each version are on the GitHub release page
 (https://github.com/nappsllc/rustshot/releases). Lines here are for the
 next release.
 
+## 0.6.3
+
+- Updates: users on 0.6.1 or earlier still need to download this
+  version once from the Releases page (or reinstall it from the
+  Microsoft Store or their package manager): those versions reject the
+  repository's renamed release links. From 0.6.2 on, updates are
+  offered in the app again.
+- Sharper small icons: the 16, 20 and 24 px frames of the app icon (the
+  title bar, the tray and the icon file's small entries, also in the
+  MSIX) are drawn on the pixel grid instead of scaled down from the
+  large icon with blurry thin strokes.
+- The mouse wheel changes the size of the current tool and of the
+  selected objects by about 12 % a notch (as do the - / + buttons and
+  keys), and every notch counts. Before, a notch moved the size by 1 px
+  and notches within 160 ms of each other were dropped, so resizing the
+  Magnify loupe with the wheel was very slow. The partial steps of
+  high-resolution wheels and touchpads add up to notches; on macOS the
+  trackpad's scroll deltas are converted to notches correctly.
+- Window titles: "Rustshot — Settings" and "Rustshot — History"; the
+  Edit window is titled "`<file name>` — Rustshot", with a `*` before it while
+  there are unsaved changes (on macOS the close button's dot instead).
+- Windows: the title bar's text and the window's 1 px border take the
+  colors of Rustshot's own title bar (its theme), so the frame no longer
+  shows a contrasting line.
+- macOS groundwork: Settings, History and the Edit window can run their
+  content under a transparent title bar, their controls clear of the
+  traffic lights (a 72 px zone), with the close button's dot for unsaved
+  changes. Those windows are not available on macOS yet, and this layout
+  is checked by builds and tests only, not yet on a Mac.
+
 ## 0.6.2
 
 - Updates: users on 0.6.1 or earlier won't be offered this update in the

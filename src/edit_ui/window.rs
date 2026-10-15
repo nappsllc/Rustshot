@@ -128,7 +128,7 @@ impl Window {
     fn lay(&self) -> Lay {
         let k = self.k();
         let (w, h) = (self.canvas.width() as f32 / k, self.canvas.height() as f32 / k);
-        draw::layout(&self.e, w, h, self.e.canvas.bar_width())
+        draw::layout(&self.e, w, h, draw::bar_w(&self.e, w))
     }
 
     /// Right to left: the toolbar and the canvas (the picture) keep
@@ -544,7 +544,8 @@ impl Window {
                 {
                     let ly = p.y / k;
                     if (ly - d.y0).abs() > 4.0 || d.to.is_some() {
-                        let lay = draw::layout(&self.e, self.canvas.width() as f32 / k, self.canvas.height() as f32 / k, self.e.canvas.bar_width());
+                        let lw = self.canvas.width() as f32 / k;
+                        let lay = draw::layout(&self.e, lw, self.canvas.height() as f32 / k, draw::bar_w(&self.e, lw));
                         let to = lay.rows.iter().min_by(|a, b| (a.0.y + a.0.h / 2.0 - ly).abs().total_cmp(&(b.0.y + b.0.h / 2.0 - ly).abs())).map(|r| r.1);
                         if let Some(d) = self.e.rail_drag.as_mut() {
                             d.to = to;

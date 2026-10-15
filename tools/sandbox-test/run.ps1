@@ -20,8 +20,8 @@ param(
     [string]$OldMsix,
     # Work folder (mapped into the sandbox as Desktop\test). Results: <Work>\out\results.txt.
     [string]$Work = (Join-Path $env:TEMP 'rustshot-sandbox'),
-    # Just one group: probe (hotkey probe), rec (recording), v030 / v040 / v041 / v050 / v060 / v062 (0.3.0 / 0.4.0 / 0.4.1 / 0.5.0 / 0.6.0 / 0.6.2 checks), data (data files), msix (the MSIX).
-    [ValidateSet('', 'probe', 'rec', 'v030', 'v040', 'v041', 'v050', 'v060', 'v062', 'data', 'msix')] [string]$Only = '',
+    # Just one group: probe (hotkey probe), rec (recording), v030 / v040 / v041 / v050 / v060 / v062 / v063 (0.3.0 / 0.4.0 / 0.4.1 / 0.5.0 / 0.6.0 / 0.6.2 / 0.6.3 checks), data (data files), msix (the MSIX).
+    [ValidateSet('', 'probe', 'rec', 'v030', 'v040', 'v041', 'v050', 'v060', 'v062', 'v063', 'data', 'msix')] [string]$Only = '',
     # A picture with a QR code of an https link for the 0.5.0 Read QR check
     # (e.g. the qr_make_link_light_1x.png preview; without it that check SKIPs).
     [string]$QrPng,
@@ -58,6 +58,12 @@ Copy-Item (Join-Path $here '..\..\models\selfie.bin') $dataDir
 # The language files, for the 0.5.0 checks' "put there by hand" cases.
 Copy-Item (Join-Path $here '..\..\lang') $dataDir -Recurse
 if ($QrPng) { Copy-Item $QrPng (Join-Path $dataDir 'qr.png') }
+# The 0.6.3 icon checks: the new pixel-aligned 16 px frame and 0.6.2's (from
+# git; that check SKIPs without it).
+Copy-Item (Join-Path $here '..\..\packaging\icons\small\rustshot-16.png') (Join-Path $dataDir 'icon16-new.png')
+$old16 = Join-Path $dataDir 'icon16-062.png'
+cmd /c "git -C `"$here`" show v0.6.2:packaging/icons/rustshot-16.png > `"$old16`" 2> nul"
+if ($LASTEXITCODE -ne 0 -or (Get-Item $old16).Length -lt 100) { Remove-Item $old16 -ErrorAction SilentlyContinue }
 if (-not $NoSign) { & (Join-Path $here 'sign-sideload.ps1') -In $signDirs }
 if ($Only) { New-Item -ItemType File (Join-Path $Work "$Only-only") | Out-Null }
 
