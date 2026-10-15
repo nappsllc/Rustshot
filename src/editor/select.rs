@@ -122,6 +122,15 @@ fn tool_of(o: &Obj) -> Tool {
     }
 }
 
+/// The area of a region object hit on its whole area (pixelate, blur,
+/// invert); `None` for the rest (a spotlight is hit on its border only).
+fn region_rect(o: &Obj) -> Option<FRect> {
+    match o {
+        Obj::Pixelate { r, .. } | Obj::Blur { r, .. } | Obj::Invert { r } => Some(*r),
+        _ => None,
+    }
+}
+
 /// `b` resized by dragging `h` to `p` (`aspect`: keep the box's shape).
 fn resize_box(h: Handle, b: FRect, p: Pt, aspect: bool) -> FRect {
     let (mut x0, mut y0, mut x1, mut y1) = (b.x, b.y, b.x1(), b.y1());
@@ -160,10 +169,24 @@ impl Edit {
         HIT_PX * self.ui_scale()
     }
 
-    /// The topmost object under `p`.
+    /// The object under `p`: the topmost one hit, except that inside a
+    /// region (pixelate, blur, invert: hit on its whole area) a
+    /// non-region object hit beneath it is more specific and wins. The
+    /// region keeps the press where nothing else is under it and on its
+    /// border (within the hit slack of its edge); a spotlight is hit on
+    /// its border only. The hover cursor and the press both ask this.
     pub(super) fn obj_at(&self, p: Pt) -> Option<usize> {
         let tol = self.hit_slack();
-        (0..self.objects.len()).rev().find(|&i| oe::hit(&self.objects[i], p, tol, self.font.as_ref()))
+        let font = self.font.as_ref();
+        let mut hits = (0..self.objects.len()).rev().filter(|&i| oe::hit(&self.objects[i], p, tol, font));
+        let top = hits.next()?;
+        let Some(r) = region_rect(&self.objects[top]) else { return Some(top) };
+        let inner = FRect { x: r.x + tol, y: r.y + tol, w: r.w - 2.0 * tol, h: r.h - 2.0 * tol };
+        let interior = inner.w > 0.0 && inner.h > 0.0 && p.x > inner.x && p.x < inner.x1() && p.y > inner.y && p.y < inner.y1();
+        if !interior {
+            return Some(top);
+        }
+        Some(hits.find(|&i| region_rect(&self.objects[i]).is_none()).unwrap_or(top))
     }
 
     /// The selection's box: the union of the selected objects' boxes.

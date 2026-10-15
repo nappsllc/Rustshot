@@ -500,6 +500,13 @@ impl Edit {
                 self.handle_press(h);
                 return;
             }
+            // Then the capture selection's handles resize it, with every
+            // tool (before the objects on its edge and the tool).
+            if let (Some(h), Some(sr)) = (self.sel_handle_at(p), self.sel) {
+                let aspect = if sr.h > 0.0 { sr.w / sr.h } else { 1.0 };
+                self.interact = Interact::Resize { handle: h, orig: sr, aspect };
+                return;
+            }
             // The select tool picks (or starts a marquee); with no tool
             // and the drawing tools a press on an object picks it up too
             // (a drag moves it, a click selects it; Ctrl draws over it).
@@ -534,25 +541,14 @@ impl Edit {
             if self.host.is_some() {
                 return;
             }
-            if let Some(sr) = self.sel {
-                for (h, hp) in handle_points(sr) {
-                    if (hp.x - p.x).hypot(hp.y - p.y) <= HANDLE_HIT * self.ui_scale() {
-                        let aspect = if sr.h > 0.0 { sr.w / sr.h } else { 1.0 };
-                        self.interact = Interact::Resize {
-                            handle: h,
-                            orig: sr,
-                            aspect,
-                        };
-                        return;
-                    }
-                }
-                if hit(sr, p) {
-                    self.interact = Interact::MoveSel {
-                        start: p,
-                        orig: sr,
-                    };
-                    return;
-                }
+            if let Some(sr) = self.sel
+                && hit(sr, p)
+            {
+                self.interact = Interact::MoveSel {
+                    start: p,
+                    orig: sr,
+                };
+                return;
             }
             // Freeform: the lasso starts here.
             self.snip.lasso = if self.snip.freeform { vec![p] } else { Vec::new() };

@@ -2,9 +2,18 @@
 //! press: the chrome first (toolbar, its popovers, the mini-toolbar, the
 //! color ring, the size label's menu button, the notice and the hint
 //! card: the arrow),
-//! then typing and Text mode, the selected objects' handles, an object a
-//! press would pick up (the move cursor), then the tool's own cursor and
-//! the capture selection's handles.
+//! then typing and Text mode (and the crop frame), the selected objects'
+//! handles, the capture selection's handles (resize it with every tool;
+//! only within [`HANDLE_HIT`] of the 8 handles, so drawing next to them
+//! still draws), an object a press would pick up (the move cursor), then
+//! the tool's own cursor (no tool: moving the selection inside it).
+//!
+//! The object picked up is the topmost one hit, except inside a region
+//! (pixelate, blur, invert, hit on its whole area): a non-region object
+//! hit beneath it is more specific and wins. The region keeps the pointer
+//! where nothing else is under it and on its border ([`Edit::obj_at`]).
+//! The Edit window has no capture selection; its crop frame takes every
+//! press while it is up, whatever the tool.
 //!
 //! While the magnifier's crosshair is drawn under the pointer the system
 //! pointer is hidden ([`Edit::pointer_at`]): the hardware cursor leads the
@@ -37,6 +46,15 @@ impl Edit {
             _ => {}
         }
         self.obj_at(p)
+    }
+
+    /// The capture selection's handle under `p` (the overlay only: the
+    /// Edit window has none), whatever the tool: within
+    /// [`HANDLE_HIT`] of one of its 8 handles, not along the edges between.
+    pub(super) fn sel_handle_at(&self, p: Pt) -> Option<Handle> {
+        let sr = self.sel.filter(|_| self.host.is_none())?;
+        let reach = HANDLE_HIT * self.ui_scale();
+        handle_points(sr).into_iter().find(|(_, q)| (q.x - p.x).hypot(q.y - p.y) <= reach).map(|(h, _)| h)
     }
 
     /// The overlay's chrome under `p` (the toolbar and its popovers, the
@@ -104,13 +122,9 @@ impl Edit {
                 select::OHandle::Point(..) => Cursor::Move,
             });
         }
-        // No tool: the capture selection's handles come before the
-        // objects (they sit on its edge).
-        let sel_handle = |e: &Edit| {
-            let sr = e.sel.filter(|_| e.host.is_none() && e.tool.is_none())?;
-            handle_points(sr).into_iter().find(|(_, q)| (q.x - p.x).hypot(q.y - p.y) <= HANDLE_HIT * e.ui_scale()).map(|(h, _)| h)
-        };
-        if let Some(h) = sel_handle(self) {
+        // The capture selection's handles, with every tool, come before
+        // the objects (they sit on its edge) and the tool.
+        if let Some(h) = self.sel_handle_at(p) {
             return C(handle_cursor(h));
         }
         if let Some(i) = self.grab_at(p, mods) {
