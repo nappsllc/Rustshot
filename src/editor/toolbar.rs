@@ -609,9 +609,13 @@ pub fn layout(inp: &Input) -> Toolbar {
         let r = match mode {
             Some(m) => FRect { x: m.x1() + 6.0 * s, y: m.y + (m.h - h) / 2.0, w: h, h },
             None => {
+                // Off the toolbar above (as the mode switch keeps off it).
+                let x = sel.x.clamp(area.x, (area.x1() - h).max(area.x));
                 let up = sel.y - 8.0 * s - h;
-                let y = if up >= area.y + 4.0 * s { up } else { sel.y + 8.0 * s };
-                FRect { x: sel.x.clamp(area.x, (area.x1() - h).max(area.x)), y, w: h, h }
+                let bar_up = above.then(|| pop.map_or(bar, |p| union(bar, p)));
+                let clash = bar_up.is_some_and(|b| up < b.y1() && up + h > b.y && x < b.x1() && x + h > b.x);
+                let y = if up >= area.y + 4.0 * s && !clash { up } else { sel.y + 8.0 * s };
+                FRect { x, y, w: h, h }
             }
         };
         items.push(Item { kind: Kind::Toggle { act: Act::Freeform, icon: "lasso", on }, r, disabled: false });
@@ -996,6 +1000,16 @@ impl Toolbar {
             docked: self.docked,
         }
     }
+}
+
+/// What the size label of selection `sel` keeps off (the toolbar and its
+/// popover when they sit above the selection; Close) and the mode switch
+/// (or freeform toggle) it follows.
+pub fn label_keep_off(tb: Option<&Toolbar>, sel: FRect) -> ([Option<FRect>; 2], Option<FRect>) {
+    let Some(t) = tb else { return ([None, None], None) };
+    let bar = (t.above && t.bar.y1() <= sel.y).then(|| t.pop.map_or(t.bar, |p| union(t.bar, p)));
+    let close = t.items.iter().find(|i| i.kind == Kind::Close).map(|i| i.r);
+    ([bar, close], t.mode)
 }
 
 /// Size label: 8 above the selection's top-left, or 8 inside it when there
