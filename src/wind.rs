@@ -801,7 +801,7 @@ mod tests {
         let native = Overlap::native();
         assert_eq!(native == Overlap::MACOS, cfg!(target_os = "macos"));
         // The traffic lights (12 px dots at x 20 / 40 / 60, y 14) inside.
-        assert!(60.0 + 6.0 < Overlap::MACOS.left && 14.0 + 6.0 < Overlap::MACOS.top);
+        const { assert!(60.0 + 6.0 < Overlap::MACOS.left && 14.0 + 6.0 < Overlap::MACOS.top) };
     }
 
     #[test]
