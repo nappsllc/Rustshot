@@ -23,7 +23,7 @@ next release.
   high-resolution wheels and touchpads add up to notches; on macOS the
   trackpad's scroll deltas are converted to notches correctly.
 - Window titles: "Rustshot — Settings" and "Rustshot — History"; the
-  Edit window is titled "<file> — Rustshot", with a `*` before it while
+  Edit window is titled "`<file name>` — Rustshot", with a `*` before it while
   there are unsaved changes (on macOS the close button's dot instead).
 - Windows: the title bar's text and the window's 1 px border take the
   colors of Rustshot's own title bar (its theme), so the frame no longer
