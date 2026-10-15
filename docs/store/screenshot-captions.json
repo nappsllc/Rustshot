@@ -1,0 +1,352 @@
+{
+  "en-us": [
+    "Mark up a capture right where you took it: highlights, boxes, arrows, numbered tags and callouts.",
+    "Light theme. Circle it, blur a name, zoom in with the magnifier and add a note.",
+    "Text mode: Windows OCR finds the words in the area. Drag across them and copy just the text you need.",
+    "Quick Redact hides e-mails, phone and card numbers, IP addresses and keys in one step (Blur style shown).",
+    "Record MP4 or GIF with system sound, your microphone and a camera bubble you can drag anywhere.",
+    "History keeps every capture for 30 days, with its annotations still editable.",
+    "The Edit window: rotate, resize, and put a capture on a presentation canvas with rounded corners and a shadow.",
+    "Every hotkey can be changed in Settings."
+  ],
+  "ar": [
+    "أضف تعليقاتك على اللقطة في مكانها: تظليل ومربعات وأسهم وأرقام وفقاعات شرح.",
+    "السمة الفاتحة. ارسم دائرة، وموّه اسمًا، وكبّر بالعدسة، وأضف ملاحظة.",
+    "وضع النص: يجد التعرف الضوئي في Windows الكلمات في المنطقة. اسحب فوقها وانسخ النص الذي تحتاجه فقط.",
+    "يخفي «الإخفاء السريع» عناوين البريد وأرقام الهواتف والبطاقات وعناوين IP والمفاتيح بخطوة واحدة (نمط التمويه).",
+    "سجّل MP4 أو GIF مع صوت النظام والميكروفون وفقاعة كاميرا يمكنك سحبها إلى أي مكان.",
+    "يحتفظ «السجل» بكل لقطة لمدة 30 يومًا، مع بقاء تعليقاتها التوضيحية قابلة للتحرير.",
+    "نافذة التحرير: دوّر اللقطة وغيّر حجمها وضعها على لوحة عرض بزوايا مستديرة وظل.",
+    "يمكن تغيير كل اختصار من «الإعدادات»."
+  ],
+  "bg": [
+    "Анотирайте заснетото на място: маркер, правоъгълници, стрелки, номера и балончета.",
+    "Светла тема. Оградете, размажете име, увеличете с лупата и добавете бележка.",
+    "Текстов режим: OCR на Windows намира думите в областта. Плъзнете върху тях и копирайте само нужния текст.",
+    "Бързото заличаване скрива имейли, телефонни номера и номера на карти, IP адреси и ключове с една стъпка (стил „Размазване“).",
+    "Записвайте MP4 или GIF със системния звук, микрофона и балонче с камера, което местите където искате.",
+    "Хронологията пази всяко заснемане 30 дни, а анотациите остават редактируеми.",
+    "Прозорецът за редактиране: завъртете, преоразмерете и поставете снимката на платно за презентация със заоблени ъгли и сянка.",
+    "Всяка клавишна комбинация може да се промени в Настройки."
+  ],
+  "cs": [
+    "Popisky přímo na místě snímku: zvýraznění, rámečky, šipky, číslované značky a bubliny.",
+    "Světlý motiv. Zakroužkujte, rozostřete jméno, přibližte lupou a přidejte poznámku.",
+    "Textový režim: OCR systému Windows najde slova v oblasti. Táhněte přes ně a zkopírujte jen potřebný text.",
+    "Rychlé začernění skryje e-maily, telefonní čísla a čísla karet, IP adresy a klíče jedním krokem (styl Rozostření).",
+    "Nahrávejte MP4 nebo GIF se zvukem systému, mikrofonem a bublinou kamery, kterou přetáhnete kamkoli.",
+    "Historie uchová každý snímek 30 dní a jeho popisky zůstanou upravitelné.",
+    "Okno Upravit: otočte, změňte velikost a umístěte snímek na prezentační plátno se zaoblenými rohy a stínem.",
+    "Každou klávesovou zkratku lze změnit v Nastavení."
+  ],
+  "da": [
+    "Opmærk et skærmbillede lige dér, hvor du tog det: markeringer, bokse, pile, numre og talebobler.",
+    "Lyst tema. Sæt en ring om det, slør et navn, zoom ind med luppen og tilføj en note.",
+    "Teksttilstand: Windows OCR finder ordene i området. Træk hen over dem, og kopiér kun den tekst, du skal bruge.",
+    "Hurtig maskering skjuler e-mails, telefon- og kortnumre, IP-adresser og nøgler i ét trin (Sløring vist).",
+    "Optag MP4 eller GIF med systemlyd, din mikrofon og en kameraboble, du kan trække hen hvor som helst.",
+    "Historik gemmer hvert skærmbillede i 30 dage, og noterne kan stadig redigeres.",
+    "Redigeringsvinduet: rotér, skift størrelse, og læg et skærmbillede på et præsentationslærred med runde hjørner og skygge.",
+    "Alle genvejstaster kan ændres i Indstillinger."
+  ],
+  "de": [
+    "Beschriften Sie eine Aufnahme direkt an Ort und Stelle: Markierungen, Rahmen, Pfeile, Nummern und Sprechblasen.",
+    "Helles Design. Einkreisen, einen Namen weichzeichnen, mit der Lupe vergrößern und eine Notiz hinzufügen.",
+    "Textmodus: Die Windows-Texterkennung findet die Wörter im Bereich. Ziehen Sie darüber und kopieren Sie nur den Text, den Sie brauchen.",
+    "Schnell schwärzen verdeckt E-Mail-Adressen, Telefon- und Kartennummern, IP-Adressen und Schlüssel in einem Schritt (Stil Weichzeichnen).",
+    "Nehmen Sie MP4 oder GIF mit Systemton, Ihrem Mikrofon und einer Kamerablase auf, die Sie überallhin ziehen können.",
+    "Der Verlauf bewahrt jede Aufnahme 30 Tage lang auf – die Anmerkungen bleiben bearbeitbar.",
+    "Das Bearbeiten-Fenster: drehen, Größe ändern und eine Aufnahme auf eine Präsentationsfläche mit runden Ecken und Schatten setzen.",
+    "Jedes Tastenkürzel lässt sich in den Einstellungen ändern."
+  ],
+  "el": [
+    "Σχολιάστε μια λήψη εκεί που την τραβήξατε: επισημάνσεις, πλαίσια, βέλη, αριθμοί και συννεφάκια.",
+    "Ανοιχτό θέμα. Κυκλώστε, θολώστε ένα όνομα, μεγεθύνετε με τον μεγεθυντικό φακό και προσθέστε σημείωση.",
+    "Λειτουργία κειμένου: το OCR των Windows βρίσκει τις λέξεις στην περιοχή. Σύρετε πάνω τους και αντιγράψτε μόνο το κείμενο που θέλετε.",
+    "Η Γρήγορη απόκρυψη κρύβει e-mail, αριθμούς τηλεφώνου και καρτών, διευθύνσεις IP και κλειδιά με ένα βήμα (στυλ Θόλωμα).",
+    "Εγγραφή MP4 ή GIF με τον ήχο συστήματος, το μικρόφωνο και ένα συννεφάκι κάμερας που μετακινείτε όπου θέλετε.",
+    "Το Ιστορικό κρατά κάθε λήψη για 30 ημέρες, με τις σημειώσεις της ακόμη επεξεργάσιμες.",
+    "Το παράθυρο Επεξεργασίας: περιστρέψτε, αλλάξτε μέγεθος και βάλτε μια λήψη σε καμβά παρουσίασης με στρογγυλές γωνίες και σκιά.",
+    "Κάθε συντόμευση αλλάζει από τις Ρυθμίσεις."
+  ],
+  "es": [
+    "Anota una captura justo donde la hiciste: resaltados, recuadros, flechas, números y bocadillos.",
+    "Tema claro. Rodea algo con un círculo, desenfoca un nombre, amplía con la lupa y añade una nota.",
+    "Modo texto: el OCR de Windows encuentra las palabras del área. Arrastra sobre ellas y copia solo el texto que necesitas.",
+    "La ocultación rápida oculta correos, números de teléfono y de tarjeta, direcciones IP y claves en un paso (estilo Desenfoque).",
+    "Graba MP4 o GIF con el sonido del sistema, tu micrófono y una burbuja de cámara que puedes arrastrar a cualquier sitio.",
+    "El Historial guarda cada captura 30 días, con sus anotaciones aún editables.",
+    "La ventana Editar: gira, cambia el tamaño y coloca una captura en un lienzo de presentación con esquinas redondeadas y sombra.",
+    "Todos los atajos de teclado se pueden cambiar en Configuración."
+  ],
+  "fi": [
+    "Merkitse kaappaus suoraan paikan päällä: korostukset, laatikot, nuolet, numerot ja puhekuplat.",
+    "Vaalea teema. Ympyröi, sumenna nimi, suurenna suurennuslasilla ja lisää muistiinpano.",
+    "Tekstitila: Windowsin tekstintunnistus löytää alueen sanat. Vedä niiden yli ja kopioi vain tarvitsemasi teksti.",
+    "Pikapeitto piilottaa sähköpostit, puhelin- ja korttinumerot, IP-osoitteet ja avaimet yhdellä kertaa (Sumennus-tyyli).",
+    "Tallenna MP4 tai GIF järjestelmän äänen, mikrofonin ja minne tahansa vedettävän kamerakuplan kanssa.",
+    "Historia säilyttää jokaisen kaappauksen 30 päivää, ja merkinnät ovat yhä muokattavissa.",
+    "Muokkausikkuna: kierrä, muuta kokoa ja aseta kaappaus esityspohjalle pyöristetyin kulmin ja varjolla.",
+    "Jokaisen pikanäppäimen voi vaihtaa Asetuksissa."
+  ],
+  "fr": [
+    "Annotez une capture là où vous l'avez prise : surlignages, cadres, flèches, numéros et bulles.",
+    "Thème clair. Entourez, floutez un nom, zoomez avec la loupe et ajoutez une note.",
+    "Mode texte : l'OCR de Windows trouve les mots de la zone. Glissez dessus et copiez uniquement le texte voulu.",
+    "Le masquage rapide cache e-mails, numéros de téléphone et de carte, adresses IP et clés en une étape (style Flou).",
+    "Enregistrez en MP4 ou GIF avec le son du système, votre micro et une bulle caméra à placer où vous voulez.",
+    "L'historique conserve chaque capture 30 jours, avec ses annotations toujours modifiables.",
+    "La fenêtre Modifier : faites pivoter, redimensionnez et posez une capture sur un fond de présentation aux coins arrondis, avec ombre.",
+    "Chaque raccourci se modifie dans les Paramètres."
+  ],
+  "he": [
+    "סמנו על הצילום ממש במקום: הדגשות, מסגרות, חצים, מספרים ובועות הסבר.",
+    "ערכת נושא בהירה. הקיפו בעיגול, טשטשו שם, הגדילו עם זכוכית המגדלת והוסיפו הערה.",
+    "מצב טקסט: זיהוי התווים של Windows מוצא את המילים באזור. גררו עליהן והעתיקו רק את הטקסט הדרוש.",
+    "השחרה מהירה מסתירה כתובות דוא\"ל, מספרי טלפון וכרטיסים, כתובות IP ומפתחות בצעד אחד (בסגנון טשטוש).",
+    "הקליטו MP4 או GIF עם צליל המערכת, המיקרופון ובועת מצלמה שאפשר לגרור לכל מקום.",
+    "ההיסטוריה שומרת כל צילום למשך 30 יום, וההערות נשארות ניתנות לעריכה.",
+    "חלון העריכה: סובבו, שנו גודל והניחו צילום על משטח מצגת עם פינות מעוגלות וצל.",
+    "אפשר לשנות כל קיצור מקשים בהגדרות."
+  ],
+  "hi": [
+    "कैप्चर पर वहीं निशान लगाएँ: हाइलाइट, बॉक्स, तीर, क्रमांक और कॉलआउट।",
+    "हल्की थीम। घेरा बनाएँ, नाम धुंधला करें, आवर्धक से ज़ूम करें और नोट जोड़ें।",
+    "टेक्स्ट मोड: Windows OCR क्षेत्र के शब्द ढूँढता है। उन पर खींचें और सिर्फ़ ज़रूरी टेक्स्ट कॉपी करें।",
+    "त्वरित छिपाव ई-मेल, फ़ोन और कार्ड नंबर, IP पते और कुंजियाँ एक ही चरण में छिपाता है (धुंधला शैली)।",
+    "सिस्टम ध्वनि, अपने माइक्रोफ़ोन और कहीं भी खींचे जा सकने वाले कैमरा बबल के साथ MP4 या GIF रिकॉर्ड करें।",
+    "इतिहास हर कैप्चर को 30 दिन रखता है, और उसके एनोटेशन संपादन योग्य रहते हैं।",
+    "संपादन विंडो: घुमाएँ, आकार बदलें और कैप्चर को गोल कोनों व छाया वाले प्रस्तुति कैनवास पर रखें।",
+    "हर हॉटकी सेटिंग्स में बदली जा सकती है।"
+  ],
+  "hr": [
+    "Označite snimku ondje gdje ste je snimili: isticanja, okviri, strelice, brojevi i oblačići.",
+    "Svijetla tema. Zaokružite, zamutite ime, povećajte povećalom i dodajte bilješku.",
+    "Tekstni način: OCR sustava Windows pronalazi riječi u području. Povucite preko njih i kopirajte samo potreban tekst.",
+    "Brzo zatamnjivanje u jednom koraku skriva e-adrese, brojeve telefona i kartica, IP adrese i ključeve (stil Zamućenje).",
+    "Snimajte MP4 ili GIF sa zvukom sustava, mikrofonom i oblačićem kamere koji možete povući bilo kamo.",
+    "Povijest čuva svaku snimku 30 dana, a oznake ostaju uredive.",
+    "Prozor Uredi: zakrenite, promijenite veličinu i stavite snimku na prezentacijsko platno sa zaobljenim kutovima i sjenom.",
+    "Svaki tipkovni prečac može se promijeniti u Postavkama."
+  ],
+  "hu": [
+    "Jelölje meg a képet ott, ahol készítette: kiemelés, keretek, nyilak, számok és szövegbuborékok.",
+    "Világos téma. Karikázza be, mossa el a nevet, nagyítson a nagyítóval, és írjon megjegyzést.",
+    "Szöveg mód: a Windows szövegfelismerése megtalálja a terület szavait. Húzza át rajtuk, és csak a kellő szöveget másolja.",
+    "A Gyors kitakarás egy lépésben elrejti az e-mail-címeket, telefon- és kártyaszámokat, IP-címeket és kulcsokat (Elmosás stílus).",
+    "Rögzítsen MP4-et vagy GIF-et rendszerhanggal, mikrofonnal és bárhová húzható kamerabuborékkal.",
+    "Az Előzmények 30 napig megőrzik a képeket, a jegyzetek továbbra is szerkeszthetők.",
+    "A Szerkesztés ablak: forgatás, átméretezés, és a kép bemutató vászonra helyezése lekerekített sarkokkal és árnyékkal.",
+    "Minden billentyűparancs módosítható a Beállításokban."
+  ],
+  "id": [
+    "Beri anotasi pada tangkapan langsung di tempat: sorotan, kotak, panah, nomor, dan balon keterangan.",
+    "Tema terang. Lingkari, buramkan nama, perbesar dengan kaca pembesar, dan tambahkan catatan.",
+    "Mode teks: OCR Windows menemukan kata-kata di area. Seret di atasnya dan salin hanya teks yang Anda perlukan.",
+    "Sensor Cepat menyembunyikan email, nomor telepon dan kartu, alamat IP, serta kunci dalam satu langkah (gaya Buram).",
+    "Rekam MP4 atau GIF dengan suara sistem, mikrofon, dan gelembung kamera yang bisa diseret ke mana saja.",
+    "Riwayat menyimpan setiap tangkapan selama 30 hari, dengan anotasi yang tetap bisa diedit.",
+    "Jendela Edit: putar, ubah ukuran, dan letakkan tangkapan di kanvas presentasi dengan sudut membulat dan bayangan.",
+    "Setiap tombol pintas bisa diubah di Pengaturan."
+  ],
+  "it": [
+    "Annota una cattura proprio dove l'hai fatta: evidenziazioni, riquadri, frecce, numeri e fumetti.",
+    "Tema chiaro. Cerchia, sfoca un nome, ingrandisci con la lente e aggiungi una nota.",
+    "Modalità testo: l'OCR di Windows trova le parole nell'area. Trascina sopra di esse e copia solo il testo che ti serve.",
+    "L'oscuramento rapido nasconde e-mail, numeri di telefono e di carta, indirizzi IP e chiavi in un solo passaggio (stile Sfocatura).",
+    "Registra MP4 o GIF con l'audio di sistema, il microfono e una bolla della fotocamera da trascinare ovunque.",
+    "La Cronologia conserva ogni cattura per 30 giorni, con le annotazioni ancora modificabili.",
+    "La finestra Modifica: ruota, ridimensiona e metti una cattura su una tela da presentazione con angoli arrotondati e ombra.",
+    "Ogni scorciatoia si può cambiare nelle Impostazioni."
+  ],
+  "ja": [
+    "撮ったその場で注釈を追加：マーカー、四角形、矢印、番号、吹き出し。",
+    "ライトテーマ。丸で囲み、名前をぼかし、拡大鏡でズームしてメモを追加。",
+    "テキストモード：Windows の OCR が範囲内の文字を認識。ドラッグして必要なテキストだけをコピー。",
+    "クイック墨消しで、メール、電話番号、カード番号、IP アドレス、キーを一度に隠せます（ぼかしスタイル）。",
+    "システム音、マイク、好きな場所へドラッグできるカメラ表示付きで MP4 や GIF を録画。",
+    "履歴はすべてのキャプチャを 30 日間保存し、注釈もあとから編集できます。",
+    "編集ウィンドウ：回転、サイズ変更、角丸と影の付いたプレゼン用キャンバスへの配置。",
+    "ホットキーはすべて設定で変更できます。"
+  ],
+  "ko": [
+    "캡처한 자리에서 바로 표시: 형광펜, 상자, 화살표, 번호, 말풍선.",
+    "밝은 테마. 동그라미를 치고, 이름을 흐리게 하고, 돋보기로 확대하고 메모를 추가하세요.",
+    "텍스트 모드: Windows OCR이 영역의 단어를 찾습니다. 드래그해서 필요한 텍스트만 복사하세요.",
+    "빠른 가리기로 이메일, 전화번호, 카드 번호, IP 주소, 키를 한 번에 가립니다(흐리게 스타일).",
+    "시스템 소리, 마이크, 어디로든 끌어 놓을 수 있는 카메라 버블과 함께 MP4나 GIF로 녹화하세요.",
+    "기록은 모든 캡처를 30일 동안 보관하며 주석도 계속 편집할 수 있습니다.",
+    "편집 창: 회전, 크기 조정, 둥근 모서리와 그림자가 있는 프레젠테이션 캔버스에 배치.",
+    "모든 단축키는 설정에서 바꿀 수 있습니다."
+  ],
+  "lt": [
+    "Žymėkite nuotrauką ten, kur ją padarėte: paryškinimai, rėmeliai, rodyklės, numeriai ir debesėliai.",
+    "Šviesi tema. Apveskite, sulieskite vardą, padidinkite lupa ir pridėkite pastabą.",
+    "Teksto režimas: „Windows“ OCR randa srities žodžius. Pertempkite per juos ir kopijuokite tik reikiamą tekstą.",
+    "Greitas užtušavimas vienu žingsniu paslepia el. paštus, telefono ir kortelių numerius, IP adresus ir raktus (stilius „Suliejimas“).",
+    "Įrašykite MP4 ar GIF su sistemos garsu, mikrofonu ir kameros burbulu, kurį galima nutempti bet kur.",
+    "Istorija saugo kiekvieną nuotrauką 30 dienų, o žymėjimus vis dar galima redaguoti.",
+    "Redagavimo langas: pasukite, pakeiskite dydį ir padėkite nuotrauką ant pristatymo drobės su užapvalintais kampais ir šešėliu.",
+    "Kiekvieną spartųjį klavišą galima pakeisti parametruose."
+  ],
+  "nb": [
+    "Merk opp et skjermbilde der du tok det: markeringer, bokser, piler, tall og snakkebobler.",
+    "Lyst tema. Ring det inn, gjør et navn uskarpt, zoom inn med forstørrelsesglasset og legg til et notat.",
+    "Tekstmodus: Windows OCR finner ordene i området. Dra over dem og kopier bare teksten du trenger.",
+    "Hurtigsladding skjuler e-post, telefon- og kortnumre, IP-adresser og nøkler i ett trinn (stilen Uskarphet).",
+    "Ta opp MP4 eller GIF med systemlyd, mikrofonen og en kameraboble du kan dra hvor som helst.",
+    "Historikk tar vare på hvert skjermbilde i 30 dager, og merknadene kan fortsatt redigeres.",
+    "Redigeringsvinduet: roter, endre størrelse og legg et skjermbilde på et presentasjonslerret med runde hjørner og skygge.",
+    "Alle hurtigtaster kan endres i Innstillinger."
+  ],
+  "nl": [
+    "Annoteer een opname ter plekke: markeringen, kaders, pijlen, nummers en tekstballonnen.",
+    "Licht thema. Omcirkel iets, vervaag een naam, zoom in met het vergrootglas en voeg een notitie toe.",
+    "Tekstmodus: Windows OCR vindt de woorden in het gebied. Sleep eroverheen en kopieer alleen de tekst die je nodig hebt.",
+    "Snel onleesbaar maken verbergt e-mailadressen, telefoon- en kaartnummers, IP-adressen en sleutels in één stap (stijl Vervagen).",
+    "Neem MP4 of GIF op met systeemgeluid, je microfoon en een camerabubbel die je overal heen sleept.",
+    "Geschiedenis bewaart elke opname 30 dagen, met aantekeningen die nog te bewerken zijn.",
+    "Het venster Bewerken: draai, wijzig het formaat en zet een opname op een presentatiecanvas met ronde hoeken en een schaduw.",
+    "Elke sneltoets is te wijzigen in Instellingen."
+  ],
+  "pl": [
+    "Dodawaj adnotacje od razu w miejscu zrzutu: zakreślenia, ramki, strzałki, numery i dymki.",
+    "Jasny motyw. Zakreśl, rozmyj nazwisko, powiększ lupą i dodaj notatkę.",
+    "Tryb tekstu: OCR systemu Windows znajduje słowa w obszarze. Przeciągnij po nich i skopiuj tylko potrzebny tekst.",
+    "Szybkie maskowanie w jednym kroku ukrywa e-maile, numery telefonów i kart, adresy IP oraz klucze (styl Rozmycie).",
+    "Nagrywaj MP4 lub GIF z dźwiękiem systemu, mikrofonem i dymkiem kamery, który przeciągniesz w dowolne miejsce.",
+    "Historia przechowuje każdy zrzut przez 30 dni, a adnotacje nadal można edytować.",
+    "Okno Edytuj: obróć, zmień rozmiar i umieść zrzut na płótnie prezentacji z zaokrąglonymi rogami i cieniem.",
+    "Każdy skrót klawiszowy można zmienić w Ustawieniach."
+  ],
+  "pt-br": [
+    "Faça anotações na captura ali mesmo: destaques, caixas, setas, números e balões.",
+    "Tema claro. Circule, desfoque um nome, amplie com a lupa e adicione uma nota.",
+    "Modo texto: o OCR do Windows encontra as palavras na área. Arraste sobre elas e copie só o texto de que precisa.",
+    "A Ocultação rápida esconde e-mails, números de telefone e de cartão, endereços IP e chaves em um passo (estilo Desfoque).",
+    "Grave MP4 ou GIF com o som do sistema, seu microfone e uma bolha de câmera que você arrasta para qualquer lugar.",
+    "O Histórico guarda cada captura por 30 dias, com as anotações ainda editáveis.",
+    "A janela Editar: gire, redimensione e coloque uma captura em uma tela de apresentação com cantos arredondados e sombra.",
+    "Todos os atalhos podem ser alterados em Configurações."
+  ],
+  "pt-pt": [
+    "Anote uma captura no próprio local: destaques, caixas, setas, números e balões.",
+    "Tema claro. Circunde, desfoque um nome, amplie com a lupa e adicione uma nota.",
+    "Modo de texto: o OCR do Windows encontra as palavras na área. Arraste sobre elas e copie apenas o texto de que precisa.",
+    "A Ocultação rápida esconde e-mails, números de telefone e de cartão, endereços IP e chaves num só passo (estilo Desfoque).",
+    "Grave MP4 ou GIF com o som do sistema, o seu microfone e uma bolha de câmara que pode arrastar para qualquer lado.",
+    "O Histórico guarda cada captura durante 30 dias, com as anotações ainda editáveis.",
+    "A janela Editar: rode, redimensione e coloque uma captura numa tela de apresentação com cantos arredondados e sombra.",
+    "Todos os atalhos podem ser alterados nas Definições."
+  ],
+  "ro": [
+    "Adnotați captura chiar acolo unde ați făcut-o: evidențieri, chenare, săgeți, numere și baloane.",
+    "Temă deschisă. Încercuiți, estompați un nume, măriți cu lupa și adăugați o notă.",
+    "Modul text: OCR-ul Windows găsește cuvintele din zonă. Trageți peste ele și copiați doar textul de care aveți nevoie.",
+    "Ascunderea rapidă acoperă e-mailuri, numere de telefon și de card, adrese IP și chei într-un singur pas (stilul Estompare).",
+    "Înregistrați MP4 sau GIF cu sunetul sistemului, microfonul și o bulă de cameră pe care o mutați oriunde.",
+    "Istoricul păstrează fiecare captură 30 de zile, cu adnotările încă editabile.",
+    "Fereastra Editare: rotiți, redimensionați și puneți o captură pe o pânză de prezentare cu colțuri rotunjite și umbră.",
+    "Orice tastă rapidă poate fi schimbată din Setări."
+  ],
+  "ru": [
+    "Размечайте снимок прямо на месте: маркер, рамки, стрелки, номера и выноски.",
+    "Светлая тема. Обведите, размойте имя, увеличьте лупой и добавьте заметку.",
+    "Режим текста: OCR Windows находит слова в области. Проведите по ним и скопируйте только нужный текст.",
+    "Быстрое скрытие за один шаг прячет e-mail, номера телефонов и карт, IP-адреса и ключи (стиль «Размытие»).",
+    "Записывайте MP4 или GIF со звуком системы, микрофоном и окошком камеры, которое можно перетащить куда угодно.",
+    "История хранит каждый снимок 30 дней, а пометки на нём можно править.",
+    "Окно правки: поверните, измените размер и положите снимок на фон для презентации со скруглёнными углами и тенью.",
+    "Любое сочетание клавиш можно изменить в параметрах."
+  ],
+  "sl": [
+    "Označite posnetek kar na mestu: poudarki, okvirji, puščice, številke in oblački.",
+    "Svetla tema. Obkrožite, zameglite ime, povečajte s povečevalom in dodajte opombo.",
+    "Besedilni način: OCR sistema Windows najde besede v območju. Povlecite čeznje in kopirajte le potrebno besedilo.",
+    "Hitro zakrivanje v enem koraku skrije e-poštne naslove, telefonske številke in številke kartic, naslove IP in ključe (slog Zameglitev).",
+    "Snemajte MP4 ali GIF z zvokom sistema, mikrofonom in oblačkom kamere, ki ga povlečete kamorkoli.",
+    "Zgodovina hrani vsak posnetek 30 dni, oznake pa ostanejo urejljive.",
+    "Okno Uredi: zasukajte, spremenite velikost in postavite posnetek na predstavitveno platno z zaobljenimi robovi in senco.",
+    "Vsako bližnjico lahko spremenite v Nastavitvah."
+  ],
+  "sr-Latn": [
+    "Obeležite snimak tamo gde ste ga napravili: isticanja, okviri, strelice, brojevi i oblačići.",
+    "Svetla tema. Zaokružite, zamutite ime, uvećajte lupom i dodajte belešku.",
+    "Režim teksta: Windows OCR pronalazi reči u oblasti. Prevucite preko njih i kopirajte samo potreban tekst.",
+    "Brzo prikrivanje u jednom koraku skriva e-adrese, brojeve telefona i kartica, IP adrese i ključeve (stil Zamućenje).",
+    "Snimajte MP4 ili GIF sa zvukom sistema, mikrofonom i oblačićem kamere koji možete prevući bilo gde.",
+    "Istorija čuva svaki snimak 30 dana, a oznake ostaju izmenljive.",
+    "Prozor Uredi: rotirajte, promenite veličinu i postavite snimak na prezentacijsko platno sa zaobljenim uglovima i senkom.",
+    "Svaka prečica na tastaturi može se promeniti u Podešavanjima."
+  ],
+  "sv": [
+    "Märk upp en skärmbild direkt där du tog den: markeringar, rutor, pilar, nummer och pratbubblor.",
+    "Ljust tema. Ringa in, gör ett namn oskarpt, zooma in med förstoringsglaset och lägg till en anteckning.",
+    "Textläge: Windows OCR hittar orden i området. Dra över dem och kopiera bara den text du behöver.",
+    "Snabbmaskering döljer e-post, telefon- och kortnummer, IP-adresser och nycklar i ett steg (stilen Oskärpa).",
+    "Spela in MP4 eller GIF med systemljud, din mikrofon och en kamerabubbla som du kan dra vart som helst.",
+    "Historik sparar varje skärmbild i 30 dagar, och anteckningarna går fortfarande att redigera.",
+    "Redigeringsfönstret: rotera, ändra storlek och lägg en skärmbild på en presentationsduk med rundade hörn och skugga.",
+    "Alla kortkommandon kan ändras i Inställningar."
+  ],
+  "th": [
+    "ใส่คำอธิบายบนภาพที่จับได้ทันที: ไฮไลต์ กรอบ ลูกศร ตัวเลข และกล่องข้อความ",
+    "ธีมสว่าง วงกลม เบลอชื่อ ซูมด้วยแว่นขยาย และเพิ่มบันทึก",
+    "โหมดข้อความ: OCR ของ Windows หาคำในพื้นที่ ลากผ่านแล้วคัดลอกเฉพาะข้อความที่ต้องการ",
+    "ปิดบังด่วนซ่อนอีเมล หมายเลขโทรศัพท์และบัตร ที่อยู่ IP และคีย์ได้ในขั้นตอนเดียว (แสดงแบบเบลอ)",
+    "บันทึก MP4 หรือ GIF พร้อมเสียงระบบ ไมโครโฟน และวงกล้องที่ลากไปไว้ตรงไหนก็ได้",
+    "ประวัติเก็บทุกภาพไว้ 30 วัน และยังแก้ไขคำอธิบายประกอบได้",
+    "หน้าต่างแก้ไข: หมุน ปรับขนาด และวางภาพบนผืนผ้าใบนำเสนอที่มีมุมโค้งและเงา",
+    "เปลี่ยนปุ่มลัดทุกปุ่มได้ในการตั้งค่า"
+  ],
+  "tr": [
+    "Ekran görüntüsünü çektiğiniz yerde işaretleyin: vurgular, kutular, oklar, numaralar ve konuşma balonları.",
+    "Açık tema. Daire içine alın, bir adı bulanıklaştırın, büyüteçle yakınlaştırın ve not ekleyin.",
+    "Metin modu: Windows OCR alandaki sözcükleri bulur. Üzerlerinde sürükleyin ve yalnızca gereken metni kopyalayın.",
+    "Hızlı Karartma e-postaları, telefon ve kart numaralarını, IP adreslerini ve anahtarları tek adımda gizler (Bulanık stil).",
+    "Sistem sesi, mikrofonunuz ve istediğiniz yere sürükleyebileceğiniz bir kamera balonuyla MP4 veya GIF kaydedin.",
+    "Geçmiş her görüntüyü 30 gün saklar; ek açıklamalar düzenlenebilir kalır.",
+    "Düzenle penceresi: döndürün, yeniden boyutlandırın ve görüntüyü yuvarlak köşeli, gölgeli bir sunum tuvaline yerleştirin.",
+    "Her kısayol tuşu Ayarlar'dan değiştirilebilir."
+  ],
+  "uk": [
+    "Робіть позначки на знімку просто на місці: маркер, рамки, стрілки, номери та виноски.",
+    "Світла тема. Обведіть, розмийте ім'я, збільште лупою та додайте нотатку.",
+    "Режим тексту: OCR Windows знаходить слова в області. Проведіть по них і скопіюйте лише потрібний текст.",
+    "Швидке приховування за один крок ховає e-mail, номери телефонів і карток, IP-адреси та ключі (стиль «Розмиття»).",
+    "Записуйте MP4 або GIF зі звуком системи, мікрофоном і віконцем камери, яке можна перетягнути будь-куди.",
+    "Історія зберігає кожен знімок 30 днів, а позначки на ньому можна редагувати.",
+    "Вікно редагування: поверніть, змініть розмір і покладіть знімок на тло для презентації із заокругленими кутами й тінню.",
+    "Будь-яке сполучення клавіш можна змінити в настройках."
+  ],
+  "vi": [
+    "Chú thích ảnh chụp ngay tại chỗ: tô sáng, khung, mũi tên, số thứ tự và bong bóng chú thích.",
+    "Giao diện sáng. Khoanh tròn, làm mờ tên, phóng to bằng kính lúp và thêm ghi chú.",
+    "Chế độ văn bản: OCR của Windows tìm các từ trong vùng. Kéo qua chúng và chỉ sao chép phần văn bản bạn cần.",
+    "Che nhanh ẩn email, số điện thoại và số thẻ, địa chỉ IP và khóa chỉ trong một bước (kiểu Làm mờ).",
+    "Quay MP4 hoặc GIF với âm thanh hệ thống, micrô và bong bóng camera có thể kéo đến bất cứ đâu.",
+    "Lịch sử giữ mọi ảnh chụp trong 30 ngày, chú thích vẫn chỉnh sửa được.",
+    "Cửa sổ Chỉnh sửa: xoay, đổi kích thước và đặt ảnh chụp lên khung trình bày có góc bo tròn và đổ bóng.",
+    "Mọi phím tắt đều có thể đổi trong Cài đặt."
+  ],
+  "zh-Hans": [
+    "截图后就地标注：荧光笔、方框、箭头、编号和标注框。",
+    "浅色主题。圈出重点、模糊姓名、用放大镜放大并添加备注。",
+    "文本模式：Windows OCR 识别区域中的文字。拖动选择，只复制需要的文本。",
+    "快速遮盖一步隐藏电子邮件、电话和卡号、IP 地址和密钥（图为模糊样式）。",
+    "录制 MP4 或 GIF，可带系统声音、麦克风和可随意拖动的摄像头气泡。",
+    "历史记录将每张截图保留 30 天，标注仍可编辑。",
+    "编辑窗口：旋转、调整大小，并将截图放在带圆角和阴影的演示画布上。",
+    "所有快捷键都可以在设置中更改。"
+  ],
+  "zh-Hant": [
+    "擷取後就地標註：螢光筆、方框、箭頭、編號和圖說。",
+    "淺色主題。圈出重點、模糊姓名、用放大鏡放大並加上附註。",
+    "文字模式：Windows OCR 辨識區域中的文字。拖曳選取，只複製需要的文字。",
+    "快速遮蔽一步隱藏電子郵件、電話與卡號、IP 位址和金鑰（圖為模糊樣式）。",
+    "錄製 MP4 或 GIF，可加入系統音效、麥克風與可隨意拖曳的攝影機泡泡。",
+    "歷程記錄會將每張擷取保留 30 天，標註仍可編輯。",
+    "編輯視窗：旋轉、調整大小，並將擷取放在具有圓角與陰影的簡報畫布上。",
+    "所有快速鍵都能在設定中變更。"
+  ]
+}

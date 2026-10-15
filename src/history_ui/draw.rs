@@ -16,6 +16,9 @@ use crate::uifb::{Fb, C4};
 pub const HDR_H: f32 = 48.0;
 pub const FOOT_H: f32 = 28.0;
 pub const PANEL_W: f32 = 320.0;
+/// A button's label and icon keep at least this far from its ends (a
+/// longer label is cut).
+const BTN_MIN_PAD: f32 = 4.0;
 pub const DAY_H: f32 = 30.0;
 pub const PAD_X: f32 = 24.0;
 pub const GAP: f32 = 16.0;
@@ -395,15 +398,42 @@ pub struct PanelLay {
     pub delete: FRect,
 }
 
-pub fn panel_lay(p: FRect) -> PanelLay {
+/// The details panel's two labelled buttons: Edit and Open file, or for
+/// a recording Open and Show in folder.
+pub fn panel_labels(rec: bool) -> (&'static str, &'static str) {
+    if rec { (tr!("history.open"), tr!("history.show_in_folder")) } else { (tr!("history.edit"), tr!("history.open_file")) }
+}
+
+/// The details panel's parts in `p`, its buttons sized for the labels of
+/// a recording (`rec`) or a capture.
+pub fn panel_lay(p: FRect, rec: bool) -> PanelLay {
     let by = p.y1() - 56.0;
+    // As on the board: Edit and Open file share the row (flex 1), 8 px
+    // apart and 8 px before Delete; a label too long for half the row
+    // takes what the other one does not need.
+    let delete = FRect { x: p.x1() - 16.0 - 36.0, y: by + 14.0, w: 36.0, h: 28.0 };
+    let room = delete.x - 8.0 - (p.x + 16.0) - 8.0;
+    // Each label's width with its icon and 8 px at each end, down to 4 px
+    // when both would not fit otherwise.
+    let (le, lo) = panel_labels(rec);
+    let need = |s: &str, pad: f32| (crate::uifb::text_width(&crate::fonts::UI, 12.0 * CSS, s) + 20.0 + 2.0 * pad + 1.0).ceil();
+    let pad = [8.0, 6.0, BTN_MIN_PAD].into_iter().find(|&pad| need(le, pad) + need(lo, pad) <= room).unwrap_or(BTN_MIN_PAD);
+    let (ne, no) = (need(le, pad), need(lo, pad));
+    let ew = if ne <= room / 2.0 && no <= room / 2.0 {
+        room / 2.0
+    } else if ne + no <= room {
+        if ne > no { ne } else { room - no }
+    } else {
+        room * ne / (ne + no)
+    }
+    .floor();
     PanelLay {
         close: FRect { x: p.x1() - 10.0 - IB, y: p.y + 6.0, w: IB, h: IB },
         preview: FRect { x: p.x + 16.0, y: p.y + 40.0 + 14.0, w: p.w - 32.0, h: 160.0 },
         rows_y: p.y + 40.0 + 14.0 + 160.0 + 10.0,
-        edit: FRect { x: p.x + 16.0, y: by + 14.0, w: 122.0, h: 28.0 },
-        open: FRect { x: p.x + 16.0 + 122.0 + 8.0, y: by + 14.0, w: 122.0, h: 28.0 },
-        delete: FRect { x: p.x1() - 16.0 - 36.0, y: by + 14.0, w: 36.0, h: 28.0 },
+        edit: FRect { x: p.x + 16.0, y: by + 14.0, w: ew, h: 28.0 },
+        open: FRect { x: p.x + 16.0 + ew + 8.0, y: by + 14.0, w: (room - ew).floor(), h: 28.0 },
+        delete,
     }
 }
 
@@ -580,7 +610,7 @@ pub fn targets(ui: &Ui, lay: &Lay, h: &History, mouse: (f32, f32)) -> Vec<(FRect
         }
         if let Some(p) = lay.panel {
             t.push((p, Target::Inert));
-            let pl = panel_lay(p);
+            let pl = panel_lay(p, h.single().is_some_and(|e| e.meta.kind.is_recording()));
             t.push((pl.close, Target::PanelClose));
             t.push((pl.edit, Target::PanelEdit));
             t.push((pl.open, Target::PanelOpen));
@@ -1220,7 +1250,7 @@ fn paint_panel(ui: &mut Ui, h: &mut History, pr: FRect, t: &WTok, hover: Option<
     fill(ui, pr, 0.0, t.rail);
     line_v(ui, pr.x, pr.y, pr.h, t.sep);
     let Some(e) = h.single().cloned() else { return };
-    let pl = panel_lay(pr);
+    let pl = panel_lay(pr, e.meta.kind.is_recording());
     text(ui, 12.5, tr!("history.details"), pr.x + 16.0, pr.y + 20.0, t.tx, true);
     let hov = hover == Some(&Target::PanelClose);
     btn_bg(ui, pl.close, t, false, hov, 7.0);
@@ -1288,8 +1318,9 @@ fn paint_panel(ui: &mut Ui, h: &mut History, pr: FRect, t: &WTok, hover: Option<
     line_h(ui, pr.x, pl.edit.y - 14.0, pr.w, t.sep);
     let rec = e.meta.kind.is_recording();
     let (hov_e, hov_o, hov_d) = (hover == Some(&Target::PanelEdit), hover == Some(&Target::PanelOpen), hover == Some(&Target::PanelDelete));
-    button(ui, pl.edit, if rec { tr!("history.open") } else { tr!("history.edit") }, Some(if rec { "play" } else { "pencil" }), Style::Pri, hov_e, t);
-    button(ui, pl.open, if rec { tr!("history.show_in_folder") } else { tr!("history.open_file") }, Some("folder"), Style::Plain, hov_o, t);
+    let (le, lo) = panel_labels(rec);
+    button(ui, pl.edit, le, Some(if rec { "play" } else { "pencil" }), Style::Pri, hov_e, t);
+    button(ui, pl.open, lo, Some("folder"), Style::Plain, hov_o, t);
     button(ui, pl.delete, "", Some("trash"), Style::Danger, hov_d, t);
 }
 
@@ -1316,6 +1347,15 @@ pub fn button(ui: &mut Ui, r: FRect, label: &str, icn: Option<&str>, st: Style, 
     if rg.a > 0 {
         ring(ui, r, 7.0, rg);
     }
+    // A label longer than the button: cut to fit (never past its ends).
+    let room = r.w - 2.0 * BTN_MIN_PAD - if icn.is_some() { 20.0 } else { 0.0 };
+    let cut;
+    let label = if !label.is_empty() && ui.text_w(12.0, label) > room {
+        cut = ui.fit_text(12.0, label, room.max(0.0));
+        cut.as_str()
+    } else {
+        label
+    };
     let lw = if label.is_empty() { 0.0 } else { ui.text_w(12.0, label) };
     let cw = lw + if icn.is_some() { if label.is_empty() { 14.0 } else { 20.0 } } else { 0.0 };
     let mut x = r.x + (r.w - cw) / 2.0;

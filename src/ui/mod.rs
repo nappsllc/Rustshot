@@ -815,6 +815,18 @@ pub mod preview {
         v
     }
 
+    /// The Microsoft Store screenshots' languages: English, then the
+    /// catalogs `RUSTSHOT_FIT_LANGS` names (`all`: every `lang/*.txt`).
+    pub fn store_langs() -> Vec<&'static str> {
+        std::iter::once("en").chain(crate::i18n::fit_langs()).collect()
+    }
+
+    /// Write `img` as `<lang>/<name>` under `RUSTSHOT_PREVIEW_DIR` (the
+    /// Store screenshots, one folder per language; no-op when unset).
+    pub fn save_lang(lang: &str, name: &str, img: &PixBuf) {
+        save(&format!("{lang}/{name}"), img);
+    }
+
     /// Note problems in the frames drawn on this thread from now on, in a
     /// window `pw` physical px wide ([`render`] does this itself).
     pub fn begin_check(pw: u32) {
@@ -866,8 +878,9 @@ pub mod preview {
     pub fn save(name: &str, img: &PixBuf) {
         let Some(dir) = std::env::var_os("RUSTSHOT_PREVIEW_DIR") else { return };
         let dir = std::path::PathBuf::from(dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join(name), img.to_png().unwrap()).unwrap();
+        let path = dir.join(name);
+        std::fs::create_dir_all(path.parent().unwrap_or(&dir)).unwrap();
+        std::fs::write(path, img.to_png().unwrap()).unwrap();
     }
 }
 

@@ -982,7 +982,7 @@ pub fn with_lang<R>(code: &str, f: impl FnOnce() -> R) -> R {
 
 /// The variable naming real catalogs for the fit tests: comma-separated
 /// tags (`de,fi,ar`), each read from the source tree's `lang/<tag>.txt`
-/// (docs/translating.md).
+/// (docs/translating.md), or `all` for every file there.
 #[cfg(test)]
 pub const FIT_VAR: &str = "RUSTSHOT_FIT_LANGS";
 
@@ -1004,6 +1004,13 @@ pub fn fit_langs() -> Vec<&'static str> {
 #[cfg(test)]
 fn load_fit_langs(list: &str, dir: &std::path::Path) -> Vec<&'static str> {
     let found = files::discover(&[dir.to_path_buf()]);
+    let all: String;
+    let list = if list.trim().eq_ignore_ascii_case("all") {
+        all = found.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>().join(",");
+        &all
+    } else {
+        list
+    };
     let mut out: Vec<&'static str> = Vec::new();
     for t in list.split(',').map(str::trim).filter(|t| !t.is_empty() && !t.eq_ignore_ascii_case("en")) {
         let i = index_of(t).unwrap_or_else(|| panic!("{FIT_VAR}: this build has no language {t} (add lang/{t}.txt, then build again)"));

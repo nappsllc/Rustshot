@@ -457,7 +457,7 @@ fn plurals_pick_forms() {
 
 /// The fit tests' real catalogs (`RUSTSHOT_FIT_LANGS`): each tag named is
 /// read from the folder and used by `with_lang`; English, pseudo-languages
-/// and repeats are skipped.
+/// and repeats are skipped; `all` names every file.
 #[test]
 fn fit_languages_load_from_the_source_folder() {
     let dir = std::env::temp_dir().join(format!("rustshot-fitlangs-{}", std::process::id()));
@@ -467,6 +467,7 @@ fn fit_languages_load_from_the_source_folder() {
     assert_eq!(with_lang("zz-fit", || tr!("settings.general.language")), "Sprache wählen");
     assert_eq!(with_lang("zz-fit", || tr!("settings.general.theme")), "Theme", "missing keys: English");
     assert!(load_fit_langs("", &dir).is_empty());
+    assert_eq!(load_fit_langs(" All ", &dir), ["zz-fit"], "every file in the folder");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

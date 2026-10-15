@@ -234,12 +234,35 @@ this order: the first is the one search results show.
 All of them are Rustshot's own renders (the preview tests), not captures of
 a real desktop: the overlay shots are drawn over a sample inbox on a
 neutral wallpaper (`src/editor/store_tests.rs`), and the History, Edit and
-Settings windows are placed on the same wallpaper. To make them again:
+Settings windows are placed on the same wallpaper.
+
+### Every language
+
+The same eight shots exist for each of the 35 UI languages (English and
+every `lang/<tag>.txt`; Arabic and Hebrew mirrored as the app draws them).
+The UI is in the language; the sample inbox, its annotations and the words
+Text mode and Quick Redact find stay English. They are not in the repository:
+they go to `dist/store/screenshots/<Store code>/` (the codes msix.ps1
+declares: `en-us`, `ar`, … `pt-br`, `pt-pt`, `sr-Latn`, `zh-Hans`, `zh-Hant`),
+01-….png to 08-….png (1920 × 1080, about 130 KB each) and `captions.txt`
+(file name, a tab, the caption; from
+[screenshot-captions.json](screenshot-captions.json), which holds the
+captions of every language). Upload each folder to that language's
+listing. To make them again (Windows; Pillow; a build folder off the
+source drive is fine):
 
 ```bash
-RUSTSHOT_PREVIEW_DIR=<dir> cargo test --bin rustshot -- --include-ignored store_screenshot preview_settings_pngs
-python tools/store-screenshots.py <dir>
+RUSTSHOT_PREVIEW_DIR=<dir> RUSTSHOT_FIT_LANGS=all cargo test --bin rustshot -- --include-ignored store_screenshot
+python tools/store-screenshots.py <dir>            # → dist/store/screenshots/<code>/
+python tools/store-screenshots.py <dir> --docs     # also the English set below
 ```
+
+`RUSTSHOT_FIT_LANGS=de,ja` makes only those (and English). A new language
+needs its captions in screenshot-captions.json (the script stops without
+them). `RUSTSHOT_FIT_LANGS=all cargo test` runs the fit tests (cut or
+overlapping text) in every language too.
+
+### English
 
 | # | File | Caption |
 |---|---|---|

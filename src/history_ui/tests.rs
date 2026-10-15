@@ -761,28 +761,59 @@ fn fits_in_long_languages() {
     }
 }
 
+/// The details panel's footer: Edit and Open file share the row 8 px
+/// apart and 8 px before Delete (as on the board), and their labels fit
+/// in every fit language; the window with the panel open fits.
+#[test]
+fn details_panel_fits_in_long_languages() {
+    for lang in crate::ui::preview::langs() {
+        crate::i18n::with_lang(lang, || {
+            let (_r, st) = fixture(&format!("panel-fit-{lang}"));
+            let mut h = history(&st);
+            h.sel = vec![h.entries[3].id.clone()];
+            let p = layout_of(&h, 1280.0, 720.0).panel.expect("the details panel");
+            for rec in [false, true] {
+                let pl = draw::panel_lay(p, rec);
+                assert!(pl.open.x - pl.edit.x1() >= 8.0 && pl.delete.x - pl.open.x1() >= 8.0, "{lang}: {:?} {:?} {:?}", pl.edit, pl.open, pl.delete);
+                let (le, lo) = draw::panel_labels(rec);
+                for (r, label) in [(pl.edit, le), (pl.open, lo)] {
+                    let w = crate::uifb::text_width(&crate::fonts::UI, 12.0 * crate::ui::compact::CSS, label);
+                    assert!(w + 20.0 + 8.0 <= r.w, "{lang}: {label:?} in {:.0}", r.w);
+                }
+            }
+            crate::ui::preview::begin_check(1280);
+            let mut focus = FocusState::default();
+            render_with(&mut h, &DARK, 1280, 720, 1.0, &Input::default(), &mut focus);
+            crate::ui::preview::assert_fits(&focus, 1280, 720, 1.0, &format!("history details {lang}"));
+        });
+    }
+}
+
 /// The Microsoft Store screenshot (docs/store/screenshots): the grid at
-/// 125 %, a capture selected and another hovered, with Windows paths.
+/// 125 %, a capture selected and another hovered, with Windows paths;
+/// in each of [`crate::ui::preview::store_langs`] (`<lang>/`).
 #[test]
 #[ignore = "writes preview PNGs; set RUSTSHOT_PREVIEW_DIR"]
 fn store_screenshot_history() {
     let k = 1.25;
-    for (tn, th) in [("dark", DARK), ("light", LIGHT)] {
-        let (_r, st) = fixture(&format!("store-{tn}"));
-        for e in st.list() {
-            st.update(&e.id, |m| {
-                m.monitor = "Display 1".into();
-                m.saved = m.saved.as_ref().and_then(|p| p.file_name()).map(|n| PathBuf::from(format!("C:\\Users\\you\\Pictures\\rustshot\\{}", n.to_string_lossy())));
-                m.file = m.file.as_ref().map(|_| PathBuf::from("C:\\Users\\you\\Videos\\rustshot\\rec.mp4"));
-            })
-            .unwrap();
-        }
-        let mut h = history(&st);
-        h.sel = vec![h.entries[3].id.clone()];
-        let l = layout_of(&h, 1280.0, 720.0);
-        let (hx, hy) = centre(l.on_screen(l.items[2].thumb, 0.0));
-        let (img, _) = render(&mut h, &th, 1280, 720, k, &at(hx, hy + 50.0, k));
-        crate::ui::preview::save(&format!("store-history-{tn}.png"), &img);
+    for lang in crate::ui::preview::store_langs() {
+        crate::i18n::with_lang(lang, || {
+            let (_r, st) = fixture(&format!("store-{lang}"));
+            for e in st.list() {
+                st.update(&e.id, |m| {
+                    m.monitor = "Display 1".into();
+                    m.saved = m.saved.as_ref().and_then(|p| p.file_name()).map(|n| PathBuf::from(format!("C:\\Users\\you\\Pictures\\rustshot\\{}", n.to_string_lossy())));
+                    m.file = m.file.as_ref().map(|_| PathBuf::from("C:\\Users\\you\\Videos\\rustshot\\rec.mp4"));
+                })
+                .unwrap();
+            }
+            let mut h = history(&st);
+            h.sel = vec![h.entries[3].id.clone()];
+            let l = layout_of(&h, 1280.0, 720.0);
+            let (hx, hy) = centre(l.on_screen(l.items[2].thumb, 0.0));
+            let (img, _) = render(&mut h, &DARK, 1280, 720, k, &at(hx, hy + 50.0, k));
+            crate::ui::preview::save_lang(lang, "store-history-dark.png", &img);
+        });
     }
 }
 

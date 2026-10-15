@@ -68,6 +68,12 @@ fn mode_btn_w(i: usize) -> f32 {
     MODE_BTN[i].max((10.0 + 14.0 + 6.0 + crate::uifb::text_width(crate::fonts::ui_font(), 11.5, label) + 6.0).ceil())
 }
 
+/// The grip hint's width (logical px): the board's, or wider for a longer
+/// hint (8 px, the 14 px grip glyph, 6 px, the words, 10 px spare).
+fn grip_w() -> f32 {
+    GRIP_W.max((8.0 + 14.0 + 6.0 + crate::uifb::text_width(crate::fonts::ui_font(), 11.0, crate::cam::GRIP_HINT.get()) + 10.0).ceil())
+}
+
 /// Top-left of a `bw`x`bh` panel centred under `sel` (`above`: it went
 /// above the selection or inside its bottom edge): below when it fits,
 /// else above, else inside at the bottom (a tall selection), else below
@@ -375,7 +381,7 @@ pub fn layout(inp: &Input, rv: &RecView) -> Toolbar {
     }
     // The grip hint under the bubble (it is shown, not dragged).
     if let Some(b) = inp.grip {
-        let (gw, gh) = (GRIP_W * s, GRIP_H * s);
+        let (gw, gh) = (grip_w() * s, GRIP_H * s);
         let r = FRect { x: b.x + (b.w - gw) / 2.0, y: b.y1() + GRIP_GAP * s, w: gw, h: gh };
         items.push(Item { kind: Kind::Grip, r, disabled: false });
         extra.push(r);
@@ -732,6 +738,24 @@ mod tests {
         assert!(tb.extra.contains(&g));
         i.grip = None;
         assert!(!layout(&i).items.iter().any(|it| it.kind == Kind::Grip));
+    }
+
+    /// The grip hint's words fit its pill in every fit language (a long
+    /// one widens it, still centred under the bubble).
+    #[test]
+    fn grip_hint_fits_in_long_languages() {
+        use super::super::chrome::{tw, Ui};
+        for lang in crate::ui::preview::langs() {
+            crate::i18n::with_lang(lang, || {
+                let ui = Ui { th: &crate::theme::DARK, s: 1.0, font: Some(crate::fonts::ui_font()) };
+                let v = rv(RecFormat::Mp4);
+                let mut i = input(r(240.0, 110.0, 960.0, 420.0), &v);
+                i.grip = Some(r(264.0, 346.0, 160.0, 160.0));
+                let g = find(&layout(&i), |k| *k == Kind::Grip).r;
+                assert!(8.0 + 14.0 + 6.0 + tw(&ui, 11.0, crate::cam::GRIP_HINT.get()) + 8.0 <= g.w, "{lang}: the grip hint in {:.0}", g.w);
+                assert_eq!(g.x + g.w / 2.0, 344.0, "{lang}");
+            });
+        }
     }
 
     /// Every word of the recording panel fits its place in English and the

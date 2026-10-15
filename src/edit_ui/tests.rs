@@ -369,6 +369,9 @@ fn the_list_selects_and_reorders() {
     assert_eq!(lay.rows.iter().map(|r| r.1).collect::<Vec<_>>(), [3, 2, 1, 0]);
     assert_eq!(draw::obj_name(&w.e.canvas.objects()[3]), "Callout \"Move this to\u{2026}\"");
     assert_eq!(draw::obj_name(&w.e.canvas.objects()[1]), "Number 1");
+    // Right to left, the quoted text is isolated (its "…" stays at its end).
+    let rtl = crate::i18n::with_lang("qps-rtl", || draw::obj_name(&w.e.canvas.objects()[3]));
+    assert!(rtl.contains("\u{2068}\"Move this to\u{2026}\"\u{2069}"), "{rtl:?}");
     let r = lay.rows[3].0;
     click(&mut w, Pt::new(r.x + 50.0, r.y + 10.0));
     assert_eq!(w.e.canvas.selected(), [0]);
@@ -985,11 +988,13 @@ fn toolbar_fits_at_the_minimum_width() {
 #[ignore = "writes preview PNGs; set RUSTSHOT_PREVIEW_DIR"]
 fn store_screenshot_edit() {
     use super::image::ImgAct;
-    for (tn, th) in [("dark", DARK), ("light", LIGHT)] {
-        let (_r, mut w) = window(&format!("store-edit-{tn}"), page(1180, 760), objects(), th, 1.25);
-        w.image_act(ImgAct::Canvas);
-        w.render();
-        crate::ui::preview::save(&format!("store-edit-presentation-{tn}.png"), w.pixels());
+    for lang in crate::ui::preview::store_langs() {
+        crate::i18n::with_lang(lang, || {
+            let (_r, mut w) = window(&format!("store-edit-{lang}"), page(1180, 760), objects(), LIGHT, 1.25);
+            w.image_act(ImgAct::Canvas);
+            w.render();
+            crate::ui::preview::save_lang(lang, "store-edit-presentation-light.png", w.pixels());
+        });
     }
 }
 
