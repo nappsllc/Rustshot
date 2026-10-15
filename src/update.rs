@@ -61,13 +61,25 @@ fn is_clean_url(u: &str) -> bool {
 /// Only release pages of this repo may be printed or opened: no other scheme,
 /// host, control characters or whitespace (argv injection, terminal escapes).
 fn is_safe_release_url(u: &str) -> bool {
-    u.starts_with(RELEASES_PREFIX) && is_clean_url(u)
+    has_prefix(u, RELEASES_PREFIX) && is_clean_url(u)
 }
 
-/// A release asset URL of this repo (exact lowercase prefix; no traversal,
-/// backslashes or percent-escapes after the prefix).
+/// `u` starts with `prefix` (one of this repo's), with the owner and repo
+/// in any ASCII case: GitHub's are case-insensitive, and its API spells
+/// them as the repo is named (`nappsllc/Rustshot` since the rename).
+fn has_prefix(u: &str, prefix: &str) -> bool {
+    let (site, repo) = ("https://github.com/".len(), "nappsllc/rustshot/".len());
+    let (u, p) = (u.as_bytes(), prefix.as_bytes());
+    u.len() >= p.len()
+        && u[..site] == p[..site]
+        && u[site..site + repo].eq_ignore_ascii_case(&p[site..site + repo])
+        && u[site + repo..p.len()] == p[site + repo..]
+}
+
+/// A release asset URL of this repo (the prefix in any ASCII case; no
+/// traversal, backslashes or percent-escapes after it).
 pub fn is_safe_download_url(u: &str) -> bool {
-    u.starts_with(DOWNLOAD_PREFIX)
+    has_prefix(u, DOWNLOAD_PREFIX)
         && is_clean_url(u)
         && !u.contains('\\')
         && !u[DOWNLOAD_PREFIX.len()..].contains(['%', '@'])
@@ -1309,6 +1321,11 @@ mod tests {
     #[test]
     fn release_url_guard() {
         assert!(is_safe_release_url("https://github.com/nappsllc/rustshot/releases/tag/v0.2.0"));
+        // GitHub spells the repo as it is named since the rename.
+        assert!(is_safe_release_url("https://github.com/nappsllc/Rustshot/releases/tag/v0.6.1"));
+        assert!(is_safe_download_url("https://github.com/nappsllc/Rustshot/releases/download/v0.6.1/SHA256SUMS"));
+        assert!(!is_safe_release_url("https://github.com/nappsllc/Rustshot2/releases/tag/v0.6.1"));
+        assert!(!is_safe_release_url("https://github.com/nappsllc/rustsh\u{f6}t/releases/tag/v0.6.1"));
         assert!(!is_safe_release_url("https://github.com/nappsllc/rustshot/x y"));
         assert!(!is_safe_release_url("https://github.com/nappsllc/rustshot/\u{1b}[2J"));
         assert!(!is_safe_release_url("-https://github.com/nappsllc/rustshot/"));
