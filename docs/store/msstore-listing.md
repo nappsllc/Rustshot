@@ -1,6 +1,6 @@
 # Microsoft Store listing (Partner Center, en-US)
 
-Text to paste into Partner Center for Rustshot 0.6.2. Each field's block is
+Text to paste into Partner Center for Rustshot 0.6.3. Each field's block is
 the exact text. The limits are Partner Center's current Store listing
 limits for MSIX desktop apps; recheck them in the form, which counts for
 you. Everything here describes the **Store (MSIX) build**, which differs
@@ -129,17 +129,19 @@ annotate image
 GIF recorder
 ```
 
-## What's new in this version (0.6.2)
+## What's new in this version (0.6.3)
 
-Limit: 1,500 characters. This text is 917 characters. 0.6.2's changes
-first; the last three lines keep 0.6.1's, 0.6.0's and 0.5's main points
-for customers updating from older versions. (The in-app update note of
-the GitHub release does not apply to the Store build, which the Store
-updates.)
+Limit: 1,500 characters. This text is 1,274 characters. 0.6.3's changes
+first; the last four lines keep 0.6.2's, 0.6.1's, 0.6.0's and 0.5's main
+points for customers updating from older versions. (The in-app update
+note of the GitHub release does not apply to the Store build, which the
+Store updates.)
 
 ```text
-• The tray icon is now the Rustshot app icon: the blue tile with the white glyph, with a red dot while recording, so it is easy to spot on light and dark taskbars. Settings and the update dialog show the same icon.
-• Pixelate, Blur, Invert, Spotlight, Magnify and the ruler pick up the arrow, box or text under the pointer like the other drawing tools: drag to move it, click to select it, hold Ctrl to draw over it.
+• Sharper small icons: the 16, 20 and 24 px versions of the Rustshot icon (title bar, tray, Start menu and taskbar) are drawn on the pixel grid instead of scaled down into blurry thin strokes.
+• The mouse wheel resizes the current tool or the selected objects by about 12% a notch, and every notch counts, so resizing the Magnify loupe is quick. High-resolution wheels and touchpads add up smoothly.
+• Clearer window titles: "Rustshot — Settings", "Rustshot — History" and "<file> — Rustshot" in the Edit window, with a * while it has unsaved changes. The title bars match Rustshot's theme, without a contrasting border.
+• From 0.6.2: the tray icon is the blue Rustshot app icon; Pixelate, Blur, Magnify and the other tools pick up the arrow, box or text under the pointer.
 • From 0.6.1: fast Pencil and Marker strokes, freeform (lasso) selections and the ruler follow every movement of the mouse, even with high-rate gaming mice.
 • From 0.6.0: Rustshot is open source under the Apache License 2.0; the magnifier keeps up with fast mice; hover over an arrow, box or text with a drawing tool to pick it up and move it.
 • From 0.5: 35 interface languages, scrolling capture (Shift+S), QR codes (Q), a screen ruler (U), click and keystroke overlays and trimming for recordings.
