@@ -640,14 +640,6 @@ const GLYPH_PATH: &str = "M1.5 6V3.5a2 2 0 0 1 2-2H6 M10 1.5h2.5a2 2 0 0 1 2 2V6
 const GLYPH_STROKE: f32 = 1.6;
 const GLYPH_DOT_R: f32 = 2.4;
 
-/// Draw the app glyph (the tray icon's shape) in a `size`×`size` box at
-/// (x, y), physical px; also the update dialog's app icon.
-pub fn draw_glyph(fb: &mut crate::uifb::Fb, x: f32, y: f32, size: f32, c: crate::uifb::C4) {
-    draw_brackets(fb, x, y, size, c);
-    let k = size / 16.0;
-    fb.fill_circle(x + 8.0 * k, y + 8.0 * k, GLYPH_DOT_R * k, c);
-}
-
 /// The recording dot's color.
 pub const REC_RED: (u8, u8, u8) = (0xF0, 0x3E, 0x3E);
 const REC_DOT_R: f32 = 3.6;
@@ -695,6 +687,18 @@ pub fn tray_icon_rgba(size: u32, recording: bool) -> Vec<u8> {
         out.extend_from_slice(&[px[0], px[1], px[2], (tile[i] * 255.0).round() as u8]);
     }
     out
+}
+
+/// The app icon ([`tray_icon_rgba`]) blended into `fb` with its top-left
+/// at physical px (x, y), `size` px square: the Settings rail and About,
+/// the update dialog.
+pub fn draw_app_icon(fb: &mut crate::uifb::Fb, x: i32, y: i32, size: u32) {
+    let n = size as usize;
+    for (i, p) in tray_icon_rgba(size, false).as_chunks::<4>().0.iter().enumerate() {
+        if p[3] != 0 {
+            fb.blend_px(x + (i % n) as i32, y + (i / n) as i32, crate::uifb::C4::new(p[0], p[1], p[2], p[3]));
+        }
+    }
 }
 
 /// The glyph's corner brackets alone (no centre dot), `size`x`size` at (x, y).

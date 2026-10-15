@@ -487,9 +487,8 @@ fn paint(ui: &mut Ui, m: &Machine, v: &mut View) -> Option<Btn> {
             match c.mark {
                 Mark::App => {
                     let r = ui.alloc(Some(ICON), crate::ui::layout::H);
-                    let s = ui.px(ICON);
-                    let col = th.accent;
-                    crate::tray::draw_glyph(&mut ui.fb, r.x, (r.y + (r.h - s) / 2.0).round(), s, col);
+                    let s = ui.px(ICON).round();
+                    crate::tray::draw_app_icon(&mut ui.fb, r.x.round() as i32, (r.y + (r.h - s) / 2.0).round() as i32, s as u32);
                 }
                 Mark::Icon(name, col) => ui.icon(name, ICON, col),
             }

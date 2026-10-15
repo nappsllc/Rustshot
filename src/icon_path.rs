@@ -369,7 +369,6 @@ pub const SETTINGS_ICONS: &[(&str, &[Shape])] = &[
     ("set-rotate", &[Path("M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"), Path("M3 3v5h5")]), // rotate-ccw
     ("set-plus", &[Path("M5 12h14"), Path("M12 5v14")]),
     // The app mark's corner brackets (the board's `s-mark`).
-    ("set-mark", &[Path("M5 10V7a2 2 0 0 1 2-2h3M14 5h3a2 2 0 0 1 2 2v3M19 14v3a2 2 0 0 1-2 2h-3M10 19H7a2 2 0 0 1-2-2v-3")]),
 ];
 
 /// SVG path-data tokenizer (numbers, single-char flags, command letters).

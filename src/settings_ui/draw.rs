@@ -66,14 +66,10 @@ fn line(ui: &mut Ui, x: f32, y: f32, w: f32, h: f32, c: C4) {
     ui.fb.fill_rect(px, py, pw, ph, c);
 }
 
-/// The app mark (the board's `s-mark`) at `(x, y)`, `size` logical px.
+/// The app icon at `(x, y)`, `size` logical px.
 fn mark(ui: &mut Ui, x: f32, y: f32, size: f32) {
     let r = phys(ui, FRect { x, y, w: size, h: size });
-    let k = r.w / 24.0;
-    ui.fb.fill_rounded(r.x as i32, r.y as i32, r.w as i32, r.h as i32, 5.4 * k, C4::rgb(0x1B, 0x1C, 0x20));
-    ui.fb.stroke_rounded(FRect { x: r.x + 0.5 * k, y: r.y + 0.5 * k, w: r.w - k, h: r.h - k }, 5.0 * k, k.max(1.0), C4::new(255, 255, 255, 26));
-    crate::icon_path::draw_icon(&mut ui.fb, "set-mark", r.x, r.y, r.w, C4::rgb(0xEC, 0xEE, 0xF3));
-    ui.fb.fill_circle(r.x + 12.0 * k, r.y + 12.0 * k, 3.5 * k, C4::rgb(0x8B, 0x93, 0xFF));
+    crate::tray::draw_app_icon(&mut ui.fb, r.x as i32, r.y as i32, r.w as u32);
 }
 
 /// A board row (`.r`): `label` (and `help`, wrapped into the lines `h`
