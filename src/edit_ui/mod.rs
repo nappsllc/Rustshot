@@ -36,6 +36,13 @@ pub const W: u32 = 1200;
 pub const H: u32 = 800;
 pub const MIN: (u32, u32) = (960, 600);
 
+/// The smallest window under `chrome`: [`MIN`], wider by what the title
+/// bar's window buttons take of the toolbar strip (macOS: 76 px, its
+/// buttons starting at x 84), so the toolbar keeps its room.
+pub fn min_size(chrome: crate::wind::Overlap) -> (u32, u32) {
+    (MIN.0 + (crate::wind::Overlap::past(8.0, chrome.left) - 8.0) as u32, MIN.1)
+}
+
 // --- the save flow --------------------------------------------------------------
 
 /// Where Save writes.
@@ -390,6 +397,22 @@ pub fn wait_all() {
     }
 }
 
+/// The document's name: the saved file's ("2026-10-05_14-32.png"), else
+/// the capture's History title.
+pub fn doc_name(meta: &crate::history::Meta) -> String {
+    meta.saved
+        .as_ref()
+        .and_then(|p| p.file_name())
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| crate::history::title(meta))
+}
+
+/// The window's title, the file name first ("2026-10-05_14-32.png —
+/// Rustshot") so the unsaved marker attaches to it (`Driver::edited`).
+pub fn window_title(meta: &crate::history::Meta) -> String {
+    tr!("edit.window_title", name = doc_name(meta))
+}
+
 /// The entry, waiting (a little) for the history thread to finish it: a
 /// thumbnail's Edit can come before the files are written.
 fn load(store: &Store, id: &str) -> Option<Entry> {
@@ -434,14 +457,14 @@ fn run(id: &str, rx: crate::chan::Receiver<Msg>, unsaved: Arc<AtomicBool>) {
     // Its crop, a freeform capture's lasso and its image edits.
     canvas.set_doc(doc.crop, e.meta.mask.clone());
     canvas.set_edits(doc.edits);
-    let title = tr!("edit.window_title", name = crate::history::title(&e.meta));
+    let title = window_title(&e.meta);
     // Pruning leaves the entry alone while it is open.
     let held = crate::history::hold_open(&e.id, &e.dir);
     let mut ed = Edit::new(store, e, canvas, cfg);
     ed.held = Some(held);
     let mut w = window::Window::new(ed, rx);
     w.unsaved = unsaved;
-    let spec = crate::wind::WindowSpec { title, w: W, h: H, resizable: true, min: MIN, controls: crate::wind::Controls::MinMaxClose };
+    let spec = crate::wind::WindowSpec { title, w: W, h: H, resizable: true, min: min_size(crate::wind::Overlap::native()), controls: crate::wind::Controls::MinMaxClose };
     if let Err(err) = crate::wind::run_window(spec, &mut w) {
         eprintln!("rustshot: edit window: {err:#}");
     }
@@ -494,11 +517,16 @@ pub struct Edit {
     /// (and its scale).
     pub img_dialog: Option<image::ImgDialog>,
     pub dlg_pic: Option<(crate::pixbuf::PixBuf, (crate::pixbuf::PixBuf, f32))>,
+    /// What the OS's title bar covers ([`crate::wind::Overlap`]; macOS:
+    /// the toolbar's top 28 px are its drag strip, its buttons start past
+    /// the traffic lights).
+    pub chrome: crate::wind::Overlap,
 }
 
 impl Edit {
     pub fn new(store: Store, entry: Entry, canvas: Canvas, cfg: Config) -> Edit {
         Edit {
+            chrome: crate::wind::Overlap::native(),
             store,
             entry,
             canvas,
@@ -633,13 +661,7 @@ impl Edit {
 
     /// The file name the questions talk about ("2026-10-05_14-32.png").
     pub fn file_name(&self) -> String {
-        self.entry
-            .meta
-            .saved
-            .as_ref()
-            .and_then(|p| p.file_name())
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| crate::history::title(&self.entry.meta))
+        doc_name(&self.entry.meta)
     }
 
     /// The two answers' files as the Save question shows them.

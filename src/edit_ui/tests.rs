@@ -736,6 +736,73 @@ fn preview_edit_pngs() {
     }
 }
 
+/// The title is the file name first, so the unsaved marker attaches to
+/// it ("*2026-10-05_14-32.png — Rustshot" where the OS has no dot).
+#[test]
+fn the_title_starts_with_the_file_and_marks_unsaved_changes() {
+    use crate::wind::Driver;
+    let (_r, mut w) = window("title", page(320, 200), objects(), DARK, 1.0);
+    assert_eq!(w.title().as_deref(), Some("2026-10-05_14-32.png \u{2014} Rustshot"));
+    assert!(!w.edited());
+    w.e.canvas.select(0, false);
+    key(&mut w, crate::wind::key::DELETE, Mods::default());
+    assert!(w.edited(), "an object deleted is unsaved");
+    let mut t = crate::wind::Title::new(&w.title().unwrap());
+    let star = if cfg!(target_os = "macos") { "" } else { "*" };
+    assert_eq!(t.set_edited(w.edited()).as_deref(), Some(format!("{star}2026-10-05_14-32.png \u{2014} Rustshot").as_str()));
+}
+
+/// macOS (board 12): the 44 px strip runs under the transparent title
+/// bar; the toolbar's buttons start at x 84, clear of the traffic
+/// lights' 72 x 28 zone (right to left, where the toolbar starts at the
+/// right, the zoom control ends before it), and a press in the strip's
+/// top 28 px drags the window off the buttons. Writes
+/// `edit-macos-*.png`.
+#[test]
+fn the_toolbar_clears_the_macos_traffic_lights() {
+    use crate::wind::Driver;
+    let zone = FRect { x: 0.0, y: 0.0, w: 72.0, h: 28.0 };
+    let meets = |a: FRect, b: FRect| a.x < b.x1() && b.x < a.x1() && a.y < b.y1() && b.y < a.y1();
+    for lang in ["en", "qps-rtl"] {
+        crate::i18n::with_lang(lang, || {
+            let rtl = crate::i18n::is_rtl();
+            for (tn, th) in [("dark", DARK), ("light", LIGHT)] {
+                let (_r, mut w) = window(&format!("mac-{lang}-{tn}"), page(1180, 760), objects(), th, 1.0);
+                w.e.chrome = crate::wind::Overlap::MACOS;
+                w.event(Ev::Resize(W, H));
+                w.render();
+                let buttons = w.e.canvas.bar_buttons();
+                assert!(!buttons.is_empty());
+                // The toolbar is in screen space; the zoom control in the
+                // layout (mirrored right to left).
+                for (icon, r) in &buttons {
+                    assert!(!meets(*r, zone), "{lang}: {icon} {r:?} under the traffic lights");
+                }
+                let lay = draw::layout(&w.e, W as f32, H as f32, w.e.canvas.bar_width());
+                let z = if rtl { FRect { x: W as f32 - lay.zoom.r.x1(), ..lay.zoom.r } } else { lay.zoom.r };
+                assert!(!meets(z, zone), "{lang}: the zoom control {z:?}");
+                if !rtl {
+                    let first = buttons.iter().map(|b| b.1.x).fold(f32::MAX, f32::min);
+                    assert_eq!(first, 84.0, "the buttons start 12 past the zone");
+                    // A button is ours; the strip's empty middle drags.
+                    let (_, b) = buttons[0];
+                    assert!(!w.drags_window((b.x + 4.0) as i32, (b.y + 4.0) as i32), "a button");
+                    let end = buttons.iter().map(|b| b.1.x1()).fold(0.0, f32::max);
+                    let stop = if lay.zoom_in_status { W as f32 - 84.0 } else { z.x };
+                    assert!(end < stop, "{end} {stop}");
+                    assert!(w.drags_window(((end + stop) / 2.0) as i32, 2), "between the toolbar and the zoom");
+                    if !lay.zoom_in_status {
+                        assert!(!w.drags_window((z.x + 4.0) as i32, (z.y + 4.0) as i32), "the zoom control");
+                    }
+                    let mut img = w.pixels().clone();
+                    crate::ui::preview::traffic_lights(&mut img, 1.0);
+                    crate::ui::preview::save(&format!("edit-macos-{tn}.png"), &img);
+                }
+            }
+        });
+    }
+}
+
 /// The frame time on a 4K capture with objects: dragging an object at
 /// Fit and at 100 % (`cargo test --release edit_frame_time -- --ignored
 /// --nocapture` for the numbers; the debug build is far slower).

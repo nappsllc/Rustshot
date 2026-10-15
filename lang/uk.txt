@@ -99,7 +99,7 @@ settings.error.secret_needs_bucket = Спершу вкажіть бакет та
 settings.error.autostart = Не вдалося змінити «Запуск під час входу»: {e}
 settings.error.reset_tools = Не вдалося скинути інструменти в {path}: {e}
 settings.error.backup = Не вдалося створити копію config.toml у {path}: {e}
-settings.window_title = Настройки Rustshot
+settings.window_title = Rustshot — Налаштування
 settings.header.reset_to_defaults = Скинути
 settings.footer.open_config_file = Відкрити файл настройок
 settings.general.appearance = Вигляд
@@ -710,7 +710,7 @@ history.no_upload = Цей знімок не має вивантаження д�
 history.saved_to = Збережено: {n} у {dir}
 history.saved_some_why = Збережено {n} з {total}: не вдалося прочитати знімок: {why}
 history.saved_some = Збережено {n} з {total}
-history.window_title = Історія Rustshot
+history.window_title = Rustshot — Історія
 history.open_failed = Не вдалося відкрити знімок: {e}
 history.show_failed = Не вдалося показати знімок: {e}
 history.path_copied = Шлях до файлу скопійовано
@@ -823,7 +823,7 @@ edit.saved_gone = Збережено: {n} (запису в Історії нем
 edit.not_in_history = Цього знімка більше немає в Історії
 edit.bad_lasso = Не вдалося відкрити знімок: його ласо не читається
 edit.bad_crop = Не вдалося відкрити знімок: обрізання виходить за зображення
-edit.window_title = Редагування — {name}
+edit.window_title = {name} — Rustshot
 edit.save_failed = Помилка збереження: {e}
 
 # Capture launcher

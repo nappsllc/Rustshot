@@ -99,7 +99,7 @@ settings.error.secret_needs_bucket = Inserisci prima il bucket e l'ID chiave di 
 settings.error.autostart = Impossibile modificare Avvia all'accesso: {e}
 settings.error.reset_tools = Impossibile reimpostare gli strumenti in {path}: {e}
 settings.error.backup = Impossibile eseguire il backup di config.toml in {path}: {e}
-settings.window_title = Impostazioni di Rustshot
+settings.window_title = Rustshot — Impostazioni
 settings.header.reset_to_defaults = Ripristina predefiniti
 settings.footer.open_config_file = Apri file di configurazione
 settings.general.appearance = Aspetto
@@ -688,7 +688,7 @@ history.no_upload = Questa acquisizione non ha caricamenti da eliminare
 history.saved_to = Salvate {n} in {dir}
 history.saved_some_why = Salvate {n} di {total}: impossibile leggere un'acquisizione: {why}
 history.saved_some = Salvate {n} di {total}
-history.window_title = Cronologia di Rustshot
+history.window_title = Rustshot — Cronologia
 history.open_failed = Impossibile aprire l'acquisizione: {e}
 history.show_failed = Impossibile mostrare l'acquisizione: {e}
 history.path_copied = Percorso file copiato
@@ -795,7 +795,7 @@ edit.saved_gone = Salvata {n} (voce di Cronologia non più presente)
 edit.not_in_history = Quell'acquisizione non è più in Cronologia
 edit.bad_lasso = Impossibile aprire l'acquisizione: il suo lazo non è leggibile
 edit.bad_crop = Impossibile aprire l'acquisizione: il ritaglio è fuori dall'immagine
-edit.window_title = Modifica – {name}
+edit.window_title = {name} — Rustshot
 edit.save_failed = Salvataggio non riuscito: {e}
 
 # Capture launcher

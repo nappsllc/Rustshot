@@ -99,7 +99,7 @@ settings.error.secret_needs_bucket = Zuerst Bucket und Zugriffsschlüssel-ID ein
 settings.error.autostart = Beim Anmelden starten konnte nicht geändert werden: {e}
 settings.error.reset_tools = Werkzeuge in {path} konnten nicht zurückgesetzt werden: {e}
 settings.error.backup = Sicherung von config.toml nach {path} fehlgeschlagen: {e}
-settings.window_title = Rustshot-Einstellungen
+settings.window_title = Rustshot — Einstellungen
 settings.header.reset_to_defaults = Standard wiederherstellen
 settings.footer.open_config_file = Konfigurationsdatei öffnen
 settings.general.appearance = Darstellung
@@ -688,7 +688,7 @@ history.no_upload = Diese Aufnahme hat keinen Upload zum Löschen
 history.saved_to = {n} gespeichert in {dir}
 history.saved_some_why = {n} von {total} gespeichert: Eine Aufnahme konnte nicht gelesen werden: {why}
 history.saved_some = {n} von {total} gespeichert
-history.window_title = Rustshot-Verlauf
+history.window_title = Rustshot — Verlauf
 history.open_failed = Aufnahme konnte nicht geöffnet werden: {e}
 history.show_failed = Aufnahme konnte nicht angezeigt werden: {e}
 history.path_copied = Dateipfad kopiert
@@ -795,7 +795,7 @@ edit.saved_gone = Gespeichert: {n} (Verlaufseintrag fehlt)
 edit.not_in_history = Diese Aufnahme ist nicht mehr im Verlauf
 edit.bad_lasso = Aufnahme konnte nicht geöffnet werden: Ihr Lasso ist nicht lesbar
 edit.bad_crop = Aufnahme konnte nicht geöffnet werden: Der Zuschnitt liegt außerhalb des Bildes
-edit.window_title = Bearbeiten – {name}
+edit.window_title = {name} — Rustshot
 edit.save_failed = Speichern fehlgeschlagen: {e}
 
 # Capture launcher

@@ -614,6 +614,39 @@ pub fn rtl_ev(ev: Ev, width: u32) -> Ev {
     }
 }
 
+/// A window event with its pointer `dy` physical px higher: for a layout
+/// drawn `dy` px down the window, below the strip of a title bar the
+/// content runs under ([`crate::wind::Overlap`], macOS).
+pub fn lift_ev(ev: Ev, dy: i32) -> Ev {
+    if dy == 0 {
+        return ev;
+    }
+    match ev {
+        Ev::Move { x, y } => Ev::Move { x, y: y - dy },
+        Ev::Down { x, y } => Ev::Down { x, y: y - dy },
+        Ev::Up { x, y } => Ev::Up { x, y: y - dy },
+        Ev::Wheel { delta, x, y } => Ev::Wheel { delta, x, y: y - dy },
+        Ev::Middle { down, x, y } => Ev::Middle { down, x, y: y - dy },
+        Ev::Right { down, x, y } => Ev::Right { down, x, y: y - dy },
+        e => e,
+    }
+}
+
+/// Run the surfaces at the top of a layout drawn `rows` px down an RGBA
+/// frame `w` px wide up to its top edge (the title bar's strip, which the
+/// layout leaves clear): its first row repeated above it, so the rail,
+/// the header and a question's dimming reach the window's edge.
+pub fn extend_up(raw: &mut [u8], w: usize, rows: usize) {
+    let stride = w * 4;
+    if rows == 0 || raw.len() < (rows + 1) * stride {
+        return;
+    }
+    let (above, rest) = raw.split_at_mut(rows * stride);
+    for row in above.chunks_exact_mut(stride) {
+        row.copy_from_slice(&rest[..stride]);
+    }
+}
+
 /// Left and Right as seen on screen: swapped in a mirrored frame (a
 /// segmented control or slider runs right to left there; text fields,
 /// drawn left to right, take the keys as they are).
@@ -881,6 +914,20 @@ pub mod preview {
         let path = dir.join(name);
         std::fs::create_dir_all(path.parent().unwrap_or(&dir)).unwrap();
         std::fs::write(path, img.to_png().unwrap()).unwrap();
+    }
+
+    /// macOS's traffic lights as AppKit puts them over a window whose
+    /// content runs under its transparent title bar (12 px dots centred
+    /// at x 20, 40, 60, y 14, at scale `k`): drawn over a preview of
+    /// such a window to see what they cover.
+    pub fn traffic_lights(img: &mut PixBuf, k: f32) {
+        let w = img.width() as usize;
+        let mut fb = Fb::new(img.as_raw_mut(), w);
+        use crate::uifb::C4;
+        for (cx, c) in [(20.0, C4::rgb(0xFF, 0x5F, 0x57)), (40.0, C4::rgb(0xFE, 0xBC, 0x2E)), (60.0, C4::rgb(0x28, 0xC8, 0x40))] {
+            let (x, y, d) = (((cx - 6.0) * k).round() as i32, ((14.0 - 6.0) * k).round() as i32, (12.0 * k).round() as i32);
+            fb.fill_rounded(x, y, d, d, d as f32 / 2.0, c);
+        }
     }
 }
 

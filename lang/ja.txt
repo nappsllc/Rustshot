@@ -99,7 +99,7 @@ settings.error.secret_needs_bucket = 先にバケットとアクセス キー ID
 settings.error.autostart = 「ログイン時に起動」を変更できませんでした: {e}
 settings.error.reset_tools = {path} のツールをリセットできませんでした: {e}
 settings.error.backup = config.toml を {path} にバックアップできませんでした: {e}
-settings.window_title = Rustshot の設定
+settings.window_title = Rustshot — 設定
 settings.header.reset_to_defaults = 既定に戻す
 settings.footer.open_config_file = 設定ファイルを開く
 settings.general.appearance = 外観
@@ -677,7 +677,7 @@ history.no_upload = このキャプチャには削除するアップロードが
 history.saved_to = {n} 件を {dir} に保存しました
 history.saved_some_why = {total} 件中 {n} 件を保存しました: 読み込めないキャプチャがありました: {why}
 history.saved_some = {total} 件中 {n} 件を保存しました
-history.window_title = Rustshot 履歴
+history.window_title = Rustshot — 履歴
 history.open_failed = キャプチャを開けませんでした: {e}
 history.show_failed = キャプチャを表示できませんでした: {e}
 history.path_copied = ファイル パスをコピーしました
@@ -781,7 +781,7 @@ edit.saved_gone = {n} を保存しました (履歴の項目はありません)
 edit.not_in_history = そのキャプチャはもう履歴にありません
 edit.bad_lasso = キャプチャを開けませんでした: なげなわを読み込めません
 edit.bad_crop = キャプチャを開けませんでした: 切り抜きが画像の外にあります
-edit.window_title = 編集 — {name}
+edit.window_title = {name} — Rustshot
 edit.save_failed = 保存に失敗しました: {e}
 
 # Capture launcher

@@ -99,7 +99,7 @@ settings.error.secret_needs_bucket = Introduza primeiro o bucket e o ID da chave
 settings.error.autostart = Não foi possível alterar «Abrir ao iniciar sessão»: {e}
 settings.error.reset_tools = Não foi possível repor as ferramentas em {path}: {e}
 settings.error.backup = Não foi possível criar uma cópia de segurança do config.toml em {path}: {e}
-settings.window_title = Definições do Rustshot
+settings.window_title = Rustshot — Definições
 settings.header.reset_to_defaults = Repor predefinições
 settings.footer.open_config_file = Abrir ficheiro de configuração
 settings.general.appearance = Aspeto
@@ -688,7 +688,7 @@ history.no_upload = Esta captura não tem nenhum carregamento para eliminar
 history.saved_to = {n} guardadas em {dir}
 history.saved_some_why = {n} de {total} guardadas: não foi possível ler uma captura: {why}
 history.saved_some = {n} de {total} guardadas
-history.window_title = Histórico do Rustshot
+history.window_title = Rustshot — Histórico
 history.open_failed = Não foi possível abrir a captura: {e}
 history.show_failed = Não foi possível mostrar a captura: {e}
 history.path_copied = Caminho do ficheiro copiado
@@ -795,7 +795,7 @@ edit.saved_gone = Guardado: {n} (entrada do Histórico removida)
 edit.not_in_history = Essa captura já não está no Histórico
 edit.bad_lasso = Não foi possível abrir a captura: o laço não pode ser lido
 edit.bad_crop = Não foi possível abrir a captura: o recorte fica fora da imagem
-edit.window_title = Editar — {name}
+edit.window_title = {name} — Rustshot
 edit.save_failed = Não foi possível guardar: {e}
 
 # Capture launcher

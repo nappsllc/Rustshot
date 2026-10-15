@@ -769,7 +769,15 @@ mod window {
             let content = CGRect { origin: CGPoint { x: 0.0, y: 0.0 }, size: CGSize { width: w, height: h } };
             // Titled | Closable (| Miniaturizable) (| Resizable): the traffic
             // lights; a button the window does not have shows disabled.
-            let style: u64 = 1 | 2 | if spec.controls.minimize() { 4 } else { 0 } | if spec.resizable { 8 } else { 0 };
+            // Content under the title bar: | FullSizeContentView (our
+            // surface runs to the top edge; the content view is the whole
+            // window, the title bar transparent over its top 28 pt).
+            let under = driver.under_titlebar();
+            let style: u64 = 1
+                | 2
+                | if spec.controls.minimize() { 4 } else { 0 }
+                | if spec.resizable { 8 } else { 0 }
+                | if under { 1 << 15 } else { 0 };
             let win: *mut c_void = msg0(class, objc_sel(c"alloc"));
             let win: *mut c_void = msg4(
                 win,
@@ -783,7 +791,14 @@ mod window {
                 anyhow::bail!("failed to create NSWindow");
             }
             let _: () = msg1(win, objc_sel(c"setReleasedWhenClosed:"), 0i64);
+            // Still set when hidden: the Window menu, Mission Control and
+            // the Dock's window list show it.
             let _: () = msg1(win, objc_sel(c"setTitle:"), ns_string(&spec.title));
+            if under {
+                // The header row is the visual title (NSWindowTitleHidden).
+                let _: () = msg1(win, objc_sel(c"setTitleVisibility:"), 1i64);
+                let _: () = msg1(win, objc_sel(c"setTitlebarAppearsTransparent:"), 1i64);
+            }
             if spec.resizable {
                 let min = CGSize { width: spec.min.0 as f64 * m, height: spec.min.1 as f64 * m };
                 let _: () = msg1(win, objc_sel(c"setContentMinSize:"), min);
@@ -817,6 +832,7 @@ mod window {
             let quit = || WINDOWED.with(|c| c.get().quit);
             let mut size = phys(content_size(win), s);
             let mut lang = crate::i18n::generation();
+            let mut title = crate::wind::Title::new(&spec.title);
             driver.on_create(hwnd);
             if !quit() {
                 driver.on_event(Ev::Resize(size.0, size.1));
@@ -825,7 +841,7 @@ mod window {
             if !quit() {
                 // Themed before it is first shown.
                 frame = driver.frame_colors();
-                apply_frame(win, frame);
+                apply_frame(win, frame, under);
                 let _: () = msg1(app, objc_sel(c"activateIgnoringOtherApps:"), 1i64);
                 let _: () = msg1(win, objc_sel(c"makeKeyAndOrderFront:"), core::ptr::null_mut::<c_void>());
             }
@@ -861,13 +877,18 @@ mod window {
                     let target: *mut c_void = msg0(ev, objc_sel(c"window"));
                     let ty: u64 = msg0(ev, objc_sel(c"type"));
                     let ours = target == win;
-                    if ours {
+                    // Content under the title bar: a press in its strip
+                    // moves the window unless one of our buttons is there.
+                    let strip = if ours && under && ty == LEFT_DOWN { strip_press(ev, &*driver, content_size(win), s) } else { None };
+                    if ours && strip != Some(true) {
                         repaint |= dispatch_window(ev, ty, driver, content_size(win), s, &mut pressed);
                     }
-                    // Keys stay ours (no responder chain: it would beep);
-                    // everything else also goes to AppKit so the title bar,
-                    // close button and resize edges work.
-                    if !(ours && (ty == KEY_DOWN || ty == KEY_UP)) {
+                    // Keys stay ours (no responder chain: it would beep),
+                    // as does a press on our button in the strip (or the
+                    // title bar would start a drag); everything else also
+                    // goes to AppKit so the title bar, traffic lights and
+                    // resize edges work.
+                    if !(ours && (ty == KEY_DOWN || ty == KEY_UP || strip == Some(false))) {
                         let _: () = msg1(app, objc_sel(c"sendEvent:"), ev);
                     }
                 }
@@ -897,8 +918,8 @@ mod window {
                 if !quit() && Instant::now() >= next_tick {
                     next_tick = Instant::now() + Duration::from_millis(tick_ms(hwnd));
                     // The UI language switched: lay out again, retitle.
-                    if let Some(title) = crate::wind::relocalize(&mut lang, driver, size) {
-                        if let Some(t) = title {
+                    if let Some(t) = crate::wind::relocalize(&mut lang, driver, size) {
+                        if let Some(t) = title.retitle(t) {
                             let _: () = msg1(win, objc_sel(c"setTitle:"), ns_string(&t));
                         }
                         repaint = true;
@@ -910,7 +931,12 @@ mod window {
                     let want = driver.frame_colors();
                     if want != frame {
                         frame = want;
-                        apply_frame(win, frame);
+                        apply_frame(win, frame, under);
+                    }
+                    // Unsaved changes: the document-edited dot in the
+                    // close button (the title text stays as it is).
+                    if title.set_edited(driver.edited()).is_some() {
+                        let _: () = msg1(win, objc_sel(c"setDocumentEdited:"), i64::from(title.is_edited()));
                     }
                 }
                 if repaint
@@ -938,12 +964,13 @@ mod window {
 
     /// The title bar in the design's colours: transparent over a window
     /// background of the caption colour, in the dark or light appearance
-    /// (traffic lights and title text to match). The content view stays
-    /// below the title bar (no full-size content: the boards leave the
-    /// title bar to the OS). `None`: AppKit's defaults.
-    unsafe fn apply_frame(win: *mut c_void, c: Option<FrameColors>) {
+    /// of OUR theme (traffic lights and title text to match). A window
+    /// whose content runs `under` it (board 12) keeps it transparent over
+    /// our own surface; the others keep the content view below it.
+    /// `None`: AppKit's defaults.
+    unsafe fn apply_frame(win: *mut c_void, c: Option<FrameColors>, under: bool) {
         unsafe {
-            let _: () = msg1(win, objc_sel(c"setTitlebarAppearsTransparent:"), i64::from(c.is_some()));
+            let _: () = msg1(win, objc_sel(c"setTitlebarAppearsTransparent:"), i64::from(c.is_some() || under));
             let appearance: *mut c_void = match c {
                 Some(c) => msg1(
                     objc_cls(c"NSAppearance"),
@@ -1038,6 +1065,26 @@ mod window {
                 KEY_DOWN | KEY_UP => dispatch_nsevent(ev, driver),
                 _ => false,
             }
+        }
+    }
+
+    /// A press in the transparent title bar's strip of a window whose
+    /// content runs under it (the top 28 pt, [`Overlap::MACOS`]): `true`
+    /// when it is the title bar's (the traffic lights' zone, or a spot the
+    /// driver leaves to it: AppKit moves the window), `false` when it is
+    /// ours (a button reaching into the strip). `None`: not in the strip.
+    unsafe fn strip_press(ev: *mut c_void, driver: &dyn Driver, content: (f64, f64), s: f64) -> Option<bool> {
+        unsafe {
+            let p: CGPoint = msg0(ev, objc_sel(c"locationInWindow"));
+            let top = content.1 - p.y;
+            let o = Overlap::MACOS;
+            if !(0.0..f64::from(o.top)).contains(&top) || !(0.0..content.0).contains(&p.x) {
+                return None;
+            }
+            if p.x < f64::from(o.left) {
+                return Some(true);
+            }
+            Some(driver.drags_window((p.x * s).round() as i32, (top * s).round() as i32))
         }
     }
 }

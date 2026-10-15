@@ -37,6 +37,13 @@ pub mod draw;
 pub const W: u32 = 960;
 pub const H: u32 = 640;
 pub const MIN: (u32, u32) = (720, 480);
+
+/// The smallest window under `chrome`: [`MIN`], wider by what the title
+/// bar's window buttons take of the header row (macOS: 66 px, the row
+/// starting at x 84 instead of 18), so the row fits as it does elsewhere.
+pub fn min_size(chrome: crate::wind::Overlap) -> (u32, u32) {
+    (MIN.0 + (crate::wind::Overlap::past(18.0, chrome.left) - 18.0) as u32, MIN.1)
+}
 /// Below this width the details panel is not shown.
 pub const PANEL_MIN_W: f32 = 900.0;
 /// Thumbnail size (the slider): the card's minimum width, 140 high at 200.
@@ -149,6 +156,12 @@ pub struct History {
     pub cursor_text: bool,
     /// What the pointer was on in the last frame.
     pub hover: Option<draw::Target>,
+    /// What the OS's title bar covers ([`crate::wind::Overlap`]; macOS:
+    /// the header row starts past the traffic lights).
+    pub chrome: crate::wind::Overlap,
+    /// The last frame's targets (whether a press in the title bar's
+    /// strip is ours: [`History::drags_window_at`]).
+    pub targets: Vec<(crate::objects::FRect, draw::Target)>,
 }
 
 impl History {
@@ -180,9 +193,20 @@ impl History {
             focus_search: false,
             cursor_text: false,
             hover: None,
+            chrome: crate::wind::Overlap::native(),
+            targets: Vec::new(),
         };
         h.reload();
         h
+    }
+
+    /// Whether a press at `(x, y)` (logical px, the layout's left to right
+    /// coordinates) in the title bar's strip moves the window: nothing of
+    /// ours there (the header's empty stretches), or a question is open
+    /// over the window.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub fn drags_window_at(&self, x: f32, y: f32) -> bool {
+        matches!(draw::hit(&self.targets, x, y), None | Some(draw::Target::Inert | draw::Target::Space))
     }
 
     /// List the store again (selection kept where its entries still are).
@@ -764,7 +788,7 @@ fn run(rx: Receiver<Msg>) {
         h.clear = Some(false);
     }
     let mut w = window::Window::new(h, rx);
-    let spec = crate::wind::WindowSpec { title: tr!("history.window_title").into(), w: W, h: H, resizable: true, min: MIN, controls: crate::wind::Controls::MinMaxClose };
+    let spec = crate::wind::WindowSpec { title: tr!("history.window_title").into(), w: W, h: H, resizable: true, min: min_size(crate::wind::Overlap::native()), controls: crate::wind::Controls::MinMaxClose };
     if let Err(e) = crate::wind::run_window(spec, &mut w) {
         eprintln!("rustshot: history window: {e:#}");
     }

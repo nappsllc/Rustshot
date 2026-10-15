@@ -99,7 +99,7 @@ settings.error.secret_needs_bucket = Najprije unesite bucket i ID pristupnog klj
 settings.error.autostart = Nije moguće promijeniti „Pokreni pri prijavi”: {e}
 settings.error.reset_tools = Nije moguće vratiti alate na zadano u {path}: {e}
 settings.error.backup = Nije moguće stvoriti sigurnosnu kopiju datoteke config.toml u {path}: {e}
-settings.window_title = Postavke aplikacije Rustshot
+settings.window_title = Rustshot — Postavke
 settings.header.reset_to_defaults = Vrati zadano
 settings.footer.open_config_file = Otvori konfiguracijsku datoteku
 settings.general.appearance = Izgled
@@ -699,7 +699,7 @@ history.no_upload = Ova snimka nema prijenos za brisanje
 history.saved_to = Spremljeno: {n} u {dir}
 history.saved_some_why = Spremljeno {n} od {total}: snimku nije moguće pročitati: {why}
 history.saved_some = Spremljeno {n} od {total}
-history.window_title = Rustshot – Povijest
+history.window_title = Rustshot — Povijest
 history.open_failed = Nije moguće otvoriti snimku: {e}
 history.show_failed = Nije moguće prikazati snimku: {e}
 history.path_copied = Put do datoteke kopiran
@@ -809,7 +809,7 @@ edit.saved_gone = Spremljeno: {n} (unos u Povijesti više ne postoji)
 edit.not_in_history = Ta snimka više nije u Povijesti
 edit.bad_lasso = Nije moguće otvoriti snimku: njezin laso nije moguće pročitati
 edit.bad_crop = Nije moguće otvoriti snimku: njezino obrezivanje je izvan slike
-edit.window_title = Uređivanje – {name}
+edit.window_title = {name} — Rustshot
 edit.save_failed = Spremanje nije uspjelo: {e}
 
 # Capture launcher

@@ -9,6 +9,7 @@ use crate::objects::{FRect, Obj};
 use crate::ui::Ui;
 use crate::ui::paint::{self, WTok};
 use crate::uifb::C4;
+use crate::wind::Overlap;
 
 pub const BAR_H: f32 = 44.0;
 pub const STATUS_H: f32 = 28.0;
@@ -31,6 +32,8 @@ pub(super) fn note_h() -> f32 {
     NOTE_H + 15.0 * (note_lines().len() as f32 - 2.0).max(0.0)
 }
 const DLG_W: f32 = 420.0;
+/// The docked toolbar's buttons start this far into its strip.
+const DOCK_PAD: f32 = 8.0;
 
 /// The question's width: the board's 420, wider when its buttons need it
 /// (Discard on the left, 16 clear of the rest), within the window.
@@ -59,6 +62,10 @@ pub struct ZoomLay {
 pub struct Lay {
     pub w: f32,
     pub h: f32,
+    /// The 44 px strip along the top.
+    pub strip: FRect,
+    /// Where the docked toolbar's buttons go in it (past the title bar's
+    /// window buttons where the content runs under it).
     pub bar: FRect,
     pub rail: FRect,
     pub canvas: FRect,
@@ -149,15 +156,23 @@ fn zoom_lay(right: f32, cy: f32, h: f32) -> ZoomLay {
 
 /// Lay the window out at `w` × `h`; `bar_w`: the docked toolbar's buttons.
 pub fn layout(e: &Edit, w: f32, h: f32, bar_w: f32) -> Lay {
-    let bar = FRect { x: 0.0, y: 0.0, w, h: BAR_H };
+    // The title bar's window buttons keep their zone (macOS: the 72 px
+    // at the window's left on screen; the strip stays 44 px, its top 28
+    // the drag strip): the toolbar's buttons start past it, or (right to
+    // left, the toolbar from the right) the zoom control ends before it.
+    // (Both 12 px past the zone, as History's row: board 12's x 84.)
+    let (lead, trail) = e.chrome.sides(crate::i18n::is_rtl());
+    let (lead, trail) = (Overlap::past(DOCK_PAD, lead) - DOCK_PAD, Overlap::past(8.0, trail) - 8.0);
+    let strip = FRect { x: 0.0, y: 0.0, w, h: BAR_H };
+    let bar = FRect { x: lead, w: (w - lead).max(1.0), ..strip };
     let status = FRect { x: 0.0, y: h - STATUS_H, w, h: STATUS_H };
     let rw = if e.collapsed { RAIL_MIN } else { RAIL_W };
     let body_h = (h - BAR_H - STATUS_H).max(0.0);
     let rail = FRect { x: 0.0, y: BAR_H, w: rw, h: body_h };
     let canvas = FRect { x: rw, y: BAR_H, w: (w - rw).max(1.0), h: body_h.max(1.0) };
-    let in_bar = zoom_lay(w - 8.0, BAR_H / 2.0, 32.0);
+    let in_bar = zoom_lay(w - 8.0 - trail, BAR_H / 2.0, 32.0);
     // The toolbar's buttons end with their 8 px pad: 2 px more apart.
-    let zoom_in_status = in_bar.r.x < bar_w + 2.0;
+    let zoom_in_status = in_bar.r.x < lead + bar_w + 2.0;
     let zoom = if zoom_in_status { zoom_lay(w - 8.0, status.y + STATUS_H / 2.0, 24.0) } else { in_bar };
     let collapse = if e.collapsed {
         FRect { x: (RAIL_MIN - 32.0) / 2.0, y: BAR_H + 6.0, w: 32.0, h: 32.0 }
@@ -182,7 +197,7 @@ pub fn layout(e: &Edit, w: f32, h: f32, bar_w: f32) -> Lay {
     }
     let note_top = rail.y1() - note_h();
     rows.retain(|(r, _)| r.y1() <= note_top);
-    Lay { w, h, bar, rail, canvas, status, zoom, zoom_in_status, collapse, rows }
+    Lay { w, h, strip, bar, rail, canvas, status, zoom, zoom_in_status, collapse, rows }
 }
 
 fn inside(r: FRect, x: f32, y: f32) -> bool {
@@ -316,7 +331,7 @@ fn btn_bg(ui: &mut Ui, r: FRect, t: &WTok, on: bool, hov: bool, rad: f32) {
 
 /// The strip under the docked toolbar (its buttons are the editor's).
 pub fn paint_strip(ui: &mut Ui, lay: &Lay, t: &WTok) {
-    fill(ui, lay.bar, 0.0, t.win);
+    fill(ui, lay.strip, 0.0, t.win);
     line_h(ui, 0.0, BAR_H - 1.0, lay.w, t.sep);
 }
 

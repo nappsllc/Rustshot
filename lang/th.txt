@@ -99,7 +99,7 @@ settings.error.secret_needs_bucket = ป้อนบักเก็ตและ�
 settings.error.autostart = เปลี่ยน "เปิดเมื่อลงชื่อเข้าใช้" ไม่ได้: {e}
 settings.error.reset_tools = รีเซ็ตเครื่องมือใน {path} ไม่ได้: {e}
 settings.error.backup = สำรอง config.toml ไปยัง {path} ไม่ได้: {e}
-settings.window_title = การตั้งค่า Rustshot
+settings.window_title = Rustshot — การตั้งค่า
 settings.header.reset_to_defaults = รีเซ็ตเป็นค่าเริ่มต้น
 settings.footer.open_config_file = เปิดไฟล์การกำหนดค่า
 settings.general.appearance = ลักษณะที่ปรากฏ
@@ -677,7 +677,7 @@ history.no_upload = การจับภาพนี้ไม่มีการ
 history.saved_to = บันทึก {n} รายการไปยัง {dir} แล้ว
 history.saved_some_why = บันทึกแล้ว {n} จาก {total}: อ่านการจับภาพหนึ่งไม่ได้: {why}
 history.saved_some = บันทึกแล้ว {n} จาก {total}
-history.window_title = ประวัติ Rustshot
+history.window_title = Rustshot — ประวัติ
 history.open_failed = เปิดการจับภาพไม่ได้: {e}
 history.show_failed = แสดงการจับภาพไม่ได้: {e}
 history.path_copied = คัดลอกพาธไฟล์แล้ว
@@ -781,7 +781,7 @@ edit.saved_gone = บันทึก {n} แล้ว (รายการใน�
 edit.not_in_history = การจับภาพนั้นไม่อยู่ในประวัติแล้ว
 edit.bad_lasso = เปิดการจับภาพไม่ได้: อ่านบ่วงบาศไม่ได้
 edit.bad_crop = เปิดการจับภาพไม่ได้: กรอบครอบตัดอยู่นอกภาพ
-edit.window_title = แก้ไข — {name}
+edit.window_title = {name} — Rustshot
 edit.save_failed = บันทึกล้มเหลว: {e}
 
 # Capture launcher

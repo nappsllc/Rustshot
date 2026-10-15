@@ -99,7 +99,7 @@ settings.error.secret_needs_bucket = Сначала укажите бакет и
 settings.error.autostart = Не удалось изменить «Запуск при входе»: {e}
 settings.error.reset_tools = Не удалось сбросить инструменты в {path}: {e}
 settings.error.backup = Не удалось создать копию config.toml в {path}: {e}
-settings.window_title = Параметры Rustshot
+settings.window_title = Rustshot — Параметры
 settings.header.reset_to_defaults = Сбросить
 settings.footer.open_config_file = Открыть файл настроек
 settings.general.appearance = Оформление
@@ -710,7 +710,7 @@ history.no_upload = У этого снимка нет загрузки для у
 history.saved_to = Сохранено: {n} в {dir}
 history.saved_some_why = Сохранено {n} из {total}: не удалось прочитать снимок: {why}
 history.saved_some = Сохранено {n} из {total}
-history.window_title = История Rustshot
+history.window_title = Rustshot — История
 history.open_failed = Не удалось открыть снимок: {e}
 history.show_failed = Не удалось показать снимок: {e}
 history.path_copied = Путь к файлу скопирован
@@ -823,7 +823,7 @@ edit.saved_gone = Сохранено: {n} (записи в Истории нет
 edit.not_in_history = Этого снимка больше нет в Истории
 edit.bad_lasso = Не удалось открыть снимок: его лассо не читается
 edit.bad_crop = Не удалось открыть снимок: обрезка выходит за изображение
-edit.window_title = Правка — {name}
+edit.window_title = {name} — Rustshot
 edit.save_failed = Ошибка сохранения: {e}
 
 # Capture launcher

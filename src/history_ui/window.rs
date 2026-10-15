@@ -345,6 +345,7 @@ pub fn frame(canvas: &mut PixBuf, th: &crate::theme::Theme, inp: &Input, focus: 
     h.cursor_text = matches!(hover, Some(Target::Search));
     draw::paint(&mut ui, h, &lay, hover.as_ref(), now);
     h.hover = hover;
+    h.targets = targets;
     let out = ui.finish();
     let mut acts = acts;
     if out.escape && !asked && !h.escape() {
@@ -702,5 +703,20 @@ impl Driver for Window {
 
     fn frame_colors(&self) -> Option<wind::FrameColors> {
         Some(crate::ui::paint::WTok::of(&crate::theme::resolve(&self.h.cfg)).frame())
+    }
+
+    /// macOS: the header row is the visual title under the transparent
+    /// title bar (its row starts past the traffic lights: `History::chrome`).
+    fn under_titlebar(&self) -> bool {
+        true
+    }
+
+    fn drags_window(&self, x: i32, y: i32) -> bool {
+        let x = match crate::ui::rtl_ev(Ev::Down { x, y }, self.canvas.width()) {
+            Ev::Down { x, .. } => x,
+            _ => x,
+        };
+        let k = wind::scale(self.hwnd);
+        self.h.drags_window_at(x as f32 / k, y as f32 / k)
     }
 }

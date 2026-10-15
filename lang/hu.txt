@@ -99,7 +99,7 @@ settings.error.secret_needs_bucket = Előbb adja meg a gyűjtőt és a hozzáfé
 settings.error.autostart = Az „Indítás bejelentkezéskor” nem módosítható: {e}
 settings.error.reset_tools = Nem sikerült visszaállítani az eszközöket ({path}): {e}
 settings.error.backup = Nem sikerült biztonsági másolatot készíteni a config.toml fájlról ({path}): {e}
-settings.window_title = Rustshot – Beállítások
+settings.window_title = Rustshot — Beállítások
 settings.header.reset_to_defaults = Alapértelmezések visszaállítása
 settings.footer.open_config_file = Konfigurációs fájl megnyitása
 settings.general.appearance = Megjelenés
@@ -688,7 +688,7 @@ history.no_upload = Ennek a felvételnek nincs törölhető feltöltése
 history.saved_to = {n} mentve ide: {dir}
 history.saved_some_why = {n} / {total} mentve: egy felvétel nem olvasható: {why}
 history.saved_some = {n} / {total} mentve
-history.window_title = Rustshot – Előzmények
+history.window_title = Rustshot — Előzmények
 history.open_failed = Nem sikerült megnyitni a felvételt: {e}
 history.show_failed = Nem sikerült megjeleníteni a felvételt: {e}
 history.path_copied = Elérési út másolva
@@ -795,7 +795,7 @@ edit.saved_gone = Mentve: {n} (az előzménybejegyzés már nincs meg)
 edit.not_in_history = Ez a felvétel már nincs az Előzményekben
 edit.bad_lasso = Nem sikerült megnyitni a felvételt: a lasszója nem olvasható
 edit.bad_crop = Nem sikerült megnyitni a felvételt: a körülvágás a képen kívülre esik
-edit.window_title = Szerkesztés – {name}
+edit.window_title = {name} — Rustshot
 edit.save_failed = A mentés sikertelen: {e}
 
 # Capture launcher

@@ -1178,3 +1178,17 @@ fn paragraph_wraps_to_the_width_and_height() {
     let below = h.img.as_raw()[25 * w * 4..60 * w * 4].iter().any(|&b| b != 0);
     assert!(!below, "lines past the height are not drawn");
 }
+
+/// The OS title bar takes the window's own colours from OUR theme (board
+/// 12): the caption and the 1 px border in `--win` (no seam), the title
+/// in `--tx`.
+#[test]
+fn title_bar_colours_follow_the_theme() {
+    let d = crate::ui::paint::WTok::of(&DARK).frame();
+    assert_eq!(d, crate::wind::FrameColors { dark: true, caption: [0x1B, 0x1C, 0x20], text: [0xEC, 0xEE, 0xF3], border: [0x1B, 0x1C, 0x20] });
+    let l = crate::ui::paint::WTok::of(&LIGHT).frame();
+    assert_eq!(l, crate::wind::FrameColors { dark: false, caption: [0xFA, 0xFA, 0xFC], text: [0x15, 0x17, 0x1E], border: [0xFA, 0xFA, 0xFC] });
+    // A light desktop does not turn a dark Rustshot's bar light.
+    let cfg = crate::config::Config { theme: "dark".into(), ..crate::config::Config::default() };
+    assert!(crate::ui::paint::WTok::of(&crate::theme::resolve_with(&cfg, || Some(false))).frame().dark);
+}

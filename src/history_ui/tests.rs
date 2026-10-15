@@ -574,6 +574,71 @@ fn the_header_fits_at_the_minimum_width() {
     }
 }
 
+/// macOS (board 12): the content runs under the transparent title bar,
+/// so the header row starts at x 84, clear of the traffic lights' 72 x
+/// 28 zone, and still fits at the smallest window; a press in the top
+/// 28 px drags the window except on the header's controls. Right to
+/// left the zone is the layout's trailing end (the frame is mirrored,
+/// the lights stay at the left). Writes `history-macos-*.png`.
+#[test]
+fn the_header_clears_the_macos_traffic_lights() {
+    let (_r, st) = fixture("mac-header");
+    let zone = FRect { x: 0.0, y: 0.0, w: 72.0, h: 28.0 };
+    let meets = |a: FRect, b: FRect| a.x < b.x1() && b.x < a.x1() && a.y < b.y1() && b.y < a.y1();
+    let (mw, mh) = min_size(crate::wind::Overlap::MACOS);
+    assert_eq!((mw, mh), (MIN.0 + 66, MIN.1), "the smallest window keeps the row's room");
+    assert_eq!(min_size(crate::wind::Overlap::NONE), MIN);
+    for lang in crate::ui::preview::langs() {
+        crate::i18n::with_lang(lang, || {
+            let rtl = crate::i18n::is_rtl();
+            let mut h = history(&st);
+            h.chrome = crate::wind::Overlap::MACOS;
+            h.sel = vec![h.entries[0].id.clone()];
+            // Nothing cut short or overlapping at the smallest window.
+            crate::ui::preview::begin_check(mw);
+            let mut focus = FocusState::default();
+            render_with(&mut h, &DARK, mw, mh, 1.0, &Input::default(), &mut focus);
+            crate::ui::preview::assert_fits(&focus, mw, mh, 1.0, &format!("history macos {lang}"));
+            for w in [mw as f32, W as f32] {
+                let l = layout_of(&h, w, H as f32);
+                // On screen: the layout mirrored right to left.
+                let screen = |r: FRect| if rtl { FRect { x: w - r.x1(), ..r } } else { r };
+                let mut parts: Vec<FRect> = l.filters.iter().map(|f| f.0).chain(l.views.iter().map(|v| v.0)).collect();
+                parts.extend([Some(l.more), l.search, l.panel_btn, l.slider].into_iter().flatten());
+                for r in &parts {
+                    assert!(!meets(screen(*r), zone), "{lang} at {w}: {r:?} under the traffic lights");
+                }
+                if !rtl {
+                    assert_eq!(l.title_x, 84.0, "the row starts 12 past the zone");
+                    assert!(l.search.unwrap().x >= 84.0);
+                } else {
+                    assert_eq!(l.title_x, 18.0);
+                    assert!(w - l.more.x1() >= 84.0, "{lang} at {w}: {:?}", l.more);
+                }
+                let last = l.views.last().map_or(l.filters.last().unwrap().0, |v| v.0);
+                let right = l.panel_btn.unwrap_or(l.more);
+                assert!(last.x1() + 6.0 <= right.x, "{lang} at {w}: {last:?} runs into {right:?}");
+            }
+            // The drag strip: the empty header drags, its controls do not.
+            let (mut img, _) = render(&mut h, &DARK, W, H, 1.0, &Input::default());
+            let l = layout_of(&h, W as f32, H as f32);
+            let (mx, my) = centre(l.more);
+            assert!(!h.drags_window_at(mx, my), "⋯ is ours");
+            let s = l.search.unwrap();
+            assert!(!h.drags_window_at(s.x + 4.0, s.y + 2.0), "the search field is ours");
+            if lang == "en" {
+                let gap = l.views.last().unwrap().0.x1() + 4.0;
+                assert!(h.drags_window_at(gap, 6.0), "the header's empty stretch drags");
+                crate::ui::preview::traffic_lights(&mut img, 1.0);
+                crate::ui::preview::save("history-macos-dark.png", &img);
+                let (mut img, _) = render(&mut h, &LIGHT, W, H, 1.0, &Input::default());
+                crate::ui::preview::traffic_lights(&mut img, 1.0);
+                crate::ui::preview::save("history-macos-light.png", &img);
+            }
+        });
+    }
+}
+
 /// Open with… opens the saved file of an unedited capture, else a
 /// temporary picture (no chooser in tests).
 #[test]

@@ -99,7 +99,7 @@ settings.error.secret_needs_bucket = Hãy nhập bucket và ID khóa truy cập 
 settings.error.autostart = Không thể thay đổi Mở khi đăng nhập: {e}
 settings.error.reset_tools = Không thể đặt lại công cụ trong {path}: {e}
 settings.error.backup = Không thể sao lưu config.toml vào {path}: {e}
-settings.window_title = Cài đặt Rustshot
+settings.window_title = Rustshot — Cài đặt
 settings.header.reset_to_defaults = Đặt lại mặc định
 settings.footer.open_config_file = Mở tệp cấu hình
 settings.general.appearance = Giao diện
@@ -677,7 +677,7 @@ history.no_upload = Bản chụp này không có bản tải lên để xóa
 history.saved_to = Đã lưu {n} vào {dir}
 history.saved_some_why = Đã lưu {n}/{total}: không đọc được một bản chụp: {why}
 history.saved_some = Đã lưu {n}/{total}
-history.window_title = Lịch sử Rustshot
+history.window_title = Rustshot — Lịch sử
 history.open_failed = Không thể mở bản chụp: {e}
 history.show_failed = Không thể hiện bản chụp: {e}
 history.path_copied = Đã sao chép đường dẫn tệp
@@ -781,7 +781,7 @@ edit.saved_gone = Đã lưu {n} (mục Lịch sử không còn)
 edit.not_in_history = Bản chụp đó không còn trong Lịch sử
 edit.bad_lasso = Không thể mở bản chụp: không đọc được vùng thòng lọng
 edit.bad_crop = Không thể mở bản chụp: vùng cắt nằm ngoài ảnh
-edit.window_title = Chỉnh sửa — {name}
+edit.window_title = {name} — Rustshot
 edit.save_failed = Lưu thất bại: {e}
 
 # Capture launcher

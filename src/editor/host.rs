@@ -511,6 +511,14 @@ impl Canvas {
         self.e.toolbar.as_ref().is_some_and(|t| t.contains(p))
     }
 
+    /// Whether `p` (window px) is on one of the toolbar's buttons or its
+    /// open popover, not the strip's empty stretches (a title bar's drag
+    /// strip over it moves the window there).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub fn on_bar_item(&self, p: Pt) -> bool {
+        self.e.toolbar.as_ref().is_some_and(|t| t.pop.is_some_and(|r| hit(r, p)) || t.items.iter().any(|i| hit(i.r, p)))
+    }
+
     /// A press at window point `p`: the toolbar's, the canvas's (Space
     /// held: a pan). Returns whether it was taken.
     pub fn press(&mut self, p: Pt) -> bool {

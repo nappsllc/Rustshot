@@ -99,7 +99,7 @@ settings.error.secret_needs_bucket = Najpierw wpisz bucket i identyfikator klucz
 settings.error.autostart = Nie można zmienić opcji Uruchamiaj po zalogowaniu: {e}
 settings.error.reset_tools = Nie można zresetować narzędzi w {path}: {e}
 settings.error.backup = Nie można utworzyć kopii config.toml w {path}: {e}
-settings.window_title = Ustawienia Rustshot
+settings.window_title = Rustshot — Ustawienia
 settings.header.reset_to_defaults = Przywróć domyślne
 settings.footer.open_config_file = Otwórz plik konfiguracji
 settings.general.appearance = Wygląd
@@ -710,7 +710,7 @@ history.no_upload = To przechwycenie nie ma przesłanego pliku do usunięcia
 history.saved_to = Zapisano ({n}) w: {dir}
 history.saved_some_why = Zapisano {n} z {total}: nie można odczytać przechwycenia: {why}
 history.saved_some = Zapisano {n} z {total}
-history.window_title = Historia Rustshot
+history.window_title = Rustshot — Historia
 history.open_failed = Nie można otworzyć przechwycenia: {e}
 history.show_failed = Nie można pokazać przechwycenia: {e}
 history.path_copied = Skopiowano ścieżkę pliku
@@ -823,7 +823,7 @@ edit.saved_gone = Zapisano {n} (wpis w Historii nie istnieje)
 edit.not_in_history = Tego przechwycenia nie ma już w Historii
 edit.bad_lasso = Nie można otworzyć przechwycenia: nie można odczytać jego lassa
 edit.bad_crop = Nie można otworzyć przechwycenia: jego kadr wychodzi poza obraz
-edit.window_title = Edycja – {name}
+edit.window_title = {name} — Rustshot
 edit.save_failed = Błąd zapisu: {e}
 
 # Capture launcher

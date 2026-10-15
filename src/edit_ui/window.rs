@@ -705,7 +705,34 @@ const C4_SHADOW: crate::uifb::C4 = crate::uifb::C4 { r: 0, g: 0, b: 0, a: 22 };
 
 impl Driver for Window {
     fn title(&self) -> Option<String> {
-        Some(tr!("edit.window_title", name = crate::history::title(&self.e.entry.meta)))
+        Some(super::window_title(&self.e.entry.meta))
+    }
+
+    /// Unsaved changes: the marker on the file name the title starts with.
+    fn edited(&self) -> bool {
+        self.e.canvas.unsaved()
+    }
+
+    /// macOS: the toolbar strip runs under the transparent title bar (its
+    /// top 28 px drag the window; `Edit::chrome`).
+    fn under_titlebar(&self) -> bool {
+        true
+    }
+
+    fn drags_window(&self, x: i32, y: i32) -> bool {
+        // The toolbar is in screen space; the zoom control in the layout
+        // (mirrored right to left).
+        let p = Pt::new(x as f32, y as f32);
+        if self.e.canvas.on_bar_item(p) {
+            return false;
+        }
+        let k = self.k();
+        let l = match crate::ui::rtl_ev(Ev::Down { x, y }, self.canvas.width()) {
+            Ev::Down { x, y } => (x as f32 / k, y as f32 / k),
+            _ => (x as f32 / k, y as f32 / k),
+        };
+        let z = self.lay().zoom.r;
+        !(l.0 >= z.x && l.0 < z.x1() && l.1 >= z.y && l.1 < z.y1())
     }
 
     fn on_create(&mut self, hwnd: Hwnd) {

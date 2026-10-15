@@ -1025,6 +1025,8 @@ struct WinState<'a> {
     frame: core::cell::Cell<Option<FrameColors>>,
     /// The UI language generation the window last drew in.
     lang: core::cell::Cell<u64>,
+    /// The title shown: the driver's, with its unsaved marker.
+    title: core::cell::RefCell<crate::wind::Title>,
 }
 
 /// The native frame for `controls`: always a caption with a system menu
@@ -1050,13 +1052,15 @@ pub(crate) fn colorref([r, g, b]: [u8; 3]) -> u32 {
     u32::from_le_bytes([r, g, b, 0])
 }
 
-/// Theme the OS title bar: dark/light caption buttons and text (Windows 10
-/// 2004+ and 11), the caption and border in the design's colours (Windows
-/// 11 22000+; older builds refuse the attribute and keep theirs). `None`:
-/// the OS defaults again.
+/// Theme the OS title bar: dark/light caption buttons (Windows 10 2004+
+/// and 11), the caption, its title text and the border in the design's
+/// colours (Windows 11 22000+; older builds refuse those attributes and
+/// keep theirs). The caption stays the system's (its buttons, Snap
+/// Layouts, the icon and title on the left); only its colours are ours.
+/// `None`: the OS defaults again.
 unsafe fn apply_frame(hwnd: HWND, c: Option<&FrameColors>) {
     use windows::Win32::Graphics::Dwm::{
-        DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE,
+        DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE,
     };
     /// DWMWA_COLOR_DEFAULT.
     const DEFAULT: u32 = 0xFFFF_FFFF;
@@ -1064,6 +1068,7 @@ unsafe fn apply_frame(hwnd: HWND, c: Option<&FrameColors>) {
         let set = |a, v: u32| DwmSetWindowAttribute(hwnd, a, (&raw const v).cast(), 4);
         let _ = set(DWMWA_USE_IMMERSIVE_DARK_MODE, u32::from(c.is_some_and(|c| c.dark)));
         let _ = set(DWMWA_CAPTION_COLOR, c.map_or(DEFAULT, |c| colorref(c.caption)));
+        let _ = set(DWMWA_TEXT_COLOR, c.map_or(DEFAULT, |c| colorref(c.text)));
         let _ = set(DWMWA_BORDER_COLOR, c.map_or(DEFAULT, |c| colorref(c.border)));
     }
 }
@@ -1075,6 +1080,11 @@ unsafe fn sync_frame(hwnd: HWND, st: &WinState<'_>, drv: &dyn Driver) {
     if st.frame.get() != want {
         st.frame.set(want);
         unsafe { apply_frame(hwnd, want.as_ref()) };
+    }
+    // The unsaved marker ("*name — Rustshot") follows the document.
+    let marked = st.title.borrow_mut().set_edited(drv.edited());
+    if let Some(t) = marked {
+        set_title(hwnd, &t);
     }
 }
 
@@ -1252,7 +1262,8 @@ unsafe extern "system" fn wndproc_window(hwnd: HWND, msg: u32, wp: WPARAM, lp: L
                 // The UI language switched: lay out again, retitle, repaint.
                 let mut seen = st.lang.get();
                 if let Some(title) = crate::wind::relocalize(&mut seen, drv, st.size.get()) {
-                    if let Some(t) = title {
+                    let retitled = st.title.borrow_mut().retitle(title);
+                    if let Some(t) = retitled {
                         set_title(hwnd, &t);
                     }
                     invalidate(hwnd);
@@ -1348,6 +1359,7 @@ unsafe fn window_loop(spec: &WindowSpec, drv: &mut dyn Driver) -> anyhow::Result
             ex_style,
             frame: core::cell::Cell::new(None),
             lang: core::cell::Cell::new(crate::i18n::generation()),
+            title: core::cell::RefCell::new(crate::wind::Title::new(&spec.title)),
         };
         let hwnd = CreateWindowExW(
             ex_style,
@@ -2295,12 +2307,16 @@ mod tests {
         let dark = crate::ui::paint::WTok::of(&crate::theme::DARK).frame();
         assert!(dark.dark);
         assert_eq!(dark.caption, [0x1B, 0x1C, 0x20], "the window surface (--win)");
-        // --bd (white at 9 %) over --win.
-        assert_eq!(dark.border, [0x30, 0x30, 0x34]);
+        // Board 12: BORDER_COLOR = the caption (the 1 px frame vanishes),
+        // TEXT_COLOR = --tx.
+        assert_eq!(dark.border, dark.caption);
+        assert_eq!(dark.text, [0xEC, 0xEE, 0xF3]);
+        assert_eq!(colorref(dark.text), 0x00F3_EEEC);
         let light = crate::ui::paint::WTok::of(&crate::theme::LIGHT).frame();
         assert!(!light.dark);
         assert_eq!(light.caption, [0xFA, 0xFA, 0xFC]);
-        assert_eq!(light.border, [0xE6, 0xE6, 0xE8], "--bd (black at 8 %) over --win");
+        assert_eq!(light.border, light.caption);
+        assert_eq!(light.text, [0x15, 0x17, 0x1E]);
     }
 
     /// oleacc's STATE_SYSTEM_INVISIBLE (a title bar button not shown).
@@ -2528,7 +2544,7 @@ mod tests {
             Cursor::Arrow
         }
         fn frame_colors(&self) -> Option<FrameColors> {
-            Some(FrameColors { dark: true, caption: [0x1B, 0x1C, 0x20], border: [0x30, 0x31, 0x34] })
+            Some(FrameColors { dark: true, caption: [0x1B, 0x1C, 0x20], text: [0xEC, 0xEE, 0xF3], border: [0x1B, 0x1C, 0x20] })
         }
     }
 
@@ -2804,5 +2820,89 @@ mod tests {
                 assert!(near(p, want), "{name}: title bar {p:?}, want the design surface {want:?}");
             }
         }
+    }
+
+    /// Reports unsaved changes as the helper thread flips them.
+    struct Dirty {
+        hwnd: HWND,
+        fb: PixBuf,
+        edited: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        helper: Option<std::thread::JoinHandle<Vec<String>>>,
+    }
+
+    impl Driver for Dirty {
+        fn on_create(&mut self, hwnd: HWND) {
+            self.hwnd = hwnd;
+            let raw = hwnd.0 as usize;
+            let edited = self.edited.clone();
+            self.helper = Some(std::thread::spawn(move || unsafe {
+                let hwnd = HWND(raw as *mut core::ffi::c_void);
+                let text = || {
+                    let mut buf = [0u16; 256];
+                    let n = windows::Win32::UI::WindowsAndMessaging::GetWindowTextW(hwnd, &mut buf);
+                    String::from_utf16_lossy(&buf[..n.max(0) as usize])
+                };
+                while !IsWindowVisible(hwnd).as_bool() {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                let mut seen = vec![text()];
+                for on in [true, false] {
+                    edited.store(on, std::sync::atomic::Ordering::SeqCst);
+                    // A change repaints; the title follows on that paint.
+                    let _ = InvalidateRect(Some(hwnd), None, false);
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                    while text().starts_with('*') != on && std::time::Instant::now() < deadline {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    seen.push(text());
+                }
+                let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
+                seen
+            }));
+        }
+        fn on_event(&mut self, ev: Ev) -> bool {
+            match ev {
+                Ev::Resize(w, h) => self.fb = PixBuf::new(w.max(1), h.max(1)),
+                Ev::Close => close(self.hwnd),
+                _ => {}
+            }
+            false
+        }
+        fn frame(&mut self) -> Option<&mut PixBuf> {
+            Some(&mut self.fb)
+        }
+        fn cursor(&self) -> Cursor {
+            Cursor::Arrow
+        }
+        fn edited(&self) -> bool {
+            self.edited.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    /// The Edit window's title carries the unsaved marker on the file
+    /// name it starts with ("*name — Rustshot"), and drops it once saved.
+    #[test]
+    fn run_window_title_marks_unsaved_changes() {
+        let _guard = windows_lock();
+        let seen = std::thread::spawn(|| {
+            let edited = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let mut d = Dirty { hwnd: HWND::default(), fb: PixBuf::new(1, 1), edited, helper: None };
+            let spec = WindowSpec {
+                title: "2026-10-05_14-32.png \u{2014} Rustshot".into(),
+                w: 320,
+                h: 160,
+                resizable: true,
+                min: (200, 100),
+                controls: Controls::MinMaxClose,
+            };
+            run_window(spec, &mut d).expect("window loop");
+            d.helper.take().expect("helper").join().expect("helper thread")
+        })
+        .join()
+        .expect("window thread");
+        assert_eq!(
+            seen,
+            ["2026-10-05_14-32.png \u{2014} Rustshot", "*2026-10-05_14-32.png \u{2014} Rustshot", "2026-10-05_14-32.png \u{2014} Rustshot"]
+        );
     }
 }

@@ -139,7 +139,7 @@ function Checks050($exe) {
     $sys = (Get-WinUserLanguageList)[0].LanguageTag
     $s = OpenSettings $exe $vars 'en'
     $title = if ($s.h -ne [IntPtr]::Zero) { [V50]::Title($s.h) } else { '' }
-    Check "v050 language: with no language set (system $sys) Settings opens in English" ($title -eq 'Rustshot Settings') "title=[$title]"
+    Check "v050 language: with no language set (system $sys) Settings opens in English" ($title -eq "Rustshot $([char]0x2014) Settings") "title=[$title]"
     $enShot = if ($s.h -ne [IntPtr]::Zero) { WinShot $s.h 'v050-settings-en' }
     $redEn = if ($enShot) { RedPixels $enShot } else { -1 }
 
@@ -158,7 +158,7 @@ function Checks050($exe) {
         $red = RedPixels "$out\v050-settings-pick-offline.png"
         Check 'v050 language: picking a language offline says it couldn''t download it, in red, with Retry (out\v050-settings-pick-offline.png)' $failed "red px=$red (English start: $redEn)"
         $title = [V50]::Title($s.h)
-        Check 'v050 language: ... and the window stays up and in English' (-not $s.p.HasExited -and $title -eq 'Rustshot Settings') "title=[$title] exited=$($s.p.HasExited)"
+        Check 'v050 language: ... and the window stays up and in English' (-not $s.p.HasExited -and $title -eq "Rustshot $([char]0x2014) Settings") "title=[$title] exited=$($s.p.HasExited)"
         $parts = @(Get-ChildItem $cache -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -like '*.part' -or $_.DirectoryName -like '*\lang' })
         Check 'v050 language: no language file and no partial file after the failed download' ($parts.Count -eq 0) "files=$(($parts | ForEach-Object Name) -join ',')"
     }
@@ -170,7 +170,7 @@ function Checks050($exe) {
     $title = if ($s.h -ne [IntPtr]::Zero) { [V50]::Title($s.h) } else { '' }
     $sh = if ($s.h -ne [IntPtr]::Zero) { WinShot $s.h 'v050-settings-de-offline' }
     Start-Sleep 3
-    Check 'v050 language: language = "de" with no network starts in English and stays up' ($title -eq 'Rustshot Settings' -and -not $s.p.HasExited) "title=[$title] exited=$($s.p.HasExited)"
+    Check 'v050 language: language = "de" with no network starts in English and stays up' ($title -eq "Rustshot $([char]0x2014) Settings" -and -not $s.p.HasExited) "title=[$title] exited=$($s.p.HasExited)"
     CloseSettings $s
     $o = WithEnv $vars { & $exe data --fetch 2>&1 | Out-String }; $rc = $LASTEXITCODE
     $deLine = ($o -split "`r?`n" | Where-Object { $_ -like 'lang-de.txt:*' }) -join ''
@@ -186,7 +186,7 @@ function Checks050($exe) {
         $s = OpenSettings $exe $vars 'de'
         $title = if ($s.h -ne [IntPtr]::Zero) { [V50]::Title($s.h) } else { '' }
         if ($s.h -ne [IntPtr]::Zero) { $null = WinShot $s.h 'v050-settings-de' }
-        Check 'v050 language: with it, language = "de" opens Settings in German (out\v050-settings-de.png)' ($title -eq 'Rustshot-Einstellungen') "title=[$title]"
+        Check 'v050 language: with it, language = "de" opens Settings in German (out\v050-settings-de.png)' ($title -eq "Rustshot $([char]0x2014) Einstellungen") "title=[$title]"
         CloseSettings $s
         # Right to left: Arabic, its file put there the same way.
         if (Test-Path "$repoLang\ar.txt") {

@@ -99,7 +99,7 @@ settings.error.secret_needs_bucket = 請先輸入貯體和存取金鑰 ID：秘�
 settings.error.autostart = 無法變更「登入時啟動」：{e}
 settings.error.reset_tools = 無法重設 {path} 中的工具：{e}
 settings.error.backup = 無法將 config.toml 備份到 {path}：{e}
-settings.window_title = Rustshot 設定
+settings.window_title = Rustshot — 設定
 settings.header.reset_to_defaults = 還原為預設值
 settings.footer.open_config_file = 開啟設定檔
 settings.general.appearance = 外觀
@@ -677,7 +677,7 @@ history.no_upload = 此擷取沒有可刪除的上傳
 history.saved_to = 已將 {n} 項儲存到 {dir}
 history.saved_some_why = 已儲存 {n} / {total} 項：有擷取無法讀取：{why}
 history.saved_some = 已儲存 {n} / {total} 項
-history.window_title = Rustshot 歷程記錄
+history.window_title = Rustshot — 歷程記錄
 history.open_failed = 無法開啟擷取：{e}
 history.show_failed = 無法顯示擷取：{e}
 history.path_copied = 已複製檔案路徑
@@ -781,7 +781,7 @@ edit.saved_gone = 已儲存 {n}（歷程記錄項目已不存在）
 edit.not_in_history = 該擷取已不在歷程記錄中
 edit.bad_lasso = 無法開啟擷取：無法讀取其套索
 edit.bad_crop = 無法開啟擷取：其裁剪範圍超出影像
-edit.window_title = 編輯 — {name}
+edit.window_title = {name} — Rustshot
 edit.save_failed = 儲存失敗：{e}
 
 # Capture launcher

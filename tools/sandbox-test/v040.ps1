@@ -161,8 +161,8 @@ function Checks040($exe) {
         $ow = "$env:TEMP\rustshot-open"
         $before = @(Get-ChildItem $ow -Filter *.png -ErrorAction SilentlyContinue).Count
         $hp = WithEnv $vars { Start-Process $exe -ArgumentList 'history' -PassThru }; $null = $hp.Handle
-        $up = WaitFor { [W]::FindWindow('rustshot_window', 'Rustshot History') -ne [IntPtr]::Zero } 10
-        $hw = [W]::FindWindow('rustshot_window', 'Rustshot History')
+        $up = WaitFor { [W]::FindWindow('rustshot_window', "Rustshot $([char]0x2014) History") -ne [IntPtr]::Zero } 10
+        $hw = [W]::FindWindow('rustshot_window', "Rustshot $([char]0x2014) History")
         Start-Sleep 2
         if ($up) { [void][W]::SetForegroundWindow($hw); Start-Sleep -Milliseconds 400; [W]::Chord(0x11, 0x41); Start-Sleep -Milliseconds 400; [W]::Chord(0x11, 0x4F) }   # Ctrl+A, Ctrl+O
         $wrote = WaitFor { @(Get-ChildItem $ow -Filter *.png -ErrorAction SilentlyContinue).Count -gt $before } 10

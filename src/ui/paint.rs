@@ -149,18 +149,13 @@ impl WTok {
         }
     }
 
-    /// The OS title bar in this theme: the window surface (`win`, what
-    /// every window draws along its top edge) with the board's 1 px
-    /// border (`bd` over `win`), so the caption reads as part of the
-    /// design rather than a white strip over a dark window.
+    /// The OS title bar in this theme (board 12): the window surface
+    /// (`win`, what every window draws along its top edge) as the caption
+    /// and the border, so the bar and its 1 px frame read as part of the
+    /// window with no seam, and the title in `tx`.
     pub fn frame(&self) -> crate::wind::FrameColors {
-        let over = |c: C4, o: C4| {
-            let a = u32::from(o.a);
-            let mix = |b: u8, f: u8| ((u32::from(b) * (255 - a) + u32::from(f) * a + 127) / 255) as u8;
-            [mix(c.r, o.r), mix(c.g, o.g), mix(c.b, o.b)]
-        };
-        let w = self.win;
-        crate::wind::FrameColors { dark: self.dark, caption: [w.r, w.g, w.b], border: over(w, self.bd) }
+        let (w, t) = (self.win, self.tx);
+        crate::wind::FrameColors { dark: self.dark, caption: [w.r, w.g, w.b], text: [t.r, t.g, t.b], border: [w.r, w.g, w.b] }
     }
 
     /// The Edit window's checkerboard (darker in light mode: board 11).

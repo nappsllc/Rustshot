@@ -32,8 +32,8 @@ public static class W {
   [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
   [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, IntPtr extra);
-  // The Settings window: wind_win's "rustshot_window" class, title "Rustshot Settings".
-  public static IntPtr Settings() { return FindWindow("rustshot_window", "Rustshot Settings"); }
+  // The Settings window: wind_win's "rustshot_window" class, title "Rustshot \u2014 Settings".
+  public static IntPtr Settings() { return FindWindow("rustshot_window", "Rustshot \u2014 Settings"); }
   public static uint Owner(IntPtr h) { uint p; GetWindowThreadProcessId(h, out p); return p; }
   public static IntPtr Overlay() {
     IntPtr r = IntPtr.Zero;

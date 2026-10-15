@@ -57,8 +57,8 @@ function HistoryChecks($exe) {
 
     # `rustshot history` opens the History window (no daemon: in its own process).
     $h = WithEnv $vars { Start-Process $exe -ArgumentList 'history' -PassThru }
-    $up = WaitFor { [W]::FindWindow('rustshot_window', 'Rustshot History') -ne [IntPtr]::Zero } 10
-    $hw = [W]::FindWindow('rustshot_window', 'Rustshot History')
+    $up = WaitFor { [W]::FindWindow('rustshot_window', "Rustshot $([char]0x2014) History") -ne [IntPtr]::Zero } 10
+    $hw = [W]::FindWindow('rustshot_window', "Rustshot $([char]0x2014) History")
     Check 'history: `rustshot history` opens the History window' ($up -and [W]::Owner($hw) -eq $h.Id) "owner=$(if ($up) { [W]::Owner($hw) }) pid=$($h.Id)"
     Start-Sleep 2
     Shot 'history-window'
@@ -85,13 +85,13 @@ function HistoryChecks($exe) {
     $null = WaitFor { $g.HasExited } 5
     if (-not $g.HasExited) { Stop-Process -Id $g.Id -Force -ErrorAction SilentlyContinue }
     [R]::Hyper(0x77)   # Ctrl+Alt+Shift+F8: history_hotkey
-    $up = WaitFor { [W]::FindWindow('rustshot_window', 'Rustshot History') -ne [IntPtr]::Zero } 8
-    $hw = [W]::FindWindow('rustshot_window', 'Rustshot History')
+    $up = WaitFor { [W]::FindWindow('rustshot_window', "Rustshot $([char]0x2014) History") -ne [IntPtr]::Zero } 8
+    $hw = [W]::FindWindow('rustshot_window', "Rustshot $([char]0x2014) History")
     Check 'history: the History hotkey opens the window in the daemon' ($up -and [W]::Owner($hw) -eq $dm.Id) "owner=$(if ($up) { [W]::Owner($hw) }) daemon=$($dm.Id)"
     Start-Sleep 2
     Shot 'history-window-daemon'
     if ($up) { [void][W]::PostMessage($hw, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) }
-    Check 'history: closing it keeps the daemon running' ((WaitFor { [W]::FindWindow('rustshot_window', 'Rustshot History') -eq [IntPtr]::Zero } 5) -and -not $dm.HasExited)
+    Check 'history: closing it keeps the daemon running' ((WaitFor { [W]::FindWindow('rustshot_window', "Rustshot $([char]0x2014) History") -eq [IntPtr]::Zero } 5) -and -not $dm.HasExited)
     Stop-Process -Id $dm.Id -Force -ErrorAction SilentlyContinue   # the PID started above
     $null = WaitFor { $dm.HasExited } 5
 
