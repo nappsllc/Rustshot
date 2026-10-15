@@ -1,7 +1,9 @@
 //! Microsoft Store screenshots of the overlay (docs/store/screenshots):
 //! 1920 x 1080 frames over a sample desktop with real text, so Text mode
 //! and Quick Redact have words to show. `RUSTSHOT_PREVIEW_DIR=<dir>
-//! cargo test store_screenshots -- --ignored` writes `store-*.png`.
+//! cargo test store_screenshots -- --ignored` writes `<dir>/en/store-*.png`
+//! (and `<dir>/<tag>/` for each catalog `RUSTSHOT_FIT_LANGS` names; `all`:
+//! every `lang/*.txt`). The sample desktop stays English.
 
 use super::tests::{edit_of, preview_app_with, settled_frame};
 use super::*;
@@ -156,8 +158,15 @@ fn word_at(l: usize, w: usize, dx: f32) -> Pt {
 #[ignore = "writes preview PNGs; set RUSTSHOT_PREVIEW_DIR"]
 fn store_screenshots() {
     let Some(dir) = std::env::var_os("RUSTSHOT_PREVIEW_DIR") else { return };
-    let dir = std::path::PathBuf::from(dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    for lang in crate::ui::preview::store_langs() {
+        let dir = std::path::PathBuf::from(&dir).join(lang);
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::i18n::with_lang(lang, || store_screenshots_in(&dir));
+    }
+}
+
+/// The five overlay screenshots, in this thread's language, into `dir`.
+fn store_screenshots_in(dir: &std::path::Path) {
     let save = |a: &mut App, name: &str| {
         let img = settled_frame(a);
         assert_eq!((img.width(), img.height()), (W, H));

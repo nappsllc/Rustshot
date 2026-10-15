@@ -223,7 +223,11 @@ pub fn obj_name(o: &Obj) -> String {
     let quote = |t: &str| {
         let t = t.trim().replace('\n', " ");
         let short: String = t.chars().take(12).collect();
-        if t.chars().count() > 12 { format!("\"{short}\u{2026}\"") } else { format!("\"{short}\"") }
+        let q = if t.chars().count() > 12 { format!("\"{short}\u{2026}\"") } else { format!("\"{short}\"") };
+        // Right to left, the quoted text in a first-strong isolate: its
+        // quotes and "…" stay at its own ends ("Move this to…", not
+        // "…Move this to").
+        if crate::i18n::is_rtl() { format!("\u{2068}{q}\u{2069}") } else { q }
     };
     match o {
         Obj::Counter { n, .. } => tr!("edit.obj.number", n),

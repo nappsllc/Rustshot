@@ -139,7 +139,8 @@ two controls overlap, or a button's label had to be cut. They always run
 in English and three pseudo-languages (40 % longer than English, accented,
 Hebrew and Arabic letters). `RUSTSHOT_FIT_LANGS` adds real catalogs: a
 comma-separated list of tags, each read from the source tree's
-`lang/<tag>.txt` (the file must be there when the tests are built).
+`lang/<tag>.txt` (the file must be there when the tests are built), or
+`all` for every file there.
 
 ```powershell
 # Windows (PowerShell), from the repository
@@ -153,7 +154,9 @@ RUSTSHOT_FIT_LANGS=de,fi cargo test --release fit
 
 The tests that matter (all match `fit`): `every_section_fits`,
 `dialogs_fit_in_long_languages` (Settings), `tooltips_fit_in_long_languages`
-(overlay toolbar), `panel_text_fits_in_long_languages` (recording panel),
+(overlay toolbar), `panel_text_fits_in_long_languages` and
+`grip_hint_fits_in_long_languages` (recording panel),
+`details_panel_fits_in_long_languages` (History's details panel),
 `fits_in_long_languages` (History, Edit window, launcher, update and
 encoder dialogs), `notices_fit_in_long_languages`. Also run
 `cargo test --release catalogs_agree_with_english` (your file reads

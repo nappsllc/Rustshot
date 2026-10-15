@@ -1744,6 +1744,21 @@ fn language_frame_cost() {
     }
 }
 
+/// The Microsoft Store screenshot: Shortcuts › Global, dark, at 150 %, in
+/// each of [`preview::store_langs`] (`<lang>/`, RUSTSHOT_PREVIEW_DIR).
+#[test]
+#[ignore = "writes preview PNGs; set RUSTSHOT_PREVIEW_DIR"]
+fn store_screenshot_settings() {
+    for lang in preview::store_langs() {
+        crate::i18n::with_lang(lang, || {
+            let mut s = sample();
+            s.section = KEYS_GLOBAL;
+            let (img, _) = render(&mut s, &DARK, 1.5, &Input::default(), &mut FocusState::default());
+            preview::save_lang(lang, "settings-shortcuts-global-dark-150.png", &img);
+        });
+    }
+}
+
 /// Every section in the pseudo-languages and the RUSTSHOT_FIT_LANGS
 /// catalogs (RUSTSHOT_PREVIEW_DIR).
 #[test]
