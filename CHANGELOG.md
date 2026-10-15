@@ -4,6 +4,24 @@ Release notes for each version are on the GitHub release page
 (https://github.com/nappsllc/rustshot/releases). Lines here are for the
 next release.
 
+## 0.6.1
+
+- Fast pencil, marker, lasso and ruler strokes keep every pointer
+  position again (0.6.0's once-per-refresh drawing had thinned them); on
+  Windows the moves the system coalesced away are recovered from the
+  mouse's history, so high-rate mice draw smooth lines.
+- The size label and the freeform toggle keep off the toolbar when there
+  is no Record button.
+- The camera bubble's grip hint widens for languages with a longer hint.
+- History: the details panel's buttons are spaced (Open file no longer
+  touches Delete).
+- Right-to-left languages: the object list's text reads in the right
+  order.
+- The Edit window's Resize image and Canvas dialog titles are translated
+  in 14 more languages.
+- Tools: Microsoft Store screenshots in all 35 interface languages
+  (tools/store-screenshots.py).
+
 ## 0.6.0
 
 - Rustshot is now licensed under Apache-2.0 (previously GPL-3.0).
