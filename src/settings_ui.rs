@@ -8,8 +8,9 @@
 //! file-name pattern editor), **History**, **Recording** and **Camera**
 //! (the Record popover's defaults: [`recording`]), **Upload** (Imgur),
 //! then under *Shortcuts* **Global**, **Recording** (the record hotkey and
-//! the while-recording keys), **Overlay tools**, **Overlay actions**, and
-//! **About**, with a footer of **OK** / **Cancel** / **Apply** (the board
+//! the while-recording keys), **Overlay tools**, **Overlay editing**,
+//! **Overlay actions**, **Edit window** (one key per row, in two columns:
+//! [`draw::KEY_PAGES`]), and **About**, with a footer of **OK** / **Cancel** / **Apply** (the board
 //! leaves it out; the window keeps its explicit save). Drawn in [`draw`].
 //! Opened from the tray ("Settings…") and by `rustshot settings`
 //! ([`show`], [`run_here`]).
@@ -60,7 +61,7 @@ mod upload;
 
 /// The rail's sections (icon, name); About sits at the bottom. Each one
 /// fits the body without scrolling (`every_section_fits`).
-pub const SECTIONS: [(&str, Key); 15] = [
+pub const SECTIONS: [(&str, Key); 17] = [
     ("set-sliders", key!("settings.section.general")),
     ("set-camera", key!("settings.section.capture")),
     ("region", key!("settings.section.overlay")),
@@ -74,7 +75,9 @@ pub const SECTIONS: [(&str, Key); 15] = [
     ("set-keyboard", key!("settings.section.keys_global")),
     ("film", key!("settings.section.keys_recording")),
     ("pencil", key!("settings.section.keys_tools")),
+    ("select", key!("settings.section.keys_editing")),
     ("copy", key!("settings.section.keys_actions")),
+    ("image", key!("settings.section.keys_edit_window")),
     ("info", key!("settings.section.about")),
 ];
 /// The header's title of each section: the rail's name, with its group
@@ -93,7 +96,9 @@ pub const TITLES: [Key; SECTIONS.len()] = [
     key!("settings.title.keys_global"),
     key!("settings.title.keys_recording"),
     key!("settings.title.keys_tools"),
+    key!("settings.title.keys_editing"),
     key!("settings.title.keys_actions"),
+    key!("settings.title.keys_edit_window"),
     key!("settings.section.about"),
 ];
 /// Section indices.
@@ -109,18 +114,22 @@ pub const UPLOAD: usize = 8;
 /// An S3-compatible bucket's settings (Upload › Upload to S3-compatible).
 pub const S3_STORAGE: usize = 9;
 /// The shortcut sections: the global hotkeys, the record hotkey and the
-/// while-recording keys, the overlay's tool keys, its action keys.
+/// while-recording keys, the overlay's tool keys, its editing keys
+/// (objects, the selection, typing, undo), its action keys, the Edit
+/// window's own keys.
 pub const KEYS_GLOBAL: usize = 10;
 pub const KEYS_RECORDING: usize = 11;
 pub const KEYS_TOOLS: usize = 12;
-pub const KEYS_ACTIONS: usize = 13;
-pub const ABOUT: usize = 14;
+pub const KEYS_EDITING: usize = 13;
+pub const KEYS_ACTIONS: usize = 14;
+pub const KEYS_EDIT_WINDOW: usize = 15;
+pub const ABOUT: usize = 16;
 /// The rail's group labels: (first section, label).
 pub const RAIL_GROUPS: [(usize, Key); 1] = [(KEYS_GLOBAL, key!("settings.rail.shortcuts"))];
 
 /// One of the shortcut sections (key rows, Reset to defaults).
 pub fn is_keys(section: usize) -> bool {
-    (KEYS_GLOBAL..=KEYS_ACTIONS).contains(&section)
+    (KEYS_GLOBAL..=KEYS_EDIT_WINDOW).contains(&section)
 }
 
 /// The section that lists global hotkey `slot` (see [`GLOBALS`]): the
@@ -132,12 +141,9 @@ pub fn section_of_slot(slot: usize) -> usize {
 /// The section that lists overlay or while-recording action `a`.
 pub fn section_of_action(a: Action) -> usize {
     if a.while_recording() {
-        KEYS_RECORDING
-    } else if draw::TOOL_ROWS.iter().any(|(_, acts)| acts.contains(&a)) {
-        KEYS_TOOLS
-    } else {
-        KEYS_ACTIONS
+        return KEYS_RECORDING;
     }
+    draw::KEY_PAGES.iter().find(|(_, page)| draw::page_actions(page).any(|x| x == a)).map_or(KEYS_ACTIONS, |(sec, _)| *sec)
 }
 
 /// The section with key box `field` ("global3", "key_rec_pause"; the

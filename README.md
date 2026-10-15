@@ -184,10 +184,11 @@ screenshots, editing and video capture.** Windows, Linux and macOS.
   translation. Arabic and Hebrew get a right-to-left layout.
 
 **Settings and the rest**
-- A Settings window in 15 short sections that never scroll: General,
+- A Settings window in 17 short sections that never scroll: General,
   Capture, Overlay, Saving, File names, History, Recording, Camera,
-  Upload, S3 storage, four Shortcuts sections (Global, Recording, Overlay
-  tools, Overlay actions) and About.
+  Upload, S3 storage, six Shortcuts sections (Global, Recording, Overlay
+  tools, Overlay editing, Overlay actions, Edit window: one action a row)
+  and About.
 - Global hotkeys and every editor key can be remapped. On Windows,
   Rustshot can take over <kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> and
   <kbd>Print Screen</kbd>.

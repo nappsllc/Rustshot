@@ -1,4 +1,4 @@
-use super::draw::{rail_area, viewport, ACTION_ROWS, FOOT_H, HDR_H, RAIL, RAIL_W, REC_ROWS, TOOL_ROWS};
+use super::draw::{page_actions, page_of, page_rows, rail_area, viewport, FOOT_H, HDR_H, KEY_COL_GAP, KEY_PAGES, RAIL, RAIL_W, REC_ROWS};
 use super::*;
 use crate::theme::{DARK, LIGHT};
 use crate::ui::preview;
@@ -1368,7 +1368,7 @@ fn tray_off_notice_and_store_build() {
 /// tool or action key.
 #[test]
 fn change_shortcuts_reaches_every_row() {
-    for (field, sec) in [("key_rec_mute", KEYS_RECORDING), ("global3", KEYS_GLOBAL), ("global2", KEYS_RECORDING), ("key_tool_text", KEYS_TOOLS), ("key_accept", KEYS_ACTIONS)] {
+    for (field, sec) in [("key_rec_mute", KEYS_RECORDING), ("global3", KEYS_GLOBAL), ("global2", KEYS_RECORDING), ("key_tool_text", KEYS_TOOLS), ("key_undo", KEYS_EDITING), ("key_accept", KEYS_ACTIONS), ("key_zoom_in", KEYS_EDIT_WINDOW)] {
         let mut s = sample();
         s.notify_hotkeys("x".into(), Some(field.into()));
         s.on(Click::ChangeShortcuts);
@@ -2044,46 +2044,78 @@ fn sections_fit(lang: &str) {
     }
 }
 
-/// The overlay key rows' labels (a long translation wrapped, or above
-/// the caps) never run into their key caps, at every UI scale, in English,
-/// the pseudo-languages and the `RUSTSHOT_FIT_LANGS` catalogs.
+/// The shortcut pages' labels (a long translation wrapped beside its
+/// cap) never run into their key caps, at every UI scale, in English, the
+/// pseudo-languages and the `RUSTSHOT_FIT_LANGS` catalogs; in English and
+/// the real languages every row's label fits on one line beside its cap
+/// in its column (the pages' two columns are slim enough), and every row
+/// sits in its column.
 #[test]
 fn key_row_labels_fit_clear_of_their_caps() {
+    let mut wrapped = Vec::new();
     for lang in preview::langs() {
         crate::i18n::with_lang(lang, || {
             for k in [1.0f32, 1.5, 2.0] {
-                for (sec, rows) in [(KEYS_TOOLS, &TOOL_ROWS[..]), (KEYS_ACTIONS, &ACTION_ROWS[..])] {
+                for (sec, page) in &KEY_PAGES {
+                    let rows: Vec<(crate::i18n::Key, Action)> = page_rows(page).collect();
                     let mut s = sample();
-                    s.section = sec;
+                    s.section = *sec;
                     let mut focus = FocusState::default();
                     render(&mut s, &DARK, k, &Input::default(), &mut focus);
+                    let mut widths = Vec::new();
                     let img = preview::render(W, H, k, &DARK, &Input::default(), &mut focus, |ui| {
                         draw::paint(ui, &mut s);
+                        widths = rows.iter().map(|(l, _)| ui.text_w(12.0, l.get())).collect();
                     });
                     if k == 1.0 {
                         preview::save(&format!("settings-key-rows-{sec}-{lang}.png"), &img);
                     }
                     let problems = preview::take_problems();
                     assert!(problems.is_empty(), "{lang} {sec} at {k}: {problems:#?}");
-                    let caps: Vec<FRect> = rows.iter().flat_map(|(_, acts)| acts.iter()).filter_map(|a| focus.rect_of(&format!("key_{}", a.id()))).collect();
-                    assert!(!caps.is_empty());
+                    // (A one-key row's box is the whole row: a click anywhere records.)
+                    let boxes: Vec<FRect> = rows.iter().filter_map(|(_, a)| focus.rect_of(&format!("key_{}", a.id()))).collect();
+                    assert_eq!(boxes.len(), rows.len(), "{lang} {sec}: every row drawn");
+                    // Each row inside its column of the body.
+                    let vp = viewport();
+                    let cw = draw::key_col_w(vp.w - 2.0 * draw::KEYS_PAD_X, page.len());
+                    let left = RAIL_W + draw::KEYS_PAD_X;
+                    for b in &boxes {
+                        let (x0, x1) = (b.x / k, b.x1() / k);
+                        let col = (0..page.len()).any(|c| {
+                            let cx = left + c as f32 * (cw + KEY_COL_GAP);
+                            x0 >= cx - 0.5 && x1 <= cx + cw + 0.5
+                        });
+                        assert!(col, "{lang} {sec} at {k}: {b:?} in a column");
+                    }
                     let texts = preview::drawn_texts();
-                    // A label's lines: text not inside a cap area.
-                    let inside = |t: &FRect, c: &FRect| t.x >= c.x - 1.0 && t.x1() <= c.x1() + 1.0 && t.y >= c.y - 1.0 && t.y1() <= c.y1() + 1.0;
-                    let mut labels = 0;
-                    for (s, t) in texts.iter().filter(|(_, t)| !caps.iter().any(|c| inside(t, c))) {
-                        labels += rows.iter().any(|(l, _)| l.get().contains(s.trim())) as usize;
-                        for c in &caps {
-                            let ow = t.x1().min(c.x1()) - t.x.max(c.x);
-                            let oh = t.y1().min(c.y1()) - t.y.max(c.y);
-                            assert!(ow <= 0.5 || oh <= 0.5, "{lang} {sec} at {k}: {s:?} at {t:?} runs into the caps at {c:?}");
+                    for (((l, a), b), need) in rows.iter().zip(&boxes).zip(&widths) {
+                        let label = l.get();
+                        let cap = crate::ui::compact::caps_of(s.form.keys.chords(*a).first(), false).remove(0);
+                        let mine: Vec<&(String, FRect)> = texts.iter().filter(|(_, t)| t.x >= b.x - 1.0 && t.x1() <= b.x1() + 1.0 && (b.y..b.y1()).contains(&(t.y + t.h / 2.0))).collect();
+                        // The cap's text, rightmost; its key cap starts 7 px
+                        // before it. (A symbol's cap, "[", is not noted: the
+                        // narrowest cap, 22 px, from the row's 8 px padding.)
+                        let c = mine.iter().filter(|(t, _)| *t == cap).map(|(_, r)| *r).max_by(|p, q| p.x.total_cmp(&q.x));
+                        let cap_x = c.map_or(b.x1() - 30.0 * k, |c| c.x - 7.0 * k);
+                        let lines: Vec<&&(String, FRect)> = mine.iter().filter(|(t, r)| !(*t == cap && r.x >= cap_x)).collect();
+                        assert!(!lines.is_empty() && lines.iter().all(|(t, _)| label.contains(t.trim())), "{lang} {sec} at {k}: {label:?} drawn ({lines:?})");
+                        for (t, r) in &lines {
+                            assert!(r.x1() <= cap_x + 0.5, "{lang} {sec} at {k}: {t:?} at {r:?} runs into the cap at {cap_x}");
+                        }
+                        // One line beside the cap in the real languages.
+                        // (Reported once a language and label, with the width it
+                        // needs and the room it has.)
+                        let one_line = lines.len() == 1 && lines[0].0 == label;
+                        let known = wrapped.iter().any(|(l, t, ..): &(&str, String, f32, f32)| *l == lang && t == label);
+                        if !(lang.starts_with("qps") || one_line || known) {
+                            wrapped.push((lang, label.to_string(), need.ceil(), ((cap_x - b.x) / k - 12.0).floor()));
                         }
                     }
-                    assert!(labels >= rows.len().min(4), "{lang} {sec} at {k}: the labels were drawn ({labels})");
                 }
             }
         });
     }
+    assert!(wrapped.is_empty(), "labels wrapped beside their caps (shorten them): {wrapped:#?}");
 }
 
 /// The rail fits its column, About at the bottom clear of the last item,
@@ -2099,12 +2131,38 @@ fn rail_fits() {
     assert!(labels[0].0 < tops[KEYS_GLOBAL] && labels[0].0 > tops[KEYS_GLOBAL - 1]);
 }
 
+/// The rail's names end inside its items (10 px clear of the rail's
+/// edge) in English, the pseudo-languages and the `RUSTSHOT_FIT_LANGS`
+/// catalogs, at 100 % and 150 %.
+#[test]
+fn rail_names_fit_in_every_language() {
+    let mut long = Vec::new();
+    for lang in preview::langs() {
+        crate::i18n::with_lang(lang, || {
+            for k in [1.0f32, 1.5] {
+                // (The pseudo-languages' rail runs long: not real names.)
+                if lang.starts_with("qps") {
+                    continue;
+                }
+                let mut s = sample();
+                render(&mut s, &DARK, k, &Input::default(), &mut FocusState::default());
+                for (t, r) in preview::drawn_texts() {
+                    if r.x < RAIL_W * k && r.x1() > (RAIL_W - 10.0) * k + 0.5 && !long.contains(&(lang, t.clone())) {
+                        long.push((lang, t));
+                    }
+                }
+            }
+        });
+    }
+    assert!(long.is_empty(), "rail names past their items: {long:#?}");
+}
+
 /// Every global hotkey and every overlay / while-recording key is drawn
 /// in the section that lists it (the deep links' targets).
 #[test]
 fn every_key_is_in_its_section() {
     let mut drawn: Vec<(usize, FocusState)> = Vec::new();
-    for sec in KEYS_GLOBAL..=KEYS_ACTIONS {
+    for sec in KEYS_GLOBAL..=KEYS_EDIT_WINDOW {
         let mut s = sample();
         s.section = sec;
         let mut focus = FocusState::default();
@@ -2118,10 +2176,8 @@ fn every_key_is_in_its_section() {
     for a in Action::ALL {
         let want = if a.while_recording() {
             KEYS_RECORDING
-        } else if TOOL_ROWS.iter().any(|(_, acts)| acts.contains(&a)) {
-            KEYS_TOOLS
         } else {
-            KEYS_ACTIONS
+            KEY_PAGES.iter().find(|(_, p)| page_actions(p).any(|x| x == a)).map(|(sec, _)| *sec).unwrap_or(usize::MAX)
         };
         // (Linux has no share sheet: no Share key.)
         let want = if cfg!(target_os = "linux") && a == Action::Share { vec![] } else { vec![want] };
@@ -2135,9 +2191,9 @@ fn every_key_is_in_its_section() {
 
 /// The rail keys tests/e2e.rs `settings_window_saves_and_the_daemon_reloads`
 /// posts land where it expects (its constants, repeated here): Down ×3
-/// from General is Saving, with Save to and Format; End, Up is Overlay
-/// actions, with Accept's cap and then OK further on (it tabs to them by
-/// id).
+/// from General is Saving, with Save to and Format; End, Up, Up is
+/// Overlay actions (Edit window is the last shortcut section), with
+/// Accept's cap and then OK further on (it tabs to them by id).
 #[test]
 fn e2e_rail_keys() {
     let key = |s: &mut Settings, focus: &mut FocusState, vk: u32, n: usize| {
@@ -2159,7 +2215,7 @@ fn e2e_rail_keys() {
     render(&mut s, &DARK, 1.0, &Input::default(), &mut focus);
     key(&mut s, &mut focus, wind::key::TAB, 1);
     key(&mut s, &mut focus, wind::key::END, 1);
-    key(&mut s, &mut focus, wind::key::UP, 1);
+    key(&mut s, &mut focus, wind::key::UP, 2);
     assert_eq!(s.section, KEYS_ACTIONS);
     assert!(focus.rect_of("key_accept").is_some());
     // Tab reaches every control of the section and the footer, OK too.
@@ -2220,7 +2276,7 @@ fn rail_switches_sections() {
         render(&mut s, &DARK, k, &press(wind::key::END, Default::default()), &mut focus);
         assert_eq!(s.section, ABOUT);
         render(&mut s, &DARK, k, &press(wind::key::UP, Default::default()), &mut focus);
-        assert_eq!(s.section, KEYS_ACTIONS);
+        assert_eq!(s.section, KEYS_EDIT_WINDOW);
         render(&mut s, &DARK, k, &press(wind::key::HOME, Default::default()), &mut focus);
         assert_eq!(s.section, GENERAL);
     }
@@ -2464,12 +2520,12 @@ fn while_recording_rows_notes() {
     assert!(focus.is_recording("global2"));
 }
 
-/// The overlay rows (tools, actions) and the while-recording rows list
-/// every keymap action once (each in its own group), at most 7 rows a
-/// section.
+/// The shortcut pages and the while-recording rows list every keymap
+/// action once, one action a row, at most 10 rows a column (12 in a
+/// page of one column).
 #[test]
 fn key_rows_cover_every_action() {
-    let mut all: Vec<Action> = TOOL_ROWS.iter().chain(ACTION_ROWS.iter()).flat_map(|(_, a)| a.iter().copied()).collect();
+    let mut all: Vec<Action> = KEY_PAGES.iter().flat_map(|(_, p)| page_actions(p)).collect();
     assert!(all.iter().all(|a| !a.while_recording()));
     assert!(REC_ROWS.iter().all(|(_, a)| a.while_recording()));
     all.extend(REC_ROWS.iter().map(|(_, a)| *a));
@@ -2477,11 +2533,17 @@ fn key_rows_cover_every_action() {
     let want: Vec<Action> = Action::ALL.into_iter().filter(|a| *a != Action::Share || crate::share::supported()).collect();
     assert_eq!(all.len(), want.len());
     assert_eq!(all.contains(&Action::Share), crate::share::supported());
-    all.dedup();
     for a in want {
-        assert!(all.contains(&a), "{a:?}");
+        assert_eq!(all.iter().filter(|x| **x == a).count(), 1, "{a:?}");
     }
-    assert!(TOOL_ROWS.len() <= 7 && ACTION_ROWS.len() <= 7);
+    for (sec, page) in &KEY_PAGES {
+        assert_eq!(page_of(*sec).map(|p| page_actions(p).collect::<Vec<_>>()), Some(page_actions(page).collect()));
+        assert!((1..=2).contains(&page.len()));
+        for col in page.iter() {
+            let rows = col.iter().filter(|i| matches!(i, draw::KeyItem::Row(..))).count();
+            assert!(rows <= if page.len() == 1 { 12 } else { 10 }, "{sec}: {rows} rows in a column");
+        }
+    }
 }
 
 /// About: the links open only their fixed URLs, Check for updates the

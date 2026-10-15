@@ -194,7 +194,8 @@ subfolder pattern `/` nests folders (`%Y/%m`) and `..` is dropped.
 
 Every editor key except the arrows, <kbd>Tab</kbd>, the mouse wheel and
 hold-while-drawing modifiers can be remapped in **Settings › Shortcuts ›
-Overlay tools** and **Overlay actions**: click a row (or its key cap) and press the new keys;
+Overlay tools**, **Overlay editing**, **Overlay actions** and **Edit
+window** (one action a row): click a row and press the new keys;
 <kbd>Esc</kbd> cancels, <kbd>Backspace</kbd> unbinds, **Reset to
 defaults** puts every key back. Keys bound to two actions are shown in red
 with a note; the first action in the list wins.
