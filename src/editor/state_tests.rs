@@ -30,13 +30,6 @@ fn quiet(mut a: App) -> App {
     a
 }
 
-/// One second before now, for timestamps (no underflow panic
-/// on a clock that started less than a second ago).
-fn a_second_ago() -> Instant {
-    let now = Instant::now();
-    now.checked_sub(Duration::from_secs(1)).unwrap_or(now)
-}
-
 fn ed(a: &mut App) -> &mut Edit {
     edit_of(a)
 }
@@ -1510,7 +1503,9 @@ fn mic_meter_opens_with_the_panel_only() {
     a.pump();
     assert_eq!(ed(&mut a).rec.meter.as_ref().map(|m| m.device().to_string()).as_deref(), Some(""), "the default microphone");
     ed(&mut a).rec.meter.as_ref().unwrap().set_peak(1.0);
-    ed(&mut a).rec.meter_at = a_second_ago();
+    // A second ago (no underflow on a clock younger than that).
+    let now = Instant::now();
+    ed(&mut a).rec.meter_at = now.checked_sub(Duration::from_secs(1)).unwrap_or(now);
     a.pump();
     assert_eq!(ed(&mut a).rec.bars, (7, true), "loud: all bars, clipping");
     let m = a.mouse;

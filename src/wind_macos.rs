@@ -1031,15 +1031,7 @@ mod window {
                     if !inside {
                         return false;
                     }
-                    let dy: f64 = msg0(ev, objc_sel(c"scrollingDeltaY"));
-                    let mut delta = (dy * 120.0).round() as i32;
-                    if delta == 0 {
-                        delta = if dy < 0.0 { -1 } else { 1 };
-                    }
-                    let inverted: i8 = msg0(ev, objc_sel(c"isDirectionInvertedFromDevice"));
-                    if inverted != 0 {
-                        delta = -delta;
-                    }
+                    let delta = wheel_delta(ev);
                     driver.on_event(Ev::Wheel { delta, x, y });
                     true
                 }
@@ -1063,6 +1055,32 @@ const LEFT_DRAGGED: u64 = 6;
 const KEY_DOWN: u64 = 10;
 const KEY_UP: u64 = 11;
 const SCROLL_WHEEL: u64 = 22;
+
+/// A scroll event's vertical delta in Win32 units: ±120 a notch, away
+/// from the user positive whatever the natural-scrolling setting.
+/// A wheel reports lines (a notch is one); a trackpad or Magic Mouse
+/// reports precise deltas in points, many events a gesture: ten points
+/// make a line, so a swipe is notches a piece at a time, not one (or
+/// dozens) every event. Never zero for a nonzero scroll.
+unsafe fn wheel_delta(ev: *mut c_void) -> i32 {
+    unsafe {
+        let dy: f64 = msg0(ev, objc_sel(c"scrollingDeltaY"));
+        let precise: i8 = msg0(ev, objc_sel(c"hasPreciseScrollingDeltas"));
+        let inverted: i8 = msg0(ev, objc_sel(c"isDirectionInvertedFromDevice"));
+        wheel_units(dy, precise != 0, inverted != 0)
+    }
+}
+
+/// [`wheel_delta`]'s arithmetic: `dy` in lines, or in points when
+/// `precise`; `inverted` undoes natural scrolling.
+fn wheel_units(dy: f64, precise: bool, inverted: bool) -> i32 {
+    let lines = if precise { dy / 10.0 } else { dy };
+    let mut delta = (lines * 120.0).round() as i32;
+    if delta == 0 && dy != 0.0 {
+        delta = if dy < 0.0 { -1 } else { 1 };
+    }
+    if inverted { -delta } else { delta }
+}
 // FlagsChanged (12) is deliberately absent: modifier-only changes are not
 // keys on any backend (wind_linux ignores them the same way).
 
@@ -1122,19 +1140,7 @@ fn dispatch_nsevent(ev: *mut c_void, driver: &mut dyn Driver) -> bool {
                 true
             }
             SCROLL_WHEEL => {
-                let dy: f64 = msg0(ev, objc_sel(c"scrollingDeltaY"));
-                // Win32 delivers ±120 per notch; Cocoa reports line units.
-                let mut delta = (dy * 120.0).round() as i32;
-                if delta == 0 {
-                    delta = if dy < 0.0 { -1 } else { 1 };
-                }
-                // The flag says natural scrolling already inverted the value;
-                // undo it so the sign matches Win32 (away-from-user positive)
-                // regardless of the user's system setting.
-                let inverted: i8 = msg0(ev, objc_sel(c"isDirectionInvertedFromDevice"));
-                if inverted != 0 {
-                    delta = -delta;
-                }
+                let delta = wheel_delta(ev);
                 let p: CGPoint = msg0(ev, objc_sel(c"locationInWindow"));
                 let (x, y) = client_pos(p);
                 driver.on_event(Ev::Wheel { delta, x, y });
@@ -1693,5 +1699,21 @@ impl Drop for Layer {
             let _: () = msg0(self.win, objc_sel(c"close"));
             let _: () = msg0(self.win, objc_sel(c"release"));
         }
+    }
+}
+
+#[cfg(test)]
+mod wheel_tests {
+    use super::wheel_units;
+
+    #[test]
+    fn wheel_lines_and_trackpad_points_become_notches() {
+        assert_eq!(wheel_units(1.0, false, false), 120, "a wheel notch");
+        assert_eq!(wheel_units(-3.0, false, false), -360);
+        assert_eq!(wheel_units(10.0, true, false), 120, "ten trackpad points a line");
+        assert_eq!(wheel_units(2.5, true, false), 30);
+        assert_eq!(wheel_units(0.01, true, false), 1, "never zero for a scroll");
+        assert_eq!(wheel_units(0.0, true, false), 0, "a horizontal-only scroll is none");
+        assert_eq!(wheel_units(10.0, true, true), -120, "natural scrolling undone");
     }
 }
