@@ -238,7 +238,8 @@ your translation of that label, letter for letter:
 | `s3.no_secret_for` | "Settings › Upload" |
 | `i18n.downloads_off` | "Settings › General" |
 | `screenclip.guide.steps` | "Open Default apps" = `screenclip.guide.open`; "Choose defaults by link type" (Windows' label) |
-| `settings.keys.row.*` | tool and action names as in `tip.*` / `action.*` |
+| `settings.keys.group.*` | the action words as in `action.*` / `tip.*` (Undo, Redo, Copy, Save, Share, Pin, Zoom, Rotate, Flip); "Selected objects" as in the Edit window; "Capture" and "UI size" headings are `settings.section.capture` / `settings.overlay.ui_size` |
+| `action.*` | the Shortcuts rows' labels, two columns of them: keep them about as short as English (the fit tests flag a label that wraps) |
 
 ## 5. Keys and key caps
 

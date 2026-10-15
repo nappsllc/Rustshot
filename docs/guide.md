@@ -885,9 +885,11 @@ on the left picks the section:
   link after upload* and *Upload recordings automatically*.
 - **S3 storage:** the bucket's settings with **Test connection** (see
   [Uploads](#uploads)).
-- **Shortcuts › Global, Recording, Overlay tools, Overlay actions:** the
-  global hotkeys, the record hotkey with the *While recording* chords,
-  and every editor shortcut.
+- **Shortcuts › Global, Recording, Overlay tools, Overlay editing,
+  Overlay actions, Edit window:** the global hotkeys, the record hotkey
+  with the *While recording* chords, and every editor shortcut, one
+  action a row (the tools by their toolbar names; two columns where the
+  rows are slim).
 - **About:** the version, *Check for updates* and links.
 
 Every section fits the window; nothing scrolls.

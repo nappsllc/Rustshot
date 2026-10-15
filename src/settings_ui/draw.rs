@@ -1,5 +1,5 @@
 //! Painting the Settings window as on the Settings board: the 188 px
-//! rail (14 sections, a Shortcuts group), a 48 px header, the section body
+//! rail (17 sections, a Shortcuts group), a 48 px header, the section body
 //! that fits without scrolling (rows of the board's `.r`: a 12.5/500
 //! label with an 11/400 helper line, controls on the right) and the
 //! footer bar with Open config file and OK / Cancel /
@@ -37,9 +37,9 @@ pub fn viewport() -> FRect {
     FRect { x: RAIL_W, y: HDR_H, w: W as f32 - RAIL_W, h: H as f32 - HDR_H - FOOT_H }
 }
 
-/// The rail: 15 sections and the Shortcuts label need items a little
-/// shorter than the board's 32 px (26, 28 apart).
-pub const RAIL: RailStyle<'static> = RailStyle { item: 26.0, pitch: 28.0, groups: &RAIL_GROUPS };
+/// The rail: 17 sections and the Shortcuts label need items a little
+/// shorter than the board's 32 px (25, 27 apart).
+pub const RAIL: RailStyle<'static> = RailStyle { item: 25.0, pitch: 27.0, groups: &RAIL_GROUPS };
 
 /// Where the rail's items go (from the top: the title bar names the app).
 pub fn rail_area() -> FRect {
@@ -156,6 +156,14 @@ pub fn srow(ui: &mut Ui, tok: &Tok, label: &str, help: Option<&str>, f: impl FnO
 /// left under a key-binding row: `left`), with the info glyph when
 /// `err`.
 pub fn note_line(ui: &mut Ui, tok: &Tok, text: &str, err: bool, left: Option<f32>) {
+    note_line_h(ui, tok, text, err, left, NOTE_H);
+}
+
+/// A [`note_line`]'s height with the gap under it (logical px).
+pub const NOTE_H: f32 = 20.0;
+
+/// [`note_line`] taking `h` (with the gap under it).
+fn note_line_h(ui: &mut Ui, tok: &Tok, text: &str, err: bool, left: Option<f32>, h: f32) {
     let b = ui.bounds();
     let y = ui.cursor_y();
     let c = if err { tok.er } else { tok.tx2 };
@@ -173,7 +181,7 @@ pub fn note_line(ui: &mut Ui, tok: &Tok, text: &str, err: bool, left: Option<f32
         tx += ui.px(19.0);
     }
     ui.text_at(11.0, &fit, tx, cy, c, false);
-    ui.space(18.0 + 2.0);
+    ui.space(h);
 }
 
 /// The Win+Shift+S row's state line, right-aligned like [`note_line`]:
@@ -331,9 +339,12 @@ fn body(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) {
             S3_STORAGE => super::upload::s3_section(ui, s, tok, click),
             KEYS_GLOBAL => keys_global(ui, s, tok),
             KEYS_RECORDING => keys_recording(ui, s, tok),
-            KEYS_TOOLS => overlay_keys(ui, s, tok, &TOOL_ROWS),
-            KEYS_ACTIONS => overlay_keys(ui, s, tok, &ACTION_ROWS),
-            _ => about(ui, tok, click),
+            ABOUT => about(ui, tok, click),
+            _ => {
+                if let Some(page) = page_of(sec) {
+                    key_page(ui, s, tok, page);
+                }
+            }
         }
         ui.cursor_y()
     });
@@ -937,57 +948,153 @@ fn wayland() -> bool {
     false
 }
 
-/// Shortcuts › Overlay tools: (label, actions).
-pub const TOOL_ROWS: [(Key, &[Action]); 7] = [
-    (
-        key!("settings.keys.row.tools"),
-        &[
-            Action::ToolPencil,
-            Action::ToolLine,
-            Action::ToolArrow,
-            Action::ToolRectangle,
-            Action::ToolCircle,
-            Action::ToolMarker,
-            Action::ToolText,
-            Action::ToolCounter,
-            Action::ToolPixelate,
-            Action::ToolBlur,
-            Action::ToolInvert,
-        ],
-    ),
-    (
-        key!("settings.keys.row.select"),
-        &[Action::ToolSelect, Action::ToolCallout, Action::ToolSpotlight, Action::ToolMagnify, Action::ToolRuler],
-    ),
-    (
-        key!("settings.keys.row.objects"),
-        &[Action::DeleteObject, Action::Duplicate, Action::BringFront, Action::SendBack],
-    ),
-    (key!("settings.keys.row.crop"), &[Action::ToolCrop, Action::Trim, Action::Redact, Action::SelectFreeform, Action::ReadQr]),
-    (key!("settings.keys.row.size"), &[Action::SizeDown, Action::SizeUp, Action::TogglePalette]),
-    (key!("settings.keys.row.typing"), &[Action::TextBold, Action::TextItalic, Action::TextUnderline]),
-    (key!("settings.keys.row.undo"), &[Action::Undo, Action::Redo, Action::SelectAll]),
+/// An entry in a column of a shortcut page: a group's heading, or one
+/// action's row (its label, its key cap).
+#[derive(Clone, Copy, Debug)]
+pub enum KeyItem {
+    Head(Key),
+    Row(Key, Action),
+}
+use KeyItem::{Head, Row};
+
+/// A shortcut page: its columns, each read top to bottom (the left one
+/// first; mirrored right to left). Two where every label fits on one
+/// line beside its cap in half the body in every language
+/// (`key_row_labels_fit_clear_of_their_caps`), else one.
+pub type KeyPage = &'static [&'static [KeyItem]];
+
+/// The overlay's shortcut pages, one action a row: (section, page).
+/// Each column fits the body, with the conflict line under them, even
+/// with every row on two lines (`every_section_fits`).
+pub const KEY_PAGES: [(usize, KeyPage); 4] = [(KEYS_TOOLS, TOOLS_PAGE), (KEYS_EDITING, EDITING_PAGE), (KEYS_ACTIONS, ACTIONS_PAGE), (KEYS_EDIT_WINDOW, EDIT_WINDOW_PAGE)];
+
+/// Shortcuts › Overlay tools: the toolbar's tools by their tooltip
+/// names, then the stroke size and the palette.
+const TOOLS_PAGE: KeyPage = &[
+    &[
+        Row(key!("action.tool_select"), Action::ToolSelect),
+        Row(key!("action.tool_pencil"), Action::ToolPencil),
+        Row(key!("action.tool_line"), Action::ToolLine),
+        Row(key!("action.tool_arrow"), Action::ToolArrow),
+        Row(key!("action.tool_rectangle"), Action::ToolRectangle),
+        Row(key!("action.tool_circle"), Action::ToolCircle),
+        Row(key!("action.tool_marker"), Action::ToolMarker),
+        Row(key!("action.tool_text"), Action::ToolText),
+        Row(key!("action.tool_callout"), Action::ToolCallout),
+        Row(key!("action.tool_counter"), Action::ToolCounter),
+    ],
+    &[
+        Row(key!("action.tool_pixelate"), Action::ToolPixelate),
+        Row(key!("action.tool_blur"), Action::ToolBlur),
+        Row(key!("action.tool_invert"), Action::ToolInvert),
+        Row(key!("action.tool_spotlight"), Action::ToolSpotlight),
+        Row(key!("action.tool_magnify"), Action::ToolMagnify),
+        Row(key!("action.tool_ruler"), Action::ToolRuler),
+        Row(key!("action.tool_crop"), Action::ToolCrop),
+        Row(key!("action.size_down"), Action::SizeDown),
+        Row(key!("action.size_up"), Action::SizeUp),
+        Row(key!("action.toggle_palette"), Action::TogglePalette),
+    ],
 ];
 
-/// Shortcuts › Overlay actions: (label, actions). The Edit window's own
-/// keys (zoom, image edits) end the list.
-pub const ACTION_ROWS: [(Key, &[Action]); 7] = [
-    (key!("settings.keys.row.copy"), &[Action::Copy, Action::Save, Action::Upload, Action::CopyText, Action::CopyColor]),
-    (key!("settings.keys.row.save_as"), &[Action::SaveAs, Action::SaveDesktop, Action::OpenWith, Action::ScrollCapture]),
-    SEND_ROW,
-    (key!("settings.keys.row.ui_size"), &[Action::UiBigger, Action::UiSmaller, Action::UiReset]),
-    (key!("settings.keys.row.zoom"), &[Action::ZoomIn, Action::ZoomOut, Action::ZoomFit, Action::ZoomActual]),
-    (key!("settings.keys.row.rotate"), &[Action::RotateLeft, Action::RotateRight, Action::FlipHorizontal, Action::FlipVertical]),
-    (key!("settings.keys.row.image"), &[Action::ImageResize, Action::ImageCanvas, Action::ImageEffects, Action::ImageReset]),
+/// Shortcuts › Overlay editing: the selected objects (the toolbar's
+/// names under the heading), typing, the selection, undo.
+const EDITING_PAGE: KeyPage = &[
+    &[
+        Head(key!("settings.keys.group.objects")),
+        Row(key!("tip.delete"), Action::DeleteObject),
+        Row(key!("tip.duplicate"), Action::Duplicate),
+        Row(key!("tip.bring_to_front"), Action::BringFront),
+        Row(key!("tip.send_to_back"), Action::SendBack),
+        Head(key!("settings.keys.group.typing")),
+        Row(key!("tip.bold"), Action::TextBold),
+        Row(key!("tip.italic"), Action::TextItalic),
+        Row(key!("tip.underline"), Action::TextUnderline),
+    ],
+    &[
+        Head(key!("settings.keys.group.selection")),
+        Row(key!("action.select_all"), Action::SelectAll),
+        Row(key!("action.select_freeform"), Action::SelectFreeform),
+        Row(key!("action.trim"), Action::Trim),
+        Row(key!("action.redact"), Action::Redact),
+        Row(key!("action.read_qr"), Action::ReadQr),
+        Head(key!("settings.keys.group.undo")),
+        Row(key!("action.undo"), Action::Undo),
+        Row(key!("action.redo"), Action::Redo),
+    ],
 ];
 
-/// Share (with a share sheet: not on Linux), Pin to screen, Record, and
-/// Accept · Cancel.
-#[cfg(not(target_os = "linux"))]
-const SEND_ROW: (Key, &[Action]) =
-    (key!("settings.keys.row.send"), &[Action::Share, Action::Pin, Action::Record, Action::Accept, Action::Cancel]);
-#[cfg(target_os = "linux")]
-const SEND_ROW: (Key, &[Action]) = (key!("settings.keys.row.send_linux"), &[Action::Pin, Action::Record, Action::Accept, Action::Cancel]);
+/// Shortcuts › Overlay actions: what to do with the capture, and the
+/// overlay's UI size. (Share only with a share sheet: not on Linux.)
+const ACTIONS_PAGE: KeyPage = &[
+    &[
+        Head(key!("settings.keys.group.copy_save")),
+        Row(key!("action.copy"), Action::Copy),
+        Row(key!("action.copy_text"), Action::CopyText),
+        Row(key!("action.copy_color"), Action::CopyColor),
+        Row(key!("action.save"), Action::Save),
+        Row(key!("action.save_as"), Action::SaveAs),
+        Row(key!("action.save_desktop"), Action::SaveDesktop),
+        Head(key!("settings.overlay.ui_size")),
+        Row(key!("action.ui_bigger"), Action::UiBigger),
+        Row(key!("action.ui_smaller"), Action::UiSmaller),
+        Row(key!("action.ui_reset"), Action::UiReset),
+    ],
+    &[
+        Head(key!("settings.keys.group.share_pin")),
+        Row(key!("action.upload"), Action::Upload),
+        Row(key!("action.open_with"), Action::OpenWith),
+        Row(key!("action.share"), Action::Share),
+        Row(key!("action.pin"), Action::Pin),
+        Head(key!("settings.section.capture")),
+        Row(key!("action.scroll_capture"), Action::ScrollCapture),
+        Row(key!("action.record"), Action::Record),
+        Row(key!("action.accept"), Action::Accept),
+        Row(key!("action.cancel"), Action::Cancel),
+    ],
+];
+
+/// Shortcuts › Edit window: its own keys (asked there before the
+/// overlay's): zoom, rotate and flip, the image dialogs. One column:
+/// their Ctrl+Shift caps leave half the body too little room for the
+/// labels.
+const EDIT_WINDOW_PAGE: KeyPage = &[&[
+    Row(key!("action.zoom_in"), Action::ZoomIn),
+    Row(key!("action.zoom_out"), Action::ZoomOut),
+    Row(key!("action.zoom_fit"), Action::ZoomFit),
+    Row(key!("action.zoom_actual"), Action::ZoomActual),
+    Row(key!("action.rotate_left"), Action::RotateLeft),
+    Row(key!("action.rotate_right"), Action::RotateRight),
+    Row(key!("action.flip_horizontal"), Action::FlipHorizontal),
+    Row(key!("action.flip_vertical"), Action::FlipVertical),
+    Row(key!("action.image_resize"), Action::ImageResize),
+    Row(key!("action.image_canvas"), Action::ImageCanvas),
+    Row(key!("action.image_effects"), Action::ImageEffects),
+    Row(key!("action.image_reset"), Action::ImageReset),
+]];
+
+/// Whether row action `a` is shown here (Share needs a share sheet).
+fn shown(a: Action) -> bool {
+    a != Action::Share || crate::share::supported()
+}
+
+/// The actions page `page` shows, in reading order.
+pub fn page_actions(page: KeyPage) -> impl Iterator<Item = Action> {
+    page_rows(page).map(|(_, a)| a)
+}
+
+/// The rows of `page`: (label, action), in reading order.
+pub fn page_rows(page: KeyPage) -> impl Iterator<Item = (Key, Action)> {
+    page.iter().flat_map(|c| c.iter()).filter_map(|i| match i {
+        Row(l, a) if shown(*a) => Some((*l, *a)),
+        _ => None,
+    })
+}
+
+/// The page of shortcut section `sec`, if it is one of [`KEY_PAGES`].
+pub fn page_of(sec: usize) -> Option<KeyPage> {
+    KEY_PAGES.iter().find(|(s, _)| *s == sec).map(|(_, p)| *p)
+}
 
 /// The while-recording rows of Shortcuts › Recording: (label, action).
 pub const REC_ROWS: [(Key, Action); 3] = [
@@ -996,41 +1103,23 @@ pub const REC_ROWS: [(Key, Action); 3] = [
     (key!("hotkey.rec_hide"), Action::RecHidePill),
 ];
 
-/// The global hotkey rows of `slots` ([`GLOBALS`] order), with their notes.
+/// The global hotkey rows of `slots` ([`GLOBALS`] order), one hotkey a
+/// row, with their notes. With a note under most of them (every hotkey
+/// taken by another app) the rows and the notes close up to fit.
 fn global_rows(ui: &mut Ui, s: &mut Settings, tok: &Tok, slots: &[usize]) {
     ui.allow_meta = true;
-    for (label, slot) in GLOBALS.iter().filter(|(_, slot)| slots.contains(slot)) {
-        // Read QR code shares Copy text's row (the section has no room
-        // for a ninth): two caps, one note.
-        if *slot == 8 && slots.contains(&6) {
-            continue;
-        }
-        if *slot == 6 && slots.contains(&8) {
-            let qr = tr!("action.read_qr");
-            let msg = match (s.global_message(6), s.global_message(8)) {
-                (Some(a), Some(b)) => Some(format!("{a} \u{b7} {qr}: {b}")),
-                (Some(a), None) => Some(a),
-                (None, Some(b)) => Some(format!("{qr}: {b}")),
-                (None, None) => None,
-            };
-            let (e6, e8) = (s.global_err(6), s.global_err(8));
-            let (mut c6, mut c8) = (*s.form.global_mut(6), *s.form.global_mut(8));
-            let mut pair = [Slot { id: "global6".into(), chord: &mut c6, err: e6 }, Slot { id: "global8".into(), chord: &mut c8, err: e8 }];
-            ui.key_row(tr!("settings.keys.row.copy_text_qr"), &["Copy text from area", "Read QR code from area"], &mut pair, true, 34.0, tok);
-            *s.form.global_mut(6) = c6;
-            *s.form.global_mut(8) = c8;
-            if let Some(m) = msg {
-                note_line(ui, tok, &m, true, Some(8.0));
-            }
-            continue;
-        }
-        let msg = s.global_message(*slot);
-        let err = s.global_err(*slot);
-        let chord = s.form.global_mut(*slot);
+    let rows: Vec<(Key, usize)> = GLOBALS.iter().copied().filter(|(_, slot)| slots.contains(slot)).collect();
+    let notes = rows.iter().filter(|(_, slot)| s.global_message(*slot).is_some()).count();
+    let tight = rows.len() as f32 * (34.0 + 2.0) + notes as f32 * NOTE_H > 400.0;
+    let (h, note_h) = if tight { (30.0, NOTE_H - 2.0) } else { (34.0, NOTE_H) };
+    for (label, slot) in rows {
+        let msg = s.global_message(slot);
+        let err = s.global_err(slot);
+        let chord = s.form.global_mut(slot);
         let mut slots = [Slot { id: format!("global{slot}"), chord, err }];
-        ui.key_row(label.get(), &[], &mut slots, true, 34.0, tok);
+        ui.key_row(label.get(), &[], &mut slots, true, h, tok);
         if let Some(m) = msg {
-            note_line(ui, tok, &m, true, Some(8.0));
+            note_line_h(ui, tok, &m, true, Some(8.0), note_h);
         }
     }
     ui.allow_meta = false;
@@ -1069,27 +1158,50 @@ fn keys_recording(ui: &mut Ui, s: &mut Settings, tok: &Tok) {
     ui.allow_meta = false;
 }
 
-/// Shortcuts › Overlay tools / Overlay actions: single keys while the
-/// overlay is open, a conflict noted under its row.
-fn overlay_keys(ui: &mut Ui, s: &mut Settings, tok: &Tok, rows: &[(Key, &[Action])]) {
+/// The gap between a shortcut page's two columns (logical px).
+pub const KEY_COL_GAP: f32 = 12.0;
+
+/// The width of each of `n` columns in `w` (logical px).
+pub fn key_col_w(w: f32, n: usize) -> f32 {
+    (w - KEY_COL_GAP * n.saturating_sub(1) as f32) / n.max(1) as f32
+}
+
+/// A shortcut page ([`KEY_PAGES`]): one action a row, its label left and
+/// its key cap right, in its columns under their group headings; a
+/// conflict noted under the columns (the focused row's, else the first).
+fn key_page(ui: &mut Ui, s: &mut Settings, tok: &Tok, page: KeyPage) {
     let bad = s.form.conflicting();
-    for (label, acts) in rows {
-        let mut chords: Vec<Option<Chord>> = acts.iter().map(|a| s.form.keys.chords(*a).first().copied()).collect();
-        let names: Vec<&str> = acts.iter().map(|a| a.label()).collect();
-        let changed = {
-            let mut slots: Vec<Slot> = chords
-                .iter_mut()
-                .zip(acts.iter())
-                .map(|(c, a)| Slot { id: format!("key_{}", a.id()), chord: c, err: bad.contains(a) })
-                .collect();
-            ui.key_row(label.get(), &names, &mut slots, false, 30.0, tok)
-        };
-        if let Some(i) = changed {
-            s.form.keys.set(acts[i], chords[i].into_iter().collect());
-        }
-        if let Some(n) = acts.iter().find_map(|a| s.form.conflict_note(*a).map(|n| (a, n))).map(|(a, note)| tr!("settings.keys.conflict", action = a.label(), note)) {
-            note_line(ui, tok, &n, true, Some(8.0));
-        }
+    let b = ui.bounds();
+    let y0 = ui.cursor_y();
+    let cw = key_col_w(b.w, page.len());
+    let mut end = y0;
+    for (c, items) in page.iter().enumerate() {
+        let r = FRect { x: b.x + c as f32 * (cw + KEY_COL_GAP), y: y0, w: cw, h: b.h };
+        let e = ui.area(r, |ui| {
+            for item in items.iter() {
+                match *item {
+                    Head(k) => sec_at(ui, tok, k.get(), 8.0),
+                    Row(label, a) if shown(a) => {
+                        let mut chord = s.form.keys.chords(a).first().copied();
+                        let changed = {
+                            let mut slots = [Slot { id: format!("key_{}", a.id()), chord: &mut chord, err: bad.contains(&a) }];
+                            ui.key_row(label.get(), &[], &mut slots, false, 30.0, tok)
+                        };
+                        if changed.is_some() {
+                            s.form.keys.set(a, chord.into_iter().collect());
+                        }
+                    }
+                    Row(..) => {}
+                }
+            }
+            ui.cursor_y()
+        });
+        end = end.max(e);
+    }
+    ui.space(end - y0);
+    let focused = page_actions(page).find(|a| ui.focus.is_focused(&format!("key_{}", a.id())) && s.form.conflict_note(*a).is_some());
+    if let Some((a, note)) = focused.into_iter().chain(page_actions(page)).find_map(|a| s.form.conflict_note(a).map(|n| (a, n))) {
+        note_line(ui, tok, &tr!("settings.keys.conflict", action = a.label(), note), true, Some(8.0));
     }
 }
 

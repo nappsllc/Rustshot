@@ -848,9 +848,9 @@ fn keys(hwnd: HWND, vks: &[u32]) {
 #[ignore = "live display access"]
 fn settings_window_saves_and_the_daemon_reloads() {
     const RET: u32 = 0x0D;
-    // Rail keys: General → Saving (Capture, Overlay, Saving); End (About), Up → Shortcuts › Overlay actions.
+    // Rail keys: General → Saving (Capture, Overlay, Saving); End (About), Up, Up (past Edit window) → Shortcuts › Overlay actions.
     const TO_SAVING: [u32; 3] = [0x28; 3];
-    const TO_ACTIONS: [u32; 2] = [0x23, 0x26];
+    const TO_ACTIONS: [u32; 3] = [0x23, 0x26, 0x26];
     const MODS: u32 = 1 | 2 | 4; // Alt+Ctrl+Shift
     const F9: u32 = 0x78;
     const F11: u32 = 0x7A;
