@@ -4,6 +4,19 @@ Release notes for each version are on the GitHub release page
 (https://github.com/nappsllc/rustshot/releases). Lines here are for the
 next release.
 
+## 0.6.2
+
+- Updates: users on 0.6.1 or earlier won't be offered this update in the
+  app. Since the repository's rename GitHub spells its release links
+  `nappsllc/Rustshot`, which those versions reject, so they keep saying
+  they are up to date. Download 0.6.2 once from the Releases page (or
+  reinstall it from the Microsoft Store or your package manager); from
+  0.6.2 on, the app accepts the links in any case and updates
+  automatically again.
+- The tray / menu-bar icon is now the app icon (the blue tile with the
+  white glyph, a red dot while recording) on every platform, instead of
+  a gray or white glyph that followed the theme.
+
 ## 0.6.1
 
 - Fast pencil, marker, lasso and ruler strokes keep every pointer
