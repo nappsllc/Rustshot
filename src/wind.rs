@@ -74,6 +74,14 @@ impl Mods {
 #[derive(Clone, Copy, Debug)]
 pub enum Ev {
     Move { x: i32, y: i32 },
+    /// A position the pointer passed since the last frame, before the
+    /// newest (which comes as `Move`): the overlay draws once per display
+    /// refresh, so it hands every position in order first (Windows: the
+    /// queued moves and the gaps the system's move history fills).
+    /// Drags (strokes, the lasso, the ruler) follow it; hover and the
+    /// loupe wait for the `Move`. Nothing to repaint for it alone.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    Trail { x: i32, y: i32 },
     Down { x: i32, y: i32 },
     Up { x: i32, y: i32 },
     Wheel { delta: i32, x: i32, y: i32 },

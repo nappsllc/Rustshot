@@ -2142,6 +2142,16 @@ impl Driver for App {
                     }
                 }
             }
+            // A position passed since the last frame: a drag (stroke,
+            // lasso, ruler) takes it; the `Move` after it repaints, and
+            // hover waits for it.
+            Ev::Trail { x, y } => {
+                if matches!(&self.st, State::Edit(e) if !matches!(e.interact, Interact::None)) {
+                    self.mouse = (x, y);
+                    self.pointer_move(x, y);
+                }
+                return false;
+            }
             Ev::Down { x, y } => {
                 self.mouse = (x, y);
                 self.pointer_down(x, y);
