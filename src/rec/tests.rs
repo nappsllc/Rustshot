@@ -349,6 +349,8 @@ fn session_records_stepped_frames_and_renames_the_part_file() {
     for i in 0..10 {
         run.shoot(i * 20);
     }
+    // The encoder logs a frame just before it counts it.
+    wait_until("the frame count", || s.stats().frames == 10);
     let st = s.stats();
     assert_eq!((st.frames, st.dropped, st.elapsed, st.paused, st.failed), (10, 0, Duration::from_millis(180), false, false));
     run.time.set_ms(200);
