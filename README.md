@@ -202,7 +202,7 @@ screenshots, editing and video capture.** Windows, Linux and macOS.
 ## Install
 
 Download from the **[latest release](https://github.com/nappsllc/Rustshot/releases/latest)**
-(v0.5.1 sizes shown):
+(v0.6.0 sizes shown):
 
 | Platform | File | Size | Notes |
 |---|---|---|---|
@@ -214,7 +214,7 @@ Download from the **[latest release](https://github.com/nappsllc/Rustshot/releas
 | Any Linux | `rustshot-<v>-linux-x86_64.tar.gz` | 1.8 MB | The binary and a desktop file. See `INSTALL.txt` inside. |
 | Any Linux | `rustshot.flatpak` | 1.5 MB | `flatpak install --user rustshot.flatpak` |
 | Any Linux | `rustshot_<v>_amd64.snap` | 9.4 MB | `sudo snap install --dangerous rustshot_<v>_amd64.snap` |
-| macOS 11+ | `rustshot-<v>-macos-universal.dmg` | 2.8 MB | Universal (Apple Silicon and Intel). Drag it to Applications. |
+| macOS 11+ | `rustshot-<v>-macos-universal.dmg` | 2.7 MB | Universal (Apple Silicon and Intel). Drag it to Applications. |
 | macOS 11+ | `rustshot-<v>-macos-universal.zip` | 2.3 MB | The same `Rustshot.app`, zipped. |
 
 The release also carries `SHA256SUMS`, the language files
@@ -465,7 +465,7 @@ and send one: [docs/translating.md](docs/translating.md) (languages in
 
 ## Known limitations
 
-From the v0.5.1 release notes:
+From the v0.6.0 release notes:
 
 - **Translations:** the 34 translations are machine-made, and none has
   been reviewed by a native speaker yet. Reviews and corrections are
