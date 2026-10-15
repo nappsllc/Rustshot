@@ -10,9 +10,11 @@
 #   rustshot_window owned by the PID started here); E on History's one
 #   entry opens the Edit window titled "<file> — Rustshot", and a stroke
 #   drawn in it makes it "*<file> — Rustshot".
-# - Windows chrome: DWMWA_BORDER_COLOR is the caption colour and the
-#   caption and text colours are Rustshot's (DwmGetWindowAttribute; SKIP
-#   where the OS does not answer for them).
+# - Windows chrome: on screen, the Settings window's caption is Rustshot's
+#   theme surface and its 1 px border (the frame's outer pixels,
+#   DWMWA_EXTENDED_FRAME_BOUNDS) is the caption colour. (The colours set
+#   with DWMWA_CAPTION/TEXT/BORDER_COLOR can't be read back:
+#   DwmGetWindowAttribute answers E_INVALIDARG for them.)
 # Isolated instance: own RUSTSHOT_INSTANCE, APPDATA and LOCALAPPDATA,
 # unusual hotkeys. Only the PIDs started here are stopped. Input goes to
 # the sandbox's own desktop only.
@@ -33,7 +35,8 @@ public static class V63 {
   [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, IntPtr extra);
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L, T, R, B; }
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
-  [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr h, uint a, out uint v, uint n);
+  [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr h, uint a, out RECT v, uint n);
+  [DllImport("user32.dll")] public static extern IntPtr GetClassLongPtr(IntPtr h, int i);
   [DllImport("shell32.dll", CharSet=CharSet.Unicode)] public static extern uint ExtractIconEx(string file, int index, IntPtr[] large, IntPtr[] small, uint n);
   [DllImport("user32.dll")] public static extern bool DestroyIcon(IntPtr h);
   // The visible rustshot_window windows of process pid: "hwnd<TAB>title" each.
@@ -135,8 +138,8 @@ function Checks063($exe) {
     Check "v063 titles: ``rustshot settings`` opens a window titled ""$want""" $up "titles: $(V63Titles $s)"
     if ($up) {
         Start-Sleep 2
-        # WM_GETICON: ICON_SMALL (0), else ICON_SMALL2 (2).
-        $hi = [V63]::SendMessage($sw, 0x007F, [IntPtr]0, [IntPtr]::Zero)
+        # The class's small icon (GCLP_HICONSM; WM_GETICON has none: no WM_SETICON).
+        $hi = [V63]::GetClassLongPtr($sw, -34)
         if ($hi -eq [IntPtr]::Zero) { $hi = [V63]::SendMessage($sw, 0x007F, [IntPtr]2, [IntPtr]::Zero) }
         if ($hi -ne [IntPtr]::Zero -and (Test-Path $new16)) {
             $b = V63IconBmp $hi
@@ -151,23 +154,30 @@ function Checks063($exe) {
             }
             $b.Dispose()
         } else {
-            Add-Content $log "SKIP  v063 icon: the Settings window has no small icon handle (WM_GETICON)"
+            Add-Content $log "SKIP  v063 icon: the Settings window has no small icon handle (GCLP_HICONSM, WM_GETICON)"
         }
-        # DWMWA_BORDER_COLOR 34, DWMWA_CAPTION_COLOR 35, DWMWA_TEXT_COLOR 36 (COLORREF 0x00BBGGRR).
-        $c = @{}
-        $ok = $true
-        foreach ($a in @(@('border', 34), @('caption', 35), @('text', 36))) {
-            $v = [uint32]0
-            $hr = [V63]::DwmGetWindowAttribute($sw, [uint32]$a[1], [ref]$v, 4)
-            if ($hr -ne 0) { $ok = $false; $c[$a[0]] = "hr=0x{0:X8}" -f $hr } else { $c[$a[0]] = $v }
-        }
-        $fmt = ($c.GetEnumerator() | Sort-Object Name | ForEach-Object { if ($_.Value -is [uint32]) { "{0}=0x{1:X6}" -f $_.Name, $_.Value } else { "$($_.Name)=$($_.Value)" } }) -join ' '
-        if ($ok) {
-            # Rustshot's: the dark theme's caption 1B1C20 / text ECEEF3, the light one's FAFAFC.
-            $known = @(0x201C1B, 0xFCFAFA)
-            Check 'v063 chrome: the border is the caption colour and the caption is Rustshot''s theme surface (DWM)' ($c.border -eq $c.caption -and $known -contains [int]$c.caption -and $c.text -ne $c.caption -and $c.text -ne 0xFFFFFFFF) $fmt
+        # DWMWA_EXTENDED_FRAME_BOUNDS (9): the frame as drawn, its outer pixels the border.
+        $fb = New-Object V63+RECT
+        $hr = [V63]::DwmGetWindowAttribute($sw, 9, [ref]$fb, 16)
+        if ($hr -eq 0) {
+            [void][V63]::SetForegroundWindow($sw); Start-Sleep -Milliseconds 500
+            $w = $fb.R - $fb.L; $hh = $fb.B - $fb.T
+            $bmp = New-Object System.Drawing.Bitmap $w, $hh
+            $g = [System.Drawing.Graphics]::FromImage($bmp)
+            $g.CopyFromScreen($fb.L, $fb.T, 0, 0, $bmp.Size)
+            $bmp.Save("$out\v063-settings-frame.png")
+            $cap = $bmp.GetPixel([int]($w * 0.55), 8)
+            $edges = @($bmp.GetPixel(0, [int]($hh / 2)), $bmp.GetPixel($w - 1, [int]($hh / 2)), $bmp.GetPixel([int]($w / 2), 0))
+            $g.Dispose(); $bmp.Dispose()
+            $near = { param($a, $b) [Math]::Abs($a.R - $b.R) -le 6 -and [Math]::Abs($a.G - $b.G) -le 6 -and [Math]::Abs($a.B - $b.B) -le 6 }
+            # Rustshot's: the dark theme's caption 1B1C20, the light one's FAFAFC.
+            $known = @([System.Drawing.Color]::FromArgb(0x1B, 0x1C, 0x20), [System.Drawing.Color]::FromArgb(0xFA, 0xFA, 0xFC))
+            $isOurs = @($known | Where-Object { & $near $_ $cap }).Count -gt 0
+            $hex = { param($c) '{0:X2}{1:X2}{2:X2}' -f $c.R, $c.G, $c.B }
+            $bad = @($edges | Where-Object { -not (& $near $_ $cap) })
+            Check 'v063 chrome: the caption is Rustshot''s theme surface and the 1 px border is the caption colour (on screen, out\v063-settings-frame.png)' ($isOurs -and $bad.Count -eq 0) "caption=$(& $hex $cap) border(left,right,top)=$(($edges | ForEach-Object { & $hex $_ }) -join ',') frame=${w}x$hh"
         } else {
-            Add-Content $log "SKIP  v063 chrome: DwmGetWindowAttribute does not answer for the caption, text and border colours here ($fmt)"
+            Add-Content $log ("SKIP  v063 chrome: no DWMWA_EXTENDED_FRAME_BOUNDS (hr=0x{0:X8})" -f $hr)
         }
         Shot 'v063-settings'
     }
@@ -197,6 +207,8 @@ function Checks063($exe) {
             $r = New-Object V63+RECT
             [void][V63]::GetWindowRect($ew, [ref]$r)
             $cx = [int](($r.L + $r.R) / 2); $cy = [int](($r.T + $r.B) / 2)
+            # R: the rectangle tool (the window opens on Select), then a drag over the picture.
+            [V63]::keybd_event(0x52, 0, 0, [IntPtr]::Zero); [V63]::keybd_event(0x52, 0, 2, [IntPtr]::Zero); Start-Sleep -Milliseconds 300
             V63Drag ($cx - 80) ($cy - 40) ($cx + 80) ($cy + 40)
             $starred = "*$want"
             $ed = WaitFor { (V63Window $h $starred) -ne [IntPtr]::Zero } 5
