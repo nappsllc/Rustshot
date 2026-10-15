@@ -944,6 +944,7 @@ mod window {
             let quit = || WINDOWED.with(|c| c.get().quit);
             let mut size = (pw, ph);
             let mut lang = crate::i18n::generation();
+            let mut title = crate::wind::Title::new(&spec.title);
             driver.on_create(Hwnd(win));
             if !quit() {
                 driver.on_event(Ev::Resize(pw, ph));
@@ -978,8 +979,8 @@ mod window {
                 if Instant::now() >= next_tick {
                     next_tick = Instant::now() + Duration::from_millis(tick_ms(me));
                     // The UI language switched: lay out again, retitle.
-                    if let Some(title) = crate::wind::relocalize(&mut lang, driver, size) {
-                        if let Some(t) = title {
+                    if let Some(t) = crate::wind::relocalize(&mut lang, driver, size) {
+                        if let Some(t) = title.retitle(t) {
                             set_title(&t);
                         }
                         repaint = true;
@@ -1025,6 +1026,10 @@ mod window {
                     if want != frame {
                         frame = want;
                         set_theme_variant(dpy, win, frame);
+                    }
+                    // The unsaved marker ("*name — Rustshot").
+                    if let Some(t) = title.set_edited(driver.edited()) {
+                        set_title(&t);
                     }
                 }
                 if repaint

@@ -188,18 +188,115 @@ pub(crate) fn motif_hints(controls: Controls, resizable: bool) -> [u32; 5] {
 
 /// Colours for the OS-drawn title bar and window border, so the caption
 /// reads as part of the design surface under it (`Driver::frame_colors`).
-/// Windows 11: DWM immersive dark mode plus caption and border colours
-/// (Windows 10: dark mode only); Linux: a dark/light hint to the window
-/// manager (`_GTK_THEME_VARIANT`); macOS: a transparent title bar over the
-/// window background in the matching appearance.
+/// They follow the app's own theme (Settings > Theme), never the OS's.
+/// Windows 11: DWM immersive dark mode plus caption, title text and border
+/// colours (Windows 10: dark mode only); Linux: a dark/light hint to the
+/// window manager (`_GTK_THEME_VARIANT`); macOS: a transparent title bar
+/// over the window background in the matching appearance.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(target_os = "macos", allow(dead_code))]
 pub struct FrameColors {
     pub dark: bool,
     /// Title bar background (`[r, g, b]`): the window's top surface.
     pub caption: [u8; 3],
-    /// The 1 px window border.
+    /// The title text (the design's `--tx`).
+    pub text: [u8; 3],
+    /// The 1 px window border: the caption colour, so the frame vanishes
+    /// into the window (Windows 11).
     pub border: [u8; 3],
+}
+
+/// What the OS's title bar covers of a window whose content runs under
+/// it (`Driver::under_titlebar`), in logical px: macOS's transparent
+/// title bar over a full-size content view (the standard 28 px; the
+/// traffic lights, 12 px dots centred at x 20, 40 and 60, y 14, in a
+/// 72 px no-go zone at its left). Elsewhere the OS draws its title bar
+/// above the client area and nothing is covered: layouts start at the
+/// top of the client area and never bake a title bar in.
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct Overlap {
+    /// The title bar's height over the content (the drag strip).
+    pub top: f32,
+    /// The window buttons' zone at the window's left edge (on screen, in
+    /// right-to-left languages too: AppKit keeps them on the left).
+    pub left: f32,
+}
+
+impl Overlap {
+    pub const NONE: Overlap = Overlap { top: 0.0, left: 0.0 };
+    pub const MACOS: Overlap = Overlap { top: 28.0, left: 72.0 };
+
+    /// This platform's.
+    pub const fn native() -> Overlap {
+        if cfg!(target_os = "macos") { Overlap::MACOS } else { Overlap::NONE }
+    }
+
+    /// The window buttons' zone as (leading, trailing) insets of a layout
+    /// drawn left to right and mirrored in a right-to-left language (the
+    /// zone stays at the window's left on screen, so it is the layout's
+    /// trailing end there).
+    pub fn sides(self, rtl: bool) -> (f32, f32) {
+        if rtl { (0.0, self.left) } else { (self.left, 0.0) }
+    }
+
+    /// How far in from a window edge a row that starts `base` px in goes
+    /// when a zone `zone` px wide is at that edge ([`Overlap::sides`]):
+    /// 12 px past the zone (board 12: macOS rows start at x 84 instead of
+    /// 18), never nearer the edge than `base`.
+    pub fn past(base: f32, zone: f32) -> f32 {
+        if zone > 0.0 { base.max(zone + 12.0) } else { base }
+    }
+}
+
+/// A window's title with the unsaved-changes marker where the OS has no
+/// other: a leading `*` on Windows and X11 ("*2026-10-05_14-32.png —
+/// Rustshot"); macOS shows the document-edited dot in the close button
+/// instead (`setDocumentEdited:`), so the text stays as it is there.
+pub(crate) fn marked_title(title: &str, edited: bool) -> String {
+    if edited && !cfg!(target_os = "macos") { format!("*{title}") } else { title.to_string() }
+}
+
+/// The title a `run_window` window shows, kept in step with its driver:
+/// its title in the current language (`Driver::title`) and the unsaved
+/// marker (`Driver::edited`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Title {
+    base: String,
+    edited: bool,
+}
+
+impl Title {
+    pub(crate) fn new(base: &str) -> Title {
+        Title { base: base.to_string(), edited: false }
+    }
+
+    /// The text to show.
+    pub(crate) fn shown(&self) -> String {
+        marked_title(&self.base, self.edited)
+    }
+
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    pub(crate) fn is_edited(&self) -> bool {
+        self.edited
+    }
+
+    /// The language switched (`relocalize`'s `Some(title)`): the text to
+    /// show when it changed.
+    pub(crate) fn retitle(&mut self, title: Option<String>) -> Option<String> {
+        let t = title?;
+        (t != self.base).then(|| {
+            self.base = t;
+            self.shown()
+        })
+    }
+
+    /// The unsaved state now: the text to show when it changed.
+    pub(crate) fn set_edited(&mut self, on: bool) -> Option<String> {
+        (on != self.edited).then(|| {
+            self.edited = on;
+            self.shown()
+        })
+    }
 }
 
 /// Logical size → physical pixels at `scale` (never below 1 px).
@@ -332,6 +429,30 @@ pub trait Driver {
     /// the UI language switches (`None`: keep the one it has).
     fn title(&self) -> Option<String> {
         None
+    }
+    /// `run_window` only: the window's document has unsaved changes
+    /// (asked after every repaint): the title's marker on Windows and
+    /// X11, the document-edited dot on macOS ([`marked_title`]).
+    fn edited(&self) -> bool {
+        false
+    }
+    /// `run_window` only, asked once before the window is made: our
+    /// content runs under the OS's title bar where it can be transparent
+    /// (macOS: a full-size content view with the title hidden; the header
+    /// row is the visual title), leaving [`Overlap::native`] clear.
+    /// Windows and X11 keep their title bar above the client area either
+    /// way.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    fn under_titlebar(&self) -> bool {
+        false
+    }
+    /// `run_window` with [`Driver::under_titlebar`] only: whether a press
+    /// at `(x, y)` (client px) in the title bar's drag strip moves the
+    /// window (true: nothing of ours is there) or is ours (a button that
+    /// reaches into the strip).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    fn drags_window(&self, _x: i32, _y: i32) -> bool {
+        true
     }
 }
 
@@ -556,6 +677,15 @@ impl Driver for AutoClose<'_> {
     fn title(&self) -> Option<String> {
         self.inner.title()
     }
+    fn edited(&self) -> bool {
+        self.inner.edited()
+    }
+    fn under_titlebar(&self) -> bool {
+        self.inner.under_titlebar()
+    }
+    fn drags_window(&self, x: i32, y: i32) -> bool {
+        self.inner.drags_window(x, y)
+    }
 }
 
 /// Serialises the tests that open windows: they share the process-wide
@@ -639,6 +769,39 @@ mod tests {
         assert!(Controls::MinMaxClose.minimize() && Controls::MinMaxClose.maximize());
         assert!(Controls::MinClose.minimize() && !Controls::MinClose.maximize());
         assert!(!Controls::Close.minimize() && !Controls::Close.maximize());
+    }
+
+    /// The unsaved marker attaches to the file name, first in the title
+    /// (a `*` where the OS has no document-edited dot), and a language
+    /// switch keeps it.
+    #[test]
+    fn title_marks_unsaved_changes() {
+        let mut t = Title::new("2026-10-05_14-32.png \u{2014} Rustshot");
+        assert_eq!(t.shown(), "2026-10-05_14-32.png \u{2014} Rustshot");
+        assert_eq!(t.set_edited(false), None, "no change");
+        let star = if cfg!(target_os = "macos") { "" } else { "*" };
+        assert_eq!(t.set_edited(true).as_deref(), Some(format!("{star}2026-10-05_14-32.png \u{2014} Rustshot").as_str()));
+        assert!(t.is_edited());
+        assert_eq!(t.set_edited(true), None);
+        assert_eq!(t.retitle(None), None, "no title: kept");
+        assert_eq!(t.retitle(Some("2026-10-05_14-32.png \u{2014} Rustshot".into())), None, "the same title");
+        assert_eq!(t.retitle(Some("x.png \u{2014} Rustshot".into())).as_deref(), Some(format!("{star}x.png \u{2014} Rustshot").as_str()));
+        assert_eq!(t.set_edited(false).as_deref(), Some("x.png \u{2014} Rustshot"));
+        assert_eq!(marked_title("a", false), "a");
+    }
+
+    /// macOS's traffic lights stay at the window's left on screen: the
+    /// leading end of a left-to-right layout, the trailing end of one
+    /// mirrored for a right-to-left language.
+    #[test]
+    fn titlebar_overlap_sides() {
+        assert_eq!(Overlap::MACOS.sides(false), (72.0, 0.0));
+        assert_eq!(Overlap::MACOS.sides(true), (0.0, 72.0));
+        assert_eq!(Overlap::NONE.sides(true), (0.0, 0.0));
+        let native = Overlap::native();
+        assert_eq!(native == Overlap::MACOS, cfg!(target_os = "macos"));
+        // The traffic lights (12 px dots at x 20 / 40 / 60, y 14) inside.
+        assert!(60.0 + 6.0 < Overlap::MACOS.left && 14.0 + 6.0 < Overlap::MACOS.top);
     }
 
     #[test]

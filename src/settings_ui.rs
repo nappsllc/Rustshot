@@ -2032,7 +2032,7 @@ fn run(rx: Receiver<Msg>) {
         uisize::init(s.loaded.ui_scale);
     }
     let mut w = Window::new(s, th, rx);
-    let spec = WindowSpec { title: tr!("settings.window_title").into(), w: W, h: H, resizable: false, min: (W, H), controls: wind::Controls::MinClose };
+    let spec = WindowSpec { title: tr!("settings.window_title").into(), w: W, h: win_h(), resizable: false, min: (W, win_h()), controls: wind::Controls::MinClose };
     if let Err(e) = wind::run_window(spec, &mut w) {
         eprintln!("rustshot: settings window: {e:#}");
     }
@@ -2084,11 +2084,29 @@ struct Window {
     sized_for: f32,
     /// What [`Window::report_focus`] last wrote.
     reported: Option<String>,
+    /// How far down the layout is drawn (physical px): the title bar's
+    /// strip it leaves clear ([`titlebar`]).
+    top: usize,
+}
+
+/// The title bar's strip over the window (logical px; macOS: the content
+/// runs under its transparent title bar, board 12): the layout starts
+/// below it, so the rail's mark and the header's title clear the traffic
+/// lights, and the window is that much taller. 0 elsewhere (the OS's
+/// title bar is above the client area).
+fn titlebar() -> f32 {
+    wind::Overlap::native().top
+}
+
+/// The window's client height (logical px).
+fn win_h() -> u32 {
+    H + titlebar() as u32
 }
 
 impl Window {
     fn new(s: Settings, th: Theme, rx: Receiver<Msg>) -> Window {
         Window {
+            top: 0,
             hwnd: Hwnd::default(),
             s,
             th,
@@ -2184,10 +2202,11 @@ impl Window {
             if self.closing || self.canvas.width() == 0 {
                 return;
             }
-            let k = wind::follow_scale(self.hwnd, &mut self.sized_for, W, H);
+            let k = wind::follow_scale(self.hwnd, &mut self.sized_for, W, win_h());
             // The form's theme and accent show before Apply.
             self.th = self.s.preview_theme();
-            let click = frame(&mut self.canvas, &self.th, &self.input, &mut self.focus, &mut self.s, k);
+            self.top = (titlebar() * k).round() as usize;
+            let click = frame(&mut self.canvas, &self.th, &self.input, &mut self.focus, &mut self.s, k, self.top);
             self.input.end_frame();
             let (click, redraw) = click;
             let Some(c) = click else {
@@ -2211,18 +2230,23 @@ impl Window {
 
 /// Paint one frame of `s` into `canvas` (window background first); returns
 /// the click (Esc/Enter included) and whether the kit wants another frame.
-fn frame(canvas: &mut PixBuf, th: &Theme, input: &Input, focus: &mut FocusState, s: &mut Settings, k: f32) -> (Option<Click>, bool) {
+/// The window's frame: the layout `top` px (physical) down, under the
+/// strip of a title bar the content runs under (macOS: [`titlebar`]), its
+/// surfaces running up to the top edge.
+fn frame(canvas: &mut PixBuf, th: &Theme, input: &Input, focus: &mut FocusState, s: &mut Settings, k: f32, top: usize) -> (Option<Click>, bool) {
     let (w, h) = canvas.dimensions();
     let bg = th.surface.with_alpha(255);
     for p in canvas.as_raw_mut().as_chunks_mut::<4>().0 {
         *p = [bg.r, bg.g, bg.b, 255];
     }
-    let area = FRect { x: 0.0, y: 0.0, w: w as f32 / k, h: h as f32 / k };
+    let top = top.min(h.saturating_sub(1) as usize);
+    let area = FRect { x: 0.0, y: 0.0, w: w as f32 / k, h: (h as usize - top) as f32 / k };
     let mut clip = crate::ui::SystemClipboard;
-    let fb = crate::uifb::Fb::new(canvas.as_raw_mut(), w as usize);
+    let fb = crate::uifb::Fb::new(&mut canvas.as_raw_mut()[top * w as usize * 4..], w as usize);
     let mut ui = Ui::new(fb, th, input, focus, &mut clip, k, area);
     let click = draw::paint(&mut ui, s);
     let out = ui.finish();
+    crate::ui::extend_up(canvas.as_raw_mut(), w as usize, top);
     let click = click.or(if out.escape {
         Some(Click::Escape)
     } else if out.enter {
@@ -2264,8 +2288,9 @@ impl Driver for Window {
     }
 
     fn on_event(&mut self, ev: Ev) -> bool {
-        // Right to left: the pointer mirrored, as the frame is.
-        let ev = crate::ui::rtl_ev(ev, self.canvas.width());
+        // Right to left: the pointer mirrored, as the frame is; in the
+        // layout's coordinates (below the title bar's strip).
+        let ev = crate::ui::lift_ev(crate::ui::rtl_ev(ev, self.canvas.width()), self.top as i32);
         match ev {
             Ev::Resize(w, h) => {
                 self.canvas = PixBuf::new(w.max(1), h.max(1));
@@ -2312,7 +2337,7 @@ impl Driver for Window {
                     wind::raise(self.hwnd);
                 }
                 // The UI size changed elsewhere (the overlay's Ctrl+=).
-                wind::follow_scale(self.hwnd, &mut self.sized_for, W, H);
+                wind::follow_scale(self.hwnd, &mut self.sized_for, W, win_h());
                 // The broken file fixed in an editor: the window works again.
                 if self.s.broken() && self.rechecked.elapsed() >= std::time::Duration::from_millis(500) {
                     self.rechecked = std::time::Instant::now();
@@ -2402,6 +2427,12 @@ impl Driver for Window {
     /// recolours it before Apply, as it does the rest of the window).
     fn frame_colors(&self) -> Option<wind::FrameColors> {
         Some(crate::ui::paint::WTok::of(&self.th).frame())
+    }
+
+    /// macOS: our surface runs to the top edge under the transparent
+    /// title bar; the layout starts below its strip, which drags.
+    fn under_titlebar(&self) -> bool {
+        true
     }
 }
 

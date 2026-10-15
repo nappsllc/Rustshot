@@ -1759,6 +1759,47 @@ fn store_screenshot_settings() {
     }
 }
 
+/// macOS (board 12): Settings' surface runs to the top edge under the
+/// transparent title bar. The layout starts below its 28 px strip (the
+/// rail's mark and the header's title drop clear of the traffic lights)
+/// and the window is that much taller, so every section fits as it does
+/// elsewhere; the strip continues the rail, its border and the header,
+/// and the pointer lands where the layout drew. Writes
+/// `settings-macos-*.png`.
+#[test]
+fn settings_under_the_macos_title_bar() {
+    let top = crate::wind::Overlap::MACOS.top as usize;
+    let row = |img: &PixBuf, y: usize| img.as_raw()[y * W as usize * 4..(y + 1) * W as usize * 4].to_vec();
+    for (tn, th) in [("dark", &DARK), ("light", &LIGHT)] {
+        for i in [GENERAL, ABOUT] {
+            let mut under = PixBuf::new(W, H + top as u32);
+            let mut s = sample();
+            s.section = i;
+            super::frame(&mut under, th, &Input::default(), &mut FocusState::default(), &mut s, 1.0, top);
+            let mut plain = PixBuf::new(W, H);
+            let mut s = sample();
+            s.section = i;
+            super::frame(&mut plain, th, &Input::default(), &mut FocusState::default(), &mut s, 1.0, 0);
+            assert!(under.as_raw()[top * W as usize * 4..] == *plain.as_raw(), "{tn} {i}: the layout below the strip is the usual one");
+            for y in 0..top {
+                assert!(row(&under, y) == row(&plain, 0), "{tn} {i}: strip row {y} continues the top row");
+            }
+            if i == GENERAL {
+                let mut img = under.clone();
+                crate::ui::preview::traffic_lights(&mut img, 1.0);
+                crate::ui::preview::save(&format!("settings-macos-{tn}.png"), &img);
+            }
+        }
+    }
+    // The pointer in the layout's coordinates.
+    match crate::ui::lift_ev(Ev::Down { x: 5, y: 40 }, top as i32) {
+        Ev::Down { x, y } => assert_eq!((x, y), (5, 40 - top as i32)),
+        e => panic!("{e:?}"),
+    }
+    assert!(matches!(crate::ui::lift_ev(Ev::Timer, 28), Ev::Timer));
+    assert_eq!(super::win_h(), H + crate::wind::Overlap::native().top as u32);
+}
+
 /// Every section in the pseudo-languages and the RUSTSHOT_FIT_LANGS
 /// catalogs (RUSTSHOT_PREVIEW_DIR).
 #[test]

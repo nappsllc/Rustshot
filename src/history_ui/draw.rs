@@ -12,6 +12,7 @@ use crate::ui::Ui;
 use crate::ui::compact::CSS;
 use crate::ui::paint::{self, WTok};
 use crate::uifb::{Fb, C4};
+use crate::wind::Overlap;
 
 pub const HDR_H: f32 = 48.0;
 pub const FOOT_H: f32 = 28.0;
@@ -181,6 +182,9 @@ pub struct Lay {
     pub search: Option<FRect>,
     /// The header shows its title (left out when the search needs it).
     pub title: bool,
+    /// Where the header's row starts: 18 px in, past the title bar's
+    /// window buttons where the content runs under it (macOS: x 84).
+    pub title_x: f32,
     /// A card's Edit button: its label's width (54 px at least).
     pub edit_w: f32,
     pub filters: Vec<(FRect, Filter)>,
@@ -230,11 +234,14 @@ pub fn layout(ui: &Ui, h: &History, w: f32, hh: f32) -> Lay {
     let panel = (panel_w > 0.0).then_some(FRect { x: w - PANEL_W, y: HDR_H, w: PANEL_W, h: body_h.max(0.0) });
     let cy = HDR_H / 2.0;
     // Header, left to right: title, search, filter, view; right: slider,
-    // the panel toggle, ⋯.
+    // the panel toggle, ⋯. The title bar's window buttons keep their
+    // zone (macOS: the 72 px at the window's left on screen).
+    let (lead, trail) = h.chrome.sides(crate::i18n::is_rtl());
+    let title_x = Overlap::past(18.0, lead);
     let title_w = ui.text_w(14.0, tr!("history.title")) + 6.0;
-    let mut x = 18.0 + title_w + 10.0;
+    let mut x = title_x + title_w + 10.0;
     let mut title = true;
-    let more = FRect { x: w - 14.0 - IB, y: cy - IB / 2.0, w: IB, h: IB };
+    let more = FRect { x: w - Overlap::past(14.0, trail) - IB, y: cy - IB / 2.0, w: IB, h: IB };
     let mut right = more.x - 10.0;
     let empty = h.entries.is_empty();
     let (mut search, mut filters, mut views, mut slider, mut panel_btn) = (None, Vec::new(), Vec::new(), None, None);
@@ -334,6 +341,7 @@ pub fn layout(ui: &Ui, h: &History, w: f32, hh: f32) -> Lay {
         foot,
         search,
         title,
+        title_x,
         edit_w: (26.0 + ui.text_w(11.5, tr!("history.edit")) + 9.0).ceil().max(54.0),
         filters,
         views,
@@ -765,7 +773,7 @@ fn paint_header(ui: &mut Ui, h: &mut History, lay: &Lay, t: &WTok, hover: Option
     fill(ui, lay.hdr, 0.0, t.win);
     line_h(ui, 0.0, HDR_H - 1.0, lay.w, t.sep);
     if lay.title {
-        text(ui, 14.0, tr!("history.title"), 18.0, cy, t.tx, true);
+        text(ui, 14.0, tr!("history.title"), lay.title_x, cy, t.tx, true);
     }
     let dim = h.on() && h.entries.is_empty();
     let k = if dim { 0.5 } else { 1.0 };
