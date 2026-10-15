@@ -659,6 +659,9 @@ const TILE_GLYPH: f32 = 0.6;
 /// an opaque scratch buffer (the rasterizer assumes an opaque destination).
 pub fn tray_icon_rgba(size: u32, recording: bool) -> Vec<u8> {
     use crate::uifb::{C4, Fb};
+    if let Some(px) = small_icon_rgba(size, recording) {
+        return px;
+    }
     let n = size as usize;
     let white = C4::rgb(255, 255, 255);
     let mask = |draw: &dyn Fn(&mut Fb)| {
@@ -687,6 +690,68 @@ pub fn tray_icon_rgba(size: u32, recording: bool) -> Vec<u8> {
         out.extend_from_slice(&[px[0], px[1], px[2], (tile[i] * 255.0).round() as u8]);
     }
     out
+}
+
+/// The pixel-aligned small icons (16, 20, 24 px: the title bar, the tray
+/// at 100–150%, the icon file's small frames): the anti-aliased glyph's
+/// thin strokes blur at these sizes, so the brackets are whole pixels,
+/// 2 px thick, and the dot a 2 × 2 square (a red 4 × 4 one recording).
+/// `(tile corner radius, bracket box first and last px, bracket arm)`.
+fn small_spec(size: u32) -> Option<(f32, usize, usize, usize)> {
+    match size {
+        16 => Some((3.5, 3, 12, 4)),
+        20 => Some((4.5, 4, 15, 5)),
+        24 => Some((5.5, 5, 18, 5)),
+        _ => None,
+    }
+}
+
+fn small_icon_rgba(size: u32, recording: bool) -> Option<Vec<u8>> {
+    let (r, lo, hi, arm) = small_spec(size)?;
+    const STROKE: usize = 2;
+    let n = size as usize;
+    let c = n / 2;
+    let in_bracket = |x: usize, y: usize| {
+        [(lo, true), (hi, false)].iter().any(|&(bx, right)| {
+            [(lo, true), (hi, false)].iter().any(|&(by, down)| {
+                // Distance into the corner along each axis (None: outside it).
+                let along = |v: usize, b: usize, fwd: bool| if fwd { v.checked_sub(b) } else { b.checked_sub(v) };
+                let (Some(dx), Some(dy)) = (along(x, bx, right), along(y, by, down)) else { return false };
+                (dx < arm && dy < STROKE) || (dx < STROKE && dy < arm)
+            })
+        })
+    };
+    let dot_r = if recording { 2 } else { 1 };
+    let in_dot = |x: usize, y: usize| x + dot_r >= c && x < c + dot_r && y + dot_r >= c && y < c + dot_r;
+    let mut out = Vec::with_capacity(n * n * 4);
+    for y in 0..n {
+        for x in 0..n {
+            // The tile's coverage, 4 × 4 samples a pixel.
+            let mut cov = 0u32;
+            for s in 0..16 {
+                let (px, py) = (x as f32 + (s % 4) as f32 / 4.0 + 0.125, y as f32 + (s / 4) as f32 / 4.0 + 0.125);
+                let (cx, cy) = (px.clamp(r, n as f32 - r), py.clamp(r, n as f32 - r));
+                cov += u32::from((px - cx).powi(2) + (py - cy).powi(2) <= r * r);
+            }
+            let t = (x + y) as f32 / (2 * n - 2) as f32;
+            let mix = |a: u8, b: u8, t: f32| a as f32 + (b as f32 - a as f32) * t;
+            let mut px = [mix(TILE_TOP.0, TILE_BOTTOM.0, t), mix(TILE_TOP.1, TILE_BOTTOM.1, t), mix(TILE_TOP.2, TILE_BOTTOM.2, t)];
+            let fg = if in_dot(x, y) {
+                Some((if recording { REC_RED } else { (255, 255, 255) }, 1.0))
+            } else if in_bracket(x, y) {
+                // Each bracket's outer corner pixel half-tone: a rounded corner.
+                let corner = (x == lo || x == hi) && (y == lo || y == hi);
+                Some(((255, 255, 255), if corner { 0.55 } else { 1.0 }))
+            } else {
+                None
+            };
+            if let Some((f, k)) = fg {
+                px = [mix(px[0] as u8, f.0, k), mix(px[1] as u8, f.1, k), mix(px[2] as u8, f.2, k)];
+            }
+            out.extend_from_slice(&[px[0].round() as u8, px[1].round() as u8, px[2].round() as u8, (cov * 255 / 16) as u8]);
+        }
+    }
+    Some(out)
 }
 
 /// The app icon ([`tray_icon_rgba`]) blended into `fb` with its top-left
@@ -955,6 +1020,34 @@ mod tests {
         assert_eq!(MenuItem::Quit.label(), "Quit Rustshot");
     }
 
+
+    #[test]
+    fn small_icons_are_pixel_aligned() {
+        for size in [16u32, 20, 24] {
+            let b = tray_icon_rgba(size, false);
+            let px = |x: u32, y: u32| &b[((y * size + x) * 4) as usize..][..4];
+            let c = size / 2;
+            // The dot and the brackets' straight runs are pure white, the gap between them the tile.
+            assert_eq!(px(c, c)[..3], [255, 255, 255]);
+            let (_, lo, _, _) = small_spec(size).unwrap();
+            assert_eq!(px(lo as u32 + 2, lo as u32)[..3], [255, 255, 255], "{size}");
+            assert!(px(c - 2, c - 2)[2] > px(c - 2, c - 2)[0] + 100, "{size}: blue between");
+            assert!(tray_icon_rgba(size, true)[((c * size + c - 2) * 4) as usize] == REC_RED.0, "{size}: larger red dot");
+        }
+    }
+
+    /// The icon file's small frames (packaging/icons/small/), from this
+    /// code: `cargo test write_small_icon_pngs -- --ignored`, then make-all.ps1.
+    #[test]
+    #[ignore = "writes packaging/icons/small/*.png"]
+    fn write_small_icon_pngs() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packaging/icons/small");
+        std::fs::create_dir_all(&dir).unwrap();
+        for size in [16u32, 20, 24] {
+            let png = crate::pngfile::encode(size, size, crate::pngfile::Color::Rgba, &tray_icon_rgba(size, false)).unwrap();
+            std::fs::write(dir.join(format!("rustshot-{size}.png")), png).unwrap();
+        }
+    }
 
     #[test]
     fn icon_is_the_blue_tile_with_the_white_glyph() {

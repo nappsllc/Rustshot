@@ -3,14 +3,22 @@
 $ErrorActionPreference = 'Stop'
 $d = $PSScriptRoot
 $mk = Join-Path $d 'make-icon.ps1'
+# 16, 20 and 24 px are pixel-aligned frames the app draws itself (its tray
+# icon at those sizes): small/rustshot-<size>.png, written by
+# `cargo test write_small_icon_pngs -- --ignored`.
+$small = Join-Path $d 'small'
+function Write-Icon([int]$Size, [string]$Out) {
+    $p = Join-Path $small "rustshot-$Size.png"
+    if (Test-Path $p) { Copy-Item $p $Out -Force } else { & $mk -Size $Size -Out $Out }
+}
 foreach ($s in 16, 32, 48, 64, 128, 256, 512, 1024) {
-    & $mk -Size $s -Out (Join-Path $d "rustshot-$s.png")
+    Write-Icon $s (Join-Path $d "rustshot-$s.png")
 }
 $m = Join-Path $d 'msix'
 New-Item -ItemType Directory -Force $m | Out-Null
 & $mk -Size 44 -Out (Join-Path $m 'Square44x44Logo.png')
 foreach ($s in 16, 24, 32, 48, 256) {
-    & $mk -Size $s -Out (Join-Path $m "Square44x44Logo.targetsize-${s}_altform-unplated.png")
+    Write-Icon $s (Join-Path $m "Square44x44Logo.targetsize-${s}_altform-unplated.png")
 }
 & $mk -Size 150 -Out (Join-Path $m 'Square150x150Logo.png')
 & $mk -Size 150 -CanvasW 310 -Out (Join-Path $m 'Wide310x150Logo.png')
@@ -54,7 +62,7 @@ try {
     $pngs = @()
     foreach ($s in $sizes) {
         $p = Join-Path $tmp "$s.png"
-        & $mk -Size $s -Out $p
+        Write-Icon $s $p
         if ($s -ge 256) {
             $pngs += , [IO.File]::ReadAllBytes($p)
         } else {
