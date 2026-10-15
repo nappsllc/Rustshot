@@ -989,6 +989,8 @@ fn perf_gdi_wheel_size() {
             if obj { crate::objects::edit::size(&e.objects[0]).unwrap() } else { e.mem.size(tool) }
         };
         let (mut tt, mut th, mut area) = (vec![], vec![], vec![]);
+        crate::perf::force_on();
+        let _ = crate::perf::take();
         for k in 0..120 {
             let delta = if (k / 30) % 2 == 0 { 120 } else { -120 };
             let t0 = Instant::now();
@@ -1001,6 +1003,12 @@ fn perf_gdi_wheel_size() {
             tt.push(t0.elapsed().as_secs_f64() * 1000.0);
             area.push(rects.iter().map(|r| r.w() as f64 * r.h() as f64).sum::<f64>());
         }
+        let per: Vec<String> = crate::perf::NAMES
+            .iter()
+            .zip(crate::perf::take())
+            .filter(|(_, (ms, _))| *ms > 0.0)
+            .map(|(k, (ms, c))| format!("{k} {:.3} ms ({:.1})", ms / 120.0, c as f64 / 120.0))
+            .collect();
         // A flick: ten notches up as fast as they come.
         let s0 = size(&mut app);
         for _ in 0..10 {
@@ -1015,5 +1023,6 @@ fn perf_gdi_wheel_size() {
             pct(&mut tt, 1.0),
             pct(&mut area, 0.5)
         );
+        println!("  per notch: {}", per.join(", "));
     }
 }

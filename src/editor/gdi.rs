@@ -443,7 +443,7 @@ impl GdiScreen {
         let bg = |r: PxRect, out: &mut [u8]| {
             self.read(self.plain.dc, r, out, r.w() as usize, true);
         };
-        let bake = compose::Bake { objs: objects, font, pass: crate::objects::SpotPass::of(objects, area), img, bg: &bg };
+        let bake = compose::Bake::new(objects, font, area, img, &bg);
         for w in rects.iter().map(|w| w.intersect(&l.rect)).filter(|w| !w.is_empty()) {
             let (ww, wh) = (w.w() as usize, w.h() as usize);
             tmp.clear();

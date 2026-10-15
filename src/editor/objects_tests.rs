@@ -487,6 +487,10 @@ fn in_place_rebake_matches_a_full_bake() {
         Box::new(|o| oe::translate(&mut o[2], 5.5, 40.25)),
         Box::new(|o| oe::translate(&mut o[3], -300.0, 20.0)),
         Box::new(|o| oe::set_point(&mut o[3], oe::Point::Src, Pt::new(520.0, 300.0))),
+        // Wheel notches on the loupe: its radius alone (the ring band).
+        Box::new(|o| oe::set_size(&mut o[3], 140.0)),
+        Box::new(|o| oe::set_size(&mut o[3], 61.0)),
+        Box::new(|o| oe::set_size(&mut o[3], 68.0)),
         Box::new(|o| oe::translate(&mut o[1], 3.0, 7.0)),
         Box::new(|o| oe::set_color(&mut o[0], C4::rgb(1, 200, 3))),
         Box::new(|o| {
@@ -527,6 +531,14 @@ fn dirty_rects_cover_object_edits() {
     assert!(k < 0.12, "a move repaints locally: {k}");
     assert_dirty_covers(&mut a, "move loupe", edit(|o| oe::translate(&mut o[2], -40.0, 30.0)));
     assert_dirty_covers(&mut a, "move pixelate", edit(|o| oe::translate(&mut o[1], 4.0, 4.0)));
+    // A wheel notch on the loupe (over the pixelate and the rect): the
+    // band between its rings, not the box round source and loupe.
+    let up = assert_dirty_covers(&mut a, "loupe radius up", edit(|o| oe::set_size(&mut o[2], 160.0)));
+    let down = assert_dirty_covers(&mut a, "loupe radius down", edit(|o| oe::set_size(&mut o[2], 143.0)));
+    let b = crate::objects::Obj::bounds(&ed(&mut a).objects[2], None).unwrap();
+    let (w, h) = ed(&mut a).shot.size;
+    let boxk = (b.w * b.h) as f64 / (w as f64 * h as f64);
+    assert!(up < boxk * 0.75 && down < boxk * 0.5, "a radius step repaints the ring band: {up} {down} (box {boxk})");
     assert_dirty_covers(&mut a, "first spotlight", edit(|o| o.push(Obj::Spotlight { r: FRect { x: 500.0, y: 500.0, w: 100.0, h: 100.0 } })));
     let k = assert_dirty_covers(&mut a, "move spotlight", edit(|o| oe::translate(&mut o[3], 30.0, 0.0)));
     assert!(k < 0.05, "a spotlight move repaints its rects: {k}");
