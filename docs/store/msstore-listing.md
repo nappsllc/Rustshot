@@ -1,6 +1,6 @@
 # Microsoft Store listing (Partner Center, en-US)
 
-Text to paste into Partner Center for Rustshot 0.6.0. Each field's block is
+Text to paste into Partner Center for Rustshot 0.6.1. Each field's block is
 the exact text. The limits are Partner Center's current Store listing
 limits for MSIX desktop apps; recheck them in the form, which counts for
 you. Everything here describes the **Store (MSIX) build**, which differs
@@ -129,19 +129,18 @@ annotate image
 GIF recorder
 ```
 
-## What's new in this version (0.6.0)
+## What's new in this version (0.6.1)
 
-Limit: 1,500 characters. This text is 871 characters. 0.6.0's points
-first; the last line keeps 0.5's main points for customers updating from
-0.4.
+Limit: 1,500 characters. This text is 883 characters. 0.6.1's fixes
+first; the last two lines keep 0.6.0's and 0.5's main points for
+customers updating from older versions.
 
 ```text
-• Rustshot is now open source under the Apache License 2.0. The package includes the license and NOTICE files.
-• The magnifier keeps up with fast gaming mice: the overlay draws once per display refresh, with the newest pointer position.
-• Hover over an arrow, box or text with a drawing tool to pick it up: drag to move it, click to select it, hold Ctrl to draw over it.
-• Under the magnifier's crosshair the mouse pointer is hidden, so the two never drift apart; the exact pixel stays visible at the center.
-• The normal arrow pointer over the toolbar, menus and buttons.
-• When Imgur refuses the shared upload key, Rustshot says so and offers Open Upload settings, where "Get a key" explains how to add your own.
+• Fast Pencil and Marker strokes, freeform (lasso) selections and the ruler follow every movement of the mouse again, so quick lines stay smooth, even with high-rate gaming mice.
+• The size label and the freeform toggle no longer overlap the toolbar.
+• History: the buttons in the details panel are spaced apart, so Open file no longer touches Delete.
+• Right-to-left languages: the object list reads in the right order. The camera bubble's hint fits longer languages, and two more Edit window dialog titles are translated in 14 languages.
+• From 0.6.0: Rustshot is open source under the Apache License 2.0; the magnifier keeps up with fast mice; hover over an arrow, box or text with a drawing tool to pick it up and move it.
 • From 0.5: 35 interface languages, scrolling capture (Shift+S), QR codes (Q), a screen ruler (U), click and keystroke overlays and trimming for recordings.
 ```
 
