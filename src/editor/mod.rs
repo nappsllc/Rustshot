@@ -160,7 +160,7 @@ pub fn bake_objects(base: &PixBuf, objs: &[Obj], font: Option<&AnnotFont>) -> Pi
         }
     };
     let area = compose::spot_area(None, size);
-    let bake = compose::Bake { objs, font, pass: crate::objects::SpotPass::of(objs, area), img, bg: &bg };
+    let bake = compose::Bake::new(objs, font, area, img, &bg);
     bake.window(out.as_raw_mut(), img, Order::Rgba);
     out
 }
@@ -3315,7 +3315,7 @@ impl Edit {
                             out[i * n..][..n].copy_from_slice(&base.as_raw()[(y as usize * iw + r.x0 as usize) * 4..][..n]);
                         }
                     };
-                    let bake = compose::Bake { objs: &self.objects, font, pass: crate::objects::SpotPass::of(&self.objects, area), img, bg: &bg };
+                    let bake = compose::Bake::new(&self.objects, font, area, img, &bg);
                     bake.window(composed.as_raw_mut(), img, Order::Rgba);
                 }
             }
@@ -5579,8 +5579,7 @@ mod tests {
                 }
             }
         }
-        let area: i64 = rects.iter().map(|r| r.w() as i64 * r.h() as i64).sum();
-        area as f64 / (w as f64 * h as f64)
+        let area: i64 = rects.iter().map(|r| r.w() as i64 * r.h() as i64).sum();        area as f64 / (w as f64 * h as f64)
     }
 
     /// A pixelate drag repaints only the cells along the moving edges, and

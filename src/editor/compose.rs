@@ -1276,6 +1276,25 @@ fn sel_dirty(prev: &Scene, now: &Scene, out: &mut Vec<PxRect>) -> bool {
     true
 }
 
+/// A toolbar that changed only in its size readout (the number and the
+/// size preview: a wheel notch, a +/- press): the readout's rects, a
+/// couple of pixels out; `None` when anything else changed.
+fn bar_value_dirty(prev: &Scene, now: &Scene) -> Option<Vec<PxRect>> {
+    let (a, b) = (prev.bar.as_ref()?, now.bar.as_ref()?);
+    let same = BarUi { value: b.value.clone(), size: b.size, ..a.clone() };
+    if same != *b {
+        return None;
+    }
+    let m = 2.0 * now.s;
+    Some(
+        b.tb.items
+            .iter()
+            .filter(|it| it.kind == toolbar::Kind::Value)
+            .map(|it| px_bounds(FRect { x: it.r.x - m, y: it.r.y - m, w: it.r.w + 2.0 * m, h: it.r.h + 2.0 * m }))
+            .collect(),
+    )
+}
+
 /// Rects (clipped to the image, possibly overlapping) covering every pixel
 /// that may differ between scenes `prev` and `now`: old and new bounds of
 /// each changed element, the symmetric difference of the selections, and
@@ -1316,6 +1335,12 @@ pub fn dirty_rects(prev: Option<&Scene>, now: &Scene, font: Option<&crate::text:
             // is a few pixels): two rects, not four, so a drag stays
             // under the damage rect cap.
             out.extend(assist::cross_dirty(a, b, now.size));
+            continue;
+        }
+        if e == El::Bar
+            && let Some(v) = bar_value_dirty(prev, now)
+        {
+            out.extend(v);
             continue;
         }
         if e == El::Draft
@@ -1395,17 +1420,24 @@ pub fn object_damage(
     let pb = |o: &Obj| o.bounds(font).map(|b| px_bounds(b).intersect(&img)).filter(|r| !r.is_empty());
     let common = prev.iter().zip(now).take_while(|(a, b)| a == b).count();
     let mut d = Vec::new();
+    // A changed object's parts (a loupe's rings and connector, not the
+    // box of all three), old and new.
     let add = |o: &Obj, d: &mut Vec<PxRect>| {
         if !o.is_spot() {
-            d.extend(pb(o));
+            d.extend(o.parts(font).into_iter().map(|b| px_bounds(b).intersect(&img)).filter(|r| !r.is_empty()));
         }
     };
     if prev.len() == now.len() {
         for (a, b) in prev[common..].iter().zip(&now[common..]) {
-            if a != b {
-                add(a, &mut d);
-                add(b, &mut d);
+            if a == b {
+                continue;
             }
+            if let Some(v) = loupe_step(a, b) {
+                d.extend(v.into_iter().map(|b| px_bounds(b).intersect(&img)).filter(|r| !r.is_empty()));
+                continue;
+            }
+            add(a, &mut d);
+            add(b, &mut d);
         }
     } else {
         for o in prev[common..].iter().chain(&now[common..]) {
@@ -1418,9 +1450,15 @@ pub fn object_damage(
     if d.is_empty() {
         return Some(d);
     }
+    // The first changed object reads nothing changed below it (same pass,
+    // same objects below), unless objects were added or removed there.
+    let first_reads = pp != np || prev.len() != now.len();
     let common = if pp != np { 0 } else { common };
     // What the later objects read from the changed pixels.
-    for o in now[common.min(now.len())..].iter().filter(|o| !o.is_spot()) {
+    for (k, o) in now.iter().enumerate().skip(common).filter(|(_, o)| !o.is_spot()) {
+        if k == common && !first_reads {
+            continue;
+        }
         let Some(b) = pb(o) else { continue };
         let hits: Vec<PxRect> = d.iter().map(|r| r.intersect(&b)).filter(|r| !r.is_empty()).collect();
         if hits.is_empty() {
@@ -1465,6 +1503,51 @@ pub fn object_damage(
     None
 }
 
+/// A loupe whose radius alone changed (a wheel notch, a +/- press): what
+/// it draws differently. Its view maps each pixel from the source the same
+/// whatever the radius, so inside the smaller disc (short of its ring)
+/// nothing changes: the band between the two rings (in up to 32 rects, a
+/// row band's left and right parts), the source's rings and the connectors.
+fn loupe_step(a: &Obj, b: &Obj) -> Option<Vec<FRect>> {
+    let (
+        Obj::Magnify { src, dst, radius: ra, zoom, color, width },
+        Obj::Magnify { src: s2, dst: d2, radius: rb, zoom: z2, color: c2, width: w2 },
+    ) = (a, b)
+    else {
+        return None;
+    };
+    if (src, dst, zoom, color, width) != (s2, d2, z2, c2, w2) || ![ra, rb, &dst.x, &dst.y].iter().all(|v| v.is_finite()) {
+        return None;
+    }
+    let m = width.max(0.5) + 2.0;
+    let (r_out, r_in) = (ra.max(*rb) + m, ra.min(*rb) - m - 1.0);
+    // Everything but the loupe's disc: its own box out of each part list.
+    let disc_box = |r: f32| FRect { x: dst.x - r - m, y: dst.y - r - m, w: 2.0 * (r + m), h: 2.0 * (r + m) };
+    let mut v: Vec<FRect> = a.parts(None).into_iter().filter(|p| *p != disc_box(*ra)).collect();
+    v.extend(b.parts(None).into_iter().filter(|p| *p != disc_box(*rb)));
+    if r_in <= 0.0 {
+        v.push(disc_box(ra.max(*rb)));
+        return Some(v);
+    }
+    const BANDS: usize = 16;
+    let hb = 2.0 * r_out / BANDS as f32;
+    for i in 0..BANDS {
+        let (y0, y1) = (-r_out + hb * i as f32, -r_out + hb * (i + 1) as f32);
+        let near = if y0 <= 0.0 && y1 >= 0.0 { 0.0 } else { y0.abs().min(y1.abs()) };
+        let far = y0.abs().max(y1.abs());
+        let outer = (r_out * r_out - near * near).max(0.0).sqrt();
+        let inner = if far < r_in { (r_in * r_in - far * far).sqrt() } else { 0.0 };
+        let (top, h) = (dst.y + y0, hb);
+        if inner > 1.0 {
+            v.push(FRect { x: dst.x - outer, y: top, w: outer - inner, h });
+            v.push(FRect { x: dst.x + inner, y: top, w: outer - inner, h });
+        } else {
+            v.push(FRect { x: dst.x - outer, y: top, w: 2.0 * outer, h });
+        }
+    }
+    Some(v)
+}
+
 /// Re-bake windows `rects` of `out` (the capture `base` with `objs` baked
 /// in, the spotlight pass over `area`): each from the base, every object
 /// over it rendered into it.
@@ -1477,7 +1560,7 @@ pub fn rebake(out: &mut PixBuf, base: &PixBuf, objs: &[Obj], area: crate::object
             out[i * n..][..n].copy_from_slice(&base.as_raw()[(y as usize * iw + r.x0 as usize) * 4..][..n]);
         }
     };
-    let bake = Bake { objs, font, pass: crate::objects::SpotPass::of(objs, area), img, bg: &bg };
+    let bake = Bake::new(objs, font, area, img, &bg);
     let mut tmp = Vec::new();
     for w in rects.iter().map(|w| w.intersect(&img)).filter(|w| !w.is_empty()) {
         let (ww, wh) = (w.w() as usize, w.h() as usize);
@@ -1501,6 +1584,23 @@ pub struct Bake<'a> {
     pub pass: Option<crate::objects::SpotPass>,
     pub img: PxRect,
     pub bg: &'a dyn Fn(PxRect, &mut [u8]),
+    /// The loupes' sources rendered so far (object index, rect, pixels):
+    /// windows of one bake that cut a loupe share its source's.
+    sources: std::cell::RefCell<Vec<(usize, PxRect, Vec<u8>)>>,
+}
+
+impl<'a> Bake<'a> {
+    /// A bake of `objs` (their spotlight pass over `area`) in image rect
+    /// `img`, its background from `bg`.
+    pub fn new(
+        objs: &'a [Obj],
+        font: Option<&'a crate::text::AnnotFont>,
+        area: crate::objects::Px,
+        img: PxRect,
+        bg: &'a dyn Fn(PxRect, &mut [u8]),
+    ) -> Self {
+        Bake { objs, font, pass: crate::objects::SpotPass::of(objs, area), img, bg, sources: Default::default() }
+    }
 }
 
 impl Bake<'_> {
@@ -1537,11 +1637,26 @@ impl Bake<'_> {
                         }
                         s = n;
                     }
-                    let mut sb = vec![0u8; s.w() as usize * s.h() as usize * 4];
-                    (self.bg)(s, &mut sb);
-                    self.window_upto(&mut sb, s, order, j);
-                    let src = Surf::with_origin(&mut sb, s.w() as u32, s.h() as u32, s.x0, s.y0, order);
-                    o.render_with_source(&mut sf, &src, font);
+                    // (Every window of this bake sees the same source.)
+                    let cached = self.sources.borrow_mut().iter().position(|e| e.0 == j && e.1 == s);
+                    let mut sb = match cached {
+                        Some(i) => std::mem::take(&mut self.sources.borrow_mut()[i].2),
+                        None => {
+                            let mut sb = vec![0u8; s.w() as usize * s.h() as usize * 4];
+                            (self.bg)(s, &mut sb);
+                            self.window_upto(&mut sb, s, order, j);
+                            sb
+                        }
+                    };
+                    {
+                        let src = Surf::with_origin(&mut sb, s.w() as u32, s.h() as u32, s.x0, s.y0, order);
+                        o.render_with_source(&mut sf, &src, font);
+                    }
+                    let mut c = self.sources.borrow_mut();
+                    match cached {
+                        Some(i) => c[i].2 = sb,
+                        None => c.push((j, s, sb)),
+                    }
                     continue;
                 }
             }

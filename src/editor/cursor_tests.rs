@@ -298,6 +298,132 @@ fn callout_tool_click_types_and_drag_moves() {
     assert_eq!(ed(&mut a).objects.len(), 1);
 }
 
+fn pix(x: f32, y: f32, w: f32, h: f32) -> Obj {
+    Obj::Pixelate { r: FRect { x, y, w, h }, cell: 12.0 }
+}
+
+/// A Pixelate region just drawn (the tool still on): a press on another
+/// object picks that one up, beside the region and under it alike.
+#[test]
+fn region_tool_picks_up_another_object_after_drawing() {
+    let mut a = with(Some(SEL), vec![rect(300.0, 300.0, 200.0, 100.0)], Some(Tool::Pixelate));
+    // A region beside the rect, then one over it (both drawn on empty space).
+    drag(&mut a, (800, 300), (1000, 500));
+    drag(&mut a, (260, 250), (560, 460));
+    assert_eq!(ed(&mut a).objects.len(), 3, "two regions drawn");
+    let e = ed(&mut a);
+    // The rect's outline, under the second region: the rect.
+    assert_eq!(e.under(Pt::new(ON.0 as f32, ON.1 as f32), NONE), Under::Grab(0));
+    assert_eq!(e.hover_obj(Pt::new(ON.0 as f32, ON.1 as f32), NONE), Some(0));
+    // The region where nothing else is: the region; its border too.
+    assert_eq!(e.under(Pt::new(400.0, 350.0), NONE), Under::Grab(2), "inside the hollow rect");
+    assert_eq!(e.under(Pt::new(900.0, 400.0), NONE), Under::Grab(1));
+    assert_eq!(e.under(Pt::new(261.0, 300.0), NONE), Under::Grab(2), "its edge");
+    // A drag on the outline moves the rect, a click selects it.
+    {
+        let _m = hold(ALT);
+        drag(&mut a, ON, (ON.0 + 20, ON.1 + 10));
+    }
+    let e = ed(&mut a);
+    assert_eq!(crate::objects::edit::sel_box(&e.objects[0], None).unwrap(), FRect { x: 320.0, y: 310.0, w: 200.0, h: 100.0 });
+    assert_eq!(e.objects.len(), 3, "nothing drawn");
+    assert_eq!(e.obj.sel, vec![0]);
+    click(&mut a, ON.0 + 20, ON.1 + 10);
+    assert_eq!(ed(&mut a).obj.sel, vec![0]);
+}
+
+/// The rule under a region (Pixelate, Blur, Invert) for every tool and
+/// the select tool: the more specific object beneath wins inside it; a
+/// region over a region, the top one; selected, its handles first.
+#[test]
+fn region_prefers_the_object_beneath() {
+    let regions = [
+        pix(250.0, 250.0, 300.0, 200.0),
+        Obj::Blur { r: FRect { x: 250.0, y: 250.0, w: 300.0, h: 200.0 }, sigma: 10.0 },
+        Obj::Invert { r: FRect { x: 250.0, y: 250.0, w: 300.0, h: 200.0 } },
+    ];
+    for reg in regions {
+        for t in [None, Some(Tool::Select), Some(Tool::Pixelate), Some(Tool::Arrow)] {
+            let mut a = with(Some(SEL), vec![rect(300.0, 300.0, 200.0, 100.0), reg.clone()], t);
+            let e = ed(&mut a);
+            assert_eq!(e.obj_at(Pt::new(350.0, 301.0)), Some(0), "{reg:?} {t:?}");
+            assert_eq!(e.obj_at(Pt::new(400.0, 350.0)), Some(1), "{reg:?} {t:?}");
+            assert_eq!(e.obj_at(Pt::new(252.0, 350.0)), Some(1), "{reg:?} {t:?}: its edge");
+        }
+    }
+    // A region over a region: the top one (neither is more specific).
+    let mut a = with(Some(SEL), vec![pix(200.0, 200.0, 400.0, 400.0), pix(300.0, 300.0, 100.0, 100.0)], Some(Tool::Pixelate));
+    assert_eq!(ed(&mut a).obj_at(Pt::new(350.0, 350.0)), Some(1));
+    // An object over the region: still the topmost.
+    let mut a = with(Some(SEL), vec![pix(250.0, 250.0, 300.0, 200.0), rect(300.0, 300.0, 200.0, 100.0)], Some(Tool::Pixelate));
+    assert_eq!(ed(&mut a).obj_at(Pt::new(350.0, 301.0)), Some(1));
+}
+
+/// The capture selection's handles resize it with every tool: the resize
+/// cursor on them, a drag resizes; next to them the tool draws; a
+/// selected object's handle there still wins.
+#[test]
+fn selection_handles_resize_with_every_tool() {
+    let all = [
+        Tool::Select, Tool::Path, Tool::Line, Tool::Arrow, Tool::Rect, Tool::Ellipse, Tool::Marker, Tool::Text, Tool::Counter,
+        Tool::Pixelate, Tool::Invert, Tool::Callout, Tool::Spotlight, Tool::Magnify, Tool::Blur, Tool::Ruler,
+    ];
+    let se = (SEL.x1() as i32, SEL.y1() as i32);
+    let e_mid = (SEL.x1() as i32, (SEL.y + SEL.h / 2.0) as i32);
+    for t in all {
+        let mut a = with(Some(SEL), Vec::new(), Some(t));
+        let e = ed(&mut a);
+        assert_eq!(at(e, se.0 as f32, se.1 as f32), Cursor::SizeNWSE, "{t:?}");
+        assert_eq!(at(e, e_mid.0 as f32 - 3.0, e_mid.1 as f32), Cursor::SizeWE, "{t:?}");
+        drag(&mut a, se, (se.0 + 40, se.1 + 20));
+        let e = ed(&mut a);
+        assert_eq!(e.sel, Some(FRect { w: SEL.w + 40.0, h: SEL.h + 20.0, ..SEL }), "{t:?}");
+        assert!(e.objects.is_empty() && e.text.is_none() && e.ruler.is_none(), "{t:?}: nothing drawn");
+        // Away from the handles (on the edge, inside): the tool.
+        let mut a = with(Some(SEL), Vec::new(), Some(t));
+        let e = ed(&mut a);
+        let near = Pt::new(SEL.x1() - 30.0, SEL.y1() - 30.0);
+        assert_ne!(at(e, near.x, near.y), Cursor::SizeNWSE, "{t:?}");
+        assert_ne!(at(e, SEL.x + SEL.w / 4.0, SEL.y + 1.0), Cursor::SizeNS, "{t:?}: the edge between handles");
+    }
+    // Drawing that starts next to a handle still draws.
+    let mut a = with(Some(SEL), Vec::new(), Some(Tool::Rect));
+    drag(&mut a, (se.0 - 30, se.1 - 30), (se.0 - 200, se.1 - 150));
+    assert_eq!(ed(&mut a).objects.len(), 1);
+    assert_eq!(ed(&mut a).sel, Some(SEL));
+    // A selected object's handle on the selection's corner beats it.
+    let mut a = with(Some(SEL), vec![rect(SEL.x1() - 200.0, SEL.y1() - 100.0, 200.0, 100.0)], Some(Tool::Arrow));
+    ed(&mut a).obj.sel = vec![0];
+    ed(&mut a).prepare(None, se, Instant::now());
+    {
+        let _m = hold(ALT);
+        drag(&mut a, (se.0 + 6, se.1 + 6), (se.0 - 40, se.1 - 20));
+    }
+    let e = ed(&mut a);
+    assert_eq!(e.sel, Some(SEL), "the selection did not resize");
+    assert_eq!(crate::objects::edit::sel_box(&e.objects[0], None).unwrap().w, 154.0);
+}
+
+/// The Edit window: no capture selection; its canvas is resized by the
+/// crop frame, which takes presses whatever tool was on.
+#[test]
+fn edit_window_crop_frame_with_a_drawing_tool() {
+    let img = PixBuf::from_pixel(400, 300, [200, 210, 220, 255]);
+    let mut c = host::Canvas::new(img, Vec::new(), Config::default(), theme::DARK);
+    let area = FRect { x: 0.0, y: 40.0, w: 1200.0, h: 720.0 };
+    c.set_rects(area, FRect { x: 0.0, y: 0.0, w: 1200.0, h: 40.0 }, FRect { x: 0.0, y: 0.0, w: 1200.0, h: 800.0 }, 1.0);
+    c.key('R' as u32, false, false, NONE);
+    let corner = c.view.to_win(Pt::new(400.0, 300.0));
+    assert_eq!(c.cursor(corner), Cursor::Cross, "the rect tool, no frame");
+    c.key('C' as u32, false, false, NONE);
+    assert_eq!(c.cursor(corner), Cursor::SizeNWSE, "the crop frame's corner");
+    c.press(corner);
+    c.moved(c.view.to_win(Pt::new(350.0, 260.0)), true);
+    c.release(c.view.to_win(Pt::new(350.0, 260.0)));
+    c.key(crate::wind::key::RETURN, false, false, NONE);
+    assert_eq!(c.crop(), Some(FRect { x: 0.0, y: 0.0, w: 350.0, h: 260.0 }), "cropped");
+}
+
 /// The Edit window: the same rule through its canvas (window points):
 /// outside the canvas (the status bar, the side list) the arrow, an
 /// object with a drawing tool the move cursor, Ctrl the cross.

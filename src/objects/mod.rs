@@ -612,6 +612,38 @@ impl Obj {
         }
     }
 
+    /// Rects covering every pixel `render` may touch, like [`Obj::bounds`]
+    /// but tighter where the object is apart: a loupe is its source's box,
+    /// its disc's box and its connector in a few pieces, not the box of all
+    /// three (a radius step repaints the rings, not the space between).
+    pub fn parts(&self, font: Option<&AnnotFont>) -> Vec<FRect> {
+        let Obj::Magnify { src, dst, radius, zoom, width, .. } = self else { return self.bounds(font).into_iter().collect() };
+        let Some(all) = self.bounds(font) else { return Vec::new() };
+        let (rs, m) = (radius / zoom.max(1.0), width.max(0.5) + 2.0);
+        let disc = |c: &Pt, r: f32| FRect { x: c.x - r - m, y: c.y - r - m, w: 2.0 * (r + m), h: 2.0 * (r + m) };
+        let mut v = vec![disc(src, rs), disc(dst, *radius)];
+        let (dx, dy) = (dst.x - src.x, dst.y - src.y);
+        let d = dx.hypot(dy);
+        if !d.is_finite() || !rs.is_finite() || !radius.is_finite() {
+            return vec![all];
+        }
+        if d > radius + rs + 2.0 {
+            // The connector (`magnify`: from ring to ring), in up to 8
+            // pieces, each its stretch's box grown by the stroke and AA.
+            let (ux, uy) = (dx / d, dy / d);
+            let a = Pt::new(src.x + ux * rs, src.y + uy * rs);
+            let len = d - rs - radius;
+            let n = (len / 64.0).ceil().clamp(1.0, 8.0) as usize;
+            for i in 0..n {
+                let (t0, t1) = (len * i as f32 / n as f32, len * (i + 1) as f32 / n as f32);
+                let (p, q) = (Pt::new(a.x + ux * t0, a.y + uy * t0), Pt::new(a.x + ux * t1, a.y + uy * t1));
+                let (x0, y0) = (p.x.min(q.x) - m, p.y.min(q.y) - m);
+                v.push(FRect { x: x0, y: y0, w: (p.x - q.x).abs() + 2.0 * m, h: (p.y - q.y).abs() + 2.0 * m });
+            }
+        }
+        v
+    }
+
     /// Pixelate only: the mosaic grid as rendered into a window covering
     /// the whole image: the pixelated area `[x0, x1) x [y0, y1)` (`x1`/`y1`
     /// not yet clipped to the image) and the cell size, cells anchored at
@@ -787,6 +819,13 @@ fn magnify(sf: &mut Surf, ext: Option<&Surf>, src: Pt, dst: Pt, radius: f32, zoo
     let clip = |v: f32, lo: i32, hi: i32| (v as f64).clamp(lo as f64, hi as f64) as i32;
     let (sx0, sy0) = (clip((src.x - rs).floor() - 1.0, bx0, bx1), clip((src.y - rs).floor() - 1.0, by0, by1));
     let (sx1, sy1) = (clip((src.x + rs).ceil() + 1.0, bx0, bx1), clip((src.y + rs).ceil() + 1.0, by0, by1));
+    // Only what the pixels of this surface (a window, maybe a strip of
+    // the disc) show: their preimage, a pixel round.
+    let (wx0, wy0, wx1, wy1) = sf.bounds();
+    let pre = |v: i32, s: f32, d: f32| (s + (v as f32 - d) / zoom).floor();
+    let (sx0, sx1) = (sx0.max(clip(pre(wx0, src.x, dst.x) - 1.0, bx0, bx1)), sx1.min(clip(pre(wx1, src.x, dst.x) + 2.0, bx0, bx1)));
+    let (sy0, sy1) = (sy0.max(clip(pre(wy0, src.y, dst.y) - 1.0, by0, by1)), sy1.min(clip(pre(wy1, src.y, dst.y) + 2.0, by0, by1)));
+    let (sx1, sy1) = (sx1.max(sx0), sy1.max(sy0));
     let sw = (sx1 - sx0).max(0) as usize;
     let mut tmp = vec![None; sw * (sy1 - sy0).max(0) as usize];
     for y in sy0..sy1 {
