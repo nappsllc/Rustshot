@@ -16,6 +16,9 @@ next release.
 - The tray / menu-bar icon is now the app icon (the blue tile with the
   white glyph, a red dot while recording) on every platform, instead of
   a gray or white glyph that followed the theme.
+- Pixelate, Blur, Invert, Spotlight, Magnify and the Ruler pick up the
+  arrow, box or text under the pointer like the other drawing tools
+  (drag to move it, click to select it); hold Ctrl to draw over it.
 
 ## 0.6.1
 
