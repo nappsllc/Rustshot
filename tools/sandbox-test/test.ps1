@@ -88,6 +88,9 @@ function KillAll { Get-Process rustshot -ErrorAction SilentlyContinue | Stop-Pro
 . "$T\v060.ps1"
 # 0.6.2 (the tray icon is the drawn app icon, no fallback): Checks062.
 . "$T\v062.ps1"
+# 0.6.3 (the pixel-aligned 16 px icon, window titles, the unsaved marker,
+# DWM caption / text / border colours): Checks063.
+. "$T\v063.ps1"
 # The sideload-signed MSIX (and an update over the older release's): MsixChecks.
 . "$T\msix.ps1"
 HotkeyProbe $log
@@ -148,6 +151,15 @@ if (Test-Path "$T\v062-only") {
     Copy-Item $portable.FullName "$env:TEMP\rustshot.exe"
     Add-Content $log "      portable exe: $($portable.FullName) $((Get-Item $portable.FullName).Length) B"
     Checks062 "$env:TEMP\rustshot.exe"
+    Add-Content $log 'DONE'
+    return
+}
+# <T>\v063-only: just the 0.6.3 checks.
+if (Test-Path "$T\v063-only") {
+    $portable = PortableExe
+    Copy-Item $portable.FullName "$env:TEMP\rustshot.exe"
+    Add-Content $log "      portable exe: $($portable.FullName) $((Get-Item $portable.FullName).Length) B"
+    Checks063 "$env:TEMP\rustshot.exe"
     Add-Content $log 'DONE'
     return
 }
@@ -376,6 +388,7 @@ if ($portable) {
     Checks050 "$env:TEMP\rustshot.exe"
     Checks060 "$env:TEMP\rustshot.exe"
     Checks062 "$env:TEMP\rustshot.exe"
+    Checks063 "$env:TEMP\rustshot.exe"
     RecordingChecks "$env:TEMP\rustshot.exe"
     Start-Process "$env:TEMP\rustshot.exe"
     Check 'portable: daemon started for visual tray check' (WaitFor { [W]::TrayWindow() })
