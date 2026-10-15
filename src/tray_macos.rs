@@ -1,8 +1,6 @@
-//! The macOS menu-bar icon: an `NSStatusItem` with the tray glyph as a
-//! template image (the menu bar tints it) and an `NSMenu` of the shared
-//! model (`tray::menu`), rebuilt each time it opens. While recording the
-//! glyph is drawn in the menu bar's color with the red dot (a template
-//! image would tint the dot too). Everything runs on the main thread:
+//! The macOS menu-bar icon: an `NSStatusItem` with the app icon (the blue
+//! tile, the red dot while recording) and an `NSMenu` of the shared model
+//! (`tray::menu`), rebuilt each time it opens. Everything runs on the main thread:
 //! the calls here queue their work on the main queue, which the overlay's
 //! pump serves.
 #![cfg_attr(test, allow(dead_code))] // tests never put an icon in the menu bar
@@ -126,22 +124,9 @@ unsafe fn create() -> Option<State> {
     }
 }
 
-/// The menu bar is dark (the button's appearance).
-unsafe fn dark_bar(st: &State) -> bool {
-    unsafe {
-        let b = button(st);
-        if b.is_null() {
-            return true;
-        }
-        let ap: *mut c_void = msg0(b, objc_sel(c"effectiveAppearance"));
-        let name: *mut c_void = if ap.is_null() { core::ptr::null_mut() } else { msg0(ap, objc_sel(c"name")) };
-        oc::string_of(name).contains("Dark")
-    }
-}
-
-/// The glyph as a PNG, `n`x`n` px, in `rgb`.
-fn glyph_png(n: u32, rgb: (u8, u8, u8), recording: bool) -> Option<Vec<u8>> {
-    let rgba = tray::tray_glyph_rgba_rec(n, rgb, recording);
+/// The icon as a PNG, `n`x`n` px.
+fn icon_png(n: u32, recording: bool) -> Option<Vec<u8>> {
+    let rgba = tray::tray_icon_rgba(n, recording);
     crate::pngfile::encode(n, n, crate::pngfile::Color::Rgba, &rgba).ok()
 }
 
@@ -151,21 +136,13 @@ unsafe fn set_image(st: &State) {
         if b.is_null() {
             return;
         }
-        let rec = tray::is_recording();
-        // A template (black, the bar tints it) unless the red dot must show.
-        let rgb = match (rec, dark_bar(st)) {
-            (false, _) => (0, 0, 0),
-            (true, true) => (255, 255, 255),
-            (true, false) => (0x1B, 0x1C, 0x20),
-        };
-        let Some(png) = glyph_png((PT * 2.0) as u32, rgb, rec) else { return };
+        let Some(png) = icon_png((PT * 2.0) as u32, tray::is_recording()) else { return };
         let data: *mut c_void = msg0::<*mut c_void>(objc_cls(c"NSData"), objc_sel(c"alloc"));
         let data: *mut c_void = msg2(data, objc_sel(c"initWithBytes:length:"), png.as_ptr(), png.len());
         let Some(data) = Id::owned(data) else { return };
         let img: *mut c_void = msg0(objc_cls(c"NSImage"), objc_sel(c"alloc"));
         let Some(img) = Id::owned(msg1(img, objc_sel(c"initWithData:"), data.ptr())) else { return };
         let _: () = msg1(img.ptr(), objc_sel(c"setSize:"), NSSize { w: PT, h: PT });
-        let _: () = msg1(img.ptr(), objc_sel(c"setTemplate:"), i8::from(!rec));
         let _: () = msg1(b, objc_sel(c"setImage:"), img.ptr());
     }
 }

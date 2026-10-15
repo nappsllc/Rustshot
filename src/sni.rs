@@ -31,9 +31,6 @@ const INTROSPECT: &str = "org.freedesktop.DBus.Introspectable";
 const PEER: &str = "org.freedesktop.DBus.Peer";
 /// The icon sizes sent (the host picks the closest).
 pub const ICON_SIZES: [u32; 3] = [22, 32, 48];
-/// The glyph's color on a dark panel and on a light one.
-const ON_DARK: (u8, u8, u8) = (255, 255, 255);
-const ON_LIGHT: (u8, u8, u8) = (0x1B, 0x1C, 0x20);
 
 /// What the tray shows now.
 #[derive(Clone, Debug, PartialEq)]
@@ -42,14 +39,12 @@ pub struct View {
     /// The tooltip's title ("Rustshot — recording 1:23").
     pub tip: String,
     pub menu: Vec<MenuItem>,
-    /// The panel is light: a dark glyph.
-    pub light_panel: bool,
 }
 
 impl View {
     /// The tray's state as the daemon published it.
-    pub fn current(light_panel: bool) -> View {
-        View { recording: tray::is_recording(), tip: tray::tip_text(), menu: tray::current_menu(), light_panel }
+    pub fn current() -> View {
+        View { recording: tray::is_recording(), tip: tray::tip_text(), menu: tray::current_menu() }
     }
 }
 
@@ -88,7 +83,7 @@ impl Sni {
     /// `NewToolTip`, the menu's `LayoutUpdated`).
     pub fn update(&mut self, view: View) -> Vec<Message> {
         let mut out = Vec::new();
-        if view.recording != self.view.recording || view.light_panel != self.view.light_panel {
+        if view.recording != self.view.recording {
             out.push(Message::signal(ITEM_PATH, ITEM, "NewIcon", vec![]));
         }
         if view.tip != self.view.tip {
@@ -266,7 +261,7 @@ impl Sni {
             "Status" => s("Active"),
             "WindowId" => Value::I32(0),
             "IconName" | "OverlayIconName" | "AttentionIconName" | "AttentionMovieName" | "IconThemePath" => s(""),
-            "IconPixmap" => icon_pixmaps(self.view.recording, self.view.light_panel),
+            "IconPixmap" => icon_pixmaps(self.view.recording),
             "OverlayIconPixmap" | "AttentionIconPixmap" => Value::Array("(iiay)".into(), vec![]),
             "ToolTip" => Value::Struct(vec![s(""), Value::Array("(iiay)".into(), vec![]), s(&self.view.tip), s("")]),
             "ItemIsMenu" => Value::Bool(false),
@@ -353,13 +348,12 @@ fn machine_id() -> String {
     std::fs::read_to_string("/etc/machine-id").map(|s| s.trim().to_string()).unwrap_or_default()
 }
 
-/// The glyph as `a(iiay)`: ARGB32 in network byte order at [`ICON_SIZES`].
-pub fn icon_pixmaps(recording: bool, light_panel: bool) -> Value {
-    let rgb = if light_panel { ON_LIGHT } else { ON_DARK };
+/// The icon as `a(iiay)`: ARGB32 in network byte order at [`ICON_SIZES`].
+pub fn icon_pixmaps(recording: bool) -> Value {
     let icons = ICON_SIZES
         .iter()
         .map(|&n| {
-            let rgba = tray::tray_glyph_rgba_rec(n, rgb, recording);
+            let rgba = tray::tray_icon_rgba(n, recording);
             let mut argb = Vec::with_capacity(rgba.len());
             for p in rgba.as_chunks::<4>().0 {
                 argb.extend([p[3], p[0], p[1], p[2]].map(Value::Byte));
@@ -485,49 +479,6 @@ pub fn watcher_change(m: &Message) -> Option<bool> {
     }
     let [name, _old, new] = m.body.as_slice() else { return None };
     (name.as_str() == Some(WATCHER)).then(|| new.as_str().is_some_and(|s| !s.is_empty()))
-}
-
-// ---------------------------------------------------------------------------
-// The panel's color
-// ---------------------------------------------------------------------------
-
-const PORTAL: &str = "org.freedesktop.portal.Desktop";
-const PORTAL_PATH: &str = "/org/freedesktop/portal/desktop";
-const SETTINGS: &str = "org.freedesktop.portal.Settings";
-
-/// Whether the panel is light, from the desktop (`XDG_CURRENT_DESKTOP`)
-/// and the color scheme (`org.freedesktop.appearance color-scheme`:
-/// 1 dark, 2 light, 0 no preference). GNOME's top bar is dark in both
-/// schemes; elsewhere the panel follows the scheme (no preference: dark).
-pub fn light_panel(desktop: &str, scheme: Option<u32>) -> bool {
-    let gnome = desktop.split(':').any(|d| matches!(d.to_ascii_lowercase().as_str(), "gnome" | "ubuntu" | "unity" | "pantheon"));
-    !gnome && scheme == Some(2)
-}
-
-/// The color scheme through the Settings portal (None: no portal).
-pub fn color_scheme(bus: &mut dyn Bus) -> Option<u32> {
-    let args = || vec![Value::str("org.freedesktop.appearance"), Value::str("color-scheme")];
-    let one = Message::call(PORTAL, PORTAL_PATH, SETTINGS, "ReadOne", args());
-    if let Ok(r) = bus.call(one, dbus::CALL_TIMEOUT) {
-        return r.body.first().and_then(Value::as_u32);
-    }
-    // Portals before 1.18 have only Read (a variant in a variant).
-    let r = bus.call(Message::call(PORTAL, PORTAL_PATH, SETTINGS, "Read", args()), dbus::CALL_TIMEOUT).ok()?;
-    r.body.first().and_then(Value::as_u32)
-}
-
-/// The match rule for color-scheme changes.
-pub fn scheme_rule() -> String {
-    format!("type='signal',interface='{SETTINGS}',member='SettingChanged',path='{PORTAL_PATH}',arg0='org.freedesktop.appearance'")
-}
-
-/// A `SettingChanged` of the color scheme: its new value.
-pub fn scheme_change(m: &Message) -> Option<u32> {
-    if m.kind != Kind::Signal || !m.is(SETTINGS, "SettingChanged") {
-        return None;
-    }
-    let [ns, key, v] = m.body.as_slice() else { return None };
-    (ns.as_str() == Some("org.freedesktop.appearance") && key.as_str() == Some("color-scheme")).then(|| v.as_u32()).flatten()
 }
 
 #[cfg(test)]

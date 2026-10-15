@@ -4,7 +4,7 @@ use crate::tray::RecMenu;
 use std::time::Duration;
 
 fn view(rec: Option<RecMenu>) -> View {
-    View { recording: rec.is_some(), tip: "Rustshot".into(), menu: tray::menu(Some(true), rec), light_panel: false }
+    View { recording: rec.is_some(), tip: "Rustshot".into(), menu: tray::menu(Some(true), rec) }
 }
 
 /// A call from the host `:1.7` to us.
@@ -62,8 +62,8 @@ fn item_properties() {
     assert!(r.body[0].as_str().unwrap().contains("<node name=\"MenuBar\"/>"));
 }
 
-/// The icon: the glyph at 22/32/48 px, ARGB32 big-endian, in the
-/// panel's color; the red dot while recording.
+/// The icon: the app icon at 22/32/48 px, ARGB32 big-endian; the red dot
+/// while recording.
 #[test]
 fn icon_pixmaps_are_argb_in_network_order() {
     let mut s = Sni::new(view(None));
@@ -86,10 +86,9 @@ fn icon_pixmaps_are_argb_in_network_order() {
             _ => panic!("bytes"),
         })
     };
-    // The centre dot: opaque, white on a dark panel (A, R, G, B).
+    // The centre dot: opaque white on the blue tile (A, R, G, B).
     assert_eq!(centre(px, 1), [255, 255, 255, 255]);
-    assert_eq!(centre(&icon_pixmaps(false, true), 1), [255, 0x1B, 0x1C, 0x20], "dark on a light panel");
-    assert_eq!(centre(&icon_pixmaps(true, false), 2), [255, tray::REC_RED.0, tray::REC_RED.1, tray::REC_RED.2]);
+    assert_eq!(centre(&icon_pixmaps(true), 2), [255, tray::REC_RED.0, tray::REC_RED.1, tray::REC_RED.2]);
     // Corners are transparent.
     let b = px.items()[0].items()[2].items();
     assert_eq!(b[0], Value::Byte(0));
@@ -280,9 +279,6 @@ fn changes_are_signalled() {
     let sig = s.update(v.clone());
     assert_eq!(sig.len(), 1);
     assert_eq!(sig[0].member.as_deref(), Some("LayoutUpdated"));
-    // A light panel: only the icon.
-    v.light_panel = true;
-    assert_eq!(s.update(v).iter().map(|m| m.member.clone().unwrap()).collect::<Vec<_>>(), ["NewIcon"]);
 }
 
 /// A scripted session bus: the bus's own methods and the watcher.
@@ -365,20 +361,3 @@ fn the_watcher_coming_and_going() {
     assert!(watcher_rule().contains("arg0='org.kde.StatusNotifierWatcher'"));
 }
 
-#[test]
-fn panel_color() {
-    assert!(!light_panel("KDE", None), "no preference: dark");
-    assert!(!light_panel("KDE", Some(1)));
-    assert!(light_panel("KDE", Some(2)));
-    assert!(light_panel("XFCE", Some(2)));
-    assert!(!light_panel("ubuntu:GNOME", Some(2)), "GNOME's top bar is dark");
-    let mut m = Message::signal(PORTAL_PATH, SETTINGS, "SettingChanged", vec![
-        Value::str("org.freedesktop.appearance"),
-        Value::str("color-scheme"),
-        Value::variant(Value::U32(2)),
-    ]);
-    m.sender = Some(":1.3".into());
-    assert_eq!(scheme_change(&wire(m)), Some(2));
-    let other = Message::signal(PORTAL_PATH, SETTINGS, "SettingChanged", vec![Value::str("org.gnome"), Value::str("x"), Value::variant(Value::U32(2))]);
-    assert_eq!(scheme_change(&other), None);
-}

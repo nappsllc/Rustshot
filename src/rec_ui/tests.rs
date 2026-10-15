@@ -387,8 +387,7 @@ fn render_recording_previews() {
         let items = crate::tray::menu(Some(false), Some(rec));
         let (w, h) = (360usize, 80 + 56 * items.len());
         let px = render_layer(w, h, |f| {
-            let fg = if th.dark { (255, 255, 255) } else { (27, 28, 32) };
-            let g = crate::tray::tray_glyph_rgba_rec(32, fg, true);
+            let g = crate::tray::tray_icon_rgba(32, true);
             for y in 0..64usize {
                 for x in 0..64usize {
                     let p = &g[((y / 2) * 32 + x / 2) * 4..][..4];

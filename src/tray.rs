@@ -648,51 +648,51 @@ pub fn draw_glyph(fb: &mut crate::uifb::Fb, x: f32, y: f32, size: f32, c: crate:
     fb.fill_circle(x + 8.0 * k, y + 8.0 * k, GLYPH_DOT_R * k, c);
 }
 
-/// Monochrome tray glyph as straight-alpha RGBA, `size`x`size`, in color `rgb`.
-/// Coverage is rasterised white-on-black into an opaque scratch buffer (the
-/// rasterizer assumes an opaque destination) and its red channel becomes alpha.
-#[cfg_attr(not(test), allow(dead_code))] // tests
-pub fn tray_glyph_rgba(size: u32, rgb: (u8, u8, u8)) -> Vec<u8> {
-    tray_glyph_rgba_rec(size, rgb, false)
-}
-
 /// The recording dot's color.
 pub const REC_RED: (u8, u8, u8) = (0xF0, 0x3E, 0x3E);
 const REC_DOT_R: f32 = 3.6;
 
-/// [`tray_glyph_rgba`]; with `recording` the centre dot is a larger red
-/// one (the tray icon while a recording runs).
-pub fn tray_glyph_rgba_rec(size: u32, rgb: (u8, u8, u8), recording: bool) -> Vec<u8> {
+/// The app icon's tile: its gradient's top-left and bottom-right colors
+/// (packaging/icons/make-icon.ps1) and corner radius (of the side).
+const TILE_TOP: (u8, u8, u8) = (79, 142, 247);
+const TILE_BOTTOM: (u8, u8, u8) = (37, 78, 196);
+const TILE_RADIUS: f32 = 56.0 / 256.0;
+/// The glyph's box, of the tile's side: the app icon's brackets span 55%
+/// of it, the glyph's 91% of its box.
+const TILE_GLYPH: f32 = 0.6;
+
+/// The tray icon as straight-alpha RGBA, `size`x`size`: the app icon (the
+/// blue tile with the white glyph); with `recording` the centre dot is a
+/// larger red one. Each shape's coverage is rasterised white-on-black into
+/// an opaque scratch buffer (the rasterizer assumes an opaque destination).
+pub fn tray_icon_rgba(size: u32, recording: bool) -> Vec<u8> {
     use crate::uifb::{C4, Fb};
     let n = size as usize;
     let white = C4::rgb(255, 255, 255);
-    let mut scratch = [0u8, 0, 0, 255].repeat(n * n);
-    if !recording {
-        draw_glyph(&mut Fb::new(&mut scratch, n), 0.0, 0.0, size as f32, white);
-        let mut out = Vec::with_capacity(n * n * 4);
-        for px in scratch.as_chunks::<4>().0 {
-            out.extend_from_slice(&[rgb.0, rgb.1, rgb.2, px[0]]);
-        }
-        return out;
-    }
-    // The brackets in `rgb`, the red dot over them (coverage of each).
-    let k = size as f32 / 16.0;
-    draw_brackets(&mut Fb::new(&mut scratch, n), 0.0, 0.0, size as f32, white);
-    let mut dot = [0u8, 0, 0, 255].repeat(n * n);
-    Fb::new(&mut dot, n).fill_circle(8.0 * k, 8.0 * k, REC_DOT_R * k, white);
+    let mask = |draw: &dyn Fn(&mut Fb)| {
+        let mut buf = [0u8, 0, 0, 255].repeat(n * n);
+        draw(&mut Fb::new(&mut buf, n));
+        buf.as_chunks::<4>().0.iter().map(|p| p[0] as f32 / 255.0).collect::<Vec<f32>>()
+    };
+    let side = size as f32;
+    let tile = mask(&|fb| fb.fill_rounded(0, 0, n as i32, n as i32, side * TILE_RADIUS, white));
+    let g = side * TILE_GLYPH;
+    let o = (side - g) / 2.0;
+    let k = g / 16.0;
+    let brackets = mask(&|fb| draw_brackets(fb, o, o, g, white));
+    let r = if recording { REC_DOT_R } else { GLYPH_DOT_R };
+    let dot = mask(&|fb| fb.fill_circle(o + 8.0 * k, o + 8.0 * k, r * k, white));
+    let dot_rgb = if recording { REC_RED } else { (255, 255, 255) };
+    let mix = |a: u8, b: u8, t: f32| a as f32 + (b as f32 - a as f32) * t;
     let mut out = Vec::with_capacity(n * n * 4);
-    for (g, d) in scratch.as_chunks::<4>().0.iter().zip(dot.as_chunks::<4>().0) {
-        let (ga, da) = (g[0] as f32 / 255.0, d[0] as f32 / 255.0);
-        let a = da + ga * (1.0 - da);
-        let mix = |base: u8, red: u8| {
-            if a > 0.0 { ((red as f32 * da + base as f32 * ga * (1.0 - da)) / a).round() as u8 } else { 0 }
-        };
-        out.extend_from_slice(&[
-            mix(rgb.0, REC_RED.0),
-            mix(rgb.1, REC_RED.1),
-            mix(rgb.2, REC_RED.2),
-            (a * 255.0).round() as u8,
-        ]);
+    for i in 0..n * n {
+        let (x, y) = (i % n, i / n);
+        let t = (x + y) as f32 / (2 * n.max(2) - 2) as f32;
+        let base = [mix(TILE_TOP.0, TILE_BOTTOM.0, t), mix(TILE_TOP.1, TILE_BOTTOM.1, t), mix(TILE_TOP.2, TILE_BOTTOM.2, t)];
+        let (gb, gd) = (brackets[i], dot[i]);
+        let px = [(base[0], dot_rgb.0), (base[1], dot_rgb.1), (base[2], dot_rgb.2)]
+            .map(|(b, d)| ((b + (255.0 - b) * gb) * (1.0 - gd) + d as f32 * gd).round() as u8);
+        out.extend_from_slice(&[px[0], px[1], px[2], (tile[i] * 255.0).round() as u8]);
     }
     out
 }
@@ -925,19 +925,15 @@ mod tests {
     #[test]
     fn recording_icon_has_a_red_centre() {
         for size in [16u32, 32] {
-            let plain = tray_glyph_rgba(size, (255, 255, 255));
-            let rec = tray_glyph_rgba_rec(size, (255, 255, 255), true);
+            let plain = tray_icon_rgba(size, false);
+            let rec = tray_icon_rgba(size, true);
             let c = size / 2;
             let i = ((c * size + c) * 4) as usize;
             assert_eq!(&plain[i..i + 4], &[255, 255, 255, 255]);
             assert_eq!(&rec[i..i + 4], &[REC_RED.0, REC_RED.1, REC_RED.2, 255]);
-            // The brackets keep the theme color.
-            let u = size as f32 / 16.0;
-            let j = ((((2.1 * u) as u32) * size + (2.1 * u) as u32) * 4) as usize;
-            assert!(rec[j + 3] > 100 && rec[j] == 255 && rec[j + 1] == 255, "{:?}", &rec[j..j + 4]);
-            // The red dot is larger than the plain one.
-            let off = ((c * size + c + (3.0 * u) as u32) * 4 + 3) as usize;
-            assert!(rec[off] > plain[off], "dot radius");
+            // The red dot is larger than the plain one: white or red, not the tile's blue.
+            let off = ((c * size + c + (size as f32 * 0.11) as u32) * 4) as usize;
+            assert!(rec[off] > plain[off], "dot radius {:?} {:?}", &rec[off..off + 4], &plain[off..off + 4]);
         }
     }
 
@@ -955,27 +951,29 @@ mod tests {
         assert_eq!(MenuItem::Quit.label(), "Quit Rustshot");
     }
 
-    fn alpha(buf: &[u8], size: u32, x: u32, y: u32) -> u8 {
-        buf[((y * size + x) * 4 + 3) as usize]
-    }
 
     #[test]
-    fn glyph_shape() {
-        for size in [16u32, 32] {
-            let b = tray_glyph_rgba(size, (27, 28, 32));
+    fn icon_is_the_blue_tile_with_the_white_glyph() {
+        for size in [16u32, 20, 24, 32] {
+            let b = tray_icon_rgba(size, false);
             assert_eq!(b.len(), (size * size * 4) as usize);
-            let c = size / 2;
-            let i = ((c * size + c) * 4) as usize;
-            assert_eq!(&b[i..i + 4], &[27, 28, 32, 255]);
-            let u = size as f32 / 16.0;
-            // Corner brackets: the arc apex and the straight runs have coverage.
-            assert!(alpha(&b, size, (2.1 * u) as u32, (2.1 * u) as u32) > 100);
-            assert!(alpha(&b, size, (13.9 * u) as u32, (13.9 * u) as u32) > 100);
-            // Gap between bracket and dot, and the image corners, are empty.
-            assert_eq!(alpha(&b, size, (4.5 * u) as u32, (4.5 * u) as u32), 0);
-            for (x, y) in [(0, 0), (size - 1, 0), (0, size - 1), (size - 1, size - 1)] {
-                assert_eq!(alpha(&b, size, x, y), 0);
+            let px = |x: u32, y: u32| &b[((y * size + x) * 4) as usize..][..4];
+            // The tile is opaque blue just inside its edge; its corners are rounded off.
+            let m = size / 2;
+            for (x, y) in [(m, 1), (1, m), (m, size - 2), (size - 2, m)] {
+                let p = px(x, y);
+                assert!(p[3] == 255 && p[2] > 180 && p[0] < 100, "edge {x},{y}: {p:?}");
             }
+            for (x, y) in [(0, 0), (size - 1, 0), (0, size - 1), (size - 1, size - 1)] {
+                assert!(px(x, y)[3] < 128, "corner {x},{y}");
+            }
+            // The gradient runs from the lighter top-left to the darker bottom-right.
+            assert!(px(2, 2)[2] > px(size - 3, size - 3)[2]);
+            // A bracket's corner is white-ish.
+            let o = size as f32 * (1.0 - TILE_GLYPH) / 2.0;
+            let k = size as f32 * TILE_GLYPH / 16.0;
+            let (x, y) = ((o + 2.1 * k) as u32, (o + 2.1 * k) as u32);
+            assert!(px(x, y)[0] > 140, "bracket {x},{y}: {:?}", px(x, y));
         }
     }
 
@@ -988,13 +986,8 @@ mod tests {
         );
         std::fs::create_dir_all(dir).unwrap();
         for size in [16u32, 20, 24, 32] {
-            for (name, fg, bg, rec) in [
-                ("dark", (255u8, 255u8, 255u8), 0x20u8, false),
-                ("light", (27, 28, 32), 0xF3, false),
-                ("dark-rec", (255, 255, 255), 0x20, true),
-                ("light-rec", (27, 28, 32), 0xF3, true),
-            ] {
-                let g = tray_glyph_rgba_rec(size, fg, rec);
+            for (name, bg, rec) in [("dark", 0x20u8, false), ("light", 0xF3, false), ("dark-rec", 0x20, true), ("light-rec", 0xF3, true)] {
+                let g = tray_icon_rgba(size, rec);
                 let scale = 8u32;
                 let w = size * scale;
                 let mut img = Vec::with_capacity((w * w * 3) as usize);

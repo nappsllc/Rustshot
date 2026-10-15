@@ -48,18 +48,11 @@ fn run(tx: Sender<HotEvent>) {
     }
 }
 
-/// The color scheme's panel color (the desktop from `XDG_CURRENT_DESKTOP`).
-fn light(scheme: Option<u32>) -> bool {
-    sni::light_panel(&std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default(), scheme)
-}
-
 /// Serve the item on `c` until the connection breaks (`Err`) or the
 /// daemon is gone (`Ok`).
 fn session(mut c: Conn, tx: &Sender<HotEvent>, told: &mut bool) -> Result<()> {
     dbus::add_match(&mut c, &sni::watcher_rule())?;
-    let _ = dbus::add_match(&mut c, &sni::scheme_rule());
-    let mut scheme = sni::color_scheme(&mut c);
-    let mut sni = Sni::new(View::current(light(scheme)));
+    let mut sni = Sni::new(View::current());
     let wanted = sni::item_name(std::process::id());
     // The name we go by while the icon is shown, and whether the watcher has us.
     let mut owned: Option<String> = None;
@@ -96,7 +89,7 @@ fn session(mut c: Conn, tx: &Sender<HotEvent>, told: &mut bool) -> Result<()> {
                     // The menu is read as it is now (Start at login may have
                     // changed in Settings meanwhile).
                     if m.path.as_deref() == Some(sni::MENU_PATH) {
-                        for s in sni.update(View::current(light(scheme))) {
+                        for s in sni.update(View::current()) {
                             c.send(s)?;
                         }
                     }
@@ -122,9 +115,6 @@ fn session(mut c: Conn, tx: &Sender<HotEvent>, told: &mut bool) -> Result<()> {
                 Kind::Signal => {
                     if let Some(appeared) = sni::watcher_change(&m) {
                         register = appeared;
-                    } else if let Some(s) = sni::scheme_change(&m) {
-                        scheme = Some(s);
-                        generation = generation.wrapping_sub(1);
                     }
                 }
                 _ => {}
@@ -135,7 +125,7 @@ fn session(mut c: Conn, tx: &Sender<HotEvent>, told: &mut bool) -> Result<()> {
         if g != generation || last_view.elapsed() > Duration::from_secs(5) {
             generation = g;
             last_view = Instant::now();
-            for s in sni.update(View::current(light(scheme))) {
+            for s in sni.update(View::current()) {
                 c.send(s)?;
             }
         }

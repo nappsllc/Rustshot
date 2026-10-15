@@ -136,29 +136,10 @@ fn base_data(hwnd: HWND) -> NOTIFYICONDATAW {
     }
 }
 
-/// Cached glyph HICON (as usize; 0 = none yet). Replaced on theme/DPI change.
+/// Cached glyph HICON (as usize; 0 = none yet). Replaced on a state or DPI change.
 static GLYPH: Mutex<usize> = Mutex::new(0);
 
-/// True when the taskbar uses the light theme (missing value = dark).
-fn taskbar_is_light() -> bool {
-    use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
-    let mut val: u32 = 0;
-    let mut len = std::mem::size_of::<u32>() as u32;
-    let rc = unsafe {
-        RegGetValueW(
-            HKEY_CURRENT_USER,
-            w!(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"),
-            w!("SystemUsesLightTheme"),
-            RRF_RT_REG_DWORD,
-            None,
-            Some((&raw mut val).cast()),
-            Some(&raw mut len),
-        )
-    };
-    rc.is_ok() && val == 1
-}
-
-/// Render the glyph at the tray size for `hwnd`'s DPI into a new HICON.
+/// Render the app icon at the tray size for `hwnd`'s DPI into a new HICON.
 fn build_glyph(hwnd: HWND) -> Option<HICON> {
     use windows::Win32::Graphics::Gdi::*;
     use windows::Win32::UI::HiDpi::{GetDpiForSystem, GetDpiForWindow, GetSystemMetricsForDpi};
@@ -168,8 +149,7 @@ fn build_glyph(hwnd: HWND) -> Option<HICON> {
             dpi = GetDpiForSystem();
         }
         let size = GetSystemMetricsForDpi(SM_CXSMICON, dpi.max(96)).max(16) as u32;
-        let rgb = if taskbar_is_light() { (0x1B, 0x1C, 0x20) } else { (255, 255, 255) };
-        let rgba = tray::tray_glyph_rgba_rec(size, rgb, tray::is_recording());
+        let rgba = tray::tray_icon_rgba(size, tray::is_recording());
         let bmi = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
                 biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
@@ -233,7 +213,7 @@ fn icon(hwnd: HWND) -> HICON {
     HICON(*g as *mut _)
 }
 
-/// Theme or DPI changed: re-render the glyph and swap it into the tray icon.
+/// The state or DPI changed: re-render the icon and swap it into the tray icon.
 fn refresh_icon(hwnd: HWND) {
     if *GLYPH.lock().unwrap() == 0 {
         return; // not added yet
@@ -373,19 +353,6 @@ pub fn handle(hwnd: HWND, m: u32, _w: WPARAM, l: LPARAM) -> Option<LRESULT> {
         WM_TRAY_TIP if tray::is_visible() => set_tip(hwnd),
         WM_TRAY_TIP => {}
         WM_DPICHANGED => refresh_icon(hwnd),
-        WM_SETTINGCHANGE => {
-            // lParam is a wide string naming the changed setting; theme switches send this one.
-            let is_theme = l.0 != 0 && {
-                let p = l.0 as *const u16;
-                let want: Vec<u16> = "ImmersiveColorSet".encode_utf16().collect();
-                (0..want.len()).all(|i| unsafe { *p.add(i) } == want[i])
-                    && unsafe { *p.add(want.len()) } == 0
-            };
-            if !is_theme {
-                return None;
-            }
-            refresh_icon(hwnd);
-        }
         WM_TRAYICON => match l.0 as u32 {
             // While recording, a click stops it (the menu has the same).
             WM_LBUTTONUP => send(tray::click_event()),
