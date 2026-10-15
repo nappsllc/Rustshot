@@ -99,7 +99,7 @@ settings.error.secret_needs_bucket = पहले बकेट और एक्�
 settings.error.autostart = लॉगिन पर लॉन्च करें नहीं बदल सका: {e}
 settings.error.reset_tools = {path} में टूल रीसेट नहीं कर सका: {e}
 settings.error.backup = config.toml का {path} में बैकअप नहीं ले सका: {e}
-settings.window_title = Rustshot सेटिंग्स
+settings.window_title = Rustshot — सेटिंग्स
 settings.header.reset_to_defaults = डिफ़ॉल्ट पर रीसेट करें
 settings.footer.open_config_file = कॉन्फ़िग फ़ाइल खोलें
 settings.general.appearance = दिखावट
@@ -688,7 +688,7 @@ history.no_upload = इस कैप्चर का हटाने के ल�
 history.saved_to = {dir} में {n} सहेजे गए
 history.saved_some_why = {total} में से {n} सहेजे गए: एक कैप्चर पढ़ा नहीं जा सका: {why}
 history.saved_some = {total} में से {n} सहेजे गए
-history.window_title = Rustshot इतिहास
+history.window_title = Rustshot — इतिहास
 history.open_failed = कैप्चर नहीं खोल सका: {e}
 history.show_failed = कैप्चर नहीं दिखा सका: {e}
 history.path_copied = फ़ाइल पथ कॉपी किया गया
@@ -795,7 +795,7 @@ edit.saved_gone = {n} सहेजा गया (इतिहास प्रव
 edit.not_in_history = वह कैप्चर अब इतिहास में नहीं है
 edit.bad_lasso = कैप्चर नहीं खोल सका: इसका लैसो पढ़ा नहीं जा सकता
 edit.bad_crop = कैप्चर नहीं खोल सका: इसका क्रॉप चित्र के बाहर है
-edit.window_title = संपादन — {name}
+edit.window_title = {name} — Rustshot
 edit.save_failed = सहेजना विफल: {e}
 
 # Capture launcher

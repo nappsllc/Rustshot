@@ -99,7 +99,7 @@ settings.error.secret_needs_bucket = Introduceți mai întâi bucketul și ID-ul
 settings.error.autostart = Nu s-a putut modifica „Pornire la conectare”: {e}
 settings.error.reset_tools = Nu s-au putut reseta instrumentele în {path}: {e}
 settings.error.backup = Nu s-a putut face copia de rezervă a config.toml în {path}: {e}
-settings.window_title = Setări Rustshot
+settings.window_title = Rustshot — Setări
 settings.header.reset_to_defaults = Resetare la valorile implicite
 settings.footer.open_config_file = Deschidere fișier de configurare
 settings.general.appearance = Aspect
@@ -699,7 +699,7 @@ history.no_upload = Această captură nu are nicio încărcare de șters
 history.saved_to = S-au salvat {n} în {dir}
 history.saved_some_why = S-au salvat {n} din {total}: o captură nu a putut fi citită: {why}
 history.saved_some = S-au salvat {n} din {total}
-history.window_title = Istoric Rustshot
+history.window_title = Rustshot — Istoric
 history.open_failed = Captura nu a putut fi deschisă: {e}
 history.show_failed = Captura nu a putut fi afișată: {e}
 history.path_copied = Calea fișierului a fost copiată
@@ -809,7 +809,7 @@ edit.saved_gone = Salvat: {n} (intrarea din Istoric nu mai există)
 edit.not_in_history = Captura nu mai este în Istoric
 edit.bad_lasso = Captura nu a putut fi deschisă: lasoul ei nu poate fi citit
 edit.bad_crop = Captura nu a putut fi deschisă: decuparea ei iese în afara imaginii
-edit.window_title = Editare – {name}
+edit.window_title = {name} — Rustshot
 edit.save_failed = Salvarea a eșuat: {e}
 
 # Capture launcher

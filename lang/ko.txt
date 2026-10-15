@@ -99,7 +99,7 @@ settings.error.secret_needs_bucket = 먼저 버킷과 액세스 키 ID를 입력
 settings.error.autostart = 로그인 시 실행을 변경할 수 없습니다: {e}
 settings.error.reset_tools = {path}의 도구를 초기화할 수 없습니다: {e}
 settings.error.backup = config.toml을 백업할 수 없습니다({path}): {e}
-settings.window_title = Rustshot 설정
+settings.window_title = Rustshot — 설정
 settings.header.reset_to_defaults = 기본값으로 초기화
 settings.footer.open_config_file = 구성 파일 열기
 settings.general.appearance = 모양
@@ -677,7 +677,7 @@ history.no_upload = 이 캡처에는 삭제할 업로드가 없습니다
 history.saved_to = {n}개를 {dir}에 저장했습니다
 history.saved_some_why = {total}개 중 {n}개 저장됨: 읽을 수 없는 캡처가 있습니다: {why}
 history.saved_some = {total}개 중 {n}개 저장됨
-history.window_title = Rustshot 기록
+history.window_title = Rustshot — 기록
 history.open_failed = 캡처를 열 수 없습니다: {e}
 history.show_failed = 캡처를 표시할 수 없습니다: {e}
 history.path_copied = 파일 경로 복사됨
@@ -781,7 +781,7 @@ edit.saved_gone = 저장됨: {n}(기록 항목 없음)
 edit.not_in_history = 그 캡처는 더 이상 기록에 없습니다
 edit.bad_lasso = 캡처를 열 수 없습니다: 올가미를 읽을 수 없습니다
 edit.bad_crop = 캡처를 열 수 없습니다: 자르기 영역이 그림을 벗어납니다
-edit.window_title = 편집 — {name}
+edit.window_title = {name} — Rustshot
 edit.save_failed = 저장 실패: {e}
 
 # Capture launcher

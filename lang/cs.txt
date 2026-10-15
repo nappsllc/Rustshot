@@ -99,7 +99,7 @@ settings.error.secret_needs_bucket = Nejdříve zadejte bucket a ID přístupov�
 settings.error.autostart = Nelze změnit Spouštět po přihlášení: {e}
 settings.error.reset_tools = Nástroje v {path} nelze obnovit: {e}
 settings.error.backup = config.toml nelze zálohovat do {path}: {e}
-settings.window_title = Nastavení Rustshot
+settings.window_title = Rustshot — Nastavení
 settings.header.reset_to_defaults = Obnovit výchozí
 settings.footer.open_config_file = Otevřít konfigurační soubor
 settings.general.appearance = Vzhled
@@ -699,7 +699,7 @@ history.no_upload = Tento záznam nemá žádné nahrání k odstranění
 history.saved_to = Uloženo do {dir}: {n}
 history.saved_some_why = Uloženo {n} z {total}: záznam nelze přečíst: {why}
 history.saved_some = Uloženo {n} z {total}
-history.window_title = Historie Rustshot
+history.window_title = Rustshot — Historie
 history.open_failed = Záznam nelze otevřít: {e}
 history.show_failed = Záznam nelze zobrazit: {e}
 history.path_copied = Cesta k souboru zkopírována
@@ -809,7 +809,7 @@ edit.saved_gone = Uloženo: {n} (položka Historie neexistuje)
 edit.not_in_history = Tento záznam už v Historii není
 edit.bad_lasso = Záznam nelze otevřít: jeho laso nelze přečíst
 edit.bad_crop = Záznam nelze otevřít: jeho oříznutí leží mimo obrázek
-edit.window_title = Úpravy – {name}
+edit.window_title = {name} — Rustshot
 edit.save_failed = Uložení selhalo: {e}
 
 # Capture launcher

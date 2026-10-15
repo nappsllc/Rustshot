@@ -99,7 +99,7 @@ settings.error.secret_needs_bucket = Εισαγάγετε πρώτα το bucket
 settings.error.autostart = Δεν ήταν δυνατή η αλλαγή της ρύθμισης «Εκκίνηση κατά τη σύνδεση»: {e}
 settings.error.reset_tools = Δεν ήταν δυνατή η επαναφορά των εργαλείων στο {path}: {e}
 settings.error.backup = Δεν ήταν δυνατή η δημιουργία αντιγράφου του config.toml στο {path}: {e}
-settings.window_title = Ρυθμίσεις Rustshot
+settings.window_title = Rustshot — Ρυθμίσεις
 settings.header.reset_to_defaults = Επαναφορά προεπιλογών
 settings.footer.open_config_file = Άνοιγμα αρχείου ρυθμίσεων
 settings.general.appearance = Εμφάνιση
@@ -688,7 +688,7 @@ history.no_upload = Αυτή η λήψη δεν έχει αποστολή για
 history.saved_to = Αποθηκεύτηκαν {n} στο {dir}
 history.saved_some_why = Αποθηκεύτηκαν {n} από {total}: μια λήψη δεν διαβάστηκε: {why}
 history.saved_some = Αποθηκεύτηκαν {n} από {total}
-history.window_title = Ιστορικό Rustshot
+history.window_title = Rustshot — Ιστορικό
 history.open_failed = Δεν ήταν δυνατό το άνοιγμα της λήψης: {e}
 history.show_failed = Δεν ήταν δυνατή η εμφάνιση της λήψης: {e}
 history.path_copied = Η διαδρομή αρχείου αντιγράφηκε
@@ -795,7 +795,7 @@ edit.saved_gone = Αποθηκεύτηκε {n} (η καταχώριση στο �
 edit.not_in_history = Αυτή η λήψη δεν βρίσκεται πια στο Ιστορικό
 edit.bad_lasso = Δεν ήταν δυνατό το άνοιγμα της λήψης: το λάσο της δεν διαβάζεται
 edit.bad_crop = Δεν ήταν δυνατό το άνοιγμα της λήψης: η περικοπή της βρίσκεται έξω από την εικόνα
-edit.window_title = Επεξεργασία – {name}
+edit.window_title = {name} — Rustshot
 edit.save_failed = Η αποθήκευση απέτυχε: {e}
 
 # Capture launcher

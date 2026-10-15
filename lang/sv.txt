@@ -99,7 +99,7 @@ settings.error.secret_needs_bucket = Ange först bucket och åtkomstnyckel-ID: d
 settings.error.autostart = Det gick inte att ändra Starta vid inloggning: {e}
 settings.error.reset_tools = Det gick inte att återställa verktygen i {path}: {e}
 settings.error.backup = Det gick inte att säkerhetskopiera config.toml till {path}: {e}
-settings.window_title = Rustshot-inställningar
+settings.window_title = Rustshot — Inställningar
 settings.header.reset_to_defaults = Återställ standard
 settings.footer.open_config_file = Öppna konfigurationsfil
 settings.general.appearance = Utseende
@@ -688,7 +688,7 @@ history.no_upload = Upptagningen har ingen uppladdning att ta bort
 history.saved_to = Sparade {n} i {dir}
 history.saved_some_why = Sparade {n} av {total}: en upptagning kunde inte läsas: {why}
 history.saved_some = Sparade {n} av {total}
-history.window_title = Rustshot Historik
+history.window_title = Rustshot — Historik
 history.open_failed = Det gick inte att öppna upptagningen: {e}
 history.show_failed = Det gick inte att visa upptagningen: {e}
 history.path_copied = Sökväg kopierad
@@ -795,7 +795,7 @@ edit.saved_gone = Sparade {n} (posten i Historik finns inte)
 edit.not_in_history = Upptagningen finns inte längre i Historik
 edit.bad_lasso = Det gick inte att öppna upptagningen: dess lasso kan inte läsas
 edit.bad_crop = Det gick inte att öppna upptagningen: beskärningen ligger utanför bilden
-edit.window_title = Redigera – {name}
+edit.window_title = {name} — Rustshot
 edit.save_failed = Det gick inte att spara: {e}
 
 # Capture launcher

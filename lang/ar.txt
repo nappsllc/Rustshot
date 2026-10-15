@@ -99,7 +99,7 @@ settings.error.secret_needs_bucket = أدخل الحاوية ومعرّف مفت
 settings.error.autostart = تعذر تغيير «التشغيل عند تسجيل الدخول»: {e}
 settings.error.reset_tools = تعذرت إعادة تعيين الأدوات في {path}: {e}
 settings.error.backup = تعذر نسخ config.toml احتياطيًا إلى {path}: {e}
-settings.window_title = إعدادات Rustshot
+settings.window_title = Rustshot — الإعدادات
 settings.header.reset_to_defaults = إعادة التعيين إلى الافتراضيات
 settings.footer.open_config_file = فتح ملف التكوين
 settings.general.appearance = المظهر
@@ -732,7 +732,7 @@ history.no_upload = لا يوجد رفع لهذه اللقطة لحذفه
 history.saved_to = تم حفظ {n} في {dir}
 history.saved_some_why = تم حفظ {n} من {total}: تعذرت قراءة لقطة: {why}
 history.saved_some = تم حفظ {n} من {total}
-history.window_title = سجل Rustshot
+history.window_title = Rustshot — السجل
 history.open_failed = تعذر فتح اللقطة: {e}
 history.show_failed = تعذر إظهار اللقطة: {e}
 history.path_copied = تم نسخ مسار الملف
@@ -851,7 +851,7 @@ edit.saved_gone = تم حفظ {n} (لم يعد إدخال السجل موجود�
 edit.not_in_history = لم تعد تلك اللقطة في السجل
 edit.bad_lasso = تعذر فتح اللقطة: لا يمكن قراءة تحديدها الحر
 edit.bad_crop = تعذر فتح اللقطة: اقتصاصها يقع خارج الصورة
-edit.window_title = تحرير — {name}
+edit.window_title = {name} — Rustshot
 edit.save_failed = فشل الحفظ: {e}
 
 # Capture launcher

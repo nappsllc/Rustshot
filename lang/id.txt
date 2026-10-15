@@ -99,7 +99,7 @@ settings.error.secret_needs_bucket = Masukkan bucket dan ID kunci akses terlebih
 settings.error.autostart = Tidak dapat mengubah Jalankan saat masuk: {e}
 settings.error.reset_tools = Tidak dapat mengatur ulang alat di {path}: {e}
 settings.error.backup = Tidak dapat mencadangkan config.toml ke {path}: {e}
-settings.window_title = Pengaturan Rustshot
+settings.window_title = Rustshot — Pengaturan
 settings.header.reset_to_defaults = Atur ulang ke default
 settings.footer.open_config_file = Buka file konfigurasi
 settings.general.appearance = Tampilan
@@ -677,7 +677,7 @@ history.no_upload = Tangkapan ini tidak punya unggahan untuk dihapus
 history.saved_to = {n} disimpan ke {dir}
 history.saved_some_why = {n} dari {total} disimpan: sebuah tangkapan tidak dapat dibaca: {why}
 history.saved_some = {n} dari {total} disimpan
-history.window_title = Riwayat Rustshot
+history.window_title = Rustshot — Riwayat
 history.open_failed = Tidak dapat membuka tangkapan: {e}
 history.show_failed = Tidak dapat menampilkan tangkapan: {e}
 history.path_copied = Jalur file disalin
@@ -781,7 +781,7 @@ edit.saved_gone = {n} disimpan (entri Riwayat sudah tidak ada)
 edit.not_in_history = Tangkapan itu tidak lagi ada di Riwayat
 edit.bad_lasso = Tidak dapat membuka tangkapan: lasonya tidak dapat dibaca
 edit.bad_crop = Tidak dapat membuka tangkapan: pangkasannya di luar gambar
-edit.window_title = Edit — {name}
+edit.window_title = {name} — Rustshot
 edit.save_failed = Gagal menyimpan: {e}
 
 # Capture launcher

@@ -99,7 +99,7 @@ settings.error.secret_needs_bucket = Skriv inn bøtten og tilgangsnøkkel-ID-en 
 settings.error.autostart = Kunne ikke endre Start ved pålogging: {e}
 settings.error.reset_tools = Kunne ikke tilbakestille verktøyene i {path}: {e}
 settings.error.backup = Kunne ikke sikkerhetskopiere config.toml til {path}: {e}
-settings.window_title = Rustshot-innstillinger
+settings.window_title = Rustshot — Innstillinger
 settings.header.reset_to_defaults = Tilbakestill
 settings.footer.open_config_file = Åpne konfigurasjonsfil
 settings.general.appearance = Utseende
@@ -688,7 +688,7 @@ history.no_upload = Dette opptaket har ingen opplasting å slette
 history.saved_to = Lagret {n} i {dir}
 history.saved_some_why = Lagret {n} av {total}: et opptak kunne ikke leses: {why}
 history.saved_some = Lagret {n} av {total}
-history.window_title = Rustshot Historikk
+history.window_title = Rustshot — Historikk
 history.open_failed = Kunne ikke åpne opptaket: {e}
 history.show_failed = Kunne ikke vise opptaket: {e}
 history.path_copied = Filbanen er kopiert
@@ -795,7 +795,7 @@ edit.saved_gone = Lagret {n} (oppføringen i Historikk er borte)
 edit.not_in_history = Det opptaket er ikke lenger i Historikk
 edit.bad_lasso = Kunne ikke åpne opptaket: lassoen kan ikke leses
 edit.bad_crop = Kunne ikke åpne opptaket: beskjæringen ligger utenfor bildet
-edit.window_title = Rediger – {name}
+edit.window_title = {name} — Rustshot
 edit.save_failed = Lagring mislyktes: {e}
 
 # Capture launcher

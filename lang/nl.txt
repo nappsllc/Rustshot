@@ -99,7 +99,7 @@ settings.error.secret_needs_bucket = Vul eerst de bucket en de toegangssleutel-I
 settings.error.autostart = Kan Starten bij aanmelden niet wijzigen: {e}
 settings.error.reset_tools = Kan de tools in {path} niet resetten: {e}
 settings.error.backup = Kan geen back-up van config.toml maken in {path}: {e}
-settings.window_title = Rustshot-instellingen
+settings.window_title = Rustshot — Instellingen
 settings.header.reset_to_defaults = Standaardwaarden
 settings.footer.open_config_file = Configuratiebestand openen
 settings.general.appearance = Weergave
@@ -688,7 +688,7 @@ history.no_upload = Deze opname heeft geen upload om te verwijderen
 history.saved_to = {n} opgeslagen in {dir}
 history.saved_some_why = {n} van {total} opgeslagen: een opname kon niet worden gelezen: {why}
 history.saved_some = {n} van {total} opgeslagen
-history.window_title = Rustshot Geschiedenis
+history.window_title = Rustshot — Geschiedenis
 history.open_failed = Kan de opname niet openen: {e}
 history.show_failed = Kan de opname niet tonen: {e}
 history.path_copied = Bestandspad gekopieerd
@@ -795,7 +795,7 @@ edit.saved_gone = {n} opgeslagen (item in Geschiedenis weg)
 edit.not_in_history = Die opname staat niet meer in Geschiedenis
 edit.bad_lasso = Kan de opname niet openen: de lasso is onleesbaar
 edit.bad_crop = Kan de opname niet openen: de uitsnede ligt buiten de afbeelding
-edit.window_title = Bewerken — {name}
+edit.window_title = {name} — Rustshot
 edit.save_failed = Opslaan mislukt: {e}
 
 # Capture launcher

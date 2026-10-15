@@ -99,7 +99,7 @@ settings.error.secret_needs_bucket = הזן תחילה את ה-bucket ואת מ�
 settings.error.autostart = לא ניתן לשנות את ההגדרה הפעלה בכניסה: {e}
 settings.error.reset_tools = לא ניתן לאפס את הכלים ב-{path}: {e}
 settings.error.backup = לא ניתן לגבות את config.toml אל {path}: {e}
-settings.window_title = הגדרות Rustshot
+settings.window_title = Rustshot — הגדרות
 settings.header.reset_to_defaults = איפוס לברירות המחדל
 settings.footer.open_config_file = פתח את קובץ התצורה
 settings.general.appearance = מראה
@@ -699,7 +699,7 @@ history.no_upload = ללכידה הזו אין העלאה למחיקה
 history.saved_to = נשמרו {n} בתיקייה {dir}
 history.saved_some_why = נשמרו {n} מתוך {total}: לא ניתן לקרוא לכידה: {why}
 history.saved_some = נשמרו {n} מתוך {total}
-history.window_title = היסטוריית Rustshot
+history.window_title = Rustshot — היסטוריה
 history.open_failed = לא ניתן לפתוח את הלכידה: {e}
 history.show_failed = לא ניתן להציג את הלכידה: {e}
 history.path_copied = נתיב הקובץ הועתק
@@ -809,7 +809,7 @@ edit.saved_gone = נשמר {n} (רשומת ההיסטוריה כבר לא קיי
 edit.not_in_history = הלכידה הזו כבר לא בהיסטוריה
 edit.bad_lasso = לא ניתן לפתוח את הלכידה: אי אפשר לקרוא את בחירת הלסו שלה
 edit.bad_crop = לא ניתן לפתוח את הלכידה: החיתוך שלה חורג מהתמונה
-edit.window_title = עריכה — {name}
+edit.window_title = {name} — Rustshot
 edit.save_failed = השמירה נכשלה: {e}
 
 # Capture launcher

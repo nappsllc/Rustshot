@@ -99,7 +99,7 @@ settings.error.secret_needs_bucket = Najprej vnesite vedro in ID ključa za dost
 settings.error.autostart = »Zaženi ob prijavi« ni bilo mogoče spremeniti: {e}
 settings.error.reset_tools = Orodij v {path} ni bilo mogoče ponastaviti: {e}
 settings.error.backup = Varnostne kopije config.toml v {path} ni bilo mogoče ustvariti: {e}
-settings.window_title = Nastavitve Rustshot
+settings.window_title = Rustshot — Nastavitve
 settings.header.reset_to_defaults = Ponastavi na privzeto
 settings.footer.open_config_file = Odpri datoteko nastavitev
 settings.general.appearance = Videz
@@ -710,7 +710,7 @@ history.no_upload = Ta posnetek nima naložene datoteke za brisanje
 history.saved_to = Shranjeno: {n} v {dir}
 history.saved_some_why = Shranjeno: {n} od {total}: posnetka ni bilo mogoče prebrati: {why}
 history.saved_some = Shranjeno: {n} od {total}
-history.window_title = Zgodovina Rustshot
+history.window_title = Rustshot — Zgodovina
 history.open_failed = Posnetka ni bilo mogoče odpreti: {e}
 history.show_failed = Posnetka ni bilo mogoče prikazati: {e}
 history.path_copied = Pot datoteke je kopirana
@@ -823,7 +823,7 @@ edit.saved_gone = Shranjeno: {n} (vnosa v Zgodovini ni več)
 edit.not_in_history = Tega posnetka ni več v Zgodovini
 edit.bad_lasso = Posnetka ni bilo mogoče odpreti: njegovega lasa ni mogoče prebrati
 edit.bad_crop = Posnetka ni bilo mogoče odpreti: obrezano območje je zunaj slike
-edit.window_title = Uredi – {name}
+edit.window_title = {name} — Rustshot
 edit.save_failed = Shranjevanje ni uspelo: {e}
 
 # Capture launcher

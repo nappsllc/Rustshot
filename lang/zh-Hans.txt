@@ -99,7 +99,7 @@ settings.error.secret_needs_bucket = 请先输入存储桶和访问密钥 ID：�
 settings.error.autostart = 无法更改“登录时启动”：{e}
 settings.error.reset_tools = 无法重置 {path} 中的工具：{e}
 settings.error.backup = 无法将 config.toml 备份到 {path}：{e}
-settings.window_title = Rustshot 设置
+settings.window_title = Rustshot — 设置
 settings.header.reset_to_defaults = 恢复默认设置
 settings.footer.open_config_file = 打开配置文件
 settings.general.appearance = 外观
@@ -677,7 +677,7 @@ history.no_upload = 此捕获没有可删除的上传
 history.saved_to = 已将 {n} 项保存到 {dir}
 history.saved_some_why = 已保存 {n} / {total} 项：有捕获无法读取：{why}
 history.saved_some = 已保存 {n} / {total} 项
-history.window_title = Rustshot 历史记录
+history.window_title = Rustshot — 历史记录
 history.open_failed = 无法打开捕获：{e}
 history.show_failed = 无法显示捕获：{e}
 history.path_copied = 文件路径已复制
@@ -781,7 +781,7 @@ edit.saved_gone = 已保存 {n}（历史记录条目已不存在）
 edit.not_in_history = 该捕获已不在历史记录中
 edit.bad_lasso = 无法打开捕获：无法读取其套索
 edit.bad_crop = 无法打开捕获：其裁剪范围超出图像
-edit.window_title = 编辑 — {name}
+edit.window_title = {name} — Rustshot
 edit.save_failed = 保存失败：{e}
 
 # Capture launcher

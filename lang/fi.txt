@@ -99,7 +99,7 @@ settings.error.secret_needs_bucket = Anna ensin säilö ja käyttöavaimen tunnu
 settings.error.autostart = Käynnistä kirjautuessa -asetusta ei voitu muuttaa: {e}
 settings.error.reset_tools = Työkaluja ei voitu palauttaa: {path}: {e}
 settings.error.backup = config.toml-tiedoston varmuuskopiointi epäonnistui: {path}: {e}
-settings.window_title = Rustshot-asetukset
+settings.window_title = Rustshot — Asetukset
 settings.header.reset_to_defaults = Palauta oletukset
 settings.footer.open_config_file = Avaa asetustiedosto
 settings.general.appearance = Ulkoasu
@@ -688,7 +688,7 @@ history.no_upload = Tällä kaappauksella ei ole poistettavaa lähetystä
 history.saved_to = Tallennettu {n} · {dir}
 history.saved_some_why = Tallennettu {n}/{total}: kaappausta ei voitu lukea: {why}
 history.saved_some = Tallennettu {n}/{total}
-history.window_title = Rustshot – Historia
+history.window_title = Rustshot — Historia
 history.open_failed = Kaappausta ei voitu avata: {e}
 history.show_failed = Kaappausta ei voitu näyttää: {e}
 history.path_copied = Tiedostopolku kopioitu
@@ -795,7 +795,7 @@ edit.saved_gone = Tallennettu {n} (Historian merkintä puuttuu)
 edit.not_in_history = Kaappaus ei ole enää Historiassa
 edit.bad_lasso = Kaappausta ei voitu avata: sen lassoa ei voi lukea
 edit.bad_crop = Kaappausta ei voitu avata: sen rajaus on kuvan ulkopuolella
-edit.window_title = Muokkaa – {name}
+edit.window_title = {name} — Rustshot
 edit.save_failed = Tallennus epäonnistui: {e}
 
 # Capture launcher

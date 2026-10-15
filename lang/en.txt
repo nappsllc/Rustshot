@@ -102,7 +102,7 @@ settings.error.secret_needs_bucket = Enter the bucket and the access key ID firs
 settings.error.autostart = Could not change Launch at login: {e}
 settings.error.reset_tools = Could not reset the tools in {path}: {e}
 settings.error.backup = Could not back up config.toml to {path}: {e}
-settings.window_title = Rustshot Settings
+settings.window_title = Rustshot — Settings
 settings.header.reset_to_defaults = Reset to defaults
 settings.footer.open_config_file = Open config file
 settings.general.appearance = Appearance
@@ -691,7 +691,7 @@ history.no_upload = This capture has no upload to delete
 history.saved_to = Saved {n} to {dir}
 history.saved_some_why = Saved {n} of {total}: a capture could not be read: {why}
 history.saved_some = Saved {n} of {total}
-history.window_title = Rustshot History
+history.window_title = Rustshot — History
 history.open_failed = Could not open the capture: {e}
 history.show_failed = Could not show the capture: {e}
 history.path_copied = File path copied
@@ -798,7 +798,7 @@ edit.saved_gone = Saved {n} (History entry gone)
 edit.not_in_history = That capture is no longer in History
 edit.bad_lasso = Could not open the capture: its lasso cannot be read
 edit.bad_crop = Could not open the capture: its crop lies outside the picture
-edit.window_title = Edit — {name}
+edit.window_title = {name} — Rustshot
 edit.save_failed = Save failed: {e}
 
 # Capture launcher

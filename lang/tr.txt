@@ -99,7 +99,7 @@ settings.error.secret_needs_bucket = Önce kovayı ve erişim anahtarı kimliği
 settings.error.autostart = Oturum açınca başlat değiştirilemedi: {e}
 settings.error.reset_tools = {path} içindeki araçlar sıfırlanamadı: {e}
 settings.error.backup = config.toml yedeklenemedi ({path}): {e}
-settings.window_title = Rustshot Ayarları
+settings.window_title = Rustshot — Ayarlar
 settings.header.reset_to_defaults = Varsayılanlara sıfırla
 settings.footer.open_config_file = Yapılandırma dosyasını aç
 settings.general.appearance = Görünüm
@@ -688,7 +688,7 @@ history.no_upload = Bu yakalamanın silinecek bir yüklemesi yok
 history.saved_to = {n} öğe kaydedildi: {dir}
 history.saved_some_why = {total} öğeden {n} tanesi kaydedildi: bir yakalama okunamadı: {why}
 history.saved_some = {total} öğeden {n} tanesi kaydedildi
-history.window_title = Rustshot Geçmişi
+history.window_title = Rustshot — Geçmiş
 history.open_failed = Yakalama açılamadı: {e}
 history.show_failed = Yakalama gösterilemedi: {e}
 history.path_copied = Dosya yolu kopyalandı
@@ -795,7 +795,7 @@ edit.saved_gone = Kaydedildi: {n} (Geçmiş kaydı yok)
 edit.not_in_history = Bu yakalama artık Geçmiş'te değil
 edit.bad_lasso = Yakalama açılamadı: kementi okunamıyor
 edit.bad_crop = Yakalama açılamadı: kırpma alanı resmin dışında
-edit.window_title = Düzenle — {name}
+edit.window_title = {name} — Rustshot
 edit.save_failed = Kaydetme başarısız: {e}
 
 # Capture launcher

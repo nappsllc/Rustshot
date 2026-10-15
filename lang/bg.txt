@@ -99,7 +99,7 @@ settings.error.secret_needs_bucket = Първо въведете bucket и ID н
 settings.error.autostart = Не можа да се промени „Стартиране при влизане“: {e}
 settings.error.reset_tools = Инструментите в {path} не можаха да се нулират: {e}
 settings.error.backup = Не можа да се направи резервно копие на config.toml в {path}: {e}
-settings.window_title = Настройки на Rustshot
+settings.window_title = Rustshot — Настройки
 settings.header.reset_to_defaults = Стандартни настройки
 settings.footer.open_config_file = Отваряне на файла с настройки
 settings.general.appearance = Облик
@@ -688,7 +688,7 @@ history.no_upload = Това заснемане няма качване за и�
 history.saved_to = Запазени: {n} в {dir}
 history.saved_some_why = Запазени: {n} от {total}; едно заснемане не можа да се прочете: {why}
 history.saved_some = Запазени: {n} от {total}
-history.window_title = Хронология на Rustshot
+history.window_title = Rustshot — Хронология
 history.open_failed = Заснемането не можа да се отвори: {e}
 history.show_failed = Заснемането не можа да се покаже: {e}
 history.path_copied = Пътят до файла е копиран
@@ -795,7 +795,7 @@ edit.saved_gone = Запазено: {n} (елементът в Хронолог�
 edit.not_in_history = Това заснемане вече не е в Хронологията
 edit.bad_lasso = Заснемането не можа да се отвори: ласото му не може да се прочете
 edit.bad_crop = Заснемането не можа да се отвори: изрязването му е извън картината
-edit.window_title = Редактиране – {name}
+edit.window_title = {name} — Rustshot
 edit.save_failed = Неуспешно запазване: {e}
 
 # Capture launcher

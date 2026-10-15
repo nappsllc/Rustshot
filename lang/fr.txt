@@ -99,7 +99,7 @@ settings.error.secret_needs_bucket = Saisissez d’abord le compartiment et l’
 settings.error.autostart = Impossible de modifier « Lancer à la connexion » : {e}
 settings.error.reset_tools = Impossible de réinitialiser les outils dans {path} : {e}
 settings.error.backup = Impossible de sauvegarder config.toml dans {path} : {e}
-settings.window_title = Paramètres de Rustshot
+settings.window_title = Rustshot — Paramètres
 settings.header.reset_to_defaults = Réinitialiser
 settings.footer.open_config_file = Ouvrir le fichier de configuration
 settings.general.appearance = Apparence
@@ -688,7 +688,7 @@ history.no_upload = Cette capture n’a aucun envoi à supprimer
 history.saved_to = Enregistrées dans {dir} : {n}
 history.saved_some_why = {n} sur {total} enregistrées : une capture n’a pas pu être lue : {why}
 history.saved_some = {n} sur {total} enregistrées
-history.window_title = Historique de Rustshot
+history.window_title = Rustshot — Historique
 history.open_failed = Impossible d’ouvrir la capture : {e}
 history.show_failed = Impossible d’afficher la capture : {e}
 history.path_copied = Chemin du fichier copié
@@ -795,7 +795,7 @@ edit.saved_gone = {n} enregistré (entrée de l’Historique supprimée)
 edit.not_in_history = Cette capture n’est plus dans l’Historique
 edit.bad_lasso = Impossible d’ouvrir la capture : son lasso est illisible
 edit.bad_crop = Impossible d’ouvrir la capture : sa zone rognée dépasse l’image
-edit.window_title = Modifier – {name}
+edit.window_title = {name} — Rustshot
 edit.save_failed = Échec de l’enregistrement : {e}
 
 # Capture launcher
