@@ -486,13 +486,25 @@ mod tests {
 
     #[test]
     fn layouts_with_altgr_are_told() {
-        // SAFETY: plain layout loads.
+        use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyboardLayoutList, LoadKeyboardLayoutW, UnloadKeyboardLayout};
+        // SAFETY: plain layout loads. A layout loaded here stays in the
+        // user's session (and in the tray's layout switcher) until logoff,
+        // so what the test adds it unloads again, before any assertion.
         unsafe {
-            let us = windows::Win32::UI::Input::KeyboardAndMouse::LoadKeyboardLayoutW(windows::core::w!("00000409"), Default::default());
-            let de = windows::Win32::UI::Input::KeyboardAndMouse::LoadKeyboardLayoutW(windows::core::w!("00000407"), Default::default());
-            if let (Ok(us), Ok(de)) = (us, de) {
-                assert!(!has_altgr(us), "US");
-                assert!(has_altgr(de), "German");
+            let mut before = vec![HKL::default(); 64];
+            let n = GetKeyboardLayoutList(Some(&mut before)) as usize;
+            before.truncate(n);
+            let us = LoadKeyboardLayoutW(windows::core::w!("00000409"), Default::default()).ok();
+            let de = LoadKeyboardLayoutW(windows::core::w!("00000407"), Default::default()).ok();
+            let altgr = (us.map(has_altgr), de.map(has_altgr));
+            for hkl in [us, de].into_iter().flatten() {
+                if !before.contains(&hkl) {
+                    let _ = UnloadKeyboardLayout(hkl);
+                }
+            }
+            if let (Some(us), Some(de)) = altgr {
+                assert!(!us, "US");
+                assert!(de, "German");
             }
         }
     }
