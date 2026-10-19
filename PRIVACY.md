@@ -137,6 +137,15 @@ Rustshot does not collect, store or transmit personal data or telemetry.
   (the original is kept whole if anything fails); nothing leaves your
   computer. On Windows the frames from the new start to the next key frame
   are decoded and encoded again locally.
+- Windows hidden from screenshots: an app can ask the system to keep its
+  windows out of every capture (password managers do this for their
+  pickers). Rustshot respects that: their pixels are never captured, and
+  by default (Settings › Capture › *Mark windows hidden from screenshots*,
+  `mark_hidden_windows`) it paints a plain "Hidden from screenshots"
+  placeholder where such a window was visible, so the capture does not
+  look empty. Only the window's position and size are read (and, on
+  Windows, its corner style); never its title, app name or content, and
+  nothing about it is stored or sent.
 - Scrolling capture: Rustshot scrolls only the window under the selection
   (Windows: wheel messages to that window, or UI Automation's scroll
   pattern of the element there; X11: wheel button presses while the pointer
