@@ -182,6 +182,24 @@ rectangle with its size, in the ruler's color and size), <kbd>Esc</kbd>
 discards it; another drag measures again. A kept measurement is ordinary
 arrows, a rectangle and a text, so older builds show it too.
 
+**Mark windows hidden from screenshots** (Settings › Capture,
+`mark_hidden_windows`, on by default; Windows and macOS). Some apps keep
+their windows out of every capture: password managers do it for their
+pickers, with Windows' `SetWindowDisplayAffinity` (`WDA_EXCLUDEFROMCAPTURE`
+or `WDA_MONITOR`) or macOS' `NSWindow.sharingType = .none`. The system
+then hands every screenshot tool what is behind such a window (or black),
+so window snapping outlines the window but the capture looks empty there.
+Rustshot paints a placeholder over the part of each such window that was
+visible when the capture was taken: a plain panel in the theme's colors
+with the window's rounded corners, a lock and *Hidden from screenshots*.
+It is part of the captured picture: the overlay, the saved file, the
+clipboard, History and the Edit window all show it. Nothing of the window
+is shown: no title, app name or content. What covers part of it is worked
+out from rectangles (the windows above it, taken as solid boxes), so the
+rounded corners or shadow of a window above can leave a sliver unmarked.
+Not in recordings or scrolling captures, and not on Linux (no such
+window flag there). Turn it off to get what the system returns.
+
 **Include mouse pointer** (Settings › Capture, `include_cursor`, off by
 default): the pointer is captured with the screen and added as an object
 (*Mouse pointer* in the Edit window's list) where it was. Move it or

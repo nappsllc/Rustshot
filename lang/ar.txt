@@ -1262,3 +1262,9 @@ fx.anchor.right = يمين
 fx.anchor.bottom_left = أسفل اليسار
 fx.anchor.bottom = أسفل
 fx.anchor.bottom_right = أسفل اليمين
+
+# Windows hidden from screenshots
+capture.hidden.title = مخفية عن لقطات الشاشة
+capture.hidden.body = تحمي هذه النافذة معلومات خاصة
+settings.capture.mark_hidden_windows = تمييز النوافذ المخفية عن لقطات الشاشة
+settings.capture.mark_hidden_windows.help = إظهار بديل حيث يستثني تطبيق نافذته من اللقطات

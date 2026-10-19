@@ -1230,3 +1230,9 @@ fx.anchor.right = Праворуч
 fx.anchor.bottom_left = Ліворуч знизу
 fx.anchor.bottom = Знизу
 fx.anchor.bottom_right = Праворуч знизу
+
+# Windows hidden from screenshots
+capture.hidden.title = Приховано від знімків екрана
+capture.hidden.body = Це вікно захищає особисті дані
+settings.capture.mark_hidden_windows = Позначати вікна, приховані від знімків екрана
+settings.capture.mark_hidden_windows.help = Заглушка на місці вікна, яке програма виключає зі знімків

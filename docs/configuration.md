@@ -85,6 +85,7 @@ trim_margins = false              # trim each new region or window to its conten
 border_width = 0                  # a border around every export, 1-8 logical px (0 = none)
 border_color = "#000000"          # its color
 include_cursor = false            # the mouse pointer as an object in each capture
+mark_hidden_windows = true        # Windows, macOS: a "Hidden from screenshots" placeholder over windows that keep themselves out of captures
 export_watermark = false          # a watermark on every export:
 watermark_text = ""               #   this text,
 watermark_image = ""              #   or this PNG (wins over the text)

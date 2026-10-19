@@ -231,6 +231,11 @@ impl X {
 /// Nothing to load ahead here.
 pub fn warm() {}
 
+/// X11 and Wayland have no "hidden from capture" window flag.
+pub fn hidden_tops(_own_pid: Option<u32>, _within: R) -> Option<Vec<crate::hidden::Top>> {
+    None
+}
+
 /// Every window that counts, front to back, with its parts; `own_pid`'s
 /// windows (and the overlay) left out. `None` on Wayland or without an X
 /// display.

@@ -256,6 +256,10 @@ pub struct Config {
     /// Settings › Capture "Include mouse pointer": the pointer is captured
     /// with the screen and added as an object (movable, deletable).
     pub include_cursor: bool,
+    /// Settings › Capture "Mark windows hidden from screenshots": a
+    /// placeholder over each window that asked the OS to be left out of
+    /// captures (password managers), instead of what was behind it.
+    pub mark_hidden_windows: bool,
     /// Settings › Saving "Watermark on export": every exported image gets
     /// the watermark below (text, or a PNG image when `watermark_image` is
     /// set), at `watermark_anchor` (top-left … bottom-right, center) with
@@ -412,6 +416,7 @@ impl Default for Config {
             border_color: "#000000".into(),
             border_width: 0,
             include_cursor: false,
+            mark_hidden_windows: true,
             export_watermark: false,
             watermark_text: String::new(),
             watermark_image: String::new(),
@@ -1213,6 +1218,7 @@ pub fn parse_config(text: &str) -> Result<Config, String> {
                     as_u64(val).ok().filter(|w| *w <= BORDER_MAX as u64).ok_or_else(|| bad("number (0-8)", val))? as u32
             }
             "include_cursor" => cfg.include_cursor = as_bool(val).map_err(|e| bad("boolean", &e))?,
+            "mark_hidden_windows" => cfg.mark_hidden_windows = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "export_watermark" => cfg.export_watermark = as_bool(val).map_err(|e| bad("boolean", &e))?,
             "watermark_text" => cfg.watermark_text = as_string(val).map_err(|e| bad("string", &e))?,
             "watermark_image" => cfg.watermark_image = as_string(val).map_err(|e| bad("string", &e))?,
@@ -1551,6 +1557,7 @@ pub fn to_toml(c: &Config) -> String {
     ));
     out.push_str(&format!("save_scale = {}\nsave_scale_percent = {}\n", q(&c.save_scale), c.save_scale_percent));
     out.push_str(&format!("include_cursor = {}\n", c.include_cursor));
+    out.push_str(&format!("mark_hidden_windows = {}\n", c.mark_hidden_windows));
     out.push_str(&format!("read_qr_hotkey = {}\n", q(&c.read_qr_hotkey)));
     out.push_str(&format!(
         "export_watermark = {}\nwatermark_text = {}\nwatermark_image = {}\nwatermark_anchor = {}\nwatermark_margin = {}\nwatermark_opacity = {}\nwatermark_size = {}\nwatermark_tiled = {}\nwatermark_color = {}\n",

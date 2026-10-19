@@ -1182,3 +1182,9 @@ fx.anchor.right = Kanan
 fx.anchor.bottom_left = Kiri bawah
 fx.anchor.bottom = Bawah
 fx.anchor.bottom_right = Kanan bawah
+
+# Windows hidden from screenshots
+capture.hidden.title = Disembunyikan dari tangkapan layar
+capture.hidden.body = Jendela ini melindungi informasi pribadi
+settings.capture.mark_hidden_windows = Tandai jendela yang tersembunyi dari tangkapan layar
+settings.capture.mark_hidden_windows.help = Tampilkan pengganti di tempat aplikasi mengecualikan jendelanya dari tangkapan

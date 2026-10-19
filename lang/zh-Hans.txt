@@ -1182,3 +1182,9 @@ fx.anchor.right = 右
 fx.anchor.bottom_left = 左下
 fx.anchor.bottom = 下
 fx.anchor.bottom_right = 右下
+
+# Windows hidden from screenshots
+capture.hidden.title = 已在截图中隐藏
+capture.hidden.body = 此窗口会保护隐私信息
+settings.capture.mark_hidden_windows = 标记在截图中隐藏的窗口
+settings.capture.mark_hidden_windows.help = 在应用将其窗口排除在捕获之外的位置显示占位图

@@ -87,6 +87,7 @@ mod sound;
 mod text;
 mod theme;
 mod hdr;
+mod hidden;
 mod trim;
 mod tray;
 #[cfg(target_os = "linux")]
@@ -1001,6 +1002,7 @@ fn run() -> Result<()> {
                 Plan::Editor(pending) => exit(editor_main(cfg, RunKind::OneShot, pending)),
                 Plan::Direct { screen, region } => {
                     hdr::configure(&cfg);
+                    hidden::configure(&cfg, &theme::resolve(&cfg));
                     let mut shot = match screen {
                         Some(n) => capture::grab_monitor(n as usize),
                         None => capture::grab_edit(None, cfg.capture_active_monitor),

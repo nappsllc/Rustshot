@@ -1198,3 +1198,9 @@ fx.anchor.right = Direita
 fx.anchor.bottom_left = Inferior esquerdo
 fx.anchor.bottom = Inferior
 fx.anchor.bottom_right = Inferior direito
+
+# Windows hidden from screenshots
+capture.hidden.title = Oculta nas capturas de ecrã
+capture.hidden.body = Esta janela protege informações privadas
+settings.capture.mark_hidden_windows = Assinalar janelas ocultas nas capturas de ecrã
+settings.capture.mark_hidden_windows.help = Mostra um marcador de posição onde uma aplicação exclui a janela das capturas

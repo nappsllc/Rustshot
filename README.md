@@ -74,6 +74,10 @@ screenshots, editing and video capture.** Windows, Linux and macOS.
   pixel left open at its center.
 - *Include mouse pointer* (Settings › Capture): the pointer is captured
   too, as an object you can move or delete (Windows and X11).
+- Windows that hide themselves from screenshots (a password manager's
+  picker) are never captured; a plain *Hidden from screenshots* panel
+  shows where they were instead of what is behind them (Windows and
+  macOS; *Mark windows hidden from screenshots*, Settings › Capture).
 - *Trim to content*: <kbd>Shift</kbd>+<kbd>A</kbd> (or the `W × H`
   readout) cuts the uniform margins off the selection. Settings can trim
   every new region or window for you.

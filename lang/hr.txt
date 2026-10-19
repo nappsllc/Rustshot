@@ -1214,3 +1214,9 @@ fx.anchor.right = Desno
 fx.anchor.bottom_left = Dolje lijevo
 fx.anchor.bottom = Dolje
 fx.anchor.bottom_right = Dolje desno
+
+# Windows hidden from screenshots
+capture.hidden.title = Skriveno od snimki zaslona
+capture.hidden.body = Ovaj prozor štiti privatne podatke
+settings.capture.mark_hidden_windows = Označi prozore skrivene od snimki zaslona
+settings.capture.mark_hidden_windows.help = Prikazuje zamjenski okvir gdje aplikacija isključuje svoj prozor iz snimki

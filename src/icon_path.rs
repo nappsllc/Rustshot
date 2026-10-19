@@ -213,8 +213,10 @@ pub const ICONS: &[(&str, &[Shape])] = &[
         Path("M12 17v5"),
         Path("M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"),
     ]),
+    // A window hidden from screenshots (its placeholder): Lucide lock.
+    ("lock", &[Rect { x: 3.0, y: 11.0, w: 18.0, h: 11.0, r: 2.0 }, Path("M7 11V7a5 5 0 0 1 10 0v4")]),
     ("x", &[Path("M18 6 6 18"), Path("m6 6 12 12")]),
-    ("check", &[Path("M20 6 9 17l-5-5")]),
+    ("check",&[Path("M20 6 9 17l-5-5")]),
     ("chevron", &[Path("m6 9 6 6 6-6")]), // chevron-down
     ("pipette", &[ // pipette
         Path("m12 9-8.414 8.414A2 2 0 0 0 3 18.828v1.344a2 2 0 0 1-.586 1.414A2 2 0 0 1 3.828 21h1.344a2 2 0 0 0 1.414-.586L15 12"),

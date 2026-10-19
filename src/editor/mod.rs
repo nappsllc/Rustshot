@@ -51,7 +51,7 @@ pub(crate) mod style {
     pub(crate) use super::toolbar::BTN;
 }
 #[cfg(windows)]
-mod gdi;
+pub(crate) mod gdi;
 /// Linux/macOS: no GDI backend (`Edit::gdi` is always `None`).
 #[cfg(not(windows))]
 mod gdi {
@@ -2285,6 +2285,8 @@ fn grab(cfg: &Config, th: &Theme, screen: Option<u32>) -> anyhow::Result<(Shot, 
 fn grab_screen(cfg: &Config, th: &Theme, screen: Option<u32>) -> anyhow::Result<(Shot, Option<gdi::GdiScreen>)> {
     // Settings › Capture "HDR screenshots" (recordings follow it too).
     crate::hdr::configure(cfg);
+    // Settings › Capture "Mark windows hidden from screenshots".
+    crate::hidden::configure(cfg, th);
     #[cfg(windows)]
     if cfg.use_gdi() {
         let shot = capture::plan_edit(screen, cfg.capture_active_monitor)?;
@@ -2292,7 +2294,6 @@ fn grab_screen(cfg: &Config, th: &Theme, screen: Option<u32>) -> anyhow::Result<
         let scr = gdi::GdiScreen::capture(shot.origin, shot.size, dim)?;
         return Ok((shot, Some(scr)));
     }
-    let _ = th;
     Ok((capture::grab_edit(screen, cfg.capture_active_monitor)?, None))
 }
 

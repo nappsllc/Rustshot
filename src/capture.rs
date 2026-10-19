@@ -132,6 +132,8 @@ fn grab_into(mut shot: Shot) -> Result<Shot> {
     for (r, px) in crate::hdr::win::grab((shot.origin.0, shot.origin.1, shot.size.0, shot.size.1)) {
         crate::hdr::win::paste(&mut shot.image, (r.0 - shot.origin.0, r.1 - shot.origin.1), &px);
     }
+    // Windows that asked to be left out of captures: a placeholder.
+    crate::hidden::mark_shot(&mut shot);
     Ok(shot)
 }
 

@@ -978,3 +978,90 @@ fn tool_size_is_remembered_in_the_config() {
     assert!(after.starts_with(&before), "the file is kept: {after:?}");
     assert!(after.contains("tool_line_size = 4"), "{after:?}");
 }
+
+/// A window of this test process that hides itself from capture
+/// (`WDA_EXCLUDEFROMCAPTURE`, as a password manager's picker does): a
+/// direct `rustshot full --region` of it, in its own instance with its own
+/// config and data, saves the placeholder (the dark theme's flat panel,
+/// the label in the middle); with `mark_hidden_windows = false` it saves
+/// what is behind the window.
+#[test]
+#[ignore = "live display access"]
+fn a_window_hidden_from_capture_is_marked_in_the_saved_file() {
+    use windows::core::w;
+    use windows::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DestroyWindow, DispatchMessageW, PeekMessageW, SetWindowDisplayAffinity, ShowWindow, TranslateMessage, MSG,
+        PM_REMOVE, SW_SHOWNOACTIVATE, WDA_EXCLUDEFROMCAPTURE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    };
+    fn pump() {
+        unsafe {
+            let mut m = MSG::default();
+            while PeekMessageW(&mut m, None, 0, 0, PM_REMOVE).as_bool() {
+                let _ = TranslateMessage(&m);
+                DispatchMessageW(&m);
+            }
+        }
+    }
+    let (x, y, w, h) = (240, 200, 480, 300);
+    let hwnd = unsafe {
+        let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        let hwnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, w!("STATIC"), w!(""), WS_POPUP, x, y, w, h, None, None, None, None)
+            .expect("test window");
+        SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE).expect("exclude from capture");
+        let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        hwnd
+    };
+    for _ in 0..30 {
+        pump();
+        std::thread::sleep(Duration::from_millis(15));
+    }
+    // The dark theme's panel and stripe colors (hidden.rs `Style::of`).
+    let panel = |p: &[u8]| p[..3] == [0x1F, 0x21, 0x26] || p[..3] == [0x23, 0x25, 0x2B];
+    for (tag, extra, marked) in [("hidden-on", "", true), ("hidden-off", "mark_hidden_windows = false\n", false)] {
+        let root = config_root(tag, &renderer());
+        append_config(&root, &format!("theme = \"dark\"\n{extra}"));
+        let out = root.join("shot.png");
+        let mut child = rustshot(&root)
+            .env("RUSTSHOT_INSTANCE", format!("e2e-{tag}-{}", std::process::id()))
+            .env("LOCALAPPDATA", &*root)
+            .args(["full", "--region", &format!("{w}x{h}+{x}+{y}"), "--path"])
+            .arg(&out)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn rustshot");
+        // Our window keeps answering while it runs (a hung one is ghosted).
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let code = loop {
+            pump();
+            if let Ok(Some(st)) = child.try_wait() {
+                break st.code();
+            }
+            assert!(Instant::now() < deadline, "{tag}: rustshot did not finish");
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert_eq!(code, Some(0), "{tag}: saved");
+        let bytes = std::fs::read(&out).expect("the PNG");
+        let mut dec = png::Decoder::new(std::io::Cursor::new(bytes));
+        dec.set_transformations(png::Transformations::EXPAND);
+        let mut r = dec.read_info().expect("png");
+        let mut buf = vec![0; r.output_buffer_size()];
+        let info = r.next_frame(&mut buf).expect("frame");
+        assert_eq!((info.width, info.height), (w as u32, h as u32), "{tag}: the region");
+        let bpp = if info.color_type == png::ColorType::Rgba { 4 } else { 3 };
+        let at = |x: i32, y: i32| &buf[(y as usize * w as usize + x as usize) * bpp..][..3];
+        let flat = [(10, 10), (w - 12, 12), (12, h - 12), (w - 12, h - 12), (20, h / 2)];
+        let n = flat.iter().filter(|&&(x, y)| panel(at(x, y))).count();
+        if marked {
+            assert_eq!(n, flat.len(), "{tag}: the placeholder's panel");
+            let ink = (h / 2 - 40..h / 2 + 40).flat_map(|y| (w / 2 - 60..w / 2 + 60).map(move |x| (x, y))).filter(|&(x, y)| !panel(at(x, y))).count();
+            assert!(ink > 200, "{tag}: the label ({ink} px)");
+        } else {
+            assert!(n < flat.len(), "{tag}: what is behind the window");
+        }
+    }
+    unsafe {
+        let _ = DestroyWindow(hwnd);
+    }
+}

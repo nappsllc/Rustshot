@@ -1198,3 +1198,9 @@ fx.anchor.right = Jobbra
 fx.anchor.bottom_left = Bal alsó
 fx.anchor.bottom = Lent
 fx.anchor.bottom_right = Jobb alsó
+
+# Windows hidden from screenshots
+capture.hidden.title = Rejtve a képernyőképek elől
+capture.hidden.body = Ez az ablak személyes adatokat véd
+settings.capture.mark_hidden_windows = Képernyőképek elől rejtett ablakok jelölése
+settings.capture.mark_hidden_windows.help = Helyőrzőt mutat ott, ahol egy alkalmazás kizárja ablakát a felvételekből
