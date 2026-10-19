@@ -1248,9 +1248,9 @@ fn about(ui: &mut Ui, tok: &Tok, click: &mut Option<Click>) {
     let gap = 18.0;
     let mut x = 0.0;
     let mut rows: Vec<Vec<(usize, &str, &str, bool)>> = vec![Vec::new()];
-    for (i, (label, url)) in crate::actions::LINKS.iter().take(5).map(|(k, u)| (k.get(), *u)).enumerate() {
-        // Website, Source on GitHub, Report an issue: off-site.
-        let ext = i < 3;
+    for (i, (label, url)) in crate::actions::LINKS.iter().take(4).map(|(k, u)| (k.get(), *u)).enumerate() {
+        // GitHub, Report an issue: off-site.
+        let ext = i < 2;
         let w = ui.text_w(12.5, label) + if ext { 19.0 } else { 0.0 };
         if x > 0.0 && x + w > b.w {
             rows.push(Vec::new());
