@@ -1315,5 +1315,6 @@ fn about(ui: &mut Ui, tok: &Tok, click: &mut Option<Click>) {
     ui.text_at(7.0, "c", cx - ui.px(cw) / 2.0, fy, c, false);
     let text = tr!("settings.about.footer");
     ui.text_at(11.0, text, fx + 2.0 * r + ui.px(4.0), fy, c, false);
-    ui.space(14.0 + 14.0);
+    ui.text_at(11.0, tr!("settings.about.license"), fx, fy + ui.px(17.0), c, false);
+    ui.space(14.0 + 14.0 + 17.0);
 }
