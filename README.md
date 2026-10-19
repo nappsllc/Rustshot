@@ -206,7 +206,7 @@ screenshots, editing and video capture.** Windows, Linux and macOS.
 ## Install
 
 Download from the **[latest release](https://github.com/nappsllc/Rustshot/releases/latest)**
-(v0.6.4 sizes shown):
+(v0.6.5 sizes shown):
 
 | Platform | File | Size | Notes |
 |---|---|---|---|
@@ -469,12 +469,12 @@ and send one: [docs/translating.md](docs/translating.md) (languages in
 
 ## Known limitations
 
-From the v0.6.4 release notes:
+From the v0.6.5 release notes:
 
 - **Translations:** the 34 translations are machine-made, and none has
   been reviewed by a native speaker yet (this includes the names shortened
-  in 0.6.4 to fit the Shortcuts screens). Reviews and corrections are
-  welcome.
+  in 0.6.4 to fit the Shortcuts screens and 0.6.5's hotkey summary lines).
+  Reviews and corrections are welcome.
 - **Linux text:** Arabic, Hindi and Thai text is drawn without shaping, so
   letters don't join and marks may be misplaced.
 - **Right-to-left:** the window title bars (drawn by the OS) are not
