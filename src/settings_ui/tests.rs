@@ -2578,9 +2578,6 @@ fn about_links() {
     s.section = ABOUT;
     let mut focus = FocusState::default();
     assert_eq!(click(&mut s, &mut focus, "check_updates_now", 1.0), Some(Click::CheckUpdates));
-    for (i, (label, url)) in crate::actions::LINKS.iter().take(4).enumerate() {
-        assert_eq!(click(&mut s, &mut focus, &format!("link_{i}"), 1.0), Some(Click::Link(url)), "{}", label.get());
-    }
     assert_eq!(click(&mut s, &mut focus, "link_powernapps", 1.0), Some(Click::Link(crate::actions::POWERNAPPS)));
 }
 

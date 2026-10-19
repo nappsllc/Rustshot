@@ -72,13 +72,9 @@ pub const POWERNAPPS: &str = "https://powernapps.net/r/rustshot";
 /// Settings › Upload's "Get a key".
 pub const IMGUR_ADD_CLIENT: &str = "https://api.imgur.com/oauth2/addclient";
 
-/// The links of Settings → About (the first four), PowerNapps' and
-/// Settings › Upload's "Get a key": the only URLs [`open_link`] opens.
-pub const LINKS: [(crate::i18n::Key, &str); 6] = [
-    (key!("settings.about.link.source"), "https://github.com/nappsllc/rustshot"),
-    (key!("settings.about.link.issue"), "https://github.com/nappsllc/rustshot/issues"),
-    (key!("settings.about.link.whats_new"), "https://github.com/nappsllc/rustshot/releases"),
-    (key!("settings.about.link.licenses"), "https://github.com/nappsllc/rustshot/blob/main/THIRD_PARTY_NOTICES.md"),
+/// PowerNapps' link (Settings → About) and Settings › Upload's "Get a
+/// key": the only URLs [`open_link`] opens.
+pub const LINKS: [(crate::i18n::Key, &str); 2] = [
     (key!("settings.about.link.powernapps"), POWERNAPPS),
     (key!("settings.upload.get_key"), IMGUR_ADD_CLIENT),
 ];

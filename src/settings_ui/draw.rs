@@ -1244,39 +1244,10 @@ fn about(ui: &mut Ui, tok: &Tok, click: &mut Option<Click>) {
     }
     ui.space(18.0 + 72.0f32.max(block) + 14.0);
 
-    // The links, wrapping like the board's row; a line under them.
-    let gap = 18.0;
-    let mut x = 0.0;
-    let mut rows: Vec<Vec<(usize, &str, &str, bool)>> = vec![Vec::new()];
-    for (i, (label, url)) in crate::actions::LINKS.iter().take(4).map(|(k, u)| (k.get(), *u)).enumerate() {
-        // GitHub, Report an issue: off-site.
-        let ext = i < 2;
-        let w = ui.text_w(12.5, label) + if ext { 19.0 } else { 0.0 };
-        if x > 0.0 && x + w > b.w {
-            rows.push(Vec::new());
-            x = 0.0;
-        }
-        rows.last_mut().expect("a row").push((i, label, url, ext));
-        x += w + gap;
-    }
-    ui.space(2.0);
-    let (saved_gap, saved_h) = (ui.lay.gap, ui.ctl_h);
-    ui.ctl_h = 16.0;
-    for r in &rows {
-        ui.lay.gap = gap;
-        ui.row(|ui| {
-            for (i, label, url, ext) in r {
-                if ui.clink(&format!("link_{i}"), label, 12.5, *ext, tok) {
-                    *click = Some(Click::Link(url));
-                }
-            }
-        });
-    }
-    ui.lay.gap = saved_gap;
-    ui.ctl_h = saved_h;
-    let ly = ui.cursor_y() - gap + 12.0;
+    // A line, then more from PowerNapps.
+    let ly = ui.cursor_y() + 2.0;
     line(ui, b.x, ly, b.w, 1.0, tok.sep);
-    ui.space(12.0 - gap + 6.0);
+    ui.space(2.0 + 6.0);
 
     // More from PowerNapps, with its link on the right.
     let y = ui.cursor_y();
