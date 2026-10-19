@@ -4,6 +4,41 @@ Release notes for each version are on the GitHub release page
 (https://github.com/nappsllc/rustshot/releases). Lines here are for the
 next release.
 
+## 0.6.4
+
+- Updates: users on 0.6.1 or earlier still need to download this
+  version once from the Releases page (or reinstall it from the
+  Microsoft Store or their package manager): those versions reject the
+  repository's renamed release links. From 0.6.2 on, updates are
+  offered in the app.
+- Windows hidden from screenshots: windows that keep themselves out of
+  captures (`SetWindowDisplayAffinity`, as password managers and some
+  secure apps do) are marked with a "Hidden from screenshots"
+  placeholder instead of coming out empty, so a window that snapping
+  outlines no longer shows as a blank hole. Settings › Capture "Mark
+  windows hidden from screenshots" (on by default) turns it off. Full
+  support on Windows; on macOS (`sharingType` none) it is checked by
+  builds and tests only, not yet on a Mac; Linux is unaffected. The
+  Settings window is 552 px tall (was 520) for the new row.
+- Shortcuts: one shortcut a row, each with its own label and key, in two
+  columns where they fit, under six sections: Global, Recording, Overlay
+  tools, Overlay editing (new), Overlay actions and Edit window (new).
+  About 40 translations of action and section names were shortened to
+  fit (bg, cs, da, de, el, es, fr, id, it, lt, nl, pl, pt-BR, pt-PT, ro,
+  ru, sl, sr-Latn, tr, uk, vi); native speakers are welcome to review
+  them.
+- The Settings rail starts at the top, without the logo and name (the
+  title bar names the app).
+- Overlay: a wheel notch repaints only what changed (a loupe's ring
+  band, the toolbar's size readout), so resizing the Magnify loupe with
+  the wheel feels much quicker. Inside a Pixelate, Blur or Invert
+  region, the arrow, box or text beneath it is picked up (the region
+  keeps its border and its empty area). The capture selection's handles
+  resize it with every tool, not only with none.
+- The magnifier loupe's shadow is even all round. It used to sit below
+  the disc only, which read as an off-centre gray disc on light
+  screens.
+
 ## 0.6.3
 
 - Updates: users on 0.6.1 or earlier still need to download this
