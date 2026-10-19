@@ -4,6 +4,29 @@ Release notes for each version are on the GitHub release page
 (https://github.com/nappsllc/rustshot/releases). Lines here are for the
 next release.
 
+## 0.6.5
+
+- Updates: users on 0.6.1 or earlier still need to download this
+  version once from the Releases page (or reinstall it from the
+  Microsoft Store or their package manager): those versions reject the
+  repository's renamed release links. From 0.6.2 on, updates are
+  offered in the app.
+- Hotkeys: when several shortcuts can't be registered (another app
+  already uses them), the Settings dialog is one summary that always
+  fits the window: a heading ("4 shortcuts are in use by another app"),
+  one short line per shortcut (its keys and the fallback it got, or
+  "not set"), the how-to once, and "and N more" past 6 lines. Before,
+  each failure was a long sentence with its own how-to, and with four
+  the last was cut off above the buttons. A single failure keeps its
+  sentence. The tray balloon lists 2 lines and "and N more" (within
+  the 255 characters Windows keeps); stderr still gets every failure
+  in full. Translated into all 35 languages.
+- Settings › About has no links row any more (Website, Source on
+  GitHub, Report an issue, What's new and Licenses are gone, and their
+  strings with them in every language); the powernapps.net link stays.
+- Overlay: the magnifier's coordinates and color caption has the
+  loupe's even shadow all round. The panel shadow it used sat low.
+
 ## 0.6.4
 
 - Updates: users on 0.6.1 or earlier still need to download this
