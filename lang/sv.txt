@@ -352,6 +352,19 @@ hotkey.fail.no_display = Kunde inte registrera {chord} – ingen X-skärm är ti
 hotkey.fail.invalid_kept = Kunde inte registrera {chord} – det är inte ett kortkommando som Rustshot kan registrera; behöll {kept}.
 hotkey.fail.no_display_kept = Kunde inte registrera {chord} – ingen X-skärm är tillgänglig; behöll {kept}.
 hotkey.fail.in_use_kept = Kunde inte registrera {chord} – det används av en annan app; behöll {kept}.
+hotkey.fail.summary_in_use[one] = {n} kortkommando används av en annan app
+hotkey.fail.summary_in_use[other] = {n} kortkommandon används av en annan app
+hotkey.fail.summary[one] = {n} kortkommando kunde inte registreras
+hotkey.fail.summary[other] = {n} kortkommandon kunde inte registreras
+hotkey.fail.line.alt = {name}: {chord} → nu {alt}
+hotkey.fail.line.kept = {name}: {chord} → behöll {kept}
+hotkey.fail.line.not_set = {name}: {chord} – inte angivet
+hotkey.fail.line.invalid = {name}: {chord} – inte ett giltigt kortkommando
+hotkey.fail.line.no_display = {name}: {chord} – ingen X-skärm
+hotkey.fail.line.unknown = {name}: {chord} – inte bekräftat
+hotkey.fail.more[one] = och {n} till
+hotkey.fail.more[other] = och {n} till
+hotkey.fail.pick_any = Välj en annan tangent: klicka på Ändra kortkommandon…, klicka på tangenten och tryck på en ny.
 
 # Shared buttons
 common.apply = Verkställ

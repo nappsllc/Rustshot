@@ -352,6 +352,22 @@ hotkey.fail.no_display = {chord} nu a putut fi înregistrată – nu este dispon
 hotkey.fail.invalid_kept = {chord} nu a putut fi înregistrată – nu este o comandă rapidă pe care Rustshot o poate înregistra; s-a păstrat {kept}.
 hotkey.fail.no_display_kept = {chord} nu a putut fi înregistrată – nu este disponibil niciun X display; s-a păstrat {kept}.
 hotkey.fail.in_use_kept = {chord} nu a putut fi înregistrată – este folosită de altă aplicație; s-a păstrat {kept}.
+hotkey.fail.summary_in_use[one] = {n} comandă rapidă este folosită de altă aplicație
+hotkey.fail.summary_in_use[few] = {n} comenzi rapide sunt folosite de altă aplicație
+hotkey.fail.summary_in_use[other] = {n} de comenzi rapide sunt folosite de altă aplicație
+hotkey.fail.summary[one] = {n} comandă rapidă nu a putut fi înregistrată
+hotkey.fail.summary[few] = {n} comenzi rapide nu au putut fi înregistrate
+hotkey.fail.summary[other] = {n} de comenzi rapide nu au putut fi înregistrate
+hotkey.fail.line.alt = {name}: {chord} → acum {alt}
+hotkey.fail.line.kept = {name}: {chord} → s-a păstrat {kept}
+hotkey.fail.line.not_set = {name}: {chord} – nesetată
+hotkey.fail.line.invalid = {name}: {chord} – comandă rapidă nevalidă
+hotkey.fail.line.no_display = {name}: {chord} – niciun X display
+hotkey.fail.line.unknown = {name}: {chord} – neconfirmată
+hotkey.fail.more[one] = și încă {n}
+hotkey.fail.more[few] = și încă {n}
+hotkey.fail.more[other] = și încă {n}
+hotkey.fail.pick_any = Alegeți altă tastă: faceți clic pe „Modificare comenzi rapide…”, faceți clic pe tastă și apăsați una nouă.
 
 # Shared buttons
 common.apply = Aplicare

@@ -352,6 +352,16 @@ hotkey.fail.no_display = Tidak dapat mendaftarkan {chord} — tidak ada X displa
 hotkey.fail.invalid_kept = Tidak dapat mendaftarkan {chord} — ini bukan pintasan yang bisa didaftarkan Rustshot; tetap {kept}.
 hotkey.fail.no_display_kept = Tidak dapat mendaftarkan {chord} — tidak ada X display; tetap {kept}.
 hotkey.fail.in_use_kept = Tidak dapat mendaftarkan {chord} — dipakai aplikasi lain; tetap {kept}.
+hotkey.fail.summary_in_use[other] = {n} pintasan dipakai aplikasi lain
+hotkey.fail.summary[other] = {n} pintasan tidak dapat didaftarkan
+hotkey.fail.line.alt = {name}: {chord} → kini {alt}
+hotkey.fail.line.kept = {name}: {chord} → tetap {kept}
+hotkey.fail.line.not_set = {name}: {chord} — belum diatur
+hotkey.fail.line.invalid = {name}: {chord} — bukan pintasan yang valid
+hotkey.fail.line.no_display = {name}: {chord} — tidak ada X display
+hotkey.fail.line.unknown = {name}: {chord} — belum dipastikan
+hotkey.fail.more[other] = dan {n} lainnya
+hotkey.fail.pick_any = Pilih tombol lain: klik Ubah pintasan…, klik tombolnya, lalu tekan yang baru.
 
 # Shared buttons
 common.apply = Terapkan

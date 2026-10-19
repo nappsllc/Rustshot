@@ -352,6 +352,19 @@ hotkey.fail.no_display = Kan {chord} niet registreren — geen X-display beschik
 hotkey.fail.invalid_kept = Kan {chord} niet registreren — Rustshot kan deze sneltoets niet registreren; {kept} blijft.
 hotkey.fail.no_display_kept = Kan {chord} niet registreren — geen X-display beschikbaar; {kept} blijft.
 hotkey.fail.in_use_kept = Kan {chord} niet registreren — in gebruik door een andere app; {kept} blijft.
+hotkey.fail.summary_in_use[one] = {n} sneltoets is in gebruik door een andere app
+hotkey.fail.summary_in_use[other] = {n} sneltoetsen zijn in gebruik door een andere app
+hotkey.fail.summary[one] = Kan {n} sneltoets niet registreren
+hotkey.fail.summary[other] = Kan {n} sneltoetsen niet registreren
+hotkey.fail.line.alt = {name}: {chord} → nu {alt}
+hotkey.fail.line.kept = {name}: {chord} → {kept} blijft
+hotkey.fail.line.not_set = {name}: {chord} — niet ingesteld
+hotkey.fail.line.invalid = {name}: {chord} — geen geldige sneltoets
+hotkey.fail.line.no_display = {name}: {chord} — geen X-display
+hotkey.fail.line.unknown = {name}: {chord} — niet bevestigd
+hotkey.fail.more[one] = en nog {n}
+hotkey.fail.more[other] = en nog {n}
+hotkey.fail.pick_any = Kies een andere toets: klik op Sneltoetsen wijzigen…, klik op de toets en druk op een nieuwe.
 
 # Shared buttons
 common.apply = Toepassen

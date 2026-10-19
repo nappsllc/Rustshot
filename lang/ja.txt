@@ -352,6 +352,16 @@ hotkey.fail.no_display = {chord} を登録できませんでした — X ディ�
 hotkey.fail.invalid_kept = {chord} を登録できませんでした — Rustshot が登録できるショートカットではありません。{kept} のままです。
 hotkey.fail.no_display_kept = {chord} を登録できませんでした — X ディスプレイがありません。{kept} のままです。
 hotkey.fail.in_use_kept = {chord} を登録できませんでした — 他のアプリが使用中です。{kept} のままです。
+hotkey.fail.summary_in_use[other] = {n} 個のショートカットが他のアプリで使用中です
+hotkey.fail.summary[other] = {n} 個のショートカットを登録できませんでした
+hotkey.fail.line.alt = {name}: {chord} → 現在は {alt}
+hotkey.fail.line.kept = {name}: {chord} → {kept} のまま
+hotkey.fail.line.not_set = {name}: {chord} — 未設定
+hotkey.fail.line.invalid = {name}: {chord} — 無効なショートカット
+hotkey.fail.line.no_display = {name}: {chord} — X ディスプレイなし
+hotkey.fail.line.unknown = {name}: {chord} — 未確認
+hotkey.fail.more[other] = ほか {n} 件
+hotkey.fail.pick_any = 別のキーを選んでください: 「ショートカットを変更…」をクリックし、キーをクリックして新しいキーを押します。
 
 # Shared buttons
 common.apply = 適用

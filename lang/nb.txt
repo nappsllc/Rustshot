@@ -352,6 +352,19 @@ hotkey.fail.no_display = Kunne ikke registrere {chord} – ingen X-skjerm er til
 hotkey.fail.invalid_kept = Kunne ikke registrere {chord} – det er ikke en hurtigtast Rustshot kan registrere; beholdt {kept}.
 hotkey.fail.no_display_kept = Kunne ikke registrere {chord} – ingen X-skjerm er tilgjengelig; beholdt {kept}.
 hotkey.fail.in_use_kept = Kunne ikke registrere {chord} – den brukes av en annen app; beholdt {kept}.
+hotkey.fail.summary_in_use[one] = {n} hurtigtast brukes av en annen app
+hotkey.fail.summary_in_use[other] = {n} hurtigtaster brukes av en annen app
+hotkey.fail.summary[one] = {n} hurtigtast kunne ikke registreres
+hotkey.fail.summary[other] = {n} hurtigtaster kunne ikke registreres
+hotkey.fail.line.alt = {name}: {chord} → nå {alt}
+hotkey.fail.line.kept = {name}: {chord} → beholdt {kept}
+hotkey.fail.line.not_set = {name}: {chord} – ikke angitt
+hotkey.fail.line.invalid = {name}: {chord} – ikke en gyldig hurtigtast
+hotkey.fail.line.no_display = {name}: {chord} – ingen X-skjerm
+hotkey.fail.line.unknown = {name}: {chord} – ikke bekreftet
+hotkey.fail.more[one] = og {n} til
+hotkey.fail.more[other] = og {n} til
+hotkey.fail.pick_any = Velg en annen tast: klikk på Endre hurtigtaster…, klikk på tasten og trykk en ny.
 
 # Shared buttons
 common.apply = Bruk

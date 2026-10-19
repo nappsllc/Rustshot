@@ -352,6 +352,25 @@ hotkey.fail.no_display = Не вдалося зареєструвати {chord} 
 hotkey.fail.invalid_kept = Не вдалося зареєструвати {chord} — Rustshot не може зареєструвати таке сполучення; залишено {kept}.
 hotkey.fail.no_display_kept = Не вдалося зареєструвати {chord} — немає доступного X-дисплея; залишено {kept}.
 hotkey.fail.in_use_kept = Не вдалося зареєструвати {chord} — зайнято іншою програмою; залишено {kept}.
+hotkey.fail.summary_in_use[one] = {n} сполучення клавіш зайнято іншою програмою
+hotkey.fail.summary_in_use[few] = {n} сполучення клавіш зайняті іншою програмою
+hotkey.fail.summary_in_use[many] = {n} сполучень клавіш зайняті іншою програмою
+hotkey.fail.summary_in_use[other] = {n} сполучення клавіш зайняті іншою програмою
+hotkey.fail.summary[one] = Не вдалося зареєструвати {n} сполучення клавіш
+hotkey.fail.summary[few] = Не вдалося зареєструвати {n} сполучення клавіш
+hotkey.fail.summary[many] = Не вдалося зареєструвати {n} сполучень клавіш
+hotkey.fail.summary[other] = Не вдалося зареєструвати {n} сполучення клавіш
+hotkey.fail.line.alt = {name}: {chord} → тепер {alt}
+hotkey.fail.line.kept = {name}: {chord} → залишено {kept}
+hotkey.fail.line.not_set = {name}: {chord} — не призначено
+hotkey.fail.line.invalid = {name}: {chord} — неприпустиме сполучення
+hotkey.fail.line.no_display = {name}: {chord} — немає X-дисплея
+hotkey.fail.line.unknown = {name}: {chord} — не підтверджено
+hotkey.fail.more[one] = і ще {n}
+hotkey.fail.more[few] = і ще {n}
+hotkey.fail.more[many] = і ще {n}
+hotkey.fail.more[other] = і ще {n}
+hotkey.fail.pick_any = Виберіть іншу клавішу: натисніть «Змінити сполучення…», клацніть клавішу і натисніть нову.
 
 # Shared buttons
 common.apply = Застосувати

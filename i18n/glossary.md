@@ -51,6 +51,9 @@ usually shorter in characters; their glyphs are wider, so still check.
 - `—` (em dash) joins two parts of a message. Use your language's dash
   convention (– with spaces in German, French, Russian…) or a colon.
 - `×` in "1×", "{w} × {h}", "×{c}" is the multiplication sign. Keep it.
+- `→` (U+2192) means "became" ("{sw} × {sh} → {w} × {h}", the hotkey
+  summary's "{name}: {chord} → now {alt}"). Right-to-left languages write
+  `←` (U+2190), so it points the way the line reads.
 - Quotation marks: your language's own („…“, «…», «…», 「…」, "…").
 - French: a (narrow) no-break space before `: ; ? !` and inside « ».
   Write it as the character itself (U+202F or U+00A0), not `\s`.
@@ -223,7 +226,7 @@ your translation of that label, letter for letter:
 
 | String | Quotes |
 |---|---|
-| `hotkey.fail.pick`, `hotkey.fail.pick_free` | "Change shortcuts…" = `settings.q.change_shortcuts` |
+| `hotkey.fail.pick`, `hotkey.fail.pick_free`, `hotkey.fail.pick_any` | "Change shortcuts…" = `settings.q.change_shortcuts` |
 | `settings.tray.hide_win` | "Settings > Capture" = `settings.section.capture` |
 | `settings.tray.hide`, `_keep`, `_win` | "Settings" (the window), "Start menu" (Windows' name) |
 | `settings.overlay.copy_text.help` | "Copy text" = `tip.copy_text` / `hotkey.copy_text` |

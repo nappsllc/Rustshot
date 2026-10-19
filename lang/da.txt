@@ -352,6 +352,19 @@ hotkey.fail.no_display = Kunne ikke registrere {chord} – ingen X-skærm er til
 hotkey.fail.invalid_kept = Kunne ikke registrere {chord} – det er ikke en genvejstast, Rustshot kan registrere; beholdt {kept}.
 hotkey.fail.no_display_kept = Kunne ikke registrere {chord} – ingen X-skærm er tilgængelig; beholdt {kept}.
 hotkey.fail.in_use_kept = Kunne ikke registrere {chord} – den bruges af en anden app; beholdt {kept}.
+hotkey.fail.summary_in_use[one] = {n} genvejstast bruges af en anden app
+hotkey.fail.summary_in_use[other] = {n} genvejstaster bruges af en anden app
+hotkey.fail.summary[one] = {n} genvejstast kunne ikke registreres
+hotkey.fail.summary[other] = {n} genvejstaster kunne ikke registreres
+hotkey.fail.line.alt = {name}: {chord} → nu {alt}
+hotkey.fail.line.kept = {name}: {chord} → beholdt {kept}
+hotkey.fail.line.not_set = {name}: {chord} – ikke angivet
+hotkey.fail.line.invalid = {name}: {chord} – ikke en gyldig genvejstast
+hotkey.fail.line.no_display = {name}: {chord} – ingen X-skærm
+hotkey.fail.line.unknown = {name}: {chord} – ikke bekræftet
+hotkey.fail.more[one] = og {n} mere
+hotkey.fail.more[other] = og {n} mere
+hotkey.fail.pick_any = Vælg en anden tast: klik på Skift genvejstaster…, klik på tasten, og tryk på en ny.
 
 # Shared buttons
 common.apply = Anvend

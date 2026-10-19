@@ -352,6 +352,22 @@ hotkey.fail.no_display = Nije moguće registrovati {chord} – X display nije do
 hotkey.fail.invalid_kept = Nije moguće registrovati {chord} – to nije prečica koju Rustshot može da registruje; zadržana je {kept}.
 hotkey.fail.no_display_kept = Nije moguće registrovati {chord} – X display nije dostupan; zadržana je {kept}.
 hotkey.fail.in_use_kept = Nije moguće registrovati {chord} – koristi je druga aplikacija; zadržana je {kept}.
+hotkey.fail.summary_in_use[one] = {n} prečicu koristi druga aplikacija
+hotkey.fail.summary_in_use[few] = {n} prečice koristi druga aplikacija
+hotkey.fail.summary_in_use[other] = {n} prečica koristi druga aplikacija
+hotkey.fail.summary[one] = {n} prečicu nije moguće registrovati
+hotkey.fail.summary[few] = {n} prečice nije moguće registrovati
+hotkey.fail.summary[other] = {n} prečica nije moguće registrovati
+hotkey.fail.line.alt = {name}: {chord} → sada {alt}
+hotkey.fail.line.kept = {name}: {chord} → zadržana je {kept}
+hotkey.fail.line.not_set = {name}: {chord} – nije podešeno
+hotkey.fail.line.invalid = {name}: {chord} – nevažeća prečica
+hotkey.fail.line.no_display = {name}: {chord} – nema X displaya
+hotkey.fail.line.unknown = {name}: {chord} – nije potvrđeno
+hotkey.fail.more[one] = i još {n}
+hotkey.fail.more[few] = i još {n}
+hotkey.fail.more[other] = i još {n}
+hotkey.fail.pick_any = Izaberite drugi taster: kliknite na Promeni prečice…, kliknite na taster i pritisnite novi.
 
 # Shared buttons
 common.apply = Primeni

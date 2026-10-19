@@ -352,6 +352,25 @@ hotkey.fail.no_display = Bližnjice {chord} ni bilo mogoče registrirati – X d
 hotkey.fail.invalid_kept = Bližnjice {chord} ni bilo mogoče registrirati – Rustshot je ne more registrirati; ohranjena je {kept}.
 hotkey.fail.no_display_kept = Bližnjice {chord} ni bilo mogoče registrirati – X display ni na voljo; ohranjena je {kept}.
 hotkey.fail.in_use_kept = Bližnjice {chord} ni bilo mogoče registrirati – uporablja jo druga aplikacija; ohranjena je {kept}.
+hotkey.fail.summary_in_use[one] = {n} bližnjico uporablja druga aplikacija
+hotkey.fail.summary_in_use[two] = {n} bližnjici uporablja druga aplikacija
+hotkey.fail.summary_in_use[few] = {n} bližnjice uporablja druga aplikacija
+hotkey.fail.summary_in_use[other] = {n} bližnjic uporablja druga aplikacija
+hotkey.fail.summary[one] = {n} bližnjice ni bilo mogoče registrirati
+hotkey.fail.summary[two] = {n} bližnjic ni bilo mogoče registrirati
+hotkey.fail.summary[few] = {n} bližnjic ni bilo mogoče registrirati
+hotkey.fail.summary[other] = {n} bližnjic ni bilo mogoče registrirati
+hotkey.fail.line.alt = {name}: {chord} → zdaj {alt}
+hotkey.fail.line.kept = {name}: {chord} → ohranjena je {kept}
+hotkey.fail.line.not_set = {name}: {chord} – ni nastavljeno
+hotkey.fail.line.invalid = {name}: {chord} – neveljavna bližnjica
+hotkey.fail.line.no_display = {name}: {chord} – ni X displaya
+hotkey.fail.line.unknown = {name}: {chord} – ni potrjeno
+hotkey.fail.more[one] = in še {n}
+hotkey.fail.more[two] = in še {n}
+hotkey.fail.more[few] = in še {n}
+hotkey.fail.more[other] = in še {n}
+hotkey.fail.pick_any = Izberite drugo tipko: kliknite »Spremeni bližnjice…«, kliknite tipko in pritisnite novo.
 
 # Shared buttons
 common.apply = Uporabi

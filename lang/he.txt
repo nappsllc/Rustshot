@@ -352,6 +352,22 @@ hotkey.fail.no_display = לא ניתן לרשום את {chord} — אין X disp
 hotkey.fail.invalid_kept = לא ניתן לרשום את {chord} — Rustshot לא יכול לרשום צירוף כזה; נשאר {kept}.
 hotkey.fail.no_display_kept = לא ניתן לרשום את {chord} — אין X display זמין; נשאר {kept}.
 hotkey.fail.in_use_kept = לא ניתן לרשום את {chord} — הוא בשימוש של אפליקציה אחרת; נשאר {kept}.
+hotkey.fail.summary_in_use[one] = קיצור מקשים אחד בשימוש של אפליקציה אחרת
+hotkey.fail.summary_in_use[two] = שני קיצורי מקשים בשימוש של אפליקציה אחרת
+hotkey.fail.summary_in_use[other] = {n} קיצורי מקשים בשימוש של אפליקציה אחרת
+hotkey.fail.summary[one] = לא ניתן לרשום קיצור מקשים אחד
+hotkey.fail.summary[two] = לא ניתן לרשום שני קיצורי מקשים
+hotkey.fail.summary[other] = לא ניתן לרשום {n} קיצורי מקשים
+hotkey.fail.line.alt = {name}: {chord} ← עכשיו {alt}
+hotkey.fail.line.kept = {name}: {chord} ← נשאר {kept}
+hotkey.fail.line.not_set = {name}: {chord} — לא הוגדר
+hotkey.fail.line.invalid = {name}: {chord} — לא צירוף תקין
+hotkey.fail.line.no_display = {name}: {chord} — אין X display
+hotkey.fail.line.unknown = {name}: {chord} — לא אושר
+hotkey.fail.more[one] = ועוד אחד
+hotkey.fail.more[two] = ועוד שניים
+hotkey.fail.more[other] = ועוד {n}
+hotkey.fail.pick_any = בחר מקש אחר: לחץ על שינוי קיצורי מקשים…, לחץ על המקש והקש צירוף חדש.
 
 # Shared buttons
 common.apply = החל

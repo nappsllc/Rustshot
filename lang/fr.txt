@@ -352,6 +352,19 @@ hotkey.fail.no_display = Impossible d’inscrire {chord} – aucun X display n�
 hotkey.fail.invalid_kept = Impossible d’inscrire {chord} – Rustshot ne peut pas inscrire ce raccourci ; {kept} conservé.
 hotkey.fail.no_display_kept = Impossible d’inscrire {chord} – aucun X display n’est disponible ; {kept} conservé.
 hotkey.fail.in_use_kept = Impossible d’inscrire {chord} – il est utilisé par une autre application ; {kept} conservé.
+hotkey.fail.summary_in_use[one] = {n} raccourci est utilisé par une autre application
+hotkey.fail.summary_in_use[other] = {n} raccourcis sont utilisés par une autre application
+hotkey.fail.summary[one] = {n} raccourci n’a pas pu être inscrit
+hotkey.fail.summary[other] = {n} raccourcis n’ont pas pu être inscrits
+hotkey.fail.line.alt = {name} : {chord} → désormais {alt}
+hotkey.fail.line.kept = {name} : {chord} → {kept} conservé
+hotkey.fail.line.not_set = {name} : {chord} – non défini
+hotkey.fail.line.invalid = {name} : {chord} – raccourci non valide
+hotkey.fail.line.no_display = {name} : {chord} – aucun X display
+hotkey.fail.line.unknown = {name} : {chord} – non confirmé
+hotkey.fail.more[one] = et {n} autre
+hotkey.fail.more[other] = et {n} autres
+hotkey.fail.pick_any = Choisissez une autre touche : cliquez sur « Modifier les raccourcis… », cliquez sur la touche et appuyez sur une nouvelle.
 
 # Shared buttons
 common.apply = Appliquer

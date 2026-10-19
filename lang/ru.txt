@@ -352,6 +352,25 @@ hotkey.fail.no_display = Не удалось зарегистрировать {c
 hotkey.fail.invalid_kept = Не удалось зарегистрировать {chord} — Rustshot не может зарегистрировать такое сочетание; оставлено {kept}.
 hotkey.fail.no_display_kept = Не удалось зарегистрировать {chord} — нет доступного X-дисплея; оставлено {kept}.
 hotkey.fail.in_use_kept = Не удалось зарегистрировать {chord} — занято другим приложением; оставлено {kept}.
+hotkey.fail.summary_in_use[one] = {n} сочетание клавиш занято другим приложением
+hotkey.fail.summary_in_use[few] = {n} сочетания клавиш заняты другим приложением
+hotkey.fail.summary_in_use[many] = {n} сочетаний клавиш заняты другим приложением
+hotkey.fail.summary_in_use[other] = {n} сочетания клавиш заняты другим приложением
+hotkey.fail.summary[one] = Не удалось зарегистрировать {n} сочетание клавиш
+hotkey.fail.summary[few] = Не удалось зарегистрировать {n} сочетания клавиш
+hotkey.fail.summary[many] = Не удалось зарегистрировать {n} сочетаний клавиш
+hotkey.fail.summary[other] = Не удалось зарегистрировать {n} сочетания клавиш
+hotkey.fail.line.alt = {name}: {chord} → теперь {alt}
+hotkey.fail.line.kept = {name}: {chord} → оставлено {kept}
+hotkey.fail.line.not_set = {name}: {chord} — не назначено
+hotkey.fail.line.invalid = {name}: {chord} — недопустимое сочетание
+hotkey.fail.line.no_display = {name}: {chord} — нет X-дисплея
+hotkey.fail.line.unknown = {name}: {chord} — не подтверждено
+hotkey.fail.more[one] = и ещё {n}
+hotkey.fail.more[few] = и ещё {n}
+hotkey.fail.more[many] = и ещё {n}
+hotkey.fail.more[other] = и ещё {n}
+hotkey.fail.pick_any = Выберите другую клавишу: нажмите «Изменить сочетания…», щёлкните клавишу и нажмите новую.
 
 # Shared buttons
 common.apply = Применить

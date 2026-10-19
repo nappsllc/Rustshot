@@ -352,6 +352,22 @@ hotkey.fail.no_display = Nepavyko užregistruoti {chord} — nėra X display.
 hotkey.fail.invalid_kept = Nepavyko užregistruoti {chord} — tai ne spartusis klavišas, kurį Rustshot gali užregistruoti; palikta {kept}.
 hotkey.fail.no_display_kept = Nepavyko užregistruoti {chord} — nėra X display; palikta {kept}.
 hotkey.fail.in_use_kept = Nepavyko užregistruoti {chord} — naudoja kita programa; palikta {kept}.
+hotkey.fail.summary_in_use[one] = {n} spartųjį klavišą naudoja kita programa
+hotkey.fail.summary_in_use[few] = {n} sparčiuosius klavišus naudoja kita programa
+hotkey.fail.summary_in_use[other] = {n} sparčiųjų klavišų naudoja kita programa
+hotkey.fail.summary[one] = Nepavyko užregistruoti {n} sparčiojo klavišo
+hotkey.fail.summary[few] = Nepavyko užregistruoti {n} sparčiųjų klavišų
+hotkey.fail.summary[other] = Nepavyko užregistruoti {n} sparčiųjų klavišų
+hotkey.fail.line.alt = {name}: {chord} → dabar {alt}
+hotkey.fail.line.kept = {name}: {chord} → palikta {kept}
+hotkey.fail.line.not_set = {name}: {chord} — nenustatyta
+hotkey.fail.line.invalid = {name}: {chord} — netinkamas spartusis klavišas
+hotkey.fail.line.no_display = {name}: {chord} — nėra X display
+hotkey.fail.line.unknown = {name}: {chord} — nepatvirtinta
+hotkey.fail.more[one] = ir dar {n}
+hotkey.fail.more[few] = ir dar {n}
+hotkey.fail.more[other] = ir dar {n}
+hotkey.fail.pick_any = Pasirinkite kitą klavišą: spustelėkite „Keisti sparčiuosius klavišus…“, spustelėkite klavišą ir paspauskite naują.
 
 # Shared buttons
 common.apply = Taikyti

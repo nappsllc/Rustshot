@@ -352,6 +352,16 @@ hotkey.fail.no_display = 无法注册 {chord} — 没有可用的 X display。
 hotkey.fail.invalid_kept = 无法注册 {chord} — Rustshot 不能注册此快捷键；保留 {kept}。
 hotkey.fail.no_display_kept = 无法注册 {chord} — 没有可用的 X display；保留 {kept}。
 hotkey.fail.in_use_kept = 无法注册 {chord} — 已被其他应用占用；保留 {kept}。
+hotkey.fail.summary_in_use[other] = {n} 个快捷键已被其他应用占用
+hotkey.fail.summary[other] = {n} 个快捷键无法注册
+hotkey.fail.line.alt = {name}：{chord} → 现为 {alt}
+hotkey.fail.line.kept = {name}：{chord} → 保留 {kept}
+hotkey.fail.line.not_set = {name}：{chord} — 未设置
+hotkey.fail.line.invalid = {name}：{chord} — 不是有效的快捷键
+hotkey.fail.line.no_display = {name}：{chord} — 没有 X display
+hotkey.fail.line.unknown = {name}：{chord} — 未确认
+hotkey.fail.more[other] = 另有 {n} 个
+hotkey.fail.pick_any = 请另选按键：单击“更改快捷键…”，单击该按键，然后按新的按键。
 
 # Shared buttons
 common.apply = 应用

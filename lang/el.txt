@@ -352,6 +352,19 @@ hotkey.fail.no_display = Δεν ήταν δυνατή η καταχώριση τ
 hotkey.fail.invalid_kept = Δεν ήταν δυνατή η καταχώριση του {chord} – δεν είναι συντόμευση που μπορεί να καταχωρίσει το Rustshot. Διατηρήθηκε το {kept}.
 hotkey.fail.no_display_kept = Δεν ήταν δυνατή η καταχώριση του {chord} – δεν υπάρχει διαθέσιμο X display. Διατηρήθηκε το {kept}.
 hotkey.fail.in_use_kept = Δεν ήταν δυνατή η καταχώριση του {chord} – χρησιμοποιείται από άλλη εφαρμογή. Διατηρήθηκε το {kept}.
+hotkey.fail.summary_in_use[one] = {n} συντόμευση χρησιμοποιείται από άλλη εφαρμογή
+hotkey.fail.summary_in_use[other] = {n} συντομεύσεις χρησιμοποιούνται από άλλη εφαρμογή
+hotkey.fail.summary[one] = Δεν ήταν δυνατή η καταχώριση {n} συντόμευσης
+hotkey.fail.summary[other] = Δεν ήταν δυνατή η καταχώριση {n} συντομεύσεων
+hotkey.fail.line.alt = {name}: {chord} → τώρα {alt}
+hotkey.fail.line.kept = {name}: {chord} → διατηρήθηκε το {kept}
+hotkey.fail.line.not_set = {name}: {chord} – δεν ορίστηκε
+hotkey.fail.line.invalid = {name}: {chord} – μη έγκυρη συντόμευση
+hotkey.fail.line.no_display = {name}: {chord} – χωρίς X display
+hotkey.fail.line.unknown = {name}: {chord} – δεν επιβεβαιώθηκε
+hotkey.fail.more[one] = και {n} ακόμη
+hotkey.fail.more[other] = και {n} ακόμη
+hotkey.fail.pick_any = Επιλέξτε άλλο πλήκτρο: κάντε κλικ στο «Αλλαγή συντομεύσεων…», κάντε κλικ στο πλήκτρο και πατήστε ένα νέο.
 
 # Shared buttons
 common.apply = Εφαρμογή
