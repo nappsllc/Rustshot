@@ -206,7 +206,7 @@ screenshots, editing and video capture.** Windows, Linux and macOS.
 ## Install
 
 Download from the **[latest release](https://github.com/nappsllc/Rustshot/releases/latest)**
-(v0.6.3 sizes shown):
+(v0.6.4 sizes shown):
 
 | Platform | File | Size | Notes |
 |---|---|---|---|
@@ -469,10 +469,11 @@ and send one: [docs/translating.md](docs/translating.md) (languages in
 
 ## Known limitations
 
-From the v0.6.3 release notes:
+From the v0.6.4 release notes:
 
 - **Translations:** the 34 translations are machine-made, and none has
-  been reviewed by a native speaker yet. Reviews and corrections are
+  been reviewed by a native speaker yet (this includes the names shortened
+  in 0.6.4 to fit the Shortcuts screens). Reviews and corrections are
   welcome.
 - **Linux text:** Arabic, Hindi and Thai text is drawn without shaping, so
   letters don't join and marks may be misplaced.
@@ -480,8 +481,9 @@ From the v0.6.3 release notes:
   mirrored.
 - **macOS:** the History, Edit, launcher and Make QR code windows and
   scrolling capture are not available yet (and neither is Settings, which
-  opens `config.toml` instead). The trim window, Share and the text styles
-  compile on macOS but are untested on real hardware.
+  opens `config.toml` instead). The trim window, Share, the text styles and
+  the placeholder for windows hidden from screenshots compile on macOS but
+  are untested on real hardware.
 - **Untested:** HDR tone-mapping on a real HDR monitor, the quality of the
   camera background blur on real people, and S3 uploads against a real
   bucket (only against the SigV4 test vectors).
