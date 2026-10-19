@@ -177,8 +177,9 @@ launcher_after = "pin"
     # as tests/e2e.rs does. A click also focuses the toggle (Enter would
     # flip it back), so OK is clicked too. Client points at 100 % (680 px
     # wide): the rail's Capture (60, 51), then Capture > After capture >
-    # Play shutter sound (641, 304), OK (461, 497) (`sandbox_click_points`
-    # in src/settings_ui/tests.rs checks the first two).
+    # Play shutter sound (641, 304), OK (461, 23 px above the client's
+    # bottom: the footer's buttons, 44 px tall; 529 at 0.6.4's 552)
+    # (`sandbox_click_points` in src/settings_ui/tests.rs checks the first two).
     $dm = WithEnv $vars { Start-Process $exe -ArgumentList 'daemon' -PassThru }
     $null = WaitFor { [W]::FindWindow('rustshot_tray_sbx-030', [NullString]::Value) -ne [IntPtr]::Zero } 10
     Start-Sleep 1
@@ -195,7 +196,7 @@ launcher_after = "pin"
         [V3]::PostClientClick($h, [int](641 * $sc), [int](304 * $sc))
         Start-Sleep -Milliseconds 500
         Shot 'v030-settings-toggled'
-        [V3]::PostClientClick($h, [int](461 * $sc), [int](497 * $sc))   # OK
+        [V3]::PostClientClick($h, [int](461 * $sc), [int]($c.B - 23 * $sc))   # OK
         if (-not (WaitFor { [W]::Settings() -eq [IntPtr]::Zero } 3)) { Shot 'v030-settings-modal'; [V3]::PostKey($h, 0x0D) }   # the rewrite question's Save
     }
     $closed = WaitFor { [W]::Settings() -eq [IntPtr]::Zero } 6
