@@ -842,11 +842,12 @@ pub fn mag_bounds(ui: &Ui, m: &MagUi) -> Vec<FRect> {
 }
 
 /// The loupe's shadow as (theme shadow layer, drop, spread), logical px:
-/// all round, a soft halo dropped a little and a contact ring that
+/// all round and concentric (no drop: any reads as an off-centre disc),
+/// a soft halo and a contact ring that
 /// outlines the shape. The panels' layers (7 px down and 5 out: none
 /// above, 12 below) under a disc read as a gray background off the
 /// pixels' centre.
-const MAG_SHADOW: [(usize, f32, f32); 2] = [(2, 1.0, 4.0), (0, 0.0, 1.0)];
+const MAG_SHADOW: [(usize, f32, f32); 2] = [(2, 0.0, 4.0), (0, 0.0, 1.0)];
 
 /// [`MAG_SHADOW`] at scale `s`, on whole physical px (the shadows share
 /// the loupe's pixel grid, so its centre).
