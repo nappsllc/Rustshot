@@ -881,3 +881,304 @@ fn perf_magnifier_bench() {
         );
     }
 }
+
+// ---- the loupe's centre ---------------------------------------------------------
+
+/// What [`measure_loupe`] finds, image px.
+#[derive(Debug)]
+struct LoupeCentres {
+    /// The surface disc's coverage (no shadow), the magnified pixels'
+    /// clip, the pointer's cell and its outline: their centroids.
+    disc: (f32, f32),
+    grid: (f32, f32),
+    mid: (f32, f32),
+    outline: (f32, f32),
+    /// How far the gray (surface and shadow) reaches past the shape's
+    /// edge to the left, top, right and bottom, through its centre.
+    reach: [f32; 4],
+    /// The grid's physical size and its offsets from the shape's edges.
+    grid_px: f32,
+    margins: [f32; 4],
+}
+
+/// Weighted centroid of `w` over the buffer at origin `o`, `bw` wide.
+fn centroid(w: &[f32], bw: usize, o: (i32, i32)) -> (f32, f32) {
+    let (mut sx, mut sy, mut sw) = (0.0f64, 0.0f64, 0.0f64);
+    for (i, &v) in w.iter().enumerate() {
+        let v = v as f64;
+        sx += v * ((i % bw) as f64 + 0.5);
+        sy += v * ((i / bw) as f64 + 0.5);
+        sw += v;
+    }
+    assert!(sw > 0.0, "nothing drawn");
+    ((sx / sw) as f32 + o.0 as f32, (sy / sw) as f32 + o.1 as f32)
+}
+
+/// The loupe of theme `th` at scale `s` for pointer `p` on monitor `area`
+/// (a caption `cap_w` wide), drawn alone onto a transparent buffer, and
+/// the centres of its parts.
+fn measure_loupe(th: Theme, s: f32, square: bool, p: Pt, area: FRect, cap_w: f32) -> (MagUi, LoupeCentres) {
+    let (r, _) = mag_rect(p, area, s, cap_w, &[]);
+    let (cell, rim) = mag_geom(s);
+    // The caption off the buffer: only the loupe is measured.
+    let cap = FRect { x: -100_000.0, y: -100_000.0, w: 0.0, h: 0.0 };
+    let m = MagUi { r, cap, px: vec![C4::rgb(0, 0, 0); MAG_N * MAG_N], text: String::new(), square, cell, rim, s };
+    let pad = (60.0 * s).ceil() as i32;
+    let o = (r.x.floor() as i32 - pad, r.y.floor() as i32 - pad);
+    let bw = (r.w.ceil() as i32 + 2 * pad) as usize;
+    let bh = (r.h.ceil() as i32 + 2 * pad) as usize;
+    let render = |th: &Theme, m: &MagUi| -> Vec<u8> {
+        let mut d = vec![0u8; bw * bh * 4];
+        let mut f = Fb::with_origin(&mut d, bw, o.0, o.1, crate::raster::Order::Rgba);
+        mag(&mut f, &Ui { th, s, font: None }, m);
+        d
+    };
+    let flat = Theme { shadow: [C4::new(0, 0, 0, 0); 4], ..th };
+    let with = |c: C4, mid: Option<C4>| {
+        let mut m = m.clone();
+        m.px = vec![c; MAG_N * MAG_N];
+        if let Some(k) = mid {
+            m.px[MAG_N * MAG_N / 2] = k;
+        }
+        m
+    };
+    let (gray, red) = (C4::rgb(128, 128, 128), C4::rgb(255, 0, 0));
+    // The disc: its coverage (alpha) without the shadow.
+    let a = render(&flat, &with(gray, None));
+    let alpha: Vec<f32> = a.chunks(4).map(|p| p[3] as f32 / 255.0).collect();
+    let disc = centroid(&alpha, bw, o);
+    // The grid's clip: what changes with the pixels' color.
+    let (w, k) = (render(&flat, &with(C4::rgb(255, 255, 255), None)), render(&flat, &with(C4::rgb(0, 0, 0), None)));
+    let gw: Vec<f32> = w.chunks(4).zip(k.chunks(4)).map(|(p, q)| (p[1] as f32 - q[1] as f32).abs() / 255.0).collect();
+    let grid = centroid(&gw, bw, o);
+    // The pointer's cell: what changes with its color alone.
+    let b = render(&flat, &with(gray, Some(red)));
+    let cw: Vec<f32> = a.chunks(4).zip(b.chunks(4)).map(|(p, q)| (p[0] as f32 - q[0] as f32).abs() / 255.0).collect();
+    let mid = centroid(&cw, bw, o);
+    // Its outline: black and white over the gray pixels, near the cell.
+    let (gx, gy) = (r.x + rim + 8.5 * cell, r.y + rim + 8.5 * cell);
+    let ow: Vec<f32> = a
+        .chunks(4)
+        .enumerate()
+        .map(|(i, p)| {
+            let (x, y) = ((i % bw) as f32 + o.0 as f32 + 0.5, (i / bw) as f32 + o.1 as f32 + 0.5);
+            if (x - gx).abs() > 2.0 * cell || (y - gy).abs() > 2.0 * cell {
+                return 0.0;
+            }
+            // Gray (and its grid line) is 104..=128; the outline is off it.
+            let v = p[1] as f32;
+            if v < 104.0 {
+                (104.0 - v) / 104.0
+            } else if v > 128.0 {
+                (v - 128.0) / 127.0
+            } else {
+                0.0
+            }
+        })
+        .collect();
+    let outline = centroid(&ow, bw, o);
+    // The gray around it, through the shape's centre: from the shadow too.
+    let full = render(&th, &with(gray, None));
+    let al = |x: i32, y: i32| full[((y - o.1) as usize * bw + (x - o.0) as usize) * 4 + 3];
+    let (cx, cy) = ((r.x + r.w / 2.0).floor() as i32, (r.y + r.h / 2.0).floor() as i32);
+    let far = |dx: i32, dy: i32| -> f32 {
+        let (mut x, mut y, mut last, mut n) = (cx, cy, 0, 0);
+        while x > o.0 && y > o.1 && x < o.0 + bw as i32 - 1 && y < o.1 + bh as i32 - 1 {
+            if al(x, y) >= 3 {
+                last = n;
+            }
+            x += dx;
+            y += dy;
+            n += 1;
+        }
+        last as f32
+    };
+    // From the centre pixel's middle to the last gray pixel's far side.
+    let half = r.w / 2.0;
+    let (ox, oy) = (cx as f32 + 0.5 - (r.x + half), cy as f32 + 0.5 - (r.y + half));
+    let reach = [far(-1, 0) + 0.5 - ox - half, far(0, -1) + 0.5 - oy - half, far(1, 0) + 0.5 + ox - half, far(0, 1) + 0.5 + oy - half];
+    // The grid's own box: where the pixels show.
+    let (mut l, mut t, mut rt, mut bt) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+    for (i, &v) in gw.iter().enumerate() {
+        if v > 0.01 {
+            let (x, y) = ((i % bw) as i32 + o.0, (i / bw) as i32 + o.1);
+            (l, t, rt, bt) = (l.min(x), t.min(y), rt.max(x), bt.max(y));
+        }
+    }
+    assert_eq!(rt - l, bt - t, "a square box");
+    let grid_px = (rt + 1 - l) as f32;
+    let margins = [l as f32 - r.x, t as f32 - r.y, r.x1() - (rt + 1) as f32, r.y1() - (bt + 1) as f32];
+    (m, LoupeCentres { disc, grid, mid, outline, reach, grid_px, margins })
+}
+
+/// The 4K report: the gray disc behind the magnified pixels looked off
+/// their centre. At every UI scale, light and dark, round and square,
+/// wherever the pointer is (odd and even pixels, the monitor's edges, so
+/// flipped): the disc, the grid's clip, the pointer's cell and its outline
+/// share one centre, the grid is whole physical px centred in the disc,
+/// and the gray (surface and shadow) shows on every side alike but for a
+/// slight drop.
+#[test]
+fn magnifier_disc_grid_and_pixel_share_one_centre() {
+    let area = fr(0.0, 0.0, 3840.0, 2160.0);
+    let points = [(1000.0, 800.0), (1001.0, 801.0), (1000.5, 800.5), (1919.0, 1080.0), (5.0, 5.0), (3839.0, 2159.0), (3830.0, 12.0), (8.0, 2150.0), (3000.0, 1999.0)];
+    let mut worst = (0.0f32, String::new());
+    let mut fails = Vec::new();
+    for s in [1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5] {
+        let (cell, rim) = mag_geom(s);
+        let d = cell * MAG_N as f32 + 2.0 * rim;
+        for (th, name) in [(theme::LIGHT, "light"), (theme::DARK, "dark")] {
+            for square in [false, true] {
+                for &(x, y) in &points {
+                    for cap_w in [130.0 * s, d + 37.0] {
+                        let (m, c) = measure_loupe(th, s, square, Pt::new(x, y), area, cap_w);
+                        let tag = format!("s {s} {name} {} at ({x}, {y}) cap {cap_w}", if square { "square" } else { "round" });
+                        let r = m.r;
+                        assert_eq!((r.x.fract(), r.y.fract(), r.w, r.h), (0.0, 0.0, d, d), "{tag}: whole px");
+                        assert_eq!(c.grid_px, cell * MAG_N as f32, "{tag}: the grid is 17 cells of whole px");
+                        let want = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+                        for (part, (px, py)) in [("disc", c.disc), ("grid", c.grid), ("cell", c.mid), ("outline", c.outline)] {
+                            let e = (px - want.0).abs().max((py - want.1).abs());
+                            if e > worst.0 {
+                                worst = (e, format!("{tag}: {part} at ({px:.2}, {py:.2}), centre ({}, {})", want.0, want.1));
+                            }
+                            if e > 0.5 {
+                                fails.push(format!("{tag}: {part} centre ({px:.2}, {py:.2}) vs ({}, {})", want.0, want.1));
+                            }
+                        }
+                        let [ml, mt, mr, mb] = c.margins;
+                        if ml != mr || mt != mb {
+                            fails.push(format!("{tag}: grid margins {:?}", c.margins));
+                        }
+                        // The gray all round: the same left and right, above
+                        // too, lower by at most the intended drop (1 px logical).
+                        let [l, t, rt, b] = c.reach;
+                        let drop = (b - t) / 2.0;
+                        if (l - rt).abs() > 0.5 || t < 1.0 || drop < 0.0 || drop > s.round() + 0.5 {
+                            fails.push(format!("{tag}: gray reaches left {l} top {t} right {rt} bottom {b} (drop {drop})"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    eprintln!("largest centre offset: {:.3} px ({})", worst.0, worst.1);
+    assert!(fails.is_empty(), "{} off centre, e.g.:\n{}", fails.len(), fails.iter().take(30).cloned().collect::<Vec<_>>().join("\n"));
+}
+
+/// In the overlay, at each UI scale (the shot's, as on a 4K monitor at
+/// 125..250 %): the scene's loupe has its monitor's scale and the
+/// geometry [`mag_geom`] gives for it, on whole px.
+#[test]
+fn magnifier_scene_geometry_at_every_scale() {
+    for s in [1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5] {
+        let mut shot = synthetic_shot();
+        shot.scale = s;
+        let mut a = preview_app_with(theme::LIGHT, None, shot);
+        a.focus_tries = u8::MAX;
+        for (x, y) in [(400, 300), (401, 301), (1435, 895), (3, 3)] {
+            mv(&mut a, x, y);
+            let m = scene(&mut a).mag.clone().expect("magnifier");
+            let (cell, rim) = mag_geom(m.s);
+            assert_eq!(m.s, s, "the monitor's scale");
+            assert_eq!((m.cell, m.rim), (cell, rim));
+            assert_eq!((m.r.w, m.r.h), (cell * MAG_N as f32 + 2.0 * rim, cell * MAG_N as f32 + 2.0 * rim));
+            assert_eq!((m.r.x.fract(), m.r.y.fract()), (0.0, 0.0), "s {s} ({x}, {y}): {:?}", m.r);
+        }
+    }
+}
+
+/// The pointer moving as the GDI overlay paints it: each frame only its
+/// damage (capped as the live path caps it), over what the screen held.
+/// At 100, 150 and 200 %, light (the photo's) and dark, round and square,
+/// small steps, jumps and flips at the edges: every frame equals a full
+/// repaint of its scene, no shadow or surface left where the loupe was.
+#[test]
+fn magnifier_moves_leave_nothing_behind() {
+    let path = [(305, 302), (306, 303), (318, 309), (400, 420), (402, 421), (1300, 200), (1430, 250), (1439, 899), (1200, 880), (20, 890), (5, 5), (700, 450), (701, 451), (690, 440)];
+    for s in [1.0, 1.5, 2.0] {
+        for th in [theme::LIGHT, theme::DARK] {
+            for square in [false, true] {
+                let mut shot = synthetic_shot();
+                shot.scale = s;
+                let mut a = preview_app_with(th, None, shot);
+                a.focus_tries = u8::MAX;
+                ed(&mut a).cfg.magnifier_square = square;
+                ed(&mut a).assist.dismiss_hint(Instant::now());
+                mv(&mut a, 300, 300);
+                let mut screen = settled(&mut a);
+                let e = ed(&mut a);
+                e.painted = e.scene.clone();
+                let w = screen.width() as usize;
+                for &(x, y) in &path {
+                    mv(&mut a, x, y);
+                    let State::Edit(e) = &mut a.st else { panic!("editor") };
+                    e.prepare(a.notice.as_ref(), a.mouse, Instant::now());
+                    let rects = compose::cap_rects(compose::merge_rects(e.dirty_rects(e.painted.as_ref())), MAX_DAMAGE_RECTS);
+                    e.painted = e.scene.clone();
+                    let bd = PixBufBackdrop { img: e.composed(), dim: e.th.dim };
+                    for r in &rects {
+                        let mut out = vec![0u8; (r.w() * r.h() * 4) as usize];
+                        e.compose_rect(*r, &bd, &mut out, Order::Rgba);
+                        for ty in 0..r.h() as usize {
+                            let i = ((r.y0 as usize + ty) * w + r.x0 as usize) * 4;
+                            screen.as_raw_mut()[i..i + r.w() as usize * 4].copy_from_slice(&out[ty * r.w() as usize * 4..][..r.w() as usize * 4]);
+                        }
+                    }
+                    let mut full = PixBuf::new(screen.width(), screen.height());
+                    e.compose_rect(compose::PxRect::image(e.shot.size), &bd, full.as_raw_mut(), Order::Rgba);
+                    let bad = screen.as_raw().chunks(4).zip(full.as_raw().chunks(4)).position(|(p, q)| p != q);
+                    assert!(bad.is_none(), "s {s} dark {} square {square} at ({x}, {y}): stale pixel ({}, {})", th.dark, bad.unwrap() % w, bad.unwrap() / w);
+                }
+            }
+        }
+    }
+}
+
+/// `RUSTSHOT_MAG_CROPS=<dir> cargo test magnifier_crops`: the round loupe
+/// over a light page, light theme, at 100, 150 and 200 %, 4x nearest-neighbour
+/// (`RUSTSHOT_MAG_TAG` names them, "after" by default).
+#[test]
+fn magnifier_crops() {
+    let Some(dir) = std::env::var_os("RUSTSHOT_MAG_CROPS") else { return };
+    let dir = std::path::PathBuf::from(dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for s in [1.0f32, 1.5, 2.0] {
+        // A light page: white, a few lines of "text" and a blue block.
+        let (w, h) = (1440u32, 900u32);
+        let mut img = PixBuf::from_pixel(w, h, [250, 250, 250, 255]);
+        for y in 0..h {
+            for x in 0..w {
+                let block = x > 600 && x < 640 && y > 380 && y < 420;
+                if block || (y % 24 < 3 && x % 90 < 70) {
+                    let i = (y as usize * w as usize + x as usize) * 4;
+                    let c = if block { [40, 90, 220, 255] } else { [60, 60, 60, 255] };
+                    img.as_raw_mut()[i..i + 4].copy_from_slice(&c);
+                }
+            }
+        }
+        let mut shot = synthetic_shot();
+        shot.scale = s;
+        shot.image = img;
+        let mut a = preview_app_with(theme::LIGHT, None, shot);
+        ed(&mut a).assist.dismiss_hint(Instant::now());
+        mv(&mut a, 601, 401);
+        let f = settled(&mut a);
+        let m = ed(&mut a).scene.as_ref().unwrap().mag.clone().unwrap();
+        let pad = (30.0 * s) as i32;
+        let (x0, y0) = (m.r.x as i32 - pad, m.r.y as i32 - pad);
+        let (cw, ch) = (m.r.w as i32 + 2 * pad, m.r.h as i32 + 2 * pad);
+        let k = 4i32;
+        let mut z = PixBuf::new((cw * k) as u32, (ch * k) as u32);
+        for y in 0..ch * k {
+            for x in 0..cw * k {
+                let (sx, sy) = ((x0 + x / k).clamp(0, w as i32 - 1), (y0 + y / k).clamp(0, h as i32 - 1));
+                let c = f.get_pixel(sx as u32, sy as u32);
+                let i = ((y * cw * k + x) * 4) as usize;
+                z.as_raw_mut()[i..i + 4].copy_from_slice(&c);
+            }
+        }
+        let tag = std::env::var("RUSTSHOT_MAG_TAG").unwrap_or_else(|_| "after".into());
+        std::fs::write(dir.join(format!("mag_{tag}_{}pct_light_4x.png", (s * 100.0) as u32)), z.to_png().unwrap()).unwrap();
+    }
+}
