@@ -206,7 +206,36 @@ impl GdiScreen {
         for (r, px) in crate::hdr::win::grab((origin.0, origin.1, size.0, size.1)) {
             s.put((r.0 - origin.0, r.1 - origin.1), &px);
         }
+        // Windows that asked to be left out of captures: a placeholder.
+        s.mark_hidden(&crate::hidden::find(origin, size), &crate::hidden::Style::of(&crate::hidden::current_theme()));
         s.finish()
+    }
+
+    /// Paint the placeholders of windows hidden from capture into `plain`
+    /// (each over the box of its visible parts: read back, painted, put).
+    fn mark_hidden(&self, wins: &[crate::hidden::Hidden], st: &crate::hidden::Style) {
+        let img = PxRect::image(self.size);
+        for h in wins {
+            let b = h.pieces.iter().fold(PxRect::default(), |u, p| u.union(&PxRect::new(p.x0, p.y0, p.x1, p.y1))).intersect(&img);
+            if b.is_empty() {
+                continue;
+            }
+            let (w, hh) = (b.w() as usize, b.h() as usize);
+            let mut px = vec![0u8; w * hh * 4];
+            self.read(self.plain.dc, b, &mut px, w, true);
+            crate::hidden::paint(&mut px, w, (b.x0, b.y0), Order::Bgra, h, st);
+            let mut sc = self.scratch.borrow_mut();
+            for y0 in (0..hh as i32).step_by(BAND as usize) {
+                let bh = BAND.min(hh as i32 - y0).min(sc.h);
+                unsafe { let _ = GdiFlush(); }
+                for i in 0..bh {
+                    sc.row(i, w).copy_from_slice(&px[(y0 + i) as usize * w * 4..][..w * 4]);
+                }
+                unsafe {
+                    let _ = BitBlt(self.plain.dc, b.x0, b.y0 + y0, w as i32, bh, Some(sc.m.dc), 0, 0, SRCCOPY);
+                }
+            }
+        }
     }
 
     /// Same as `capture`, from an in-memory RGBA image (tests, benches).
@@ -215,6 +244,16 @@ impl GdiScreen {
         let s = Self::empty(img.dimensions(), dim)?;
         s.put((0, 0), img);
         s.finish()
+    }
+
+    /// All of `plain`, RGBA (tests).
+    #[cfg(test)]
+    pub fn plain_pixels(&self) -> crate::pixbuf::PixBuf {
+        let (w, h) = (self.size.0 as usize, self.size.1 as usize);
+        let mut px = vec![0u8; w * h * 4];
+        self.read(self.plain.dc, PxRect::image(self.size), &mut px, w, true);
+        crate::wind::swap_rb(&mut px);
+        crate::pixbuf::PixBuf::from_raw(w as u32, h as u32, px).expect("plain size")
     }
 
     /// Write RGBA `img` into `plain` with its top-left at `at` (inside).

@@ -830,6 +830,30 @@ fn image_rows_write_their_keys() {
     assert!(c.trim_margins && c.border_width == u32::from(BORDER_DEFAULT));
 }
 
+/// Capture "Mark windows hidden from screenshots": on by default, its
+/// switch writes `mark_hidden_windows`; none on Linux (no window there
+/// can hide from captures).
+#[test]
+fn the_hidden_windows_switch_writes_its_key() {
+    let cfg = Config::default();
+    assert!(Form::new(&cfg, None).mark_hidden, "on by default");
+    let mut s = sample();
+    s.section = CAPTURE;
+    let mut focus = FocusState::default();
+    if cfg!(target_os = "linux") {
+        render(&mut s, &DARK, 1.0, &Input::default(), &mut focus);
+        assert!(focus.rect_of("mark_hidden_windows").is_none());
+        return;
+    }
+    reveal(&mut s, &mut focus, "mark_hidden_windows");
+    click(&mut s, &mut focus, "mark_hidden_windows", 1.0);
+    assert!(!s.form.mark_hidden);
+    let c = s.form.apply(&s.loaded, &s.loaded);
+    assert!(!c.mark_hidden_windows);
+    assert!(config::to_toml(&c).contains("mark_hidden_windows = false"));
+    assert!(Form::new(&c, None).apply(&c, &c).mark_hidden_windows == c.mark_hidden_windows, "round trip");
+}
+
 /// An Edit window image key on a global hotkey's chord (an old file's
 /// Ctrl+Shift+R record hotkey) or on an overlay action's is shown as a
 /// conflict.

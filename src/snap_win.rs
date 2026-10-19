@@ -15,10 +15,14 @@
 use super::{win_top_rect, Node, WinInfo, MAX_DEPTH, MAX_NODES, R};
 use windows::core::BOOL;
 use windows::Win32::Foundation::{HWND, LPARAM, POINT, RECT};
-use windows::Win32::Graphics::Gdi::ClientToScreen;
-use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS};
+use windows::Win32::Graphics::Gdi::{ClientToScreen, GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+use windows::Win32::Graphics::Dwm::{
+    DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS, DWMWA_VISIBLE_FRAME_BORDER_THICKNESS, DWMWA_WINDOW_CORNER_PREFERENCE,
+    DWMWCP_DONOTROUND, DWMWCP_ROUND, DWMWCP_ROUNDSMALL, DWM_WINDOW_CORNER_PREFERENCE,
+};
+use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetClassNameW, GetClientRect, GetDesktopWindow, GetLayeredWindowAttributes, GetShellWindow, GetWindow, GetWindowLongW, GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindowVisible, GWL_EXSTYLE, GWL_STYLE,
+    EnumWindows, GetClassNameW, GetClientRect, GetDesktopWindow, GetWindowDisplayAffinity, IsZoomed, WDA_NONE, GetLayeredWindowAttributes, GetShellWindow, GetWindow, GetWindowLongW, GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindowVisible, GWL_EXSTYLE, GWL_STYLE,
     LAYERED_WINDOW_ATTRIBUTES_FLAGS, LWA_ALPHA, WS_CAPTION, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
     WS_THICKFRAME, WS_VISIBLE, GW_CHILD, GW_HWNDNEXT,
 };
@@ -175,6 +179,119 @@ pub fn windows(own_pid: Option<u32>, within: R) -> Option<Vec<Node>> {
     unsafe { EnumWindows(Some(top_cb), LPARAM(&mut t as *mut Tops as isize)) }.ok()?;
     let mut left = MAX_NODES;
     Some(t.out.into_iter().map(|(h, r)| Node::new(r, kids_of(h, &mut left, 1)).with_client(client_rect(h))).collect())
+}
+
+/// A Rustshot window, of this process or another (its classes are
+/// `rustshot_*`).
+fn rustshot_class(h: HWND) -> bool {
+    let mut buf = [0u16; 64];
+    let n = unsafe { GetClassNameW(h, &mut buf) }.clamp(0, buf.len() as i32) as usize;
+    String::from_utf16_lossy(&buf[..n]).starts_with("rustshot")
+}
+
+/// The radius of `h`'s rounded corners in px: Windows 11 rounds framed
+/// windows that are not maximised (8 logical px) unless the window asked
+/// otherwise (`DWMWA_WINDOW_CORNER_PREFERENCE`, when DWM tells); popups
+/// stay square unless they asked. Windows 10: square.
+fn corner_px(h: HWND, style: u32) -> f32 {
+    unsafe {
+        let mut thick = 0u32;
+        // An attribute of Windows 11 (build 22000) DWM, readable there only.
+        if DwmGetWindowAttribute(h, DWMWA_VISIBLE_FRAME_BORDER_THICKNESS, (&mut thick as *mut u32).cast(), 4).is_err() {
+            return 0.0;
+        }
+        let mut pref = 0i32;
+        let asked = DwmGetWindowAttribute(h, DWMWA_WINDOW_CORNER_PREFERENCE, (&mut pref as *mut i32).cast(), 4).is_ok();
+        let framed = style & (WS_CAPTION.0 | WS_THICKFRAME.0) != 0;
+        let logical = match (asked, DWM_WINDOW_CORNER_PREFERENCE(pref)) {
+            (true, DWMWCP_DONOTROUND) => 0.0,
+            (true, DWMWCP_ROUND) => 8.0,
+            (true, DWMWCP_ROUNDSMALL) => 4.0,
+            _ if framed && !IsZoomed(h).as_bool() => 8.0,
+            _ => 0.0,
+        };
+        let dpi = GetDpiForWindow(h);
+        logical * if dpi > 0 { dpi as f32 / 96.0 } else { 1.0 }
+    }
+}
+
+/// `h`'s rect covers (nearly) all of its monitor.
+fn covers_monitor(h: HWND, r: R) -> bool {
+    unsafe {
+        let mon = MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST);
+        let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+        if !GetMonitorInfoW(mon, &mut mi).as_bool() {
+            return false;
+        }
+        let m = r_of(mi.rcMonitor);
+        let a = |r: R| i64::from(r.w()) * i64::from(r.h());
+        a(r.intersect(&m)) * 100 >= a(m) * 95
+    }
+}
+
+struct HiddenTops {
+    own_pid: Option<u32>,
+    shell: (HWND, HWND),
+    within: R,
+    out: Vec<crate::hidden::Top>,
+}
+
+/// One window for [`hidden_tops`]: hidden (`GetWindowDisplayAffinity`
+/// other than `WDA_NONE`, any process may ask), or an ordinary window
+/// that covers what is behind it.
+fn hidden_top(h: HWND, t: &HiddenTops) -> Option<crate::hidden::Top> {
+    // Every window that would snap counts (own captured ones too).
+    let i = info(h, None, t.shell, t.within)?;
+    let r = win_top_rect(&i)?;
+    let mut aff = 0u32;
+    if unsafe { GetWindowDisplayAffinity(h, &mut aff) }.is_err() || aff == WDA_NONE.0 {
+        return Some(crate::hidden::Top { r, hidden: None });
+    }
+    // Hidden and ours (notices, the recording bar): not in the capture,
+    // and nothing to explain.
+    let mut pid = 0u32;
+    unsafe { GetWindowThreadProcessId(h, Some(&mut pid)) };
+    if t.own_pid == Some(pid) || rustshot_class(h) {
+        return None;
+    }
+    unsafe {
+        // `info` asks DWM only of framed and app windows.
+        let mut c = 0u32;
+        if DwmGetWindowAttribute(h, DWMWA_CLOAKED, (&mut c as *mut u32).cast(), 4).is_ok() && c != 0 {
+            return None;
+        }
+        let mut f = RECT::default();
+        let r = DwmGetWindowAttribute(h, DWMWA_EXTENDED_FRAME_BOUNDS, (&mut f as *mut RECT).cast(), std::mem::size_of::<RECT>() as u32)
+            .ok()
+            .map(|_| r_of(f))
+            .filter(|f| !f.is_empty())
+            .unwrap_or(r);
+        // A layered window over a whole monitor is an overlay (the border
+        // a meeting app draws round a shared screen), not a window.
+        let ex = GetWindowLongW(h, GWL_EXSTYLE) as u32;
+        if ex & WS_EX_LAYERED.0 != 0 && covers_monitor(h, r) {
+            return None;
+        }
+        let style = GetWindowLongW(h, GWL_STYLE) as u32;
+        Some(crate::hidden::Top { r, hidden: Some(corner_px(h, style)) })
+    }
+}
+
+unsafe extern "system" fn hidden_cb(h: HWND, lp: LPARAM) -> BOOL {
+    let t = unsafe { &mut *(lp.0 as *mut HiddenTops) };
+    if let Some(top) = hidden_top(h, t) {
+        t.out.push(top);
+    }
+    BOOL(1)
+}
+
+/// Every top-level window reaching `within`, front to back, those hidden
+/// from capture marked (see [`super::hidden_tops`]).
+pub fn hidden_tops(own_pid: Option<u32>, within: R) -> Option<Vec<crate::hidden::Top>> {
+    let shell = unsafe { (GetShellWindow(), GetDesktopWindow()) };
+    let mut t = HiddenTops { own_pid, shell, within, out: Vec::new() };
+    unsafe { EnumWindows(Some(hidden_cb), LPARAM(&mut t as *mut HiddenTops as isize)) }.ok()?;
+    Some(t.out)
 }
 
 #[cfg(test)]

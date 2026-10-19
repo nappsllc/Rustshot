@@ -346,6 +346,16 @@ mod imp;
 #[path = "snap_macos.rs"]
 mod imp;
 
+/// Every top-level window reaching `within` (global px), front to back,
+/// for marking the ones hidden from screenshots ([`crate::hidden`]):
+/// `own_pid`'s and other Rustshot processes' hidden windows (notices,
+/// the recording bar) are left out, their captured ones kept (they cover
+/// what is behind them). `None` where windows cannot be listed or no
+/// window can hide (Linux).
+pub fn hidden_tops(own_pid: Option<u32>, within: R) -> Option<Vec<crate::hidden::Top>> {
+    imp::hidden_tops(own_pid, within)
+}
+
 /// Get the first snapshot's one-time costs (Windows: loading dwmapi and
 /// its first DWM query) out of the way on a background thread.
 pub fn warm_up() {

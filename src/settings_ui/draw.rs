@@ -703,6 +703,12 @@ fn capture(ui: &mut Ui, s: &mut Settings, tok: &Tok, click: &mut Option<Click>) 
     srow(ui, tok, tr!("settings.capture.include_pointer"), Some(tr!("settings.capture.include_pointer_help")), |ui| {
         ui.switch("include_cursor", &mut f.cursor, tok);
     });
+    // Not on Linux: no window there can hide from captures.
+    if !cfg!(target_os = "linux") {
+        srow(ui, tok, tr!("settings.capture.mark_hidden_windows"), Some(tr!("settings.capture.mark_hidden_windows.help")), |ui| {
+            ui.switch("mark_hidden_windows", &mut f.mark_hidden, tok);
+        });
+    }
 }
 
 /// Overlay: what shows while selecting, and how the toolbar draws.

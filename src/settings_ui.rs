@@ -1,8 +1,9 @@
-//! The Settings window (the Settings board, 680 × 520): a rail of short
+//! The Settings window (680 × 552; the Settings board's 680 × 520 plus a
+//! row for Capture's "Mark windows hidden from screenshots"): a rail of short
 //! sections, each fitting the body without scrolling ([`SECTIONS`]):
 //! **General** (theme, accent, launch at login, tray icon, update
 //! checks), **Capture** (Win+Shift+S, snapping, Accept on select, what
-//! happens after a capture), **Overlay** (magnifier, hints, UI size,
+//! happens after a capture, the pointer and hidden windows in it), **Overlay** (magnifier, hints, UI size,
 //! renderer, "Reset tool sizes & colors"), **Saving** (folder, Save As,
 //! format and JPEG quality), **File names** (daily subfolders and the
 //! file-name pattern editor), **History**, **Recording** and **Camera**
@@ -53,7 +54,7 @@ use crate::chan::{Receiver, Sender};
 
 /// Window size, logical px.
 pub const W: u32 = 680;
-pub const H: u32 = 520;
+pub const H: u32 = 552;
 
 pub(crate) mod draw;
 mod recording;
@@ -400,6 +401,8 @@ pub struct Form {
     pub trim: bool,
     /// Capture "Include mouse pointer" (`include_cursor`).
     pub cursor: bool,
+    /// Capture "Mark windows hidden from screenshots" (`mark_hidden_windows`).
+    pub mark_hidden: bool,
     /// Saving "Watermark on export" (`export_watermark`) and its text.
     pub watermark: bool,
     pub watermark_text: TextState,
@@ -463,6 +466,7 @@ impl Form {
             redact_style: REDACT_STYLES.iter().position(|a| cfg.redact_style.trim() == a.1).unwrap_or(0),
             trim: cfg.trim_margins,
             cursor: cfg.include_cursor,
+            mark_hidden: cfg.mark_hidden_windows,
             watermark: cfg.export_watermark,
             watermark_text: TextState::new(&cfg.watermark_text),
             watermark_image: cfg.watermark_image.clone(),
@@ -631,6 +635,9 @@ impl Form {
         }
         if self.cursor != was.cursor {
             c.include_cursor = self.cursor;
+        }
+        if self.mark_hidden != was.mark_hidden {
+            c.mark_hidden_windows = self.mark_hidden;
         }
         if self.watermark != was.watermark {
             c.export_watermark = self.watermark;
