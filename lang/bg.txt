@@ -1198,3 +1198,9 @@ fx.anchor.right = Вдясно
 fx.anchor.bottom_left = Долу вляво
 fx.anchor.bottom = Долу
 fx.anchor.bottom_right = Долу вдясно
+
+# Windows hidden from screenshots
+capture.hidden.title = Скрит от екранни снимки
+capture.hidden.body = Този прозорец защитава лична информация
+settings.capture.mark_hidden_windows = Отбелязване на прозорци, скрити от екранни снимки
+settings.capture.mark_hidden_windows.help = Показва заместител, където приложение изключва прозореца си от заснеманията

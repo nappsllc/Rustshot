@@ -1201,3 +1201,9 @@ fx.anchor.right = Right
 fx.anchor.bottom_left = Bottom left
 fx.anchor.bottom = Bottom
 fx.anchor.bottom_right = Bottom right
+
+# Windows hidden from screenshots
+capture.hidden.title = Hidden from screenshots
+capture.hidden.body = This window protects private information
+settings.capture.mark_hidden_windows = Mark windows hidden from screenshots
+settings.capture.mark_hidden_windows.help = Show a placeholder where an app keeps its window out of captures

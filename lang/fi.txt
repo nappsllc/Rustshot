@@ -1198,3 +1198,9 @@ fx.anchor.right = Oikea
 fx.anchor.bottom_left = Alavasen
 fx.anchor.bottom = Ala
 fx.anchor.bottom_right = Alaoikea
+
+# Windows hidden from screenshots
+capture.hidden.title = Piilotettu kuvakaappauksilta
+capture.hidden.body = Tämä ikkuna suojaa yksityisiä tietoja
+settings.capture.mark_hidden_windows = Merkitse kuvakaappauksilta piilotetut ikkunat
+settings.capture.mark_hidden_windows.help = Näyttää paikkamerkin, kun sovellus jättää ikkunansa pois kaappauksista

@@ -1198,3 +1198,9 @@ fx.anchor.right = Sağ
 fx.anchor.bottom_left = Sol alt
 fx.anchor.bottom = Alt
 fx.anchor.bottom_right = Sağ alt
+
+# Windows hidden from screenshots
+capture.hidden.title = Ekran görüntülerinden gizlendi
+capture.hidden.body = Bu pencere özel bilgileri korur
+settings.capture.mark_hidden_windows = Ekran görüntülerinden gizlenen pencereleri işaretle
+settings.capture.mark_hidden_windows.help = Bir uygulamanın penceresini yakalamaların dışında tuttuğu yerde yer tutucu gösterir

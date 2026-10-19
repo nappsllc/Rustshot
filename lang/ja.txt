@@ -1182,3 +1182,9 @@ fx.anchor.right = 右
 fx.anchor.bottom_left = 左下
 fx.anchor.bottom = 下
 fx.anchor.bottom_right = 右下
+
+# Windows hidden from screenshots
+capture.hidden.title = スクリーンショットには表示されません
+capture.hidden.body = このウィンドウは個人情報を保護しています
+settings.capture.mark_hidden_windows = スクリーンショットから隠されたウィンドウを示す
+settings.capture.mark_hidden_windows.help = アプリがキャプチャから除外したウィンドウの位置にプレースホルダーを表示

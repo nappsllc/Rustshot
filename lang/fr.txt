@@ -1198,3 +1198,9 @@ fx.anchor.right = À droite
 fx.anchor.bottom_left = En bas à gauche
 fx.anchor.bottom = En bas
 fx.anchor.bottom_right = En bas à droite
+
+# Windows hidden from screenshots
+capture.hidden.title = Masquée des captures d’écran
+capture.hidden.body = Cette fenêtre protège des informations privées
+settings.capture.mark_hidden_windows = Signaler les fenêtres masquées des captures d’écran
+settings.capture.mark_hidden_windows.help = Affiche un espace réservé là où une application exclut sa fenêtre des captures

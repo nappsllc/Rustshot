@@ -1230,3 +1230,9 @@ fx.anchor.right = Prawo
 fx.anchor.bottom_left = Lewy dolny
 fx.anchor.bottom = Dół
 fx.anchor.bottom_right = Prawy dolny
+
+# Windows hidden from screenshots
+capture.hidden.title = Ukryte przed zrzutami ekranu
+capture.hidden.body = To okno chroni prywatne informacje
+settings.capture.mark_hidden_windows = Oznaczaj okna ukryte przed zrzutami ekranu
+settings.capture.mark_hidden_windows.help = Pokazuje symbol zastępczy tam, gdzie aplikacja wyklucza swoje okno z przechwyceń

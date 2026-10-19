@@ -1214,3 +1214,9 @@ fx.anchor.right = Vpravo
 fx.anchor.bottom_left = Vlevo dole
 fx.anchor.bottom = Dole
 fx.anchor.bottom_right = Vpravo dole
+
+# Windows hidden from screenshots
+capture.hidden.title = Skryto před snímky obrazovky
+capture.hidden.body = Toto okno chrání soukromé informace
+settings.capture.mark_hidden_windows = Označit okna skrytá před snímky obrazovky
+settings.capture.mark_hidden_windows.help = Zobrazí zástupný panel tam, kde aplikace vyřazuje své okno ze záznamů

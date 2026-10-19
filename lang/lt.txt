@@ -1214,3 +1214,9 @@ fx.anchor.right = Dešinėje
 fx.anchor.bottom_left = Apačioje kairėje
 fx.anchor.bottom = Apačioje
 fx.anchor.bottom_right = Apačioje dešinėje
+
+# Windows hidden from screenshots
+capture.hidden.title = Paslėpta nuo ekrano kopijų
+capture.hidden.body = Šis langas saugo privačią informaciją
+settings.capture.mark_hidden_windows = Žymėti nuo ekrano kopijų paslėptus langus
+settings.capture.mark_hidden_windows.help = Rodo pakaitalą ten, kur programa neleidžia fiksuoti savo lango

@@ -1214,3 +1214,9 @@ fx.anchor.right = ימין
 fx.anchor.bottom_left = למטה משמאל
 fx.anchor.bottom = למטה
 fx.anchor.bottom_right = למטה מימין
+
+# Windows hidden from screenshots
+capture.hidden.title = מוסתר מצילומי מסך
+capture.hidden.body = החלון הזה מגן על מידע פרטי
+settings.capture.mark_hidden_windows = סימון חלונות המוסתרים מצילומי מסך
+settings.capture.mark_hidden_windows.help = הצגת ממלא מקום היכן שאפליקציה מוציאה את החלון שלה מלכידות
