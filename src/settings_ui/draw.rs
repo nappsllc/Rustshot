@@ -427,8 +427,12 @@ pub struct Dialog<'a> {
     pub check: Option<(&'a str, &'a str, bool, Click)>,
     /// The card's least width (logical px).
     pub min_w: f32,
-    /// The tallest the text may grow before it is cut.
+    /// The tallest the text may grow (never past the window: it grows to
+    /// the window's height less a margin).
     pub max_text_h: f32,
+    /// Lines (the hotkey summary's) that do not fit are left out whole:
+    /// [`fit_lines`], instead of a paragraph cut short.
+    pub fit_lines: bool,
     /// A red line under the text (something the dialog's button could not do).
     pub error: Option<&'a str>,
 }
@@ -444,9 +448,22 @@ pub fn dialog(ui: &mut Ui, d: &Dialog) -> Option<Click> {
     let cw = (total + check_w + 2.0 * cp).max(d.min_w);
     let text_w = cw - 2.0 * cp - icon_w;
     let title_h = if d.title.is_some() { 24.0 } else { 0.0 };
-    let th = ui.paragraph_height(d.text, text_w).clamp(24.0, d.max_text_h);
     let err_lines = d.error.map_or(Vec::new(), |e| wrap(e, text_w, |s| ui.text_w(12.0, s)));
     let err_h = if err_lines.is_empty() { 0.0 } else { 8.0 + 16.0 * err_lines.len() as f32 };
+    // The text's room: up to the window's height less a margin.
+    let room = (b.h - 2.0 * DIALOG_MARGIN - (cp + title_h + err_h + 24.0 + QROW + cp)).max(24.0);
+    let max_h = d.max_text_h.min(room);
+    let text = if d.fit_lines { fit_lines(d.text, max_h, |t| ui.paragraph_height(t, text_w)) } else { d.text.to_string() };
+    let text = text.as_str();
+    let th = ui.paragraph_height(text, text_w).clamp(24.0, max_h);
+    // (Tests: text taller than its room is cut short; lines left out
+    // are noted too.)
+    #[cfg(test)]
+    if d.fit_lines && ui.paragraph_height(text, text_w) > th + 0.5 {
+        crate::ui::preview::note_cut(text);
+    } else if text != d.text {
+        crate::ui::preview::note_cut(&format!("lines left out: {text}"));
+    }
     let ch = cp + title_h + th + err_h + 24.0 + QROW + cp;
     let card = FRect { x: ((b.w - cw) / 2.0).round(), y: ((b.h - ch) / 2.0).round(), w: cw, h: ch };
     ui.modal_card(card);
@@ -458,7 +475,7 @@ pub fn dialog(ui: &mut Ui, d: &Dialog) -> Option<Click> {
         ui.text_at(14.0, &fit, x, cy, tok.tx, true);
     }
     let ty = card.y + cp + title_h + if title_h == 0.0 && th <= 24.0 { 2.0 } else { 0.0 };
-    ui.area(FRect { x: tx, y: ty, w: text_w, h: th }, |ui| ui.height(th).paragraph(d.text, false));
+    ui.area(FRect { x: tx, y: ty, w: text_w, h: th }, |ui| ui.height(th).paragraph(text, false));
     for (i, l) in err_lines.iter().enumerate() {
         let (x, cy) = (ui.px(tx), ui.px(ty + th + 8.0 + 8.0 + 16.0 * i as f32));
         ui.text_at(12.0, l, x, cy, tok.er, false);
@@ -487,6 +504,24 @@ pub fn dialog(ui: &mut Ui, d: &Dialog) -> Option<Click> {
     click
 }
 
+/// The least room between a [`dialog`]'s card and the window's edges.
+const DIALOG_MARGIN: f32 = 16.0;
+
+/// `text` in whole lines whose height (`height`) fits `max_h`: the first
+/// line, as many of the next as fit, "and N more" and the last line (for
+/// a hotkey summary: its heading, its first rows and how to pick a key).
+/// The summary is short enough to fit as it is ([`crate::hotkey::DIALOG_LINES`]);
+/// this is for notes joined to it, or to an error, later.
+pub fn fit_lines(text: &str, max_h: f32, height: impl Fn(&str) -> f32) -> String {
+    let lines: Vec<&str> = text.split('\n').collect();
+    if lines.len() < 3 || height(text) <= max_h {
+        return text.to_string();
+    }
+    let last = lines.len() - 1;
+    let cut = |k: usize| format!("{}\n{}\n{}", lines[..k].join("\n"), trn!("hotkey.fail.more", last - k), lines[last]);
+    (1..last).rev().map(cut).find(|t| height(t) <= max_h).unwrap_or_else(|| cut(1))
+}
+
 /// The question, error, broken-file state or guide, as a [`dialog`].
 fn question(ui: &mut Ui, s: &Settings, m: &Modal) -> Option<Click> {
     if let Modal::Guide { broken, dont_show } = *m {
@@ -504,6 +539,7 @@ fn question(ui: &mut Ui, s: &Settings, m: &Modal) -> Option<Click> {
                 check: Some(("q_dont_show", GUIDE_DONT_SHOW.get(), dont_show, Click::DontShow)),
                 min_w: 500.0,
                 max_text_h: 260.0,
+                fit_lines: false,
                 error: s.guide_error.as_deref(),
             },
         );
@@ -546,7 +582,14 @@ fn question(ui: &mut Ui, s: &Settings, m: &Modal) -> Option<Click> {
         Modal::Reset(_) => ("alert", RESET.get().into(), vec![("q_replace", tr!("settings.q.replace"), Click::Replace), ("q_cancel", tr!("common.cancel"), Click::Back)]),
     };
     let icon_color = if matches!(m, Modal::Rewrite { .. } | Modal::HideTray | Modal::TrayOffNotice) { ui.theme.accent_fg } else { ui.theme.error };
-    dialog(ui, &Dialog { icon, icon_color, title: None, text: &text, buttons: &btns, check: None, min_w: 420.0, max_text_h: 160.0, error: None })
+    // A hotkey note or an error (notes join it) grows to the window, a
+    // little wider for the summary's one-line rows; the rest are short.
+    let (min_w, max_text_h, fit_lines) = match m {
+        Modal::Hotkeys { .. } => (500.0, f32::INFINITY, true),
+        Modal::Error(_) => (420.0, f32::INFINITY, true),
+        _ => (420.0, 160.0, false),
+    };
+    dialog(ui, &Dialog { icon, icon_color, title: None, text: &text, buttons: &btns, check: None, min_w, max_text_h, fit_lines, error: None })
 }
 
 

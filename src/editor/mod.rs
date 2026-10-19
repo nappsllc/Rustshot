@@ -249,16 +249,18 @@ pub enum HotkeyNote {
     Balloon(String),
 }
 
-/// The note for `failed` (none when empty). A while-recording chord never
-/// opens the dialog (it would land over the recording): a small note.
+/// The note for `failed` (none when empty; several are a
+/// [`crate::hotkey::summary`], shorter in a balloon). A while-recording
+/// chord never opens the dialog (it would land over the recording): a
+/// small note.
 pub fn hotkey_note(failed: &[crate::hotkey::Failure]) -> Option<HotkeyNote> {
     if failed.is_empty() {
         return None;
     }
-    let text = failed.iter().map(|f| f.message()).collect::<Vec<_>>().join("\n");
+    use crate::hotkey::{BALLOON_LINES, DIALOG_LINES, summary};
     Some(match failed.iter().find(|f| f.slot < crate::hotkey::SLOTS && f.needs_action()) {
-        Some(f) => HotkeyNote::Dialog { text, field: Some(f.field_id()) },
-        None => HotkeyNote::Balloon(text),
+        Some(f) => HotkeyNote::Dialog { text: summary(failed, DIALOG_LINES), field: Some(f.field_id()) },
+        None => HotkeyNote::Balloon(summary(failed, BALLOON_LINES)),
     })
 }
 
@@ -281,13 +283,15 @@ thread_local! {
 /// Key bindings, the dialog over it); a fallback is a tray balloon.
 fn tell_hotkey_failures(failed: &[crate::hotkey::Failure], th: Theme) {
     let Some(note) = hotkey_note(failed) else { return };
+    // stderr: every failure in full (the note may summarise them).
+    for f in failed {
+        eprintln!("rustshot: {}", f.message());
+    }
     match note {
         HotkeyNote::Dialog { text, field } => {
-            eprintln!("rustshot: {text}");
             crate::settings_ui::show_hotkeys(&text, field);
         }
         HotkeyNote::Balloon(text) => {
-            eprintln!("rustshot: {text}");
             if !crate::settings_ui::notify_hotkeys(&text, None) {
                 say(&text, ToastKind::Info, th, true);
             }

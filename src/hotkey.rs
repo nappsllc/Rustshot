@@ -367,6 +367,24 @@ impl Failure {
         }
     }
 
+    /// The failure as one short line of a [`summary`]: "Capture region:
+    /// Shift+Win+X → now Shift+Win+Q", "Quit Rustshot: Ctrl+Alt+Shift+Q —
+    /// not set".
+    pub fn line(&self) -> String {
+        let chord = chord_label(&self.wanted);
+        let name = slot_name(self.slot);
+        if let Some(a) = &self.alt {
+            return tr!("hotkey.fail.line.alt", name, chord, alt = chord_label(a));
+        }
+        match (self.cause, self.kept.as_deref().map(chord_label)) {
+            (Cause::Unknown, _) => tr!("hotkey.fail.line.unknown", name, chord),
+            (_, Some(kept)) => tr!("hotkey.fail.line.kept", name, chord, kept),
+            (Cause::InUse, None) => tr!("hotkey.fail.line.not_set", name, chord),
+            (Cause::Invalid, None) => tr!("hotkey.fail.line.invalid", name, chord),
+            (Cause::NoDisplay, None) => tr!("hotkey.fail.line.no_display", name, chord),
+        }
+    }
+
     /// Nothing is registered for the slot and the user has to pick
     /// another key (another app holds it, or it is not a valid hotkey).
     pub fn needs_action(&self) -> bool {
@@ -385,6 +403,44 @@ impl Failure {
     #[cfg_attr(target_os = "macos", allow(dead_code))] // macOS: hotkeys apply after a restart
     fn same(&self, o: &Failure) -> bool {
         self.slot == o.slot && self.cause == o.cause && same_chord(&self.wanted, &o.wanted)
+    }
+}
+
+/// The most lines of hotkeys a [`summary`] lists in the Settings dialog
+/// (the rest are "and N more": the Shortcuts rows show each one in red).
+pub const DIALOG_LINES: usize = 6;
+
+/// The same in a tray balloon (Windows shows a few lines of it).
+pub const BALLOON_LINES: usize = 3;
+
+/// What `failed` tells the user. One failure: its [`Failure::message`].
+/// Several: "4 shortcuts are in use by another app", a [`Failure::line`]
+/// for each (those that need a new key first; past `max` lines, "and N
+/// more"), and how to pick another key once at the end when one needs it.
+pub fn summary(failed: &[Failure], max: usize) -> String {
+    let n = failed.len();
+    match failed {
+        [] => String::new(),
+        [f] => f.message(),
+        _ => {
+            let head = if failed.iter().all(|f| f.cause == Cause::InUse) {
+                trn!("hotkey.fail.summary_in_use", n)
+            } else {
+                trn!("hotkey.fail.summary", n)
+            };
+            let mut order: Vec<&Failure> = failed.iter().collect();
+            order.sort_by_key(|f| !f.needs_action());
+            let shown = if n > max { max.saturating_sub(1).max(1) } else { n };
+            let mut out = vec![head];
+            out.extend(order[..shown].iter().map(|f| f.line()));
+            if shown < n {
+                out.push(trn!("hotkey.fail.more", n - shown));
+            }
+            if failed.iter().any(Failure::needs_action) {
+                out.push(tr!("hotkey.fail.pick_any").to_string());
+            }
+            out.join("\n")
+        }
     }
 }
 
