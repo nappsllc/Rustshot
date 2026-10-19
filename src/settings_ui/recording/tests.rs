@@ -281,6 +281,11 @@ fn preview_recording_section_pngs() {
 /// other label of the section.
 #[test]
 fn a_gif_keeps_the_camera_rows_enabled() {
+    // The model's state pinned on this thread: the global download switch
+    // is flipped by tests running alongside (download_switch_applies_on_save
+    // saves download_data = false), and the Background row's note and
+    // detail row would change between the renders compared here.
+    crate::cam::bg::set_state(Some(crate::cam::bg::Blur::Fetchable));
     let cams = Found { cams: vec![("{cam-1}".into(), "Integrated Camera".into())], ..find() };
     let left = |camera: bool, format: &str, section: usize| {
         let mut s = sample(Config { rec_format: format.into(), rec_camera: camera, ..Config::default() });
@@ -296,6 +301,7 @@ fn a_gif_keeps_the_camera_rows_enabled() {
     assert!(left(true, "gif", CAMERA) == left(true, "mp4", CAMERA), "a GIF keeps the camera rows");
     // And GIF still greys the sound rows (the left side differs from MP4).
     assert!(left(true, "gif", RECORDING) != left(true, "mp4", RECORDING), "GIF greys System sound and Microphone");
+    crate::cam::bg::set_state(None);
 }
 
 /// Click the control `id` at `fx` of its width, in Camera.
