@@ -943,8 +943,15 @@ mod tests {
             assert!(held, "the child took the instance");
             assert!(imp::acquire_named(&name, false).is_none(), "held by the child");
         });
+        // Keep the child's stdin open until it is reaped: `wait` closes it
+        // first, and `kill` only sends SIGKILL. On macOS the signal takes
+        // effect a moment later, so a child woken by the EOF could still
+        // return from `holder_child`, drop its guard and remove the socket
+        // file (a clean exit, not the death this test is about).
+        let stdin = child.stdin.take();
         let _ = child.kill(); // only the child this test started
         let _ = child.wait();
+        drop(stdin);
         if let Err(e) = checked {
             std::panic::resume_unwind(e);
         }
