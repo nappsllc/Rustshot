@@ -819,8 +819,13 @@ pub fn mag(f: &mut Fb, ui: &Ui, m: &MagUi) {
         circle_line(f, cx, cy, r.w / 2.0, lw, ui.th.border);
     }
     // The caption: a dot of the color, position and hex.
+    // Its shadow is the loupe's, all round (the panels' sits low).
     let cap = m.cap;
-    chrome::surface(f, ui, cap, 6.0, &chrome::SMALL_LAYERS, 1.0);
+    let crad = ui.px(6.0);
+    for (i, dy, sp) in mag_shadow(m.s) {
+        chrome::fill(f, FRect { x: cap.x - sp, y: cap.y + dy - sp, w: cap.w + 2.0 * sp, h: cap.h + 2.0 * sp }, crad + sp, ui.th.shadow[i]);
+    }
+    chrome::surface(f, ui, cap, 6.0, &[], 1.0);
     let c = m.px[MAG_N * MAG_N / 2];
     let ccy = cap.y + cap.h / 2.0;
     let dr = ui.px(5.0);
@@ -836,9 +841,8 @@ pub fn mag_bounds(ui: &Ui, m: &MagUi) -> Vec<FRect> {
     // The loupe and its shadow (all round, a little lower), AA included.
     let (dy, sp) = mag_shadow(m.s).fold((0.0f32, 0.0f32), |(d, s), (_, dy, sp)| (d.max(dy), s.max(sp)));
     let e = sp + 3.0;
-    let r = m.r;
-    let loupe = FRect { x: r.x - e, y: r.y - e, w: r.w + 2.0 * e, h: r.h + 2.0 * e + dy };
-    vec![loupe, toolbar::union(chrome::surface_bounds(ui, cap), t)]
+    let grow = |r: FRect| FRect { x: r.x - e, y: r.y - e, w: r.w + 2.0 * e, h: r.h + 2.0 * e + dy };
+    vec![grow(m.r), toolbar::union(grow(cap), t)]
 }
 
 /// The loupe's shadow as (theme shadow layer, drop, spread), logical px:
