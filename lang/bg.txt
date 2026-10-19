@@ -347,6 +347,19 @@ hotkey.fail.no_display = {chord} не можа да се регистрира �
 hotkey.fail.invalid_kept = {chord} не можа да се регистрира – Rustshot не може да регистрира такава клавишна комбинация; запазена е {kept}.
 hotkey.fail.no_display_kept = {chord} не можа да се регистрира – няма достъпен X display; запазена е {kept}.
 hotkey.fail.in_use_kept = {chord} не можа да се регистрира – използва се от друго приложение; запазена е {kept}.
+hotkey.fail.summary_in_use[one] = {n} клавишна комбинация се използва от друго приложение
+hotkey.fail.summary_in_use[other] = {n} клавишни комбинации се използват от друго приложение
+hotkey.fail.summary[one] = {n} клавишна комбинация не можа да се регистрира
+hotkey.fail.summary[other] = {n} клавишни комбинации не можаха да се регистрират
+hotkey.fail.line.alt = {name}: {chord} → сега {alt}
+hotkey.fail.line.kept = {name}: {chord} → запазена е {kept}
+hotkey.fail.line.not_set = {name}: {chord} – не е зададена
+hotkey.fail.line.invalid = {name}: {chord} – невалидна клавишна комбинация
+hotkey.fail.line.no_display = {name}: {chord} – няма X display
+hotkey.fail.line.unknown = {name}: {chord} – непотвърдена
+hotkey.fail.more[one] = и още {n}
+hotkey.fail.more[other] = и още {n}
+hotkey.fail.pick_any = Изберете друг клавиш: щракнете върху „Промяна на комбинациите…“, щракнете върху клавиша и натиснете нов.
 
 # Shared buttons
 common.apply = Приложи

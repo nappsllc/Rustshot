@@ -347,6 +347,16 @@ hotkey.fail.no_display = 無法註冊 {chord} — 沒有可用的 X display。
 hotkey.fail.invalid_kept = 無法註冊 {chord} — Rustshot 無法註冊這個快速鍵；保留 {kept}。
 hotkey.fail.no_display_kept = 無法註冊 {chord} — 沒有可用的 X display；保留 {kept}。
 hotkey.fail.in_use_kept = 無法註冊 {chord} — 已被其他應用程式使用；保留 {kept}。
+hotkey.fail.summary_in_use[other] = {n} 個快速鍵已被其他應用程式使用
+hotkey.fail.summary[other] = {n} 個快速鍵無法註冊
+hotkey.fail.line.alt = {name}：{chord} → 現為 {alt}
+hotkey.fail.line.kept = {name}：{chord} → 保留 {kept}
+hotkey.fail.line.not_set = {name}：{chord} — 未設定
+hotkey.fail.line.invalid = {name}：{chord} — 不是有效的快速鍵
+hotkey.fail.line.no_display = {name}：{chord} — 沒有 X display
+hotkey.fail.line.unknown = {name}：{chord} — 未確認
+hotkey.fail.more[other] = 另有 {n} 個
+hotkey.fail.pick_any = 請另選按鍵：按一下「變更快速鍵…」，按一下該按鍵，然後按下新的按鍵。
 
 # Shared buttons
 common.apply = 套用

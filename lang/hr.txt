@@ -347,6 +347,22 @@ hotkey.fail.no_display = Nije moguće registrirati {chord} – nije dostupan X d
 hotkey.fail.invalid_kept = Nije moguće registrirati {chord} – Rustshot ne može registrirati taj prečac; zadržan je {kept}.
 hotkey.fail.no_display_kept = Nije moguće registrirati {chord} – nije dostupan X display; zadržan je {kept}.
 hotkey.fail.in_use_kept = Nije moguće registrirati {chord} – koristi ga druga aplikacija; zadržan je {kept}.
+hotkey.fail.summary_in_use[one] = {n} prečac koristi druga aplikacija
+hotkey.fail.summary_in_use[few] = {n} prečaca koristi druga aplikacija
+hotkey.fail.summary_in_use[other] = {n} prečaca koristi druga aplikacija
+hotkey.fail.summary[one] = {n} prečac nije moguće registrirati
+hotkey.fail.summary[few] = {n} prečaca nije moguće registrirati
+hotkey.fail.summary[other] = {n} prečaca nije moguće registrirati
+hotkey.fail.line.alt = {name}: {chord} → sada {alt}
+hotkey.fail.line.kept = {name}: {chord} → zadržan je {kept}
+hotkey.fail.line.not_set = {name}: {chord} – nije postavljeno
+hotkey.fail.line.invalid = {name}: {chord} – nevažeći prečac
+hotkey.fail.line.no_display = {name}: {chord} – nema X displaya
+hotkey.fail.line.unknown = {name}: {chord} – nije potvrđeno
+hotkey.fail.more[one] = i još {n}
+hotkey.fail.more[few] = i još {n}
+hotkey.fail.more[other] = i još {n}
+hotkey.fail.pick_any = Odaberite drugu tipku: kliknite „Promijeni prečace…”, kliknite tipku i pritisnite novu.
 
 # Shared buttons
 common.apply = Primijeni

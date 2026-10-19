@@ -347,6 +347,16 @@ hotkey.fail.no_display = ลงทะเบียน {chord} ไม่ได้ 
 hotkey.fail.invalid_kept = ลงทะเบียน {chord} ไม่ได้ — Rustshot ลงทะเบียนแป้นพิมพ์ลัดนี้ไม่ได้ จึงใช้ {kept} ต่อ
 hotkey.fail.no_display_kept = ลงทะเบียน {chord} ไม่ได้ — ไม่มี X display ที่ใช้ได้ จึงใช้ {kept} ต่อ
 hotkey.fail.in_use_kept = ลงทะเบียน {chord} ไม่ได้ — แอปอื่นใช้อยู่ จึงใช้ {kept} ต่อ
+hotkey.fail.summary_in_use[other] = แป้นพิมพ์ลัด {n} รายการถูกใช้โดยแอปอื่น
+hotkey.fail.summary[other] = ลงทะเบียนแป้นพิมพ์ลัด {n} รายการไม่ได้
+hotkey.fail.line.alt = {name}: {chord} → ตอนนี้ใช้ {alt}
+hotkey.fail.line.kept = {name}: {chord} → ใช้ {kept} ต่อ
+hotkey.fail.line.not_set = {name}: {chord} — ไม่ได้ตั้งค่า
+hotkey.fail.line.invalid = {name}: {chord} — ไม่ใช่แป้นพิมพ์ลัดที่ใช้ได้
+hotkey.fail.line.no_display = {name}: {chord} — ไม่มี X display
+hotkey.fail.line.unknown = {name}: {chord} — ยืนยันไม่ได้
+hotkey.fail.more[other] = และอีก {n} รายการ
+hotkey.fail.pick_any = เลือกแป้นอื่น: คลิก เปลี่ยนแป้นพิมพ์ลัด… คลิกแป้นนั้น แล้วกดแป้นใหม่
 
 # Shared buttons
 common.apply = นำไปใช้

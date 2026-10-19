@@ -347,6 +347,19 @@ hotkey.fail.no_display = Ei voitu rekisteröidä: {chord} – X-näyttöä ei ol
 hotkey.fail.invalid_kept = Ei voitu rekisteröidä: {chord} – Rustshot ei voi rekisteröidä tätä pikanäppäintä; säilytettiin {kept}.
 hotkey.fail.no_display_kept = Ei voitu rekisteröidä: {chord} – X-näyttöä ei ole saatavilla; säilytettiin {kept}.
 hotkey.fail.in_use_kept = Ei voitu rekisteröidä: {chord} – toisen sovelluksen käytössä; säilytettiin {kept}.
+hotkey.fail.summary_in_use[one] = {n} pikanäppäin on toisen sovelluksen käytössä
+hotkey.fail.summary_in_use[other] = {n} pikanäppäintä on toisen sovelluksen käytössä
+hotkey.fail.summary[one] = {n} pikanäppäin jäi rekisteröimättä
+hotkey.fail.summary[other] = {n} pikanäppäintä jäi rekisteröimättä
+hotkey.fail.line.alt = {name}: {chord} → nyt {alt}
+hotkey.fail.line.kept = {name}: {chord} → säilytettiin {kept}
+hotkey.fail.line.not_set = {name}: {chord} – ei asetettu
+hotkey.fail.line.invalid = {name}: {chord} – ei kelvollinen pikanäppäin
+hotkey.fail.line.no_display = {name}: {chord} – ei X-näyttöä
+hotkey.fail.line.unknown = {name}: {chord} – ei vahvistettu
+hotkey.fail.more[one] = ja {n} muu
+hotkey.fail.more[other] = ja {n} muuta
+hotkey.fail.pick_any = Valitse toinen näppäin: napsauta Muuta pikanäppäimiä…, napsauta näppäintä ja paina uutta.
 
 # Shared buttons
 common.apply = Käytä

@@ -347,6 +347,19 @@ hotkey.fail.no_display = Não foi possível registrar {chord} — nenhum X displ
 hotkey.fail.invalid_kept = Não foi possível registrar {chord} — não é um atalho que o Rustshot possa registrar; {kept} foi mantido.
 hotkey.fail.no_display_kept = Não foi possível registrar {chord} — nenhum X display disponível; {kept} foi mantido.
 hotkey.fail.in_use_kept = Não foi possível registrar {chord} — está em uso por outro aplicativo; {kept} foi mantido.
+hotkey.fail.summary_in_use[one] = {n} atalho está em uso por outro aplicativo
+hotkey.fail.summary_in_use[other] = {n} atalhos estão em uso por outro aplicativo
+hotkey.fail.summary[one] = Não foi possível registrar {n} atalho
+hotkey.fail.summary[other] = Não foi possível registrar {n} atalhos
+hotkey.fail.line.alt = {name}: {chord} → agora {alt}
+hotkey.fail.line.kept = {name}: {chord} → {kept} mantido
+hotkey.fail.line.not_set = {name}: {chord} — não definido
+hotkey.fail.line.invalid = {name}: {chord} — atalho inválido
+hotkey.fail.line.no_display = {name}: {chord} — sem X display
+hotkey.fail.line.unknown = {name}: {chord} — não confirmado
+hotkey.fail.more[one] = e mais {n}
+hotkey.fail.more[other] = e mais {n}
+hotkey.fail.pick_any = Escolha outra tecla: clique em Alterar atalhos…, clique na tecla e pressione uma nova.
 
 # Shared buttons
 common.apply = Aplicar

@@ -347,6 +347,19 @@ hotkey.fail.no_display = {chord} kaydedilemedi — kullanılabilir X display yok
 hotkey.fail.invalid_kept = {chord} kaydedilemedi — Rustshot'ın kaydedebileceği bir kısayol değil; {kept} korundu.
 hotkey.fail.no_display_kept = {chord} kaydedilemedi — kullanılabilir X display yok; {kept} korundu.
 hotkey.fail.in_use_kept = {chord} kaydedilemedi — başka bir uygulamada kullanılıyor; {kept} korundu.
+hotkey.fail.summary_in_use[one] = {n} kısayol başka bir uygulamada kullanılıyor
+hotkey.fail.summary_in_use[other] = {n} kısayol başka bir uygulamada kullanılıyor
+hotkey.fail.summary[one] = {n} kısayol kaydedilemedi
+hotkey.fail.summary[other] = {n} kısayol kaydedilemedi
+hotkey.fail.line.alt = {name}: {chord} → şimdi {alt}
+hotkey.fail.line.kept = {name}: {chord} → {kept} korundu
+hotkey.fail.line.not_set = {name}: {chord} — atanmadı
+hotkey.fail.line.invalid = {name}: {chord} — geçerli bir kısayol değil
+hotkey.fail.line.no_display = {name}: {chord} — X display yok
+hotkey.fail.line.unknown = {name}: {chord} — doğrulanmadı
+hotkey.fail.more[one] = ve {n} tane daha
+hotkey.fail.more[other] = ve {n} tane daha
+hotkey.fail.pick_any = Başka bir tuş seçin: Kısayolları değiştir…'e tıklayın, tuşa tıklayın ve yeni bir tuşa basın.
 
 # Shared buttons
 common.apply = Uygula

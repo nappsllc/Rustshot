@@ -347,6 +347,16 @@ hotkey.fail.no_display = {chord}을(를) 등록할 수 없습니다 — 사용 �
 hotkey.fail.invalid_kept = {chord}을(를) 등록할 수 없습니다 — Rustshot이 등록할 수 있는 바로 가기 키가 아닙니다. {kept} 유지.
 hotkey.fail.no_display_kept = {chord}을(를) 등록할 수 없습니다 — 사용 가능한 X display가 없습니다. {kept} 유지.
 hotkey.fail.in_use_kept = {chord}을(를) 등록할 수 없습니다 — 다른 앱에서 사용 중입니다. {kept} 유지.
+hotkey.fail.summary_in_use[other] = 바로 가기 키 {n}개를 다른 앱에서 사용 중입니다
+hotkey.fail.summary[other] = 바로 가기 키 {n}개를 등록할 수 없습니다
+hotkey.fail.line.alt = {name}: {chord} → 이제 {alt}
+hotkey.fail.line.kept = {name}: {chord} → {kept} 유지
+hotkey.fail.line.not_set = {name}: {chord} — 설정 안 됨
+hotkey.fail.line.invalid = {name}: {chord} — 올바른 바로 가기 키가 아님
+hotkey.fail.line.no_display = {name}: {chord} — X display 없음
+hotkey.fail.line.unknown = {name}: {chord} — 확인되지 않음
+hotkey.fail.more[other] = 외 {n}개
+hotkey.fail.pick_any = 다른 키를 선택하세요. 바로 가기 키 변경…을 클릭하고, 키를 클릭한 다음 새 키를 누르세요.
 
 # Shared buttons
 common.apply = 적용

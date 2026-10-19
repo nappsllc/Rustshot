@@ -347,6 +347,22 @@ hotkey.fail.no_display = {chord} nelze zaregistrovat – není k dispozici žád
 hotkey.fail.invalid_kept = {chord} nelze zaregistrovat – Rustshot takovou zkratku zaregistrovat neumí; ponechána {kept}.
 hotkey.fail.no_display_kept = {chord} nelze zaregistrovat – není k dispozici žádný X display; ponechána {kept}.
 hotkey.fail.in_use_kept = {chord} nelze zaregistrovat – používá ji jiná aplikace; ponechána {kept}.
+hotkey.fail.summary_in_use[one] = {n} zkratku používá jiná aplikace
+hotkey.fail.summary_in_use[few] = {n} zkratky používá jiná aplikace
+hotkey.fail.summary_in_use[other] = {n} zkratek používá jiná aplikace
+hotkey.fail.summary[one] = {n} zkratku nelze zaregistrovat
+hotkey.fail.summary[few] = {n} zkratky nelze zaregistrovat
+hotkey.fail.summary[other] = {n} zkratek nelze zaregistrovat
+hotkey.fail.line.alt = {name}: {chord} → nyní {alt}
+hotkey.fail.line.kept = {name}: {chord} → ponechána {kept}
+hotkey.fail.line.not_set = {name}: {chord} – nenastaveno
+hotkey.fail.line.invalid = {name}: {chord} – neplatná zkratka
+hotkey.fail.line.no_display = {name}: {chord} – žádný X display
+hotkey.fail.line.unknown = {name}: {chord} – nepotvrzeno
+hotkey.fail.more[one] = a {n} další
+hotkey.fail.more[few] = a {n} další
+hotkey.fail.more[other] = a {n} dalších
+hotkey.fail.pick_any = Zvolte jinou klávesu: klikněte na Změnit zkratky…, klikněte na zkratku a stiskněte novou.
 
 # Shared buttons
 common.apply = Použít

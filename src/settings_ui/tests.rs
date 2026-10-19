@@ -1196,8 +1196,9 @@ fn unregistered_hotkey_can_be_retried() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// The user's case: Record still unregistered, full screen fallen back.
-const HOTKEY_TEXT: &str = "Shift+Win+F is in use by another app \u{2014} Capture full screen is on Shift+Win+Y instead.\nShift+Win+K is used by another app. Pick another key: click Change shortcuts\u{2026}, click the Record video key and press a new one (Shift+Win+J is free).";
+/// The user's case: Record still unregistered, full screen fallen back
+/// (a summary: the key to change first, how to change it once).
+const HOTKEY_TEXT: &str = "2 shortcuts are in use by another app\nRecord video: Shift+Win+K \u{2014} not set\nCapture full screen: Shift+Win+F \u{2192} now Shift+Win+Y\nPick another key: click Change shortcuts\u{2026}, click the key and press a new one.";
 
 /// Another app holds a global key: its row shows red with "In use by
 /// another app" (and what is used meanwhile, or a free key); a new key
@@ -1287,9 +1288,25 @@ fn hotkey_notes_route_to_dialog_or_balloon() {
     let both = [alt.clone(), stuck.clone()];
     let Some(HotkeyNote::Dialog { text, field }) = hotkey_note(&both) else { panic!() };
     assert_eq!(field.as_deref(), Some("global2"));
-    assert_eq!(text, format!("{}\n{}", alt.message(), stuck.message()));
+    assert_eq!(text, crate::hotkey::summary(&both, crate::hotkey::DIALOG_LINES));
     #[cfg(windows)]
     assert_eq!(text, HOTKEY_TEXT);
+    // Fallbacks only: a balloon, shorter still (Windows keeps 255
+    // characters of it), every one counted.
+    let alts: Vec<Failure> = [(0, "Shift+Meta+X", "Shift+Meta+Q"), (2, "Shift+Meta+G", "Shift+Meta+J"), (3, "Shift+Meta+F", "Shift+Meta+Y"), (4, "Shift+Meta+E", "Shift+Meta+Q"), (6, "Shift+Meta+Z", "Shift+Meta+Y"), (7, "Shift+Meta+H", "Shift+Meta+J")]
+        .map(|(slot, w, a)| Failure { slot, wanted: w.into(), cause: Cause::InUse, alt: Some(a.into()), ..Failure::default() })
+        .to_vec();
+    for lang in crate::ui::preview::langs() {
+        crate::i18n::with_lang(lang, || {
+            let Some(HotkeyNote::Balloon(text)) = hotkey_note(&alts) else { panic!("{lang}: a balloon") };
+            let lines: Vec<&str> = text.lines().collect();
+            assert_eq!(lines.len(), 1 + crate::hotkey::BALLOON_LINES, "{lang}: {text}");
+            assert_eq!(lines[0], trn!("hotkey.fail.summary_in_use", 6), "{lang}");
+            assert_eq!(*lines.last().unwrap(), trn!("hotkey.fail.more", 6 - (crate::hotkey::BALLOON_LINES - 1)), "{lang}");
+            assert!(!text.contains(tr!("hotkey.fail.pick_any")), "{lang}: nothing to change");
+            assert!(text.encode_utf16().count() < 256, "{lang}: {} UTF-16 units", text.encode_utf16().count());
+        });
+    }
 }
 
 /// The tray-icon-off question: one more line (and "Set up…") while
@@ -1702,6 +1719,118 @@ fn right_to_left_mirrors_the_window() {
         let crate::wind::Ev::Down { x, .. } = ev else { unreachable!() };
         assert!((x as f32) >= r.x && (x as f32) < r.x1(), "{x} in {r:?}");
     });
+}
+
+/// The most hotkeys that can fail at once (every global and every
+/// while-recording one).
+const MAX_FAILURES: usize = hotkey::SLOTS + hotkey::REC_SLOTS;
+
+/// The first `n` of every hotkey failing at once (the defaults taken by
+/// other apps): fallbacks, keys left unset, a kept one, an unconfirmed
+/// one and the while-recording keys. 1: Quit unset (the dialog); 4: the
+/// user's report (Capture region and Record video on fallbacks, Quit and
+/// full screen unset).
+fn conflicts(n: usize) -> Vec<crate::hotkey::Failure> {
+    use crate::hotkey::{Cause, Failure, REC_SLOT_BASE};
+    let f = |slot: usize, wanted: &str, cause: Cause| Failure { slot, wanted: wanted.into(), cause, ..Failure::default() };
+    let all = [
+        f(1, "Ctrl+Alt+Shift+Q", Cause::InUse),
+        Failure { alt: Some("Shift+Meta+Q".into()), ..f(0, "Shift+Meta+X", Cause::InUse) },
+        Failure { alt: Some("Shift+Meta+J".into()), ..f(2, "Shift+Meta+G", Cause::InUse) },
+        Failure { free: Some("Shift+Meta+Y".into()), ..f(3, "Shift+Meta+F", Cause::InUse) },
+        f(4, "Shift+Meta+E", Cause::InUse),
+        Failure { kept: Some("Ctrl+Alt+R".into()), ..f(5, "Ctrl+Shift+R", Cause::InUse) },
+        f(6, "Shift+Meta+Z", Cause::Unknown),
+        f(7, "Shift+Meta+H", Cause::InUse),
+        f(8, "Shift+Meta+O", Cause::InUse),
+        f(REC_SLOT_BASE, "Ctrl+Alt+Shift+P", Cause::InUse),
+        f(REC_SLOT_BASE + 1, "Ctrl+Alt+Shift+M", Cause::InUse),
+        f(REC_SLOT_BASE + 2, "Ctrl+Alt+Shift+H", Cause::InUse),
+    ];
+    assert_eq!(all.len(), MAX_FAILURES);
+    all[..n].to_vec()
+}
+
+/// The hotkey dialog over Shortcuts › Global with 1, 4 and every hotkey
+/// taken by other apps (the most that fail at once) fits the window in
+/// English, the long pseudo-languages and the RUSTSHOT_FIT_LANGS
+/// catalogs: no line cut, its buttons inside the window. One failure
+/// keeps its sentence; several are a heading, a short line each (past
+/// [`hotkey::DIALOG_LINES`], "and N more") and how to pick a key once
+/// (RUSTSHOT_PREVIEW_DIR: `after/conflicts-<n>-<lang>.png`).
+#[test]
+fn hotkey_conflicts_fit() {
+    use crate::editor::{HotkeyNote, hotkey_note};
+    use crate::hotkey::DIALOG_LINES;
+    for lang in preview::langs() {
+        crate::i18n::with_lang(lang, || {
+            for n in [1, 4, MAX_FAILURES] {
+                let failed = conflicts(n);
+                let Some(HotkeyNote::Dialog { text, field }) = hotkey_note(&failed) else { panic!("{lang} {n}: the dialog") };
+                let lines: Vec<&str> = text.lines().collect();
+                if n == 1 {
+                    assert_eq!(text, failed[0].message(), "{lang}: one failure keeps its sentence");
+                } else {
+                    let in_use = failed.iter().all(|f| f.cause == hotkey::Cause::InUse);
+                    let head = if in_use { trn!("hotkey.fail.summary_in_use", n) } else { trn!("hotkey.fail.summary", n) };
+                    assert_eq!(lines[0], head, "{lang} {n}: the heading");
+                    assert_eq!(text.matches(tr!("hotkey.fail.pick_any")).count(), 1, "{lang} {n}: how to pick a key, once");
+                    assert_eq!(*lines.last().unwrap(), tr!("hotkey.fail.pick_any"), "{lang} {n}");
+                    let shown = n.min(DIALOG_LINES - usize::from(n > DIALOG_LINES));
+                    assert_eq!(lines.len(), 1 + shown + usize::from(n > DIALOG_LINES) + 1, "{lang} {n}: {text}");
+                    if n > DIALOG_LINES {
+                        assert_eq!(lines[lines.len() - 2], trn!("hotkey.fail.more", n - shown), "{lang} {n}");
+                    }
+                    // The keys to change come first.
+                    assert!(lines[1].contains(&crate::hotkey::chord_label("Ctrl+Alt+Shift+Q")), "{lang} {n}: {}", lines[1]);
+                }
+                for k in [1.0f32, 2.0] {
+                    let mut s = sample();
+                    s.section = KEYS_GLOBAL;
+                    s.hotkey_failures = failed.iter().filter(|f| f.slot < hotkey::SLOTS).cloned().collect();
+                    s.modal = Some(Modal::Hotkeys { text: text.clone(), field: field.clone() });
+                    let mut focus = FocusState::default();
+                    let (img, _) = render(&mut s, &DARK, k, &Input::default(), &mut focus);
+                    if k == 1.0 {
+                        let tag = if n == MAX_FAILURES { "max".to_string() } else { n.to_string() };
+                        preview::save(&format!("after/conflicts-{tag}-{lang}.png"), &img);
+                    }
+                    // No text cut or past the edge; the buttons inside the
+                    // window, side by side (the page's rows lie under the
+                    // dimming).
+                    let what = format!("{lang}: {n} hotkeys taken, at {k}");
+                    let problems = preview::take_problems();
+                    assert!(problems.is_empty(), "{what}: {problems:#?}");
+                    let b = ["q_ok", "q_change"].map(|id| focus.rect_of(id).unwrap_or_else(|| panic!("{what}: {id}"))).map(|r| FRect { x: r.x / k, y: r.y / k, w: r.w / k, h: r.h / k });
+                    for r in &b {
+                        assert!(r.x >= 0.0 && r.y >= 0.0 && r.x1() <= W as f32 + 0.5 && r.y1() <= H as f32 + 0.5, "{what}: {r:?}");
+                    }
+                    assert!(b[0].x1().min(b[1].x1()) - b[0].x.max(b[1].x) <= 1.0, "{what}: {b:?} overlap");
+                }
+            }
+        });
+    }
+}
+
+/// A note too tall for the window (notes joined to the hotkey dialog)
+/// keeps whole lines: its first, as many as fit, "and N more", its last.
+#[test]
+fn joined_notes_fit_in_whole_lines() {
+    let text = (0..60).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+    let mut s = sample();
+    s.modal = Some(Modal::Hotkeys { text: text.clone(), field: None });
+    let mut focus = FocusState::default();
+    render(&mut s, &DARK, 1.0, &Input::default(), &mut focus);
+    // Nothing cut: whole lines left out (and noted as such).
+    let problems = preview::take_problems();
+    assert!(!problems.is_empty() && problems.iter().all(|p| p.contains("lines left out")), "60 lines: {problems:#?}");
+    let drawn: Vec<String> = preview::drawn_texts().into_iter().map(|t| t.0).collect();
+    assert!(drawn.iter().any(|t| t == "line 0") && drawn.iter().any(|t| t == "line 59"), "{drawn:?}");
+    let more = drawn.iter().find(|t| t.starts_with("and ")).expect("and N more");
+    let kept = drawn.iter().filter(|t| t.starts_with("line ")).count();
+    assert_eq!(*more, trn!("hotkey.fail.more", 60 - kept), "{drawn:?}");
+    // Short enough: as it is.
+    assert_eq!(super::draw::fit_lines("a\nb\nc", 100.0, |_| 60.0), "a\nb\nc");
 }
 
 /// Every question and message of the window fits it in English and the

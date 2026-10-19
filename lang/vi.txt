@@ -347,6 +347,16 @@ hotkey.fail.no_display = Không thể đăng ký {chord} — không có X displa
 hotkey.fail.invalid_kept = Không thể đăng ký {chord} — Rustshot không đăng ký được phím tắt này; giữ {kept}.
 hotkey.fail.no_display_kept = Không thể đăng ký {chord} — không có X display; giữ {kept}.
 hotkey.fail.in_use_kept = Không thể đăng ký {chord} — ứng dụng khác đang dùng; giữ {kept}.
+hotkey.fail.summary_in_use[other] = {n} phím tắt đang được ứng dụng khác dùng
+hotkey.fail.summary[other] = Không thể đăng ký {n} phím tắt
+hotkey.fail.line.alt = {name}: {chord} → nay là {alt}
+hotkey.fail.line.kept = {name}: {chord} → giữ {kept}
+hotkey.fail.line.not_set = {name}: {chord} — chưa đặt
+hotkey.fail.line.invalid = {name}: {chord} — phím tắt không hợp lệ
+hotkey.fail.line.no_display = {name}: {chord} — không có X display
+hotkey.fail.line.unknown = {name}: {chord} — chưa xác nhận
+hotkey.fail.more[other] = và {n} phím khác
+hotkey.fail.pick_any = Chọn phím khác: nhấp Đổi phím tắt…, nhấp vào phím rồi nhấn phím mới.
 
 # Shared buttons
 common.apply = Áp dụng

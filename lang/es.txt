@@ -347,6 +347,19 @@ hotkey.fail.no_display = No se pudo registrar {chord}: no hay ningún X display 
 hotkey.fail.invalid_kept = No se pudo registrar {chord}: no es un atajo que Rustshot pueda registrar; se mantiene {kept}.
 hotkey.fail.no_display_kept = No se pudo registrar {chord}: no hay ningún X display disponible; se mantiene {kept}.
 hotkey.fail.in_use_kept = No se pudo registrar {chord}: está en uso por otra aplicación; se mantiene {kept}.
+hotkey.fail.summary_in_use[one] = {n} atajo está en uso por otra aplicación
+hotkey.fail.summary_in_use[other] = {n} atajos están en uso por otra aplicación
+hotkey.fail.summary[one] = No se pudo registrar {n} atajo
+hotkey.fail.summary[other] = No se pudieron registrar {n} atajos
+hotkey.fail.line.alt = {name}: {chord} → ahora {alt}
+hotkey.fail.line.kept = {name}: {chord} → se mantiene {kept}
+hotkey.fail.line.not_set = {name}: {chord} (sin asignar)
+hotkey.fail.line.invalid = {name}: {chord} (atajo no válido)
+hotkey.fail.line.no_display = {name}: {chord} (sin X display)
+hotkey.fail.line.unknown = {name}: {chord} (sin confirmar)
+hotkey.fail.more[one] = y {n} más
+hotkey.fail.more[other] = y {n} más
+hotkey.fail.pick_any = Elige otra tecla: haz clic en Cambiar atajos…, haz clic en la tecla y pulsa una nueva.
 
 # Shared buttons
 common.apply = Aplicar

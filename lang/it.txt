@@ -347,6 +347,19 @@ hotkey.fail.no_display = Impossibile registrare {chord}: nessun X display dispon
 hotkey.fail.invalid_kept = Impossibile registrare {chord}: non è una scelta rapida che Rustshot può registrare; resta {kept}.
 hotkey.fail.no_display_kept = Impossibile registrare {chord}: nessun X display disponibile; resta {kept}.
 hotkey.fail.in_use_kept = Impossibile registrare {chord}: è in uso da un'altra app; resta {kept}.
+hotkey.fail.summary_in_use[one] = {n} scelta rapida è in uso da un'altra app
+hotkey.fail.summary_in_use[other] = {n} scelte rapide sono in uso da un'altra app
+hotkey.fail.summary[one] = Impossibile registrare {n} scelta rapida
+hotkey.fail.summary[other] = Impossibile registrare {n} scelte rapide
+hotkey.fail.line.alt = {name}: {chord} → ora {alt}
+hotkey.fail.line.kept = {name}: {chord} → resta {kept}
+hotkey.fail.line.not_set = {name}: {chord} – non impostata
+hotkey.fail.line.invalid = {name}: {chord} – scelta rapida non valida
+hotkey.fail.line.no_display = {name}: {chord} – nessun X display
+hotkey.fail.line.unknown = {name}: {chord} – non confermata
+hotkey.fail.more[one] = e {n} altra
+hotkey.fail.more[other] = e altre {n}
+hotkey.fail.pick_any = Scegli un altro tasto: fai clic su Cambia scelte rapide…, poi sul tasto e premine uno nuovo.
 
 # Shared buttons
 common.apply = Applica
