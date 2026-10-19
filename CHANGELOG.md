@@ -24,6 +24,9 @@ next release.
 - Settings › About has no links row any more (Website, Source on
   GitHub, Report an issue, What's new and Licenses are gone, and their
   strings with them in every language); the powernapps.net link stays.
+- Settings › About: the footer reads "2026 PowerNapps · by Denis
+  Platonov · Apache-2.0" in every language ("by" translated; it was
+  "Made in Los Angeles" and "Apache-2.0 License").
 - Overlay: the magnifier's coordinates and color caption has the
   loupe's even shadow all round. The panel shadow it used sat low.
 
