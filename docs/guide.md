@@ -908,7 +908,7 @@ on the left picks the section:
   with the *While recording* chords, and every editor shortcut, one
   action a row (the tools by their toolbar names; two columns where the
   rows are slim).
-- **About:** the version, *Check for updates* and links.
+- **About:** the version, *Check for updates* and the powernapps.net link.
 
 Every section fits the window; nothing scrolls.
 

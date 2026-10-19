@@ -55,9 +55,9 @@ Rustshot does not collect, store or transmit personal data or telemetry.
   readable by you only) for the app you pick (removed once a day old);
   nothing is sent anywhere.
 - Settings are stored locally in `config.toml` in your user config folder.
-- Links: Settings › About's **Website** and **More from PowerNapps** open
-  `https://powernapps.net/r/rustshot` in your browser, only when you click
-  them. That short link redirects to powernapps.net with campaign tags
+- Links: Settings › About's **More from PowerNapps** link (powernapps.net)
+  opens `https://powernapps.net/r/rustshot` in your browser, only when you
+  click it. That short link redirects to powernapps.net with campaign tags
   (`utm_source=rustshot`) so PowerNapps can count visits from the app; the
   app itself sends nothing.
 - History (on by default; off in Settings › Capture › History): each capture
