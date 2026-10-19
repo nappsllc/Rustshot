@@ -1,6 +1,7 @@
 # 0.6.0 checks, dot-sourced by test.ps1 and run on the portable exe:
 # Settings › About (the rail's last section, reached with Tab and End):
-# its Website and powernapps.net links open https://powernapps.net/r/rustshot
+# its powernapps.net link opens https://powernapps.net/r/rustshot (0.6.0's
+# Website link went in 0.6.5, with the rest of the links row: v065.ps1)
 # (Enter on the focused link; the browser this sandbox starts for it is
 # found by its command line, the sandbox has no network) and the footer
 # names Apache-2.0 (on the screenshot: the catalog in the exe is packed).
@@ -38,19 +39,6 @@ function Checks060($exe) {
     if ($onRail) {
         [V3]::PostKey($s.h, 0x23); Start-Sleep 1   # End: the last section, About
         $null = WinShot $s.h 'v060-settings-about'
-        $site = TabTo $s.h $focus 'link_0'
-        Check 'v060 about: About has the Website link (Tab reaches "link_0"; out\v060-settings-about.png)' $site "focus=$(FocusId $focus)"
-        if ($site) {
-            $before = @(UrlProcs $PowerNapps | ForEach-Object ProcessId)
-            [V3]::PostKey($s.h, 0x0D)   # Enter: open it
-            $opened = WaitFor { @(UrlProcs $PowerNapps | Where-Object { $before -notcontains $_.ProcessId }).Count -gt 0 } 20
-            $cmd = (UrlProcs $PowerNapps | Select-Object -First 1).CommandLine
-            Check 'v060 about: Website opens https://powernapps.net/r/rustshot (the browser started for it)' $opened "$cmd"
-            Start-Sleep 2
-            # The browser was started by this click, inside the sandbox: its processes go.
-            Get-Process msedge -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-            Start-Sleep 2
-        }
         $pn = TabTo $s.h $focus 'link_powernapps'
         Check 'v060 about: More from PowerNapps has its powernapps.net link (Tab reaches "link_powernapps")' $pn "focus=$(FocusId $focus)"
         if ($pn) {

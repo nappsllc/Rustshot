@@ -94,6 +94,9 @@ function KillAll { Get-Process rustshot -ErrorAction SilentlyContinue | Stop-Pro
 # 0.6.4 (a window hidden from capture gets the placeholder, Settings 552 px
 # tall, the six Shortcuts sections): Checks064.
 . "$T\v064.ps1"
+# 0.6.5 (Settings > About without its links row, several hotkeys in use:
+# the summary dialog inside the window): Checks065.
+. "$T\v065.ps1"
 # The sideload-signed MSIX (and an update over the older release's): MsixChecks.
 . "$T\msix.ps1"
 HotkeyProbe $log
@@ -172,6 +175,15 @@ if (Test-Path "$T\v064-only") {
     Copy-Item $portable.FullName "$env:TEMP\rustshot.exe"
     Add-Content $log "      portable exe: $($portable.FullName) $((Get-Item $portable.FullName).Length) B"
     Checks064 "$env:TEMP\rustshot.exe"
+    Add-Content $log 'DONE'
+    return
+}
+# <T>\v065-only: just the 0.6.5 checks.
+if (Test-Path "$T\v065-only") {
+    $portable = PortableExe
+    Copy-Item $portable.FullName "$env:TEMP\rustshot.exe"
+    Add-Content $log "      portable exe: $($portable.FullName) $((Get-Item $portable.FullName).Length) B"
+    Checks065 "$env:TEMP\rustshot.exe"
     Add-Content $log 'DONE'
     return
 }
@@ -402,6 +414,7 @@ if ($portable) {
     Checks062 "$env:TEMP\rustshot.exe"
     Checks063 "$env:TEMP\rustshot.exe"
     Checks064 "$env:TEMP\rustshot.exe"
+    Checks065 "$env:TEMP\rustshot.exe"
     RecordingChecks "$env:TEMP\rustshot.exe"
     Start-Process "$env:TEMP\rustshot.exe"
     Check 'portable: daemon started for visual tray check' (WaitFor { [W]::TrayWindow() })
