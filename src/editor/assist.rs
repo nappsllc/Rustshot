@@ -754,13 +754,17 @@ pub fn mag(f: &mut Fb, ui: &Ui, m: &MagUi) {
     let rad = ui.px(12.0);
     // Inside this the magnified pixels are opaque (fully covered).
     let hole = m.cell * MAG_N as f32 / 2.0 - 1.0;
-    if m.square {
-        chrome::surface(f, ui, r, 12.0, &chrome::SMALL_LAYERS, 1.0);
-    } else {
-        for &i in chrome::SMALL_LAYERS.iter().rev() {
-            let (dy, sp) = (ui.px(SHADOW[i].0), ui.px(SHADOW[i].1));
-            disc(f, cx, cy + dy, r.w / 2.0 + sp, hole - dy, ui.th.shadow[i]);
+    for (i, dy, sp) in mag_shadow(m.s) {
+        let c = ui.th.shadow[i];
+        if m.square {
+            chrome::fill(f, FRect { x: r.x - sp, y: r.y + dy - sp, w: r.w + 2.0 * sp, h: r.h + 2.0 * sp }, rad + sp, c);
+        } else {
+            disc(f, cx, cy + dy, r.w / 2.0 + sp, hole - dy, c);
         }
+    }
+    if m.square {
+        chrome::surface(f, ui, r, 12.0, &[], 1.0);
+    } else {
         disc(f, cx, cy, r.w / 2.0, hole, ui.th.surface);
     }
     // The pixels, clipped to the inner shape: whole runs of a cell's
@@ -829,7 +833,25 @@ pub fn mag_bounds(ui: &Ui, m: &MagUi) -> Vec<FRect> {
     let cap = m.cap;
     // The text may run past a panel narrower than it.
     let t = FRect { x: cap.x, y: cap.y, w: cap.w + chrome::tw(ui, 12.0, &m.text) + ui.px(8.0), h: cap.h };
-    vec![chrome::surface_bounds(ui, m.r), toolbar::union(chrome::surface_bounds(ui, cap), t)]
+    // The loupe and its shadow (all round, a little lower), AA included.
+    let (dy, sp) = mag_shadow(m.s).fold((0.0f32, 0.0f32), |(d, s), (_, dy, sp)| (d.max(dy), s.max(sp)));
+    let e = sp + 3.0;
+    let r = m.r;
+    let loupe = FRect { x: r.x - e, y: r.y - e, w: r.w + 2.0 * e, h: r.h + 2.0 * e + dy };
+    vec![loupe, toolbar::union(chrome::surface_bounds(ui, cap), t)]
+}
+
+/// The loupe's shadow as (theme shadow layer, drop, spread), logical px:
+/// all round, a soft halo dropped a little and a contact ring that
+/// outlines the shape. The panels' layers (7 px down and 5 out: none
+/// above, 12 below) under a disc read as a gray background off the
+/// pixels' centre.
+const MAG_SHADOW: [(usize, f32, f32); 2] = [(2, 1.0, 4.0), (0, 0.0, 1.0)];
+
+/// [`MAG_SHADOW`] at scale `s`, on whole physical px (the shadows share
+/// the loupe's pixel grid, so its centre).
+fn mag_shadow(s: f32) -> impl Iterator<Item = (usize, f32, f32)> {
+    MAG_SHADOW.into_iter().map(move |(i, dy, sp)| (i, (dy * s).round(), (sp * s).round().max(1.0)))
 }
 
 pub fn ring(f: &mut Fb, ui: &Ui, r: &RingUi) {
