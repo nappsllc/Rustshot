@@ -5,7 +5,7 @@
 
 use super::*;
 use crate::rec::gif::GifEncoder;
-use crate::rec::{AudioSource, Quality, RecFormat, RecSpec, Session, VideoEncoder};
+use crate::rec::{AudioSource, Frame, Quality, RecFormat, RecSpec, Session, VideoEncoder};
 use std::path::{Path, PathBuf};
 use crate::chan as mpsc;
 use std::time::{Duration, Instant};
@@ -145,6 +145,12 @@ impl TestWindow {
             let _ = InvalidateRect(Some(h), None, false);
         }
         std::thread::sleep(Duration::from_millis(200));
+    }
+
+    /// Color changes so far: the color index, one up per timer tick
+    /// ([`TestWindow::set_color`] sets it instead).
+    pub(crate) fn changes(&self) -> usize {
+        unsafe { GetWindowLongPtrW(HWND(self.hwnd as *mut _), GWLP_USERDATA) as usize }
     }
 
     pub(crate) fn rect(&self) -> crate::capture::IRect {
@@ -305,6 +311,54 @@ fn gif_frames(b: &[u8]) -> usize {
     }
 }
 
+/// What reached the encoder: frames pushed, and those whose picture (RGB)
+/// differs from the frame before (the first counts). A GIF writes an image
+/// for exactly those; an identical frame only lengthens the last delay.
+#[derive(Default)]
+struct Pushed {
+    frames: usize,
+    changes: usize,
+}
+
+/// Passes frames on to `inner`, counting them in [`Pushed`].
+struct Counting<E> {
+    inner: E,
+    prev: Option<Vec<u8>>,
+    seen: std::sync::Arc<std::sync::Mutex<Pushed>>,
+}
+
+impl<E: VideoEncoder> VideoEncoder for Counting<E> {
+    fn push_video(&mut self, f: &Frame) -> anyhow::Result<()> {
+        let changed = self.prev.as_ref().is_none_or(|p| {
+            p.as_chunks::<4>().0.iter().zip(f.bgra.as_chunks::<4>().0).any(|(a, b)| a[..3] != b[..3])
+        });
+        let mut s = self.seen.lock().unwrap();
+        s.frames += 1;
+        s.changes += usize::from(changed);
+        drop(s);
+        self.prev = Some(f.bgra.clone());
+        self.inner.push_video(f)
+    }
+
+    fn push_audio(&mut self, pcm: &[f32], ts: Duration) -> anyhow::Result<()> {
+        self.inner.push_audio(pcm, ts)
+    }
+
+    fn finish(self: Box<Self>) -> anyhow::Result<()> {
+        Box::new(self.inner).finish()
+    }
+
+    fn audio(&self) -> bool {
+        self.inner.audio()
+    }
+}
+
+/// The GIF has one image per change of the recorded picture, not one per
+/// captured frame: the window's 100 ms timer (about 109 ms with Windows'
+/// 15.6 ms timer ticks, later on a loaded machine) changes it some 18
+/// times in 2 s, and the 15 fps capture repeats each color once or twice.
+/// So the image count is checked against what was pushed (exactly), and
+/// the changes against the window's own count of color changes.
 #[test]
 #[ignore = "records the real desktop"]
 fn live_rec_gif_of_a_changing_window() {
@@ -313,16 +367,33 @@ fn live_rec_gif_of_a_changing_window() {
     let dir = out_dir();
     let spec = spec(RecFormat::Gif, 15, win.rect(), dir.join("window.gif"));
     let fresh = fresh_frames();
-    let (path, kind) = record(spec, vec![], 2.0, |p, w, h| Box::new(GifEncoder::create(p, w, h, 15).unwrap()));
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Pushed::default()));
+    let counts = seen.clone();
+    // Counted from when the source is open (the session starts next).
+    let before = std::cell::Cell::new(0);
+    let (path, kind) = record(spec, vec![], 2.0, |p, w, h| {
+        before.set(win.changes());
+        Box::new(Counting { inner: GifEncoder::create(p, w, h, 15).unwrap(), prev: None, seen: counts })
+    });
+    let before = before.get();
+    let made = win.changes() - before;
     drop(win);
     let b = std::fs::read(&path).unwrap();
     let _ = std::fs::remove_dir_all(&dir);
     let n = gif_frames(&b);
-    eprintln!("GIF: {} bytes, {n} frames", b.len());
+    let s = seen.lock().unwrap();
+    eprintln!("GIF: {} bytes, {n} frames; pushed {} frames, {} changes; the window changed {made} times", b.len(), s.frames, s.changes);
     if no_fresh_frames(kind, fresh) {
         return;
     }
-    assert!(n >= 15, "{n} frames");
+    // 2 s at 15 fps, give or take 10% (as the MP4 test's 30 fps).
+    assert!((27..=33).contains(&s.frames), "{} frames pushed", s.frames);
+    assert_eq!(n, s.changes, "one GIF image per change of the picture");
+    // Each color shows for about 109 ms, longer than the 67 ms between
+    // frames: the capture sees most of the window's changes. Not all: a
+    // tick late on a loaded machine can skip a color.
+    assert!(made >= 8, "the window changed {made} times in 2 s");
+    assert!(2 * s.changes > made, "{} changes recorded of the window's {made}", s.changes);
 }
 
 #[test]
