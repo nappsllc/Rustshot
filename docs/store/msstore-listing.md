@@ -306,7 +306,7 @@ HOW TO TEST
 
 PERMISSIONS
 • Microphone and camera are off by default and used only when turned on in the recording panel; Windows asks the first time.
-• The startup task "Rustshot hotkeys" starts the background process at sign-in; it can be turned off in Windows Settings › Apps › Startup.
+• The startup task "Rustshot hotkeys" starts the background process at sign-in; it can be turned off in Windows Settings › Apps › Startup or Task Manager › Startup apps.
 
 NETWORK (internetClient)
 • No telemetry and no update check (the Store updates it).

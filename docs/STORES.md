@@ -55,6 +55,18 @@ manual first submission where noted.
 Note: the unsigned `rustshot-<v>-x64.msix` attached to GitHub Releases is the
 Store upload package; end users cannot install it directly.
 
+The package's Start entries (`packaging/windows/AppxManifest.xml.in`):
+*Rustshot* (Application `Rustshot`: a plain launch runs the hotkey daemon,
+or starts a capture when one runs; it also has the `rustshot.exe` alias and
+the startup task "Rustshot hotkeys", TaskId `RustshotDaemon`) and *Rustshot
+Settings* (`RustshotSettings`, `settings`). Every entry needs a Start
+entry: Partner Center refuses an application with `AppListEntry="none"`
+(a "headless" app) unless the app has the *HeadlessAppBypass* waiver.
+0.6.5's package was refused for its hidden `RustshotDaemon` entry (the
+startup task's, with `daemon`); from 0.6.6 the task is on `Rustshot`.
+Keep the TaskId: Windows keeps the user's on/off choice for the startup
+task under it, across updates.
+
 ## winget
 1. Fork https://github.com/microsoft/winget-pkgs under the account that owns the token.
 2. Classic PAT with `public_repo` → secret `WINGET_TOKEN`.
