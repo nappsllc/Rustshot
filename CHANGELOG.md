@@ -4,6 +4,22 @@ Release notes for each version are on the GitHub release page
 (https://github.com/nappsllc/rustshot/releases). Lines here are for the
 next release.
 
+## 0.6.6
+
+- Updates: users on 0.6.1 or earlier still need to download this
+  version once from the Releases page (or reinstall it from the
+  Microsoft Store or their package manager): those versions reject the
+  repository's renamed release links. From 0.6.2 on, updates are
+  offered in the app.
+- Microsoft Store package fix: the package has no hidden "Rustshot
+  hotkeys" app any more (Partner Center refuses an app with no Start
+  entry, a "headless" app, without a waiver). Its startup task moved to
+  the Rustshot entry, whose plain launch runs the daemon, so the
+  hotkeys still start at sign-in. The task keeps its id and name
+  ("Rustshot hotkeys" in Windows Settings › Apps › Startup), so an
+  update keeps it on or off as the user left it. Start shows Rustshot
+  and Rustshot Settings, as before.
+
 ## 0.6.5
 
 - Updates: users on 0.6.1 or earlier still need to download this
