@@ -1,6 +1,6 @@
 # Microsoft Store listing (Partner Center, en-US)
 
-Text to paste into Partner Center for Rustshot 0.6.5. Each field's block is
+Text to paste into Partner Center for Rustshot 0.6.6. Each field's block is
 the exact text. The limits are Partner Center's current Store listing
 limits for MSIX desktop apps; recheck them in the form, which counts for
 you. Everything here describes the **Store (MSIX) build**, which differs
@@ -129,17 +129,19 @@ annotate image
 GIF recorder
 ```
 
-## What's new in this version (0.6.5)
+## What's new in this version (0.6.6)
 
-Limit: 1,500 characters. This text is 1,374 characters. 0.6.5's changes
-first; the last six lines keep 0.6.4's, 0.6.3's, 0.6.2's, 0.6.1's, 0.6.0's
-and 0.5's main points for customers updating from older versions. (The
-in-app update note of the GitHub release does not apply to the Store build,
-which the Store updates.)
+Limit: 1,500 characters. This text is 1,399 characters. 0.6.6's change
+first (the Store package fix: the startup task is on the Rustshot entry,
+with no hidden app; 0.6.5's package was refused for that app, so its lines
+follow); the last seven lines keep 0.6.5's, 0.6.4's, 0.6.3's, 0.6.2's,
+0.6.1's, 0.6.0's and 0.5's main points for customers updating from older
+versions. (The in-app update note of the GitHub release does not apply to
+the Store build, which the Store updates.)
 
 ```text
-• When several shortcuts are already used by another app, Settings shows one short summary that always fits: a line per shortcut and how to pick another key, instead of long sentences cut off at the bottom.
-• Settings › About is simpler: no row of links; the powernapps.net link stays. The magnifier's coordinates and color caption has an even shadow.
+• The background hotkeys now start at sign-in from Rustshot's own Start entry (no separate hidden app); turn this on or off in Windows Settings › Apps › Startup ("Rustshot hotkeys").
+• From 0.6.5: when several shortcuts are already used by another app, Settings shows one short summary that always fits; Settings › About is simpler; the magnifier's caption has an even shadow.
 • From 0.6.4: windows that hide themselves from screenshots (password managers, some secure apps) are marked with a "Hidden from screenshots" placeholder; one shortcut per row in Settings; quicker wheel resizing of the Magnify loupe.
 • From 0.6.3: sharper small icons; the mouse wheel resizes tools about 12% a notch; clearer window titles that match Rustshot's theme.
 • From 0.6.2: the tray icon is the blue Rustshot app icon; Pixelate, Blur, Magnify and the other tools pick up the arrow, box or text under the pointer.
