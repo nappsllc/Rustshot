@@ -3,7 +3,8 @@
 # run.ps1 -OldMsix gave one: an in-place update to the new version), its
 # manifest declares one language per lang\<tag>.txt with en-us first, the
 # Start entry starts the daemon, the alias runs, a second launch captures,
-# the startup task is declared, and it uninstalls.
+# the startup task is declared, the 0.6.6 checks (v066.ps1: Before066 on the
+# older package, Checks066 on the new one), and it uninstalls.
 # Inputs: <T>\in\**\sideload.cer and *-sideload.msix (run.ps1 /
 # sign-sideload.ps1), optionally <T>\oldmsix\*-sideload.msix, and
 # <T>\data\lang\*.txt (the repo's language files).
@@ -23,6 +24,8 @@ function MsixChecks {
         try { Add-AppxPackage -Path $old.FullName -ErrorAction Stop } catch { $err = $_.Exception.Message }
         $oldPkg = Get-AppxPackage *rustshot*
         Check 'msix upgrade: the older release''s package installs' ([bool]$oldPkg -and -not $err) "$($old.Name) $($oldPkg.Version) $err"
+        # 0.6.6: its startup task turned off before the update (v066.ps1).
+        if ($oldPkg) { Before066 $oldPkg }
     } else {
         Add-Content $log 'SKIP  msix upgrade: no older package (run.ps1 -OldMsix)'
     }
@@ -66,6 +69,9 @@ function MsixChecks {
     Shot 'msix-overlay'
     $st = $man.Package.Applications.Application | ForEach-Object { $_.Extensions.Extension } | Where-Object { $_.Category -eq 'windows.startupTask' }
     Check 'msix: startup task declared' ([bool]$st)
+    # 0.6.6: two Start entries, no hidden app, the startup task on Rustshot
+    # (kept off over the update), a sign-in-like start (v066.ps1).
+    Checks066 $pkg
     KillAll
     Remove-AppxPackage $pkg.PackageFullName
     Check 'msix: removed' (-not (Get-AppxPackage *rustshot*))

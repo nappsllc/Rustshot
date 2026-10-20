@@ -20,8 +20,8 @@ param(
     [string]$OldMsix,
     # Work folder (mapped into the sandbox as Desktop\test). Results: <Work>\out\results.txt.
     [string]$Work = (Join-Path $env:TEMP 'rustshot-sandbox'),
-    # Just one group: probe (hotkey probe), rec (recording), v030 / v040 / v041 / v050 / v060 / v062 / v063 / v064 / v065 (0.3.0 / 0.4.0 / 0.4.1 / 0.5.0 / 0.6.0 / 0.6.2 / 0.6.3 / 0.6.4 / 0.6.5 checks), data (data files), msix (the MSIX).
-    [ValidateSet('', 'probe', 'rec', 'v030', 'v040', 'v041', 'v050', 'v060', 'v062', 'v063', 'v064', 'v065', 'data', 'msix')] [string]$Only = '',
+    # Just one group: probe (hotkey probe), rec (recording), v030 / v040 / v041 / v050 / v060 / v062 / v063 / v064 / v065 (0.3.0 / 0.4.0 / 0.4.1 / 0.5.0 / 0.6.0 / 0.6.2 / 0.6.3 / 0.6.4 / 0.6.5 checks), data (data files), msix or v066 (the MSIX, with the 0.6.6 checks).
+    [ValidateSet('', 'probe', 'rec', 'v030', 'v040', 'v041', 'v050', 'v060', 'v062', 'v063', 'v064', 'v065', 'v066', 'data', 'msix')] [string]$Only = '',
     # A picture with a QR code of an https link for the 0.5.0 Read QR check
     # (e.g. the qr_make_link_light_1x.png preview; without it that check SKIPs).
     [string]$QrPng,

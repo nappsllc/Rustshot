@@ -97,6 +97,10 @@ function KillAll { Get-Process rustshot -ErrorAction SilentlyContinue | Stop-Pro
 # 0.6.5 (Settings > About without its links row, several hotkeys in use:
 # the summary dialog inside the window): Checks065.
 . "$T\v065.ps1"
+# 0.6.6 (the MSIX: Rustshot and Rustshot Settings only, no hidden app, the
+# startup task on Rustshot and kept over the update, a sign-in-like start):
+# Before066 and Checks066, called from MsixChecks.
+. "$T\v066.ps1"
 # The sideload-signed MSIX (and an update over the older release's): MsixChecks.
 . "$T\msix.ps1"
 HotkeyProbe $log
@@ -196,8 +200,8 @@ if (Test-Path "$T\data-only") {
     Add-Content $log 'DONE'
     return
 }
-# <T>\msix-only: just the MSIX checks.
-if (Test-Path "$T\msix-only") {
+# <T>\msix-only or v066-only: just the MSIX checks (with the 0.6.6 ones).
+if ((Test-Path "$T\msix-only") -or (Test-Path "$T\v066-only")) {
     MsixChecks
     Add-Content $log 'DONE'
     return
