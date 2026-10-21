@@ -101,6 +101,10 @@ function KillAll { Get-Process rustshot -ErrorAction SilentlyContinue | Stop-Pro
 # startup task on Rustshot and kept over the update, a sign-in-like start):
 # Before066 and Checks066, called from MsixChecks.
 . "$T\v066.ps1"
+# 0.6.7 (the MSIX: ms-screenclip chosen in Default apps, Win+Shift+S and
+# Print Screen with the tray icon off, Start at login through the startup
+# task): Checks067, called from MsixChecks.
+. "$T\v067.ps1"
 # The sideload-signed MSIX (and an update over the older release's): MsixChecks.
 . "$T\msix.ps1"
 HotkeyProbe $log
@@ -200,8 +204,8 @@ if (Test-Path "$T\data-only") {
     Add-Content $log 'DONE'
     return
 }
-# <T>\msix-only or v066-only: just the MSIX checks (with the 0.6.6 ones).
-if ((Test-Path "$T\msix-only") -or (Test-Path "$T\v066-only")) {
+# <T>\msix-only, v066-only or v067-only: just the MSIX checks (with the 0.6.6 and 0.6.7 ones).
+if ((Test-Path "$T\msix-only") -or (Test-Path "$T\v066-only") -or (Test-Path "$T\v067-only")) {
     MsixChecks
     Add-Content $log 'DONE'
     return

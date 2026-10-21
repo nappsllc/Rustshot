@@ -4,7 +4,8 @@
 # manifest declares one language per lang\<tag>.txt with en-us first, the
 # Start entry starts the daemon, the alias runs, a second launch captures,
 # the startup task is declared, the 0.6.6 checks (v066.ps1: Before066 on the
-# older package, Checks066 on the new one), and it uninstalls.
+# older package, Checks066 on the new one), the 0.6.7 checks (v067.ps1),
+# and it uninstalls.
 # Inputs: <T>\in\**\sideload.cer and *-sideload.msix (run.ps1 /
 # sign-sideload.ps1), optionally <T>\oldmsix\*-sideload.msix, and
 # <T>\data\lang\*.txt (the repo's language files).
@@ -72,6 +73,10 @@ function MsixChecks {
     # 0.6.6: two Start entries, no hidden app, the startup task on Rustshot
     # (kept off over the update), a sign-in-like start (v066.ps1).
     Checks066 $pkg
+    # 0.6.7: ms-screenclip (Win+Shift+S, Print Screen) chosen in Default
+    # apps, the tray icon off with nothing in the background, Start at
+    # login through the startup task (v067.ps1).
+    Checks067 $pkg
     KillAll
     Remove-AppxPackage $pkg.PackageFullName
     Check 'msix: removed' (-not (Get-AppxPackage *rustshot*))
