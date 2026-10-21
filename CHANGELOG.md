@@ -4,6 +4,40 @@ Release notes for each version are on the GitHub release page
 (https://github.com/nappsllc/rustshot/releases). Lines here are for the
 next release.
 
+## 0.6.7
+
+- Updates: users on 0.6.1 or earlier still need to download this
+  version once from the Releases page (or reinstall it from the
+  Microsoft Store or their package manager): those versions reject the
+  repository's renamed release links. From 0.6.2 on, updates are
+  offered in the app.
+- Microsoft Store build: Win+Shift+S and Print Screen. The package
+  declares the `ms-screenclip:` protocol (Windows' link for those keys;
+  not a reserved scheme name), so Rustshot is listed under Windows
+  Settings › Apps › Default apps › Rustshot › MS-SCREENCLIP. Nothing is
+  written to the registry and Rustshot never changes the default: the
+  user picks it there (or "Always" when Windows asks once after the
+  install). Settings › Capture › "Use Win+Shift+S and Print Screen" is
+  on while Windows opens Rustshot; turning it on shows the "One more
+  step" guide, whose Open Default apps goes straight to Rustshot's page
+  there, and the guide closes once Rustshot is chosen. Turning it off
+  while Windows opens Rustshot opens that page too (only the user can
+  pick another app). `rustshot register-screenclip` writes nothing in
+  the Store build; it says where to choose and which app opens now.
+- Microsoft Store build: the tray icon off means no background process,
+  as in the installer build: Win+Shift+S and Print Screen start Rustshot
+  on demand, launching Rustshot (or Rustshot Settings) opens Settings,
+  and the startup task at sign-in starts Rustshot, which exits at once
+  (it tells the startup task's activation from a launch from Start).
+- Microsoft Store build: Launch at login is back in Settings › General
+  and the tray menu (Start at login). It turns the package's "Rustshot
+  hotkeys" startup task on or off (the StartupTask API). Turned off in
+  Windows (Settings › Apps › Startup, Task Manager), only the user can
+  turn it on there again: the switch stays off and a message says where.
+  Set by the organization's policy, it shows read-only with "Set by your
+  organization". The new messages are in all 35 languages.
+- The installer, portable and Linux/macOS builds behave as in 0.6.6.
+
 ## 0.6.6
 
 - Updates: users on 0.6.1 or earlier still need to download this
