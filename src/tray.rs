@@ -111,7 +111,9 @@ impl MenuItem {
         }
     }
 
-    /// Shown but not clickable (greyed).
+    /// Shown but not clickable (greyed; only the Store build's locked
+    /// startup task, so only the Windows tray draws it).
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub fn grayed(self) -> bool {
         matches!(self, MenuItem::AutostartLocked(_))
     }
