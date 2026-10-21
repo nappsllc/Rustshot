@@ -1078,9 +1078,14 @@ redact.kind.ids_iban = ID-uri (IBAN)
 redact.kind.urls_tokens_passwords = URL-uri, tokenuri și parole
 redact.kind.ip_addresses = Adrese IP
 
+# Start at login (the Store build's startup task)
+autostart.by_user = Pornirea la conectare este dezactivată în Windows. Pentru a o activa, deschideți Setări > Aplicații > Pornire (sau Manager de activități > Aplicații de pornire) și activați Rustshot.
+autostart.policy = Setat de organizația dvs.
+
 # Win+Shift+S (Windows)
 screenclip.guide.title = Încă un pas pentru a folosi Win+Shift+S
 screenclip.guide.steps = Doar dvs. puteți alege în Windows ce aplicație deschide Win+Shift+S.\n1. Faceți clic mai jos pe „Deschidere Aplicații implicite”.\n2. Derulați până jos și faceți clic pe „Alegeți valorile implicite după tipul de link”.\n3. Găsiți MS-SCREENCLIP și alegeți Rustshot.
+screenclip.guide.steps_store = Doar dvs. puteți alege în Windows ce aplicație deschide Win+Shift+S.\n1. Faceți clic mai jos pe „Deschidere Aplicații implicite”.\n2. Găsiți MS-SCREENCLIP și alegeți Rustshot.
 screenclip.guide.broken = Win+Shift+S este setat la o aplicație care nu mai este instalată, așa că Windows afișează o eroare în loc să întrebe.
 screenclip.guide.open = Deschidere Aplicații implicite
 screenclip.guide.later = Reamintire mai târziu
@@ -1092,6 +1097,7 @@ screenclip.state.other = Deschide {name}
 screenclip.state.broken = Setat la o aplicație lipsă – faceți clic pentru remediere
 screenclip.state.none = Nesetat
 screenclip.open_failed = Aplicații implicite nu s-a putut deschide ({e}). Deschideți manual Setări > Aplicații > Aplicații implicite.
+screenclip.store_off = doar dvs. puteți alege altă aplicație pentru el. În Aplicații implicite (deschise acum), faceți clic pe MS-SCREENCLIP și alegeți una.
 
 # UI size
 uisize.auto = Automat

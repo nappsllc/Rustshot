@@ -1042,9 +1042,14 @@ redact.kind.ids_iban = Rekening (IBAN)
 redact.kind.urls_tokens_passwords = URL, token & kata sandi
 redact.kind.ip_addresses = Alamat IP
 
+# Start at login (the Store build's startup task)
+autostart.by_user = Mulai saat masuk dinonaktifkan di Windows. Untuk mengaktifkannya, buka Pengaturan > Aplikasi > Startup (atau Pengelola Tugas > Aplikasi startup) dan aktifkan Rustshot.
+autostart.policy = Diatur oleh organisasi Anda
+
 # Win+Shift+S (Windows)
 screenclip.guide.title = Satu langkah lagi untuk memakai Win+Shift+S
 screenclip.guide.steps = Windows hanya mengizinkan Anda sendiri memilih aplikasi yang membuka Win+Shift+S.\n1. Klik Buka Aplikasi default di bawah.\n2. Gulir ke bawah dan klik "Pilih default menurut jenis tautan".\n3. Cari MS-SCREENCLIP lalu pilih Rustshot.
+screenclip.guide.steps_store = Windows hanya mengizinkan Anda sendiri memilih aplikasi yang membuka Win+Shift+S.\n1. Klik Buka Aplikasi default di bawah.\n2. Cari MS-SCREENCLIP lalu pilih Rustshot.
 screenclip.guide.broken = Win+Shift+S saat ini diatur ke aplikasi yang sudah tidak terpasang, jadi Windows menampilkan kesalahan alih-alih bertanya.
 screenclip.guide.open = Buka Aplikasi default
 screenclip.guide.later = Ingatkan nanti
@@ -1056,6 +1061,7 @@ screenclip.state.other = Membuka {name}
 screenclip.state.broken = Diatur ke aplikasi yang hilang — klik untuk memperbaiki
 screenclip.state.none = Belum diatur
 screenclip.open_failed = Tidak dapat membuka Aplikasi default ({e}). Buka sendiri Pengaturan > Aplikasi > Aplikasi default.
+screenclip.store_off = hanya Anda yang dapat memilih aplikasi lain untuknya. Di Aplikasi default (terbuka sekarang), klik MS-SCREENCLIP lalu pilih satu.
 
 # UI size
 uisize.auto = Otomatis

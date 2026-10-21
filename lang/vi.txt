@@ -1042,9 +1042,14 @@ redact.kind.ids_iban = Số tài khoản (IBAN)
 redact.kind.urls_tokens_passwords = URL, token & mật khẩu
 redact.kind.ip_addresses = Địa chỉ IP
 
+# Start at login (the Store build's startup task)
+autostart.by_user = Khởi động khi đăng nhập đang tắt trong Windows. Để bật, mở Cài đặt > Ứng dụng > Khởi động (hoặc Trình quản lý Tác vụ > Ứng dụng khởi động) rồi bật Rustshot.
+autostart.policy = Do tổ chức của bạn đặt
+
 # Win+Shift+S (Windows)
 screenclip.guide.title = Thêm một bước để dùng Win+Shift+S
 screenclip.guide.steps = Windows chỉ cho bạn tự chọn ứng dụng nào mở Win+Shift+S.\n1. Nhấp Mở Ứng dụng mặc định bên dưới.\n2. Cuộn xuống cuối và nhấp "Chọn mặc định theo loại liên kết".\n3. Tìm MS-SCREENCLIP và chọn Rustshot.
+screenclip.guide.steps_store = Windows chỉ cho bạn tự chọn ứng dụng nào mở Win+Shift+S.\n1. Nhấp Mở Ứng dụng mặc định bên dưới.\n2. Tìm MS-SCREENCLIP và chọn Rustshot.
 screenclip.guide.broken = Win+Shift+S đang được đặt cho một ứng dụng đã gỡ cài đặt, nên Windows báo lỗi thay vì hỏi.
 screenclip.guide.open = Mở Ứng dụng mặc định
 screenclip.guide.later = Nhắc tôi sau
@@ -1056,6 +1061,7 @@ screenclip.state.other = Mở {name}
 screenclip.state.broken = Đặt cho ứng dụng không còn — nhấp để sửa
 screenclip.state.none = Chưa đặt
 screenclip.open_failed = Không thể mở Ứng dụng mặc định ({e}). Hãy tự mở Cài đặt > Ứng dụng > Ứng dụng mặc định.
+screenclip.store_off = chỉ bạn mới chọn được ứng dụng khác cho nó. Trong Ứng dụng mặc định (đang mở), nhấp MS-SCREENCLIP rồi chọn một ứng dụng.
 
 # UI size
 uisize.auto = Tự động

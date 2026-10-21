@@ -1060,9 +1060,14 @@ redact.kind.ids_iban = Identificadores (IBAN)
 redact.kind.urls_tokens_passwords = URL, tokens y contraseñas
 redact.kind.ip_addresses = Direcciones IP
 
+# Start at login (the Store build's startup task)
+autostart.by_user = Iniciar al iniciar sesión está desactivado en Windows. Para activarlo, abre Configuración > Aplicaciones > Inicio (o Administrador de tareas > Aplicaciones de arranque) y activa Rustshot.
+autostart.policy = Establecido por tu organización
+
 # Win+Shift+S (Windows)
 screenclip.guide.title = Un paso más para usar Win+Shift+S
 screenclip.guide.steps = Windows solo te deja a ti elegir qué aplicación abre Win+Shift+S.\n1. Haz clic en Abrir Aplicaciones predeterminadas, abajo.\n2. Desplázate hasta el final y haz clic en «Elegir valores predeterminados por tipo de vínculo».\n3. Busca MS-SCREENCLIP y elige Rustshot.
+screenclip.guide.steps_store = Windows solo te deja a ti elegir qué aplicación abre Win+Shift+S.\n1. Haz clic en Abrir Aplicaciones predeterminadas, abajo.\n2. Busca MS-SCREENCLIP y elige Rustshot.
 screenclip.guide.broken = Win+Shift+S está asignado a una aplicación que ya no está instalada, así que Windows muestra un error en lugar de preguntar.
 screenclip.guide.open = Abrir Aplicaciones predeterminadas
 screenclip.guide.later = Recordármelo más tarde
@@ -1074,6 +1079,7 @@ screenclip.state.other = Abre {name}
 screenclip.state.broken = Asignado a una aplicación que falta: haz clic para corregirlo
 screenclip.state.none = Sin asignar
 screenclip.open_failed = No se pudo abrir Aplicaciones predeterminadas ({e}). Abre tú mismo Configuración > Aplicaciones > Aplicaciones predeterminadas.
+screenclip.store_off = solo tú puedes elegir otra aplicación. En Aplicaciones predeterminadas (abierto ahora), haz clic en MS-SCREENCLIP y elige una.
 
 # UI size
 uisize.auto = Auto

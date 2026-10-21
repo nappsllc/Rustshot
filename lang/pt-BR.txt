@@ -1060,9 +1060,14 @@ redact.kind.ids_iban = Documentos (IBAN)
 redact.kind.urls_tokens_passwords = URLs, tokens e senhas
 redact.kind.ip_addresses = Endereços IP
 
+# Start at login (the Store build's startup task)
+autostart.by_user = Iniciar ao entrar está desativado no Windows. Para ativar, abra Configurações > Aplicativos > Inicialização (ou Gerenciador de Tarefas > Aplicativos de inicialização) e ative o Rustshot.
+autostart.policy = Definido pela sua organização
+
 # Win+Shift+S (Windows)
 screenclip.guide.title = Mais uma etapa para usar Win+Shift+S
 screenclip.guide.steps = No Windows, só você pode escolher qual aplicativo abre Win+Shift+S.\n1. Clique em Abrir Aplicativos padrão abaixo.\n2. Role até o fim e clique em “Escolher padrões por tipo de link”.\n3. Encontre MS-SCREENCLIP e escolha o Rustshot.
+screenclip.guide.steps_store = No Windows, só você pode escolher qual aplicativo abre Win+Shift+S.\n1. Clique em Abrir Aplicativos padrão abaixo.\n2. Encontre MS-SCREENCLIP e escolha o Rustshot.
 screenclip.guide.broken = Win+Shift+S está definido para um aplicativo que não está mais instalado, por isso o Windows mostra um erro em vez de perguntar.
 screenclip.guide.open = Abrir Aplicativos padrão
 screenclip.guide.later = Lembrar mais tarde
@@ -1074,6 +1079,7 @@ screenclip.state.other = Abre {name}
 screenclip.state.broken = Definido para um aplicativo ausente — clique para corrigir
 screenclip.state.none = Não definido
 screenclip.open_failed = Não foi possível abrir Aplicativos padrão ({e}). Abra Configurações > Aplicativos > Aplicativos padrão manualmente.
+screenclip.store_off = só você pode escolher outro aplicativo para ele. Em Aplicativos padrão (aberto agora), clique em MS-SCREENCLIP e escolha um.
 
 # UI size
 uisize.auto = Auto

@@ -800,8 +800,9 @@ pub fn update_channel() -> Option<&'static str> {
     })
 }
 
+/// This process runs from an MSIX package (the Store build).
 #[cfg(windows)]
-fn is_msix() -> bool {
+pub fn is_msix() -> bool {
     use windows::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
     use windows::Win32::Storage::Packaging::Appx::GetCurrentPackageFullName;
     let mut len = 0u32;
@@ -811,7 +812,7 @@ fn is_msix() -> bool {
 }
 
 #[cfg(not(windows))]
-fn is_msix() -> bool {
+pub fn is_msix() -> bool {
     false
 }
 

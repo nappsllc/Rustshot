@@ -43,6 +43,8 @@ mod macos_objc;
 mod notice;
 mod objects;
 mod ocr;
+#[cfg(windows)]
+mod package_win;
 // "Open with…": the system's app chooser for a capture.
 mod open_with;
 mod perf;
@@ -644,8 +646,8 @@ enum DaemonStart {
     Exit,
 }
 
-/// With `no_bg` ([`tray::hidden_means_no_daemon`]: Windows, not the
-/// Store build) "Show icon in tray" off means no background process
+/// With `no_bg` ([`tray::hidden_means_no_daemon`]: Windows, the Store
+/// build too) "Show icon in tray" off means no background process
 /// (unless `--force`); elsewhere the daemon is the only way to capture
 /// from a hotkey, so it always runs. `running`: a daemon of this instance
 /// is up (a launch then goes to it as before).
@@ -828,7 +830,21 @@ fn run() -> Result<()> {
         }
         Cmd::RegisterScreenclip(on) => {
             if !screenclip_win::available() {
-                return Err(anyhow!("registering the Win+Shift+S handler needs the Windows desktop build (not MSIX)"));
+                return Err(anyhow!("the Win+Shift+S handler is a Windows feature"));
+            }
+            if screenclip_win::packaged() {
+                // The package declares ms-screenclip; nothing is written,
+                // and only the user chooses the app.
+                println!(
+                    "{}",
+                    if on {
+                        "The Store package already offers Rustshot for Win+Shift+S and Print Screen; choose it in Settings > Apps > Default apps > Rustshot > MS-SCREENCLIP (or Always when Windows asks)."
+                    } else {
+                        "Only you can change which app opens Win+Shift+S: choose another app for MS-SCREENCLIP in Settings > Apps > Default apps."
+                    }
+                );
+                println!("Win+Shift+S now: {}", screenclip_win::state_line(&screenclip_win::handler(), true).0);
+                return Ok(());
             }
             screenclip_win::set(on).map_err(|e| anyhow!(e))?;
             println!(
@@ -923,6 +939,10 @@ fn run() -> Result<()> {
             if !instance::daemon_running() {
                 config::migrate_at(&config::config_path(), &mut config::load());
             }
+            // The Store build's startup task starts the app with no
+            // arguments, as Start does: at sign-in it is the Run value's
+            // `rustshot daemon` (with the tray icon off, nothing runs).
+            let plain = plain && !started_at_sign_in();
             match daemon_start(&config::load(), force, plain, tray::hidden_means_no_daemon(), instance::daemon_running) {
                 DaemonStart::Run => {}
                 DaemonStart::Notice => {
@@ -1016,6 +1036,17 @@ fn run() -> Result<()> {
             }
         }
     }
+}
+
+/// The Store build's startup task started this process (sign-in), not
+/// Start or a shortcut (`AppInstance.GetActivatedEventArgs().Kind`).
+fn started_at_sign_in() -> bool {
+    #[cfg(windows)]
+    {
+        update::is_msix() && package_win::activation_kind() == Some(package_win::KIND_STARTUP_TASK)
+    }
+    #[cfg(not(windows))]
+    false
 }
 
 /// `rustshot screenclip <uri>`: wait the URI's delay, then have the
@@ -1125,9 +1156,9 @@ mod cli_tests {
         assert_eq!(daemon_start(&off, true, false, true, none), DaemonStart::Run, "--force");
         assert_eq!(daemon_start(&off, false, false, true, none), DaemonStart::Exit);
         assert_eq!(daemon_start(&off, false, true, true, none), DaemonStart::Settings);
-        // A daemon runs (forced, or the Store build): a launch goes to it.
+        // A daemon runs (forced): a launch goes to it.
         assert_eq!(daemon_start(&off, false, true, true, || true), DaemonStart::Run);
-        // The Store build, Linux, macOS: a hidden daemon as before.
+        // Linux, macOS: a hidden daemon as before.
         assert_eq!(daemon_start(&off, false, false, false, none), DaemonStart::Run);
         assert_eq!(daemon_start(&off, false, true, false, none), DaemonStart::Run);
         // An older file with the icon off: the one-time notice, on any start

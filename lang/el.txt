@@ -1060,9 +1060,14 @@ redact.kind.ids_iban = Αναγνωριστικά (IBAN)
 redact.kind.urls_tokens_passwords = URL, διακριτικά και κωδικοί πρόσβασης
 redact.kind.ip_addresses = Διευθύνσεις IP
 
+# Start at login (the Store build's startup task)
+autostart.by_user = Η εκκίνηση κατά τη σύνδεση είναι απενεργοποιημένη στα Windows. Για να την ενεργοποιήσετε, ανοίξτε Ρυθμίσεις > Εφαρμογές > Εκκίνηση (ή Διαχείριση εργασιών > Εφαρμογές εκκίνησης) και ενεργοποιήστε το Rustshot.
+autostart.policy = Ορίστηκε από τον οργανισμό σας
+
 # Win+Shift+S (Windows)
 screenclip.guide.title = Ένα ακόμη βήμα για χρήση του Win+Shift+S
 screenclip.guide.steps = Τα Windows αφήνουν μόνο εσάς να επιλέξετε ποια εφαρμογή ανοίγει το Win+Shift+S.\n1. Κάντε κλικ στο «Άνοιγμα προεπιλεγμένων εφαρμογών» παρακάτω.\n2. Κάντε κύλιση έως κάτω και κάντε κλικ στο «Επιλογή προεπιλογών ανά τύπο σύνδεσης».\n3. Βρείτε το MS-SCREENCLIP και επιλέξτε Rustshot.
+screenclip.guide.steps_store = Τα Windows αφήνουν μόνο εσάς να επιλέξετε ποια εφαρμογή ανοίγει το Win+Shift+S.\n1. Κάντε κλικ στο «Άνοιγμα προεπιλεγμένων εφαρμογών» παρακάτω.\n2. Βρείτε το MS-SCREENCLIP και επιλέξτε Rustshot.
 screenclip.guide.broken = Το Win+Shift+S έχει οριστεί σε εφαρμογή που δεν είναι πλέον εγκατεστημένη, γι' αυτό τα Windows εμφανίζουν σφάλμα αντί να ρωτήσουν.
 screenclip.guide.open = Άνοιγμα προεπιλεγμένων εφαρμογών
 screenclip.guide.later = Υπενθύμιση αργότερα
@@ -1074,6 +1079,7 @@ screenclip.state.other = Ανοίγει: {name}
 screenclip.state.broken = Ορίστηκε σε εφαρμογή που λείπει – κάντε κλικ για διόρθωση
 screenclip.state.none = Δεν έχει οριστεί
 screenclip.open_failed = Δεν ήταν δυνατό το άνοιγμα των Προεπιλεγμένων εφαρμογών ({e}). Ανοίξτε μόνοι σας Ρυθμίσεις > Εφαρμογές > Προεπιλεγμένες εφαρμογές.
+screenclip.store_off = μόνο εσείς μπορείτε να επιλέξετε άλλη εφαρμογή. Στις «Προεπιλεγμένες εφαρμογές» (ανοιχτές τώρα), κάντε κλικ στο MS-SCREENCLIP και επιλέξτε μία.
 
 # UI size
 uisize.auto = Αυτόματο

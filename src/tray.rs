@@ -33,6 +33,9 @@ pub enum MenuItem {
     CheckUpdates,
     /// Start at login; payload = currently enabled.
     Autostart(bool),
+    /// Start at login fixed by policy (the Store build's startup task):
+    /// shown greyed, with its state.
+    AutostartLocked(bool),
     Quit,
     /// A line between groups.
     Separator,
@@ -88,7 +91,7 @@ impl MenuItem {
             MenuItem::ClosePins => tr!("tray.close_all_pins"),
             MenuItem::Settings => tr!("tray.settings"),
             MenuItem::CheckUpdates => tr!("tray.check_for_updates"),
-            MenuItem::Autostart(_) => tr!("tray.start_at_login"),
+            MenuItem::Autostart(_) | MenuItem::AutostartLocked(_) => tr!("tray.start_at_login"),
             MenuItem::Quit => tr!("tray.quit_rustshot"),
             MenuItem::Separator => "",
             MenuItem::Launcher => tr!("tray.capture"),
@@ -103,9 +106,14 @@ impl MenuItem {
     /// A check item's state (None: not a check item).
     pub fn checked(self) -> Option<bool> {
         match self {
-            MenuItem::MuteMic(on) | MenuItem::HideCamera(on) | MenuItem::HidePill(on) | MenuItem::Autostart(on) => Some(on),
+            MenuItem::MuteMic(on) | MenuItem::HideCamera(on) | MenuItem::HidePill(on) | MenuItem::Autostart(on) | MenuItem::AutostartLocked(on) => Some(on),
             _ => None,
         }
+    }
+
+    /// Shown but not clickable (greyed).
+    pub fn grayed(self) -> bool {
+        matches!(self, MenuItem::AutostartLocked(_))
     }
 
     /// A stable id per kind (the payload does not change it): dbusmenu
@@ -123,7 +131,7 @@ impl MenuItem {
             MenuItem::Capture => 10,
             MenuItem::Settings => 11,
             MenuItem::CheckUpdates => 12,
-            MenuItem::Autostart(_) => 13,
+            MenuItem::Autostart(_) | MenuItem::AutostartLocked(_) => 13,
             MenuItem::Quit => 14,
             MenuItem::ClosePins => 15,
             MenuItem::CaptureFull => 16,
@@ -293,7 +301,8 @@ pub fn nest(menu: &[MenuItem]) -> Vec<(usize, Vec<usize>)> {
 
 /// Current menu for this install.
 pub fn current_menu() -> Vec<MenuItem> {
-    let auto = crate::update::managed_install().is_none().then(crate::autostart::is_enabled);
+    let status = crate::autostart::status();
+    let auto = status.map(crate::autostart::Status::on);
     let cfg = crate::config::load();
     let today = {
         let t = crate::export::local_ymdhms();
@@ -308,7 +317,20 @@ pub fn current_menu() -> Vec<MenuItem> {
         deletable: recent.iter().map(|r| r.info.deletable()).collect(),
     };
     *RECENT.lock().unwrap_or_else(|e| e.into_inner()) = recent.into_iter().map(|r| r.link).collect();
-    menu_more(auto, rec_menu(), crate::pin::count() > 0, history, crate::rec_ui::supported(), &x)
+    let mut v = menu_more(auto, rec_menu(), crate::pin::count() > 0, history, crate::rec_ui::supported(), &x);
+    if status.is_some_and(crate::autostart::Status::locked) {
+        lock_autostart(&mut v);
+    }
+    v
+}
+
+/// "Start at login" fixed by policy: its item greyed.
+pub fn lock_autostart(menu: &mut [MenuItem]) {
+    for m in menu {
+        if let MenuItem::Autostart(on) = *m {
+            *m = MenuItem::AutostartLocked(on);
+        }
+    }
 }
 
 /// The links "Recent uploads" lists (as the menu was last built).
@@ -383,6 +405,7 @@ pub fn item_event(item: MenuItem) -> Option<HotEvent> {
         MenuItem::Settings
         | MenuItem::CheckUpdates
         | MenuItem::Autostart(_)
+        | MenuItem::AutostartLocked(_)
         | MenuItem::Separator
         | MenuItem::Launcher
         | MenuItem::MakeQr
@@ -409,8 +432,17 @@ pub fn activate(item: MenuItem, tx: &Sender<HotEvent>) -> Result<(), String> {
         }
         MenuItem::CheckUpdates => crate::actions::check_updates(),
         MenuItem::Autostart(_) => {
-            crate::actions::toggle_autostart().map_err(|e| tr!("tray.autostart_failed", e))?;
+            use crate::autostart::Refusal;
+            let res = crate::actions::toggle_autostart();
             bump();
+            match res {
+                Ok(_) => {}
+                // Turned off in Windows: only the user can turn it on
+                // there; Settings says where.
+                Err(Refusal::ByUser) => crate::settings_ui::show_message(crate::autostart::BY_USER_STEPS.get()),
+                Err(Refusal::Policy) => notify(crate::autostart::POLICY.get()),
+                Err(Refusal::Failed(e)) => return Err(tr!("tray.autostart_failed", e)),
+            }
         }
         _ => {}
     }
@@ -606,10 +638,10 @@ pub fn notify(text: &str) {
     eprintln!("rustshot: {text}");
 }
 
-/// With the tray icon off nothing runs in the background: Windows, not
-/// the Store (MSIX) build, where Win+Shift+S / Print Screen can start
-/// Rustshot on demand. The Store build (and Linux, macOS) keep the daemon
-/// running without an icon, its hotkeys working.
+/// With the tray icon off nothing runs in the background: Windows (the
+/// Store build too: its manifest declares `ms-screenclip`), where
+/// Win+Shift+S / Print Screen can start Rustshot on demand. Linux and
+/// macOS keep the daemon running without an icon, its hotkeys working.
 pub fn hidden_means_no_daemon() -> bool {
     cfg!(windows) && crate::screenclip_win::available()
 }
@@ -829,6 +861,17 @@ mod tests {
         assert!(!menu_full(None, None, false, None, true).iter().any(|m| matches!(m, MenuItem::History(_))), "History off");
         assert!(!menu_full(None, Some(RecMenu::default()), false, Some(0), true).contains(&MenuItem::Record), "not while recording");
         assert!(!menu(None, None).iter().any(|m| matches!(m, MenuItem::Autostart(_))));
+        // The Store build's startup task fixed by policy: the same item,
+        // greyed, its state shown, no event.
+        for on in [true, false] {
+            let mut v = menu(Some(on), None);
+            lock_autostart(&mut v);
+            assert!(!v.iter().any(|m| matches!(m, MenuItem::Autostart(_))));
+            let locked = *v.iter().find(|m| matches!(m, MenuItem::AutostartLocked(_))).expect("still shown");
+            assert_eq!((locked.checked(), locked.grayed(), locked.label().as_ref(), locked.id()), (Some(on), true, "Start at login", 13));
+            assert!(item_event(locked).is_none());
+            assert!(!MenuItem::Autostart(on).grayed());
+        }
         assert_eq!(*menu(None, None).last().unwrap(), MenuItem::Quit);
         assert!(!menu(Some(false), None).contains(&MenuItem::StopRecording));
         assert!(!menu(Some(true), None).contains(&MenuItem::ClosePins), "no pins: no Close all pins");

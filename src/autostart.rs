@@ -89,12 +89,113 @@ pub fn autostart_file(home: Option<&str>, xdg_config: Option<&str>, macos: bool)
     }
 }
 
+/// "Start at login" as the OS has it. Unpackaged it is on or off (the Run
+/// value, the LaunchAgent, the autostart file); the Store build's startup
+/// task can also be off by the user's hand in Windows (Settings > Apps >
+/// Startup, Task Manager), which only they can undo, or fixed by policy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Status {
+    On,
+    Off,
+    /// Turned off in Windows: the app cannot turn it on again.
+    OffByUser,
+    /// Set by the organization's policy: shown, not changeable.
+    OnByPolicy,
+    OffByPolicy,
+}
+
+impl Status {
+    /// A `Windows.ApplicationModel.StartupTaskState` (0 Disabled,
+    /// 1 DisabledByUser, 2 Enabled, 3 DisabledByPolicy, 4 EnabledByPolicy;
+    /// anything else reads as off).
+    pub fn from_task_state(state: i32) -> Status {
+        match state {
+            1 => Status::OffByUser,
+            2 => Status::On,
+            3 => Status::OffByPolicy,
+            4 => Status::OnByPolicy,
+            _ => Status::Off,
+        }
+    }
+
+    /// Rustshot starts at login.
+    pub fn on(self) -> bool {
+        matches!(self, Status::On | Status::OnByPolicy)
+    }
+
+    /// Fixed by policy: the switch shows it read-only with [`POLICY`].
+    pub fn locked(self) -> bool {
+        matches!(self, Status::OnByPolicy | Status::OffByPolicy)
+    }
+}
+
+/// Why "Start at login" did not change.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Refusal {
+    /// Turned off in Windows by the user: [`BY_USER_STEPS`] says where to
+    /// turn it on.
+    ByUser,
+    /// Fixed by policy ([`POLICY`]).
+    Policy,
+    /// It failed (the error).
+    Failed(String),
+}
+
+/// How to turn on a startup task the user turned off in Windows.
+pub const BY_USER_STEPS: crate::i18n::Key = key!("autostart.by_user");
+/// The one-line note of a startup task fixed by policy.
+pub const POLICY: crate::i18n::Key = key!("autostart.policy");
+
+impl From<String> for Refusal {
+    fn from(e: String) -> Refusal {
+        Refusal::Failed(e)
+    }
+}
+
+/// The state a startup task is in after `on` was asked for: `Ok` when it
+/// is what was asked, else why not.
+pub fn outcome(on: bool, after: Status) -> Result<(), Refusal> {
+    match after {
+        s if s.on() == on => Ok(()),
+        Status::OffByUser => Err(Refusal::ByUser),
+        Status::OnByPolicy | Status::OffByPolicy => Err(Refusal::Policy),
+        // Asked for on, still plain off: Windows (or the user, asked) said no.
+        _ => Err(Refusal::Failed("Windows did not turn it on".into())),
+    }
+}
+
+/// "Start at login" here: `None` where it is not offered (Flathub, Snap,
+/// the Mac App Store: the store handles it); the Store build's startup
+/// task; elsewhere [`is_enabled`].
+pub fn status() -> Option<Status> {
+    #[cfg(windows)]
+    if crate::update::is_msix() {
+        return Some(match crate::package_win::startup_state() {
+            Ok(s) => Status::from_task_state(s),
+            Err(e) => {
+                eprintln!("rustshot: could not read the startup task: {e}");
+                Status::Off
+            }
+        });
+    }
+    if crate::update::managed_install().is_some() {
+        return None;
+    }
+    Some(if is_enabled() { Status::On } else { Status::Off })
+}
+
 pub fn is_enabled() -> bool {
     imp::is_enabled()
 }
 
-pub fn set(on: bool) -> Result<(), String> {
-    imp::set(on)
+/// Turn "Start at login" on or off ([`status`]'s kind of install).
+pub fn set(on: bool) -> Result<(), Refusal> {
+    #[cfg(windows)]
+    if crate::update::is_msix() {
+        let after = crate::package_win::set_startup(on)?;
+        return outcome(on, Status::from_task_state(after));
+    }
+    Ok(imp::set(on)?)
 }
 
 #[cfg(windows)]
@@ -219,6 +320,31 @@ mod imp {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    /// Every StartupTaskState, and what turning it on or off then means.
+    #[test]
+    fn startup_task_states() {
+        let all = [(0, Status::Off), (1, Status::OffByUser), (2, Status::On), (3, Status::OffByPolicy), (4, Status::OnByPolicy), (7, Status::Off), (-1, Status::Off)];
+        for (n, want) in all {
+            assert_eq!(Status::from_task_state(n), want, "state {n}");
+        }
+        assert!(Status::On.on() && Status::OnByPolicy.on());
+        assert!(!Status::Off.on() && !Status::OffByUser.on() && !Status::OffByPolicy.on());
+        assert!(Status::OnByPolicy.locked() && Status::OffByPolicy.locked());
+        assert!(!Status::On.locked() && !Status::Off.locked() && !Status::OffByUser.locked());
+        // RequestEnableAsync's answers.
+        assert_eq!(outcome(true, Status::On), Ok(()));
+        assert_eq!(outcome(true, Status::OnByPolicy), Ok(()));
+        assert_eq!(outcome(true, Status::OffByUser), Err(Refusal::ByUser));
+        assert_eq!(outcome(true, Status::OffByPolicy), Err(Refusal::Policy));
+        assert!(matches!(outcome(true, Status::Off), Err(Refusal::Failed(_))));
+        // Disable()'s.
+        assert_eq!(outcome(false, Status::Off), Ok(()));
+        assert_eq!(outcome(false, Status::OffByUser), Ok(()));
+        assert_eq!(outcome(false, Status::OnByPolicy), Err(Refusal::Policy));
+        assert_eq!(BY_USER_STEPS.get(), "Start at login is turned off in Windows. To turn it on, open Settings > Apps > Startup (or Task Manager > Startup apps) and turn on Rustshot.");
+        assert_eq!(POLICY.get(), "Set by your organization");
+    }
 
     #[test]
     fn run_command_quotes_exe() {

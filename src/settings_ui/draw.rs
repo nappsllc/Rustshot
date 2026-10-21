@@ -604,6 +604,10 @@ fn general(ui: &mut Ui, s: &mut Settings, tok: &Tok) {
     let tray_row = s.tray_row;
     let warn = s.tray_warning();
     let tray_help = s.tray_help();
+    // The Store build's startup task: fixed by policy (read-only, with a
+    // note), or turned off in Windows (turning it on says where).
+    let auto_locked = s.autostart_status.is_some_and(crate::autostart::Status::locked);
+    let auto_by_user = s.autostart_status == Some(crate::autostart::Status::OffByUser);
     let f = &mut s.form;
     ui.sec(tr!("settings.general.appearance"), tok);
     srow(ui, tok, tr!("settings.general.theme"), None, |ui| {
@@ -660,9 +664,18 @@ fn general(ui: &mut Ui, s: &mut Settings, tok: &Tok) {
         }
     });
     ui.sec(tr!("settings.general.behavior"), tok);
+    let mut auto_steps = false;
     if let Some(on) = f.autostart.as_mut() {
-        srow(ui, tok, tr!("settings.general.launch_at_login"), None, |ui| {
-            ui.switch("autostart", on, tok);
+        let help = auto_locked.then(|| crate::autostart::POLICY.get());
+        srow(ui, tok, tr!("settings.general.launch_at_login"), help, |ui| {
+            let was = ui.enabled;
+            ui.enabled = was && !auto_locked;
+            if ui.switch("autostart", on, tok) && *on && auto_by_user {
+                // Only the user can turn it on again, in Windows.
+                *on = false;
+                auto_steps = true;
+            }
+            ui.enabled = was;
         });
     }
     let mut hid = false;
@@ -686,6 +699,9 @@ fn general(ui: &mut Ui, s: &mut Settings, tok: &Tok) {
     // Turned off: say how to get back before it goes.
     if hid {
         s.ask_hide_tray();
+    }
+    if auto_steps {
+        s.notify(crate::autostart::BY_USER_STEPS.get().into());
     }
 }
 

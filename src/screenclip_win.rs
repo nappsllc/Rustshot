@@ -20,6 +20,14 @@
 //! also removes the user's choice when it points at our ProgID, so
 //! Windows goes back to its default handler (the Snipping Tool).
 //!
+//! The Store (MSIX) build writes nothing: a package's registry writes are
+//! virtualised, so the shell would never see them. Its manifest declares
+//! `ms-screenclip` instead (`packaging/windows/AppxManifest.xml.in`),
+//! which makes Rustshot a candidate the same way; Windows gives the
+//! package an `AppX…` ProgID for it, and the user picks Rustshot under
+//! Default apps (or "Always" when Windows asks). "Turning it on" there
+//! only means showing the guide; Rustshot never changes the choice.
+//!
 //! Every name is in [`Names`], so tests register a throwaway scheme.
 //! The URI parsing ([`parse_uri`]) is pure and tested everywhere.
 #![cfg_attr(not(windows), allow(dead_code))]
@@ -142,6 +150,9 @@ pub struct Names {
     pub app: String,
     /// Our key; `Capabilities` and the backup live under it.
     pub app_key: String,
+    /// The Store build's package family name: its `AppX…` ProgID (the
+    /// manifest's `ms-screenclip`) is ours too.
+    pub package_family: Option<String>,
 }
 
 impl Names {
@@ -152,6 +163,7 @@ impl Names {
             progid: "Rustshot.ScreenClip".into(),
             app: "Rustshot".into(),
             app_key: r"Software\Rustshot".into(),
+            package_family: package_family(),
         }
     }
 
@@ -315,13 +327,37 @@ pub fn app_name(r: &impl RegRead, progid: &str) -> String {
     progid.to_string()
 }
 
+/// The Store build's package family name (`None` unpackaged).
+fn package_family() -> Option<String> {
+    #[cfg(windows)]
+    {
+        crate::package_win::family_name()
+    }
+    #[cfg(not(windows))]
+    None
+}
+
+/// `progid` is the `AppX…` ProgID of an application of the package
+/// `family` (its `Application\AppUserModelID` is `<family>!<app>`).
+pub fn is_package_progid(r: &impl RegRead, progid: &str, family: &str) -> bool {
+    if !is_appx(progid) || family.is_empty() {
+        return false;
+    }
+    let key = format!(r"{progid}\Application");
+    let aumid = r
+        .get(Root::User, &format!(r"Software\Classes\{key}"), Some("AppUserModelID"))
+        .or_else(|| r.get(Root::Classes, &key, Some("AppUserModelID")));
+    let want = format!("{family}!");
+    aumid.is_some_and(|a| a.get(..want.len()).is_some_and(|p| p.eq_ignore_ascii_case(&want)))
+}
+
 /// Which app the scheme opens, from the registry `r`.
 pub fn handler_in(r: &impl RegRead, n: &Names) -> Handler {
     let Some(progid) = user_choice_in(r, n) else { return Handler::None };
     if !resolves(r, &progid) {
         return Handler::Broken { progid };
     }
-    if progid.eq_ignore_ascii_case(&n.progid) {
+    if progid.eq_ignore_ascii_case(&n.progid) || n.package_family.as_deref().is_some_and(|f| is_package_progid(r, &progid, f)) {
         return Handler::Ours;
     }
     let name = app_name(r, &progid);
@@ -331,6 +367,12 @@ pub fn handler_in(r: &impl RegRead, n: &Names) -> Handler {
 /// The message that says how to pick Rustshot (Windows lets no app do it).
 pub const GUIDE_TITLE: crate::i18n::Key = key!("screenclip.guide.title");
 pub const GUIDE_STEPS: crate::i18n::Key = key!("screenclip.guide.steps");
+/// The Store build's steps: Default apps opens at Rustshot's own page,
+/// where MS-SCREENCLIP is listed.
+pub const GUIDE_STEPS_STORE: crate::i18n::Key = key!("screenclip.guide.steps_store");
+/// The Store build, turning it off while Windows opens Rustshot: only
+/// the user can pick another app (after "Could not change Win+Shift+S: ").
+pub const STORE_OFF: crate::i18n::Key = key!("screenclip.store_off");
 /// Said first when the choice names an app that is gone.
 pub const GUIDE_BROKEN: crate::i18n::Key = key!("screenclip.guide.broken");
 pub const GUIDE_OPEN: crate::i18n::Key = key!("screenclip.guide.open");
@@ -341,7 +383,13 @@ pub const NOW_OURS: crate::i18n::Key = key!("screenclip.now_ours");
 
 /// The guide's body for a choice that is `broken` or not.
 pub fn guide_text(broken: bool) -> String {
-    if broken { format!("{GUIDE_BROKEN}\n{GUIDE_STEPS}") } else { GUIDE_STEPS.to_string() }
+    guide_text_for(broken, packaged())
+}
+
+/// [`guide_text`] for the Store build (`store`) or not.
+pub fn guide_text_for(broken: bool, store: bool) -> String {
+    let steps = if store { GUIDE_STEPS_STORE } else { GUIDE_STEPS };
+    if broken { format!("{GUIDE_BROKEN}\n{steps}") } else { steps.to_string() }
 }
 
 /// How a handler line reads.
@@ -374,11 +422,22 @@ pub fn state_line(h: &Handler, show_tray: bool) -> (String, Tone) {
 /// page, where "Choose defaults by link type" is (the guide's steps).
 pub const DEFAULT_APPS_URI: &str = "ms-settings:defaultapps";
 
-/// Open Windows' Default apps; the error when Windows did not.
+/// The Store build's Default apps page: Rustshot's own (its link types,
+/// MS-SCREENCLIP among them), by its application user model ID.
+pub fn default_apps_uri_for(family: Option<&str>) -> String {
+    match family {
+        Some(f) if !f.is_empty() => format!("{DEFAULT_APPS_URI}?registeredAUMID={f}!Rustshot"),
+        _ => DEFAULT_APPS_URI.to_string(),
+    }
+}
+
+/// Open Windows' Default apps (the Store build: at Rustshot's page); the
+/// error when Windows did not.
 pub fn open_default_apps() -> Result<(), String> {
     #[cfg(windows)]
     {
-        reg::shell_open(DEFAULT_APPS_URI)
+        let family = if packaged() { package_family() } else { None };
+        reg::shell_open(&default_apps_uri_for(family.as_deref()))
     }
     #[cfg(not(windows))]
     Err("only on Windows".into())
@@ -621,19 +680,38 @@ pub mod reg {
     }
 }
 
-/// Registering is possible here: Windows, not an MSIX package (a packaged
-/// app's HKCU writes are virtualised, so the shell would never see them).
+/// Win+Shift+S can open Rustshot here: Windows (the installer and
+/// portable builds register, the Store build's manifest declares it).
 pub fn available() -> bool {
-    cfg!(windows) && crate::update::managed_install().is_none()
+    cfg!(windows)
 }
 
-/// The toggle's state, from the registry: `None` where it is not offered.
+/// The Store (MSIX) build: nothing to register, the manifest declares it.
+pub fn packaged() -> bool {
+    cfg!(windows) && crate::update::is_msix()
+}
+
+/// The Store build: the user turned the toggle on in this process (the
+/// guide follows), while Windows does not open Rustshot yet.
+static WANTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The Store build's toggle: Windows opens Rustshot, or the user asked
+/// for it here and the guide is on its way.
+pub fn store_state(ours: bool, wanted: bool) -> bool {
+    ours || wanted
+}
+
+/// The toggle's state: `None` where it is not offered; registered
+/// (installer); the Store build, [`store_state`].
 pub fn state() -> Option<bool> {
     if !available() {
         return None;
     }
     #[cfg(windows)]
     {
+        if packaged() {
+            return Some(store_state(handler() == Handler::Ours, WANTED.load(std::sync::atomic::Ordering::SeqCst)));
+        }
         Some(reg::is_registered(&Names::real()))
     }
     #[cfg(not(windows))]
@@ -661,8 +739,8 @@ pub fn handler_state() -> Handler {
 /// the Settings toggle does), then "One more step to use Win+Shift+S"
 /// shows — the Settings window opens at Capture with the guide over it
 /// (or the open window shows it; nothing over it when Windows already
-/// opens Rustshot). Where it is not offered (MSIX, off Windows) nothing
-/// happens. `owner` is accepted for callers that have a window; the guide
+/// opens Rustshot; the Store build writes nothing, its guide follows).
+/// Off Windows nothing happens. `owner` is accepted for callers that have a window; the guide
 /// lives in the Settings window, so it is not used.
 pub fn show_setup_guide(owner: Option<crate::wind::Hwnd>) {
     let _ = owner;
@@ -695,10 +773,22 @@ pub fn remind_on_start(hint: bool) {
     }
 }
 
-/// Turn the real registration on or off for this executable.
+/// What the Store build's toggle does: on, nothing to write (the guide
+/// follows); off, nothing while Windows opens another app, else
+/// [`STORE_OFF`] (only the user can pick another one).
+pub fn store_set(on: bool, ours: bool) -> Result<(), String> {
+    if on || !ours { Ok(()) } else { Err(STORE_OFF.to_string()) }
+}
+
+/// Turn the real registration on or off for this executable (the Store
+/// build: [`store_set`]).
 pub fn set(on: bool) -> Result<(), String> {
     #[cfg(windows)]
     {
+        if packaged() {
+            WANTED.store(on, std::sync::atomic::Ordering::SeqCst);
+            return store_set(on, handler() == Handler::Ours);
+        }
         let n = Names::real();
         if on {
             let exe = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -721,7 +811,7 @@ pub fn set(on: bool) -> Result<(), String> {
 pub fn repoint_on_start() {
     #[cfg(windows)]
     {
-        if !available() || crate::instance::instance_name().is_some() {
+        if !available() || packaged() || crate::instance::instance_name().is_some() {
             return;
         }
         let Ok(exe) = std::env::current_exe() else { return };
@@ -989,11 +1079,80 @@ mod tests {
         assert_eq!(state_line(&Handler::Ours, false), ("Opens Rustshot".into(), Tone::Good));
     }
 
-    /// The plain Default apps page, where the guide's steps apply.
+    /// The plain Default apps page, where the guide's steps apply; the
+    /// Store build's opens at Rustshot's own page.
     #[test]
     fn default_apps_page() {
         assert_eq!(DEFAULT_APPS_URI, "ms-settings:defaultapps");
         assert!(GUIDE_STEPS.contains("Choose defaults by link type"));
+        assert_eq!(default_apps_uri_for(None), "ms-settings:defaultapps");
+        assert_eq!(default_apps_uri_for(Some("")), "ms-settings:defaultapps");
+        assert_eq!(
+            default_apps_uri_for(Some("PowerNapps.Rustshot_abc123")),
+            "ms-settings:defaultapps?registeredAUMID=PowerNapps.Rustshot_abc123!Rustshot"
+        );
+        let store = guide_text_for(false, true);
+        assert_eq!(
+            store,
+            "Windows lets only you choose which app opens Win+Shift+S.\n1. Click Open Default apps below.\n2. Find MS-SCREENCLIP and pick Rustshot."
+        );
+        let broken = guide_text_for(true, true);
+        assert!(broken.ends_with(&store) && broken.starts_with(GUIDE_BROKEN.get()));
+        assert_eq!(guide_text_for(false, false), GUIDE_STEPS.get());
+    }
+
+    /// The Store build's package: the `AppX…` ProgID Windows made for its
+    /// manifest's `ms-screenclip` (as the sandbox shows it) is ours once
+    /// chosen; another package's, or another family's, is not.
+    #[test]
+    fn store_package_progid_is_ours() {
+        const OURS: &str = "AppXkdj1ct8fvv4xwhpxxfebykhn4czaktxv";
+        let fam = "nappsllc.rustshot.dev_3685br7djnvvc";
+        let n = Names { package_family: Some(fam.into()), ..Names::real() };
+        let mut r = FakeReg::default();
+        let app = format!(r"Software\Classes\{OURS}\Application");
+        r.put(Root::User, &app, Some("AppUserModelID"), &format!("{fam}!Rustshot"));
+        r.put(Root::User, &app, Some("ApplicationName"), "Rustshot");
+        r.put(Root::Classes, &format!(r"{OURS}\Application"), Some("AppUserModelID"), &format!("{fam}!Rustshot"));
+        snipping_tool(&mut r);
+        // Nothing chosen: Windows asks (the "Select an app" picker).
+        assert_eq!(handler_in(&r, &n), Handler::None);
+        r.choice(Some(OURS), None);
+        assert_eq!(handler_in(&r, &n), Handler::Ours);
+        assert!(is_package_progid(&r, &OURS.to_ascii_lowercase(), &fam.to_ascii_uppercase()), "case-insensitive");
+        // Unpackaged (no family) it is just another app named Rustshot.
+        let plain = Names { package_family: None, ..Names::real() };
+        assert_eq!(handler_in(&r, &plain), Handler::Other { progid: OURS.into(), name: "Rustshot".into() });
+        // Another family, a prefix of ours, or not an AppX ProgID.
+        assert!(!is_package_progid(&r, OURS, "nappsllc.rustshot.dev_other"));
+        assert!(!is_package_progid(&r, OURS, "nappsllc.rustshot.dev"));
+        assert!(!is_package_progid(&r, OURS, ""));
+        assert!(!is_package_progid(&r, "Rustshot.ScreenClip", fam));
+        // The Snipping Tool chosen: not ours.
+        r.choice(Some(SNIP), None);
+        assert_eq!(handler_in(&r, &n), Handler::Other { progid: SNIP.into(), name: "Snipping Tool".into() });
+        // The package uninstalled, its choice left: broken.
+        let mut gone = FakeReg::default();
+        gone.choice(Some(OURS), None);
+        assert_eq!(handler_in(&gone, &n), Handler::Broken { progid: OURS.into() });
+    }
+
+    /// The Store build's toggle: on while Windows opens Rustshot or once
+    /// asked for (the guide follows); off is refused while Windows opens
+    /// Rustshot (only the user can pick another app), fine otherwise.
+    #[test]
+    fn store_toggle() {
+        assert!(store_state(true, false) && store_state(false, true) && store_state(true, true));
+        assert!(!store_state(false, false));
+        assert_eq!(store_set(true, false), Ok(()));
+        assert_eq!(store_set(true, true), Ok(()));
+        assert_eq!(store_set(false, false), Ok(()));
+        let e = store_set(false, true).unwrap_err();
+        assert_eq!(e, STORE_OFF.get());
+        assert_eq!(
+            crate::tr!("settings.error.screenclip", e),
+            "Could not change Win+Shift+S: only you can choose another app for it. In Default apps (opened now), click MS-SCREENCLIP and pick one."
+        );
     }
 
     /// Register, re-point and unregister a throwaway scheme under HKCU
@@ -1014,6 +1173,7 @@ mod tests {
                     progid: format!("RustshotTest.ScreenClip.{id}"),
                     app: format!("RustshotTest{id}"),
                     app_key: format!(r"Software\RustshotTest{id}"),
+                    package_family: None,
                 };
                 assert_ne!(n.scheme, "ms-screenclip");
                 Throwaway(n)

@@ -1078,9 +1078,14 @@ redact.kind.ids_iban = מזהים (IBAN)
 redact.kind.urls_tokens_passwords = כתובות URL, אסימונים וסיסמאות
 redact.kind.ip_addresses = כתובות IP
 
+# Start at login (the Store build's startup task)
+autostart.by_user = ההפעלה בכניסה כבויה ב-Windows. כדי להפעיל אותה, פתח את הגדרות > אפליקציות > הפעלה (או מנהל המשימות > אפליקציות הפעלה) והפעל את Rustshot.
+autostart.policy = נקבע על ידי הארגון שלך
+
 # Win+Shift+S (Windows)
 screenclip.guide.title = עוד צעד אחד כדי להשתמש ב-Win+Shift+S
 screenclip.guide.steps = Windows מאפשר רק לך לבחור איזו אפליקציה פותחת את Win+Shift+S.\n1. לחץ למטה על פתח אפליקציות ברירת מחדל.\n2. גלול עד הסוף ולחץ על "בחירת ברירות מחדל לפי סוג קישור".\n3. מצא את MS-SCREENCLIP ובחר ב-Rustshot.
+screenclip.guide.steps_store = Windows מאפשר רק לך לבחור איזו אפליקציה פותחת את Win+Shift+S.\n1. לחץ למטה על פתח אפליקציות ברירת מחדל.\n2. מצא את MS-SCREENCLIP ובחר ב-Rustshot.
 screenclip.guide.broken = Win+Shift+S מוגדר כרגע לאפליקציה שכבר לא מותקנת, ולכן Windows מציג שגיאה במקום לשאול.
 screenclip.guide.open = פתח אפליקציות ברירת מחדל
 screenclip.guide.later = הזכר לי מאוחר יותר
@@ -1092,6 +1097,7 @@ screenclip.state.other = פותח את {name}
 screenclip.state.broken = מוגדר לאפליקציה חסרה — לחץ לתיקון
 screenclip.state.none = לא מוגדר
 screenclip.open_failed = לא ניתן לפתוח את אפליקציות ברירת מחדל: {e}. פתח בעצמך את הגדרות > אפליקציות > אפליקציות ברירת מחדל.
+screenclip.store_off = רק אתה יכול לבחור לה אפליקציה אחרת. באפליקציות ברירת מחדל (פתוח כעת), לחץ על MS-SCREENCLIP ובחר אחת.
 
 # UI size
 uisize.auto = אוטומטי

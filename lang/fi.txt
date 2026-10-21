@@ -1060,9 +1060,14 @@ redact.kind.ids_iban = Tunnukset (IBAN)
 redact.kind.urls_tokens_passwords = URL:t, tunnisteet ja salasanat
 redact.kind.ip_addresses = IP-osoitteet
 
+# Start at login (the Store build's startup task)
+autostart.by_user = Käynnistys kirjautuessa on poistettu käytöstä Windowsissa. Ota se käyttöön kohdassa Asetukset > Sovellukset > Käynnistys (tai Tehtävienhallinta > Käynnistyssovellukset) ja ota Rustshot käyttöön.
+autostart.policy = Organisaatiosi määrittämä
+
 # Win+Shift+S (Windows)
 screenclip.guide.title = Vielä yksi vaihe Win+Shift+S:n käyttöön
 screenclip.guide.steps = Windows antaa vain sinun valita, mikä sovellus avaa Win+Shift+S:n.\n1. Napsauta alta Avaa oletussovellukset.\n2. Vieritä alas ja napsauta ”Valitse oletukset linkkityypin mukaan”.\n3. Etsi MS-SCREENCLIP ja valitse Rustshot.
+screenclip.guide.steps_store = Windows antaa vain sinun valita, mikä sovellus avaa Win+Shift+S:n.\n1. Napsauta alta Avaa oletussovellukset.\n2. Etsi MS-SCREENCLIP ja valitse Rustshot.
 screenclip.guide.broken = Win+Shift+S on asetettu sovellukselle, jota ei ole enää asennettu, joten Windows näyttää virheen kysymisen sijaan.
 screenclip.guide.open = Avaa oletussovellukset
 screenclip.guide.later = Muistuta myöhemmin
@@ -1074,6 +1079,7 @@ screenclip.state.other = Avaa: {name}
 screenclip.state.broken = Puuttuva sovellus – korjaa napsauttamalla
 screenclip.state.none = Ei asetettu
 screenclip.open_failed = Oletussovelluksia ei voitu avata ({e}). Avaa itse Asetukset > Sovellukset > Oletussovellukset.
+screenclip.store_off = vain sinä voit valita sille toisen sovelluksen. Napsauta Oletussovelluksissa (nyt auki) MS-SCREENCLIP ja valitse sovellus.
 
 # UI size
 uisize.auto = Auto

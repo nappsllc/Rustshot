@@ -68,3 +68,28 @@ fn the_startup_task_is_on_rustshot_with_0_6_5s_task_id() {
     let listing = include_str!("../docs/store/msstore-listing.md");
     assert!(listing.contains("The startup task \"Rustshot hotkeys\" starts the background process at sign-in"));
 }
+
+/// Win+Shift+S and Print Screen (0.6.7): the Rustshot application declares
+/// `ms-screenclip` (not a reserved scheme name), so Windows lists Rustshot
+/// under Default apps; the URI arrives as `screenclip "<uri>"`, which
+/// `rustshot screenclip` reads. Only the user picks it: the certification
+/// notes say so.
+#[test]
+fn rustshot_declares_ms_screenclip() {
+    let b = body();
+    let apps = applications(&b);
+    assert_eq!(b.matches("windows.protocol").count(), 1, "one protocol");
+    let main = apps[0];
+    let i = main.find("<uap3:Extension Category=\"windows.protocol\"").expect("the protocol on the Rustshot application");
+    let ext = &main[i..i + main[i..].find("</uap3:Extension>").unwrap()];
+    assert_eq!(attr(ext, "Executable"), Some("rustshot.exe"));
+    assert_eq!(attr(ext, "EntryPoint"), Some("Windows.FullTrustApplication"));
+    let p = &ext[ext.find("<uap3:Protocol ").unwrap()..];
+    assert_eq!(attr(p, "Name"), Some("ms-screenclip"));
+    assert_eq!(attr(p, "Parameters"), Some("screenclip &quot;%1&quot;"));
+    assert!(p.contains("<uap:DisplayName>Rustshot screen capture</uap:DisplayName>"));
+    assert!(MANIFEST.contains("xmlns:uap3=\"http://schemas.microsoft.com/appx/manifest/uap/windows10/3\""));
+    let listing = include_str!("../docs/store/msstore-listing.md");
+    assert!(listing.contains("Settings > Apps > Default apps"), "the certification notes say where the user picks it");
+    assert!(listing.contains("never changes"), "and that the app never changes the default itself");
+}

@@ -1060,9 +1060,14 @@ redact.kind.ids_iban = ID-nummer (IBAN)
 redact.kind.urls_tokens_passwords = URL:er, token & lösenord
 redact.kind.ip_addresses = IP-adresser
 
+# Start at login (the Store build's startup task)
+autostart.by_user = Start vid inloggning är avstängt i Windows. Slå på det under Inställningar > Appar > Start (eller Aktivitetshanteraren > Startappar) och slå på Rustshot.
+autostart.policy = Angivet av din organisation
+
 # Win+Shift+S (Windows)
 screenclip.guide.title = Ett steg till för att använda Win+Shift+S
 screenclip.guide.steps = Windows låter bara dig välja vilken app som öppnar Win+Shift+S.\n1. Klicka på Öppna Standardappar nedan.\n2. Rulla längst ned och klicka på ”Välj standardvärden efter länktyp”.\n3. Leta upp MS-SCREENCLIP och välj Rustshot.
+screenclip.guide.steps_store = Windows låter bara dig välja vilken app som öppnar Win+Shift+S.\n1. Klicka på Öppna Standardappar nedan.\n2. Leta upp MS-SCREENCLIP och välj Rustshot.
 screenclip.guide.broken = Win+Shift+S är inställt på en app som inte längre är installerad, så Windows visar ett fel i stället för att fråga.
 screenclip.guide.open = Öppna Standardappar
 screenclip.guide.later = Påminn mig senare
@@ -1074,6 +1079,7 @@ screenclip.state.other = Öppnar {name}
 screenclip.state.broken = Inställt på en saknad app – klicka för att åtgärda
 screenclip.state.none = Inte inställt
 screenclip.open_failed = Det gick inte att öppna Standardappar ({e}). Öppna Inställningar > Appar > Standardappar själv.
+screenclip.store_off = bara du kan välja en annan app för det. Klicka på MS-SCREENCLIP i Standardappar (öppnat nu) och välj en.
 
 # UI size
 uisize.auto = Auto

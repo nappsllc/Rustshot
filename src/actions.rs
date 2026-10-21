@@ -58,8 +58,13 @@ pub fn check_updates() {
 }
 
 /// Flip "Start at login"; returns the new state.
-pub fn toggle_autostart() -> Result<bool, String> {
-    let on = !crate::autostart::is_enabled();
+pub fn toggle_autostart() -> Result<bool, crate::autostart::Refusal> {
+    use crate::autostart::{Refusal, Status};
+    let st = crate::autostart::status().unwrap_or(Status::Off);
+    if st.locked() {
+        return Err(Refusal::Policy);
+    }
+    let on = !st.on();
     crate::autostart::set(on)?;
     Ok(on)
 }

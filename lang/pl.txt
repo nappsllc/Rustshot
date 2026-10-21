@@ -1096,9 +1096,14 @@ redact.kind.ids_iban = Identyfikatory (IBAN)
 redact.kind.urls_tokens_passwords = URL-e, tokeny i hasła
 redact.kind.ip_addresses = Adresy IP
 
+# Start at login (the Store build's startup task)
+autostart.by_user = Uruchamianie przy logowaniu jest wyłączone w systemie Windows. Aby je włączyć, otwórz Ustawienia > Aplikacje > Uruchamianie (lub Menedżer zadań > Aplikacje autostartu) i włącz Rustshot.
+autostart.policy = Ustawione przez Twoją organizację
+
 # Win+Shift+S (Windows)
 screenclip.guide.title = Jeszcze jeden krok, aby używać Win+Shift+S
 screenclip.guide.steps = Tylko ty możesz wybrać w systemie Windows, która aplikacja otwiera Win+Shift+S.\n1. Kliknij poniżej Otwórz Aplikacje domyślne.\n2. Przewiń na sam dół i kliknij „Wybierz wartości domyślne według typu linku”.\n3. Znajdź MS-SCREENCLIP i wybierz Rustshot.
+screenclip.guide.steps_store = Tylko ty możesz wybrać w systemie Windows, która aplikacja otwiera Win+Shift+S.\n1. Kliknij poniżej Otwórz Aplikacje domyślne.\n2. Znajdź MS-SCREENCLIP i wybierz Rustshot.
 screenclip.guide.broken = Win+Shift+S jest ustawiony na aplikację, która nie jest już zainstalowana, więc Windows zamiast pytać pokazuje błąd.
 screenclip.guide.open = Otwórz Aplikacje domyślne
 screenclip.guide.later = Przypomnij później
@@ -1110,6 +1115,7 @@ screenclip.state.other = Otwiera: {name}
 screenclip.state.broken = Ustawiona brakująca aplikacja – kliknij, aby naprawić
 screenclip.state.none = Nie ustawiono
 screenclip.open_failed = Nie można otworzyć Aplikacji domyślnych ({e}). Otwórz samodzielnie Ustawienia > Aplikacje > Aplikacje domyślne.
+screenclip.store_off = tylko ty możesz wybrać dla niego inną aplikację. W Aplikacjach domyślnych (otwartych teraz) kliknij MS-SCREENCLIP i wybierz jedną.
 
 # UI size
 uisize.auto = Auto

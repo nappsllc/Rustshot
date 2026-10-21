@@ -1,16 +1,20 @@
 # Microsoft Store listing (Partner Center, en-US)
 
-Text to paste into Partner Center for Rustshot 0.6.6. Each field's block is
+Text to paste into Partner Center for Rustshot 0.6.7. Each field's block is
 the exact text. The limits are Partner Center's current Store listing
 limits for MSIX desktop apps; recheck them in the form, which counts for
 you. Everything here describes the **Store (MSIX) build**, which differs
-from the installer and portable builds in three ways:
+from the installer and portable builds in these ways:
 
-- **No Win+Shift+S / Print Screen takeover.** A packaged app can't register
-  the `ms-screenclip:` handler (docs/guide.md, *Win+Shift+S and Print
-  Screen*). The listing doesn't claim it.
-- **The tray icon off doesn't mean 0 MB.** In the Store build the daemon
-  keeps running hidden so the hotkeys still work.
+- **Win+Shift+S / Print Screen through the manifest.** From 0.6.7 the
+  package declares the `ms-screenclip:` protocol instead of writing the
+  handler to the registry (docs/guide.md, *Win+Shift+S and Print Screen ›
+  In the Microsoft Store build*). The user chooses Rustshot in Windows
+  Settings › Apps › Default apps; the app never changes the default. The
+  listing says so ("choose Rustshot …"), never that it takes the keys by
+  itself.
+- **Launch at login is the package's startup task** ("Rustshot hotkeys"),
+  which Windows can also turn off or fix by policy.
 - **No update check.** The Store handles updates, and *Check for updates*
   says so.
 
@@ -42,7 +46,7 @@ Capture any part of your screen, mark it up and share it in seconds. Rustshot is
 ## Description
 
 Limit: 10,000 characters, plain text (no Markdown, HTML or links). This text
-is about 3,450 characters.
+is about 3,680 characters.
 
 ```text
 Rustshot is a fast, good-looking tool for screenshots, annotation and screen recording. Press Win+Shift+X, drag across what you want, mark it up and copy, save or share it. Rustshot is a single small native app with no web view and no account, and it is open source under the Apache License 2.0.
@@ -84,6 +88,7 @@ MADE TO STAY OUT OF THE WAY
 • Small and light: it uses a few megabytes of memory in the background and draws only the pixels that change.
 • Dark and light themes that follow Windows, and any accent color.
 • Every hotkey and editor key can be remapped. Defaults: Win+Shift+X region, Win+Shift+F full screen, Win+Shift+E window, Win+Shift+G record, Win+Shift+Z copy text, Win+Shift+H History.
+• Choose Rustshot for MS-SCREENCLIP in Windows Settings › Apps › Default apps, and Win+Shift+S and Print Screen open it, even when it isn't running. With the tray icon off, nothing of Rustshot runs in the background until then.
 
 PRIVACY
 No account, no telemetry, no ads. Captures and recordings stay on your PC unless you choose Upload. The microphone and camera are used only while you record with them turned on.
@@ -93,7 +98,7 @@ Rustshot is open source under the Apache License 2.0. Source code, issues and th
 
 ## Product features
 
-Up to 20, 200 characters each. These are 16, the longest is 83.
+Up to 20, 200 characters each. These are 17, the longest is 83.
 
 ```text
 Capture a region, window, monitor or every screen with one hotkey
@@ -112,6 +117,7 @@ History keeps 30 days of captures, searchable and re-editable
 Pin captures on top of every window
 Optional upload to Imgur or your own S3-compatible storage
 Dark and light themes, any accent color, every key remappable
+Win+Shift+S and Print Screen can open Rustshot once you choose it in Default apps
 ```
 
 ## Search terms
@@ -129,24 +135,26 @@ annotate image
 GIF recorder
 ```
 
-## What's new in this version (0.6.6)
+## What's new in this version (0.6.7)
 
-Limit: 1,500 characters. This text is 1,399 characters. 0.6.6's change
-first (the Store package fix: the startup task is on the Rustshot entry,
-with no hidden app; 0.6.5's package was refused for that app, so its lines
-follow); the last seven lines keep 0.6.5's, 0.6.4's, 0.6.3's, 0.6.2's,
-0.6.1's, 0.6.0's and 0.5's main points for customers updating from older
-versions. (The in-app update note of the GitHub release does not apply to
-the Store build, which the Store updates.)
+Limit: 1,500 characters. This text is 1,373 characters. 0.6.7's changes
+first (Win+Shift+S and Print Screen through the package's ms-screenclip
+declaration, the tray icon off with nothing in the background, Launch at
+login through the startup task); the last six lines keep 0.6.5's, 0.6.4's,
+0.6.3's, 0.6.2's, 0.6.0's and 0.5's main points for customers updating from
+older versions (0.6.6 was the package fix only, 0.6.1 a smaller one).
+(The in-app update note of the GitHub release does not apply to the Store
+build, which the Store updates.)
 
 ```text
-• The background hotkeys now start at sign-in from Rustshot's own Start entry (no separate hidden app); turn this on or off in Windows Settings › Apps › Startup ("Rustshot hotkeys").
-• From 0.6.5: when several shortcuts are already used by another app, Settings shows one short summary that always fits; Settings › About is simpler; the magnifier's caption has an even shadow.
-• From 0.6.4: windows that hide themselves from screenshots (password managers, some secure apps) are marked with a "Hidden from screenshots" placeholder; one shortcut per row in Settings; quicker wheel resizing of the Magnify loupe.
+• Win+Shift+S and Print Screen can open Rustshot, even when it isn't running: choose Rustshot for MS-SCREENCLIP in Windows Settings › Apps › Default apps (Settings › Capture in Rustshot shows the way).
+• Tray icon off now means nothing runs in the background: Win+Shift+S starts Rustshot for a capture, and launching it opens Settings.
+• Launch at login is in Settings › General and the tray menu again (the "Rustshot hotkeys" startup task).
+• From 0.6.5: when several shortcuts are already used by another app, Settings shows one short summary that always fits; Settings › About is simpler.
+• From 0.6.4: windows that hide themselves from screenshots (password managers, some secure apps) are marked with a "Hidden from screenshots" placeholder; one shortcut per row in Settings.
 • From 0.6.3: sharper small icons; the mouse wheel resizes tools about 12% a notch; clearer window titles that match Rustshot's theme.
 • From 0.6.2: the tray icon is the blue Rustshot app icon; Pixelate, Blur, Magnify and the other tools pick up the arrow, box or text under the pointer.
-• From 0.6.1: fast Pencil and Marker strokes, freeform (lasso) selections and the ruler follow every movement of the mouse, even with high-rate gaming mice.
-• From 0.6.0: Rustshot is open source under the Apache License 2.0; the magnifier keeps up with fast mice; hover over an arrow, box or text with a drawing tool to pick it up and move it.
+• From 0.6.0: Rustshot is open source under the Apache License 2.0; hover over an arrow, box or text with a drawing tool to pick it up and move it.
 • From 0.5: 35 interface languages, scrolling capture (Shift+S), QR codes (Q), a screen ruler (U), click and keystroke overlays and trimming for recordings.
 ```
 
@@ -295,25 +303,26 @@ review), but certification reads this too: see the notes below.
 ## Notes for certification
 
 Partner Center › Submission options › *Notes for certification*. Keep it
-under 2,000 characters. This text is about 1,900.
+under 2,000 characters. This text is 1,978 characters.
 
 ```text
 No sign-in, account or test credentials are needed. Rustshot is a screenshot and screen recording tool that runs in the background.
 
 HOW TO TEST
-1. Launch Rustshot from Start. It runs in the background with a notification-area icon whose menu has Capture…, History… and Settings…. "Rustshot Settings" in Start opens Settings directly.
+1. Launch Rustshot from Start. It runs in the background with a notification-area icon (menu: Capture…, History…, Settings…). "Rustshot Settings" in Start opens Settings.
 2. Press Win+Shift+X. The capture overlay covers the screen: drag a region (or click a window), draw with the toolbar (R rectangle, A arrow, T text), then Ctrl+C copies, Ctrl+S saves to Pictures\rustshot, Esc cancels.
-3. Other hotkeys: Win+Shift+F full screen, Win+Shift+E window, Win+Shift+Z copy text (Windows OCR), Win+Shift+G start/stop recording, Win+Shift+H History. A key another app holds moves to a spare one (a notification says which); all keys can be changed in Settings › Shortcuts.
+3. Other hotkeys: Win+Shift+F full screen, Win+Shift+E window, Win+Shift+Z copy text (Windows OCR), Win+Shift+G start/stop recording, Win+Shift+H History. A key another app holds moves to a spare one; all keys can be changed in Settings › Shortcuts.
 4. Recording: in the overlay press 2 (Video), pick Region/Window/Screen and Start recording; stop with Win+Shift+G or the pill.
 
 PERMISSIONS
 • Microphone and camera are off by default and used only when turned on in the recording panel; Windows asks the first time.
-• The startup task "Rustshot hotkeys" starts the background process at sign-in; it can be turned off in Windows Settings › Apps › Startup or Task Manager › Startup apps.
+• The startup task "Rustshot hotkeys" starts the background process at sign-in; Launch at login in Rustshot's Settings, Windows Settings › Apps › Startup and Task Manager turn it off.
+• Win+Shift+S / Print Screen: the package declares the ms-screenclip protocol, so Rustshot is listed under Settings > Apps > Default apps. The user chooses it there; the app never changes the default itself.
 
 NETWORK (internetClient)
 • No telemetry and no update check (the Store updates it).
 • Uploads go to Imgur or the user's own S3-compatible storage only when the user chooses Upload (Ctrl+U) or Copy link.
-• Language files and the camera blur model are downloaded on demand from this version's GitHub release (github.com/nappsllc/rustshot): a language when chosen, or at first start if Windows uses one of the 34 other languages; the model when blur is turned on. Each file is checked against a SHA-256 built into the app; Settings › General › "Download language and blur files" turns this off.
+• Language files and the camera blur model are downloaded on demand from this version's GitHub release (github.com/nappsllc/rustshot), each checked against a SHA-256 built into the app; Settings › General › "Download language and blur files" turns this off.
 
 Privacy policy: https://github.com/nappsllc/rustshot/blob/main/PRIVACY.md
 ```

@@ -1060,9 +1060,14 @@ redact.kind.ids_iban = Identifiants (IBAN)
 redact.kind.urls_tokens_passwords = URL, jetons et mots de passe
 redact.kind.ip_addresses = Adresses IP
 
+# Start at login (the Store build's startup task)
+autostart.by_user = Le démarrage à l’ouverture de session est désactivé dans Windows. Pour l’activer, ouvrez Paramètres > Applications > Démarrage (ou Gestionnaire des tâches > Applications de démarrage) et activez Rustshot.
+autostart.policy = Défini par votre organisation
+
 # Win+Shift+S (Windows)
 screenclip.guide.title = Encore une étape pour utiliser Win+Shift+S
 screenclip.guide.steps = Windows vous laisse seul choisir l’application qui ouvre Win+Shift+S.\n1. Cliquez ci-dessous sur « Ouvrir Applications par défaut ».\n2. Faites défiler jusqu’en bas et cliquez sur « Choisir les valeurs par défaut par type de lien ».\n3. Recherchez MS-SCREENCLIP et choisissez Rustshot.
+screenclip.guide.steps_store = Windows vous laisse seul choisir l’application qui ouvre Win+Shift+S.\n1. Cliquez ci-dessous sur « Ouvrir Applications par défaut ».\n2. Recherchez MS-SCREENCLIP et choisissez Rustshot.
 screenclip.guide.broken = Win+Shift+S est associé à une application qui n’est plus installée : Windows affiche donc une erreur au lieu de demander.
 screenclip.guide.open = Ouvrir Applications par défaut
 screenclip.guide.later = Me le rappeler plus tard
@@ -1074,6 +1079,7 @@ screenclip.state.other = Ouvre {name}
 screenclip.state.broken = Associé à une application absente – cliquez pour corriger
 screenclip.state.none = Non défini
 screenclip.open_failed = Impossible d’ouvrir Applications par défaut ({e}). Ouvrez vous-même Paramètres > Applications > Applications par défaut.
+screenclip.store_off = vous seul pouvez choisir une autre application. Dans Applications par défaut (ouvert maintenant), cliquez sur MS-SCREENCLIP et choisissez-en une.
 
 # UI size
 uisize.auto = Auto

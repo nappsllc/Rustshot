@@ -1060,9 +1060,14 @@ redact.kind.ids_iban = ID (IBAN)
 redact.kind.urls_tokens_passwords = URL, टोकन और पासवर्ड
 redact.kind.ip_addresses = IP पते
 
+# Start at login (the Store build's startup task)
+autostart.by_user = Windows में लॉगिन पर प्रारंभ बंद है। इसे चालू करने के लिए सेटिंग्स > ऐप्स > स्टार्टअप (या कार्य प्रबंधक > स्टार्टअप ऐप्स) खोलें और Rustshot चालू करें।
+autostart.policy = आपके संगठन द्वारा सेट
+
 # Win+Shift+S (Windows)
 screenclip.guide.title = Win+Shift+S उपयोग करने के लिए एक और चरण
 screenclip.guide.steps = Win+Shift+S कौन-सा ऐप खोले, यह Windows केवल आपको चुनने देता है।\n1. नीचे डिफ़ॉल्ट ऐप्स खोलें पर क्लिक करें।\n2. सबसे नीचे स्क्रॉल करें और “लिंक प्रकार के अनुसार डिफ़ॉल्ट चुनें” पर क्लिक करें।\n3. MS-SCREENCLIP ढूंढें और Rustshot चुनें।
+screenclip.guide.steps_store = Win+Shift+S कौन-सा ऐप खोले, यह Windows केवल आपको चुनने देता है।\n1. नीचे डिफ़ॉल्ट ऐप्स खोलें पर क्लिक करें।\n2. MS-SCREENCLIP ढूंढें और Rustshot चुनें।
 screenclip.guide.broken = Win+Shift+S अभी ऐसे ऐप पर सेट है जो अब इंस्टॉल नहीं है, इसलिए Windows पूछने के बजाय त्रुटि दिखाता है।
 screenclip.guide.open = डिफ़ॉल्ट ऐप्स खोलें
 screenclip.guide.later = बाद में याद दिलाएं
@@ -1074,6 +1079,7 @@ screenclip.state.other = {name} खोलता है
 screenclip.state.broken = अनुपलब्ध ऐप पर सेट — ठीक करने के लिए क्लिक करें
 screenclip.state.none = सेट नहीं
 screenclip.open_failed = डिफ़ॉल्ट ऐप्स नहीं खोल सका ({e})। सेटिंग्स > ऐप्स > डिफ़ॉल्ट ऐप्स स्वयं खोलें।
+screenclip.store_off = इसके लिए कोई दूसरा ऐप केवल आप चुन सकते हैं। डिफ़ॉल्ट ऐप्स (अभी खुला) में MS-SCREENCLIP पर क्लिक करें और कोई ऐप चुनें।
 
 # UI size
 uisize.auto = स्वतः

@@ -1042,9 +1042,14 @@ redact.kind.ids_iban = 账号 (IBAN)
 redact.kind.urls_tokens_passwords = URL、令牌和密码
 redact.kind.ip_addresses = IP 地址
 
+# Start at login (the Store build's startup task)
+autostart.by_user = Windows 中已关闭“登录时启动”。要打开它，请转到“设置”>“应用”>“启动”（或“任务管理器”>“启动应用”）并打开 Rustshot。
+autostart.policy = 由你的组织设置
+
 # Win+Shift+S (Windows)
 screenclip.guide.title = 还差一步即可使用 Win+Shift+S
 screenclip.guide.steps = 只有你自己能在 Windows 中选择由哪个应用打开 Win+Shift+S。\n1. 单击下方的“打开默认应用”。\n2. 滚动到底部，单击“按链接类型选择默认值”。\n3. 找到 MS-SCREENCLIP 并选择 Rustshot。
+screenclip.guide.steps_store = 只有你自己能在 Windows 中选择由哪个应用打开 Win+Shift+S。\n1. 单击下方的“打开默认应用”。\n2. 找到 MS-SCREENCLIP 并选择 Rustshot。
 screenclip.guide.broken = Win+Shift+S 当前设置为一个已卸载的应用，因此 Windows 会显示错误而不是询问。
 screenclip.guide.open = 打开默认应用
 screenclip.guide.later = 稍后提醒我
@@ -1056,6 +1061,7 @@ screenclip.state.other = 打开 {name}
 screenclip.state.broken = 设置为不存在的应用 — 单击修复
 screenclip.state.none = 未设置
 screenclip.open_failed = 无法打开默认应用（{e}）。请自行打开“设置 > 应用 > 默认应用”。
+screenclip.store_off = 只有你自己能为它选择其他应用。在“默认应用”（现已打开）中单击 MS-SCREENCLIP 并选择一个应用。
 
 # UI size
 uisize.auto = 自动

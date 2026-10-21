@@ -293,6 +293,9 @@ fn show_menu(hwnd: HWND) {
             if item.checked() == Some(true) {
                 flags |= MF_CHECKED;
             }
+            if item.grayed() {
+                flags |= MF_GRAYED;
+            }
             let label: Vec<u16> = item.label().encode_utf16().chain(Some(0)).collect();
             let _ = AppendMenuW(menu, flags, i + 1, PCWSTR(label.as_ptr()));
         };

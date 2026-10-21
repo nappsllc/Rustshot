@@ -1063,9 +1063,14 @@ redact.kind.ids_iban = IDs (IBAN)
 redact.kind.urls_tokens_passwords = URLs, tokens & passwords
 redact.kind.ip_addresses = IP addresses
 
+# Start at login (the Store build's startup task)
+autostart.by_user = Start at login is turned off in Windows. To turn it on, open Settings > Apps > Startup (or Task Manager > Startup apps) and turn on Rustshot.
+autostart.policy = Set by your organization
+
 # Win+Shift+S (Windows)
 screenclip.guide.title = One more step to use Win+Shift+S
 screenclip.guide.steps = Windows lets only you choose which app opens Win+Shift+S.\n1. Click Open Default apps below.\n2. Scroll to the bottom and click "Choose defaults by link type".\n3. Find MS-SCREENCLIP and pick Rustshot.
+screenclip.guide.steps_store = Windows lets only you choose which app opens Win+Shift+S.\n1. Click Open Default apps below.\n2. Find MS-SCREENCLIP and pick Rustshot.
 screenclip.guide.broken = Win+Shift+S is currently set to an app that is no longer installed, so Windows shows an error instead of asking.
 screenclip.guide.open = Open Default apps
 screenclip.guide.later = Remind me later
@@ -1077,6 +1082,7 @@ screenclip.state.other = Opens {name}
 screenclip.state.broken = Set to a missing app — click to fix
 screenclip.state.none = Not set
 screenclip.open_failed = Couldn't open Default apps ({e}). Open Settings > Apps > Default apps yourself.
+screenclip.store_off = only you can choose another app for it. In Default apps (opened now), click MS-SCREENCLIP and pick one.
 
 # UI size
 uisize.auto = Auto

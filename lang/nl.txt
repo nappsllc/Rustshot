@@ -1060,9 +1060,14 @@ redact.kind.ids_iban = ID's (IBAN)
 redact.kind.urls_tokens_passwords = URL's, tokens en wachtwoorden
 redact.kind.ip_addresses = IP-adressen
 
+# Start at login (the Store build's startup task)
+autostart.by_user = Starten bij aanmelden staat uit in Windows. Zet het aan via Instellingen > Apps > Opstarten (of Taakbeheer > Opstart-apps) en zet Rustshot aan.
+autostart.policy = Ingesteld door je organisatie
+
 # Win+Shift+S (Windows)
 screenclip.guide.title = Nog één stap om Win+Shift+S te gebruiken
 screenclip.guide.steps = Alleen jij kunt in Windows kiezen welke app Win+Shift+S opent.\n1. Klik hieronder op Standaard-apps openen.\n2. Scrol naar beneden en klik op ‘Standaardinstellingen kiezen op koppelingstype’.\n3. Zoek MS-SCREENCLIP en kies Rustshot.
+screenclip.guide.steps_store = Alleen jij kunt in Windows kiezen welke app Win+Shift+S opent.\n1. Klik hieronder op Standaard-apps openen.\n2. Zoek MS-SCREENCLIP en kies Rustshot.
 screenclip.guide.broken = Win+Shift+S is ingesteld op een app die niet meer is geïnstalleerd, dus Windows toont een fout in plaats van te vragen.
 screenclip.guide.open = Standaard-apps openen
 screenclip.guide.later = Later herinneren
@@ -1074,6 +1079,7 @@ screenclip.state.other = Opent {name}
 screenclip.state.broken = Ontbrekende app — klik om te herstellen
 screenclip.state.none = Niet ingesteld
 screenclip.open_failed = Kan Standaard-apps niet openen ({e}). Open zelf Instellingen > Apps > Standaard-apps.
+screenclip.store_off = alleen jij kunt er een andere app voor kiezen. Klik in Standaard-apps (nu geopend) op MS-SCREENCLIP en kies er een.
 
 # UI size
 uisize.auto = Auto

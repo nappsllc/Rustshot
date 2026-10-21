@@ -241,7 +241,7 @@ fn reset_to_defaults_covers_globals_too() {
 
 fn settings_at(path: &Path) -> Settings {
     let mut s = Settings::open(path.to_path_buf(), None);
-    s.set_autostart = |_| Err("not in tests".into());
+    s.set_autostart = |_| Err(crate::autostart::Refusal::Failed("not in tests".into()));
     s.set_screenclip = |_| Err("not in tests".into());
     s.read_handler = || Handler::None;
     s
@@ -2807,4 +2807,67 @@ fn the_watermark_image_shows_and_clears() {
     assert!(out.watermark_image.is_empty() && out.export_watermark);
     render(&mut s, &DARK, 1.0, &Input::default(), &mut focus);
     assert!(focus.rect_of("watermark_text").is_some(), "back to the text");
+}
+
+/// The Store build's "Start at login" (its startup task): turned off in
+/// Windows, turning it on keeps it off and says where to turn it on (on
+/// the click, and from Apply if Windows says so then); fixed by policy,
+/// the switch is read-only with its note; a failure stays as asked.
+#[test]
+fn store_startup_task_states() {
+    use crate::autostart::{BY_USER_STEPS, POLICY, Refusal, Status};
+    // Turned off in Windows: the click says how, nothing changes.
+    let mut s = sample();
+    s.autostart = Some(false);
+    s.form.autostart = Some(false);
+    s.autostart_status = Some(Status::OffByUser);
+    let mut focus = FocusState::default();
+    click(&mut s, &mut focus, "autostart", 1.0);
+    assert_eq!(s.form.autostart, Some(false), "stays off");
+    assert!(matches!(&s.modal, Some(Modal::Error(e)) if e == BY_USER_STEPS.get()), "{:?}", s.modal);
+    assert!(!s.dirty());
+    // From Apply (the state changed under the window).
+    let dir = scratch("startup-task");
+    let p = dir.join("config.toml");
+    config::save_at(&p, &Config::default()).unwrap();
+    let mut s = settings_at(&p);
+    s.autostart = Some(false);
+    s.autostart_status = Some(Status::Off);
+    s.form.autostart = Some(true);
+    s.set_autostart = |_| Err(Refusal::ByUser);
+    s.on(Click::Apply);
+    assert!(matches!(&s.modal, Some(Modal::Error(e)) if e == BY_USER_STEPS.get()));
+    assert_eq!((s.form.autostart, s.autostart_status), (Some(false), Some(Status::OffByUser)));
+    assert!(!s.dirty());
+    // Policy: the note, the switch as it is.
+    s.modal = None;
+    s.form.autostart = Some(true);
+    s.set_autostart = |_| Err(Refusal::Policy);
+    s.on(Click::Apply);
+    assert!(matches!(&s.modal, Some(Modal::Error(e)) if e == POLICY.get()));
+    assert_eq!(s.form.autostart, Some(false));
+    // Works: the status follows.
+    s.modal = None;
+    s.form.autostart = Some(true);
+    s.set_autostart = |_| Ok(());
+    s.on(Click::Apply);
+    assert_eq!((s.autostart, s.autostart_status, s.modal.clone()), (Some(true), Some(Status::On), None));
+    let _ = std::fs::remove_dir_all(&dir);
+    // Fixed by policy: drawn, greyed (a click changes nothing), its note.
+    for (on, st) in [(true, Status::OnByPolicy), (false, Status::OffByPolicy)] {
+        let mut s = sample();
+        s.autostart = Some(on);
+        s.form.autostart = Some(on);
+        s.autostart_status = Some(st);
+        let mut focus = FocusState::default();
+        click(&mut s, &mut focus, "autostart", 1.0);
+        assert_eq!(s.form.autostart, Some(on), "{st:?}: read-only");
+        assert!(s.modal.is_none());
+    }
+    // Not the Store build (no status): the plain switch.
+    let mut s = sample();
+    s.form.autostart = Some(false);
+    let mut focus = FocusState::default();
+    click(&mut s, &mut focus, "autostart", 1.0);
+    assert_eq!(s.form.autostart, Some(true));
 }

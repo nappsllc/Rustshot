@@ -1078,9 +1078,14 @@ redact.kind.ids_iban = Čísla účtů (IBAN)
 redact.kind.urls_tokens_passwords = URL, tokeny a hesla
 redact.kind.ip_addresses = IP adresy
 
+# Start at login (the Store build's startup task)
+autostart.by_user = Spouštění při přihlášení je ve Windows vypnuté. Zapnete ho v Nastavení > Aplikace > Po spuštění (nebo ve Správci úloh > Aplikace po spuštění), kde zapněte Rustshot.
+autostart.policy = Nastaveno vaší organizací
+
 # Win+Shift+S (Windows)
 screenclip.guide.title = Ještě jeden krok k použití Win+Shift+S
 screenclip.guide.steps = Windows umožňují jen vám zvolit, která aplikace otevře Win+Shift+S.\n1. Níže klikněte na Otevřít Výchozí aplikace.\n2. Posuňte se dolů a klikněte na „Zvolit výchozí aplikace podle typu odkazu“.\n3. Najděte MS-SCREENCLIP a vyberte Rustshot.
+screenclip.guide.steps_store = Windows umožňují jen vám zvolit, která aplikace otevře Win+Shift+S.\n1. Níže klikněte na Otevřít Výchozí aplikace.\n2. Najděte MS-SCREENCLIP a vyberte Rustshot.
 screenclip.guide.broken = Win+Shift+S je teď nastaveno na aplikaci, která už není nainstalovaná, takže Windows místo dotazu zobrazí chybu.
 screenclip.guide.open = Otevřít Výchozí aplikace
 screenclip.guide.later = Připomenout později
@@ -1092,6 +1097,7 @@ screenclip.state.other = Otevírá {name}
 screenclip.state.broken = Chybějící aplikace – kliknutím opravíte
 screenclip.state.none = Nenastaveno
 screenclip.open_failed = Výchozí aplikace nelze otevřít ({e}). Otevřete sami Nastavení > Aplikace > Výchozí aplikace.
+screenclip.store_off = jinou aplikaci pro ně můžete vybrat jen vy. Ve Výchozích aplikacích (právě otevřených) klikněte na MS-SCREENCLIP a jednu vyberte.
 
 # UI size
 uisize.auto = Auto

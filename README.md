@@ -263,7 +263,7 @@ If you launch Rustshot while it is already running, the running copy
 starts a capture, or opens Settings when its tray icon is hidden (or a
 recording runs). With the tray icon off on Windows nothing runs in the
 background: launching Rustshot (or **Rustshot Settings** in the Start
-menu) opens Settings. On Linux, macOS and in the Microsoft Store build
+menu) opens Settings (the Microsoft Store build too). On Linux and macOS
 the icon off keeps Rustshot running without it. The tray menu has
 **Capture…**, **Make QR code…**, **History…** and **Settings…**.
 
@@ -295,6 +295,13 @@ associated with it", the Snipping Tool was uninstalled and the old choice
 points nowhere: the same three steps fix it. To go back, turn the option
 off in Rustshot, and Windows uses the Snipping Tool again. More detail:
 [docs/guide.md](docs/guide.md#winshifts-and-print-screen-windows).
+
+In the **Microsoft Store** build step 1 is already done: the package
+offers Rustshot for MS-SCREENCLIP when it installs (Windows may ask once
+which app to use; pick Rustshot and **Always**, or keep the Snipping
+Tool). The **Open Default apps** button there opens Rustshot's own page
+under Default apps, where **MS-SCREENCLIP** is listed. Rustshot never
+changes the default itself; to go back, pick the Snipping Tool there.
 
 ## Shortcuts
 
@@ -469,7 +476,7 @@ and send one: [docs/translating.md](docs/translating.md) (languages in
 
 ## Known limitations
 
-From the v0.6.6 release notes:
+From the v0.6.7 release notes:
 
 - **Translations:** the 34 translations are machine-made, and none has
   been reviewed by a native speaker yet (this includes the names shortened
@@ -489,9 +496,15 @@ From the v0.6.6 release notes:
   bucket (only against the SigV4 test vectors).
 - **Linux S3 key:** the Secret Service session that stores the S3 key is
   not encrypted (see [PRIVACY.md](PRIVACY.md)).
-- **Tray icon off** (no background process) is Windows only. It is not in
-  the Microsoft Store build, where the icon off keeps Rustshot running
-  without it.
+- **Tray icon off** (no background process) is Windows only (the
+  Microsoft Store build too, from 0.6.7).
+- **Microsoft Store build, Win+Shift+S:** the package offers Rustshot for
+  Win+Shift+S and Print Screen, but only you can choose it (Settings ›
+  Apps › Default apps › Rustshot › MS-SCREENCLIP); after installing it,
+  Windows may ask once which app to use.
+- **Microsoft Store build, Launch at login:** once turned off in Windows
+  (Settings › Apps › Startup or Task Manager), it can only be turned on
+  there again; set by your organization, it is shown read-only.
 - **X11:** a pin's opacity only takes effect when a compositor is running.
 - **Linux OCR:** needs `tesseract` (for example `apt install
   tesseract-ocr`).

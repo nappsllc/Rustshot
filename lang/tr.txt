@@ -1060,9 +1060,14 @@ redact.kind.ids_iban = Hesap no. (IBAN)
 redact.kind.urls_tokens_passwords = URL'ler, belirteçler ve parolalar
 redact.kind.ip_addresses = IP adresleri
 
+# Start at login (the Store build's startup task)
+autostart.by_user = Oturum açılışında başlatma Windows'ta kapalı. Açmak için Ayarlar > Uygulamalar > Başlangıç'ı (veya Görev Yöneticisi > Başlangıç uygulamaları'nı) açın ve Rustshot'ı açın.
+autostart.policy = Kuruluşunuz tarafından ayarlandı
+
 # Win+Shift+S (Windows)
 screenclip.guide.title = Win+Shift+S'yi kullanmak için bir adım daha
 screenclip.guide.steps = Win+Shift+S'yi hangi uygulamanın açacağını Windows yalnızca sizin seçmenize izin verir.\n1. Aşağıdaki Varsayılan uygulamaları aç'a tıklayın.\n2. En alta kaydırın ve "Bağlantı türüne göre varsayılanları seç"e tıklayın.\n3. MS-SCREENCLIP'i bulun ve Rustshot'ı seçin.
+screenclip.guide.steps_store = Win+Shift+S'yi hangi uygulamanın açacağını Windows yalnızca sizin seçmenize izin verir.\n1. Aşağıdaki Varsayılan uygulamaları aç'a tıklayın.\n2. MS-SCREENCLIP'i bulun ve Rustshot'ı seçin.
 screenclip.guide.broken = Win+Shift+S şu an artık yüklü olmayan bir uygulamaya ayarlı, bu yüzden Windows sormak yerine hata gösteriyor.
 screenclip.guide.open = Varsayılan uygulamaları aç
 screenclip.guide.later = Daha sonra hatırlat
@@ -1074,6 +1079,7 @@ screenclip.state.other = Açtığı: {name}
 screenclip.state.broken = Olmayan bir uygulamaya ayarlı — düzeltmek için tıklayın
 screenclip.state.none = Ayarlı değil
 screenclip.open_failed = Varsayılan uygulamalar açılamadı ({e}). Ayarlar > Uygulamalar > Varsayılan uygulamalar'ı kendiniz açın.
+screenclip.store_off = bunun için başka bir uygulamayı yalnızca siz seçebilirsiniz. Varsayılan uygulamalar'da (şimdi açıldı) MS-SCREENCLIP'e tıklayıp birini seçin.
 
 # UI size
 uisize.auto = Otomatik

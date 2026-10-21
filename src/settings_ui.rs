@@ -209,8 +209,8 @@ pub const HIDE_TRAY: Key = key!("settings.tray.hide");
 pub const HIDE_TRAY_SETUP: Key = key!("settings.tray.hide_setup");
 /// The "Show icon in tray" row's help (Windows).
 pub const TRAY_HELP: Key = key!("settings.tray.help");
-/// Where the icon off keeps the daemon (the Store build, which cannot
-/// take Win+Shift+S): the question and the row's help.
+/// Where the icon off keeps the daemon (no Win+Shift+S to start Rustshot
+/// on demand): the question and the row's help.
 pub const HIDE_TRAY_KEEP: Key = key!("settings.tray.hide_keep");
 pub const TRAY_HELP_KEEP: Key = key!("settings.tray.help_keep");
 /// The one-time notice for a file from before the icon off meant "no
@@ -347,7 +347,8 @@ pub struct Form {
     /// Start at login; `None` hides it (store installs).
     pub autostart: Option<bool>,
     /// Win+Shift+S and Print Screen open Rustshot (the `ms-screenclip:`
-    /// handler, Windows); `None` hides it (other systems, MSIX).
+    /// handler, Windows; the Store build's is declared in its manifest);
+    /// `None` hides it (other systems).
     pub screenclip: Option<bool>,
     pub check_updates: bool,
     pub download_data: bool,
@@ -1038,7 +1039,7 @@ pub struct Settings {
     /// frame of its section.
     pub focus_field: Option<String>,
     /// The icon off means no background process here
-    /// ([`crate::tray::hidden_means_no_daemon`]; not the Store build).
+    /// ([`crate::tray::hidden_means_no_daemon`]; the Store build too).
     pub no_background: bool,
     /// The drive (top-level folder) last probed and its note: probed
     /// again only when the root changes, never while typing in it.
@@ -1055,7 +1056,10 @@ pub struct Settings {
     rec_lists: recording::Lists,
     /// The Upload section's stored-secret check and Test connection.
     pub upload: upload::State,
-    set_autostart: fn(bool) -> Result<(), String>,
+    set_autostart: fn(bool) -> Result<(), crate::autostart::Refusal>,
+    /// "Start at login" as Windows has the Store build's startup task
+    /// (`None`: not that build, or not offered).
+    pub autostart_status: Option<crate::autostart::Status>,
     set_screenclip: fn(bool) -> Result<(), String>,
     read_handler: fn() -> Handler,
 }
@@ -1096,6 +1100,7 @@ impl Settings {
             rec_lists: recording::Lists::default(),
             upload: upload::State::default(),
             set_autostart: crate::autostart::set,
+            autostart_status: None,
             set_screenclip: crate::screenclip_win::set,
             read_handler: crate::screenclip_win::handler,
         }
@@ -1716,10 +1721,28 @@ impl Settings {
             }
         }
         if let (Some(on), true) = (self.form.autostart, self.form.autostart != self.autostart) {
+            use crate::autostart::{Refusal, Status};
             match (self.set_autostart)(on) {
-                Ok(()) => self.autostart = Some(on),
-                Err(e) => {
-                    self.modal = Some(Modal::Error(tr!("settings.error.autostart", e)));
+                Ok(()) => {
+                    self.autostart = Some(on);
+                    if self.autostart_status.is_some() {
+                        self.autostart_status = Some(if on { Status::On } else { Status::Off });
+                    }
+                }
+                Err(r) => {
+                    // Turned off in Windows, or fixed by policy: the switch
+                    // shows it as it is (a failure stays as asked, to retry).
+                    if !matches!(r, Refusal::Failed(_)) {
+                        self.form.autostart = self.autostart;
+                    }
+                    self.modal = Some(Modal::Error(match r {
+                        Refusal::ByUser => {
+                            self.autostart_status = Some(Status::OffByUser);
+                            crate::autostart::BY_USER_STEPS.get().into()
+                        }
+                        Refusal::Policy => crate::autostart::POLICY.get().into(),
+                        Refusal::Failed(e) => tr!("settings.error.autostart", e),
+                    }));
                     return acts;
                 }
             }
@@ -1740,6 +1763,17 @@ impl Settings {
                     }
                 }
                 Err(e) => {
+                    // The Store build, turned off while Windows opens
+                    // Rustshot: only the user can pick another app, there
+                    // (the switch shows it as it is).
+                    if !on && crate::screenclip_win::packaged() && !cfg!(test) {
+                        self.form.screenclip = self.screenclip;
+                        std::thread::spawn(|| {
+                            if let Err(e) = crate::screenclip_win::open_default_apps() {
+                                eprintln!("rustshot: {}", crate::screenclip_win::open_failed_text(&e));
+                            }
+                        });
+                    }
                     self.modal = Some(Modal::Error(tr!("settings.error.screenclip", e)));
                     return acts;
                 }
@@ -1973,6 +2007,24 @@ pub fn show_hotkeys(text: &str, field: Option<String>) {
     show_at(section);
 }
 
+/// A message for the user (over the form, with OK) in the open Settings
+/// window, or in one opened at General for it ("Start at login" turned
+/// off in Windows, from the tray).
+pub fn show_message(text: &str) {
+    if notify(text) {
+        return;
+    }
+    if cfg!(test) || cfg!(target_os = "macos") {
+        crate::tray::notify(text);
+        return;
+    }
+    *lock(&START_MESSAGE) = Some(text.to_string());
+    show_at(GENERAL);
+}
+
+/// The message a window opened by [`show_message`] starts with.
+static START_MESSAGE: Mutex<Option<String>> = Mutex::new(None);
+
 /// The hotkey note a window opened by [`show_hotkeys`] starts with.
 static START_NOTE: Mutex<Option<(String, Option<String>)>> = Mutex::new(None);
 
@@ -2022,9 +2074,12 @@ fn claim() -> Option<Receiver<Msg>> {
 }
 
 fn run(rx: Receiver<Msg>) {
-    let autostart = crate::update::managed_install().is_none().then(crate::autostart::is_enabled);
-    let mut s = Settings::open(config::config_path(), autostart)
+    let status = crate::autostart::status();
+    let mut s = Settings::open(config::config_path(), status.map(crate::autostart::Status::on))
         .with_screenclip(crate::screenclip_win::state(), crate::screenclip_win::handler());
+    if crate::update::is_msix() {
+        s.autostart_status = status;
+    }
     s.hotkey_failures = hotkey::outstanding();
     // Downloads as the file says (a broken file: off), before anything
     // here can ask for one.
@@ -2036,6 +2091,8 @@ fn run(rx: Receiver<Msg>) {
         s.notify_hotkeys(text, field);
     } else if START_GUIDE.swap(false, std::sync::atomic::Ordering::SeqCst) {
         s.open_guide();
+    } else if let Some(text) = lock(&START_MESSAGE).take() {
+        s.notify(text);
     }
     let th = crate::theme::resolve(&s.loaded);
     // Opened without a daemon (`rustshot settings`): the file's UI size.

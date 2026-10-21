@@ -1078,9 +1078,14 @@ redact.kind.ids_iban = Sąskaitos (IBAN)
 redact.kind.urls_tokens_passwords = URL, prieigos raktai ir slaptažodžiai
 redact.kind.ip_addresses = IP adresai
 
+# Start at login (the Store build's startup task)
+autostart.by_user = Paleidimas prisijungiant „Windows“ išjungtas. Norėdami jį įjungti, atidarykite Parametrai > Programos > Paleistis (arba Užduočių tvarkytuvė > Paleisties programos) ir įjunkite Rustshot.
+autostart.policy = Nustatė jūsų organizacija
+
 # Win+Shift+S (Windows)
 screenclip.guide.title = Dar vienas žingsnis norint naudoti Win+Shift+S
 screenclip.guide.steps = Windows leidžia tik jums pasirinkti, kuri programa atidaro Win+Shift+S.\n1. Toliau spustelėkite „Atidaryti numatytąsias programas“.\n2. Slinkite į apačią ir spustelėkite „Pasirinkti numatytąsias pagal saito tipą“.\n3. Raskite MS-SCREENCLIP ir pasirinkite Rustshot.
+screenclip.guide.steps_store = Windows leidžia tik jums pasirinkti, kuri programa atidaro Win+Shift+S.\n1. Toliau spustelėkite „Atidaryti numatytąsias programas“.\n2. Raskite MS-SCREENCLIP ir pasirinkite Rustshot.
 screenclip.guide.broken = Win+Shift+S dabar nustatytas programai, kuri nebeįdiegta, todėl Windows rodo klaidą, o ne klausia.
 screenclip.guide.open = Atidaryti numatytąsias programas
 screenclip.guide.later = Priminti vėliau
@@ -1092,6 +1097,7 @@ screenclip.state.other = Atidaro: {name}
 screenclip.state.broken = Nustatyta neesama programa — spustelėkite, kad pataisytumėte
 screenclip.state.none = Nenustatyta
 screenclip.open_failed = Nepavyko atidaryti numatytųjų programų ({e}). Patys atidarykite Parametrai > Programos > Numatytosios programos.
+screenclip.store_off = tik jūs galite pasirinkti kitą programą. Numatytosiose programose (dabar atidarytose) spustelėkite MS-SCREENCLIP ir pasirinkite vieną.
 
 # UI size
 uisize.auto = Automatinis

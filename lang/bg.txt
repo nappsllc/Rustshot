@@ -1060,9 +1060,14 @@ redact.kind.ids_iban = Идентификатори (IBAN)
 redact.kind.urls_tokens_passwords = URL адреси, токени и пароли
 redact.kind.ip_addresses = IP адреси
 
+# Start at login (the Store build's startup task)
+autostart.by_user = Стартирането при влизане е изключено в Windows. За да го включите, отворете Настройки > Приложения > Стартиране (или Диспечер на задачите > Приложения при стартиране) и включете Rustshot.
+autostart.policy = Зададено от вашата организация
+
 # Win+Shift+S (Windows)
 screenclip.guide.title = Още една стъпка, за да използвате Win+Shift+S
 screenclip.guide.steps = Windows позволява само вие да изберете кое приложение да отваря Win+Shift+S.\n1. Щракнете върху „Приложения по подразбиране“ по-долу.\n2. Превъртете до края и щракнете върху „Избор на стойности по подразбиране по тип връзка“.\n3. Намерете MS-SCREENCLIP и изберете Rustshot.
+screenclip.guide.steps_store = Windows позволява само вие да изберете кое приложение да отваря Win+Shift+S.\n1. Щракнете върху „Приложения по подразбиране“ по-долу.\n2. Намерете MS-SCREENCLIP и изберете Rustshot.
 screenclip.guide.broken = Win+Shift+S в момента е зададена на приложение, което вече не е инсталирано, затова Windows показва грешка, вместо да пита.
 screenclip.guide.open = Приложения по подразбиране
 screenclip.guide.later = Напомни ми по-късно
@@ -1074,6 +1079,7 @@ screenclip.state.other = Отваря {name}
 screenclip.state.broken = Зададено е липсващо приложение – щракнете за поправка
 screenclip.state.none = Не е зададено
 screenclip.open_failed = Приложенията по подразбиране не можаха да се отворят ({e}). Отворете ръчно Настройки > Приложения > Приложения по подразбиране.
+screenclip.store_off = само вие можете да изберете друго приложение за него. В „Приложения по подразбиране“ (отворени сега) щракнете върху MS-SCREENCLIP и изберете приложение.
 
 # UI size
 uisize.auto = Авто

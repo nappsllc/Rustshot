@@ -65,7 +65,27 @@ entry: Partner Center refuses an application with `AppListEntry="none"`
 0.6.5's package was refused for its hidden `RustshotDaemon` entry (the
 startup task's, with `daemon`); from 0.6.6 the task is on `Rustshot`.
 Keep the TaskId: Windows keeps the user's on/off choice for the startup
-task under it, across updates.
+task under it, across updates. Settings › General › *Launch at login* and
+the tray's *Start at login* drive that task (the StartupTask API:
+`RequestEnableAsync` / `Disable`); turned off by the user in Windows it
+can only be turned on there again (the app says where), and set by policy
+it shows read-only.
+
+From 0.6.7 the `Rustshot` application also declares the `ms-screenclip`
+protocol (`uap3:Protocol`, `Parameters="screenclip &quot;%1&quot;"`), the
+link Windows launches for Win+Shift+S and Print Screen. It is not one of
+Microsoft's [reserved file and URI scheme names](https://github.com/MicrosoftDocs/windows-dev-docs/blob/docs/hub/apps/develop/launch/reserved-uri-scheme-names.md)
+("If your app registers for a reserved association, that registration
+will be ignored"; the list has `ms-settings`, `ms-windows-store` and
+others, not `ms-screenclip`; Learn's old URL for that page now redirects
+to *Handle URI activation*), and Microsoft documents `ms-screenclip:` as
+the Snipping Tool's protocol (*Launch Snipping Tool*). The declaration only makes Rustshot a candidate:
+nothing is written to the registry, and the user picks Rustshot in
+*Settings › Apps › Default apps › Rustshot › MS-SCREENCLIP* (or *Always*
+when Windows asks); the app never changes the default itself. The
+certification notes (docs/store/msstore-listing.md) say so. Windows may
+ask which app to use once after the install; tools/sandbox-test/v067.ps1
+checks the flow end to end.
 
 ## winget
 1. Fork https://github.com/microsoft/winget-pkgs under the account that owns the token.

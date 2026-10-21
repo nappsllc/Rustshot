@@ -1042,9 +1042,14 @@ redact.kind.ids_iban = 帳號 (IBAN)
 redact.kind.urls_tokens_passwords = URL、權杖和密碼
 redact.kind.ip_addresses = IP 位址
 
+# Start at login (the Store build's startup task)
+autostart.by_user = Windows 中已關閉「登入時啟動」。若要開啟，請前往「設定」>「應用程式」>「啟動」（或「工作管理員」>「啟動應用程式」）並開啟 Rustshot。
+autostart.policy = 由您的組織設定
+
 # Win+Shift+S (Windows)
 screenclip.guide.title = 再一個步驟即可使用 Win+Shift+S
 screenclip.guide.steps = Windows 只允許你自己選擇由哪個應用程式開啟 Win+Shift+S。\n1. 按一下下方的「開啟預設應用程式」。\n2. 捲動到最下方，按一下「依連結類型選擇預設值」。\n3. 找到 MS-SCREENCLIP 並選擇 Rustshot。
+screenclip.guide.steps_store = Windows 只允許你自己選擇由哪個應用程式開啟 Win+Shift+S。\n1. 按一下下方的「開啟預設應用程式」。\n2. 找到 MS-SCREENCLIP 並選擇 Rustshot。
 screenclip.guide.broken = Win+Shift+S 目前設為已解除安裝的應用程式，因此 Windows 會顯示錯誤而不是詢問。
 screenclip.guide.open = 開啟預設應用程式
 screenclip.guide.later = 稍後提醒我
@@ -1056,6 +1061,7 @@ screenclip.state.other = 開啟 {name}
 screenclip.state.broken = 設為不存在的應用程式 — 按一下修正
 screenclip.state.none = 未設定
 screenclip.open_failed = 無法開啟預設應用程式（{e}）。請自行開啟「設定 > 應用程式 > 預設應用程式」。
+screenclip.store_off = 只有您自己能為它選擇其他應用程式。在「預設應用程式」（現已開啟）中按一下 MS-SCREENCLIP 並選擇一個應用程式。
 
 # UI size
 uisize.auto = 自動

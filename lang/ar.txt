@@ -1132,9 +1132,14 @@ redact.kind.ids_iban = أرقام IBAN والمعرّفات
 redact.kind.urls_tokens_passwords = عناوين URL والرموز المميزة وكلمات المرور
 redact.kind.ip_addresses = عناوين IP
 
+# Start at login (the Store build's startup task)
+autostart.by_user = تم إيقاف «البدء عند تسجيل الدخول» في Windows. لتشغيله، افتح الإعدادات > التطبيقات > بدء التشغيل (أو إدارة المهام > تطبيقات بدء التشغيل) وشغّل Rustshot.
+autostart.policy = تم تعيينه من قبل مؤسستك
+
 # Win+Shift+S (Windows)
 screenclip.guide.title = خطوة أخرى لاستخدام Win+Shift+S
 screenclip.guide.steps = لا يسمح Windows إلا لك باختيار التطبيق الذي يفتحه Win+Shift+S.\n1. انقر على «فتح التطبيقات الافتراضية» أدناه.\n2. مرّر إلى الأسفل وانقر على «اختيار الإعدادات الافتراضية حسب نوع الارتباط».\n3. ابحث عن MS-SCREENCLIP واختر Rustshot.
+screenclip.guide.steps_store = لا يسمح Windows إلا لك باختيار التطبيق الذي يفتحه Win+Shift+S.\n1. انقر على «فتح التطبيقات الافتراضية» أدناه.\n2. ابحث عن MS-SCREENCLIP واختر Rustshot.
 screenclip.guide.broken = تم تعيين Win+Shift+S حاليًا لتطبيق لم يعد مثبتًا، لذا يعرض Windows خطأ بدلًا من السؤال.
 screenclip.guide.open = فتح التطبيقات الافتراضية
 screenclip.guide.later = ذكّرني لاحقًا
@@ -1146,6 +1151,7 @@ screenclip.state.other = يفتح {name}
 screenclip.state.broken = معيّن لتطبيق مفقود — انقر للإصلاح
 screenclip.state.none = غير معيّن
 screenclip.open_failed = تعذر فتح التطبيقات الافتراضية ({e}). افتح الإعدادات > التطبيقات > التطبيقات الافتراضية بنفسك.
+screenclip.store_off = لا يمكن لأحد غيرك اختيار تطبيق آخر له. في «التطبيقات الافتراضية» (المفتوحة الآن)، انقر على MS-SCREENCLIP واختر تطبيقًا.
 
 # UI size
 uisize.auto = تلقائي

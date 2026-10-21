@@ -1042,9 +1042,14 @@ redact.kind.ids_iban = เลขบัญชี (IBAN)
 redact.kind.urls_tokens_passwords = URL โทเค็น และรหัสผ่าน
 redact.kind.ip_addresses = ที่อยู่ IP
 
+# Start at login (the Store build's startup task)
+autostart.by_user = การเริ่มเมื่อเข้าสู่ระบบถูกปิดใน Windows หากต้องการเปิด ให้ไปที่ การตั้งค่า > แอป > การเริ่มต้น (หรือ ตัวจัดการงาน > แอปเริ่มต้น) แล้วเปิด Rustshot
+autostart.policy = ตั้งค่าโดยองค์กรของคุณ
+
 # Win+Shift+S (Windows)
 screenclip.guide.title = อีกหนึ่งขั้นตอนเพื่อใช้ Win+Shift+S
 screenclip.guide.steps = Windows ให้คุณเท่านั้นเลือกได้ว่าแอปใดเปิด Win+Shift+S\n1. คลิก เปิดแอปเริ่มต้น ด้านล่าง\n2. เลื่อนลงล่างสุดแล้วคลิก "เลือกค่าเริ่มต้นตามชนิดลิงก์"\n3. ค้นหา MS-SCREENCLIP แล้วเลือก Rustshot
+screenclip.guide.steps_store = Windows ให้คุณเท่านั้นเลือกได้ว่าแอปใดเปิด Win+Shift+S\n1. คลิก เปิดแอปเริ่มต้น ด้านล่าง\n2. ค้นหา MS-SCREENCLIP แล้วเลือก Rustshot
 screenclip.guide.broken = ขณะนี้ Win+Shift+S ตั้งไว้กับแอปที่ถอนการติดตั้งแล้ว Windows จึงแสดงข้อผิดพลาดแทนการถาม
 screenclip.guide.open = เปิดแอปเริ่มต้น
 screenclip.guide.later = เตือนฉันภายหลัง
@@ -1056,6 +1061,7 @@ screenclip.state.other = เปิด {name}
 screenclip.state.broken = ตั้งไว้กับแอปที่ไม่มีอยู่ — คลิกเพื่อแก้ไข
 screenclip.state.none = ไม่ได้ตั้งค่า
 screenclip.open_failed = เปิดแอปเริ่มต้นไม่ได้ ({e}) เปิด การตั้งค่า > แอป > แอปเริ่มต้น ด้วยตนเอง
+screenclip.store_off = มีเพียงคุณเท่านั้นที่เลือกแอปอื่นได้ ในแอปเริ่มต้น (เปิดอยู่ตอนนี้) ให้คลิก MS-SCREENCLIP แล้วเลือกแอป
 
 # UI size
 uisize.auto = อัตโนมัติ

@@ -1078,9 +1078,14 @@ redact.kind.ids_iban = ID-ovi (IBAN)
 redact.kind.urls_tokens_passwords = URL-ovi, tokeni i lozinke
 redact.kind.ip_addresses = IP adrese
 
+# Start at login (the Store build's startup task)
+autostart.by_user = Pokretanje pri prijavi isključeno je u sustavu Windows. Da biste ga uključili, otvorite Postavke > Aplikacije > Pokretanje (ili Upravitelj zadataka > Aplikacije za pokretanje) i uključite Rustshot.
+autostart.policy = Postavila vaša organizacija
+
 # Win+Shift+S (Windows)
 screenclip.guide.title = Još jedan korak za korištenje Win+Shift+S
 screenclip.guide.steps = Windows samo vama dopušta da odaberete koja aplikacija otvara Win+Shift+S.\n1. Kliknite „Otvori zadane aplikacije” u nastavku.\n2. Pomaknite se do dna i kliknite „Odaberite zadane vrijednosti prema vrsti veze”.\n3. Pronađite MS-SCREENCLIP i odaberite Rustshot.
+screenclip.guide.steps_store = Windows samo vama dopušta da odaberete koja aplikacija otvara Win+Shift+S.\n1. Kliknite „Otvori zadane aplikacije” u nastavku.\n2. Pronađite MS-SCREENCLIP i odaberite Rustshot.
 screenclip.guide.broken = Win+Shift+S trenutačno je postavljen na aplikaciju koja više nije instalirana pa Windows umjesto pitanja prikazuje pogrešku.
 screenclip.guide.open = Otvori zadane aplikacije
 screenclip.guide.later = Podsjeti me kasnije
@@ -1092,6 +1097,7 @@ screenclip.state.other = Otvara {name}
 screenclip.state.broken = Postavljeno na nepostojeću aplikaciju – kliknite za popravak
 screenclip.state.none = Nije postavljeno
 screenclip.open_failed = Nije moguće otvoriti zadane aplikacije ({e}). Sami otvorite Postavke > Aplikacije > Zadane aplikacije.
+screenclip.store_off = samo vi možete odabrati drugu aplikaciju za to. U Zadanim aplikacijama (sada otvorenima) kliknite MS-SCREENCLIP i odaberite jednu.
 
 # UI size
 uisize.auto = Automatski

@@ -837,7 +837,27 @@ screen, a recording starts video mode, and a delay waits that long.
   is off; clicking it turns the option on and opens the message.
 - To undo it, turn the option off (or run `rustshot register-screenclip
   off`); uninstalling does the same.
-- Not offered in the Microsoft Store (MSIX) build.
+
+### In the Microsoft Store build
+
+The Store (MSIX) package declares `ms-screenclip` in its manifest, so
+installing it is all the "registering" there is: nothing is written to the
+registry, and Rustshot never changes the default itself. Windows lists
+Rustshot under *Settings › Apps › Default apps › Rustshot › MS-SCREENCLIP*,
+and after the install it may ask which app to use at the next
+<kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd> (pick Snipping Tool to keep it,
+or Rustshot and **Always**).
+
+- **Use Win+Shift+S and Print Screen** is on while Windows opens Rustshot.
+  Turning it on shows the same **One more step** message, whose **Open
+  Default apps** opens Rustshot's own page there (MS-SCREENCLIP, *Choose a
+  default*, Rustshot, *Set default*); back in the window, the message
+  closes and the toast shows once Rustshot is the chosen app. The daemon
+  does not remind you at start (the package offers itself to everyone).
+- Turning it off while Windows opens Rustshot opens that page too: only you
+  can pick another app (the message says so).
+- `rustshot register-screenclip on|off` writes nothing there; it prints
+  where to choose.
 
 ## The tray icon off (Windows)
 
@@ -852,7 +872,8 @@ set up above.
 - `rustshot daemon` (Launch at login) then exits at once (a line on
   stderr); `rustshot daemon --force` runs it anyway, also over an
   on-demand capture, and stays forced across in-app updates and in the
-  login item.
+  login item. The Store build's startup task ("Rustshot hotkeys") does the
+  same at sign-in: it starts Rustshot, which exits at once.
 - Launching Rustshot, or **Rustshot Settings** in the Start menu, opens
   Settings. **About › Check for updates** there installs the update by
   itself; a capture started by Win+Shift+S checks once a day too.
@@ -867,9 +888,9 @@ set up above.
   the background while the tray icon is off. …* with **Set up
   Win+Shift+S**, **Show tray icon again** and **OK**
   (`tray_off_mode_seen = true` afterwards).
-- The Microsoft Store build cannot take Win+Shift+S, so there (and on
-  Linux and macOS) the icon off keeps Rustshot running without it, its
-  hotkeys working.
+- The Microsoft Store build works the same way since 0.6.7 (its package
+  declares Win+Shift+S, above). On Linux and macOS the icon off keeps
+  Rustshot running without it, its hotkeys working.
 
 ## Settings
 
@@ -878,7 +899,12 @@ on the left picks the section:
 
 - **General:** theme (System, Dark, Light) and accent (Periwinkle, Teal,
   Amber or any `#rrggbb`), *Launch at login*, *Show icon in tray* and the
-  daily update check.
+  daily update check. In the Microsoft Store build *Launch at login* (and
+  the tray's *Start at login*) is the package's startup task, "Rustshot
+  hotkeys": turned off in Windows (*Settings › Apps › Startup* or Task
+  Manager) it can only be turned on there again, so the switch stays off
+  and a message says where; set by your organization's policy it is shown
+  read-only (*Set by your organization*; the tray item is greyed).
 - **Capture:** *Use Win+Shift+S and Print Screen* (Windows), *Snap to
   windows*, *Accept on select*; after a capture: *Copy to clipboard after
   capture*, *Play shutter sound*, *Show thumbnail after capture* and *Trim

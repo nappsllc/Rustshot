@@ -1042,9 +1042,14 @@ redact.kind.ids_iban = 口座番号 (IBAN)
 redact.kind.urls_tokens_passwords = URL、トークン、パスワード
 redact.kind.ip_addresses = IP アドレス
 
+# Start at login (the Store build's startup task)
+autostart.by_user = Windows でログイン時の起動がオフになっています。オンにするには、[設定] > [アプリ] > [スタートアップ] (または タスク マネージャー > [スタートアップ アプリ]) を開き、Rustshot をオンにします。
+autostart.policy = 組織によって設定されています
+
 # Win+Shift+S (Windows)
 screenclip.guide.title = Win+Shift+S を使うにはあと 1 ステップ
 screenclip.guide.steps = Win+Shift+S で開くアプリは、Windows ではユーザー自身しか選べません。\n1. 下の「既定のアプリを開く」をクリックします。\n2. 一番下までスクロールして「リンクの種類で既定値を選択する」をクリックします。\n3. MS-SCREENCLIP を探して Rustshot を選びます。
+screenclip.guide.steps_store = Win+Shift+S で開くアプリは、Windows ではユーザー自身しか選べません。\n1. 下の「既定のアプリを開く」をクリックします。\n2. MS-SCREENCLIP を探して Rustshot を選びます。
 screenclip.guide.broken = Win+Shift+S がアンインストール済みのアプリに設定されているため、Windows は確認の代わりにエラーを表示します。
 screenclip.guide.open = 既定のアプリを開く
 screenclip.guide.later = 後で通知
@@ -1056,6 +1061,7 @@ screenclip.state.other = {name} を開く
 screenclip.state.broken = 存在しないアプリに設定 — クリックして修正
 screenclip.state.none = 未設定
 screenclip.open_failed = 既定のアプリを開けませんでした ({e})。設定 > アプリ > 既定のアプリ を手動で開いてください。
+screenclip.store_off = 別のアプリを選べるのはユーザー自身だけです。いま開いた「既定のアプリ」で MS-SCREENCLIP をクリックし、アプリを選んでください。
 
 # UI size
 uisize.auto = 自動

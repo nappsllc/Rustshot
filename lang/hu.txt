@@ -1060,9 +1060,14 @@ redact.kind.ids_iban = Azonosítók (IBAN)
 redact.kind.urls_tokens_passwords = URL-ek, tokenek és jelszavak
 redact.kind.ip_addresses = IP-címek
 
+# Start at login (the Store build's startup task)
+autostart.by_user = Az indítás bejelentkezéskor ki van kapcsolva a Windowsban. A bekapcsoláshoz nyissa meg a Gépházat > Alkalmazások > Indítópult (vagy a Feladatkezelő > Indítási alkalmazások) lapot, és kapcsolja be a Rustshotot.
+autostart.policy = A szervezete állította be
+
 # Win+Shift+S (Windows)
 screenclip.guide.title = Még egy lépés a Win+Shift+S használatához
 screenclip.guide.steps = A Windowsban csak Ön választhatja ki, melyik alkalmazás nyílik meg a Win+Shift+S billentyűkre.\n1. Kattintson lent az Alapértelmezett alkalmazások gombra.\n2. Görgessen le, és kattintson az „Alapértelmezett beállítások kiválasztása hivatkozástípus szerint” elemre.\n3. Keresse meg az MS-SCREENCLIP elemet, és válassza a Rustshot alkalmazást.
+screenclip.guide.steps_store = A Windowsban csak Ön választhatja ki, melyik alkalmazás nyílik meg a Win+Shift+S billentyűkre.\n1. Kattintson lent az Alapértelmezett alkalmazások gombra.\n2. Keresse meg az MS-SCREENCLIP elemet, és válassza a Rustshot alkalmazást.
 screenclip.guide.broken = A Win+Shift+S egy már nem telepített alkalmazáshoz van rendelve, ezért a Windows kérdés helyett hibát jelez.
 screenclip.guide.open = Alapértelmezett alkalmazások
 screenclip.guide.later = Emlékeztessen később
@@ -1074,6 +1079,7 @@ screenclip.state.other = Megnyitja: {name}
 screenclip.state.broken = Hiányzó alkalmazáshoz rendelve – kattintson a javításhoz
 screenclip.state.none = Nincs beállítva
 screenclip.open_failed = Az Alapértelmezett alkalmazások nem nyitható meg ({e}). Nyissa meg kézzel: Gépház > Alkalmazások > Alapértelmezett alkalmazások.
+screenclip.store_off = csak Ön választhat hozzá másik alkalmazást. Az Alapértelmezett alkalmazásokban (most megnyitva) kattintson az MS-SCREENCLIP elemre, és válasszon egyet.
 
 # UI size
 uisize.auto = Auto

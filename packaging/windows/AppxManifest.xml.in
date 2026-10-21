@@ -35,6 +35,16 @@
             <desktop:ExecutionAlias Alias="rustshot.exe" />
           </uap3:AppExecutionAlias>
         </uap3:Extension>
+        <!-- Win+Shift+S and Print Screen launch ms-screenclip:. Declaring it
+             only makes Rustshot a candidate: the user picks it in Settings >
+             Apps > Default apps > MS-SCREENCLIP (the app never changes the
+             default itself). The URI arrives as `screenclip "<uri>"`. -->
+        <uap3:Extension Category="windows.protocol" Executable="rustshot.exe" EntryPoint="Windows.FullTrustApplication">
+          <uap3:Protocol Name="ms-screenclip" Parameters="screenclip &quot;%1&quot;">
+            <uap:Logo>Assets\Square44x44Logo.png</uap:Logo>
+            <uap:DisplayName>Rustshot screen capture</uap:DisplayName>
+          </uap3:Protocol>
+        </uap3:Extension>
         <!-- The hotkey daemon at sign-in: a plain launch (no arguments) runs
              it. On this entry because the Store refuses an entry hidden
              from Start (a "headless" app) without a waiver. The TaskId is

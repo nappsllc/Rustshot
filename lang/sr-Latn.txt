@@ -1078,9 +1078,14 @@ redact.kind.ids_iban = Identifikatori (IBAN)
 redact.kind.urls_tokens_passwords = URL-ovi, tokeni i lozinke
 redact.kind.ip_addresses = IP adrese
 
+# Start at login (the Store build's startup task)
+autostart.by_user = Pokretanje pri prijavljivanju je isključeno u Windowsu. Da biste ga uključili, otvorite Postavke > Aplikacije > Pokretanje (ili Upravljač zadacima > Aplikacije za pokretanje) i uključite Rustshot.
+autostart.policy = Podesila vaša organizacija
+
 # Win+Shift+S (Windows)
 screenclip.guide.title = Još jedan korak do Win+Shift+S
 screenclip.guide.steps = Windows dozvoljava samo vama da izaberete koja aplikacija otvara Win+Shift+S.\n1. Kliknite na „Otvori podrazumevane aplikacije“ ispod.\n2. Pomerite se do dna i kliknite na „Izaberite podrazumevane vrednosti prema tipu veze“.\n3. Pronađite MS-SCREENCLIP i izaberite Rustshot.
+screenclip.guide.steps_store = Windows dozvoljava samo vama da izaberete koja aplikacija otvara Win+Shift+S.\n1. Kliknite na „Otvori podrazumevane aplikacije“ ispod.\n2. Pronađite MS-SCREENCLIP i izaberite Rustshot.
 screenclip.guide.broken = Win+Shift+S je trenutno dodeljen aplikaciji koja više nije instalirana, pa Windows prikazuje grešku umesto da pita.
 screenclip.guide.open = Otvori podrazumevane aplikacije
 screenclip.guide.later = Podseti me kasnije
@@ -1092,6 +1097,7 @@ screenclip.state.other = Otvara {name}
 screenclip.state.broken = Dodeljeno nepostojećoj aplikaciji – kliknite da biste ispravili
 screenclip.state.none = Nije podešeno
 screenclip.open_failed = Nije moguće otvoriti podrazumevane aplikacije ({e}). Sami otvorite Podešavanja > Aplikacije > Podrazumevane aplikacije.
+screenclip.store_off = samo vi možete da izaberete drugu aplikaciju za to. U Podrazumevanim aplikacijama (sada otvorenim) kliknite na MS-SCREENCLIP i izaberite jednu.
 
 # UI size
 uisize.auto = Auto
