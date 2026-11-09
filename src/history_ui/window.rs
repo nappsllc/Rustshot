@@ -329,8 +329,6 @@ pub fn frame(canvas: &mut PixBuf, th: &crate::theme::Theme, inp: &Input, focus: 
     let m = (inp.mouse.x / k, inp.mouse.y / k);
     let targets = draw::targets(&ui, &lay, h, m);
     h.search_focused = ui.focus.is_focused("history.search");
-    // Esc in a question answers it only (it is not the window's Esc too).
-    let asked = h.asking();
     let acts = input(h, &lay, &targets, inp, k, now);
     // Input may have changed what is shown: lay out again for the paint.
     let lay = draw::layout(&ui, h, lw, lh);
@@ -347,11 +345,8 @@ pub fn frame(canvas: &mut PixBuf, th: &crate::theme::Theme, inp: &Input, focus: 
     h.hover = hover;
     h.targets = targets;
     let out = ui.finish();
-    let mut acts = acts;
-    if out.escape && !asked && !h.escape() {
-        // Esc with nothing to clear does nothing (the window stays).
-    }
-    let _ = &mut acts;
+    // Esc is handled once, in `input`: one step a press (a question's
+    // Esc answers it only); with nothing to clear the window stays.
     (acts, out.redraw)
 }
 

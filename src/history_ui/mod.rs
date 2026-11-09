@@ -343,22 +343,35 @@ impl History {
         }
     }
 
-    /// Esc: closes a menu or the question, else clears the search, else
-    /// the selection. Returns whether it did something.
+    /// Esc, one step a press: closes a menu or the question; else clears
+    /// the search being typed in; else the selection (closing the details
+    /// panel); else the search, focused or not. Returns whether it did
+    /// something.
     pub fn escape(&mut self) -> bool {
         if self.menu.take().is_some() || self.clear.take().is_some() || self.ask_delete.take().is_some() || self.ask_unupload.take().is_some() {
             return true;
         }
-        if !self.search.text.is_empty() {
-            self.search.set("");
-            self.scroll = 0.0;
+        // Typing in the search field: Esc clears what was typed first.
+        if self.search_focused && !self.search.text.is_empty() {
+            self.clear_search();
             return true;
         }
+        // Else the selection goes first (and with it the details panel),
+        // then the search on the next Esc, focused or not.
         if !self.sel.is_empty() {
             self.sel.clear();
             return true;
         }
+        if !self.search.text.is_empty() {
+            self.clear_search();
+            return true;
+        }
         false
+    }
+
+    fn clear_search(&mut self) {
+        self.search.set("");
+        self.scroll = 0.0;
     }
 
     /// "Keeping 30 days", "1.2 GB of 2 GB", "112 captures".

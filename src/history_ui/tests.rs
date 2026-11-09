@@ -208,13 +208,21 @@ fn groups_follow_the_days_and_the_search() {
     assert_eq!(titles, ["Chrome \u{2014} Stripe Dashboard", "Chrome \u{2014} Stripe \u{b7} Payments \u{b7} pi_3Q8x", "VS Code \u{2014} billing/stripe_webhook.rs"]);
     let (i, hl) = &g[0].items[0];
     assert_eq!(&history::title(&h.entries[*i].meta)[hl[0].clone()], "Stripe");
-    // Esc clears the search, then the selection.
+    // Esc deselects first (the details panel goes), then clears the
+    // search, though the field has no focus.
     h.sel = vec![h.entries[0].id.clone()];
     assert!(h.escape());
-    assert!(h.search.text.is_empty() && h.sel.len() == 1);
+    assert!(h.sel.is_empty() && h.search.text == "stripe");
     assert!(h.escape());
-    assert!(h.sel.is_empty());
+    assert!(h.search.text.is_empty());
     assert!(!h.escape());
+    // Typing in the search field: Esc clears the text before the selection.
+    h.search.set("stripe");
+    h.sel = vec![h.entries[0].id.clone()];
+    h.search_focused = true;
+    assert!(h.escape());
+    assert!(h.search.text.is_empty() && h.sel.len() == 1);
+    h.search_focused = false;
     // The filter.
     h.filter = Filter::Recordings;
     assert_eq!(h.shown().len(), 3);
@@ -900,4 +908,21 @@ fn monitor_row_names_an_unknown_monitor_when_shown() {
             assert_eq!(draw::monitor_row(&m("", 2.0)), format!("{} (2\u{d7})", tr!("history.display")), "{lang}");
         });
     }
+}
+
+/// One Esc press through the window is one step: the selected capture
+/// (and its details panel) goes, the search stays for the next press.
+#[test]
+fn one_esc_press_is_one_step() {
+    let (_r, st) = fixture("esc-steps");
+    let mut h = history(&st);
+    h.search.set("stripe");
+    h.sel = vec![h.entries[0].id.clone()];
+    let mut esc = Input::default();
+    esc.feed(&Ev::Key { vk: crate::wind::key::ESCAPE, up: false, repeat: false, mods: Mods::default() });
+    render(&mut h, &DARK, 1280, 720, 1.0, &esc);
+    assert!(h.sel.is_empty(), "the selection goes first");
+    assert_eq!(h.search.text, "stripe", "the search waits for the next Esc");
+    render(&mut h, &DARK, 1280, 720, 1.0, &esc);
+    assert!(h.search.text.is_empty());
 }
